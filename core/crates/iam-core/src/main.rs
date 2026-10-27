@@ -1,17 +1,46 @@
 use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}};
+use iam_idp::{Idp, IdpError};
 use iam_decision::{DecisionRequest, DecisionResponse, Engine};
 use serde_json::{Value, json};
 use iam_plugin_runtime::{PluginRuntime, Verdict};
 use std::sync::Arc;
 
 /// Shared state: Cedar engine plus an optional blocking WASM plugin (wasm bytes).
-pub struct Core { pub engine: Engine, pub plugin: Option<(PluginRuntime, Vec<u8>)> }
+pub struct Core { pub engine: Engine, pub plugin: Option<(PluginRuntime, Vec<u8>)>, pub idp: Idp }
 
 pub fn app(engine: Arc<Core>) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok","service":"iam-core"})) }))
         .route("/v1/decide", post(decide))
+        .route("/.well-known/openid-configuration", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.discovery()) }))
+        .route("/jwks.json", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.jwks()) }))
+        .route("/authorize", post(authorize))
+        .route("/token", post(token))
         .with_state(engine)
+}
+
+#[derive(serde::Deserialize)]
+struct AuthorizeReq { client_id: String, redirect_uri: String, code_challenge: String, username: String, password: String }
+#[derive(serde::Deserialize)]
+struct TokenReq { code: String, code_verifier: String, redirect_uri: String, client_id: String }
+
+fn idp_err(e: IdpError) -> (StatusCode, Json<Value>) {
+    let (s, m) = match e {
+        IdpError::InvalidClient => (StatusCode::BAD_REQUEST, "invalid_client"),
+        IdpError::InvalidCredentials => (StatusCode::UNAUTHORIZED, "invalid_credentials"),
+        IdpError::InvalidGrant => (StatusCode::BAD_REQUEST, "invalid_grant"),
+        IdpError::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "invalid_request"),
+    };
+    (s, Json(json!({"error": m})))
+}
+
+// POC simplification: JSON bodies instead of the form/redirect dance of full OIDC.
+async fn authorize(State(c): State<Arc<Core>>, Json(r): Json<AuthorizeReq>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    c.idp.authorize(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username, &r.password)
+        .map(|code| Json(json!({"code": code}))).map_err(idp_err)
+}
+async fn token(State(c): State<Arc<Core>>, Json(r): Json<TokenReq>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    c.idp.token(&r.code, &r.code_verifier, &r.redirect_uri, &r.client_id).map(Json).map_err(idp_err)
 }
 
 async fn decide(State(c): State<Arc<Core>>, Json(req): Json<DecisionRequest>)
@@ -43,7 +72,8 @@ async fn main() {
         let wat = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read plugin {p}: {e}"));
         (PluginRuntime::new(100_000).unwrap(), wat::parse_str(wat).expect("invalid plugin"))
     });
-    let engine = Arc::new(Core { engine, plugin });
+    let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
+    let engine = Arc::new(Core { engine, plugin, idp: Idp::demo(&issuer) });
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
     let l = tokio::net::TcpListener::bind(&addr).await.unwrap();
     tracing::info!("iam-core listening on {addr}");
@@ -58,7 +88,7 @@ mod tests {
     use tower::ServiceExt;
 
     async fn call(body: Value) -> Value {
-        let engine = Arc::new(Core { engine: Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), plugin: None });
+        let engine = Arc::new(Core { engine: Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), plugin: None, idp: Idp::demo("http://idp.test") });
         let r = app(engine).oneshot(Request::post("/v1/decide")
             .header("content-type", "application/json").body(Body::from(body.to_string())).unwrap()).await.unwrap();
         serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap()
@@ -68,7 +98,7 @@ mod tests {
     async fn plugin_denies_sensitive_off_hours() {
         let wasm = wat::parse_str(include_str!("../../../../plugins/examples/deny-off-hours.wat")).unwrap();
         let core = Arc::new(Core { engine: Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(),
-            plugin: Some((PluginRuntime::new(100_000).unwrap(), wasm)) });
+            plugin: Some((PluginRuntime::new(100_000).unwrap(), wasm)), idp: Idp::demo("http://idp.test") });
         for (hour, allow) in [(10, true), (23, false)] {
             let body = json!({"principal":"User::\"alice\"","action":"Action::\"approve\"","resource":"Request::\"r1\"",
               "context":{"sod_conflict":false,"hour":hour,"sensitive":true}});
