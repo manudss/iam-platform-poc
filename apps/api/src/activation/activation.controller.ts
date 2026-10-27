@@ -1,6 +1,8 @@
-import { BadRequestException, Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '../auth/auth.guard.js';
 import { ActivationService } from './activation.service.js';
 
+@UseGuards(AuthGuard)
 @Controller('tenants/:tenant/activations')
 export class ActivationController {
   constructor(private readonly svc: ActivationService) {}
