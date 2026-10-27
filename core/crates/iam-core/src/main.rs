@@ -73,7 +73,7 @@ async fn main() {
         (PluginRuntime::new(100_000).unwrap(), wat::parse_str(wat).expect("invalid plugin"))
     });
     let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
-    let engine = Arc::new(Core { engine, plugin, idp: Idp::demo(&issuer) });
+    let engine = Arc::new(Core { engine, plugin, idp: Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)) });
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
     let l = tokio::net::TcpListener::bind(&addr).await.unwrap();
     tracing::info!("iam-core listening on {addr}");
