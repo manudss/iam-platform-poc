@@ -1,4 +1,5 @@
 //! POC identity provider module: OIDC authorization-code + PKCE (S256), Ed25519 (EdDSA) id tokens, JWKS.
+//! OAuth/OIDC-inspired authentication PROTOTYPE (JSON endpoints, no redirects or forms): not a standard OIDC flow.
 //! NOT production: in-memory keys and codes, fictional demo users, no sessions, MFA, passkeys, SAML,
 //! consent, refresh tokens, rate limiting or key rotation. See README "Not built yet".
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
@@ -19,6 +20,7 @@ pub struct Idp {
     redirect_uris: Vec<String>,
     users: HashMap<String, String>, // username -> demo password (FICTIONAL, plain text on purpose: demo only)
     codes: Mutex<HashMap<String, Code>>,
+    ttl: u64,
 }
 
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() }
@@ -32,9 +34,12 @@ impl Idp {
         users.insert("demo-bob".to_string(), "demo-only-not-a-secret".to_string());
         Self {
             key: SigningKey::from_bytes(&seed), issuer: issuer.into(), client_id: "demo-web".into(),
-            redirect_uris: vec!["http://localhost:4200/callback".into()], users, codes: Mutex::new(HashMap::new()),
+            redirect_uris: vec!["http://localhost:4200/callback".into()], users, codes: Mutex::new(HashMap::new()), ttl: 300,
         }
     }
+
+    /// Token lifetime in seconds (local testing only, e.g. 1 to test expiry).
+    pub fn with_ttl(mut self, ttl: u64) -> Self { self.ttl = ttl; self }
 
     pub fn discovery(&self) -> Value {
         json!({"issuer": self.issuer, "authorization_endpoint": format!("{}/authorize", self.issuer),
@@ -68,8 +73,8 @@ impl Idp {
         let ok_pkce = B64.encode(Sha256::digest(verifier.as_bytes())) == c.challenge;
         if !ok_pkce || c.exp < now() || c.redirect_uri != redirect_uri || c.client_id != client_id { return Err(IdpError::InvalidGrant); }
         let t = now();
-        let claims = json!({"iss": self.issuer, "sub": c.user, "aud": c.client_id, "iat": t, "exp": t + 300});
-        Ok(json!({"id_token": self.sign(&claims), "token_type": "Bearer", "expires_in": 300}))
+        let claims = json!({"iss": self.issuer, "sub": c.user, "aud": c.client_id, "iat": t, "exp": t + self.ttl, "tenant": "acme-demo"});
+        Ok(json!({"id_token": self.sign(&claims), "token_type": "Bearer", "expires_in": self.ttl}))
     }
 
     fn sign(&self, claims: &Value) -> String {
@@ -111,6 +116,7 @@ mod tests {
         let tok = i.token(&login(&i, &ch), &v, REDIR, "demo-web").unwrap();
         let claims = verify(tok["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap();
         assert_eq!(claims["sub"], "demo-alice");
+        assert_eq!(claims["tenant"], "acme-demo");
     }
     #[test]
     fn wrong_verifier_rejected_and_code_burned() {
