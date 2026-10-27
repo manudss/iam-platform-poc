@@ -2,7 +2,7 @@
 CREATE DATABASE IF NOT EXISTS iam;
 USE iam;
 CREATE TABLE IF NOT EXISTS identities (id VARCHAR(32) PRIMARY KEY, display_name VARCHAR(80), manager_id VARCHAR(32), department VARCHAR(40));
-CREATE TABLE IF NOT EXISTS roles (id VARCHAR(32) PRIMARY KEY, label VARCHAR(80), sensitive BOOLEAN DEFAULT FALSE);
+CREATE TABLE IF NOT EXISTS roles (id VARCHAR(32) PRIMARY KEY, label VARCHAR(80), is_sensitive BOOLEAN DEFAULT FALSE);
 CREATE TABLE IF NOT EXISTS assignments (identity_id VARCHAR(32), role_id VARCHAR(32), PRIMARY KEY (identity_id, role_id));
 CREATE TABLE IF NOT EXISTS sod_rules (role_a VARCHAR(32), role_b VARCHAR(32), PRIMARY KEY (role_a, role_b));
 INSERT IGNORE INTO identities VALUES ('demo-alice','Alice Demo',NULL,'finance'),('demo-bob','Bob Demo','demo-alice','finance');
