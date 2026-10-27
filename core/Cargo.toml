@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["crates/iam-decision", "crates/iam-plugin-runtime", "crates/iam-core"]
