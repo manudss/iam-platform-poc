@@ -1,0 +1,11 @@
+[package]
+name = "iam-plugin-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+serde = "1.0.229"
+serde_json = "1.0.154"
+wasmtime = "50.0.0"
+wat = "1.262.0"
