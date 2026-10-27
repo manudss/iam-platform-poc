@@ -5,12 +5,15 @@ import request from 'supertest';
 import { AppModule } from './app.module.js';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { AuthGuard } from './auth/auth.guard.js';
 import { PluginHost } from './plugins/plugin-host.service.js';
 
 describe('api', () => {
   let app: INestApplication;
   before(async () => {
-    const m = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const m = await Test.createTestingModule({ imports: [AppModule] })
+      // Unit-level only: activation logic without auth. Auth is covered end-to-end in e2e.spec.ts.
+      .overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
     app = m.createNestApplication();
     await app.init();
   });
