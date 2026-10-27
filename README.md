@@ -7,7 +7,7 @@ redistribution.
 ## What exists and was tested
 | Part | State |
 |---|---|
-| `core/` Rust: Cedar decision engine (forbid wins, errored policy = deny), WASM plugin runtime (fuel limit, no imports), HTTP `/health` and `/v1/decide` | 10 unit/integration tests pass (`cd core && cargo test`) |
+| `core/` Rust: Cedar decision engine (forbid wins, errored policy = deny), WASM plugin runtime (fuel limit, no imports), HTTP `/health` and `/v1/decide` | 11 unit/integration tests pass (`cd core && cargo test`); the WASM hook is wired into `/v1/decide` when `IAM_PLUGIN_WAT` is set (tested in-process only, not in the HTTP end-to-end suite) |
 | `apps/api` NestJS: health, in-memory activation journal (A,B,A = 3 activations), async plugin host with idempotent effects, `/access/check` proxy to the Rust core (fails closed) | 4 unit tests + 4 end-to-end tests pass (`cd core && cargo build -p iam-core`, then `cd apps/api && npm i && npm test`) |
 | `apps/web` Angular: empty console shell | builds, 2 tests pass (`cd apps/web && npm i && npx ng test --watch=false`) |
 
