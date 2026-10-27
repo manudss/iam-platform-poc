@@ -1,0 +1,27 @@
+# iam-platform-poc
+
+Private proof of concept for a new IAM/IGA platform. Design choices come from the architecture document
+(stack: Angular, NestJS, Rust core, Dolt for versioned business data). No license has been granted for
+redistribution.
+
+## What exists and was tested
+| Part | State |
+|---|---|
+| `core/` Rust: Cedar decision engine (forbid wins, errored policy = deny), WASM plugin runtime (fuel limit, no imports), HTTP `/health` and `/v1/decide` | 10 unit/integration tests pass (`cd core && cargo test`) |
+| `apps/api` NestJS: health, in-memory activation journal (A,B,A = 3 activations), async plugin host with idempotent effects | 4 tests pass (`cd apps/api && npm i && npm test`) |
+| `apps/web` Angular: empty console shell | builds, 2 tests pass (`cd apps/web && npm i && npx ng test --watch=false`) |
+
+## Written but NOT run or verified
+- `infra/docker-compose.yml` (Dolt, two PostgreSQL, Temporal, NATS JetStream, OpenBao dev). Never started: the authoring environment had no Docker.
+- `data/demo/01-schema.sql` (fictional identities, SoD rule) is not loaded into a real Dolt yet.
+- `proto/decision.proto` is a draft; no gRPC server yet.
+
+## Not built yet
+OIDC IdP module (code + PKCE, JWKS), NestJS-to-Rust calls, Dolt read/write, Temporal workflows, NATS publisher,
+SCIM/LDAP/CSV connectors, durable activation protocol, plugin packaging. The home-made IdP is the main security
+work before any production use.
+
+## Local use
+1. `cp .env.example .env` and change the placeholder values (never commit `.env`).
+2. `docker compose --env-file .env -f infra/docker-compose.yml up -d` (untested).
+3. Core: `cd core && IAM_POLICY_FILE=../policies/demo.cedar cargo run -p iam-core`.
