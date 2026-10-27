@@ -13,6 +13,9 @@ tracing-subscriber = "0.3.23"
 iam-decision = { path = "../iam-decision" }
 iam-plugin-runtime = { path = "../iam-plugin-runtime" }
 
+[dependencies.wat]
+version = "1"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
