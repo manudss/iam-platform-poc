@@ -1,0 +1,45 @@
+# Local development stack. NOT RUN in the authoring sandbox (no Docker there): untested.
+# Usage: cp ../.env.example ../.env && docker compose --env-file ../.env up -d
+services:
+  dolt:
+    image: dolthub/dolt-sql-server:latest
+    environment:
+      DOLT_ROOT_PASSWORD: ${DOLT_ROOT_PASSWORD}
+      DOLT_ROOT_HOST: "%"
+    ports: ["3307:3306"]
+    volumes: ["dolt-data:/var/lib/dolt", "../data/demo:/docker-entrypoint-initdb.d:ro"]
+
+  runtime-pg:           # sessions, credentials refs, decision journal, effects journal, activation journal
+    image: postgres:17
+    environment: { POSTGRES_PASSWORD: "${RUNTIME_PG_PASSWORD}", POSTGRES_DB: runtime }
+    ports: ["5433:5432"]
+    volumes: ["runtime-pg:/var/lib/postgresql/data"]
+
+  temporal-pg:          # Temporal's own store, separate from runtime-pg
+    image: postgres:17
+    environment: { POSTGRES_PASSWORD: "${TEMPORAL_PG_PASSWORD}", POSTGRES_DB: temporal }
+    volumes: ["temporal-pg:/var/lib/postgresql/data"]
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    depends_on: [temporal-pg]
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: ${TEMPORAL_PG_PASSWORD}
+      POSTGRES_SEEDS: temporal-pg
+    ports: ["7233:7233"]
+
+  nats:
+    image: nats:latest
+    command: ["-js"]
+    ports: ["4222:4222"]
+
+  openbao:              # dev mode: in-memory, for local experiments only
+    image: openbao/openbao:latest
+    command: ["server", "-dev", "-dev-root-token-id=${BAO_DEV_ROOT_TOKEN}"]
+    ports: ["8200:8200"]
+    cap_add: [IPC_LOCK]
+
+volumes: { dolt-data: {}, runtime-pg: {}, temporal-pg: {} }
