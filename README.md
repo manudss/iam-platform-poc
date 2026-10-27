@@ -8,8 +8,13 @@ redistribution.
 | Part | State |
 |---|---|
 | `core/` Rust: Cedar decision engine (forbid wins, errored policy = deny), WASM plugin runtime (fuel limit, no imports), HTTP `/health` and `/v1/decide` | 10 unit/integration tests pass (`cd core && cargo test`) |
-| `apps/api` NestJS: health, in-memory activation journal (A,B,A = 3 activations), async plugin host with idempotent effects | 4 tests pass (`cd apps/api && npm i && npm test`) |
+| `apps/api` NestJS: health, in-memory activation journal (A,B,A = 3 activations), async plugin host with idempotent effects, `/access/check` proxy to the Rust core (fails closed) | 4 unit tests + 4 end-to-end tests pass (`cd core && cargo build -p iam-core`, then `cd apps/api && npm i && npm test`) |
 | `apps/web` Angular: empty console shell | builds, 2 tests pass (`cd apps/web && npm i && npx ng test --watch=false`) |
+
+## Real vs simulated
+- Real in the end-to-end test: the Rust core binary (Cedar decisions) and the NestJS HTTP API.
+- In-memory stand-ins (simulated): the activation journal (target: PostgreSQL), plugin effects (nothing is sent).
+- Not present yet: Dolt, PostgreSQL, Temporal, NATS, OpenBao running for real.
 
 ## Written but NOT run or verified
 - `infra/docker-compose.yml` (Dolt, two PostgreSQL, Temporal, NATS JetStream, OpenBao dev). Never started: the authoring environment had no Docker.
