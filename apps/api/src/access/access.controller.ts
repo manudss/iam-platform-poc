@@ -1,4 +1,5 @@
-import { BadGatewayException, Body, Controller, Post } from '@nestjs/common';
+import { BadGatewayException, Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '../auth/auth.guard.js';
 
 interface CheckBody {
   principal: string;
@@ -8,6 +9,7 @@ interface CheckBody {
 }
 
 /** Thin proxy: NestJS never decides, the Rust core does. Fails closed if the core is unreachable. */
+@UseGuards(AuthGuard)
 @Controller('access')
 export class AccessController {
   private readonly core = process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081';
