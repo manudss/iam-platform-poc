@@ -1,8 +1,9 @@
 # Manual trigger only (workflow_dispatch): nothing runs on push, so no GitHub-hosted minutes are used unless a person starts it.
 # Private repo + GitHub Free = 2,000 included Linux minutes per month (see docs.github.com billing docs); usage above that is billed
 # unless a budget with "stop usage" is set. Each job is capped with timeout-minutes. Standard runners only.
-# Real-service suites (Dolt, PostgreSQL, NATS, OpenBao, Temporal) are skipped here because their binaries are not installed
-# in this workflow; see docs/e2e.md. The core binary IS built, so the Rust-core end-to-end suite runs.
+# Real-service suites run from plain binaries (Dolt, PostgreSQL, NATS, OpenBao, Temporal) are skipped in the api job; see docs/e2e.md.
+# The core binary IS built, so the Rust-core end-to-end suite runs. The compose job starts the real docker-compose stack on the
+# runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts.
 name: ci
 on: workflow_dispatch
 permissions:
@@ -35,3 +36,30 @@ jobs:
         with: { node-version: 22 }
       - run: npm ci && npm test -- --watch=false
         working-directory: apps/web
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Start the compose stack (local-only dev credentials from .env.example)
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env -f infra/docker-compose.yml up -d
+      - name: Wait for ports
+        run: |
+          for p in 3307 5433 4222 8200 7233; do
+            ok=0; for i in $(seq 1 90); do (echo > /dev/tcp/127.0.0.1/$p) 2>/dev/null && { ok=1; break; }; sleep 2; done
+            echo "port $p open=$ok"; [ $ok = 1 ] || { docker compose -f infra/docker-compose.yml ps; docker compose -f infra/docker-compose.yml logs --tail=100; exit 1; }
+          done
+          sleep 15
+      - name: Run compose end-to-end suite
+        working-directory: apps/api
+        run: npm ci && npm run build && COMPOSE_STACK=1 node --test dist/compose.e2e.spec.js
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml ps; docker compose -f infra/docker-compose.yml logs --tail=150
+      - name: Stop
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v
