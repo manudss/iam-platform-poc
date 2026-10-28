@@ -42,20 +42,22 @@ describe('decision audit (real core + API)', { skip: !existsSync(bin) && 'core b
   const check = (token: string | undefined, body: object) => post(`${API}/access/check`, { action: 'Action::"approve"', resource: 'Request::"r1"', ...body }, token);
   const audit = async (token: string | undefined, tenant = 'acme-demo') => fetch(`${API}/tenants/${tenant}/audit`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
 
-  it('an allow and a deny are both recorded, with caller, tenant and (tenant mode) the activation version', async () => {
-    const t = await login();
-    assert.equal((await check(t, { principal: 'User::"demo-alice"', context: { roles: ['payment-approver'], sod_conflict: false } })).status, 201); // demo mode: allow
-    assert.equal((await check(t, { principal: 'User::"demo-alice"', context: { roles: ['payment-approver'], sod_conflict: true } })).status, 201); // deny
-    // tenant mode: activate a version in the core, then decide against it
+  it('an allow and a deny are both recorded, with caller (token subject), tenant and the activation version from server data', async () => {
+    const t = await login(), tb = await login('demo-bob');
     assert.equal((await post(`${CORE}/v1/activate`, { tenant: 'acme-demo', seq: 1, commit: 'abcdef12', snapshot: { assignments: [{ identity_id: 'demo-alice', role_id: 'payment-approver' }], sod_rules: [] } }, undefined, { 'x-core-admin-token': ADMIN })).status, 200);
-    assert.equal(((await (await check(t, { tenant: 'acme-demo', principal: 'User::"demo-alice"', context: {} })).json()) as { allow: boolean }).allow, true);
+    assert.equal(((await (await check(t, { principal: 'User::"demo-alice"', context: { roles: [], sod_conflict: true } })).json()) as { allow: boolean }).allow, true); // hostile context ignored: roles come from the active version
+    assert.equal(((await (await check(tb, { tenant: 'acme-demo', context: { roles: ['payment-approver'] } })).json()) as { allow: boolean }).allow, false); // bob has no role in the data
+    assert.equal(((await (await check(t, {})).json()) as { allow: boolean }).allow, true);
     const r = await audit(t); assert.equal(r.status, 200);
     const { entries } = (await r.json()) as { entries: Entry[] };
     assert.deepEqual(entries.map((e) => e.allow), [true, false, true]); // newest first
-    assert.ok(entries.every((e) => e.tenant === 'acme-demo' && e.subject === 'demo-alice' && e.source === 'http'));
-    assert.deepEqual([entries[0].activation_seq, entries[0].commit], [1, 'abcdef12']);
-    assert.equal(entries[2].activation_seq, null);
+    assert.deepEqual(entries.map((e) => e.subject), ['demo-alice', 'demo-bob', 'demo-alice']);
+    assert.ok(entries.every((e) => e.tenant === 'acme-demo' && e.source === 'http' && e.activation_seq === 1 && e.commit === 'abcdef12'));
     assert.ok(!JSON.stringify(entries).includes('sod_conflict')); // context values are not stored
+  });
+  it('negative: spoofing another principal is 403 and not decided', async () => {
+    const t = await login('demo-bob');
+    assert.equal((await check(t, { principal: 'User::"demo-alice"' })).status, 403);
   });
   it('negative: no token or garbage token cannot read the audit; another tenant is 403; a body for another tenant is 403 and not recorded', async () => {
     assert.equal((await audit(undefined)).status, 401);
