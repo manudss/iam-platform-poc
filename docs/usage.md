@@ -79,3 +79,6 @@ async notification plugin host in the API (idempotent per activation). Packaging
 
 ## 6. Known gaps
 See README sections "Written but NOT run" and "Not implemented".
+
+## Decision audit
+`POST /access/check` (bearer token) records every answer. Read it: `curl -H "authorization: Bearer $TOKEN" http://127.0.0.1:3000/tenants/acme-demo/audit?limit=50` (newest first, only your token's tenant). Set `IAM_PG_URL` for the durable PostgreSQL table `decision_audit`; without it the audit lives in memory only.
