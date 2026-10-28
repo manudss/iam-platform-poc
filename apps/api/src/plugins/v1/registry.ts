@@ -183,6 +183,28 @@ export class PluginRegistry {
     this.audit({ tenant, action: 'plugin.enable', plugin: id });
   }
 
+  /** Current configuration in the form versioned in Dolt: enablement plus NON-SECRET settings (secret fields are never exported). */
+  async exportConfig(tenant: string, id: string): Promise<{ enabled: boolean; settings: Record<string, unknown> }> {
+    const p = this.plugin(id);
+    const cur = (await this.settings.get(tenant, id)) ?? {};
+    const settings = Object.fromEntries(Object.entries(cur).filter(([k]) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret'));
+    return { enabled: this.isActive(tenant, id) && !p.manifest.base, settings };
+  }
+
+  /**
+   * Applies a configuration that came from a reviewed and merged Dolt version. It goes through the same checks as the admin screen
+   * (settings schema, dependencies, base validity) and NEVER widens grants: enabling reuses the grants an admin already gave, so a data merge
+   * cannot grant a sensitive hook, SQL install or component screen. Secrets are untouched (kept as stored).
+   */
+  async applyVersionedConfig(tenant: string, id: string, cfg: { enabled: boolean; settings: Record<string, unknown> }) {
+    const p = this.plugin(id);
+    await this.configure(tenant, id, cfg.settings);
+    if (p.manifest.base) return;
+    if (cfg.enabled) await this.enable(tenant, id, {});
+    else await this.disable(tenant, id);
+    this.audit({ tenant, action: 'plugin.config.applied', plugin: id, detail: 'from a merged Dolt version; grants unchanged' });
+  }
+
   /** Disable: slots fall back to the base plugin with the base's own stored configuration. Data is never dropped. */
   async disable(tenant: string, id: string) {
     const p = this.plugin(id);
