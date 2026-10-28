@@ -38,3 +38,7 @@ A suite whose variable is unset is reported as skipped with a reason, never as p
 ## What is NOT covered
 - The same chain against the docker-compose containers (only container-level checks run, in CI), gRPC beyond `Decide` (activate, IdP: OPEN), TLS/auth on the gRPC port,
   crash recovery of activations, load/performance, security review of the home-made IdP.
+
+## Slices 4 and 5 (local runs only, not in CI yet)
+- `cd core && cargo test -p iam-core --bin iam-core`: includes the browser code+PKCE flow tests (`authz::tests`).
+- `agent.e2e.spec.ts` (needs the built core binary only): delegation allowlist, SoD deny through the same Cedar decision, audit source `agent`, negatives (outside allowlist, unknown tool, no/forged delegation, re-delegation, call budget). 5/5 passed locally.
