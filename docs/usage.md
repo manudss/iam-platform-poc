@@ -63,7 +63,7 @@ Business API (NestJS). The `AuthGuard` checks signature (JWKS), issuer, audience
 | `POST /tenants/:t/changes` `{identity, role}` | creates a Dolt branch, adds the assignment, runs the SoD check, commits on the branch only |
 | `POST /tenants/:t/changes/:branch/merge` | re-checks SoD; 409 if violated; else merges into main |
 | `POST /tenants/:t/connectors/csv` `{csv}` | CSV connector (header `identity_id,display_name,manager_id,department,role_id`, <=500 rows, <=100 KB): same branch + SoD flow |
-| `POST /tenants/:t/activations` `{commit?}` | journals an activation (default: Dolt main head); re-activating an old commit is a new seq |
+| `POST /tenants/:t/activations` `{commit?, requestId?}` | journals and applies an activation (default: Dolt main head); a new request (or none) is always a new seq, even for an old commit; the same `requestId` retried is idempotent (same seq, no new effect) |
 | `POST /tenants/:t/activations/reconcile` | compares the core's version with the latest activation and re-applies if different |
 | `GET /tenants/:t/activations` | journal for the tenant |
 | `POST /tenants/:t/activation-workflows` `{commit?}` | same, run as a Temporal workflow (needs `IAM_TEMPORAL_ADDR`) |
