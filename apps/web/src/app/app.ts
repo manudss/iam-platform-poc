@@ -1,10 +1,11 @@
 import { Component, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiClient, Change } from './api';
+import { PluginsAdmin } from './plugins-admin';
 
 @Component({
   selector: 'app-root',
-  imports: [FormsModule],
+  imports: [FormsModule, PluginsAdmin],
   styleUrl: './app.css',
   templateUrl: './app.html',
 })
