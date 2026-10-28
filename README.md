@@ -31,6 +31,7 @@ The demo users and their shared password are fictional and exist only for local 
 - Not run: the docker-compose stack as a whole (images, networking, the compose PostgreSQL/Temporal/NATS/OpenBao services). The same products were run as plain binaries in the tests above, which is not the same as validating the compose file.
 
 ## Written but NOT run or verified
+- `.github/workflows/ci.yml`: manual trigger only (`workflow_dispatch`), never executed. Private repo on GitHub Free includes 2,000 Actions minutes per month (docs.github.com, checked); the account's actual plan/budget was not checked. Jobs are time-capped and the real-service suites would be skipped there.
 - `infra/docker-compose.yml` (Dolt, two PostgreSQL, Temporal, NATS JetStream, OpenBao dev). Never started: the authoring environment had no Docker.
 - `proto/decision.proto` is a draft; no gRPC server yet.
 
