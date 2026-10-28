@@ -1,4 +1,5 @@
 # Local development stack. Not runnable in the authoring sandbox (no Docker); exercised only by the manual CI job "compose" (see README for its result).
+# All published ports are bound to 127.0.0.1 only (never exposed on the host's other interfaces).
 # Usage: cp ../.env.example ../.env && docker compose --env-file ../.env up -d
 services:
   dolt:
@@ -6,13 +7,13 @@ services:
     environment:
       DOLT_ROOT_PASSWORD: ${DOLT_ROOT_PASSWORD}
       DOLT_ROOT_HOST: "%"
-    ports: ["3307:3306"]
+    ports: ["127.0.0.1:3307:3306"]
     volumes: ["dolt-data:/var/lib/dolt", "../data/demo:/docker-entrypoint-initdb.d:ro"]
 
   runtime-pg:           # sessions, credentials refs, decision journal, effects journal, activation journal
     image: postgres:17
     environment: { POSTGRES_PASSWORD: "${RUNTIME_PG_PASSWORD}", POSTGRES_DB: runtime }
-    ports: ["5433:5432"]
+    ports: ["127.0.0.1:5433:5432"]
     volumes: ["runtime-pg:/var/lib/postgresql/data"]
 
   temporal-pg:          # Temporal's own store, separate from runtime-pg
@@ -29,17 +30,17 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PWD: ${TEMPORAL_PG_PASSWORD}
       POSTGRES_SEEDS: temporal-pg
-    ports: ["7233:7233"]
+    ports: ["127.0.0.1:7233:7233"]
 
   nats:
     image: nats:latest
     command: ["-js"]
-    ports: ["4222:4222"]
+    ports: ["127.0.0.1:4222:4222"]
 
   openbao:              # dev mode: in-memory, for local experiments only
     image: openbao/openbao:latest
     command: ["server", "-dev", "-dev-root-token-id=${BAO_DEV_ROOT_TOKEN}"]
-    ports: ["8200:8200"]
+    ports: ["127.0.0.1:8200:8200"]
     cap_add: [IPC_LOCK]
 
 volumes: { dolt-data: {}, runtime-pg: {}, temporal-pg: {} }
