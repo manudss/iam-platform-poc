@@ -1,4 +1,5 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { PluginRegistry } from '../plugins/v1/registry.js';
 import pg from 'pg';
 import { DoltService } from '../dolt/dolt.service.js';
 import { ActivationConsumer } from '../integrations/activation-consumer.js';
@@ -14,7 +15,7 @@ import { EffectStore } from './effect-store.js';
 export class EffectsService implements OnModuleInit, OnModuleDestroy {
   private pool?: pg.Pool;
   private consumer?: ActivationConsumer;
-  constructor(private readonly dolt: DoltService) {}
+  constructor(private readonly dolt: DoltService, @Optional() private readonly plugins?: PluginRegistry) {}
 
   async onModuleInit() {
     const { IAM_EFFECTS, IAM_PG_URL, IAM_NATS_URL, IAM_NOTIFY_SINK_URL, IAM_PROVISION_TARGET_URL } = process.env;
@@ -23,6 +24,7 @@ export class EffectsService implements OnModuleInit, OnModuleDestroy {
     const fx = new ActivationEffects({
       store: new EffectStore(this.pool), snapshotAt: (c) => this.dolt.snapshotAt(c),
       previousCommit: async (tenant, seq) => (await this.pool!.query("SELECT commit_hash FROM activations WHERE tenant=$1 AND seq<$2 AND state='applied' ORDER BY seq DESC LIMIT 1", [tenant, seq])).rows[0]?.commit_hash,
+      pluginNotify: this.plugins ? async (t, p) => { await this.plugins!.emit(t, 'notify.send', p); } : undefined,
       notifySinkUrl: IAM_NOTIFY_SINK_URL, provisionTargetUrl: IAM_PROVISION_TARGET_URL,
     });
     this.consumer = new ActivationConsumer(this.pool, async (e) => { await fx.handle(e); });
