@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/activation.e2e.spec.js dist/outbox.e2e.spec.js dist/pg.e2e.spec.js dist/integrations.e2e.spec.js dist/temporal.e2e.spec.js dist/compose.e2e.spec.js dist/fullstack.e2e.spec.js dist/grpc.e2e.spec.js dist/compose-app.e2e.spec.js dist/audit.e2e.spec.js dist/effects.e2e.spec.js dist/agent.e2e.spec.js dist/effects-wiring.e2e.spec.js dist/plugins/v1/plugins-v1.spec.js dist/plugins/v1/plugins-admin.spec.js dist/plugins/v1/plugins-pg.e2e.spec.js dist/signin-gate.e2e.spec.js"
+    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/activation.e2e.spec.js dist/outbox.e2e.spec.js dist/pg.e2e.spec.js dist/integrations.e2e.spec.js dist/temporal.e2e.spec.js dist/compose.e2e.spec.js dist/fullstack.e2e.spec.js dist/grpc.e2e.spec.js dist/compose-app.e2e.spec.js dist/audit.e2e.spec.js dist/effects.e2e.spec.js dist/agent.e2e.spec.js dist/effects-wiring.e2e.spec.js dist/plugins/v1/plugins-v1.spec.js dist/plugins/v1/plugins-admin.spec.js dist/plugins/v1/plugins-pg.e2e.spec.js dist/signin-gate.e2e.spec.js dist/plugins/v1/plugins-dolt.e2e.spec.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.6",
