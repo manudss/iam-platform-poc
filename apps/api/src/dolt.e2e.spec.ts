@@ -84,4 +84,27 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
     assert.equal((await j(`${API}/${T}/assignments`, 'GET')).status, 401);
     assert.equal((await j(`${API}/tenants/other/assignments`, 'GET', t)).status, 403);
   });
+  it('CSV connector: import lands on a branch, SoD is simulated, main untouched, merge applies it', async () => {
+    const t = await login();
+    const csv = 'identity_id,display_name,manager_id,department,role_id\ndemo-carol,"Carol, Demo",demo-alice,hr,accountant\n';
+    const count = async () => ((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length;
+    const base = await count();
+    const r = await j(`${API}/${T}/connectors/csv`, 'POST', t, { csv });
+    assert.equal(r.status, 201);
+    assert.equal(await count(), base); // main untouched before merge
+    const imp = (await r.json()) as { branch: string; mergeable: boolean; rows: number };
+    assert.equal(imp.rows, 1); assert.equal(imp.mergeable, true);
+    assert.equal((await j(`${API}/${T}/changes/${imp.branch}/merge`, 'POST', t)).status, 201);
+    assert.equal(await count(), base + 1);
+  });
+  it('CSV connector: SoD conflict in the file is reported and cannot be merged; bad input is 400', async () => {
+    const t = await login();
+    const bad = 'identity_id,display_name,manager_id,department,role_id\ndemo-bob,Bob Demo,,finance,payment-approver\n';
+    const imp = (await (await j(`${API}/${T}/connectors/csv`, 'POST', t, { csv: bad })).json()) as { branch: string; mergeable: boolean };
+    assert.equal(imp.mergeable, false);
+    assert.equal((await j(`${API}/${T}/changes/${imp.branch}/merge`, 'POST', t)).status, 409);
+    for (const csv of ['wrong,header\n', 'identity_id,display_name,manager_id,department,role_id\nx;drop,N,,d,accountant\n', 'identity_id,display_name,manager_id,department,role_id\nok-id,N,,d,nope\n'])
+      assert.equal((await j(`${API}/${T}/connectors/csv`, 'POST', t, { csv })).status, 400);
+    assert.equal((await j(`${API}/${T}/connectors/csv`, 'POST', undefined, { csv: bad })).status, 401);
+  });
 });
