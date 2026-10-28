@@ -42,6 +42,7 @@ In the console: sign in as `demo-alice` (password in README "Demo credentials"),
 | `API_PORT` | API | HTTP port (3000) |
 | `DOLT_HOST/PORT/USER/PASSWORD/DATABASE` | API | Dolt SQL server (`127.0.0.1:3307`, `root`, empty, `iam`) |
 | `IAM_PG_URL` | API | PostgreSQL URL: durable activation journal; unset = in-memory journal |
+| `IAM_CORE_ADMIN_TOKEN` | core + API | shared admin token (>= 8 chars, local fictional value): enables `/v1/activate` on the core and core-apply in the API; unset = activation only journaled (`state: recorded`) |
 | `IAM_NATS_URL` | API | NATS JetStream: publish `iam.activation.<tenant>` after activation |
 | `IAM_BAO_ADDR`, `IAM_BAO_TOKEN` | API | OpenBao KV v2; `secret/iam/pg` field `url` supplies the PostgreSQL URL when `IAM_PG_URL` is unset |
 | `IAM_TEMPORAL_ADDR` | API | Temporal frontend: enables `POST .../activation-workflows` |
@@ -63,6 +64,7 @@ Business API (NestJS). The `AuthGuard` checks signature (JWKS), issuer, audience
 | `POST /tenants/:t/changes/:branch/merge` | re-checks SoD; 409 if violated; else merges into main |
 | `POST /tenants/:t/connectors/csv` `{csv}` | CSV connector (header `identity_id,display_name,manager_id,department,role_id`, <=500 rows, <=100 KB): same branch + SoD flow |
 | `POST /tenants/:t/activations` `{commit?}` | journals an activation (default: Dolt main head); re-activating an old commit is a new seq |
+| `POST /tenants/:t/activations/reconcile` | compares the core's version with the latest activation and re-applies if different |
 | `GET /tenants/:t/activations` | journal for the tenant |
 | `POST /tenants/:t/activation-workflows` `{commit?}` | same, run as a Temporal workflow (needs `IAM_TEMPORAL_ADDR`) |
 
