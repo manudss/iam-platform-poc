@@ -5,13 +5,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/pg.e2e.spec.js"
+    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/pg.e2e.spec.js dist/integrations.e2e.spec.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",
     "@nestjs/core": "^12.3.2",
     "@nestjs/platform-express": "^12.3.2",
     "mysql2": "^3.24.6",
+    "nats": "^2.29.3",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
