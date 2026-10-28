@@ -1,5 +1,7 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import pg from 'pg';
+import { NatsService } from '../integrations/nats.service.js';
+import { SecretsService } from '../integrations/secrets.service.js';
 
 export interface Activation {
   tenant: string;
@@ -8,13 +10,18 @@ export interface Activation {
   state: 'activated';
 }
 
+/** Result of activate(): the event field says honestly whether the NATS event was acknowledged. */
+export type ActivationResult = Activation & { event: 'published' | 'not-published' | 'disabled' };
+
 /**
  * Activation journal. A merge changes nothing; only an explicit activation makes a Dolt commit live.
  * Re-activating an older commit (A -> B -> A) is a NEW activation with a new seq.
  *
  * Storage: PostgreSQL when IAM_PG_URL is set (durable, seq allocated under a per-tenant advisory lock),
  * otherwise an in-memory list (lost on restart - dev fallback only).
- * TODO(POC): Dolt tag as reference, NATS event, Rust reload, crash recovery of a half-done activation.
+ * After the journal commit, a NATS JetStream event iam.activation.<tenant> is published when IAM_NATS_URL is set (not atomic with
+ * the journal: no outbox yet). The PostgreSQL URL comes from IAM_PG_URL or, if absent, from OpenBao KV secret/iam/pg field "url".
+ * TODO(POC): Dolt tag as reference, outbox, Rust reload, crash recovery of a half-done activation.
  */
 @Injectable()
 export class ActivationService implements OnModuleDestroy {
@@ -22,10 +29,17 @@ export class ActivationService implements OnModuleDestroy {
   private pool?: pg.Pool;
   private ready?: Promise<void>;
 
-  private get url() { return process.env.IAM_PG_URL; }
+  private resolved?: Promise<string | undefined>;
 
-  private db(): Promise<pg.Pool> {
-    if (!this.pool) this.pool = new pg.Pool({ connectionString: this.url, max: 4 });
+  constructor(private readonly secrets: SecretsService = new SecretsService(), private readonly nats: NatsService = new NatsService()) {}
+
+  private resolveUrl(): Promise<string | undefined> {
+    this.resolved ??= process.env.IAM_PG_URL ? Promise.resolve(process.env.IAM_PG_URL) : this.secrets.get('iam/pg').then((s) => s?.url);
+    return this.resolved;
+  }
+
+  private async db(): Promise<pg.Pool> {
+    if (!this.pool) this.pool = new pg.Pool({ connectionString: await this.resolveUrl(), max: 4 });
     this.ready ??= this.pool.query(
       `CREATE TABLE IF NOT EXISTS activations (
          tenant text NOT NULL, seq integer NOT NULL, commit_hash text NOT NULL,
@@ -33,9 +47,15 @@ export class ActivationService implements OnModuleDestroy {
     return this.ready.then(() => this.pool!);
   }
 
-  async activate(tenant: string, commit: string): Promise<Activation> {
+  async activate(tenant: string, commit: string): Promise<ActivationResult> {
     if (!/^[0-9a-v]{8,64}$/.test(commit)) throw new Error('invalid commit hash');
-    if (!this.url) {
+    const a = await this.record(tenant, commit);
+    const ev = this.nats.enabled ? ((await this.nats.publish(`iam.activation.${tenant}`, a)) ? 'published' : 'not-published') : 'disabled';
+    return { ...a, event: ev };
+  }
+
+  private async record(tenant: string, commit: string): Promise<Activation> {
+    if (!(await this.resolveUrl())) {
       const seq = this.mem.filter((a) => a.tenant === tenant).length + 1;
       const a: Activation = { tenant, seq, commit, state: 'activated' };
       this.mem.push(a);
@@ -54,7 +74,7 @@ export class ActivationService implements OnModuleDestroy {
   }
 
   async list(tenant: string): Promise<Activation[]> {
-    if (!this.url) return this.mem.filter((a) => a.tenant === tenant);
+    if (!(await this.resolveUrl())) return this.mem.filter((a) => a.tenant === tenant);
     const r = await (await this.db()).query('SELECT seq, commit_hash FROM activations WHERE tenant=$1 ORDER BY seq', [tenant]);
     return r.rows.map((x) => ({ tenant, seq: x.seq as number, commit: x.commit_hash as string, state: 'activated' as const }));
   }
