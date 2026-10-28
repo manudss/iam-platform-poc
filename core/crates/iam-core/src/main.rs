@@ -16,23 +16,46 @@ pub struct Core {
     pub active: RwLock<HashMap<String, Active>>,
     /// Shared secret for /v1/activate. None = endpoint disabled (secure default).
     pub admin_token: Option<String>,
+    /// Directory where each tenant's active version is persisted (<tenant>.json, atomic rename). None = memory only.
+    pub state_dir: Option<std::path::PathBuf>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Snapshot {
     pub assignments: Vec<Assignment>,
     pub sod_rules: Vec<SodRule>,
 }
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Assignment { pub identity_id: String, pub role_id: String }
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SodRule { pub role_a: String, pub role_b: String }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Active { pub seq: u64, pub commit: String, pub snapshot: Snapshot }
 
 impl Core {
+    /// Loads persisted active versions. Files that are unreadable, malformed or whose tenant name does not match the file name are skipped (logged).
+    pub fn load_state(&mut self, dir: &std::path::Path) {
+        self.state_dir = Some(dir.to_path_buf());
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let mut map = self.active.write().unwrap();
+        for e in rd.flatten() {
+            let path = e.path();
+            let (Some(stem), Some("json")) = (path.file_stem().and_then(|s| s.to_str()).map(str::to_string), path.extension().and_then(|s| s.to_str())) else { continue };
+            match std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Active>(&b).ok()) {
+                Some(a) if valid_name(&stem) => { map.insert(stem, a); }
+                _ => tracing::warn!("ignoring unreadable state file {}", path.display()),
+            }
+        }
+    }
+    fn persist(&self, tenant: &str, a: &Active) -> std::io::Result<()> {
+        let Some(dir) = &self.state_dir else { return Ok(()) };
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!(".{tenant}.tmp"));
+        std::fs::write(&tmp, serde_json::to_vec(a).map_err(std::io::Error::other)?)?;
+        std::fs::rename(tmp, dir.join(format!("{tenant}.json")))
+    }
     pub fn new(engine: Engine, plugin: Option<(PluginRuntime, Vec<u8>)>, idp: Idp) -> Self {
-        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None }
+        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None }
     }
 }
 
@@ -98,7 +121,11 @@ async fn activate(State(c): State<Arc<Core>>, headers: axum::http::HeaderMap, Js
         }
         if cur.seq > r.seq { return (StatusCode::CONFLICT, Json(json!({"error": "stale activation", "active_seq": cur.seq}))); }
     }
-    map.insert(r.tenant.clone(), Active { seq: r.seq, commit: r.commit.clone(), snapshot: r.snapshot });
+    let a = Active { seq: r.seq, commit: r.commit.clone(), snapshot: r.snapshot };
+    if let Err(e) = c.persist(&r.tenant, &a) { // not persisted = not applied: the caller sees the failure and can retry
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("cannot persist active version: {e}")})));
+    }
+    map.insert(r.tenant.clone(), a);
     (StatusCode::OK, Json(json!({"status": "applied", "seq": r.seq, "commit": r.commit})))
 }
 
@@ -177,6 +204,7 @@ async fn main() {
     }));
     let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
     let mut core = Core::new(engine, plugin, Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)));
+    if let Ok(d) = std::env::var("IAM_CORE_STATE_DIR") { core.load_state(std::path::Path::new(&d)); }
     core.admin_token = std::env::var("IAM_CORE_ADMIN_TOKEN").ok().filter(|t| t.len() >= 8);
     let engine = Arc::new(core);
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
@@ -298,5 +326,25 @@ mod activation_tests {
         assert_eq!((st, v["seq"].as_u64()), (StatusCode::OK, Some(5)));
         assert_eq!(send(&c, "GET", "/v1/version?tenant=nope", None, Value::Null).await.0, StatusCode::NOT_FOUND);
         assert_eq!(send(&c, "POST", "/v1/activate", Some(TOKEN), act(6, "bad commit!", json!([]))).await.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn active_version_survives_a_core_restart_when_a_state_dir_is_set() {
+        let dir = std::env::temp_dir().join(format!("iam-core-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |load: bool| { let mut c = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test")); c.admin_token = Some(TOKEN.into()); if load { c.load_state(&dir) } else { c.state_dir = Some(dir.clone()) }; Arc::new(c) };
+        let c1 = mk(false);
+        send(&c1, "POST", "/v1/activate", Some(TOKEN), act(7, "c7", json!([{"identity_id":"demo-alice","role_id":"payment-approver"}]))).await;
+        assert_eq!(send(&c1, "POST", "/v1/decide", None, dec("demo-alice")).await.1["allow"], true);
+        drop(c1); // "restart"
+        let c2 = mk(true);
+        let (st, v) = send(&c2, "GET", "/v1/version?tenant=t1", None, Value::Null).await;
+        assert_eq!((st, v["seq"].as_u64(), v["commit"].as_str()), (StatusCode::OK, Some(7), Some("c7")));
+        assert_eq!(send(&c2, "POST", "/v1/decide", None, dec("demo-alice")).await.1["allow"], true);
+        // a corrupted state file is ignored (fail closed: no active version), and a stale seq is still refused after reload
+        std::fs::write(dir.join("t1.json"), b"{not json").unwrap();
+        let c3 = mk(true);
+        assert_eq!(send(&c3, "POST", "/v1/decide", None, dec("demo-alice")).await.1["reasons"][0], "no-active-version");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
