@@ -27,7 +27,7 @@ export type ActivationResult = Activation & { event: 'published' | 'not-publishe
  * otherwise an in-memory list (lost on restart - dev fallback only).
  * After the journal commit, a NATS JetStream event iam.activation.<tenant> is published when IAM_NATS_URL is set (not atomic with
  * the journal: no outbox yet). The PostgreSQL URL comes from IAM_PG_URL or, if absent, from OpenBao KV secret/iam/pg field "url".
- * TODO(POC): transactional outbox for the NATS event (still not atomic with the journal).
+ * TODO(POC): outbox is PostgreSQL-only and only when core-apply is enabled; otherwise the event is published directly after the journal write.
  */
 @Injectable()
 export class ActivationService implements OnModuleDestroy {
@@ -57,6 +57,8 @@ export class ActivationService implements OnModuleDestroy {
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS state text NOT NULL DEFAULT 'recorded';
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS error text;
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS request_id text;
+       CREATE TABLE IF NOT EXISTS outbox (id bigserial PRIMARY KEY, tenant text NOT NULL, seq integer NOT NULL, payload jsonb NOT NULL,
+         created_at timestamptz NOT NULL DEFAULT now(), sent_at timestamptz, UNIQUE (tenant, seq));
        CREATE UNIQUE INDEX IF NOT EXISTS activations_request ON activations (tenant, request_id) WHERE request_id IS NOT NULL`).then(() => undefined);
     return this.ready.then(() => this.pool!);
   }
@@ -86,8 +88,36 @@ export class ActivationService implements OnModuleDestroy {
       }
     }
     if (this.applyEnabled) a = await this.apply(a);
-    const ev = a.state !== 'failed' && this.nats.enabled ? ((await this.nats.publish(`iam.activation.${tenant}`, a)) ? 'published' : 'not-published') : 'disabled';
+    if (a.state === 'failed') return { ...a, event: 'disabled' };
+    const outbox = this.applyEnabled && !!(await this.resolveUrl());
+    if (outbox) { // events leave through the PostgreSQL outbox, written in the same transaction as the 'applied' state
+      await this.relay();
+      const sent = (await (await this.db()).query('SELECT sent_at FROM outbox WHERE tenant=$1 AND seq=$2', [a.tenant, a.seq])).rows[0]?.sent_at;
+      return { ...a, event: sent ? 'published' : this.nats.enabled ? 'not-published' : 'disabled' };
+    }
+    const ev = this.nats.enabled ? ((await this.nats.publish(`iam.activation.${a.tenant}`, a)) ? 'published' : 'not-published') : 'disabled';
     return { ...a, event: ev };
+  }
+
+  /**
+   * Outbox relay: publishes unsent events in order and marks them sent only after the NATS ack (at-least-once:
+   * a crash between ack and mark re-publishes; consumers must dedupe on tenant+seq). Safe to call repeatedly.
+   * Returns the number of events published. Does nothing when NATS is disabled or unreachable (rows stay unsent).
+   */
+  async relay(): Promise<number> {
+    if (!this.nats.enabled || !(await this.resolveUrl())) return 0;
+    const c = await (await this.db()).connect();
+    let n = 0;
+    try {
+      await c.query('BEGIN');
+      const rows = (await c.query('SELECT id, tenant, seq, payload FROM outbox WHERE sent_at IS NULL ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 100')).rows;
+      for (const r of rows) {
+        if (!(await this.nats.publish(`iam.activation.${r.tenant}`, r.payload))) break; // keep order: stop at the first failure
+        await c.query('UPDATE outbox SET sent_at = now() WHERE id=$1', [r.id]); n++;
+      }
+      await c.query('COMMIT');
+    } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+    return n;
   }
 
   private async apply(a: Activation): Promise<Activation> {
@@ -100,7 +130,7 @@ export class ActivationService implements OnModuleDestroy {
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) throw new Error(`core refused activation: HTTP ${res.status} ${await res.text()}`);
-      await this.setState(a, 'applied');
+      await this.markApplied(a);
       await this.dolt.tagActivation(a.tenant, a.seq, a.commit).catch(() => undefined); // reference only; core already applied
       return { ...a, state: 'applied', error: undefined };
     } catch (e) {
@@ -108,6 +138,18 @@ export class ActivationService implements OnModuleDestroy {
       await this.setState(a, 'failed', msg);
       return { ...a, state: 'failed', error: msg };
     }
+  }
+
+  private async markApplied(a: Activation) {
+    if (!(await this.resolveUrl())) return this.setState(a, 'applied');
+    const c = await (await this.db()).connect();
+    try {
+      await c.query('BEGIN');
+      await c.query("UPDATE activations SET state='applied', error=NULL WHERE tenant=$1 AND seq=$2", [a.tenant, a.seq]);
+      await c.query('INSERT INTO outbox (tenant, seq, payload) VALUES ($1,$2,$3) ON CONFLICT (tenant, seq) DO NOTHING',
+        [a.tenant, a.seq, JSON.stringify({ tenant: a.tenant, seq: a.seq, commit: a.commit, state: 'applied' })]);
+      await c.query('COMMIT');
+    } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
 
   private async setState(a: Activation, state: ActivationState, error?: string) {
@@ -134,6 +176,7 @@ export class ActivationService implements OnModuleDestroy {
     } catch { /* core unreachable: treated as not running the version */ }
     if (core && core.seq === latest.seq && core.commit === latest.commit && latest.state === 'applied') return { action: 'none', core, activation: latest };
     const a = await this.apply(latest);
+    await this.relay().catch(() => undefined);
     return { action: a.state === 'applied' ? 'reapplied' : 'failed', core, activation: a };
   }
 
