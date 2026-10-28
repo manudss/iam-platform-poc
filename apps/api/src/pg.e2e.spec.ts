@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { ActivationService } from './activation/activation.service.js';
+import { SecretsService } from './integrations/secrets.service.js';
+import { NatsService } from './integrations/nats.service.js';
 
 const bin = process.env.PG_BIN;
 const have = !!bin && existsSync(join(bin, 'postgres')) && existsSync(join(bin, 'initdb'));
@@ -45,5 +47,14 @@ describe('activation journal on real PostgreSQL', { skip: !have && 'PG_BIN not s
     const r = await Promise.all(Array.from({ length: 8 }, (_, n) => a.activate('t3', `cc${n}`.padEnd(8, '0'))));
     assert.deepEqual(r.map((x) => x.seq).sort((x, y) => x - y), [1, 2, 3, 4, 5, 6, 7, 8]);
     await a.onModuleDestroy();
+  });
+  it('PostgreSQL URL taken from the secret store when IAM_PG_URL is unset (secret store STUBBED here; real OpenBao is tested separately)', async () => {
+    const url = process.env.IAM_PG_URL!;
+    delete process.env.IAM_PG_URL;
+    const stub = { get: async (p: string) => (p === 'iam/pg' ? { url } : undefined) } as unknown as SecretsService;
+    const a = new ActivationService(stub, new NatsService());
+    assert.equal((await a.current('t1'))?.seq, 3); // sees the durable rows written by the first test
+    await a.onModuleDestroy();
+    process.env.IAM_PG_URL = url;
   });
 });
