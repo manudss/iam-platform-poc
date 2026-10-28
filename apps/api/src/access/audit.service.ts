@@ -3,7 +3,7 @@ import pg from 'pg';
 
 export interface AuditEntry {
   id?: number; at?: string; tenant: string; subject: string; principal: string; action: string; resource: string;
-  allow: boolean; reasons: string[]; activation_seq: number | null; commit: string | null; source: 'http' | 'grpc' | 'agent'; note?: string;
+  allow: boolean; reasons: string[]; activation_seq: number | null; commit: string | null; source: 'http' | 'grpc' | 'agent' | 'simulate'; note?: string;
 }
 
 /**
