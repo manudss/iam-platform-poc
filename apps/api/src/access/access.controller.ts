@@ -1,7 +1,9 @@
 import { BadGatewayException, Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
+import { CoreGrpc } from './core-grpc.js';
 
 interface CheckBody {
+  tenant?: string;
   principal: string;
   action: string;
   resource: string;
@@ -14,8 +16,15 @@ interface CheckBody {
 export class AccessController {
   private readonly core = process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081';
 
+  private grpc?: CoreGrpc;
+  /** gRPC to the core when IAM_CORE_GRPC_ADDR is set (host:port), otherwise HTTP JSON. Both fail closed. */
   @Post('check')
   async check(@Body() body: CheckBody) {
+    const g = process.env.IAM_CORE_GRPC_ADDR;
+    if (g) {
+      try { return await (this.grpc ??= new CoreGrpc(g)).decide(body); }
+      catch { throw new BadGatewayException({ allow: false, error: 'core gRPC error (denied)' }); }
+    }
     let res: Response;
     try {
       res = await fetch(`${this.core}/v1/decide`, {
