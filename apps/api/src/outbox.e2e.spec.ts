@@ -11,6 +11,7 @@ import { connect, JSONCodec } from 'nats';
 import pg from 'pg';
 import { ActivationService } from './activation/activation.service.js';
 import { NatsService } from './integrations/nats.service.js';
+import { ActivationConsumer } from './integrations/activation-consumer.js';
 import { DoltService } from './dolt/dolt.service.js';
 
 const root = resolve(process.cwd(), '../..');
@@ -50,7 +51,7 @@ describe('outbox + core apply (real PostgreSQL, NATS, core; Dolt stubbed)', { sk
     assert.equal(v.seq, 1); // the core really applied it
     await svc.onModuleDestroy(); await n.onModuleDestroy();
   });
-  it('after a restart of the API and NATS coming back, the relay publishes the pending event exactly once', async () => {
+  it('after a restart of the API and NATS coming back, the relay publishes the pending event (observed once in this run; delivery is at-least-once)', async () => {
     await startNats();
     const n = new NatsService(), svc = new ActivationService(undefined, n, dolt); // new instance = "restart"
     assert.equal(await svc.relay(), 1);
@@ -86,5 +87,26 @@ describe('outbox + core apply (real PostgreSQL, NATS, core; Dolt stubbed)', { sk
     assert.equal((await q("select count(*)::int as n from activations where tenant='t2'"))[0].n, 1);
     assert.equal((await q("select count(*)::int as n from outbox where tenant='t2'"))[0].n, 1);
     await svc.onModuleDestroy(); await n.onModuleDestroy();
+  });
+
+  it('consumer is idempotent on tenant+seq: duplicate delivery (outbox replay) and a failing handler (rollback, then retry)', async () => {
+    const pool = new pg.Pool({ connectionString: process.env.IAM_PG_URL });
+    const calls: string[] = []; let failOnce = true;
+    const cons = new ActivationConsumer(pool, async (e, key) => { if (e.seq === 99 && failOnce) { failOnce = false; throw new Error('boom'); } calls.push(key); });
+    const ev = { tenant: 'tc', seq: 1, commit: 'aaaaaaaa', state: 'applied' };
+    assert.equal(await cons.handle(ev), 'processed');
+    assert.equal(await cons.handle(ev), 'duplicate'); // same event delivered twice
+    assert.deepEqual(calls, ['tc:1']);
+    await assert.rejects(cons.handle({ ...ev, seq: 99 }), /boom/);
+    assert.equal((await q("select count(*)::int as n from processed_events where seq=99"))[0].n, 0); // nothing recorded on failure
+    assert.equal(await cons.handle({ ...ev, seq: 99 }), 'processed'); // redelivery retries it
+    assert.deepEqual(calls, ['tc:1', 'tc:99']);
+    // end to end through NATS: duplicate publication of the same event is processed once
+    const n = new NatsService(); await n.publish('iam.activation.tc', { ...ev, seq: 5 }); await n.publish('iam.activation.tc', { ...ev, seq: 5 });
+    await cons.start(`127.0.0.1:${NP}`, 'test-consumer');
+    for (let i = 0; i < 50 && !calls.includes('tc:5'); i++) await sleep(100);
+    await sleep(500);
+    assert.equal(calls.filter((k) => k === 'tc:5').length, 1);
+    await cons.stop(); await n.onModuleDestroy(); await pool.end();
   });
 });
