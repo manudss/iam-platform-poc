@@ -21,6 +21,15 @@ export class App {
   protected identity = 'demo-bob';
   protected role = 'payment-approver';
 
+  constructor() {
+    if (location.pathname === '/callback') { // returned from the core login form
+      const search = location.search; history.replaceState(null, '', '/'); // the code never stays in the address bar or history
+      void this.run(async () => { await this.api.completeBrowserLogin(search, sessionStorage); this.loggedIn.set(true); this.message.set('Signed in through the browser flow (code + PKCE, state checked). In-memory token.'); await this.refresh(); });
+    }
+  }
+
+  protected signIn() { return this.run(() => this.api.startBrowserLogin(sessionStorage, (u) => location.assign(u))); }
+
   protected async run(fn: () => Promise<void>) {
     try { await fn(); } catch (e) { this.message.set((e as Error).message); }
   }
@@ -28,7 +37,7 @@ export class App {
   protected login() {
     return this.run(async () => {
       await this.api.login(this.user(), this.password); this.password = '';
-      this.loggedIn.set(true); this.message.set('Logged in (in-memory token, prototype flow).'); await this.refresh();
+      this.loggedIn.set(true); this.message.set('Logged in with the legacy JSON flow (in-memory token).'); await this.refresh();
     });
   }
   protected logout() { this.api.logout(); this.loggedIn.set(false); this.change.set(null); this.message.set('Logged out.'); }
