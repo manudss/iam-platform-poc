@@ -10,7 +10,7 @@ export class TemporalController {
 
   /** Same effect as POST .../activations, executed as a Temporal workflow (verify commit, then journal + event). */
   @Post()
-  async run(@Param('tenant') tenant: string, @Body() body: { commit?: string }) {
+  async run(@Param('tenant') tenant: string, @Body() body: { commit?: string; requestId?: string }) {
     if (!this.t.enabled) throw new ServiceUnavailableException('Temporal not configured (IAM_TEMPORAL_ADDR)');
     try { return await this.t.activate(tenant, body?.commit ?? (await this.dolt.head())); }
     catch (e) { throw new BadRequestException((e as Error).message.slice(0, 200)); }
