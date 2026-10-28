@@ -3,13 +3,11 @@ import { ApplicationFailure, proxyActivities } from '@temporalio/workflow';
 import type { ActivationActivities } from './activities.js';
 
 const retried = proxyActivities<ActivationActivities>({ startToCloseTimeout: '30 seconds', retry: { maximumAttempts: 3 } });
-// record() is NOT idempotent (it allocates a new journal seq): never retried automatically.
-const once = proxyActivities<ActivationActivities>({ startToCloseTimeout: '30 seconds', retry: { maximumAttempts: 1 } });
 
-export interface ActivationInput { tenant: string; commit: string }
+export interface ActivationInput { tenant: string; commit: string; requestId: string }
 
-/** Activation of a Dolt commit for a tenant: verify the commit is on main (retried), then journal + event (once). */
+/** Activation of a Dolt commit for a tenant: verify the commit is on main (retried), then journal + core apply + event. record() is idempotent per requestId, so it can be retried safely. */
 export async function activationWorkflow(input: ActivationInput) {
   if (!(await retried.verifyCommit(input.commit))) throw ApplicationFailure.nonRetryable(`commit ${input.commit} is not on Dolt main`, 'CommitNotOnMain');
-  return once.record(input.tenant, input.commit);
+  return retried.record(input.tenant, input.commit, input.requestId);
 }
