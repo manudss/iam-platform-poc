@@ -11,6 +11,8 @@ export interface EffectsDeps {
   notifySinkUrl?: string;      // local fictional sink: POST {url}/notify
   provisionTargetUrl?: string; // local demo target: PUT|DELETE {url}/Users/:id/Roles/:role
   timeoutMs?: number;
+  /** Optional plugin fan-out of notify.send (best effort: a plugin problem is logged, never an access decision, and never fails the role effects). */
+  pluginNotify?(tenant: string, payload: { effectKey: string; to: string; template: string; data: Record<string, unknown> }): Promise<void>;
 }
 interface Change { subject: string; role: string; change: 'granted' | 'revoked' }
 
@@ -41,6 +43,10 @@ export class ActivationEffects {
     const failed: string[] = [];
     const t = this.d.timeoutMs ?? 3000;
     for (const c of changes) {
+      if (this.d.pluginNotify) {
+        const key = `${e.tenant}:${e.seq}:plugin-notify:${c.subject}:${c.role}:${c.change}`;
+        await this.d.pluginNotify(e.tenant, { effectKey: key, to: `manager-of:${c.subject}`, template: 'role.changed', data: { subject: c.subject, role: c.role, change: c.change, activation: e.seq } }).catch((err) => console.warn(`[effects] plugin notify failed: ${(err as Error).message}`));
+      }
       if (this.d.notifySinkUrl) {
         const f = await this.once('notify', e, c, async (key) => {
           const base = assertLoopback(this.d.notifySinkUrl!);
