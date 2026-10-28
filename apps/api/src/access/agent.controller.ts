@@ -10,13 +10,13 @@ export const AGENT_TOOLS: Record<string, { action: string; resource: string; des
 };
 const MAX_TTL = 600, MAX_CALLS = 20;
 
-interface Delegation { agent: string; sub: string; tenant: string; principal: string; context: Record<string, unknown>; tenantMode: boolean; tools: Set<string>; exp: number; left: number }
+interface Delegation { agent: string; sub: string; tenant: string; principal: string; tools: Set<string>; exp: number; left: number }
 type DecideOut = { allow: boolean; reasons?: string[]; errors?: string[]; version?: { seq: number; commit: string } };
 
 /**
  * Bounded agentic call demo. A user (valid IdP token) delegates a SCOPED tool allowlist to a named agent for a few minutes and a few calls.
  * The agent gets an opaque delegation secret (random, kept in memory only as a SHA-256 hash, never persisted, lost on restart; NOT a JWT).
- * Every call: allowlist check, then the SAME Cedar decision in the Rust core with the delegating user's principal and the context fixed at delegation time.
+ * Every call: allowlist check, then the SAME Cedar decision in the Rust core in TENANT mode with the delegating user's principal derived from the verified token (roles/SoD come from the active data version, no caller context).
  * Every call (allow, deny, outside allowlist, core down) is written to the decision audit with source 'agent'. The agent cannot create delegations
  * (that needs a user token) and cannot change principal, tenant or context. Not an autonomous agent: no planning, no tool beyond the registry.
  */
@@ -28,9 +28,11 @@ export class AgentController {
 
   @UseGuards(AuthGuard)
   @Post('delegations')
-  create(@Body() b: { agent_id?: string; principal?: string; tools?: string[]; context?: Record<string, unknown>; tenant_mode?: boolean; ttl_seconds?: number; max_calls?: number }, @Req() req: { user: { sub: string; tenant: string } }) {
+  create(@Body() b: { agent_id?: string; principal?: string; tools?: string[]; ttl_seconds?: number; max_calls?: number }, @Req() req: { user: { sub: string; tenant: string } }) {
     if (!b.agent_id || typeof b.agent_id !== 'string' || b.agent_id.length > 64) throw new BadRequestException('agent_id required (max 64 chars)');
-    if (!b.principal || typeof b.principal !== 'string') throw new BadRequestException('principal required');
+    const principal = `User::"${req.user.sub}"`; // the delegating user is the verified token subject, never a body field
+    if (b.principal !== undefined && b.principal !== principal) throw new ForbiddenException('principal must be the authenticated subject');
+    if ('context' in (b as object) || 'tenant_mode' in (b as object)) throw new BadRequestException('context and tenant_mode are not accepted: authorization attributes come from the core');
     if (!Array.isArray(b.tools) || b.tools.length === 0) throw new BadRequestException('tools allowlist required');
     const unknown = b.tools.filter((t) => !Object.hasOwn(AGENT_TOOLS, t));
     if (unknown.length) throw new BadRequestException(`unknown tools: ${unknown.join(',')}`);
@@ -38,7 +40,7 @@ export class AgentController {
     const calls = Math.min(Math.max(Math.trunc(b.max_calls ?? 5) || 5, 1), MAX_CALLS);
     const secret = randomBytes(32).toString('base64url');
     const exp = Date.now() + ttl * 1000;
-    this.store.set(createHash('sha256').update(secret).digest('hex'), { agent: b.agent_id, sub: req.user.sub, tenant: req.user.tenant, principal: b.principal, context: b.context ?? {}, tenantMode: b.tenant_mode === true, tools: new Set(b.tools), exp, left: calls });
+    this.store.set(createHash('sha256').update(secret).digest('hex'), { agent: b.agent_id, sub: req.user.sub, tenant: req.user.tenant, principal, tools: new Set(b.tools), exp, left: calls });
     return { delegation: secret, agent_id: b.agent_id, tools: b.tools, max_calls: calls, expires_at: new Date(exp).toISOString() };
   }
 
@@ -57,7 +59,7 @@ export class AgentController {
     d.left--;
     let res: Response;
     try {
-      res = await fetch(`${this.core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...(d.tenantMode ? { tenant: d.tenant } : {}), principal: d.principal, action: def.action, resource: def.resource, context: d.context }) });
+      res = await fetch(`${this.core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tenant: d.tenant, principal: d.principal, action: def.action, resource: def.resource, context: {} }) });
     } catch { await rec({ allow: false, reasons: ['core-unreachable'] }, 'denied: core unreachable'); throw new BadGatewayException({ allow: false, error: 'core unreachable (denied)' }); }
     if (!res.ok) { await rec({ allow: false, reasons: [`core-error-${res.status}`] }, 'denied: core error'); throw new BadGatewayException({ allow: false, error: `core error ${res.status} (denied)` }); }
     const out = (await res.json()) as DecideOut;
