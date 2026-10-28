@@ -43,7 +43,7 @@ export function authPasswordLockout(failures: Map<string, number> = new Map()): 
       apiVersion: 'plugin/v1', id: 'auth-password-lockout', version: '1.0.0', name: 'Password sign-in with lockout', publisher: 'iam-platform',
       kinds: ['auth-method'], extends: 'auth-password', provides: ['auth.password'],
       hooks: [{ name: 'auth.authenticate', mode: 'blocking' }],
-      install: { migrations: [{ id: '001-attempts', sql: ['create table if not exists plg_auth_password_lockout_attempts (subject text primary key, failures int not null default 0, locked_until timestamptz)'] }] },
+      install: { migrations: [{ id: '001-attempts', sql: ['create table if not exists plg_auth_password_lockout_attempts (tenant text not null, subject text not null, failures int not null default 0, locked_until timestamptz, primary key (tenant, subject))'] }] },
       settings: [
         { key: 'minLength', type: 'number', label: 'Minimum password length', default: 12, min: 8, max: 128, group: 'Policy' },
         { key: 'allowedDomains', type: 'list', label: 'Allowed e-mail domains (empty = all)', default: [], group: 'Policy' },
@@ -69,7 +69,7 @@ export const orgManager: PluginImpl = {
     kinds: ['profile', 'workflow', 'ui'],
     hooks: [{ name: 'profile.enrich', mode: 'blocking' }, { name: 'identity.changed', mode: 'async' }],
     install: {
-      migrations: [{ id: '001-orgs', sql: ['create table if not exists plg_org_manager_orgs (id text primary key, parent text, name text not null)', 'create table if not exists plg_org_manager_members (org text not null, subject text not null, primary key (org, subject))'] }],
+      migrations: [{ id: '001-orgs', sql: ['create table if not exists plg_org_manager_orgs (tenant text not null, id text not null, parent text, name text not null, primary key (tenant, id))', 'create table if not exists plg_org_manager_members (tenant text not null, org text not null, subject text not null, primary key (tenant, org, subject))'] }],
       seed: [{ table: 'plg_org_manager_orgs', row: { id: 'root', name: 'Demo company' } }],
     },
     settings: [
