@@ -49,7 +49,7 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
     app = await NestFactory.create(AppModule, { logger: false });
     await app.listen(13010);
   });
-  after(async () => { await app?.close(); dolt?.kill(); core?.kill(); if (dir) rmSync(dir, { recursive: true, force: true }); });
+  after(async () => { await app?.close(); dolt?.kill(); core?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
   const T = 'tenants/acme-demo';
   it('reads seeded assignments from Dolt', async () => {
