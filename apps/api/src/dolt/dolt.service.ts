@@ -66,6 +66,32 @@ export class DoltService {
     } finally { await c.end(); }
   }
 
+  /**
+   * Connector entry point: upserts identities and role assignments on a NEW branch, simulates SoD, commits on the branch.
+   * Like simulate(): nothing reaches main until an explicit merge. Rows are validated before any write.
+   */
+  async importRows(rows: { identity: string; displayName: string; manager: string | null; department: string; role: string }[]) {
+    if (!rows.length || rows.length > 500) throw new BadRequestException('1 to 500 rows expected');
+    const c = await this.conn();
+    try {
+      const [rr] = await c.query('select id from roles');
+      const roles = new Set((rr as { id: string }[]).map((r) => r.id));
+      const bad = rows.filter((r) => !roles.has(r.role));
+      if (bad.length) throw new BadRequestException(`unknown role in rows: ${[...new Set(bad.map((r) => r.role))].slice(0, 5).join(', ')}`);
+      const branch = `change-${randomBytes(4).toString('hex')}`;
+      await c.query('CALL DOLT_CHECKOUT(\'-b\', ?)', [branch]);
+      for (const r of rows) {
+        await c.query('INSERT INTO identities (id, display_name, manager_id, department) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), manager_id=VALUES(manager_id), department=VALUES(department)', [r.identity, r.displayName, r.manager, r.department]);
+        await c.query('INSERT IGNORE INTO assignments VALUES (?, ?)', [r.identity, r.role]);
+      }
+      const violations = await this.violations(c);
+      await c.query('CALL DOLT_COMMIT(\'-A\', \'-m\', ?)', [`csv import: ${rows.length} rows`]);
+      const commit = await this.hash(c, branch);
+      await c.query('CALL DOLT_CHECKOUT(\'main\')');
+      return { branch, commit, rows: rows.length, violations, mergeable: violations.length === 0 };
+    } finally { await c.end(); }
+  }
+
   /** Merges a simulated branch into main, after re-checking SoD on the branch. Returns the new main commit. */
   async merge(branch: string): Promise<{ commit: string }> {
     if (!/^change-[0-9a-f]{8}$/.test(branch)) throw new BadRequestException('invalid branch');
