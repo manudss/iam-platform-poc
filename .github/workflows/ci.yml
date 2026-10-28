@@ -3,7 +3,7 @@
 # unless a budget with "stop usage" is set. Each job is capped with timeout-minutes. Standard runners only.
 # The api job downloads the real service binaries and runs the real-service suites (see the job comment and docs/e2e.md).
 # The core binary IS built, so the Rust-core end-to-end suite runs. The compose job starts the real docker-compose stack on the
-# runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts.
+# runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts (container checks) and compose-app.e2e.spec.ts (application path: Dolt -> activation -> core over gRPC -> outbox -> NATS -> consumer on the containers).
 name: ci
 on: workflow_dispatch
 permissions:
@@ -88,9 +88,15 @@ jobs:
             echo "port $p open=$ok"; [ $ok = 1 ] || { docker compose -f infra/docker-compose.yml ps; docker compose -f infra/docker-compose.yml logs --tail=100; exit 1; }
           done
           sleep 15
-      - name: Run compose end-to-end suite
+      - name: Build the Rust core (runs as a local process next to the containers, gRPC enabled by the test)
+        run: cargo build -p iam-core --locked
+        working-directory: core
+      - name: Run compose end-to-end suites (container checks, then the application path on the containers)
         working-directory: apps/api
-        run: npm ci && npm run build && COMPOSE_STACK=1 node --test dist/compose.e2e.spec.js
+        run: |
+          npm ci && npm run build
+          COMPOSE_STACK=1 node --test dist/compose.e2e.spec.js
+          COMPOSE_STACK=1 node --test dist/compose-app.e2e.spec.js
       - name: Logs on failure
         if: failure()
         run: docker compose -f infra/docker-compose.yml ps; docker compose -f infra/docker-compose.yml logs --tail=150
