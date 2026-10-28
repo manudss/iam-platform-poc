@@ -28,6 +28,7 @@ A suite whose variable is unset is reported as skipped with a reason, never as p
 - `temporal.e2e.spec.ts` (real Temporal dev server + real Dolt): workflow success; unknown commit fails the workflow and nothing is journaled.
 - `fullstack.e2e.spec.ts` (real Dolt + PostgreSQL + NATS JetStream + Rust core + NestJS services, nothing stubbed): Dolt data change -> export -> activation -> core applies and the decision flips -> outbox relay -> NATS -> idempotent consumer handles it once; same request id again gives no new seq; SoD computed by the core.
 - `grpc.e2e.spec.ts` (real core binary with `IAM_CORE_GRPC_ADDR`, NestJS gRPC client): gRPC allow/deny equals HTTP, tenant mode fail closed then activated, unreachable core rejects. Rust: `grpc.rs` test over a real socket.
+- `audit.e2e.spec.ts` (real core + API; PostgreSQL part on a real server): allow/deny/core-down recorded with tenant, seq, commit; no token 401, other tenant 403, context not stored; rows survive a restart and are tenant-isolated.
 - Rust: `cd core && cargo test --locked` (Cedar engine, WASM runtime, IdP).
 - Angular: `cd apps/web && npm test -- --watch=false` (PKCE S256 test vector, API client with a fake fetch, component render).
 - Real browser: `DOLT_BIN=... CHROME_BIN=/usr/bin/google-chrome NODE_PATH=<dir with playwright-core>/node_modules node scripts/ui-e2e.mjs [outDir]` starts Dolt, core, API and `ng serve` on 127.0.0.1, drives the console in headless Chrome and writes screenshots (build core and API first).
