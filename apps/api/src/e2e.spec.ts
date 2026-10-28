@@ -104,6 +104,14 @@ describe('e2e core + api', { skip: !existsSync(bin) && 'core binary not built' }
     } finally { process.env.IAM_CORE_URL = prev.url; process.env.IAM_ISSUER = prev.iss; }
   });
   it('token from another issuer (other keys) -> 401', async () => assert.equal((await check(await login(SHORT), {})).status, 401));
+  it('wrong audience -> 401 (valid token minted for demo-web, API expects another audience)', async () => {
+    const t = await login(CORE);
+    const prev = process.env.IAM_AUDIENCE;
+    process.env.IAM_AUDIENCE = 'some-other-api';
+    try { assert.equal((await check(t, { sod_conflict: false })).status, 401); }
+    finally { if (prev === undefined) delete process.env.IAM_AUDIENCE; else process.env.IAM_AUDIENCE = prev; }
+    assert.notEqual((await check(t, { sod_conflict: false })).status, 401); // audience restored: accepted again
+  });
   it('wrong tenant -> 403, right tenant -> 201, journal works with a valid token', async () => {
     const t = await login(CORE);
     assert.equal((await post(`${API}/tenants/other-tenant/activations`, { commit: 'aaaaaaaa' }, t)).status, 403);
