@@ -95,4 +95,4 @@ try {
   console.log('UI E2E PASSED; screenshots in ' + out);
 } finally {
   await browser?.close(); await stopAll(); rmSync(dir, { recursive: true, force: true });
-                      }
+}
