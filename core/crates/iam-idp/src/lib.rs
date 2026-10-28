@@ -1,5 +1,6 @@
 //! POC identity provider module: OIDC authorization-code + PKCE (S256), Ed25519 (EdDSA) id tokens, JWKS.
-//! OAuth/OIDC-inspired authentication PROTOTYPE (JSON endpoints, no redirects or forms): not a standard OIDC flow.
+//! OAuth/OIDC-inspired authentication PROTOTYPE: JSON endpoints plus a browser authorization-code flow (GET /authorize form, 302 with code and state,
+//! see iam-core `authz.rs`). Not a standard OIDC implementation (no userinfo, refresh, consent, MFA, sessions).
 //! NOT production: in-memory keys and codes, fictional demo users, no sessions, MFA, passkeys, SAML,
 //! consent, refresh tokens, rate limiting or key rotation. See README "Not built yet".
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
@@ -52,6 +53,11 @@ impl Idp {
     pub fn jwks(&self) -> Value {
         let x = B64.encode(self.key.verifying_key().to_bytes());
         json!({"keys": [{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"poc-1","x": x}]})
+    }
+
+    /// True when client_id and redirect_uri exactly match the registered client (checked BEFORE showing a form or redirecting anywhere).
+    pub fn check_client(&self, client_id: &str, redirect_uri: &str) -> bool {
+        client_id == self.client_id && self.redirect_uris.iter().any(|u| u == redirect_uri)
     }
 
     /// Simplified login step: checks the user and issues a single-use code bound to the PKCE challenge.
