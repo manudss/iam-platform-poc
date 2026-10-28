@@ -36,10 +36,12 @@ jobs:
           dl() { gh release download "$2" -R "$1" -p "$3" -D /tmp/svc --clobber || { echo "download failed: $1 $2 $3"; gh release view "$2" -R "$1" --json assets -q '.assets[].name'; exit 1; }; }
           dl dolthub/dolt v2.6.1 'dolt-linux-amd64.tar.gz'
           dl nats-io/nats-server v2.15.2 'nats-server-v2.15.2-linux-amd64.tar.gz'
-          dl openbao/openbao v2.7.2 'bao_*_Linux_x86_64.tar.gz'
-          dl temporalio/cli v1.9.1 'temporal_cli_*_linux_amd64.tar.gz'
+          # asset names of these two are matched on the release's own asset list (linux + amd64/x86_64 tarball, no hsm/sbom/sig/ui)
+          pick() { n=$(gh release view "$2" -R "$1" --json assets -q '.assets[].name' | grep -iE 'linux' | grep -iE '(amd64|x86_64)\.tar\.gz$' | grep -viE 'hsm|sbom|sig|ui' | head -1); echo "$1 -> $n"; test -n "$n" && dl "$1" "$2" "$n" || { gh release view "$2" -R "$1" --json assets -q '.assets[].name' | grep -i linux; exit 1; }; }
+          pick openbao/openbao v2.7.2
+          pick temporalio/cli v1.9.1
           mkdir dolt nats bao temporal
-          tar xzf dolt-linux-amd64.tar.gz -C dolt; tar xzf nats-server-*.tar.gz -C nats; tar xzf bao_*.tar.gz -C bao; tar xzf temporal_cli_*.tar.gz -C temporal
+          tar xzf dolt-linux-amd64.tar.gz -C dolt; tar xzf nats-server-*.tar.gz -C nats; tar xzf openbao_*.tar.gz -C bao; tar xzf temporal_*.tar.gz -C temporal
           echo "DOLT_BIN=$(find /tmp/svc/dolt -name dolt -type f | head -1)" >> $GITHUB_ENV
           echo "NATS_SERVER_BIN=$(find /tmp/svc/nats -name nats-server -type f | head -1)" >> $GITHUB_ENV
           echo "BAO_BIN=$(find /tmp/svc/bao -name bao -type f | head -1)" >> $GITHUB_ENV
