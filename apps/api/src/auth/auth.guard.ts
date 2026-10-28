@@ -40,9 +40,15 @@ export class AuthGuard implements CanActivate {
       claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
     } catch { throw new UnauthorizedException('malformed token'); }
     if (header.alg !== 'EdDSA' || !header.kid) throw new UnauthorizedException('unsupported algorithm');
-    const key = await this.key(header.kid);
-    if (!key || !verify(null, Buffer.from(`${parts[0]}.${parts[1]}`), key, Buffer.from(parts[2], 'base64url')))
-      throw new UnauthorizedException('bad signature');
+    const signed = Buffer.from(`${parts[0]}.${parts[1]}`), sig = Buffer.from(parts[2], 'base64url');
+    let key = await this.key(header.kid);
+    let ok = !!key && verify(null, signed, key, sig);
+    if (!ok) { // the core may have restarted with a new key under the same kid: drop the cached keys once and re-read the JWKS
+      for (const k of [...this.keys.keys()]) if (k.startsWith(`${this.coreUrl}|`)) this.keys.delete(k);
+      key = await this.key(header.kid);
+      ok = !!key && verify(null, signed, key, sig);
+    }
+    if (!ok) throw new UnauthorizedException('bad signature');
     if (claims.iss !== this.issuer) throw new UnauthorizedException('bad issuer');
     if (claims.aud !== this.audience) throw new UnauthorizedException('bad audience');
     if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now()) throw new UnauthorizedException('token expired');
