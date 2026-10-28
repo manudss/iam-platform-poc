@@ -42,6 +42,21 @@ describe('activation journal on real PostgreSQL', { skip: !have && 'PG_BIN not s
     assert.equal((await b.list('t2')).length, 0);
     await b.onModuleDestroy();
   });
+  it('A/B/A with request ids: new request = new seq; retry of the same request has no new row; concurrent same request = one row', async () => {
+    const a = new ActivationService();
+    const A = 'aaaaaaaa', B = 'bbbbbbbb';
+    assert.equal((await a.activate('t4', A, 'req-a-000001')).seq, 1);
+    assert.equal((await a.activate('t4', B, 'req-b-000001')).seq, 2);
+    assert.equal((await a.activate('t4', A, 'req-a-000002')).seq, 3); // A again after B, new request
+    assert.equal((await a.activate('t4', A, 'req-a-000002')).seq, 3); // retry of that request
+    assert.equal((await a.activate('t4', A, 'req-a-000001')).seq, 1); // retry of the first request
+    assert.equal((await a.list('t4')).length, 3);
+    await assert.rejects(a.activate('t4', B, 'req-a-000001'), /another commit/);
+    const par = await Promise.all(Array.from({ length: 6 }, () => a.activate('t5', A, 'req-par-00001')));
+    assert.deepEqual([...new Set(par.map((x) => x.seq))], [1]);
+    assert.equal((await a.list('t5')).length, 1);
+    await a.onModuleDestroy();
+  });
   it('concurrent activations get distinct consecutive seqs', async () => {
     const a = new ActivationService();
     const r = await Promise.all(Array.from({ length: 8 }, (_, n) => a.activate('t3', `cc${n}`.padEnd(8, '0'))));
