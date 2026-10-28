@@ -5,12 +5,16 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/pg.e2e.spec.js dist/integrations.e2e.spec.js"
+    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/pg.e2e.spec.js dist/integrations.e2e.spec.js dist/temporal.e2e.spec.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",
     "@nestjs/core": "^12.3.2",
     "@nestjs/platform-express": "^12.3.2",
+    "@temporalio/activity": "^1.25.0",
+    "@temporalio/client": "^1.25.0",
+    "@temporalio/worker": "^1.25.0",
+    "@temporalio/workflow": "^1.25.0",
     "mysql2": "^3.24.6",
     "nats": "^2.29.3",
     "pg": "^8.23.1",
