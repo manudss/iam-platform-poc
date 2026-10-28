@@ -61,14 +61,28 @@ export function toFormModel(fields: SettingField[], current: Record<string, unkn
   return { groups: [...groups].map(([name, fs]) => ({ name, fields: fs })) };
 }
 
-/** Replacement rule: `child` must declare every field of `base` with the same type. New required fields are allowed: enabling is refused until they are configured. */
+/**
+ * Replacement rule. A replacement may add settings, but for every base setting it must be at least as strict as the base, so that any value
+ * the replacement accepts is also valid for the base: same type, required stays required, ranges and lists cannot be wider, patterns and
+ * select options cannot be looser. Secrets stay secrets. Enabling is refused until new required settings are configured.
+ */
 export function settingsExtend(base: SettingField[], child: SettingField[]): string[] {
   const errs: string[] = [];
   const c = new Map(child.map((f) => [f.key, f]));
   for (const b of base) {
     const f = c.get(b.key);
     if (!f) { errs.push(`missing base setting ${b.key}`); continue; }
-    if (f.type !== b.type) errs.push(`setting ${b.key}: type ${f.type} differs from base ${b.type}`);
+    const e = (m: string) => errs.push(`setting ${b.key}: ${m}`);
+    if (f.type !== b.type) e(`type ${f.type} differs from base ${b.type}`);
+    if (b.required && !f.required && f.default === undefined) e('required in the base, must stay required');
+    if (b.min !== undefined && (f.min === undefined || f.min < b.min)) e(`minimum must be at least ${b.min}`);
+    if (b.max !== undefined && (f.max === undefined || f.max > b.max)) e(`maximum must be at most ${b.max}`);
+    if (b.pattern !== undefined && f.pattern !== b.pattern) e('pattern must equal the base pattern');
+    if (b.options && (!f.options || f.options.some((o) => !b.options!.some((x) => x.value === o.value)))) e('options must be a subset of the base options');
+    if (b.default !== undefined && f.default !== undefined && JSON.stringify(b.default) !== JSON.stringify(f.default) && f.type !== 'secret') {
+      const v = validateSettings([b], { [b.key]: f.default });
+      if (!v.ok) e('default is not valid for the base');
+    }
   }
   return errs;
 }
