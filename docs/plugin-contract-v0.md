@@ -1,5 +1,7 @@
 # Plugin contract v0
 
+Superseded for the async/admin side by `docs/plugins.md` (v1: manifest, install, settings forms, base/replacement). This page still describes the WASM blocking hook.
+
 Two kinds of plugin.
 
 ## Blocking hook (Rust core, WASM)
