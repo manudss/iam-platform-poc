@@ -54,6 +54,13 @@ pub async fn authorize_form(State(c): State<Arc<Core>>, Query(p): Query<HashMap<
 pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, String>>) -> Response {
     if let Err(r) = validate(&c, &p) { return r; } // hidden fields are not trusted: validated again
     let g = |k: &str| p.get(k).map(String::as_str).unwrap_or("");
+    if let Some((addr, tok)) = &c.gate {
+        match crate::gate::check(addr, tok, "acme-demo", g("username"), g("password")).await {
+            crate::gate::Gate::Allow => {}
+            crate::gate::Gate::Deny => return form(&p, Some("Wrong user or password.")),
+            crate::gate::Gate::Unavailable => return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable"),
+        }
+    }
     match c.idp.authorize(g("client_id"), g("redirect_uri"), g("code_challenge"), g("username"), g("password")) {
         Ok(code) => {
             let sep = if g("redirect_uri").contains('?') { '&' } else { '?' };
