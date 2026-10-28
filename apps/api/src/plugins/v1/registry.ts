@@ -40,7 +40,8 @@ export class PluginRegistry {
   private state = new Map<string, State>(); // key: tenant/plugin
   /** Slot -> plugin id chosen by the admin as replacement; absent means the base plugin serves. */
   private chosen = new Map<string, string>(); // key: tenant/slot
-  private unhealthy = new Set<string>();
+  /** Replacements that failed at runtime (key tenant/plugin). A faulted replacement keeps its slot but answers every call with a refusal until an admin acts. */
+  private faulted = new Set<string>();
 
   constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}) {}
 
@@ -84,7 +85,7 @@ export class PluginRegistry {
     return [...this.impls.values()].map((i) => {
       const s = this.state.get(this.k(tenant, i.manifest.id));
       const base = !!i.manifest.base;
-      return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, installed: base ? true : !!s?.installed,
+      return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), installed: base ? true : !!s?.installed,
         /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
         requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') },
         grants: s?.grants ?? {} };
@@ -151,7 +152,7 @@ export class PluginRegistry {
     st.grants = g; st.enabled = true;
     // A replacement takes over its slots, the base keeps its own settings and data untouched.
     if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
-    this.unhealthy.delete(this.k(tenant, id));
+    this.faulted.delete(this.k(tenant, id));
     this.audit({ tenant, action: 'plugin.enable', plugin: id });
   }
 
@@ -162,9 +163,17 @@ export class PluginRegistry {
     const st = this.state.get(this.k(tenant, id));
     if (!st?.enabled) return;
     for (const other of this.impls.values()) if (this.isActive(tenant, other.manifest.id) && other.manifest.requires?.includes(id)) throw new PluginError('in-use', `${other.manifest.id} requires ${id}`);
+    // Explicit return to the base: its own stored configuration must be valid on its own schema, otherwise refuse and keep the current state.
+    if (p.manifest.extends) {
+      const base = this.plugin(p.manifest.extends);
+      const v = validateSettings(base.manifest.settings, (await this.settings.get(tenant, base.manifest.id)) ?? {});
+      if (!v.ok) throw new PluginError('base-config-invalid', `the base plugin ${base.manifest.id} has no valid configuration: ${v.errors.join('; ')}`);
+    }
     st.enabled = false;
+    this.faulted.delete(this.k(tenant, id));
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
-    this.audit({ tenant, action: 'plugin.disable', plugin: id });
+    // The replacement's own state (failure counters, lockouts) is not carried to the base: say so in the audit trail.
+    this.audit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
   }
 
   isActive(tenant: string, id: string) {
@@ -173,18 +182,25 @@ export class PluginRegistry {
     return !!p.manifest.base || !!this.state.get(this.k(tenant, id))?.enabled;
   }
 
-  /** Which plugin serves a slot now: the enabled, healthy replacement, otherwise the base. */
+  /** Which plugin serves a slot now: the enabled replacement if the admin chose one, otherwise the base. A fault does NOT change this: see callSlot. */
   resolve(tenant: string, slot: string): PluginImpl {
     const id = this.chosen.get(this.k(tenant, slot));
-    if (id && !this.unhealthy.has(this.k(tenant, id))) return this.plugin(id);
+    if (id) return this.plugin(id);
     const base = [...this.impls.values()].find((i) => i.manifest.base && i.manifest.provides?.includes(slot));
     if (!base) throw new PluginError('no-provider', `no provider for slot ${slot}`);
     return base;
   }
 
+  isFaulted(tenant: string, id: string) { return this.faulted.has(this.k(tenant, id)); }
+
   /**
-   * Call a slot's blocking hook. A replacement that throws or times out is marked unhealthy and the call is answered by the base,
-   * so a broken replacement can never lock everybody out of sign-in. `failClosed` hooks (access.decide) never fall back to allow.
+   * Call a slot's hook.
+   * - Sensitive hooks (auth, risk, policy) FAIL CLOSED. If the serving replacement throws or exceeds the deadline, the call is refused
+   *   (PluginError `plugin-failed`) and the replacement is marked faulted: every later call is refused too. The base plugin is NEVER asked
+   *   after a refusal, error or timeout of a replacement, because the base may be less restrictive (no lockout, no extra factor). Callers must
+   *   treat the error as a denial. Failure counters and other state of a replacement are never rolled back or reset by the registry.
+   * - Non-sensitive hooks (for example notifications) may fall back to the base: a missed message is not an access decision.
+   * - The way out of a fault is an explicit admin action: `disable` (return to a valid base configuration, audited) or `enable` again.
    */
   async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
     const primary = this.resolve(tenant, slot);
@@ -195,13 +211,17 @@ export class PluginRegistry {
       const ctx: PluginContext = { tenant, settings };
       return await withTimeout(Promise.resolve(h(payload, ctx)), timeoutMs);
     };
+    const sensitive = SENSITIVE_HOOKS.has(hook);
+    const fk = this.k(tenant, primary.manifest.id);
+    if (primary.manifest.extends && this.faulted.has(fk)) throw new PluginError('plugin-failed', `${primary.manifest.id} is faulted: refused until an admin disables or re-enables it`);
     try {
       return { result: (await run(primary)) as R, servedBy: primary.manifest.id, fellBack: false };
     } catch (e) {
-      if (!primary.manifest.extends) throw e;
-      this.unhealthy.add(this.k(tenant, primary.manifest.id));
-      this.audit({ tenant, action: 'plugin.fallback', plugin: primary.manifest.id, detail: String((e as Error).message) });
-      const base = this.resolve(tenant, slot);
+      if (!primary.manifest.extends) throw e; // the base itself failed: nothing to fall back to
+      this.faulted.add(fk);
+      this.audit({ tenant, action: sensitive ? 'plugin.fault.closed' : 'plugin.fault.fallback', plugin: primary.manifest.id, detail: String((e as Error).message) });
+      if (sensitive) throw new PluginError('plugin-failed', `${primary.manifest.id} failed (${(e as Error).message}); refused, no fallback for ${hook}`);
+      const base = [...this.impls.values()].find((i) => i.manifest.base && i.manifest.provides?.includes(slot))!;
       return { result: (await run(base)) as R, servedBy: base.manifest.id, fellBack: true };
     }
   }
