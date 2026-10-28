@@ -43,6 +43,7 @@ In the console: sign in as `demo-alice` (password in README "Demo credentials"),
 | `DOLT_HOST/PORT/USER/PASSWORD/DATABASE` | API | Dolt SQL server (`127.0.0.1:3307`, `root`, empty, `iam`) |
 | `IAM_PG_URL` | API | PostgreSQL URL: durable activation journal; unset = in-memory journal |
 | `IAM_CORE_ADMIN_TOKEN` | core + API | shared admin token (>= 8 chars, local fictional value): enables `/v1/activate` on the core and core-apply in the API; unset = activation only journaled (`state: recorded`) |
+| `IAM_PLUGIN_PACKAGE` / `IAM_PLUGIN_TRUSTED_KEYS` | core | signed WASM plugin package dir and trusted publisher public keys (core refuses to start on any verification failure) |
 | `IAM_NATS_URL` | API | NATS JetStream: publish `iam.activation.<tenant>` after activation |
 | `IAM_BAO_ADDR`, `IAM_BAO_TOKEN` | API | OpenBao KV v2; `secret/iam/pg` field `url` supplies the PostgreSQL URL when `IAM_PG_URL` is unset |
 | `IAM_TEMPORAL_ADDR` | API | Temporal frontend: enables `POST .../activation-workflows` |
@@ -66,6 +67,7 @@ Business API (NestJS). The `AuthGuard` checks signature (JWKS), issuer, audience
 | `POST /tenants/:t/activations` `{commit?, requestId?}` | journals and applies an activation (default: Dolt main head); a new request (or none) is always a new seq, even for an old commit; the same `requestId` retried is idempotent (same seq, no new effect) |
 | `POST /tenants/:t/activations/reconcile` | compares the core's version with the latest activation and re-applies if different |
 | `GET /tenants/:t/activations` | journal for the tenant |
+| `POST /tenants/:t/connectors/scim` `{Resources:[...]}` | SCIM 2.0-like import (subset) onto a Dolt branch with SoD simulation; returns `skipped` count |
 | `POST /tenants/:t/activation-workflows` `{commit?}` | same, run as a Temporal workflow (needs `IAM_TEMPORAL_ADDR`) |
 
 ## 5. Plugins
