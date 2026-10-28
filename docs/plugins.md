@@ -75,7 +75,7 @@ Validated at registration (`validateManifest`): id, semver, kinds, known hooks a
 Rules checked when a replacement is registered (`PluginRegistry.register`):
 
 1. It `extends` a plugin marked `base` and provides every slot of that base.
-2. It declares **every base setting with the same type**. It may add settings, including required ones (an API key, for instance): enabling is refused until every required setting is configured, so the switch cannot happen half set up.
+2. It declares **every base setting, at least as strict as the base**: same type, required stays required, `min` not lower and `max` not higher, same `pattern`, select options a subset, secrets stay secrets, defaults valid for the base. Any value the replacement accepts is then also valid for the base. It may add settings, including required ones (an API key, for instance): enabling is refused until every required setting is configured, so the switch cannot happen half set up.
 3. It handles **every base hook** in the same mode and keeps the base kinds. It may add kinds and hooks.
 4. A slot has exactly one base plugin.
 
@@ -84,7 +84,12 @@ Behaviour:
 - Enabling a replacement makes it serve its slots **for that tenant**. The base plugin's stored settings and data are not modified.
 - Disabling it returns the slot to the base, with the base's own configuration. Nothing is dropped. Re-enabling later does not re-run migrations.
 - Base plugins cannot be disabled or uninstalled (`base-required`). To change behaviour you enable a replacement.
-- **Failure safety.** A blocking call to a replacement that throws or exceeds the deadline is answered by the base in the same request, the replacement is marked unhealthy (served by the base until an admin enables it again) and the event is audited (`plugin.fallback`). A broken replacement cannot lock everybody out of sign-in. Note the base answers for the sign-in slot; for `access.decide` the core fails closed instead (deny), never open.
+- **Failure safety, and why it is not "fall back to the base".** The base is often *less* restrictive than a replacement (no lockout, no extra factor). So the registry never asks the base after a replacement refused, errored or timed out for a **sensitive hook** (`auth.*`, `risk.score`, `access.decide`):
+  - the call is refused (`plugin-failed`, HTTP 503), callers must treat it as a denial;
+  - the replacement is marked **faulted**: every later call is refused too, the base is not asked, the event is audited (`plugin.fault.closed`);
+  - the registry never resets or rolls back a replacement's counters (failed attempts, lockouts) and never retries the credential on another plugin;
+  - **recovery is an explicit, audited admin action** (admin capability required), not an automatic bypass: `disable` (return to the base) or `enable` again (clears the fault, keeps the counters). `disable` is refused (`base-config-invalid`) if the base has no valid configuration of its own, and its audit entry states that replacement-owned state is kept but no longer enforced. Plan a second admin credential path outside the faulted slot (the admin token here is separate from the sign-in plugin) so a faulted sign-in plugin cannot lock admins out.
+  - Non-sensitive hooks (for example `notify.send`) may fall back to the base on failure: a missed message is not an access decision (`plugin.fault.fallback`).
 - A plugin cannot be disabled while an enabled plugin lists it in `requires`.
 
 Not covered yet: data migration between a base and a replacement that stores users in its own tables (for example moving password hashes), and a dry run of a replacement before the switch. A replacement that owns credentials must either read the base's tables or ship an explicit migration that copies, never moves, the data, so the fall back still works.
@@ -110,10 +115,14 @@ Not covered: signature check of third-party plugin packages for async plugins (W
 - **Screens**: `schema` (generic list/form over a plugin table, no plugin code in the browser) or `component` (packaged web component, needs the grant). Only `schema` is drawn in this slice; the `component` grant gate is implemented, the loader is not.
 - **HTTP** (`PluginsAdminController`): `GET /tenants/:t/plugins`, `GET .../screens`, `GET .../:id/form`, `POST .../:id/install`, `PUT .../:id/settings`, `POST .../:id/enable`, `POST .../:id/disable`.
 
-## 9. Worked examples (in the code)
+## 9. Demo versus catalogue
+
+Covered by running code and tests in this POC: `auth-method` (base password + lockout replacement), `notifier` (log base; a replacement is tested with a failing example), `profile` + `workflow` + `ui` (org-manager, mixed kinds, schema screens only), `risk-signal` (risk-geo, used to demonstrate grants only). Everything else in section 2 (connectors, audit sinks, policy plugins beyond the v0 WASM hook, TOTP, passkeys, federation, ...) is a **catalogue of possibilities**, not implemented here.
+
+## 9b. Worked examples (in the code)
 
 - `auth-password` (base, slot `auth.password`) and `notify-log` (base, slot `notify.default`).
-- `auth-password-lockout`: replacement. Same settings plus `maxFailures`, one table, locks after N failures. Test: replace, lock, disable, base answers again, no `drop`, re-install does not rerun the migration.
+- `auth-password-lockout`: replacement. Same settings plus `maxFailures`, one table, locks after N failures. Tests: replace, lock, explicit disable, base answers again, no `drop`, re-install does not rerun the migration; failure of the replacement is refused, never retried on the base.
 - `org-manager`: multi-kind (`profile`, `workflow`, `ui`), two tables, seed row, two schema screens, a claim name setting with a regex.
 - `risk-geo`: asks for a sensitive hook and a component screen. Test: enabling is refused until both are granted.
 
