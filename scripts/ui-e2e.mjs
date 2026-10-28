@@ -44,8 +44,10 @@ const stopAll = async () => {
   for (const port of [4200, 8081, 3000, 3307]) if (await portOpen(port)) console.log('WARNING: port ' + port + ' still in use after cleanup');
 };
 run(dolt, ['sql-server', '--host', '127.0.0.1', '--port', '3307', '--data-dir', data], { cwd: data, env });
-run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core') });
-run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_ISSUER: 'http://127.0.0.1:8081' } });
+const GATE = { IAM_AUTH_GATE_ADDR: '127.0.0.1:3000', IAM_AUTH_GATE_TOKEN: 'local-gate-token-demo' }; // sign-in goes through the plugin gate (API on :3000)
+const ADMIN_TOKEN = 'local-demo-plugin-admin-token';
+run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE } });
+run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } });
 run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let browser;
@@ -91,6 +93,26 @@ try {
   await page.getByRole('button', { name: 'Activate current main' }).click();
   await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('Activated main head as #1'));
   await page.screenshot({ path: join(out, '4-activated.png') });
+  // generic plugin admin screen on the real stack (core + API + Dolt + console): install, configure, grant, enable, disable
+  await page.setViewportSize({ width: 1100, height: 1400 });
+  await page.waitForSelector('#plugins table');
+  await page.fill('input[name=admintoken]', ADMIN_TOKEN);
+  const noBanner = async (label) => { assert.equal(await page.locator('[role=alert]').count(), 0, label + ': no alert'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch/.test(t), label + ': no error banner'); };
+  await noBanner('list'); await page.locator('#plugins').scrollIntoViewIfNeeded(); await page.screenshot({ path: join(out, '5-plugins-list.png'), fullPage: true });
+  const row = page.locator('tr[data-plugin=auth-password-lockout]');
+  await row.getByRole('button', { name: 'Manage' }).click();
+  await page.locator('input[name=gi]').check(); await page.click('#plugin-install');
+  await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? '')); // the form is re-read after the install: wait for it
+  await page.waitForSelector('#plugin-form');
+  await page.locator('label[data-field=maxFailures] input').fill('3'); await page.click('#plugin-save');
+  await page.waitForFunction(() => /saved|Saved|configured/i.test(document.querySelector('#plugin-note')?.textContent ?? ''));
+  assert.equal(await page.locator('label[data-field=maxFailures] input').inputValue(), '3', 'the saved value comes back from the API');
+  await page.locator('[data-hook="auth.authenticate"]').check(); await page.click('#plugin-enable');
+  await page.waitForSelector('#plugin-disable');
+  await noBanner('enabled'); await page.screenshot({ path: join(out, '6-plugin-enabled.png'), fullPage: true });
+  await page.click('#plugin-disable');
+  await page.waitForSelector('#plugin-enable');
+  await noBanner('disabled'); await page.screenshot({ path: join(out, '7-plugin-disabled-back-to-base.png'), fullPage: true });
   assert.deepEqual(errors, [], 'no page errors');
   console.log('UI E2E PASSED; screenshots in ' + out);
 } finally {
