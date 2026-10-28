@@ -1,6 +1,7 @@
 mod package;
 mod grpc;
 mod authz;
+pub mod gate;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}};
 use iam_idp::{Idp, IdpError};
 use iam_decision::{DecisionRequest, DecisionResponse, Engine};
@@ -20,6 +21,8 @@ pub struct Core {
     pub admin_token: Option<String>,
     /// Directory where each tenant's active version is persisted (<tenant>.json, atomic rename). None = memory only.
     pub state_dir: Option<std::path::PathBuf>,
+    /// Sign-in gate (loopback host:port, shared token). None = the IdP checks the password alone.
+    pub gate: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -57,7 +60,7 @@ impl Core {
         std::fs::rename(tmp, dir.join(format!("{tenant}.json")))
     }
     pub fn new(engine: Engine, plugin: Option<(PluginRuntime, Vec<u8>)>, idp: Idp) -> Self {
-        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None }
+        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None }
     }
 }
 
@@ -92,6 +95,13 @@ fn idp_err(e: IdpError) -> (StatusCode, Json<Value>) {
 
 // POC simplification: JSON bodies instead of the form/redirect dance of full OIDC.
 async fn authorize(State(c): State<Arc<Core>>, Json(r): Json<AuthorizeReq>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if let Some((addr, tok)) = &c.gate {
+        match gate::check(addr, tok, "acme-demo", &r.username, &r.password).await {
+            gate::Gate::Allow => {}
+            gate::Gate::Deny => return Err(idp_err(IdpError::InvalidCredentials)),
+            gate::Gate::Unavailable => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "temporarily_unavailable"})))),
+        }
+    }
     c.idp.authorize(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username, &r.password)
         .map(|code| Json(json!({"code": code}))).map_err(idp_err)
 }
@@ -212,6 +222,11 @@ async fn main() {
     }));
     let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
     let mut core = Core::new(engine, plugin, Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)));
+    if let Ok(g) = std::env::var("IAM_AUTH_GATE_ADDR") {
+        let addr = gate::parse_addr(&g).expect("IAM_AUTH_GATE_ADDR must be a loopback host:port");
+        let tok = std::env::var("IAM_AUTH_GATE_TOKEN").ok().filter(|t| t.len() >= 8).expect("IAM_AUTH_GATE_TOKEN (>= 8 chars) is required with a gate");
+        core.gate = Some((addr, tok));
+    }
     if let Ok(d) = std::env::var("IAM_CORE_STATE_DIR") { core.load_state(std::path::Path::new(&d)); }
     core.admin_token = std::env::var("IAM_CORE_ADMIN_TOKEN").ok().filter(|t| t.len() >= 8);
     let engine = Arc::new(core);
