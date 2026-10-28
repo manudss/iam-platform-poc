@@ -12,6 +12,7 @@ Two kinds of plugin.
 - Interface in `apps/api/src/plugins/plugin.contract.ts`.
 - Must be idempotent per (tenant, activation, effect, target). The host deduplicates by effect key.
 - Example: `notify-manager` logs a would-be notification after a role change; it sends nothing.
+- Activation effects (`apps/api/src/effects/`): notification to a local fictional sink and provisioning to a local demo target, idempotent per effect key with a PostgreSQL ledger and retry by redelivery (see README).
 
 ## Signed packages (blocking hook)
 manifest.json {name, version, abi "decide-v0", wasm_sha256, publisher} + manifest.sig (Ed25519 over the exact manifest bytes) + plugin.wasm. The core verifies against `IAM_PLUGIN_TRUSTED_KEYS` and refuses to start otherwise. See README for what is not covered (signing CLI, rotation, revocation).
