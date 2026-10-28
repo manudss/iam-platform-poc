@@ -1,0 +1,63 @@
+<section id="plugins">
+  <h2>Plugins</h2>
+  <label>Admin capability token (memory only) <input name="admintoken" type="password" [(ngModel)]="adminToken" autocomplete="off" /></label>
+  <table>
+    <thead><tr><th>Plugin</th><th>Kinds</th><th>Slot</th><th>State</th><th></th></tr></thead>
+    <tbody>
+      @for (p of plugins(); track p.id) {
+        <tr [attr.data-plugin]="p.id">
+          <td>{{ p.name }} <small>v{{ p.version }}</small>@if (p.extends) { <small> extends {{ p.extends }}</small> }</td>
+          <td>{{ p.kinds.join(', ') }}</td>
+          <td>{{ p.provides.join(', ') }}</td>
+          <td>{{ p.base ? 'base (always on)' : p.enabled ? 'enabled' : p.installed ? 'installed' : 'not installed' }}</td>
+          <td><button type="button" (click)="open(p)">Manage</button></td>
+        </tr>
+      }
+    </tbody>
+  </table>
+
+  @if (selected(); as p) {
+    <h3>{{ p.name }}</h3>
+    @if (!p.base && !p.installed) {
+      <p>Installing runs this plugin's own migrations (tables prefixed with its id). Grant that explicitly.</p>
+      @if (p.requests.install) { <label class="row"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> Allow its install migrations</label> }
+      <button type="button" id="plugin-install" (click)="install()">Install</button>
+    }
+    @if (model(); as m) {
+      <form (ngSubmit)="save()" id="plugin-form">
+        @for (g of m.groups; track g.name) {
+          <fieldset>
+            <legend>{{ g.name }}</legend>
+            @for (f of fields(g); track f.key) {
+              <label [attr.data-field]="f.key">{{ f.label }}@if (f.required) { * }
+                @switch (f.type) {
+                  @case ('boolean') { <input type="checkbox" [name]="f.key" [(ngModel)]="edited[f.key]" /> }
+                  @case ('number') { <input type="number" [name]="f.key" [(ngModel)]="edited[f.key]" [attr.min]="f.min" [attr.max]="f.max" /> }
+                  @case ('secret') { <input type="password" [name]="f.key" [(ngModel)]="edited[f.key]" autocomplete="off" /> }
+                  @case ('text') { <textarea [name]="f.key" [(ngModel)]="edited[f.key]"></textarea> }
+                  @case ('select') { <select [name]="f.key" [(ngModel)]="edited[f.key]">@for (o of f.options; track o.value) { <option [value]="o.value">{{ o.label }}</option> }</select> }
+                  @default { <input type="text" [name]="f.key" [(ngModel)]="edited[f.key]" /> }
+                }
+                @if (f.help) { <small>{{ f.help }}</small> }
+              </label>
+            }
+          </fieldset>
+        }
+        <button type="submit" id="plugin-save" [disabled]="!p.installed && !p.base">Save settings</button>
+      </form>
+    }
+    @if (!p.base && p.installed) {
+      @if (!p.enabled) {
+        @if (p.requests.sensitiveHooks.length) {
+          <p>This plugin asks to receive sensitive hooks. A declaration alone grants nothing; tick what you accept.</p>
+          @for (h of p.requests.sensitiveHooks; track h) { <label class="row"><input type="checkbox" [attr.data-hook]="h" [ngModelOptions]="{ standalone: true }" [(ngModel)]="grantHooks[h]" /> {{ h }}</label> }
+        }
+        @if (p.requests.uiComponents) { <label class="row"><input type="checkbox" name="gc" [(ngModel)]="grantComponents" /> Allow its packaged UI components to run in the console</label> }
+        <button type="button" id="plugin-enable" (click)="enable()">Enable</button>
+      } @else {
+        <button type="button" id="plugin-disable" (click)="disable()">Disable and return to base</button>
+      }
+    }
+    <p class="msg" role="status" id="plugin-note">{{ note() }}</p>
+  }
+</section>

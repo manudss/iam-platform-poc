@@ -1,0 +1,13 @@
+h2 { font-size: 1.1rem; margin: 1.6rem 0 .5rem; padding-top: .8rem; border-top: 1px solid #d9e2ec; }
+h3 { font-size: 1rem; margin: 1.2rem 0 .3rem; }
+.msg { background: #eef4ff; border-left: 4px solid #3b6fd4; padding: .5rem .75rem; border-radius: 3px; }
+label { display: flex; flex-direction: column; font-size: .85rem; gap: .2rem; margin: .4rem 0; }
+label.row { flex-direction: row; align-items: center; gap: .4rem; }
+input[type=text], input[type=number], input[type=password], select, textarea { padding: .35rem .5rem; border: 1px solid #9fb3c8; border-radius: 4px; font-size: .95rem; max-width: 28rem; }
+button { padding: .4rem .8rem; border: 1px solid #3b6fd4; background: #3b6fd4; color: #fff; border-radius: 4px; cursor: pointer; margin: .5rem .5rem 0 0; }
+button:hover { background: #2c57ad; }
+button:disabled { opacity: .5; cursor: default; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; margin-top: .5rem; }
+th, td { text-align: left; padding: .3rem .4rem; border-bottom: 1px solid #d9e2ec; vertical-align: top; }
+fieldset { border: 1px solid #d9e2ec; border-radius: 4px; margin: .6rem 0; }
+small { color: #52606d; }
