@@ -33,7 +33,7 @@ In the console: sign in as `demo-alice` (password in README "Demo credentials"),
 | Variable | Component | Meaning (default) |
 |---|---|---|
 | `IAM_CORE_ADDR` | core | listen address (`127.0.0.1:8081`) |
-| `IAM_CORE_GRPC_ADDR` | core, api | core: also serve gRPC `Decision/Decide` on this `host:port` (plaintext, loopback only). api: `/access/check` calls the core over gRPC instead of HTTP when set |
+| `IAM_CORE_GRPC_ADDR` | core, api | core: also serve gRPC `Decision/Decide` on this `host:port` (plaintext, no TLS/auth: always bind 127.0.0.1 or a private network, never a public interface; there is no default, it is off unless set). api: `/access/check` calls the core over gRPC instead of HTTP when set |
 | `IAM_ISSUER` | core, API | token issuer; must be identical on both sides |
 | `IAM_POLICY_FILE` | core | Cedar policy file (`../policies/demo.cedar`) |
 | `IAM_TOKEN_TTL_SECS` | core | token lifetime (300) |
