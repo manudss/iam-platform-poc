@@ -2,7 +2,7 @@ import type { PluginImpl } from '../registry.js';
 import type { AuthenticatePayload, AuthenticateResult, NotifyPayload } from '../hooks.js';
 
 /** Demo credential store: fictional users only. */
-const DEMO_USERS: Record<string, string> = { 'demo-user-1': 'demo-pass-1', 'demo-admin': 'demo-pass-admin' };
+const DEMO_USERS: Record<string, string> = { 'demo-user-1': 'demo-pass-1', 'demo-admin': 'demo-pass-admin', 'demo-alice': 'demo-only-not-a-secret', 'demo-bob': 'demo-only-not-a-secret' };
 
 // ---------- Base plugins (mandatory for their slot) ----------
 
