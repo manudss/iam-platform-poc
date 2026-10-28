@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import pg from 'pg';
 import { NatsService } from '../integrations/nats.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
@@ -30,7 +30,9 @@ export type ActivationResult = Activation & { event: 'published' | 'not-publishe
  * TODO(POC): outbox is PostgreSQL-only and only when core-apply is enabled; otherwise the event is published directly after the journal write.
  */
 @Injectable()
-export class ActivationService implements OnModuleDestroy {
+export class ActivationService implements OnModuleInit, OnModuleDestroy {
+  private timer?: NodeJS.Timeout;
+  private ticking = false;
   private mem: Activation[] = [];
   private pool?: pg.Pool;
   private ready?: Promise<void>;
@@ -210,5 +212,26 @@ export class ActivationService implements OnModuleDestroy {
     return (await this.list(tenant)).at(-1);
   }
 
-  async onModuleDestroy() { await this.pool?.end(); }
+  /** Background loop, only when IAM_RECONCILE_INTERVAL_MS (>= 200) is set: tick() = relay outbox + reconcile every tenant. */
+  onModuleInit() {
+    const ms = Number(process.env.IAM_RECONCILE_INTERVAL_MS ?? 0);
+    if (ms >= 200) { this.timer = setInterval(() => void this.tick().catch(() => undefined), ms); this.timer.unref(); }
+  }
+
+  /** One pass: publish pending outbox events, then reconcile each tenant that has activations (PostgreSQL journal only). Never overlaps itself. */
+  async tick(): Promise<{ relayed: number; reconciled: string[] }> {
+    if (this.ticking || !(await this.resolveUrl())) return { relayed: 0, reconciled: [] };
+    this.ticking = true;
+    try {
+      const relayed = await this.relay().catch(() => 0);
+      const reconciled: string[] = [];
+      for (const r of (await (await this.db()).query('SELECT DISTINCT tenant FROM activations')).rows) {
+        const x = await this.reconcile(r.tenant as string).catch(() => ({ action: 'failed' as const }));
+        if (x.action === 'reapplied') reconciled.push(r.tenant as string);
+      }
+      return { relayed, reconciled };
+    } finally { this.ticking = false; }
+  }
+
+  async onModuleDestroy() { if (this.timer) clearInterval(this.timer); await this.pool?.end(); }
 }
