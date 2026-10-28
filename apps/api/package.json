@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/activation.e2e.spec.js dist/outbox.e2e.spec.js dist/pg.e2e.spec.js dist/integrations.e2e.spec.js dist/temporal.e2e.spec.js dist/compose.e2e.spec.js"
+    "test": "tsc -p tsconfig.json && node --test dist/app.spec.js dist/e2e.spec.js dist/dolt.e2e.spec.js dist/activation.e2e.spec.js dist/outbox.e2e.spec.js dist/pg.e2e.spec.js dist/integrations.e2e.spec.js dist/temporal.e2e.spec.js dist/compose.e2e.spec.js dist/fullstack.e2e.spec.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.2",
