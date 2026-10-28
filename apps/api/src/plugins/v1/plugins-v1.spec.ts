@@ -58,27 +58,83 @@ describe('plugin registry v1', () => {
     assert.equal(mig.log.length, 1);
   });
 
-  it('a failing replacement falls back to the base so nobody is locked out', async () => {
+  const lockout = async (impl = authPasswordLockout()) => {
+    reg.register(impl);
+    await reg.install(T, impl.manifest.id, { install: true });
+    await reg.configure(T, impl.manifest.id, {});
+    await reg.enable(T, impl.manifest.id, { hooks: ['auth.authenticate'] });
+    return impl;
+  };
+
+  it('SECURITY: a failing auth replacement fails closed, never falls back to the less strict base, until an admin acts', async () => {
     const broken = authPasswordLockout();
     broken.handlers['auth.authenticate'] = () => { throw new Error('boom'); };
-    reg.register(broken);
-    await reg.install(T, broken.manifest.id, { install: true });
-    await reg.configure(T, broken.manifest.id, {});
-    await reg.enable(T, broken.manifest.id, { hooks: ['auth.authenticate'] });
+    await lockout(broken);
+    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed');
+    // the same valid credentials are still refused afterwards: the base is never asked
+    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed');
+    assert.ok(audit.includes('plugin.fault.closed:auth-password-lockout'));
+    assert.equal(reg.list(T).find((p) => p.id === 'auth-password-lockout')!.faulted, true);
+    // recovery is an explicit, audited admin action that returns to a valid base configuration
+    await reg.disable(T, 'auth-password-lockout');
     const r = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
-    assert.equal(r.fellBack, true); assert.equal(r.servedBy, 'auth-password'); assert.equal(r.result.outcome, 'allow');
-    assert.ok(audit.includes('plugin.fallback:auth-password-lockout'));
-    // stays on the base until an admin re-enables
-    assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good)).fellBack, false);
+    assert.equal(r.servedBy, 'auth-password'); assert.equal(r.result.outcome, 'allow');
+    assert.ok(audit.includes('plugin.disable:auth-password-lockout'));
   });
 
-  it('a hung replacement times out and falls back', async () => {
+  it('SECURITY: a hung auth replacement times out closed; a locked-out subject stays locked and counters are not reset by the registry', async () => {
     const slow = authPasswordLockout();
-    slow.handlers['auth.authenticate'] = () => new Promise(() => {});
-    reg.register(slow); await reg.install(T, slow.manifest.id, { install: true });
-    await reg.configure(T, slow.manifest.id, {}); await reg.enable(T, slow.manifest.id, { hooks: ['auth.authenticate'] });
-    const r = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good, 50);
-    assert.equal(r.servedBy, 'auth-password');
+    const real = slow.handlers['auth.authenticate'];
+    let hang = false;
+    slow.handlers['auth.authenticate'] = (p, c) => (hang ? new Promise(() => {}) : real(p, c));
+    await lockout(slow);
+    await reg.configure(T, 'auth-password-lockout', { maxFailures: 2 });
+    await reg.callSlot(T, 'auth.password', 'auth.authenticate', bad); await reg.callSlot(T, 'auth.password', 'auth.authenticate', bad);
+    assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good)).result.reason, 'locked');
+    hang = true;
+    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good, 30), (e: PluginError) => e.code === 'plugin-failed');
+    hang = false;
+    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed'); // faulted: still refused
+    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] }); // explicit admin re-enable clears the fault, not the counters
+    assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good)).result.reason, 'locked');
+  });
+
+  it('non-sensitive hooks (notifications) may fall back to the base when a replacement fails', async () => {
+    const m = structuredClone(notifyLog.manifest); m.id = 'notify-bad'; m.base = false; m.extends = 'notify-log'; m.provides = ['notify.default'];
+    reg.register({ manifest: m, handlers: { 'notify.send': () => { throw new Error('smtp down'); } } });
+    await reg.install(T, 'notify-bad', {}); await reg.configure(T, 'notify-bad', {}); await reg.enable(T, 'notify-bad');
+    const r = await reg.callSlot<any>(T, 'notify.default', 'notify.send', { to: 'x', template: 't' });
+    assert.equal(r.fellBack, true); assert.equal(r.servedBy, 'notify-log');
+    assert.ok(audit.includes('plugin.fault.fallback:notify-bad'));
+  });
+
+  it('disable is refused when the base has no valid configuration of its own', async () => {
+    const baseM = structuredClone(authPassword.manifest); baseM.id = 'auth-strict'; baseM.provides = ['auth.strict'];
+    baseM.settings = [{ key: 'realm', type: 'string', label: 'Realm', required: true }];
+    reg.register({ manifest: baseM, handlers: authPassword.handlers });
+    const m = structuredClone(authPasswordLockout().manifest); m.id = 'auth-strict-x'; m.extends = 'auth-strict'; m.provides = ['auth.strict'];
+    m.settings = [{ key: 'realm', type: 'string', label: 'Realm', required: true }]; m.install = undefined;
+    reg.register({ manifest: m, handlers: authPasswordLockout().handlers });
+    await reg.install(T, 'auth-strict-x', {}); await reg.configure(T, 'auth-strict-x', { realm: 'r' });
+    await reg.enable(T, 'auth-strict-x', { hooks: ['auth.authenticate'] });
+    await assert.rejects(reg.disable(T, 'auth-strict-x'), (e: PluginError) => e.code === 'base-config-invalid');
+    await reg.configure(T, 'auth-strict', { realm: 'r' });
+    await reg.disable(T, 'auth-strict-x');
+  });
+
+  it('semantic compatibility: a replacement cannot loosen base constraints', () => {
+    const tweak = (f: (s: any[]) => void, id: string) => { const m = structuredClone(authPasswordLockout().manifest); m.id = id; f(m.settings); return () => reg.register({ manifest: m, handlers: authPasswordLockout().handlers }); };
+    assert.throws(tweak((s) => { s[0].min = 1; }, 'a1'), /minimum must be at least 8/);
+    assert.throws(tweak((s) => { s[0].max = 999; }, 'a2'), /maximum must be at most 128/);
+    assert.throws(tweak((s) => { delete s[0].min; }, 'a3'), /minimum must be at least 8/);
+    const baseM = structuredClone(notifyLog.manifest); baseM.id = 'notify-sel'; baseM.provides = ['notify.sel'];
+    baseM.settings = [{ key: 'mode', type: 'select', label: 'Mode', options: [{ value: 'a', label: 'A' }], required: true }, { key: 'k', type: 'secret', label: 'K' }];
+    reg.register({ manifest: baseM, handlers: notifyLog.handlers });
+    const c = (settings: any[], id: string) => { const m = structuredClone(baseM); m.id = id; m.base = false; m.extends = 'notify-sel'; m.settings = settings; return () => reg.register({ manifest: m, handlers: notifyLog.handlers }); };
+    assert.throws(c([{ key: 'mode', type: 'select', label: 'M', options: [{ value: 'a', label: 'A' }, { value: 'z', label: 'Z' }], required: true }, { key: 'k', type: 'secret', label: 'K' }], 'b1'), /subset/);
+    assert.throws(c([{ key: 'mode', type: 'select', label: 'M', options: [{ value: 'a', label: 'A' }] }, { key: 'k', type: 'secret', label: 'K' }], 'b2'), /must stay required/);
+    assert.throws(c([{ key: 'mode', type: 'select', label: 'M', options: [{ value: 'a', label: 'A' }], required: true }, { key: 'k', type: 'string', label: 'K' }], 'b3'), /type string differs/);
+    c([{ key: 'mode', type: 'select', label: 'M', options: [{ value: 'a', label: 'A' }], required: true }, { key: 'k', type: 'secret', label: 'K' }], 'b4')();
   });
 
   it('declared schemas grant nothing: sensitive hooks and component screens need explicit grants', async () => {
