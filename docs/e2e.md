@@ -26,11 +26,12 @@ A suite whose variable is unset is reported as skipped with a reason, never as p
 - `pg.e2e.spec.ts` (real PostgreSQL): durable journal across service restart, concurrent activations get distinct seq, URL from a (stubbed) secret store.
 - `integrations.e2e.spec.ts`: real NATS JetStream (event received; unreachable -> `not-published`; disabled), real OpenBao dev server (KV read, missing, bad token).
 - `temporal.e2e.spec.ts` (real Temporal dev server + real Dolt): workflow success; unknown commit fails the workflow and nothing is journaled.
+- `fullstack.e2e.spec.ts` (real Dolt + PostgreSQL + NATS JetStream + Rust core + NestJS services, nothing stubbed): Dolt data change -> export -> activation -> core applies and the decision flips -> outbox relay -> NATS -> idempotent consumer handles it once; same request id again gives no new seq; SoD computed by the core.
 - Rust: `cd core && cargo test --locked` (Cedar engine, WASM runtime, IdP).
 - Angular: `cd apps/web && npm test -- --watch=false` (PKCE S256 test vector, API client with a fake fetch, component render).
 - Real browser: `DOLT_BIN=... CHROME_BIN=/usr/bin/google-chrome NODE_PATH=<dir with playwright-core>/node_modules node scripts/ui-e2e.mjs [outDir]` starts Dolt, core, API and `ng serve` on 127.0.0.1, drives the console in headless Chrome and writes screenshots (build core and API first).
 - Script: `DOLT_BIN=... scripts/dolt-smoke.sh` (Dolt CLI branch/merge scenario).
 
 ## What is NOT covered
-- The docker-compose stack (never started), gRPC,
+- The same chain against the docker-compose containers (only container-level checks run, in CI), gRPC (OPEN, not implemented),
   crash recovery of activations, load/performance, security review of the home-made IdP.
