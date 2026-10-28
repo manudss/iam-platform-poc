@@ -1,5 +1,6 @@
 mod package;
 mod grpc;
+mod authz;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}};
 use iam_idp::{Idp, IdpError};
 use iam_decision::{DecisionRequest, DecisionResponse, Engine};
@@ -68,7 +69,8 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/v1/version", get(version))
         .route("/.well-known/openid-configuration", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.discovery()) }))
         .route("/jwks.json", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.jwks()) }))
-        .route("/authorize", post(authorize))
+        .route("/authorize", post(authorize).get(authz::authorize_form))
+        .route("/authorize/login", post(authz::login))
         .route("/token", post(token))
         .with_state(engine)
 }
