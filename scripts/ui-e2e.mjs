@@ -31,17 +31,28 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let browser;
 try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
-  browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox'] });
+  browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
   const errors = []; page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('http://127.0.0.1:4200/');
+  // forged callback (another state): the code is ignored, nobody is signed in
+  await page.goto('http://localhost:4200/callback?code=attacker-code&state=forged-state');
+  await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('state mismatch'));
+  assert.equal(new URL(page.url()).pathname, '/'); // the code left the address bar
+  assert.equal(await page.locator('text=Assignments on Dolt main').count(), 0);
+  // recommended flow: console -> core login form -> back to the console with code+state
+  await page.goto('http://localhost:4200/');
   await page.screenshot({ path: join(out, '1-signin.png') });
-  // wrong password first
-  await page.fill('input[name=p]', 'wrong'); await page.click('button[type=submit]');
-  await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('login failed'));
-  await page.fill('input[name=p]', 'demo-only-not-a-secret'); await page.click('button[type=submit]');
+  await Promise.all([page.waitForURL(/127\.0\.0\.1:8081\/authorize/), page.click('#signin-browser')]);
+  await page.waitForSelector('input[name=password]'); await page.screenshot({ path: join(out, '1b-core-login-form.png') });
+  await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'wrong');
+  await Promise.all([page.waitForLoadState('load'), page.click('button[type=submit]')]);
+  await page.waitForSelector('text=Wrong user or password');
+  await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
+  await Promise.all([page.waitForURL(/localhost:4200/), page.click('button[type=submit]')]);
   await page.waitForSelector('text=Assignments on Dolt main');
   await page.waitForSelector('text=demo-bob : payment-creator');
+  assert.ok((await page.textContent('[role=status]')).includes('browser flow'));
+  assert.equal(new URL(page.url()).search, ''); // no code or state left in the URL
   await page.screenshot({ path: join(out, '2-logged-in.png') });
   // SoD violation
   await page.getByRole('button', { name: 'Simulate', exact: true }).click();
