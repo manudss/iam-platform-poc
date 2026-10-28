@@ -1,4 +1,5 @@
 mod package;
+mod grpc;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}};
 use iam_idp::{Idp, IdpError};
 use iam_decision::{DecisionRequest, DecisionResponse, Engine};
@@ -154,18 +155,23 @@ fn tenant_context(c: &Core, tenant: &str, principal: &str, ctx: &mut Value) -> R
 
 async fn decide(State(c): State<Arc<Core>>, Json(raw): Json<Value>)
     -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let bad = |m: String| (StatusCode::BAD_REQUEST, Json(json!({"error": m})));
+    decide_value(&c, raw).map(Json).map_err(|(s, v)| (s, Json(v)))
+}
+
+/// Shared by HTTP `/v1/decide` and gRPC `Decision.Decide`: one decision path, one set of rules.
+pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, Value)> {
+    let bad = |m: String| (StatusCode::BAD_REQUEST, json!({"error": m}));
     let tenant = raw.get("tenant").and_then(|v| v.as_str()).map(str::to_string);
     let mut req: DecisionRequest = serde_json::from_value(raw).map_err(|e| bad(e.to_string()))?;
     let mut version = None;
     if let Some(t) = &tenant {
-        match tenant_context(&c, t, &req.principal, &mut req.context) {
+        match tenant_context(c, t, &req.principal, &mut req.context) {
             Ok(v) => version = Some(v),
-            Err(()) => return Ok(Json(json!({"allow": false, "reasons": ["no-active-version"], "errors": []}))),
+            Err(()) => return Ok(json!({"allow": false, "reasons": ["no-active-version"], "errors": []})),
         }
     }
     let mut resp = c.engine.decide(&req)
-        .map_err(|err| (StatusCode::BAD_REQUEST, Json(json!({"error": err.to_string()}))))?;
+        .map_err(|err| (StatusCode::BAD_REQUEST, json!({"error": err.to_string()})))?;
     // Blocking plugin hook runs only on a Cedar allow; a plugin deny or error always denies (fail closed).
     if resp.allow {
         if let Some((rt, wasm)) = &c.plugin {
@@ -180,7 +186,7 @@ async fn decide(State(c): State<Arc<Core>>, Json(raw): Json<Value>)
     }
     let mut out = serde_json::to_value(&resp).unwrap();
     if let Some((seq, commit)) = version { out["version"] = json!({"seq": seq, "commit": commit}); }
-    Ok(Json(out))
+    Ok(out)
 }
 
 #[tokio::main]
@@ -210,6 +216,12 @@ async fn main() {
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
     let l = tokio::net::TcpListener::bind(&addr).await.unwrap();
     tracing::info!("iam-core listening on {addr}");
+    if let Ok(g) = std::env::var("IAM_CORE_GRPC_ADDR") {
+        let ga: std::net::SocketAddr = g.parse().expect("IAM_CORE_GRPC_ADDR must be host:port");
+        let svc = grpc::service(engine.clone());
+        tracing::info!("iam-core gRPC (plaintext, local POC) listening on {ga}");
+        tokio::spawn(async move { tonic::transport::Server::builder().add_service(svc).serve(ga).await.expect("grpc server") });
+    }
     axum::serve(l, app(engine)).await.unwrap();
 }
 
