@@ -82,3 +82,6 @@ See README sections "Written but NOT run" and "Not implemented".
 
 ## Decision audit
 `POST /access/check` (bearer token) records every answer. Read it: `curl -H "authorization: Bearer $TOKEN" http://127.0.0.1:3000/tenants/acme-demo/audit?limit=50` (newest first, only your token's tenant). Set `IAM_PG_URL` for the durable PostgreSQL table `decision_audit`; without it the audit lives in memory only.
+
+## Notification manager and provisioning (local demo targets)
+Start any two local HTTP receivers (the tests show a minimal one), then run the API with `IAM_EFFECTS=1 IAM_PG_URL=... IAM_NATS_URL=... IAM_NOTIFY_SINK_URL=http://127.0.0.1:<port> IAM_PROVISION_TARGET_URL=http://127.0.0.1:<port>`. Each activation of a Dolt commit then sends one notification per changed role (to a fictional manager address, nothing is delivered to a person) and one PUT/DELETE per granted/revoked role. Non-loopback URLs are refused. Status per effect: table `effects` in PostgreSQL.
