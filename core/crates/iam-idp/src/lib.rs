@@ -156,3 +156,17 @@ mod tests {
         assert!(verify(&tok, &j.jwks(), "http://idp.test").is_none());
     }
 }
+
+/// Detached Ed25519 signatures and SHA-256 helpers, reused by plugin package verification (same primitives as the IdP).
+pub mod detached {
+    use super::*;
+    pub fn sha256_hex(bytes: &[u8]) -> String { Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect() }
+    /// base64url public key for a 32-byte seed (demo/test key generation; no key management here).
+    pub fn public_key(seed: [u8; 32]) -> String { B64.encode(SigningKey::from_bytes(&seed).verifying_key().to_bytes()) }
+    pub fn sign(seed: [u8; 32], msg: &[u8]) -> String { B64.encode(SigningKey::from_bytes(&seed).sign(msg).to_bytes()) }
+    pub fn verify(public_key_b64: &str, msg: &[u8], sig_b64: &str) -> bool {
+        let Some(vk) = B64.decode(public_key_b64).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).and_then(|b| VerifyingKey::from_bytes(&b).ok()) else { return false };
+        let Some(sig) = B64.decode(sig_b64).ok().and_then(|b| <[u8; 64]>::try_from(b).ok()) else { return false };
+        vk.verify(msg, &Signature::from_bytes(&sig)).is_ok()
+    }
+}
