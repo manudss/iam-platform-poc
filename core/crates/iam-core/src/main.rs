@@ -3,15 +3,44 @@ use iam_idp::{Idp, IdpError};
 use iam_decision::{DecisionRequest, DecisionResponse, Engine};
 use serde_json::{Value, json};
 use iam_plugin_runtime::{PluginRuntime, Verdict};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// Shared state: Cedar engine plus an optional blocking WASM plugin (wasm bytes).
-pub struct Core { pub engine: Engine, pub plugin: Option<(PluginRuntime, Vec<u8>)>, pub idp: Idp }
+pub struct Core {
+    pub engine: Engine,
+    pub plugin: Option<(PluginRuntime, Vec<u8>)>,
+    pub idp: Idp,
+    /// Active data version per tenant, set by POST /v1/activate (in memory: the control plane re-applies it after a restart).
+    pub active: RwLock<HashMap<String, Active>>,
+    /// Shared secret for /v1/activate. None = endpoint disabled (secure default).
+    pub admin_token: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Snapshot {
+    pub assignments: Vec<Assignment>,
+    pub sod_rules: Vec<SodRule>,
+}
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Assignment { pub identity_id: String, pub role_id: String }
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct SodRule { pub role_a: String, pub role_b: String }
+#[derive(Clone, Debug)]
+pub struct Active { pub seq: u64, pub commit: String, pub snapshot: Snapshot }
+
+impl Core {
+    pub fn new(engine: Engine, plugin: Option<(PluginRuntime, Vec<u8>)>, idp: Idp) -> Self {
+        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None }
+    }
+}
 
 pub fn app(engine: Arc<Core>) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok","service":"iam-core"})) }))
         .route("/v1/decide", post(decide))
+        .route("/v1/activate", post(activate))
+        .route("/v1/version", get(version))
         .route("/.well-known/openid-configuration", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.discovery()) }))
         .route("/jwks.json", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.jwks()) }))
         .route("/authorize", post(authorize))
@@ -43,8 +72,70 @@ async fn token(State(c): State<Arc<Core>>, Json(r): Json<TokenReq>) -> Result<Js
     c.idp.token(&r.code, &r.code_verifier, &r.redirect_uri, &r.client_id).map(Json).map_err(idp_err)
 }
 
-async fn decide(State(c): State<Arc<Core>>, Json(req): Json<DecisionRequest>)
-    -> Result<Json<DecisionResponse>, (StatusCode, Json<Value>)> {
+#[derive(serde::Deserialize)]
+struct ActivateReq { tenant: String, seq: u64, commit: String, snapshot: Snapshot }
+
+fn valid_name(s: &str) -> bool { !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') }
+
+/// Applies a data version to the core. Idempotent per (tenant, seq, commit); older seq is refused (stale);
+/// same seq with another commit is a conflict. Requires the admin token header.
+async fn activate(State(c): State<Arc<Core>>, headers: axum::http::HeaderMap, Json(r): Json<ActivateReq>) -> (StatusCode, Json<Value>) {
+    let ok = match (&c.admin_token, headers.get("x-core-admin-token").and_then(|v| v.to_str().ok())) {
+        (Some(want), Some(got)) => want.len() == got.len() && want.bytes().zip(got.bytes()).fold(0u8, |a, (x, y)| a | (x ^ y)) == 0,
+        _ => false,
+    };
+    if !ok { return (StatusCode::UNAUTHORIZED, Json(json!({"error": "admin token required"}))); }
+    if !valid_name(&r.tenant) || !valid_name(&r.commit) { return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid tenant or commit"}))); }
+    let mut map = c.active.write().unwrap();
+    if let Some(cur) = map.get(&r.tenant) {
+        if cur.seq == r.seq {
+            return if cur.commit == r.commit {
+                (StatusCode::OK, Json(json!({"status": "already-applied", "seq": cur.seq, "commit": cur.commit})))
+            } else {
+                (StatusCode::CONFLICT, Json(json!({"error": "same seq, different commit"})))
+            };
+        }
+        if cur.seq > r.seq { return (StatusCode::CONFLICT, Json(json!({"error": "stale activation", "active_seq": cur.seq}))); }
+    }
+    map.insert(r.tenant.clone(), Active { seq: r.seq, commit: r.commit.clone(), snapshot: r.snapshot });
+    (StatusCode::OK, Json(json!({"status": "applied", "seq": r.seq, "commit": r.commit})))
+}
+
+async fn version(State(c): State<Arc<Core>>, axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>) -> (StatusCode, Json<Value>) {
+    let t = q.get("tenant").cloned().unwrap_or_default();
+    match c.active.read().unwrap().get(&t) {
+        Some(a) => (StatusCode::OK, Json(json!({"tenant": t, "seq": a.seq, "commit": a.commit}))),
+        None => (StatusCode::NOT_FOUND, Json(json!({"error": "no active version"}))),
+    }
+}
+
+/// Tenant mode: the data comes from the ACTIVE version, never from the caller. Caller-supplied roles/sod_conflict are overwritten.
+fn tenant_context(c: &Core, tenant: &str, principal: &str, ctx: &mut Value) -> Result<(u64, String), ()> {
+    let map = c.active.read().unwrap();
+    let a = map.get(tenant).ok_or(())?;
+    let identity = principal.split('"').nth(1).unwrap_or("");
+    let roles: Vec<&str> = a.snapshot.assignments.iter().filter(|x| x.identity_id == identity).map(|x| x.role_id.as_str()).collect();
+    let sod = a.snapshot.sod_rules.iter().any(|r| roles.contains(&r.role_a.as_str()) && roles.contains(&r.role_b.as_str()));
+    if !ctx.is_object() { *ctx = json!({}); }
+    let o = ctx.as_object_mut().unwrap();
+    o.insert("tenant_mode".into(), json!(true));
+    o.insert("roles".into(), json!(roles));
+    o.insert("sod_conflict".into(), json!(sod));
+    Ok((a.seq, a.commit.clone()))
+}
+
+async fn decide(State(c): State<Arc<Core>>, Json(raw): Json<Value>)
+    -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let bad = |m: String| (StatusCode::BAD_REQUEST, Json(json!({"error": m})));
+    let tenant = raw.get("tenant").and_then(|v| v.as_str()).map(str::to_string);
+    let mut req: DecisionRequest = serde_json::from_value(raw).map_err(|e| bad(e.to_string()))?;
+    let mut version = None;
+    if let Some(t) = &tenant {
+        match tenant_context(&c, t, &req.principal, &mut req.context) {
+            Ok(v) => version = Some(v),
+            Err(()) => return Ok(Json(json!({"allow": false, "reasons": ["no-active-version"], "errors": []}))),
+        }
+    }
     let mut resp = c.engine.decide(&req)
         .map_err(|err| (StatusCode::BAD_REQUEST, Json(json!({"error": err.to_string()}))))?;
     // Blocking plugin hook runs only on a Cedar allow; a plugin deny or error always denies (fail closed).
@@ -59,7 +150,9 @@ async fn decide(State(c): State<Arc<Core>>, Json(req): Json<DecisionRequest>)
             }
         }
     }
-    Ok(Json(resp))
+    let mut out = serde_json::to_value(&resp).unwrap();
+    if let Some((seq, commit)) = version { out["version"] = json!({"seq": seq, "commit": commit}); }
+    Ok(Json(out))
 }
 
 #[tokio::main]
@@ -73,7 +166,9 @@ async fn main() {
         (PluginRuntime::new(100_000).unwrap(), wat::parse_str(wat).expect("invalid plugin"))
     });
     let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
-    let engine = Arc::new(Core { engine, plugin, idp: Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)) });
+    let mut core = Core::new(engine, plugin, Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)));
+    core.admin_token = std::env::var("IAM_CORE_ADMIN_TOKEN").ok().filter(|t| t.len() >= 8);
+    let engine = Arc::new(core);
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
     let l = tokio::net::TcpListener::bind(&addr).await.unwrap();
     tracing::info!("iam-core listening on {addr}");
@@ -88,7 +183,7 @@ mod tests {
     use tower::ServiceExt;
 
     async fn call(body: Value) -> Value {
-        let engine = Arc::new(Core { engine: Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), plugin: None, idp: Idp::demo("http://idp.test") });
+        let engine = Arc::new(Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test")));
         let r = app(engine).oneshot(Request::post("/v1/decide")
             .header("content-type", "application/json").body(Body::from(body.to_string())).unwrap()).await.unwrap();
         serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap()
@@ -97,8 +192,8 @@ mod tests {
     #[tokio::test]
     async fn plugin_denies_sensitive_off_hours() {
         let wasm = wat::parse_str(include_str!("../../../../plugins/examples/deny-off-hours.wat")).unwrap();
-        let core = Arc::new(Core { engine: Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(),
-            plugin: Some((PluginRuntime::new(100_000).unwrap(), wasm)), idp: Idp::demo("http://idp.test") });
+        let core = Arc::new(Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(),
+            Some((PluginRuntime::new(100_000).unwrap(), wasm)), Idp::demo("http://idp.test")));
         for (hour, allow) in [(10, true), (23, false)] {
             let body = json!({"principal":"User::\"alice\"","action":"Action::\"approve\"","resource":"Request::\"r1\"",
               "context":{"sod_conflict":false,"hour":hour,"sensitive":true}});
@@ -121,5 +216,77 @@ mod tests {
         let v = call(json!({"principal":"User::\"alice\"","action":"Action::\"approve\"","resource":"Request::\"r1\"",
           "context":{"sod_conflict":true}})).await;
         assert_eq!(v["allow"], false);
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    const TOKEN: &str = "test-admin-token";
+    fn core() -> Arc<Core> {
+        let mut c = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test"));
+        c.admin_token = Some(TOKEN.into());
+        Arc::new(c)
+    }
+    async fn send(c: &Arc<Core>, method: &str, uri: &str, tok: Option<&str>, body: Value) -> (StatusCode, Value) {
+        let mut r = Request::builder().method(method).uri(uri).header("content-type", "application/json");
+        if let Some(t) = tok { r = r.header("x-core-admin-token", t); }
+        let resp = app(c.clone()).oneshot(r.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+        let st = resp.status();
+        (st, serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap_or(Value::Null))
+    }
+    fn act(seq: u64, commit: &str, roles: Value) -> Value {
+        json!({"tenant":"t1","seq":seq,"commit":commit,"snapshot":{"assignments":roles,"sod_rules":[{"role_a":"payment-creator","role_b":"payment-approver"}]}})
+    }
+    fn dec(identity: &str) -> Value {
+        json!({"tenant":"t1","principal":format!("User::\"{identity}\""),"action":"Action::\"approve\"","resource":"Request::\"r1\"","context":{"sod_conflict":false,"roles":["payment-approver"]}})
+    }
+
+    #[tokio::test]
+    async fn activation_requires_the_admin_token_and_is_disabled_without_one() {
+        let c = core();
+        assert_eq!(send(&c, "POST", "/v1/activate", None, act(1, "aa", json!([]))).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(send(&c, "POST", "/v1/activate", Some("wrong-token-xx"), act(1, "aa", json!([]))).await.0, StatusCode::UNAUTHORIZED);
+        let no_token = Arc::new(Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test")));
+        assert_eq!(send(&no_token, "POST", "/v1/activate", Some(TOKEN), act(1, "aa", json!([]))).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn activation_changes_real_decisions_and_ignores_caller_supplied_roles() {
+        let c = core();
+        // before any activation: tenant requests are denied
+        let (_, v) = send(&c, "POST", "/v1/decide", None, dec("demo-alice")).await;
+        assert_eq!(v["allow"], false); assert_eq!(v["reasons"][0], "no-active-version");
+        // version 1: alice is approver
+        let r = send(&c, "POST", "/v1/activate", Some(TOKEN), act(1, "c1", json!([{"identity_id":"demo-alice","role_id":"payment-approver"}]))).await;
+        assert_eq!((r.0, r.1["status"].as_str().unwrap()), (StatusCode::OK, "applied"));
+        let (_, v) = send(&c, "POST", "/v1/decide", None, dec("demo-alice")).await;
+        assert_eq!(v["allow"], true); assert_eq!(v["version"]["commit"], "c1");
+        // bob has no role in the active data: the roles claimed by the caller are overwritten -> deny
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec("demo-bob")).await.1["allow"], false);
+        // version 2 (roles revoked) applies: alice denied now
+        send(&c, "POST", "/v1/activate", Some(TOKEN), act(2, "c2", json!([]))).await;
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec("demo-alice")).await.1["allow"], false);
+        // SoD computed from data: someone with both roles is forbidden
+        send(&c, "POST", "/v1/activate", Some(TOKEN), act(3, "c3", json!([{"identity_id":"demo-bob","role_id":"payment-approver"},{"identity_id":"demo-bob","role_id":"payment-creator"}]))).await;
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec("demo-bob")).await.1["allow"], false);
+    }
+
+    #[tokio::test]
+    async fn activation_is_idempotent_and_refuses_stale_or_conflicting_versions() {
+        let c = core();
+        let a = act(5, "c5", json!([]));
+        assert_eq!(send(&c, "POST", "/v1/activate", Some(TOKEN), a.clone()).await.1["status"], "applied");
+        assert_eq!(send(&c, "POST", "/v1/activate", Some(TOKEN), a).await.1["status"], "already-applied");
+        assert_eq!(send(&c, "POST", "/v1/activate", Some(TOKEN), act(5, "other", json!([]))).await.0, StatusCode::CONFLICT);
+        assert_eq!(send(&c, "POST", "/v1/activate", Some(TOKEN), act(4, "c4", json!([]))).await.0, StatusCode::CONFLICT);
+        let (st, v) = send(&c, "GET", "/v1/version?tenant=t1", None, Value::Null).await;
+        assert_eq!((st, v["seq"].as_u64()), (StatusCode::OK, Some(5)));
+        assert_eq!(send(&c, "GET", "/v1/version?tenant=nope", None, Value::Null).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(send(&c, "POST", "/v1/activate", Some(TOKEN), act(6, "bad commit!", json!([]))).await.0, StatusCode::BAD_REQUEST);
     }
 }
