@@ -73,7 +73,7 @@ export class ApiClient {
 
 // ---- Plugin administration (generic, schema-driven; see docs/plugins.md) ----
 export interface PluginInfo {
-  id: string; name: string; version: string; kinds: string[]; base: boolean; provides: string[]; extends?: string; enabled: boolean; installed: boolean;
+  id: string; name: string; version: string; kinds: string[]; base: boolean; provides: string[]; extends?: string; enabled: boolean; installed: boolean; faulted?: boolean;
   requests: { install: boolean; sensitiveHooks: string[]; uiComponents: boolean };
   grants: { install?: boolean; hooks?: string[]; uiComponents?: boolean };
 }
