@@ -9,10 +9,10 @@ export class ActivationController {
   constructor(private readonly svc: ActivationService, private readonly dolt: DoltService) {}
 
   @Post()
-  async activate(@Param('tenant') tenant: string, @Body() body: { commit?: string }) {
+  async activate(@Param('tenant') tenant: string, @Body() body: { commit?: string; requestId?: string }) {
     try {
       // No commit given: activate the current Dolt main head.
-      const r = await this.svc.activate(tenant, body?.commit ?? (await this.dolt.head()));
+      const r = await this.svc.activate(tenant, body?.commit ?? (await this.dolt.head()), body?.requestId);
       if (r.state === 'failed') throw new BadGatewayException(r);
       return r;
     } catch (e) {
