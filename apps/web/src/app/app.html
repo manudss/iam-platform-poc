@@ -3,12 +3,19 @@
   <p class="msg" role="status">{{ message() }}</p>
 
   @if (!loggedIn()) {
-    <form (ngSubmit)="login()">
+    <section>
       <h2>Sign in (OAuth/OIDC-inspired prototype, fictional local users)</h2>
-      <label>User <input name="u" [ngModel]="user()" (ngModelChange)="user.set($event)" autocomplete="off" /></label>
-      <label>Password <input name="p" type="password" [(ngModel)]="password" autocomplete="off" /></label>
-      <button type="submit">Sign in</button>
-    </form>
+      <button type="button" id="signin-browser" (click)="signIn()">Sign in (browser flow, recommended)</button>
+      <p>You leave for the core login form and come back with a code; this page checks the state and the PKCE verifier.</p>
+    </section>
+    <details>
+      <summary>Legacy JSON login (diagnostic only)</summary>
+      <form (ngSubmit)="login()">
+        <label>User <input name="u" [ngModel]="user()" (ngModelChange)="user.set($event)" autocomplete="off" /></label>
+        <label>Password <input name="p" type="password" [(ngModel)]="password" autocomplete="off" /></label>
+        <button type="submit">Sign in (legacy JSON)</button>
+      </form>
+    </details>
   } @else {
     <button (click)="logout()">Sign out</button>
 
