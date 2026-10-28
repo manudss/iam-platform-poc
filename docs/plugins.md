@@ -1,6 +1,6 @@
 # Plugins (contract v1)
 
-Status: first usable slice in the POC (registry, manifest, install ledger, settings forms, base/replacement with fallback, admin API and a generic admin screen). In-memory state, fictional data. Not a marketplace, not production.
+Status: first usable slice in the POC (registry, manifest, install ledger, settings forms, base/replacement with fallback, admin API and a generic admin screen). State is in memory by default and in PostgreSQL when `IAM_PG_URL` is set (settings, grants, enablement, faults, migration ledger, seeds). Fictional data. Not a marketplace, not production.
 Code: `apps/api/src/plugins/v1/`, console: `apps/web/src/app/plugins-admin.*`. The v0 contract (`docs/plugin-contract-v0.md`) stays for the WASM blocking hook and the old async host.
 
 ## 1. Ideas in one page
@@ -64,7 +64,7 @@ Validated at registration (`validateManifest`): id, semver, kinds, known hooks a
 
 ## 5. Install file, settings, forms
 
-**Install** (`install.migrations`, `install.seed`): the installer runs each migration once. The ledger stores a checksum; an applied migration that was edited is refused (`migration-changed`): add a new one. Tables must start with `plg_<id>_`. `drop table` is refused: uninstalling or disabling never deletes data. Seeds run only on the first install. Running any of this requires the `install` grant. In the POC the ledger is in memory behind a `MigrationStore` interface; a PostgreSQL implementation is the next step.
+**Install** (`install.migrations`, `install.seed`): the installer runs each migration once. The ledger stores a checksum; an applied migration that was edited is refused (`migration-changed`): add a new one. Tables must start with `plg_<id>_`. `drop table` is refused: uninstalling or disabling never deletes data. Seeds run only on the first install. Running any of this requires the `install` grant. The ledger sits behind a `MigrationStore` interface with two implementations: in memory, and PostgreSQL (`pg-stores.ts`), which really runs the migration SQL in a transaction and records `plugin_migrations`, `plugin_seeds`, `plugin_settings`, `plugin_state`. Every table a plugin creates must have a `tenant text not null` column, and seed rows are written once per tenant, so tenants never share seeded data. After an API restart the registry reloads settings, grants, enablement and recorded faults (covered by `plugins-pg.e2e.spec.ts`, real PostgreSQL, skipped without `PG_BIN`).
 
 **Settings** (`settings`): each field has `key`, `type` (`string`, `text`, `number`, `boolean`, `select`, `multiselect`, `secret`, `url`, `list`), `label`, `help`, `default`, `required`, `min`/`max`, `pattern`, `options`, `group`, `visibleIf`. The server validates every save against the schema: unknown keys, wrong types and out-of-range values are refused (HTTP 400). `secret` fields have no default, are never returned (the form gets `********`), and keep their stored value when the console does not re-send them.
 
@@ -135,4 +135,4 @@ Covered by running code and tests in this POC: `auth-method` (base password + lo
 
 ## 11. Not done
 
-PostgreSQL stores for settings, enablement and the migration ledger; per-tenant enablement from Dolt versions (so a plugin change can be simulated on a branch and merged like a role change); wiring the hooks into the real sign-in (`iam-idp`) and the activation effects; component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
+Per-tenant enablement from Dolt versions (so a plugin change can be simulated on a branch and merged like a role change); wiring the hooks into the real sign-in (`iam-idp`) and the activation effects; component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
