@@ -35,6 +35,7 @@ export class ActivationConsumer {
   async start(natsUrl: string, durable = 'activation-consumer') {
     this.nc = await connect({ servers: natsUrl, maxReconnectAttempts: 0 });
     const jsm = await this.nc.jetstreamManager();
+    await jsm.streams.add({ name: 'IAM_EVENTS', subjects: ['iam.>'] }).catch(() => undefined); // same stream as the publisher; no-op if it exists
     await jsm.consumers.add('IAM_EVENTS', { durable_name: durable, ack_policy: AckPolicy.Explicit, filter_subject: 'iam.activation.>' }).catch(() => undefined);
     const cons = await this.nc.jetstream().consumers.get('IAM_EVENTS', durable);
     const messages = await cons.consume();
