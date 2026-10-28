@@ -1,7 +1,7 @@
 # Manual trigger only (workflow_dispatch): nothing runs on push, so no GitHub-hosted minutes are used unless a person starts it.
 # Private repo + GitHub Free = 2,000 included Linux minutes per month (see docs.github.com billing docs); usage above that is billed
 # unless a budget with "stop usage" is set. Each job is capped with timeout-minutes. Standard runners only.
-# Real-service suites run from plain binaries (Dolt, PostgreSQL, NATS, OpenBao, Temporal) are skipped in the api job; see docs/e2e.md.
+# The api job downloads the real service binaries and runs the real-service suites (see the job comment and docs/e2e.md).
 # The core binary IS built, so the Rust-core end-to-end suite runs. The compose job starts the real docker-compose stack on the
 # runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts.
 name: ci
@@ -17,16 +17,48 @@ jobs:
       - run: cargo test --locked
         working-directory: core
   api:
+    # Integration job: installs the real service binaries from their GitHub releases (free, no Docker) so the real-service suites RUN
+    # instead of skipping: Dolt, PostgreSQL (embedded-postgres npm package), NATS JetStream, OpenBao, Temporal dev server, plus the
+    # Rust core and a headless-Chrome UI run. If a download fails the step prints the release assets and fails the job.
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: cargo build -p iam-core --locked
         working-directory: core
+      - name: Install service binaries
+        run: |
+          mkdir -p /tmp/svc && cd /tmp/svc
+          dl() { gh release download "$2" -R "$1" -p "$3" -D /tmp/svc --clobber || { echo "download failed: $1 $2 $3"; gh release view "$2" -R "$1" --json assets -q '.assets[].name'; exit 1; }; }
+          dl dolthub/dolt v2.6.1 'dolt-linux-amd64.tar.gz'
+          dl nats-io/nats-server v2.15.2 'nats-server-v2.15.2-linux-amd64.tar.gz'
+          dl openbao/openbao v2.7.2 'bao_*_Linux_x86_64.tar.gz'
+          dl temporalio/cli v1.9.1 'temporal_cli_*_linux_amd64.tar.gz'
+          mkdir dolt nats bao temporal
+          tar xzf dolt-linux-amd64.tar.gz -C dolt; tar xzf nats-server-*.tar.gz -C nats; tar xzf bao_*.tar.gz -C bao; tar xzf temporal_cli_*.tar.gz -C temporal
+          echo "DOLT_BIN=$(find /tmp/svc/dolt -name dolt -type f | head -1)" >> $GITHUB_ENV
+          echo "NATS_SERVER_BIN=$(find /tmp/svc/nats -name nats-server -type f | head -1)" >> $GITHUB_ENV
+          echo "BAO_BIN=$(find /tmp/svc/bao -name bao -type f | head -1)" >> $GITHUB_ENV
+          echo "TEMPORAL_BIN=$(find /tmp/svc/temporal -name temporal -type f | head -1)" >> $GITHUB_ENV
+          mkdir /tmp/pgtry && cd /tmp/pgtry && npm init -y >/dev/null && npm i embedded-postgres >/dev/null
+          echo "PG_BIN=/tmp/pgtry/node_modules/@embedded-postgres/linux-x64/native/bin" >> $GITHUB_ENV
+      - name: Check every binary is really there
+        run: |
+          for v in DOLT_BIN NATS_SERVER_BIN BAO_BIN TEMPORAL_BIN; do p="${!v}"; test -x "$p" && echo "$v=$p" || { echo "$v missing"; exit 1; }; done
+          test -x "$PG_BIN/postgres"
       - run: npm ci && npm test
         working-directory: apps/api
+      - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
+        env:
+          NG_CLI_ANALYTICS: "false"
+        run: |
+          (cd apps/web && npm ci)
+          mkdir /tmp/pw && (cd /tmp/pw && npm init -y >/dev/null && npm i playwright-core >/dev/null)
+          CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/ui-e2e.mjs /tmp/ui-shots
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 15
