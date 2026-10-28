@@ -3,6 +3,7 @@
 // Needs: DOLT_BIN, CHROME_BIN, playwright-core resolvable (npm i playwright-core), built core and API (core/target/debug/iam-core, apps/api/dist).
 // Usage: DOLT_BIN=... CHROME_BIN=... node scripts/ui-e2e.mjs [outDir]
 import { spawn, spawnSync } from 'node:child_process';
+import { connect } from 'node:net';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
@@ -22,7 +23,26 @@ const env = { ...process.env, HOME: home };
 for (const [k, v] of [['user.name', 'poc'], ['user.email', 'poc@example.invalid']]) spawnSync(dolt, ['config', '--global', '--add', k, v], { env });
 assert.equal(spawnSync(dolt, ['sql'], { cwd: data, env, input: readFileSync(join(root, 'data/demo/01-schema.sql')) }).status, 0);
 const procs = [];
-const run = (cmd, args, opts) => procs.push(spawn(cmd, args, { stdio: 'ignore', ...opts }));
+// Each child starts in its OWN process group (detached) so the whole tree (npx -> ng serve, node, ...) can be stopped by group, never by a name pattern.
+const run = (cmd, args, opts) => procs.push(spawn(cmd, args, { stdio: 'ignore', detached: true, ...opts }));
+const portOpen = (port) => new Promise((ok) => { const c = connect(port, '127.0.0.1'); c.once('connect', () => { c.destroy(); ok(true); }); c.once('error', () => ok(false)); });
+// Descendants of the children we started, snapshotted BEFORE stopping anything (`ng serve` moves its server into its own session, so a group kill alone misses it).
+const descendants = (roots) => {
+  const rows = spawnSync('ps', ['-e', '-o', 'pid=,ppid=']).stdout.toString().trim().split('\n').map((l) => l.trim().split(/\s+/).map(Number));
+  const kids = new Map(); for (const [pid, ppid] of rows) kids.set(ppid, [...(kids.get(ppid) ?? []), pid]);
+  const out = []; const walk = (pid) => { for (const k of kids.get(pid) ?? []) { walk(k); out.push(k); } }; roots.forEach(walk);
+  return out; // leaves first
+};
+const stopAll = async () => {
+  const tree = descendants(procs.map((p) => p.pid));
+  for (const pid of tree) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
+  for (const p of procs) { try { process.kill(-p.pid, 'SIGTERM'); } catch { /* already gone */ } }
+  for (let i = 0; i < 40 && ((await portOpen(4200)) || (await portOpen(8081)) || (await portOpen(3000)) || (await portOpen(3307))); i++) {
+    if (i === 20) { for (const pid of tree) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } for (const p of procs) { try { process.kill(-p.pid, 'SIGKILL'); } catch { /* gone */ } } }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  for (const port of [4200, 8081, 3000, 3307]) if (await portOpen(port)) console.log('WARNING: port ' + port + ' still in use after cleanup');
+};
 run(dolt, ['sql-server', '--host', '127.0.0.1', '--port', '3307', '--data-dir', data], { cwd: data, env });
 run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core') });
 run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_ISSUER: 'http://127.0.0.1:8081' } });
@@ -74,5 +94,5 @@ try {
   assert.deepEqual(errors, [], 'no page errors');
   console.log('UI E2E PASSED; screenshots in ' + out);
 } finally {
-  await browser?.close(); procs.forEach((p) => p.kill()); await sleep(300); rmSync(dir, { recursive: true, force: true });
-}
+  await browser?.close(); await stopAll(); rmSync(dir, { recursive: true, force: true });
+                      }
