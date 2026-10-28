@@ -35,10 +35,10 @@ export class TemporalService implements OnModuleDestroy {
     this.running = this.worker.run().catch((e) => this.log.error(`worker stopped: ${(e as Error).message}`));
   }
 
-  async activate(tenant: string, commit: string): Promise<ActivationResult> {
+  async activate(tenant: string, commit: string, requestId: string = randomUUID()): Promise<ActivationResult> {
     if (!this.client) await this.start();
     return this.client!.workflow.execute('activationWorkflow', {
-      taskQueue: 'iam-activation', workflowId: `activation-${tenant}-${randomUUID()}`, args: [{ tenant, commit }],
+      taskQueue: 'iam-activation', workflowId: `activation-${tenant}-${requestId}`, args: [{ tenant, commit, requestId }],
     });
   }
 
