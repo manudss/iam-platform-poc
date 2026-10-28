@@ -12,14 +12,14 @@ export class ActivationController {
   async activate(@Param('tenant') tenant: string, @Body() body: { commit?: string }) {
     try {
       // No commit given: activate the current Dolt main head.
-      return this.svc.activate(tenant, body?.commit ?? (await this.dolt.head()));
+      return await this.svc.activate(tenant, body?.commit ?? (await this.dolt.head()));
     } catch (e) {
       throw new BadRequestException((e as Error).message);
     }
   }
 
   @Get()
-  list(@Param('tenant') tenant: string) {
+  async list(@Param('tenant') tenant: string) {
     return this.svc.list(tenant);
   }
 }
