@@ -133,6 +133,21 @@ Covered by running code and tests in this POC: `auth-method` (base password + lo
 - `apps/web/src/app/plugins-admin.spec.ts`: form helpers, client headers, form rendered from a schema, grant prompts.
 - Run: `cd apps/api && npm test` (listed in the script) and `cd apps/web && npx ng test --watch=false`.
 
+## 11a. Wired into the real sign-in and the activation effects
+
+**Sign-in gate (`auth.authenticate`).** The Rust core can ask the control plane before its IdP checks a password. Set `IAM_AUTH_GATE_ADDR` (loopback host:port only) and `IAM_AUTH_GATE_TOKEN` (8 characters or more, same value on the API) and both the JSON `/authorize` and the browser login form (`/authorize/login`) call `POST /internal/auth/authenticate` on the API. The API answers through `callSlot('auth.password', 'auth.authenticate')`, so the active base or replacement plugin decides.
+
+| Situation | Gate answer | Sign-in result | Plugin state |
+|---|---|---|---|
+| right password | 200 `allow` | the IdP continues (its own check still applies) | healthy |
+| wrong password, lockout | 200 `deny` | refused, `invalid_credentials` (401) | healthy, counters kept |
+| plugin threw, timed out, is faulted | 503 | refused, `temporarily_unavailable` (503) | faulted until an admin disables or re-enables |
+| gate unreachable or slow (3 s) | none | refused (503), never served by the plain IdP check | not touched |
+
+A wrong password is a business denial: it never faults the plugin for everyone. A technical failure is fail-closed and the base plugin is not asked after a replacement failed. The endpoint answers 404 unless the token is set and 401 on a wrong token. A `challenge` outcome is treated as a denial, because the demo form has no second step. Covered by `signin-gate.e2e.spec.ts` (real core binary, real API, registry) and unit tests in `core/crates/iam-core/src/gate.rs`.
+
+**Notifications (`notify.send`).** With `IAM_EFFECTS=1`, the activation effects also fan out `notify.send` to the active notifier plugins (`role.changed`, one call per effect key, idempotent). It is best effort: a notifier problem is logged and never fails the role effects or becomes an access decision.
+
 ## 11. Not done
 
-Per-tenant enablement from Dolt versions (so a plugin change can be simulated on a branch and merged like a role change); wiring the hooks into the real sign-in (`iam-idp`) and the activation effects; component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
+Per-tenant enablement from Dolt versions (so a plugin change can be simulated on a branch and merged like a role change); component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
