@@ -1,0 +1,120 @@
+// Activation protocol against REAL Dolt + the REAL Rust core (no mocks): apply a Dolt commit to the core, idempotence,
+// retry after the core was down, reconcile after a core restart, SoD computed by the core from the activated data.
+// Skipped if the dolt or core binary is missing. Journal is the in-memory fallback here (PostgreSQL durability is tested in pg.e2e.spec.ts).
+import 'reflect-metadata';
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn, spawnSync, ChildProcess } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createConnection } from 'mysql2/promise';
+import { ActivationService } from './activation/activation.service.js';
+import { DoltService } from './dolt/dolt.service.js';
+
+const root = resolve(process.cwd(), '../..');
+const coreBin = resolve(root, 'core/target/debug/iam-core');
+const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
+const doltBin = process.env.DOLT_BIN ?? (which || '/tmp/dolt-linux-amd64/bin/dolt');
+const have = existsSync(coreBin) && existsSync(doltBin);
+const CORE = 'http://127.0.0.1:18092', ADMIN = 'local-demo-admin-token'; // local fictional value
+
+describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'dolt or core binary missing' }, () => {
+  let dolt: ChildProcess, core: ChildProcess | undefined, dir: string, svc: ActivationService;
+  const T = 'acme-demo';
+
+  const startCore = async () => {
+    core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18092', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
+    for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) return; } catch { /* retry */ } await new Promise((r) => setTimeout(r, 100)); }
+    throw new Error('core did not start');
+  };
+  const stopCore = async () => { core?.kill(); core = undefined; await new Promise((r) => setTimeout(r, 300)); };
+  const sql = async (q: string) => {
+    const c = await createConnection({ host: '127.0.0.1', port: 13317, user: 'root', database: 'iam' });
+    try { await c.query(q); await c.query("call dolt_commit('-Am', 'test change')"); } finally { await c.end(); }
+  };
+  const decide = async (id: string, withLies = false) => (await (await fetch(`${CORE}/v1/decide`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tenant: T, principal: `User::"${id}"`, action: 'Action::"approve"', resource: 'Request::"r1"', context: withLies ? { roles: ['payment-approver'], sod_conflict: false } : {} }),
+  })).json()) as { allow: boolean; reasons: string[]; version?: { seq: number; commit: string } };
+
+  before(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'iam-act-'));
+    const home = join(dir, 'home'), data = join(dir, 'data'); mkdirSync(home); mkdirSync(data);
+    const env = { ...process.env, HOME: home };
+    for (const [k, v] of [['user.name', 'poc'], ['user.email', 'poc@example.invalid']]) spawnSync(doltBin, ['config', '--global', '--add', k, v], { env });
+    assert.equal(spawnSync(doltBin, ['sql'], { cwd: data, env, input: readFileSync(resolve(root, 'data/demo/01-schema.sql')) }).status, 0);
+    dolt = spawn(doltBin, ['sql-server', '--host', '127.0.0.1', '--port', '13317', '--data-dir', data], { cwd: data, env, stdio: 'ignore' });
+    for (let i = 0; i < 100; i++) { if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', '13317', '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break; await new Promise((r) => setTimeout(r, 150)); }
+    await startCore();
+    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN, DOLT_PORT: '13317', DOLT_DATABASE: 'iam' });
+    delete process.env.IAM_PG_URL; delete process.env.IAM_NATS_URL;
+    svc = new ActivationService(undefined, undefined, new DoltService());
+  });
+  after(async () => { await stopCore(); dolt?.kill(); if (dir) rmSync(dir, { recursive: true, force: true }); });
+
+  it('before any activation the core denies tenant requests (fail closed)', async () => {
+    const d = await decide('demo-alice');
+    assert.equal(d.allow, false); assert.deepEqual(d.reasons, ['no-active-version']);
+  });
+  it('activating a Dolt commit really applies it in the core; roles claimed by the caller are ignored', async () => {
+    const head = await new DoltService().head();
+    const a = await svc.activate(T, head);
+    assert.equal(a.state, 'applied'); assert.equal(a.seq, 1);
+    const v = (await (await fetch(`${CORE}/v1/version?tenant=${T}`)).json()) as { seq: number; commit: string };
+    assert.deepEqual(v, { tenant: T, seq: 1, commit: head });
+    assert.equal((await decide('demo-alice', true)).allow, false); // alice has no role in the active data, lying context is overwritten
+    assert.equal((await decide('demo-bob')).allow, false);
+  });
+  it('is idempotent: same commit again returns the same applied activation, no new seq', async () => {
+    const head = await new DoltService().head();
+    const again = await svc.activate(T, head);
+    assert.equal(again.seq, 1); assert.equal(again.state, 'applied');
+    assert.equal((await svc.list(T)).length, 1);
+  });
+  it('a new data version changes decisions; SoD is computed by the core from the activated data', async () => {
+    await sql("insert into assignments values ('demo-alice','payment-approver')");
+    const a = await svc.activate(T, await new DoltService().head());
+    assert.equal(a.seq, 2); assert.equal(a.state, 'applied');
+    const d = await decide('demo-alice');
+    assert.equal(d.allow, true); assert.equal(d.version?.seq, 2);
+    await sql("insert into assignments values ('demo-bob','payment-approver')"); // bob now creator + approver => SoD
+    assert.equal((await svc.activate(T, await new DoltService().head())).state, 'applied');
+    assert.equal((await decide('demo-bob')).allow, false);
+    assert.equal((await decide('demo-alice')).allow, true);
+  });
+  it('the activated commit is tagged act-<tenant>-<seq> in Dolt', async () => {
+    const c = await createConnection({ host: '127.0.0.1', port: 13317, user: 'root', database: 'iam' });
+    try {
+      const [r] = await c.query('select tag_name from dolt_tags order by 1');
+      assert.deepEqual((r as { tag_name: string }[]).map((x) => x.tag_name), ['act-acme-demo-1', 'act-acme-demo-2', 'act-acme-demo-3']);
+    } finally { await c.end(); }
+  });
+  it('core down: activation is journaled as failed (no false success); retry of the same commit succeeds with the same seq', async () => {
+    await stopCore();
+    await sql("delete from assignments where identity_id='demo-bob' and role_id='payment-approver'");
+    const head = await new DoltService().head();
+    const failed = await svc.activate(T, head);
+    assert.equal(failed.state, 'failed'); assert.equal(failed.seq, 4); assert.ok(failed.error);
+    assert.equal((await svc.current(T))?.state, 'failed');
+    await startCore(); // fresh core: lost its in-memory state
+    const retried = await svc.activate(T, head);
+    assert.equal(retried.state, 'applied'); assert.equal(retried.seq, 4); // same activation, not a new one
+    assert.equal((await svc.list(T)).length, 4);
+  });
+  it('reconcile re-applies the latest activation after a core restart, and does nothing when in sync', async () => {
+    assert.equal((await svc.reconcile(T)).action, 'none');
+    await stopCore(); await startCore(); // core lost its state
+    assert.equal((await decide('demo-alice')).reasons[0], 'no-active-version');
+    const r = await svc.reconcile(T);
+    assert.equal(r.action, 'reapplied');
+    assert.equal((await decide('demo-alice')).allow, true);
+    assert.equal((await svc.reconcile(T)).action, 'none');
+  });
+  it('the core refuses /v1/activate without the admin token and refuses a stale seq', async () => {
+    const body = JSON.stringify({ tenant: T, seq: 1, commit: 'abc', snapshot: { assignments: [], sod_rules: [] } });
+    const h = { 'content-type': 'application/json' };
+    assert.equal((await fetch(`${CORE}/v1/activate`, { method: 'POST', headers: h, body })).status, 401);
+    assert.equal((await fetch(`${CORE}/v1/activate`, { method: 'POST', headers: { ...h, 'x-core-admin-token': ADMIN }, body })).status, 409);
+  });
+});
