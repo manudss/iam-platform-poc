@@ -107,4 +107,28 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
       assert.equal((await j(`${API}/${T}/connectors/csv`, 'POST', t, { csv })).status, 400);
     assert.equal((await j(`${API}/${T}/connectors/csv`, 'POST', undefined, { csv: bad })).status, 401);
   });
+  it('SCIM-like connector: import lands on a branch (inactive/role-less users skipped), SoD conflict is reported, bad input is 400', async () => {
+    const t = await login();
+    const EXT = 'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User';
+    const count = async () => ((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length;
+    const base = await count();
+    const ok = { Resources: [
+      { userName: 'demo-dave', displayName: 'Dave Demo', active: true, roles: [{ value: 'accountant' }], [EXT]: { department: 'finance', manager: { value: 'demo-alice' } } },
+      { userName: 'demo-erin', displayName: 'Erin Demo', active: false, roles: [{ value: 'accountant' }] },
+      { userName: 'demo-frank', displayName: 'Frank Demo', active: true } ] };
+    const r = await j(`${API}/${T}/connectors/scim`, 'POST', t, ok);
+    assert.equal(r.status, 201);
+    const imp = (await r.json()) as { branch: string; mergeable: boolean; rows: number; skipped: number };
+    assert.deepEqual([imp.rows, imp.skipped, imp.mergeable], [1, 2, true]);
+    assert.equal(await count(), base); // main untouched before merge
+    assert.equal((await j(`${API}/${T}/changes/${imp.branch}/merge`, 'POST', t)).status, 201);
+    assert.equal(await count(), base + 1);
+    const bad = { Resources: [{ userName: 'demo-bob', displayName: 'Bob Demo', roles: [{ value: 'payment-approver' }] }] };
+    const sod = (await (await j(`${API}/${T}/connectors/scim`, 'POST', t, bad)).json()) as { branch: string; mergeable: boolean };
+    assert.equal(sod.mergeable, false);
+    assert.equal((await j(`${API}/${T}/changes/${sod.branch}/merge`, 'POST', t)).status, 409);
+    for (const body of [{}, { Resources: [] }, { Resources: [{ userName: "x';drop", displayName: 'N', roles: [{ value: 'accountant' }] }] }, { Resources: [{ userName: 'ok-id', displayName: 'N', roles: [{ value: 'nope' }] }] }, { Resources: [{ userName: 'ok-id', displayName: 'N', active: false }] }])
+      assert.equal((await j(`${API}/${T}/connectors/scim`, 'POST', t, body)).status, 400);
+    assert.equal((await j(`${API}/${T}/connectors/scim`, 'POST', undefined, ok)).status, 401);
+  });
 });
