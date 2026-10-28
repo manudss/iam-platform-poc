@@ -1,0 +1,251 @@
+import { HOOKS, HookHandler, PluginContext } from './hooks.js';
+import { PluginManifest, validateManifest } from './manifest.js';
+import { settingsExtend, toFormModel, validateSettings, FormModel } from './settings.js';
+
+/** Hooks that sit on the sign-in or decision path. Declaring one is not enough: an admin must grant it. */
+export const SENSITIVE_HOOKS = new Set(['auth.authenticate', 'auth.challenge', 'access.decide', 'risk.score']);
+
+export interface PluginImpl { manifest: PluginManifest; handlers: Record<string, HookHandler>; }
+
+/** What an admin approves when enabling a plugin. A manifest only requests; nothing is implied. */
+export interface Grants {
+  /** Allow running the install migrations (SQL limited to the plugin's own plg_ tables). */
+  install?: boolean;
+  /** Sensitive hooks the plugin may receive. */
+  hooks?: string[];
+  /** Allow packaged web components (render: 'component'). Schema-rendered screens need no grant. */
+  uiComponents?: boolean;
+}
+
+export interface MigrationStore {
+  applied(pluginId: string): Promise<{ id: string; checksum: string }[]>;
+  /** Runs the statements in one transaction and records the migration. */
+  apply(pluginId: string, id: string, checksum: string, sql: string[]): Promise<void>;
+  seed(pluginId: string, table: string, row: Record<string, unknown>): Promise<void>;
+}
+export interface SettingsStore {
+  get(tenant: string, pluginId: string): Promise<Record<string, unknown> | undefined>;
+  put(tenant: string, pluginId: string, values: Record<string, unknown>): Promise<void>;
+}
+export interface RegistryAudit { (event: { tenant: string; action: string; plugin: string; detail?: string }): void; }
+
+type State = { enabled: boolean; grants: Grants; installed: boolean };
+
+export class PluginError extends Error {
+  constructor(public code: string, message: string) { super(message); }
+}
+
+export class PluginRegistry {
+  private impls = new Map<string, PluginImpl>();
+  private state = new Map<string, State>(); // key: tenant/plugin
+  /** Slot -> plugin id chosen by the admin as replacement; absent means the base plugin serves. */
+  private chosen = new Map<string, string>(); // key: tenant/slot
+  private unhealthy = new Set<string>();
+
+  constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}) {}
+
+  private k = (tenant: string, id: string) => `${tenant}/${id}`;
+  private plugin(id: string) {
+    const p = this.impls.get(id);
+    if (!p) throw new PluginError('unknown-plugin', `unknown plugin ${id}`);
+    return p;
+  }
+
+  /** Called at startup for shipped and discovered plugins. Checks the manifest and the base/replacement rules. */
+  register(impl: PluginImpl) {
+    const m = impl.manifest;
+    const errs = validateManifest(m, HOOKS);
+    for (const h of m.hooks) if (!impl.handlers[h.name]) errs.push(`hook ${h.name} declared but no handler`);
+    for (const h of Object.keys(impl.handlers)) if (!m.hooks.some((d) => d.name === h)) errs.push(`handler for undeclared hook ${h}`);
+    if (this.impls.has(m.id)) errs.push(`plugin ${m.id} already registered`);
+    if (m.extends) {
+      const base = this.impls.get(m.extends);
+      if (!base) errs.push(`base plugin ${m.extends} is not registered`);
+      else {
+        if (!base.manifest.base) errs.push(`${m.extends} is not a base plugin`);
+        const baseSlots = base.manifest.provides ?? [];
+        if (!baseSlots.every((s) => m.provides?.includes(s))) errs.push('replacement must provide every slot of its base');
+        errs.push(...settingsExtend(base.manifest.settings, m.settings));
+        for (const h of base.manifest.hooks) if (!m.hooks.some((x) => x.name === h.name && x.mode === h.mode)) errs.push(`replacement must handle base hook ${h.name}`);
+        for (const kd of base.manifest.kinds) if (!m.kinds.includes(kd)) errs.push(`replacement must keep kind ${kd}`);
+      }
+    }
+    if (m.base) {
+      for (const s of m.provides ?? []) {
+        const other = [...this.impls.values()].find((i) => i.manifest.base && i.manifest.provides?.includes(s));
+        if (other) errs.push(`slot ${s} already has base plugin ${other.manifest.id}`);
+      }
+    }
+    if (errs.length) throw new PluginError('invalid-manifest', `${m.id}: ${errs.join('; ')}`);
+    this.impls.set(m.id, impl);
+  }
+
+  list(tenant: string) {
+    return [...this.impls.values()].map((i) => {
+      const s = this.state.get(this.k(tenant, i.manifest.id));
+      const base = !!i.manifest.base;
+      return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, installed: base ? true : !!s?.installed,
+        /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
+        requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') },
+        grants: s?.grants ?? {} };
+    });
+  }
+
+  /** Install: runs migrations once (checksum-checked), seeds, only if the admin granted `install`. */
+  async install(tenant: string, id: string, grants: Grants) {
+    const p = this.plugin(id);
+    const spec = p.manifest.install;
+    if (spec?.migrations.length || spec?.seed?.length) {
+      if (!grants.install && !p.manifest.base) throw new PluginError('grant-required', 'install requires the install grant');
+    }
+    const done = new Map((await this.migrations.applied(id)).map((a) => [a.id, a.checksum]));
+    for (const mig of spec?.migrations ?? []) {
+      const sum = checksum(JSON.stringify(mig.sql));
+      const prev = done.get(mig.id);
+      if (prev !== undefined) {
+        if (prev !== sum) throw new PluginError('migration-changed', `migration ${mig.id} was edited after being applied`);
+        continue;
+      }
+      await this.migrations.apply(id, mig.id, sum, mig.sql);
+    }
+    if (!done.size) for (const s of spec?.seed ?? []) await this.migrations.seed(id, s.table, s.row);
+    const st = this.state.get(this.k(tenant, id)) ?? { enabled: false, grants: {}, installed: false };
+    st.installed = true; st.grants = { ...st.grants, ...grants };
+    this.state.set(this.k(tenant, id), st);
+    this.audit({ tenant, action: 'plugin.install', plugin: id });
+  }
+
+  async configure(tenant: string, id: string, input: Record<string, unknown>) {
+    const p = this.plugin(id);
+    // A secret that is not re-sent keeps its stored value (the console never gets the secret back, only a mask).
+    const stored = (await this.settings.get(tenant, id)) ?? {};
+    const merged = { ...input };
+    for (const f of p.manifest.settings) if (f.type === 'secret' && merged[f.key] === undefined && stored[f.key] !== undefined) merged[f.key] = stored[f.key];
+    const r = validateSettings(p.manifest.settings, merged);
+    if (!r.ok) throw new PluginError('invalid-settings', r.errors.join('; '));
+    await this.settings.put(tenant, id, r.values);
+    this.audit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
+  }
+
+  async form(tenant: string, id: string): Promise<FormModel> {
+    const p = this.plugin(id);
+    return toFormModel(p.manifest.settings, (await this.settings.get(tenant, id)) ?? {});
+  }
+
+  private checkGrants(p: PluginImpl, g: Grants) {
+    for (const h of p.manifest.hooks) if (SENSITIVE_HOOKS.has(h.name) && !g.hooks?.includes(h.name) && !p.manifest.base) throw new PluginError('grant-required', `hook ${h.name} is sensitive and was not granted`);
+    if (p.manifest.screens?.some((s) => s.render === 'component') && !g.uiComponents && !p.manifest.base) throw new PluginError('grant-required', 'component screens were not granted');
+  }
+
+  async enable(tenant: string, id: string, grants: Grants = {}) {
+    const p = this.plugin(id);
+    if (p.manifest.base) return; // base plugins are always on
+    const st = this.state.get(this.k(tenant, id));
+    if (!st?.installed) throw new PluginError('not-installed', `${id} is not installed`);
+    const g = { ...st.grants, ...grants };
+    this.checkGrants(p, g);
+    for (const r of p.manifest.requires ?? []) if (!this.isActive(tenant, r)) throw new PluginError('missing-dependency', `requires ${r}`);
+    const cur = (await this.settings.get(tenant, id)) ?? {};
+    const v = validateSettings(p.manifest.settings, cur);
+    if (!v.ok) throw new PluginError('invalid-settings', `configure before enabling: ${v.errors.join('; ')}`);
+    st.grants = g; st.enabled = true;
+    // A replacement takes over its slots, the base keeps its own settings and data untouched.
+    if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
+    this.unhealthy.delete(this.k(tenant, id));
+    this.audit({ tenant, action: 'plugin.enable', plugin: id });
+  }
+
+  /** Disable: slots fall back to the base plugin with the base's own stored configuration. Data is never dropped. */
+  async disable(tenant: string, id: string) {
+    const p = this.plugin(id);
+    if (p.manifest.base) throw new PluginError('base-required', `${id} is a base plugin and cannot be disabled; enable a replacement instead`);
+    const st = this.state.get(this.k(tenant, id));
+    if (!st?.enabled) return;
+    for (const other of this.impls.values()) if (this.isActive(tenant, other.manifest.id) && other.manifest.requires?.includes(id)) throw new PluginError('in-use', `${other.manifest.id} requires ${id}`);
+    st.enabled = false;
+    for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
+    this.audit({ tenant, action: 'plugin.disable', plugin: id });
+  }
+
+  isActive(tenant: string, id: string) {
+    const p = this.impls.get(id);
+    if (!p) return false;
+    return !!p.manifest.base || !!this.state.get(this.k(tenant, id))?.enabled;
+  }
+
+  /** Which plugin serves a slot now: the enabled, healthy replacement, otherwise the base. */
+  resolve(tenant: string, slot: string): PluginImpl {
+    const id = this.chosen.get(this.k(tenant, slot));
+    if (id && !this.unhealthy.has(this.k(tenant, id))) return this.plugin(id);
+    const base = [...this.impls.values()].find((i) => i.manifest.base && i.manifest.provides?.includes(slot));
+    if (!base) throw new PluginError('no-provider', `no provider for slot ${slot}`);
+    return base;
+  }
+
+  /**
+   * Call a slot's blocking hook. A replacement that throws or times out is marked unhealthy and the call is answered by the base,
+   * so a broken replacement can never lock everybody out of sign-in. `failClosed` hooks (access.decide) never fall back to allow.
+   */
+  async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
+    const primary = this.resolve(tenant, slot);
+    const run = async (p: PluginImpl) => {
+      const h = p.handlers[hook];
+      if (!h) throw new PluginError('no-handler', `${p.manifest.id} has no ${hook}`);
+      const settings = validateSettings(p.manifest.settings, (await this.settings.get(tenant, p.manifest.id)) ?? {}).values;
+      const ctx: PluginContext = { tenant, settings };
+      return await withTimeout(Promise.resolve(h(payload, ctx)), timeoutMs);
+    };
+    try {
+      return { result: (await run(primary)) as R, servedBy: primary.manifest.id, fellBack: false };
+    } catch (e) {
+      if (!primary.manifest.extends) throw e;
+      this.unhealthy.add(this.k(tenant, primary.manifest.id));
+      this.audit({ tenant, action: 'plugin.fallback', plugin: primary.manifest.id, detail: String((e as Error).message) });
+      const base = this.resolve(tenant, slot);
+      return { result: (await run(base)) as R, servedBy: base.manifest.id, fellBack: true };
+    }
+  }
+
+  /** Async hook fan-out: every active plugin that declared the hook, deduplicated by effectKey. */
+  private done = new Set<string>();
+  async emit(tenant: string, hook: string, payload: { effectKey: string }) {
+    const out: { plugin: string; result: unknown }[] = [];
+    for (const p of this.impls.values()) {
+      if (!this.isActive(tenant, p.manifest.id)) continue;
+      const decl = p.manifest.hooks.find((h) => h.name === hook && h.mode === 'async');
+      if (!decl) continue;
+      const key = `${tenant}:${p.manifest.id}:${hook}:${payload.effectKey}`;
+      if (this.done.has(key)) continue;
+      const settings = validateSettings(p.manifest.settings, (await this.settings.get(tenant, p.manifest.id)) ?? {}).values;
+      out.push({ plugin: p.manifest.id, result: await p.handlers[hook](payload, { tenant, settings }) });
+      this.done.add(key);
+    }
+    return out;
+  }
+
+  /** Screens visible to the admin console. Component screens only appear if granted. */
+  screens(tenant: string) {
+    const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string }[] = [];
+    for (const p of this.impls.values()) {
+      if (!this.isActive(tenant, p.manifest.id)) continue;
+      const g = this.state.get(this.k(tenant, p.manifest.id))?.grants ?? {};
+      for (const s of p.manifest.screens ?? []) {
+        if (s.render === 'component' && !g.uiComponents && !p.manifest.base) continue;
+        res.push({ plugin: p.manifest.id, id: s.id, title: s.title, area: s.area, render: s.render, schemaRef: s.schemaRef });
+      }
+    }
+    return res;
+  }
+}
+
+function checksum(s: string) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(16);
+}
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new PluginError('timeout', `hook exceeded ${ms} ms`)), ms);
+    p.then((v) => { clearTimeout(t); res(v); }, (e) => { clearTimeout(t); rej(e); });
+  });
+}
