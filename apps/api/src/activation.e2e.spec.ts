@@ -59,25 +59,32 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
   });
   it('activating a Dolt commit really applies it in the core; roles claimed by the caller are ignored', async () => {
     const head = await new DoltService().head();
-    const a = await svc.activate(T, head);
+    const a = await svc.activate(T, head, 'req-first-0001');
     assert.equal(a.state, 'applied'); assert.equal(a.seq, 1);
     const v = (await (await fetch(`${CORE}/v1/version?tenant=${T}`)).json()) as { seq: number; commit: string };
     assert.deepEqual(v, { tenant: T, seq: 1, commit: head });
     assert.equal((await decide('demo-alice', true)).allow, false); // alice has no role in the active data, lying context is overwritten
     assert.equal((await decide('demo-bob')).allow, false);
   });
-  it('is idempotent: same commit again returns the same applied activation, no new seq', async () => {
+  it('is idempotent per REQUEST id: retry of the same request has no new effect; a request for another commit is refused', async () => {
     const head = await new DoltService().head();
-    const again = await svc.activate(T, head);
+    const again = await svc.activate(T, head, 'req-first-0001');
     assert.equal(again.seq, 1); assert.equal(again.state, 'applied');
     assert.equal((await svc.list(T)).length, 1);
+    await assert.rejects(svc.activate(T, 'ffffffff', 'req-first-0001'), /another commit/);
+  });
+  it('an explicit new request for the same commit is a NEW activation (no global dedupe by commit hash)', async () => {
+    const head = await new DoltService().head();
+    assert.equal((await svc.activate(T, head)).seq, 2);
+    assert.equal((await svc.activate(T, head)).seq, 3);
+    assert.equal((await svc.list(T)).length, 3);
   });
   it('a new data version changes decisions; SoD is computed by the core from the activated data', async () => {
     await sql("insert into assignments values ('demo-alice','payment-approver')");
     const a = await svc.activate(T, await new DoltService().head());
-    assert.equal(a.seq, 2); assert.equal(a.state, 'applied');
+    assert.equal(a.seq, 4); assert.equal(a.state, 'applied');
     const d = await decide('demo-alice');
-    assert.equal(d.allow, true); assert.equal(d.version?.seq, 2);
+    assert.equal(d.allow, true); assert.equal(d.version?.seq, 4);
     await sql("insert into assignments values ('demo-bob','payment-approver')"); // bob now creator + approver => SoD
     assert.equal((await svc.activate(T, await new DoltService().head())).state, 'applied');
     assert.equal((await decide('demo-bob')).allow, false);
@@ -87,20 +94,20 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     const c = await createConnection({ host: '127.0.0.1', port: 13317, user: 'root', database: 'iam' });
     try {
       const [r] = await c.query('select tag_name from dolt_tags order by 1');
-      assert.deepEqual((r as { tag_name: string }[]).map((x) => x.tag_name), ['act-acme-demo-1', 'act-acme-demo-2', 'act-acme-demo-3']);
+      assert.deepEqual((r as { tag_name: string }[]).map((x) => x.tag_name), ['act-acme-demo-1', 'act-acme-demo-2', 'act-acme-demo-3', 'act-acme-demo-4', 'act-acme-demo-5']);
     } finally { await c.end(); }
   });
   it('core down: activation is journaled as failed (no false success); retry of the same commit succeeds with the same seq', async () => {
     await stopCore();
     await sql("delete from assignments where identity_id='demo-bob' and role_id='payment-approver'");
     const head = await new DoltService().head();
-    const failed = await svc.activate(T, head);
-    assert.equal(failed.state, 'failed'); assert.equal(failed.seq, 4); assert.ok(failed.error);
+    const failed = await svc.activate(T, head, 'req-retry-0001');
+    assert.equal(failed.state, 'failed'); assert.equal(failed.seq, 6); assert.ok(failed.error);
     assert.equal((await svc.current(T))?.state, 'failed');
     await startCore(); // fresh core: lost its in-memory state
-    const retried = await svc.activate(T, head);
-    assert.equal(retried.state, 'applied'); assert.equal(retried.seq, 4); // same activation, not a new one
-    assert.equal((await svc.list(T)).length, 4);
+    const retried = await svc.activate(T, head, 'req-retry-0001');
+    assert.equal(retried.state, 'applied'); assert.equal(retried.seq, 6); // same request: same activation, not a new one
+    assert.equal((await svc.list(T)).length, 6);
   });
   it('reconcile re-applies the latest activation after a core restart, and does nothing when in sync', async () => {
     assert.equal((await svc.reconcile(T)).action, 'none');
