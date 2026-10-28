@@ -28,8 +28,9 @@ A suite whose variable is unset is reported as skipped with a reason, never as p
 - `temporal.e2e.spec.ts` (real Temporal dev server + real Dolt): workflow success; unknown commit fails the workflow and nothing is journaled.
 - Rust: `cd core && cargo test --locked` (Cedar engine, WASM runtime, IdP).
 - Angular: `cd apps/web && npm test -- --watch=false` (PKCE S256 test vector, API client with a fake fetch, component render).
+- Real browser: `DOLT_BIN=... CHROME_BIN=/usr/bin/google-chrome NODE_PATH=<dir with playwright-core>/node_modules node scripts/ui-e2e.mjs [outDir]` starts Dolt, core, API and `ng serve` on 127.0.0.1, drives the console in headless Chrome and writes screenshots (build core and API first).
 - Script: `DOLT_BIN=... scripts/dolt-smoke.sh` (Dolt CLI branch/merge scenario).
 
 ## What is NOT covered
-- The docker-compose stack (never started), a real browser driving the Angular UI (only the `ng serve` proxy path was exercised by script), gRPC,
+- The docker-compose stack (never started), gRPC,
   crash recovery of activations, load/performance, security review of the home-made IdP.
