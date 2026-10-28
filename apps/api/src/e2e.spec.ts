@@ -19,8 +19,8 @@ const API = 'http://127.0.0.1:13000';
 const REDIRECT = 'http://localhost:4200/callback';
 const DEMO_PASSWORD = 'demo-only-not-a-secret'; // fictional, local demo only
 
-const post = (url: string, body: object, token?: string) =>
-  fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+const post = (url: string, body: object, token?: string, extra: Record<string, string> = {}) =>
+  fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...extra, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
 
 async function login(core: string, user = 'demo-alice'): Promise<string> {
   const verifier = randomBytes(40).toString('base64url');
@@ -49,7 +49,7 @@ describe('e2e core + api', { skip: !existsSync(bin) && 'core binary not built' }
     core = spawnCore('127.0.0.1:18081', { IAM_ISSUER: CORE });
     short = spawnCore('127.0.0.1:18082', { IAM_ISSUER: SHORT, IAM_TOKEN_TTL_SECS: '1' });
     await waitUp(CORE); await waitUp(SHORT);
-    process.env.IAM_CORE_URL = CORE;
+    process.env.IAM_CORE_URL = CORE; process.env.IAM_API_ADMIN_TOKEN = 'local-demo-simulation-token';
     process.env.IAM_ISSUER = CORE;
     app = await NestFactory.create(AppModule, { logger: false });
     await app.listen(13000);
@@ -57,7 +57,7 @@ describe('e2e core + api', { skip: !existsSync(bin) && 'core binary not built' }
   after(async () => { await app?.close(); core?.kill(); short?.kill(); });
 
   const check = (token: string | undefined, context: object, principal = 'User::"alice"') =>
-    post(`${API}/access/check`, { principal, action: 'Action::"approve"', resource: 'Request::"r1"', context }, token);
+    post(`${API}/access/simulate`, { principal, action: 'Action::"approve"', resource: 'Request::"r1"', context }, token, { 'x-api-admin-token': 'local-demo-simulation-token' });
 
   it('IdP prototype: wrong password gets 401, wrong verifier burns the code', async () => {
     const challenge = createHash('sha256').update('v'.repeat(50)).digest('base64url');
