@@ -36,6 +36,12 @@ export class DoltService {
     try { return await this.hash(c, 'main'); } finally { await c.end(); }
   }
 
+  /** True when the commit is reachable from main (dolt_log on main). */
+  async commitExists(hash: string): Promise<boolean> {
+    const c = await this.conn();
+    try { const [r] = await c.query('select count(*) as n from dolt_log where commit_hash = ?', [hash]); return Number((r as { n: number }[])[0].n) > 0; } finally { await c.end(); }
+  }
+
   async assignments(): Promise<{ identity_id: string; role_id: string }[]> {
     const c = await this.conn();
     try { const [r] = await c.query('select identity_id, role_id from assignments order by 1,2'); return r as never; } finally { await c.end(); }
