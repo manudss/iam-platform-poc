@@ -42,6 +42,28 @@ export class DoltService {
     try { const [r] = await c.query('select count(*) as n from dolt_log where commit_hash = ?', [hash]); return Number((r as { n: number }[])[0].n) > 0; } finally { await c.end(); }
   }
 
+  /** Data of ONE commit (AS OF), used to build the snapshot the core applies. */
+  async snapshotAt(commit: string): Promise<{ assignments: { identity_id: string; role_id: string }[]; sod_rules: { role_a: string; role_b: string }[] }> {
+    if (!/^[0-9a-v]{8,64}$/.test(commit)) throw new BadRequestException('invalid commit hash');
+    const c = await this.conn();
+    try {
+      const [a] = await c.query(`select identity_id, role_id from assignments as of '${commit}' order by 1,2`);
+      const [r] = await c.query(`select role_a, role_b from sod_rules as of '${commit}' order by 1,2`);
+      return { assignments: a as never, sod_rules: r as never };
+    } finally { await c.end(); }
+  }
+
+  /** Reference tag act-<tenant>-<seq> on the activated commit. Idempotent: an existing tag is left untouched. */
+  async tagActivation(tenant: string, seq: number, commit: string): Promise<void> {
+    const name = `act-${tenant}-${seq}`;
+    if (!/^[a-z0-9-]{1,80}$/.test(name)) throw new BadRequestException('invalid tag name');
+    const c = await this.conn();
+    try {
+      const [t] = await c.query('select count(*) as n from dolt_tags where tag_name = ?', [name]);
+      if (Number((t as { n: number }[])[0].n) === 0) await c.query('call dolt_tag(?, ?)', [name, commit]);
+    } finally { await c.end(); }
+  }
+
   async assignments(): Promise<{ identity_id: string; role_id: string }[]> {
     const c = await this.conn();
     try { const [r] = await c.query('select identity_id, role_id from assignments order by 1,2'); return r as never; } finally { await c.end(); }
