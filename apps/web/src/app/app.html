@@ -35,5 +35,7 @@
     <h2>Activation (explicit, journaled)</h2>
     <button (click)="activate()">Activate current main</button>
     <ul>@for (a of activations(); track a.seq) { <li>#{{ a.seq }} {{ a.commit }}</li> }</ul>
+
+    <app-plugins-admin [api]="api" />
   }
 </main>
