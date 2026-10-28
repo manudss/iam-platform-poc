@@ -9,7 +9,7 @@
           <td>{{ p.name }} <small>v{{ p.version }}</small>@if (p.extends) { <small> extends {{ p.extends }}</small> }</td>
           <td>{{ p.kinds.join(', ') }}</td>
           <td>{{ p.provides.join(', ') }}</td>
-          <td>{{ p.base ? 'base (always on)' : p.enabled ? 'enabled' : p.installed ? 'installed' : 'not installed' }}</td>
+          <td>{{ p.base ? 'base (always on)' : p.faulted ? 'FAULTED: refusing requests, admin action needed' : p.enabled ? 'enabled' : p.installed ? 'installed' : 'not installed' }}</td>
           <td><button type="button" (click)="open(p)">Manage</button></td>
         </tr>
       }
