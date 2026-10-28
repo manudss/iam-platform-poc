@@ -1,3 +1,4 @@
+mod package;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}};
 use iam_idp::{Idp, IdpError};
 use iam_decision::{DecisionRequest, DecisionResponse, Engine};
@@ -161,10 +162,19 @@ async fn main() {
     let path = std::env::var("IAM_POLICY_FILE").unwrap_or_else(|_| "../policies/demo.cedar".into());
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
     let engine = Engine::new(&text).expect("invalid policies");
-    let plugin = std::env::var("IAM_PLUGIN_WAT").ok().map(|p| {
+    if std::env::var("IAM_PLUGIN_PACKAGE").is_ok() && std::env::var("IAM_PLUGIN_WAT").is_ok() { panic!("set only one of IAM_PLUGIN_PACKAGE (signed) and IAM_PLUGIN_WAT (unsigned dev)"); }
+    let signed = std::env::var("IAM_PLUGIN_PACKAGE").ok().map(|dir| {
+        let rd = |f: &str| std::fs::read(format!("{dir}/{f}")).unwrap_or_else(|e| panic!("cannot read {dir}/{f}: {e}"));
+        let keys: Vec<String> = std::env::var("IAM_PLUGIN_TRUSTED_KEYS").unwrap_or_default().split(',').filter(|k| !k.trim().is_empty()).map(str::to_string).collect();
+        let wasm = rd("plugin.wasm");
+        let m = package::load(&rd("manifest.json"), &String::from_utf8_lossy(&rd("manifest.sig")), &wasm, &keys).unwrap_or_else(|e| panic!("plugin package refused: {e}"));
+        tracing::info!("plugin package {} {} by {} loaded (signature verified)", m.name, m.version, m.publisher);
+        (PluginRuntime::new(100_000).unwrap(), wasm)
+    });
+    let plugin = signed.or_else(|| std::env::var("IAM_PLUGIN_WAT").ok().map(|p| {
         let wat = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read plugin {p}: {e}"));
         (PluginRuntime::new(100_000).unwrap(), wat::parse_str(wat).expect("invalid plugin"))
-    });
+    }));
     let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
     let mut core = Core::new(engine, plugin, Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)));
     core.admin_token = std::env::var("IAM_CORE_ADMIN_TOKEN").ok().filter(|t| t.len() >= 8);
