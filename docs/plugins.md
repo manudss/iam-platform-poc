@@ -148,6 +148,17 @@ A wrong password is a business denial: it never faults the plugin for everyone. 
 
 **Notifications (`notify.send`).** With `IAM_EFFECTS=1`, the activation effects also fan out `notify.send` to the active notifier plugins (`role.changed`, one call per effect key, idempotent). It is best effort: a notifier problem is logged and never fails the role effects or becomes an access decision.
 
+## 11b. Plugin configuration versioned in Dolt
+
+Enablement and the non-secret settings of a plugin can be versioned like a role change. Table `plugin_config(tenant, plugin, enabled, settings json)` lives in Dolt (`data/demo/01-schema.sql`).
+
+- `DoltService.proposePluginConfig(tenant, plugin, cfg)` writes the row on a new `change-xxxxxxxx` branch and commits it. Main does not change.
+- Review, then the existing `merge(branch)` brings it into main. `pluginConfigAt(tenant, ref)` reads one tenant at a commit, branch or main (tenant isolation).
+- `PluginRegistry.exportConfig` produces the versioned form. Secret-typed settings are never exported, so no secret reaches Dolt.
+- `PluginRegistry.applyVersionedConfig` applies a merged version through the same checks as the admin screen (settings schema, dependencies, valid base config on disable). It never widens grants: enabling reuses the grants an admin already gave, so a data merge cannot grant a sensitive hook, SQL install or component screen. A merged `enabled=false` is the explicit return to base.
+
+Covered by `plugins-dolt.e2e.spec.ts` (real Dolt, skipped without `DOLT_BIN`). Not wired in the console yet: the proposal and apply steps are API/service level.
+
 ## 11. Not done
 
-Per-tenant enablement from Dolt versions (so a plugin change can be simulated on a branch and merged like a role change); component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
+component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
