@@ -134,6 +134,7 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
       const t = /(?:create|alter|drop)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?([a-z0-9_]+)/gi;
       let x: RegExpExecArray | null;
       while ((x = t.exec(s))) if (!x[1].toLowerCase().startsWith(prefix)) errs.push(`migration ${mig.id}: table ${x[1]} must start with ${prefix}`);
+      if (/create\s+table/i.test(s) && !/\btenant\s+text\s+not\s+null\b/i.test(s)) errs.push(`migration ${mig.id}: every table needs a "tenant text not null" column (rows are isolated per tenant)`);
       if (/\bdrop\s+table\b/i.test(s)) errs.push(`migration ${mig.id}: drop table is not allowed (uninstall keeps data)`);
     }
   }
