@@ -1,0 +1,37 @@
+# Manual trigger only (workflow_dispatch): nothing runs on push, so no GitHub-hosted minutes are used unless a person starts it.
+# Private repo + GitHub Free = 2,000 included Linux minutes per month (see docs.github.com billing docs); usage above that is billed
+# unless a budget with "stop usage" is set. Each job is capped with timeout-minutes. Standard runners only.
+# Real-service suites (Dolt, PostgreSQL, NATS, OpenBao, Temporal) are skipped here because their binaries are not installed
+# in this workflow; see docs/e2e.md. The core binary IS built, so the Rust-core end-to-end suite runs.
+name: ci
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --locked
+        working-directory: core
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cargo build -p iam-core --locked
+        working-directory: core
+      - run: npm ci && npm test
+        working-directory: apps/api
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci && npm test -- --watch=false
+        working-directory: apps/web
