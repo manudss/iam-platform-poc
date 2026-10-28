@@ -109,4 +109,23 @@ describe('outbox + core apply (real PostgreSQL, NATS, core; Dolt stubbed)', { sk
     assert.equal(calls.filter((k) => k === 'tc:5').length, 1);
     await cons.stop(); await n.onModuleDestroy(); await pool.end();
   });
+
+  it('background loop: after the core restarts and loses its version, tick() / the timer re-applies it by itself; pending events are relayed', async () => {
+    const n = new NatsService(), svc = new ActivationService(undefined, n, dolt);
+    core.kill(); await sleep(300);
+    core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18093', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
+    for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
+    assert.equal((await fetch(`${CORE}/v1/version?tenant=t1`)).status, 404); // fresh core, no memory
+    const r = await svc.tick();
+    assert.ok(r.reconciled.includes('t1') && r.reconciled.includes('t2'));
+    assert.equal((await (await fetch(`${CORE}/v1/version?tenant=t1`)).json() as { seq: number }).seq, 2);
+    // same thing driven by the timer
+    core.kill(); await sleep(300);
+    core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18093', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
+    for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
+    process.env.IAM_RECONCILE_INTERVAL_MS = '300'; svc.onModuleInit(); delete process.env.IAM_RECONCILE_INTERVAL_MS;
+    for (let i = 0; i < 30 && (await fetch(`${CORE}/v1/version?tenant=t1`)).status !== 200; i++) await sleep(200);
+    assert.equal((await fetch(`${CORE}/v1/version?tenant=t1`)).status, 200);
+    await svc.onModuleDestroy(); await n.onModuleDestroy();
+  });
 });
