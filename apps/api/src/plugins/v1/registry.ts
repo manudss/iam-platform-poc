@@ -21,7 +21,16 @@ export interface MigrationStore {
   applied(pluginId: string): Promise<{ id: string; checksum: string }[]>;
   /** Runs the statements in one transaction and records the migration. */
   apply(pluginId: string, id: string, checksum: string, sql: string[]): Promise<void>;
-  seed(pluginId: string, table: string, row: Record<string, unknown>): Promise<void>;
+  /** Seeds one row for one tenant (the store adds the tenant column). Called once per tenant and plugin. */
+  seed(tenant: string, pluginId: string, table: string, row: Record<string, unknown>): Promise<void>;
+  /** True when this tenant already received the plugin's seed rows. */
+  seeded(tenant: string, pluginId: string): Promise<boolean>;
+}
+export interface StoredState { tenant: string; plugin: string; installed: boolean; enabled: boolean; faulted: boolean; grants: Grants; }
+/** Durable enablement, grants and fault flags: the admin state survives a restart. */
+export interface StateStore {
+  loadAll(): Promise<StoredState[]>;
+  save(s: StoredState): Promise<void>;
 }
 export interface SettingsStore {
   get(tenant: string, pluginId: string): Promise<Record<string, unknown> | undefined>;
@@ -43,7 +52,23 @@ export class PluginRegistry {
   /** Replacements that failed at runtime (key tenant/plugin). A faulted replacement keeps its slot but answers every call with a refusal until an admin acts. */
   private faulted = new Set<string>();
 
-  constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}) {}
+  constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}, private states?: StateStore) {}
+
+  /** Reload durable state after a restart. Call once after registering the plugins. Replacements that were enabled take their slots again; faults stay faults. */
+  async load() {
+    if (!this.states) return;
+    for (const r of await this.states.loadAll()) {
+      const p = this.impls.get(r.plugin);
+      if (!p) continue; // plugin no longer shipped: its state is kept in the store but inert
+      this.state.set(this.k(r.tenant, r.plugin), { enabled: r.enabled, grants: r.grants, installed: r.installed });
+      if (r.faulted) this.faulted.add(this.k(r.tenant, r.plugin));
+      if (r.enabled && p.manifest.extends) for (const sl of p.manifest.provides ?? []) this.chosen.set(this.k(r.tenant, sl), r.plugin);
+    }
+  }
+  private async persist(tenant: string, id: string) {
+    const st = this.state.get(this.k(tenant, id));
+    if (this.states && st) await this.states.save({ tenant, plugin: id, installed: st.installed, enabled: st.enabled, faulted: this.faulted.has(this.k(tenant, id)), grants: st.grants });
+  }
 
   private k = (tenant: string, id: string) => `${tenant}/${id}`;
   private plugin(id: string) {
@@ -109,10 +134,11 @@ export class PluginRegistry {
       }
       await this.migrations.apply(id, mig.id, sum, mig.sql);
     }
-    if (!done.size) for (const s of spec?.seed ?? []) await this.migrations.seed(id, s.table, s.row);
+    if (spec?.seed?.length && !(await this.migrations.seeded(tenant, id))) for (const s of spec.seed) await this.migrations.seed(tenant, id, s.table, s.row);
     const st = this.state.get(this.k(tenant, id)) ?? { enabled: false, grants: {}, installed: false };
     st.installed = true; st.grants = { ...st.grants, ...grants };
     this.state.set(this.k(tenant, id), st);
+    await this.persist(tenant, id);
     this.audit({ tenant, action: 'plugin.install', plugin: id });
   }
 
@@ -153,6 +179,7 @@ export class PluginRegistry {
     // A replacement takes over its slots, the base keeps its own settings and data untouched.
     if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
     this.faulted.delete(this.k(tenant, id));
+    await this.persist(tenant, id);
     this.audit({ tenant, action: 'plugin.enable', plugin: id });
   }
 
@@ -172,6 +199,7 @@ export class PluginRegistry {
     st.enabled = false;
     this.faulted.delete(this.k(tenant, id));
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
+    await this.persist(tenant, id);
     // The replacement's own state (failure counters, lockouts) is not carried to the base: say so in the audit trail.
     this.audit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
   }
@@ -219,6 +247,7 @@ export class PluginRegistry {
     } catch (e) {
       if (!primary.manifest.extends) throw e; // the base itself failed: nothing to fall back to
       this.faulted.add(fk);
+      await this.persist(tenant, primary.manifest.id);
       this.audit({ tenant, action: sensitive ? 'plugin.fault.closed' : 'plugin.fault.fallback', plugin: primary.manifest.id, detail: String((e as Error).message) });
       if (sensitive) throw new PluginError('plugin-failed', `${primary.manifest.id} failed (${(e as Error).message}); refused, no fallback for ${hook}`);
       const base = [...this.impls.values()].find((i) => i.manifest.base && i.manifest.provides?.includes(slot))!;
