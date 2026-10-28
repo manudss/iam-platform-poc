@@ -1,4 +1,4 @@
-# Local development stack. NOT RUN in the authoring sandbox (no Docker there): untested.
+# Local development stack. Not runnable in the authoring sandbox (no Docker); exercised only by the manual CI job "compose" (see README for its result).
 # Usage: cp ../.env.example ../.env && docker compose --env-file ../.env up -d
 services:
   dolt:
