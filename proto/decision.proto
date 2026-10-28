@@ -1,14 +1,15 @@
 syntax = "proto3";
 package iam.decision.v1;
 
-// Contract between NestJS (caller) and the Rust core. v1 draft: the POC currently exposes the
-// same shape over HTTP JSON (POST /v1/decide); gRPC (tonic) is planned.
+// Contract between NestJS (caller) and the Rust core. The core serves it over gRPC (tonic) on IAM_CORE_GRPC_ADDR
+// (opt-in, plaintext on loopback in this POC) and the same decision over HTTP JSON (POST /v1/decide).
 message DecideRequest {
   string principal = 1;   // e.g. User::"demo-alice"
   string action = 2;
   string resource = 3;
   string context_json = 4;
-  uint64 activation = 5;  // activation seq the decision must be evaluated against
+  uint64 activation = 5;  // reserved: activation seq to pin (not enforced yet)
+  string tenant = 6;      // when set, roles and SoD come from the tenant's active version (caller context is ignored)
 }
 message DecideResponse {
   bool allow = 1;
