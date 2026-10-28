@@ -12,24 +12,28 @@ use std::{collections::HashMap, sync::Arc};
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;") }
 fn pct(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect() }
 
-fn page(status: StatusCode, body: String) -> Response {
+fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response {
     let mut r = (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     let h = r.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"));
+    // Browsers also apply form-action to the redirect that follows the POST: the (already validated, registered) redirect origin must be allowed.
+    let csp = format!("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
+    if let Ok(v) = HeaderValue::from_str(&csp) { h.insert(header::CONTENT_SECURITY_POLICY, v); }
     r
 }
-fn error_page(status: StatusCode, msg: &str) -> Response { page(status, format!("<!doctype html><title>Sign-in error</title><p>{}</p>", esc(msg))) }
+fn error_page(status: StatusCode, msg: &str) -> Response { page(status, format!("<!doctype html><title>Sign-in error</title><p>{}</p>", esc(msg)), None) }
 
 fn form(p: &HashMap<String, String>, error: Option<&str>) -> Response {
     let hid = ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method"].iter()
         .map(|k| format!("<input type=\"hidden\" name=\"{k}\" value=\"{}\">", esc(p.get(*k).map(String::as_str).unwrap_or("")))).collect::<String>();
     let err = error.map(|e| format!("<p style=\"color:#b00\">{}</p>", esc(e))).unwrap_or_default();
+    let ru = p.get("redirect_uri").map(String::as_str).unwrap_or("");
+    let origin: String = ru.splitn(4, '/').take(3).collect::<Vec<_>>().join("/"); // scheme://host[:port] of a registered redirect_uri
     page(if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
         "<!doctype html><meta charset=\"utf-8\"><title>Sign in (local prototype)</title><h1>Sign in</h1><p>OAuth/OIDC-inspired authentication prototype, local demo accounts only.</p>{err}\
          <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> \
-         <label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\"></label> <button type=\"submit\">Sign in</button></form>"))
+         <label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\"></label> <button type=\"submit\">Sign in</button></form>"), Some(&origin))
 }
 
 /// Validates the authorization request parameters. Err = (status, message), never a redirect.
@@ -96,7 +100,7 @@ mod tests {
         let (st, h, body) = send(&c, get(&q(""))).await;
         assert_eq!(st, StatusCode::OK);
         assert!(body.contains("type=\"password\"") && body.contains("action=\"/authorize/login\"") && body.contains("name=\"state\" value=\"st ate\""));
-        assert_eq!(h["x-frame-options"], "DENY");
+        assert_eq!(h["x-frame-options"], "DENY"); assert!(h[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("form-action 'self' http://localhost:4200"));
         let (st, h, _) = send(&c, post_login(&login_body("demo-alice", "demo-only-not-a-secret"))).await;
         assert_eq!(st, StatusCode::FOUND);
         let loc = h[header::LOCATION].to_str().unwrap().to_string();
