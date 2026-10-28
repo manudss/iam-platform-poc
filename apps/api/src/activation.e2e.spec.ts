@@ -51,7 +51,7 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     delete process.env.IAM_PG_URL; delete process.env.IAM_NATS_URL;
     svc = new ActivationService(undefined, undefined, new DoltService());
   });
-  after(async () => { await stopCore(); dolt?.kill(); if (dir) rmSync(dir, { recursive: true, force: true }); });
+  after(async () => { await stopCore(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
   it('before any activation the core denies tenant requests (fail closed)', async () => {
     const d = await decide('demo-alice');
