@@ -127,4 +127,30 @@ export class DoltService {
       return { commit: await this.hash(c, 'main') };
     } finally { await c.end(); }
   }
+  // ---- Plugin configuration versioning (non-secret settings and enablement; grants are NOT versioned here: they stay an explicit admin act) ----
+
+  /** Writes one plugin's configuration on a NEW branch and commits it there. Main is untouched until an explicit merge. */
+  async proposePluginConfig(tenant: string, plugin: string, cfg: { enabled: boolean; settings: Record<string, unknown> }) {
+    if (!NAME.test(tenant) || !/^[a-z0-9-]{1,64}$/.test(plugin)) throw new BadRequestException('invalid tenant or plugin');
+    const c = await this.conn();
+    try {
+      const branch = `change-${randomBytes(4).toString('hex')}`;
+      await c.query('CALL DOLT_CHECKOUT(\'-b\', ?)', [branch]);
+      await c.query('INSERT INTO plugin_config (tenant, plugin, enabled, settings) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE enabled=VALUES(enabled), settings=VALUES(settings)', [tenant, plugin, cfg.enabled, JSON.stringify(cfg.settings)]);
+      await c.query('CALL DOLT_COMMIT(\'-A\', \'-m\', ?)', [`plugin config: ${tenant}/${plugin} enabled=${cfg.enabled}`]);
+      const commit = await this.hash(c, branch);
+      await c.query('CALL DOLT_CHECKOUT(\'main\')');
+      return { branch, commit };
+    } finally { await c.end(); }
+  }
+
+  /** Plugin configuration of one tenant as of a Dolt commit or branch (read only, tenant-scoped). */
+  async pluginConfigAt(tenant: string, ref: string): Promise<{ plugin: string; enabled: boolean; settings: Record<string, unknown> }[]> {
+    if (!NAME.test(tenant) || !/^([0-9a-v]{32}|main|change-[0-9a-f]{8})$/.test(ref)) throw new BadRequestException('invalid tenant or ref');
+    const c = await this.conn();
+    try {
+      const [rows] = await c.query('select plugin, enabled, settings from plugin_config as of ? where tenant = ? order by plugin', [ref, tenant]);
+      return (rows as { plugin: string; enabled: number; settings: unknown }[]).map((r) => ({ plugin: r.plugin, enabled: !!r.enabled, settings: (typeof r.settings === 'string' ? JSON.parse(r.settings) : r.settings) as Record<string, unknown> }));
+    } finally { await c.end(); }
+  }
 }
