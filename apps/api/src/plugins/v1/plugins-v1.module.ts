@@ -5,13 +5,14 @@ import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from './m
 import { PgPluginStore } from './pg-stores.js';
 import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } from './builtin/index.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
+import { AuthGateController } from './auth-gate.controller.js';
 
 /**
  * Plugin registry v1. With IAM_PG_URL set, settings, enablement, grants, faults and the migration ledger live in PostgreSQL and survive a restart
  * (install migrations really run there). Without it (unit tests, quick local demo) everything is in memory and a restart returns to the base plugins.
  */
 @Module({
-  controllers: [PluginsAdminController],
+  controllers: [PluginsAdminController, AuthGateController],
   providers: [{
     provide: PluginRegistry,
     useFactory: async () => {
