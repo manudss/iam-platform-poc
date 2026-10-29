@@ -8,6 +8,7 @@ import { ProfileFieldsPage } from './profile-fields';
 import { MyProfilePage } from './my-profile';
 import { SignupPage } from './signup-page';
 import { OrganizationsPage } from './organizations';
+import { RolesAdminPage } from './roles-admin';
 import { Shell } from './shell';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
@@ -25,6 +26,7 @@ export const routes: Routes = [
       { path: 'users', component: UsersPage, title: 'Users' },
       { path: 'profile-fields', component: ProfileFieldsPage, title: 'Profile fields' },
       { path: 'organizations', component: OrganizationsPage, title: 'Organizations' },
+      { path: 'roles', component: RolesAdminPage, title: 'Roles' },
       { path: 'my-profile', component: MyProfilePage, title: 'My profile' },
       { path: 'auth-methods', component: AuthMethodsPage, title: 'Authentication methods' },
       { path: 'assignments', component: AssignmentsPage, title: 'Assignments & changes' },

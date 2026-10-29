@@ -1,7 +1,6 @@
 import { Headers, ForbiddenException, Optional } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { Injectable, ExecutionContext } from '@nestjs/common';
-@Injectable() class WorkspaceImportGuard extends AdminGuard {override canActivate(c:ExecutionContext){return workspaceMode()?super.canActivate(c):true;}}
 import { SOD_SQL } from './dolt.service.js';
 import { BadRequestException } from '@nestjs/common';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
@@ -19,13 +18,14 @@ export class ChangesController {
 
   @Get('assignments') assignments() { return workspaceMode() ? this.v.tableRows(currentBranch(),'assignments').then(x=>x.rows) : this.dolt.assignments(); }
 
+  @UseGuards(AdminGuard)
   @Post('changes') simulate(@Body() b: { identity: string; role: string }) { if(workspaceMode())throw new ForbiddenException('Use workspace assignment staging');return this.dolt.simulate(b?.identity, b?.role); }
 
   /** CSV connector: import identities + assignments onto a new branch, with SoD simulation. */
   /** SCIM-like connector (subset, see scim.connector.ts): same branch + SoD simulation flow as CSV. */
-  @UseGuards(WorkspaceImportGuard)
+  @UseGuards(AdminGuard)
   @Post('connectors/scim') async scim(@Body() b: unknown) { const {rows,skipped}=scimToRows(b);return {...(workspaceMode()?await this.stageImport(rows):await this.dolt.importRows(rows)),skipped}; }
-  @UseGuards(WorkspaceImportGuard)
+  @UseGuards(AdminGuard)
   @Post('connectors/csv') csv(@Body() b: { csv: string }) {const rows=csvToRows(b?.csv);return workspaceMode()?this.stageImport(rows):this.dolt.importRows(rows);}
 
   private async stageImport(rows:ReturnType<typeof csvToRows>){
@@ -38,5 +38,6 @@ export class ChangesController {
     });
   }
 
+  @UseGuards(AdminGuard)
   @Post('changes/:branch/merge') merge(@Param('branch') branch: string) { if(workspaceMode())throw new ForbiddenException('Use global Apply');return this.dolt.merge(branch); }
 }

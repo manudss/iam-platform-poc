@@ -2,10 +2,11 @@ import { BadRequestException, Body, Controller, Param, Post, ServiceUnavailableE
 import { workspaceMode } from '../workspace/context.js';
 import { ForbiddenException } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
+import { AdminGuard } from '../auth/admin.guard.js';
 import { DoltService } from '../dolt/dolt.service.js';
 import { TemporalService } from './temporal.service.js';
 
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, AdminGuard)
 @Controller('tenants/:tenant/activation-workflows')
 export class TemporalController {
   constructor(private readonly t: TemporalService, private readonly dolt: DoltService) {}

@@ -34,6 +34,7 @@ export class Shell {
       { path: '/users', label: 'Users', icon: '♙' },
       { path: '/profile-fields', label: 'Profile fields', icon: '☰' },
       { path: '/organizations', label: 'Organizations', icon: '⌂' },
+      { path: '/roles', label: 'Roles', icon: '⚖' },
       { path: '/my-profile', label: 'My profile', icon: '☺' },
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },

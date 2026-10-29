@@ -2,6 +2,7 @@ import { workspaceMode } from '../workspace/context.js';
 import { ForbiddenException } from '@nestjs/common';
 import { BadGatewayException, BadRequestException, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
+import { AdminGuard } from '../auth/admin.guard.js';
 import { ActivationService } from './activation.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
 
@@ -10,6 +11,7 @@ import { DoltService } from '../dolt/dolt.service.js';
 export class ActivationController {
   constructor(private readonly svc: ActivationService, private readonly dolt: DoltService) {}
 
+  @UseGuards(AdminGuard)
   @Post()
   async activate(@Param('tenant') tenant: string, @Body() body: { commit?: string; requestId?: string }) {
     if(workspaceMode())throw new ForbiddenException('Apply working data first. Policy publication is separate and disabled in this sandbox workspace.');
@@ -24,6 +26,7 @@ export class ActivationController {
     }
   }
 
+  @UseGuards(AdminGuard)
   @Post('reconcile')
   async reconcile(@Param('tenant') tenant: string) {
     if(workspaceMode())throw new ForbiddenException('Policy publication is disabled in workspace mode');

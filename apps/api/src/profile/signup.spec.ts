@@ -10,7 +10,7 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { UsersService } from '../users/users.service.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { SignupService } from './signup.service.js';
-import { ProfileService } from './profile.service.js';
+import { SIGNUP_ALLOWED } from './profile.service.js';
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const good = { id: 'new-nora', display_name: 'Nora Test', email: 'nora@example.invalid', password: 'a-fictional-password-1', values: { 'hr-attributes.job_title': 'Tester' } };
@@ -21,7 +21,7 @@ describe('public sign-up: closed by default, request only, never grants access',
   before(async () => {
     process.env.IAM_API_ADMIN_TOKEN = ADMIN;
     const guard = { canActivate: (c: any) => { const r = c.switchToHttp().getRequest(); r.user = { sub: String(r.headers['x-test-sub'] ?? 'new-nora') }; return true; } };
-    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue(guard).overrideProvider(UsersService).useValue(usersStub).compile();
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue(guard).overrideProvider(UsersService).useValue(usersStub).overrideProvider(SIGNUP_ALLOWED).useValue(() => true).compile();
     app = mod.createNestApplication(); await app.init();
     const reg = app.get(PluginRegistry); await reg.install(T, 'hr-attributes', {}); await reg.enable(T, 'hr-attributes', {});
   });
@@ -95,5 +95,23 @@ describe('public sign-up: closed by default, request only, never grants access',
     assert.equal(last, 429);
     await api().put(u('profile-fields')).set(adm).send({ config: { fields: {} } }); reset();
     assert.equal((await api().post(u('signup')).send({ ...good, id: 'late-one' })).status, 404);
+  });
+});
+
+describe('sign-up outside the hosted workspace mode: refused by the API, whatever the setting', () => {
+  let app: INestApplication; const env = { a: process.env.IAM_API_ADMIN_TOKEN };
+  before(async () => {
+    process.env.IAM_API_ADMIN_TOKEN = ADMIN;
+    const guard = { canActivate: (c: any) => { c.switchToHttp().getRequest().user = { sub: 'new-nora' }; return true; } };
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue(guard).compile();
+    app = mod.createNestApplication(); await app.init();
+  });
+  after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; await app.close(); });
+  it('opening is refused, the form and the endpoint stay closed', async () => {
+    const api = () => request(app.getHttpServer());
+    const r = await api().put(`/tenants/${T}/profile-fields`).set({ 'x-api-admin-token': ADMIN }).send({ config: { fields: {}, signup: { open: true } } });
+    assert.equal(r.status, 400); assert.match(JSON.stringify(r.body), /workspace mode/);
+    assert.equal((await api().get(`/tenants/${T}/signup/schema`)).status, 404);
+    assert.equal((await api().post(`/tenants/${T}/signup`).send(good)).status, 404);
   });
 });

@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { DoltProfileStore } from './store.js';
 import { DoltOrgStore } from './orgs.js';
+import { RolesService } from './roles.js';
 
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
@@ -86,5 +87,27 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     assert.equal(await snap(), before);
     const tables = await v.at('main', async (c) => { const [r] = await c.query("select to_table_name t from dolt_diff_summary('HEAD~1','HEAD')"); return (r as { t: string }[]).map((x) => x.t); });
     assert.deepEqual(tables, ['profile_field_values']);
+  });
+
+  it('roles: definitions and SoD rules are edited on the branch, guarded, and Apply still enforces SoD', async () => {
+    const v = new VersioningService(); const branch = 'work-roles'; process.env.IAM_WORKSPACE_MODE = '1';
+    try {
+      await v.lock(() => v.at('main', async (c) => { await c.query('call dolt_branch(?)', [branch]); }));
+      const { branchContext } = await import('../workspace/context.js');
+      const rs = new RolesService(v); const inBranch = <T>(fn: () => Promise<T>) => branchContext.run({ branch }, fn);
+      const before = await v.at('main', async (c) => (await c.query('select * from roles order by id'))[0]);
+      let l = await inBranch(() => rs.create('admin', { id: 'auditor', label: 'Auditor' })); assert.ok(l.roles.some((r) => r.id === 'auditor'));
+      await assert.rejects(inBranch(() => rs.create('admin', { id: 'auditor', label: 'x' })), /already exists/);
+      await assert.rejects(inBranch(() => rs.create('admin', { id: 'Bad Id', label: 'x' })), /id:/);
+      await assert.rejects(inBranch(() => rs.update('admin', 'auditor', { id: 'other' })), /cannot change/);
+      await inBranch(() => rs.update('admin', 'auditor', { label: 'Internal auditor', is_sensitive: true }));
+      const first = l.roles.find((r) => r.id !== 'auditor')!.id;
+      await inBranch(() => rs.addRule('admin', { role_a: 'auditor', role_b: first }));
+      await assert.rejects(inBranch(() => rs.remove('admin', 'auditor')), /separation-of-duties/);
+      await assert.rejects(inBranch(() => rs.removeRule('admin', 'auditor', first, undefined)), /confirm/);
+      assert.deepEqual(await v.at('main', async (c) => (await c.query('select * from roles order by id'))[0]), before, 'main untouched until Apply');
+      await inBranch(() => rs.removeRule('admin', 'auditor', first, true));
+      l = await inBranch(() => rs.remove('admin', 'auditor')); assert.ok(!l.roles.some((r) => r.id === 'auditor'));
+    } finally { delete process.env.IAM_WORKSPACE_MODE; }
   });
 });
