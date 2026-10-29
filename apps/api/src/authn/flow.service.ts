@@ -124,8 +124,13 @@ export class AuthnService {
     const clean: Record<string, string> = {};
     for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= 256 && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
     let ok = false;
-    try { ok = await t.verify!(this.ctx(s, st), s.prepared!.state, clean); }
-    catch (e) { this.sessions.delete(s.id); throw e; }
+    try {
+      if (t.interact) {
+        const r = await t.interact(this.ctx(s, st), s.prepared!.state, clean);
+        if (!r.done) { s.prepared = { prompt: r.prompt, state: r.state }; return this.challenge(s); }   // a button press: no attempt used yet
+        ok = r.ok;
+      } else ok = await t.verify!(this.ctx(s, st), s.prepared!.state, clean);
+    } catch (e) { this.sessions.delete(s.id); throw e; }
     if (!ok) {
       this.fail(key); s.tries++;
       this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'step-failed' });

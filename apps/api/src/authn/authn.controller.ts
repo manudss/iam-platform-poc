@@ -50,9 +50,9 @@ export class AuthnAdminController {
       return { instance: inst, type: type.id, shownOnce: { secret, otpauthUri: otpauthUri(String(m.config.issuer ?? 'IAM POC'), u, secret, Number(m.config.periodSeconds ?? 30), Number(m.config.digits ?? 6)) }, note: 'Shown once. Demo provisioning only.' };
     }
     if (type.id === 'digit-code') {
-      const len = Number.isInteger(b?.length) ? Number(b.length) : 6; if (len < 4 || len > 8) throw new BadRequestException('length 4 to 8');
+      const len = Number(m.config.length ?? 6);
       const pin = typeof b?.pin === 'string' ? b.pin : Array.from({ length: len }, () => String(randomInt(0, 10))).join('');
-      if (!/^\d{4,8}$/.test(pin)) throw new BadRequestException('PIN must be 4 to 8 digits');
+      if (!/^\d+$/.test(pin) || pin.length !== len) throw new BadRequestException(`PIN must be exactly ${len} digits (this method's setting)`);
       await this.authn.enroll.setPin(t, u, inst, pin);
       return { instance: inst, type: type.id, ...(typeof b?.pin === 'string' ? {} : { shownOnce: { pin } }), note: 'A PIN is never shown again.' };
     }

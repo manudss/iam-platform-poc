@@ -4,7 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
@@ -16,6 +16,18 @@ import { totpAt, base32Decode, hotp, base32Encode } from './totp.js';
 const ADMIN = 'x'.repeat(20), GATE = 'gate-token-1234', T = 'acme-demo', PW = 'demo-only-not-a-secret';
 const m = (id: string, type: string, level: number, config: Record<string, unknown> = {}) => ({ id, type, name: id, enabled: true, level, config });
 const cfg = (methods: any[], chains: any[], def: string | null = null) => ({ methods, chains, defaultChain: def });
+
+type Gate = (b: any) => Promise<{ body: any }>;
+/** Presses the keypad like the browser does: finds the button that carries each digit on the CURRENT page and posts its opaque id. */
+async function pressPin(gate: Gate, T: string, c: any, pin: string, submit = true) {
+  let r = c;
+  for (const d of pin) {
+    assert.equal(r.step.fields[0].type, 'keypad');
+    const id = r.step.fields[0].keys.find((k: any) => k.digit === d).id;
+    r = (await gate({ tenant: T, session: r.session, answers: { key: id } })).body; assert.equal(r.outcome, 'challenge');
+  }
+  return submit ? (await gate({ tenant: T, session: r.session, answers: { action: 'submit' } })).body : r;
+}
 
 describe('authentication methods and chains', () => {
   let app: INestApplication, svc: AuthnService; const env = { a: process.env.IAM_API_ADMIN_TOKEN, g: process.env.IAM_AUTH_GATE_TOKEN, f: process.env.IAM_AUTHN_FILE };
@@ -58,7 +70,7 @@ describe('authentication methods and chains', () => {
 
   describe('honest analysis', () => {
     it('does not add levels and does not call password + PIN multi-factor', () => {
-      const c = validateConfig(cfg([m('pw', 'password', 3), m('pin', 'digit-code', 3, { mode: 'full' })], [{ id: 'c', name: 'c', steps: ['pw', 'pin'], level: 4 }]));
+      const c = validateConfig(cfg([m('pw', 'password', 3), m('pin', 'digit-code', 3)], [{ id: 'c', name: 'c', steps: ['pw', 'pin'], level: 4 }]));
       const a = analyzeChain(c, c.chains[0]);
       assert.equal(a.declaredLevel, 4); assert.equal(a.mfa, false); assert.deepEqual(a.verifiedFactors, ['knowledge']);
       assert.ok(a.warnings.some((w) => /same factor category/.test(w)));
@@ -138,7 +150,7 @@ describe('authentication methods and chains', () => {
     });
 
     it('e-mail code then bank-style digits (order is free): the e-mail is only a demo outbox and the claims say so', async () => {
-      await put(cfg([m('mail', 'email-otp', 4), m('pin', 'digit-code', 4, { mode: 'positions', positions: 3 })], [{ id: 'mail-pin', name: 'E-mail code then PIN digits', steps: ['mail', 'pin'], level: 4 }], 'mail-pin')).expect(200);
+      await put(cfg([m('mail', 'email-otp', 4), m('pin', 'digit-code', 4)], [{ id: 'mail-pin', name: 'E-mail code then PIN digits', steps: ['mail', 'pin'], level: 4 }], 'mail-pin')).expect(200);
       await provision('demo-bob', 'mail', { email: 'bob@example.test' });
       const pin = (await provision('demo-bob', 'pin', { length: 6 })).shownOnce.pin as string; assert.match(pin, /^\d{6}$/);
       const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T })).body; assert.deepEqual(e, { mode: 'chain', fields: [] });
@@ -148,28 +160,29 @@ describe('authentication methods and chains', () => {
       const sent = mail.messages.find((x: any) => x.user === 'demo-bob'); assert.equal(sent.to, 'bob@example.test');
       const otp = /code is (\d{6})/.exec(sent.text)![1];
       const c2 = (await gate({ tenant: T, session: c1.session, answers: { code: otp } })).body;
-      assert.equal(c2.outcome, 'challenge'); assert.equal(c2.step.type, 'digit-code'); assert.equal(c2.step.fields.length, 3);
-      const ans = Object.fromEntries(c2.step.fields.map((f: any) => { const p = Number(f.name.slice(1)); return [f.name, pin[p]]; }));
-      const done = (await gate({ tenant: T, session: c2.session, answers: ans })).body;
+      assert.equal(c2.outcome, 'challenge'); assert.equal(c2.step.type, 'digit-code');
+      assert.equal(c2.step.fields[0].type, 'keypad'); assert.equal(c2.step.fields[0].keys.length, 10);
+      assert.ok(!JSON.stringify(c2).includes(pin), 'the PIN is nowhere in the page data');
+      const done = await pressPin(gate, T, c2, pin);
       assert.equal(done.outcome, 'allow'); assert.equal(done.claims.auth_mfa, false);
       assert.deepEqual(done.claims.auth_simulated, ['mail']); assert.deepEqual(done.claims.amr, ['pin']);
       assert.equal(done.claims.auth_level_declared, 4); assert.equal(done.claims.auth_level, 4); // capped by the really verified PIN (4)
     });
 
-    it.skip('TODO debug: a later step cannot be skipped or answered early, and a finished session cannot be reused', async () => {
-      await put(cfg([m('mail', 'email-otp', 4), m('pin', 'digit-code', 4, { mode: 'full' })], [{ id: 'mail-pin2', name: 'Mail then PIN', steps: ['mail', 'pin'], level: 4 }], 'mail-pin2'));
+    it('a later step cannot be skipped or answered early, and a finished session cannot be reused', async () => {
+      await put(cfg([m('mail', 'email-otp', 4), m('pin', 'digit-code', 4)], [{ id: 'mail-pin2', name: 'Mail then PIN', steps: ['mail', 'pin'], level: 4 }], 'mail-pin2'));
       await provision('demo-bob', 'mail', { email: 'bobb@example.test' });
       const pin = (await provision('demo-bob', 'pin', { length: 6 })).shownOnce.pin as string;
       const c1 = (await gate({ tenant: T, subject: 'demo-bob' })).body;
       assert.match(c1.step.message, /DEMO ONLY: no e-mail is sent/);
-      const early = (await gate({ tenant: T, session: c1.session, answers: { pin } })).body; assert.notEqual(early.outcome, 'allow'); assert.equal(early.claims, undefined);
-      const codeOf = async () => /code is (\d{6})/.exec((await http().get(`/tenants/${T}/auth/outbox`).set(adm)).body.messages.filter((x: any) => x.user === 'demo-bob' && x.to === 'bobb@example.test').at(-1).text)![1];
+      const early = (await gate({ tenant: T, session: c1.session, answers: { key: 'nope', action: 'submit' } })).body; assert.notEqual(early.outcome, 'allow'); assert.equal(early.claims, undefined);
+      const codeOf = async () => /code is (\d{6})/.exec((await http().get(`/tenants/${T}/auth/outbox`).set(adm)).body.messages.find((x: any) => x.user === 'demo-bob' && x.to === 'bobb@example.test').text)![1];
       // the first step failed above: that session is over, even with the right code
       assert.notEqual((await gate({ tenant: T, session: c1.session, answers: { code: await codeOf() } })).body.outcome, 'allow');
       const f1 = (await gate({ tenant: T, subject: 'demo-bob' })).body;
       const c2 = (await gate({ tenant: T, session: f1.session, answers: { code: await codeOf() } })).body; assert.equal(c2.outcome, 'challenge');
-      assert.equal((await gate({ tenant: T, session: c2.session, answers: { pin } })).body.outcome, 'allow');
-      const again = (await gate({ tenant: T, session: c2.session, answers: { pin } })).body; assert.notEqual(again.outcome, 'allow'); assert.equal(again.claims, undefined);
+      assert.equal((await pressPin(gate, T, c2, pin)).outcome, 'allow');
+      const again = (await gate({ tenant: T, session: c2.session, answers: { action: 'submit' } })).body; assert.notEqual(again.outcome, 'allow'); assert.equal(again.claims, undefined);
     });
     it('a wrong PIN digit fails; a code is single use and expires', async () => {
       const c1 = (await gate({ tenant: T, subject: 'demo-bob' })).body; const sent = (await http().get(`/tenants/${T}/auth/outbox`).set(adm)).body.messages[0];
@@ -191,13 +204,26 @@ describe('authentication methods and chains', () => {
       assert.deepEqual((await gate({ tenant: T, subject: 'victim' })).body, { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' });
     });
 
-    it('a PIN typed in the admin form is kept as verifiers, never echoed back', async () => {
-      await put(cfg([m('pin', 'digit-code', 3, { mode: 'full' })], [{ id: 'pin-only', name: 'PIN', steps: ['pin'], level: 3 }], 'pin-only')).expect(200);
+    it('shuffled keypad: order and ids change on every page, ids are single page, the PIN is hashed and never echoed', async () => {
+      await put(cfg([m('pin', 'digit-code', 3)], [{ id: 'pin-only', name: 'PIN', steps: ['pin'], level: 3 }], 'pin-only')).expect(200);
       const r = await provision('demo-alice', 'pin', { pin: '482915' }); assert.equal(r.shownOnce, undefined); assert.ok(!JSON.stringify(r).includes('482915'));
-      const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T })).body; assert.deepEqual(e.fields.map((f: any) => f.name), ['pin']);
-      assert.equal((await gate({ tenant: T, subject: 'demo-alice', answers: { pin: '482915' } })).body.outcome, 'allow');
-      assert.equal((await gate({ tenant: T, subject: 'demo-alice', answers: { pin: '482916' } })).body.outcome, 'deny');
-      assert.equal((await gate({ tenant: T, subject: 'demo-alice', answers: { pin: '48291' } })).body.outcome, 'deny');
+      await http().post(`/tenants/${T}/auth/enrollments/demo-alice/pin`).set(adm).send({ pin: '4829' }).expect(400); // wrong length for this method
+      assert.deepEqual((await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T })).body, { mode: 'chain', fields: [] });
+      const stored = JSON.stringify(JSON.parse(readFileSync(process.env.IAM_AUTHN_FILE!, 'utf8'))); assert.ok(!stored.includes('482915') && !/"pos"|pepper/.test(stored), 'no clear PIN, no per-position verifiers');
+      const c = (await gate({ tenant: T, subject: 'demo-alice' })).body, k1 = c.step.fields[0].keys;
+      const p2 = (await gate({ tenant: T, session: c.session, answers: { key: k1.find((k: any) => k.digit === '4').id } })).body, k2 = p2.step.fields[0].keys;
+      assert.notDeepEqual(k1.map((k: any) => k.id), k2.map((k: any) => k.id)); assert.equal(p2.step.fields[0].entered, 1);
+      assert.equal(new Set([...k1, ...k2].map((k: any) => k.id)).size, 20, 'fresh opaque ids on every page');
+      // an id from an earlier page is a replayed button: the attempt is refused
+      assert.equal((await gate({ tenant: T, session: c.session, answers: { key: k1[0].id } })).body.outcome, 'deny');
+      // right PIN, one press at a time, allowed; wrong PIN denied; too short denied
+      assert.equal((await pressPin(gate, T, (await gate({ tenant: T, subject: 'demo-alice' })).body, '482915')).outcome, 'allow');
+      assert.equal((await pressPin(gate, T, (await gate({ tenant: T, subject: 'demo-alice' })).body, '482916')).outcome, 'deny');
+      assert.equal((await pressPin(gate, T, (await gate({ tenant: T, subject: 'demo-alice' })).body, '4829')).outcome, 'deny');
+      // delete removes the last digit
+      const q = (await gate({ tenant: T, subject: 'demo-alice' })).body; const q1 = await pressPin(gate, T, q, '48299', false);
+      const q2 = (await gate({ tenant: T, session: q1.session, answers: { action: 'delete' } })).body; assert.equal(q2.step.fields[0].entered, 4);
+      assert.equal((await pressPin(gate, T, q2, '15')).outcome, 'allow');
     });
 
     it('the gate and the admin enrollment refuse missing tokens', async () => {

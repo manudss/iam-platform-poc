@@ -7,12 +7,11 @@ import { dirname, join } from 'node:path';
  * Never stored in Dolt, never versioned, never returned by an API (a TOTP secret or PIN is shown ONCE at provisioning, demo only).
  * Keyed by tenant/user/instance, so two instances of one method type keep separate secrets.
  *
- * PIN: a full check needs a slow salted hash (scrypt). A bank-style "digits 2, 5 and 6" check cannot be done from that hash, so a
- * per-position verifier is kept too: HMAC-SHA-256(pepper, position, digit). A PIN has only 10^n values, so anyone who gets this file AND
- * the pepper can recover it by search. This is the documented limit of the POC; a real product would encrypt the PIN with a key held in an HSM/KMS.
+ * PIN: only a salted scrypt hash of the whole PIN is kept (no per-position verifiers, no pepper). A PIN has only 10^n values, so anyone who gets this
+ * file can recover it by search; a real product would add a key held in an HSM/KMS or use one-time codes. Demo accounts and fictional PINs only.
  */
-interface UserRec { totp?: { secret: string; lastStep: number }; pin?: { length: number; salt: string; hash: string; pos: string[] }; email?: string }
-interface FileShape { pepper: string; users: Record<string, Record<string, UserRec>> }
+interface UserRec { totp?: { secret: string; lastStep: number }; pin?: { length: number; salt: string; hash: string }; email?: string }
+interface FileShape { users: Record<string, Record<string, UserRec>> }
 
 export function defaultEnrollmentPath() {
   return process.env.IAM_AUTHN_FILE ?? join(dirname(process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'), 'iam-poc-authn-enrollments.json');
@@ -26,10 +25,9 @@ export class EnrollmentStore {
   private async load(): Promise<FileShape> {
     if (this.data) return this.data;
     try { this.data = JSON.parse(await readFile(this.path, 'utf8')) as FileShape; }
-    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; this.data = { pepper: randomBytes(32).toString('hex'), users: {} }; }
+    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; this.data = { users: {} }; }
     return this.data;
   }
-  private pepper(d: FileShape) { return process.env.IAM_AUTHN_PEPPER && process.env.IAM_AUTHN_PEPPER.length >= 16 ? process.env.IAM_AUTHN_PEPPER : d.pepper; }
   private async save() {
     const d = this.data!;
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
@@ -62,28 +60,14 @@ export class EnrollmentStore {
     if (!/^\d{4,8}$/.test(pin)) throw new Error('PIN must be 4 to 8 digits');
     await this.mutate((d) => {
       const salt = randomBytes(16).toString('hex');
-      this.rec(d, tenant, user, inst).pin = { length: pin.length, salt, hash: scryptSync(pin, salt, 32).toString('hex'), pos: [...pin].map((dg, i) => this.posMac(d, tenant, user, inst, i, dg)) };
+      this.rec(d, tenant, user, inst).pin = { length: pin.length, salt, hash: scryptSync(pin, salt, 32).toString('hex') };
     });
-  }
-  private posMac(d: FileShape, tenant: string, user: string, inst: string, i: number, digit: string) {
-    return createHmac('sha256', this.pepper(d)).update(`${tenant}/${user}/${inst}/${i}/${digit}`).digest('hex');
   }
   async pinLength(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.pin?.length; }
   async verifyPinFull(tenant: string, user: string, inst: string, pin: string): Promise<boolean> {
     const p = this.get(await this.load(), tenant, user, inst)?.pin; if (!p || !/^\d{4,8}$/.test(pin)) return false;
     const a = Buffer.from(p.hash, 'hex'), b = scryptSync(pin, p.salt, 32); return a.length === b.length && timingSafeEqual(a, b);
   }
-  async verifyPinPositions(tenant: string, user: string, inst: string, answers: Record<number, string>): Promise<boolean> {
-    const d = await this.load(), p = this.get(d, tenant, user, inst)?.pin; if (!p) return false;
-    let ok = true;
-    for (const [k, digit] of Object.entries(answers)) {
-      const i = Number(k); if (!Number.isInteger(i) || i < 0 || i >= p.length || !/^\d$/.test(digit)) { ok = false; continue; }
-      const a = Buffer.from(p.pos[i], 'hex'), b = Buffer.from(this.posMac(d, tenant, user, inst, i, digit), 'hex');
-      if (!timingSafeEqual(a, b)) ok = false;
-    }
-    return ok && Object.keys(answers).length > 0;
-  }
-
   // E-mail address of the recipient for code delivery
   async setEmail(tenant: string, user: string, inst: string, email: string) { await this.mutate((d) => { this.rec(d, tenant, user, inst).email = email; }); }
   async email(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.email; }

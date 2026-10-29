@@ -1,10 +1,13 @@
-import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import type { SettingField } from '../plugins/v1/manifest.js';
 import type { EnrollmentStore } from './enroll-store.js';
 import { totpVerify } from './totp.js';
 
 export type Factor = 'knowledge' | 'possession' | 'inherence';
-export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits'; maxLength?: number; hint?: string }
+export interface KeypadKey { id: string; digit: string; letters: string }
+export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits' | 'keypad'; maxLength?: number; hint?: string;
+  /** keypad only: buttons in display order (opaque ids, valid for this page only), digits entered so far, digits needed. */
+  keys?: KeypadKey[]; entered?: number; length?: number }
 export interface Prompt { title: string; message?: string; fields: PromptField[] }
 
 /** Delivery channel of one-time codes. The POC ships only the demo outbox: nothing leaves the process. */
@@ -43,6 +46,8 @@ export interface AuthMethodType {
   verification(config: Record<string, any>): { real: boolean; note: string };
   prepare?(ctx: MethodCtx): Promise<{ prompt: Prompt; state: Record<string, any> }>;
   verify?(ctx: MethodCtx, state: Record<string, any>, answers: Record<string, string>): Promise<boolean>;
+  /** Interactive methods (keypad): one call per button press. `done:false` shows the next prompt and keeps the step open; `done:true` ends it with a verdict. */
+  interact?(ctx: MethodCtx, state: Record<string, any>, answers: Record<string, string>): Promise<{ done: false; prompt: Prompt; state: Record<string, any> } | { done: true; ok: boolean }>;
 }
 
 const eq = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
@@ -84,31 +89,42 @@ export const emailOtp: AuthMethodType = {
   },
 };
 
+const PHONE_LETTERS: Record<string, string> = { '0': '', '1': '', '2': 'ABC', '3': 'DEF', '4': 'GHI', '5': 'JKL', '6': 'MNO', '7': 'PQRS', '8': 'TUV', '9': 'WXYZ' };
+/** A new random order and new opaque button ids on every page: an id only means something on the page that carried it. */
+function keypadPrompt(ctx: MethodCtx, entered: string[], map: Record<string, string>, error?: string): { prompt: Prompt; map: Record<string, string> } {
+  const digits = '0123456789'.split('');
+  for (let i = digits.length - 1; i > 0; i--) { const j = randomInt(0, i + 1); [digits[i], digits[j]] = [digits[j], digits[i]]; }
+  const len = Number(ctx.config.length ?? 6), fresh: Record<string, string> = {};
+  const keys: KeypadKey[] = digits.map((d) => { const id = randomBytes(9).toString('base64url'); fresh[id] = d; return { id, digit: d, letters: PHONE_LETTERS[d] }; });
+  void map;
+  return { map: fresh, prompt: { title: 'PIN', message: error ?? `Enter your ${len}-digit PIN with the on-screen buttons. Their order changes every time.`, fields: [{ name: 'key', label: 'PIN', type: 'keypad', keys, entered: entered.length, length: len }] } };
+}
+
 export const digitCode: AuthMethodType = {
-  id: 'digit-code', name: 'Digit code (bank-style PIN)', description: 'A PIN enrolled for the user, entered in full or, like many banks, as a few digits asked at random positions. A PIN is a knowledge factor: with a password it is NOT two different factors.',
+  id: 'digit-code', name: 'PIN on a shuffled keypad', description: 'A numeric PIN enrolled for the user, entered with on-screen buttons whose order changes on every page. A button carries only an opaque id valid for that page; the server maps it back to the digit, so the PIN digits are never sent as text. This hides the digits from simple form logging, it is NOT encryption: HTTPS is still required. A PIN is a knowledge factor: with a password it is NOT two different factors.',
   factor: 'knowledge', amr: 'pin', maturity: 'implemented', suggestedLevel: 3,
   settings: [
-    { key: 'mode', type: 'select', label: 'Entry', default: 'positions', options: [{ value: 'full', label: 'Whole PIN' }, { value: 'positions', label: 'Random positions (for example digits 2, 5 and 6)' }], group: 'PIN' },
-    { key: 'positions', type: 'number', label: 'Digits asked', default: 3, min: 2, max: 6, visibleIf: { key: 'mode', equals: 'positions' }, group: 'PIN' },
+    { key: 'length', type: 'number', label: 'PIN length (digits)', default: 6, min: 4, max: 8, group: 'PIN', help: 'Enrolled PINs must have this length.' },
   ],
   provisioning: 'admin-demo',
-  inlineWithUsername: (c) => (c.mode ?? 'positions') === 'full',
-  verification: () => ({ real: true, note: 'Verified against an enrolled PIN verifier (knowledge factor). Partial-position checks keep a per-digit verifier: weaker than a hash if the file leaks.' }),
-  async prepare(ctx) {
-    const mode = ctx.config.mode ?? 'positions';
-    if (mode === 'full') return { prompt: { title: 'PIN', fields: [{ name: 'pin', label: 'PIN', type: 'password', maxLength: 8 }] }, state: { mode } };
-    const len = (ctx.known ? await ctx.enroll.pinLength(ctx.tenant, ctx.subject, ctx.instanceId) : undefined) ?? 6;
-    const n = Math.min(Number(ctx.config.positions ?? 3), len - 1), pos: number[] = [];
-    while (pos.length < n) { const p = randomInt(0, len); if (!pos.includes(p)) pos.push(p); }
-    pos.sort((x, y) => x - y);
-    return { prompt: { title: 'PIN digits', message: 'Enter the requested digits of your PIN.', fields: pos.map((p) => ({ name: `d${p}`, label: `Digit ${p + 1}`, type: 'password' as const, maxLength: 1 })) }, state: { mode, pos } };
-  },
-  async verify(ctx, st, a) {
-    if (!ctx.known) return false;
-    if (st.mode === 'full') return typeof a.pin === 'string' && (await ctx.enroll.verifyPinFull(ctx.tenant, ctx.subject, ctx.instanceId, a.pin.trim()));
-    const ans: Record<number, string> = {};
-    for (const p of st.pos as number[]) { const v = a[`d${p}`]; if (typeof v !== 'string') return false; ans[p] = v.trim(); }
-    return ctx.enroll.verifyPinPositions(ctx.tenant, ctx.subject, ctx.instanceId, ans);
+  inlineWithUsername: () => false,
+  verification: () => ({ real: true, note: 'Verified against a salted scrypt hash of the whole enrolled PIN (knowledge factor). Keypad ids are single page and bound to the sign-in session.' }),
+  async prepare(ctx) { const k = keypadPrompt(ctx, [], {}); return { prompt: k.prompt, state: { entered: [] as string[], map: k.map, presses: 0 } }; },
+  async verify() { return false; },
+  async interact(ctx, st, a) {
+    const len = Number(ctx.config.length ?? 6), entered: string[] = [...(st.entered as string[])];
+    if (++st.presses > 40) return { done: true, ok: false };
+    if (typeof a.key === 'string') {
+      const d = (st.map as Record<string, string>)[a.key];
+      if (d === undefined) return { done: true, ok: false };            // an id that this page never carried: a replayed or forged button
+      if (entered.length < len) entered.push(d);
+    } else if (a.action === 'delete') { entered.pop(); }
+    else if (a.action === 'submit') {
+      if (entered.length !== len) return { done: true, ok: false };
+      return { done: true, ok: ctx.known && (await ctx.enroll.verifyPinFull(ctx.tenant, ctx.subject, ctx.instanceId, entered.join(''))) };
+    } else return { done: true, ok: false };
+    const k = keypadPrompt(ctx, entered, st.map);
+    return { done: false, prompt: k.prompt, state: { entered, map: k.map, presses: st.presses } };
   },
 };
 
