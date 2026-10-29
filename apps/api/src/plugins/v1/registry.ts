@@ -65,6 +65,9 @@ export class PluginRegistry {
       if (r.enabled && p.manifest.extends) for (const sl of p.manifest.provides ?? []) this.chosen.set(this.k(r.tenant, sl), r.plugin);
     }
   }
+  /** Platform-core settings that are not a plugin (for example the authentication methods and chains). They live in the same versioned store as plugin settings, so a working branch holds them until Apply. */
+  coreSettings(tenant: string, key: string) { return this.settings.get(tenant, key); }
+  async putCoreSettings(tenant: string, key: string, values: Record<string, unknown>) { await this.settings.put(tenant, key, values); this.audit({ tenant, action: 'core.settings.changed', plugin: key }); }
   private async persist(tenant: string, id: string) {
     const st = this.state.get(this.k(tenant, id));
     if (this.states && st) await this.states.save({ tenant, plugin: id, installed: st.installed, enabled: st.enabled, faulted: this.faulted.has(this.k(tenant, id)), grants: st.grants });

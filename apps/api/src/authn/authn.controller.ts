@@ -1,0 +1,64 @@
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Put, Post, UseGuards } from '@nestjs/common';
+import { randomInt } from 'node:crypto';
+import { AdminGuard } from '../auth/admin.guard.js';
+import { AuthGuard } from '../auth/auth.guard.js';
+import { AuthnService } from './flow.service.js';
+import { methodType } from './methods.js';
+import { newTotpSecret, otpauthUri } from './totp.js';
+
+/**
+ * Admin API for authentication methods and chains (one tenant at a time).
+ * Reads need a sign-in. Writes need the admin capability and, in workspace mode, a working branch: they never change live sign-in until Apply.
+ */
+@UseGuards(AuthGuard)
+@Controller('tenants/:tenant/auth')
+export class AuthnAdminController {
+  constructor(private readonly authn: AuthnService) {}
+
+  @Get() async get(@Param('tenant') t: string) {
+    const work = await this.authn.workingConfig(t), live = await this.authn.liveConfig(t);
+    return { tenant: t, catalogue: this.authn.catalogue(), working: { config: work, analyses: this.authn.analyses(work) }, live: { config: live, analyses: this.authn.analyses(live), signInMode: live.defaultChain ? 'chain' : 'base-password' } };
+  }
+  @UseGuards(AdminGuard) @Put() async put(@Param('tenant') t: string, @Body() b: { config?: unknown }) {
+    const cfg = await this.authn.saveConfig(t, b?.config);
+    return { saved: true, config: cfg, analyses: this.authn.analyses(cfg) };
+  }
+
+  private async instance(t: string, id: string) {
+    const all = [...(await this.authn.workingConfig(t)).methods, ...(await this.authn.liveConfig(t)).methods];
+    const m = all.find((x) => x.id === id); if (!m) throw new NotFoundException('unknown method instance');
+    return { m, type: methodType(m.type)! };
+  }
+  private user(u: string) { if (!/^[a-z0-9-]{1,32}$/.test(u)) throw new BadRequestException('invalid user id'); return u; }
+
+  @UseGuards(AdminGuard) @Get('enrollments/:user') async enrollments(@Param('tenant') t: string, @Param('user') u: string) { return { user: this.user(u), enrollments: await this.authn.enroll.status(t, this.user(u)) }; }
+
+  /**
+   * DEMO provisioning by an administrator. The secret or PIN is returned once and never again. A real product enrolls from the user's own session.
+   * Body: { email } for e-mail codes; { pin } or { length } for digit codes (a PIN typed here goes to the server over this request only).
+   */
+  @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number }) {
+    this.user(u); const { m, type } = await this.instance(t, inst);
+    if (type.id === 'totp') {
+      const secret = newTotpSecret(); await this.authn.enroll.setTotp(t, u, inst, secret);
+      return { instance: inst, type: type.id, shownOnce: { secret, otpauthUri: otpauthUri(String(m.config.issuer ?? 'IAM POC'), u, secret, Number(m.config.periodSeconds ?? 30), Number(m.config.digits ?? 6)) }, note: 'Shown once. Demo provisioning only.' };
+    }
+    if (type.id === 'digit-code') {
+      const len = Number.isInteger(b?.length) ? Number(b.length) : 6; if (len < 4 || len > 8) throw new BadRequestException('length 4 to 8');
+      const pin = typeof b?.pin === 'string' ? b.pin : Array.from({ length: len }, () => String(randomInt(0, 10))).join('');
+      if (!/^\d{4,8}$/.test(pin)) throw new BadRequestException('PIN must be 4 to 8 digits');
+      await this.authn.enroll.setPin(t, u, inst, pin);
+      return { instance: inst, type: type.id, ...(typeof b?.pin === 'string' ? {} : { shownOnce: { pin } }), note: 'A PIN is never shown again.' };
+    }
+    if (type.id === 'email-otp') {
+      if (typeof b?.email !== 'string' || !/^[^\s@]{1,64}@[^\s@]{1,120}$/.test(b.email)) throw new BadRequestException('email address required');
+      await this.authn.enroll.setEmail(t, u, inst, b.email); return { instance: inst, type: type.id, email: b.email, note: 'Codes go to the demo outbox, not to this address.' };
+    }
+    throw new BadRequestException(`${type.id} needs no enrollment`);
+  }
+  @UseGuards(AdminGuard) @Delete('enrollments/:user/:instance') async unenroll(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string) { await this.authn.enroll.remove(t, this.user(u), inst); return { removed: true }; }
+
+  /** Demo outbox: what the simulated e-mail delivery wrote. Administrators only; contains one-time codes in clear. */
+  @UseGuards(AdminGuard) @Get('outbox') outbox(@Param('tenant') t: string) { return { adapter: 'demo-outbox', simulated: true, messages: this.authn.outbox.list(t) }; }
+  @UseGuards(AdminGuard) @Delete('outbox') clear(@Param('tenant') t: string) { this.authn.outbox.clear(t); return { cleared: true }; }
+}
