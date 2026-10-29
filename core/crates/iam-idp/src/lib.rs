@@ -74,9 +74,14 @@ impl Idp {
     /// Simplified login step: checks the user and issues a single-use code bound to the PKCE challenge.
     pub fn authorize(&self, client_id: &str, redirect_uri: &str, code_challenge: &str, username: &str, password: &str)
         -> Result<String, IdpError> {
-        if client_id != self.client_id || !self.redirect_uris.iter().any(|u| u == redirect_uri) { return Err(IdpError::InvalidClient); }
-        if code_challenge.len() < 43 { return Err(IdpError::InvalidRequest("code_challenge")); }
         if self.users.get(username).map(|p| p == password) != Some(true) { return Err(IdpError::InvalidCredentials); }
+        self.authorize_verified(client_id, redirect_uri, code_challenge, username)
+    }
+
+    /// Called ONLY after the configured loopback gate verified this user's credentials. No password bypass in HTTP routes.
+    pub fn authorize_verified(&self, client_id: &str, redirect_uri: &str, code_challenge: &str, username: &str) -> Result<String, IdpError> {
+        if !self.check_client(client_id, redirect_uri) { return Err(IdpError::InvalidClient); }
+        if code_challenge.len() < 43 { return Err(IdpError::InvalidRequest("code_challenge")); }
         let code = rand_token();
         self.codes.lock().unwrap().insert(code.clone(), Code {
             user: username.into(), challenge: code_challenge.into(), redirect_uri: redirect_uri.into(),
@@ -126,6 +131,17 @@ mod tests {
     }
     fn login(i: &Idp, ch: &str) -> String { i.authorize("demo-web", REDIR, ch, "demo-alice", "demo-only-not-a-secret").unwrap() }
 
+    #[test]
+    fn verified_gate_identity_still_checks_client_redirect_and_challenge() {
+        let i = Idp::demo("http://idp.test");
+        let (v, ch) = pkce();
+        assert_eq!(i.authorize_verified("other", REDIR, &ch, "new-user"), Err(IdpError::InvalidClient));
+        assert_eq!(i.authorize_verified("demo-web", "https://bad.invalid", &ch, "new-user"), Err(IdpError::InvalidClient));
+        assert!(i.authorize_verified("demo-web", REDIR, "short", "new-user").is_err());
+        let code = i.authorize_verified("demo-web", REDIR, &ch, "new-user").unwrap();
+        let tok = i.token(&code, &v, REDIR, "demo-web").unwrap();
+        assert_eq!(verify(tok["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap()["sub"], "new-user");
+    }
     #[test]
     fn full_flow_and_verify() {
         let i = Idp::demo("http://idp.test");

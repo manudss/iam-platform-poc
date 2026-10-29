@@ -95,6 +95,7 @@ export interface CheckedSql { statements: string[]; destructive: boolean }
 
 /** Throws BadRequestException when the SQL is not allowed in the requested mode. */
 export function checkSql(sql: string, mode: 'read' | 'write', otherDatabases: string[] = []): CheckedSql {
+  if (mode === 'write' && /plugin_runtime_/i.test(sql)) throw new BadRequestException('plugin runtime tables are managed through Plugins, not generic SQL');
   const blocked = [...new Set([...ALWAYS_OTHER_DBS, ...otherDatabases.map((d) => d.toLowerCase())])];
   const { statements, skeletons } = scanSql(sql);
   if (mode === 'read' && statements.length !== 1) throw new BadRequestException('read mode runs exactly one statement');

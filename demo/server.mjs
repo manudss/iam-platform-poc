@@ -29,6 +29,7 @@ function proxy(req, res, target, strip) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const p = url.pathname;
+  if (/^\/(api|core)\/internal(?:\/|$)/i.test(p)) { res.writeHead(404); return res.end('not found'); }
   try {
     if (p === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
     if (p === '/core' || p.startsWith('/core/')) return proxy(req, res, CORE, true);
