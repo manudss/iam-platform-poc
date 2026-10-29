@@ -53,6 +53,11 @@ describe('profile field rules (pure)', () => {
     assert.equal(me.find((f) => f.key === 'base.display_name')!.editable, false);
     assert.equal(effectiveSchema(CAT, { fields: { 'hr-attributes.phone': { enabled: false } } }, 'admin').some((f) => f.key === 'hr-attributes.phone'), false);
   });
+  it('a plugin cannot rely on a validation hook that does not exist: the manifest is refused, never silently ignored', () => {
+    for (const name of ['profile.validate', 'signup.check']) assert.ok(validateManifest({ ...hrAttributes.manifest, hooks: [{ name, mode: 'blocking' }] } as never, HOOKS).some((e) => /unknown hook/.test(e)), name);
+    const f = { fullKey: 'p.code', type: 'string' as const, pattern: '^[A-Z]{3}$' };
+    assert.equal(checkValue(f, 'ABC'), 'ABC'); assert.throws(() => checkValue(f, 'abc'), /format/);
+  });
   it('values are checked by type', () => {
     const f = (k: string) => CAT.find((c) => c.fullKey === k)!;
     assert.equal(checkValue(f('hr-attributes.phone'), '+33 6 12 34 56 78'), '+33 6 12 34 56 78');
