@@ -6,6 +6,14 @@ redistribution.
 
 Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md).
 
+## Hosted demo (free tier)
+
+A live fictional demo runs on a free Render web service: <https://iam-poc-demo.onrender.com>
+(sign in as `demo-alice` / `demo-only-not-a-secret`; fictional users and data only).
+Free-tier limits: the instance sleeps after 15 min idle (cold start ~1 min), and
+every wake re-seeds the data. Full details, limits, deploy-your-own on any branch,
+and the GitHub Codespaces branch demo: [docs/demo.md](docs/demo.md).
+
 ## What exists and was tested
 | Part | State |
 |---|---|
