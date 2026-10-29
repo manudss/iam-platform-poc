@@ -120,6 +120,11 @@ export class PluginRegistry {
     });
   }
 
+  /** Profile fields declared by the plugins that are active for this tenant. */
+  profileFields(tenant: string): { plugin: string; fields: import('../../profile/fields.js').ProfileFieldDecl[] }[] {
+    return [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! }));
+  }
+
   /** Install: runs migrations once (checksum-checked), seeds, only if the admin granted `install`. */
   async install(tenant: string, id: string, grants: Grants) {
     const p = this.plugin(id);
