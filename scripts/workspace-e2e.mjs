@@ -66,6 +66,7 @@ try {
  assert.equal((await call('POST','/users',{id:'nope',password:'fictional-password'},'main')).status,403,'main immutable');
  assert.equal((await call('POST','/changes/anything/merge',{},'main')).status,403,'legacy merge blocked');
  assert.equal((await call('POST','/activations',{},'main')).status,403,'legacy publish blocked');
+ assert.equal((await call('POST','/activation-workflows',{},'main')).status,403,'workflow publish blocked');
  assert.equal((await call('POST','/workspace/apply',{confirm:true},'main')).status,403,'cannot apply main');
  assert.equal((await call('POST','/versioning/branches',{name:'sod-test',from:'main'},'main')).status,201);
  assert.equal((await call('POST','/workspace/assignment',{identity:'demo-bob',role:'payment-approver'},'sod-test')).status,201);

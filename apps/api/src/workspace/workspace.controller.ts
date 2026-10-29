@@ -24,7 +24,7 @@ export class WorkspaceController {
   // Read registry first: unknown providers/grants are never manufactured by a merge.
   this.registries.drop(branch);await this.registries.get(branch);
   const latest=await this.activation.current(tenant);
-  const retry=this.pending.get(branch)??(latest?.state==='failed'&&latest.requestId===`workspace-${latest.commit}`&&latest.commit===(await this.v.branches()).branches.find(x=>x.name==='main')?.commit?{source:info.commit,commit:latest.commit}:undefined);
+  const retry=this.pending.get(branch)??(latest?.state==='failed'&&latest.requestId===`workspace-${latest.commit}`&&latest.commit===(await this.v.branches()).branches.find(x=>x.name==='main')?.commit&&(await this.v.diffSummary('main',branch,false)).tables.length===0?{source:info.commit,commit:latest.commit}:undefined);
   if(!this.activation.applyEnabled)throw new BadRequestException('Apply requires a configured live permission engine');
   const r=retry&&retry.source===info.commit?{mergeable:true,commit:retry.commit,reasons:[],violations:[]}:await applyContext.run(true,()=>this.v.mergeInto(branch,'main',`Apply workspace ${branch}`,req.user.sub,b.expectedHead));
   if(!r.mergeable||!r.commit)throw new ConflictException({message:`Apply refused: ${r.reasons.join('; ')}`,reasons:r.reasons,violations:r.violations});

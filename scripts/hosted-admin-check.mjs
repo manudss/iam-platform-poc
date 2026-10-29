@@ -1,3 +1,4 @@
+// LEGACY MODE ONLY. Hosted workspace mode uses hosted-workspace-check.mjs instead.
 // Public hosted demo only. Fictional account and plugin changes, no account dashboard polling.
 import {chromium} from 'playwright-core';import assert from 'node:assert/strict';import{mkdirSync}from'node:fs';
 const base=process.argv[2],out=process.argv[3]??'/tmp/hosted-admin';mkdirSync(out,{recursive:true});

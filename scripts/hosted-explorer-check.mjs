@@ -1,3 +1,4 @@
+// LEGACY MODE ONLY. Hosted workspace mode uses hosted-workspace-check.mjs instead.
 // Live check of a hosted demo (fresh browser, NO admin token typed): sign in through the core form, then use the explorer.
 // Usage: NODE_PATH=... CHROME_BIN=... node scripts/hosted-explorer-check.mjs https://<service>.onrender.com [outDir]
 import { mkdirSync } from 'node:fs'; import { join, resolve } from 'node:path'; import assert from 'node:assert/strict'; import { createRequire } from 'node:module';

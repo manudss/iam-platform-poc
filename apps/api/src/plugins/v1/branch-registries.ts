@@ -8,9 +8,12 @@ import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } fro
 @Injectable()
 export class BranchRegistries {
   private registries = new Map<string, Promise<PluginRegistry>>();
+  private heads=new Map<string,string>();
   constructor(private readonly v: VersioningService, private readonly users: UsersService) {}
-  drop(ref: string) { this.registries.delete(ref); }
-  get(ref: string) {
+  drop(ref: string) { this.registries.delete(ref);this.heads.delete(ref); }
+  async get(ref: string) {
+    const head=await this.v.at(ref,async c=>{const [r]=await c.query("select hashof('HEAD') h");return String((r as {h:string}[])[0].h);});
+    if(this.heads.get(ref)!==head){this.drop(ref);this.heads.set(ref,head);}
     let r=this.registries.get(ref);
     if(!r){r=this.create(ref);this.registries.set(ref,r);r.catch(()=>this.registries.delete(ref));}return r;
   }
