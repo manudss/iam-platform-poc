@@ -46,8 +46,9 @@ export class DoltExplorer {
   protected dataRef = 'main';
   protected readonly tableList = signal<{ name: string; rows: number }[]>([]);
   protected readonly data = signal<TableData | null>(null);
+  protected tableSearch = ''; protected fieldSearch = ''; protected rowView = signal<Record<string, unknown> | null>(null); protected formFields: Record<string, string> = {}; protected nullFields: Record<string, boolean> = {}; protected editorOpen = false; protected jsonMode = false;
   protected editJson = ''; protected editKey: Record<string, unknown> | null = null; protected editMessage = '';
-  protected readonly editable = computed(() => { const d = this.data(); const b = this.branches().find((x) => x.name === d?.ref); return !!d && d.kind === 'branch' && !!b && !b.protected; });
+  protected readonly editable = computed(() => { const d = this.data(); const b = this.branches().find((x) => x.name === d?.ref); return !!d && d.kind === 'branch' && !!b && !b.protected && !d.table.startsWith('plugin_runtime_'); });
 
   protected sqlRef = 'main'; protected sqlMode: 'read' | 'write' = 'read';
   protected sqlText = 'select * from assignments';
@@ -138,14 +139,18 @@ export class DoltExplorer {
 
   // data
   protected async loadTables() { const r = await this.run(() => this.v.tables(this.dataRef), true); if (r) { this.tableList.set(r.tables); this.data.set(null); } }
-  protected async openTable(name: string, offset = 0) { const r = await this.run(() => this.v.rows(this.dataRef, name, offset), true); if (r) { this.data.set(r); this.editJson = ''; this.editKey = null; } }
+  protected async openTable(name: string, offset = 0) { const r = await this.run(() => this.v.rows(this.dataRef, name, offset), true); if (r) { this.data.set(r); this.editJson = ''; this.editKey = null; this.editorOpen = false; this.rowView.set(null); } }
   protected startEdit(row: Record<string, unknown>) {
-    const d = this.data()!; this.editKey = Object.fromEntries(d.primaryKey.map((k) => [k, row[k]])); this.editJson = JSON.stringify(row, null, 2); this.editMessage = '';
+    const d = this.data()!; this.editKey = Object.fromEntries(d.primaryKey.map((k) => [k, row[k]])); this.editJson = JSON.stringify(row, null, 2); this.editMessage = ''; this.prepareFields(row);
   }
-  protected startInsert() { const d = this.data()!; this.editKey = null; this.editJson = JSON.stringify(Object.fromEntries(d.columns.map((c) => [c.name, ''])), null, 2); this.editMessage = ''; }
+  protected startInsert() { const d = this.data()!; this.editKey = null; this.editJson = JSON.stringify(Object.fromEntries(d.columns.map((c) => [c.name, ''])), null, 2); this.editMessage = ''; this.prepareFields(Object.fromEntries(d.columns.map(c=>[c.name,c.nullable?null:'']))); }
+  protected visibleTables() { return this.tableList().filter(t=>t.name.toLowerCase().includes(this.tableSearch.toLowerCase())); }
+  protected visibleColumns() { return this.data()?.columns.filter(c=>c.name.toLowerCase().includes(this.fieldSearch.toLowerCase())) ?? []; }
+  private prepareFields(row: Record<string,unknown>) { this.editorOpen=true;this.jsonMode=false;this.formFields={};this.nullFields={}; for(const c of this.data()!.columns){this.nullFields[c.name]=row[c.name]===null; this.formFields[c.name]=row[c.name]===null?'':typeof row[c.name]==='object'?JSON.stringify(row[c.name]):String(row[c.name]??'');} }
+  protected cancelEdit(){this.editorOpen=false;this.editJson='';}
   protected async saveEdit() {
     const d = this.data()!; let values: Record<string, unknown>;
-    try { values = JSON.parse(this.editJson); } catch { this.note.set('The row is not valid JSON.'); return; }
+    try { values = this.jsonMode ? JSON.parse(this.editJson) : Object.fromEntries(this.data()!.columns.map(c=>{let value:unknown=this.formFields[c.name]; if(this.nullFields[c.name]) value=null;else if(/json/i.test(c.type))value=JSON.parse(String(value));else if(/^(int|bigint|tinyint|smallint|mediumint|float|double|decimal|boolean)/i.test(c.type)){if(String(value).trim()===''||!Number.isFinite(Number(value)))throw new Error('invalid number');value=Number(value);} return [c.name,value];})); } catch { this.note.set('Check the row values: numbers and JSON must be valid.'); return; }
     const op = this.editKey ? { op: 'update', key: this.editKey, values } : { op: 'insert', values };
     const r = await this.run(() => this.v.edit(d.ref, d.table, [op], this.editMessage));
     if (r) { this.note.set(`Committed ${shortHash(r.commit)} on ${d.ref}.`); await this.openTable(d.table, d.offset); }

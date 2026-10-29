@@ -1,5 +1,5 @@
 <section class="explorer">
-  <p class="hint">Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (The Assignments page still writes to Dolt <code>main</code> through its own routes.)</p>
+  <p class="hint">Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (Users, Plugins and Assignments use separate validated administration routes to Dolt <code>main</code>.)</p>
   @if (note()) { <p class="msg" role="status">{{ note() }}</p> }
   @if (busy()) { <p class="hint">Working...</p> }
 
@@ -109,13 +109,16 @@
       <h3>Tables and rows</h3>
       <label>Branch, tag or commit <select name="dr" [(ngModel)]="dataRef" (ngModelChange)="loadTables()">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
       <p class="hint">Branches can be edited unless protected. Tags are read only snapshots.</p>
-      <ul class="tables">@for (t of tableList(); track t.name) { <li><button type="button" class="link" (click)="openTable(t.name)">{{ t.name }}</button> ({{ t.rows }} rows)</li> }</ul>
+      <label>Find a table<input name="tableSearch" [(ngModel)]="tableSearch" /></label>
+      <ul class="tables">@for (t of visibleTables(); track t.name) { <li><button type="button" class="link" (click)="openTable(t.name)">{{ t.name }}</button> ({{ t.rows }} rows)</li> }</ul>
       @if (data(); as d) {
         <h4>{{ d.table }} at {{ d.ref }}@if (!editable()) { <span class="chip lock">read only</span> }</h4>
-        <div class="scroll"><table class="grid">
-          <thead><tr>@for (c of d.columns; track c.name) { <th [title]="c.type">{{ c.name }}@if (c.key === 'PRI') { * }</th> }@if (editable()) { <th></th> }</tr></thead>
+        <div class="row"><label>Find fields<input name="fieldSearch" [(ngModel)]="fieldSearch" /></label><button class="secondary" (click)="openTable(d.table,d.offset)">Refresh table</button></div>
+        <p class="hint">{{d.columns.length}} fields. Scroll horizontally for wide tables or open a row to inspect every field without truncation. Runtime plugin tables are read only: use Plugins to change them.</p>
+        <div class="scroll data-grid"><table class="grid">
+          <thead><tr><th>Row</th>@for (c of visibleColumns(); track c.name) { <th [title]="c.type">{{ c.name }}@if (c.key === 'PRI') { * }</th> }@if (editable()) { <th></th> }</tr></thead>
           <tbody>@for (r of d.rows; track $index) {
-            <tr>@for (c of d.columns; track c.name) { <td>{{ cell(r[c.name]) }}</td> }
+            <tr><td class="row-pin"><button type="button" class="link" (click)="rowView.set(r)">View row</button></td>@for (c of visibleColumns(); track c.name) { <td><div class="cell-value" [title]="cell(r[c.name])">{{ cell(r[c.name]) }}</div></td> }
               @if (editable()) { <td class="act"><button type="button" (click)="startEdit(r)">Edit</button> <button type="button" class="danger" (click)="deleteRow(r)">Delete</button></td> }</tr>
           }</tbody>
         </table></div>
@@ -125,14 +128,16 @@
         </p>
         @if (editable()) {
           <button type="button" (click)="startInsert()">Add a row</button>
-          @if (editJson) {
+          @if (editorOpen) {
             <div class="panel">
-              <label>Row (JSON, one commit on {{ d.ref }})<textarea name="ej" rows="8" [(ngModel)]="editJson"></textarea></label>
+              <h4>{{editKey ? 'Edit row' : 'Add a row'}} on {{d.ref}}</h4>
+              <div class="field-editor">@for(c of d.columns;track c.name){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}</div>
               <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
-              <button type="button" (click)="saveEdit()">Commit change</button>
+              <button type="button" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
             </div>
           }
         }
+        @if(rowView();as row){<section class="panel row-detail"><h4>All fields · {{d.table}}</h4><dl>@for(c of d.columns;track c.name){<div><dt>{{c.name}} <small>{{c.type}}</small></dt><dd><pre>{{cell(row[c.name])}}</pre></dd></div>}</dl><button type="button" class="secondary" (click)="rowView.set(null)">Close row</button>@if(editable()){<button (click)="startEdit(row)">Edit this row</button>}</section>}
         <details><summary>Table definition</summary><pre>{{ d.createStatement }}</pre></details>
       }
     }

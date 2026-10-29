@@ -17,6 +17,7 @@ export class Shell {
   protected readonly nav: NavGroup[] = [
     { title: 'Overview', items: [{ path: '/overview', label: 'Dashboard', icon: '◧' }] },
     { title: 'Access (IAM)', items: [
+      { path: '/users', label: 'Users', icon: '♙' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
     { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }] },

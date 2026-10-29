@@ -2,6 +2,7 @@ import { Routes, UrlMatcher, UrlSegment } from '@angular/router';
 import { authGuard } from './auth';
 import { CallbackPage, LoginPage } from './login';
 import { ActivationPage, AssignmentsPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
+import { UsersPage } from './users';
 import { Shell } from './shell';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
@@ -15,6 +16,7 @@ export const routes: Routes = [
     path: '', component: Shell, canActivate: [authGuard], children: [
       { path: '', pathMatch: 'full', redirectTo: 'overview' },
       { path: 'overview', component: OverviewPage, title: 'Dashboard' },
+      { path: 'users', component: UsersPage, title: 'Users' },
       { path: 'assignments', component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, component: PluginsPage, title: 'Plugins' },

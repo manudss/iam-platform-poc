@@ -63,6 +63,13 @@ export class ApiClient {
     this.token = ((await t.json()) as { id_token: string }).id_token;
   }
 
+  async users() { return (await this.raw<{users: UserProfile[]}>('GET','/users')).data.users; }
+  async saveUser(id: string | null, values: object, adminToken = '') {
+    const r = await this.raw<UserProfile>(id ? 'PUT' : 'POST', '/users' + (id ? '/' + encodeURIComponent(id) : ''), values, adminToken ? {'x-api-admin-token':adminToken} : {});
+    if (r.status === 409) throw new Error((r.data as unknown as {message:string}).message || 'User already exists');
+    return r.data;
+  }
+
   /** Same call as the typed helpers below, with extra headers (used by the plugin administration client). */
   raw<T>(method: string, path: string, body?: object, headers: Record<string, string> = {}) { return this.call<T>(method, path, body, headers); }
 
@@ -182,3 +189,5 @@ export class VersioningClient {
 export const shortHash = (h: string | null | undefined) => (h ?? '').slice(0, 8);
 /** Table cell text: NULL is shown as such, objects (JSON columns) as compact JSON. */
 export function cellText(v: unknown): string { return v === null || v === undefined ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v); }
+
+export interface UserProfile { id:string; display_name:string; department:string; manager_id:string|null; login_enabled:boolean; hasCredential:boolean; }
