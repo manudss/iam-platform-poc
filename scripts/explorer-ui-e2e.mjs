@@ -46,6 +46,13 @@ try {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/core/authorize') { const ru = new URL(u.searchParams.get('redirect_uri')); ru.searchParams.set('code', 'stand-in'); ru.searchParams.set('state', u.searchParams.get('state')); res.writeHead(302, { location: ru.toString() }); return res.end(); }
     if (u.pathname === '/core/token') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ id_token: 'acme-demo:demo-alice' })); }
+    // The existing IAM screens (assignments, activations, plugins) are served by modules that need the Rust core; they are NOT mounted here.
+    // The stand-in answers their reads with fixed demo data so the page renders like the real app, with no error banner. They are covered by the other e2e suites.
+    const old = u.pathname.match(/^\/api\/tenants\/[^/]+\/(assignments|activations|plugins)\/?$/);
+    if (old && req.method === 'GET') {
+      const body = old[1] === 'assignments' ? [{ identity_id: 'demo-alice', role_id: 'payment-initiator' }, { identity_id: 'demo-bob', role_id: 'viewer' }] : [];
+      res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(body));
+    }
     if (u.pathname.startsWith('/api/')) {
       const up = http.request({ host: '127.0.0.1', port: API_PORT, path: u.pathname.slice(4) + u.search, method: req.method, headers: req.headers }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
       return req.pipe(up);
@@ -94,7 +101,11 @@ try {
   // pull request, merge
   await btn('Pull requests').click(); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
   await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();
-  await page.waitForSelector('text=Can be merged'); await shot('5-pull-request');
+  await page.waitForSelector('text=Can be merged');
+  // the author (demo-alice) cannot approve through the UI
+  assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
+  assert.doesNotMatch(await page.locator('p.msg').first().innerText(), /Cannot|error|failed/i); await page.waitForSelector('text=demo-alice');
+  await shot('5-pull-request');
   await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
   // history on main shows the merge commit
   await btn('History').click(); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('6-history');

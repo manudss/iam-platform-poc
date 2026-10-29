@@ -93,7 +93,7 @@ export class PullRequestService {
     } finally { await m.end(); }
   }
 
-  async get(tenant: string, id: number) {
+  async get(tenant: string, id: number, sub?: unknown) {
     const m = await this.meta();
     let pr: PullRequest, comments: Row[];
     try {
@@ -111,7 +111,7 @@ export class PullRequestService {
         checks = await this.v.trialMerge(pr.source, pr.target);
       } catch (e) { checks = { mergeable: false, reasons: [`cannot be evaluated: ${(e as Error).message}`], conflicts: 0, violations: [] }; }
     }
-    return { pullRequest: pr, comments: comments.map((x) => ({ id: Number(x.id), author: x.author, kind: x.kind, body: x.body, createdAt: String(x.created_at) })), approvals: [...approvals], requiredApprovals: this.requiredApprovals, commits, diff: summary, checks };
+    return { viewer: sub === undefined ? undefined : String(sub).replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64), pullRequest: pr, comments: comments.map((x) => ({ id: Number(x.id), author: x.author, kind: x.kind, body: x.body, createdAt: String(x.created_at) })), approvals: [...approvals], requiredApprovals: this.requiredApprovals, commits, diff: summary, checks };
   }
 
   async comment(tenant: string, id: number, input: { body?: unknown; kind?: unknown }, sub: unknown) {

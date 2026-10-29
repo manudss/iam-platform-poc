@@ -209,9 +209,10 @@
           <h5>Discussion</h5>
           <ul>@for (c of d.comments; track c.id) { <li><b>{{ c.author }}</b>@if (c.kind === 'approve') { approved }: {{ c.body }}</li> }</ul>
           @if (d.pullRequest.status === 'open') {
+            @if (d.viewer && d.viewer === d.pullRequest.author) { <p class="hint">You opened this pull request, so someone else has to approve it.</p> }
             <label>Comment <input name="pc" [(ngModel)]="prComment" autocomplete="off" /></label>
             <button type="button" [disabled]="!prComment" (click)="sendComment('comment')">Comment</button>
-            <button type="button" (click)="sendComment('approve')">Approve</button>
+            <button type="button" [disabled]="d.viewer === d.pullRequest.author" [title]="d.viewer === d.pullRequest.author ? 'The author cannot approve their own pull request' : ''" (click)="sendComment('approve')">Approve</button>
             <button type="button" class="danger" [disabled]="!d.checks?.mergeable" (click)="mergePull()">Merge</button>
             <button type="button" (click)="closePull()">Close</button>
           }

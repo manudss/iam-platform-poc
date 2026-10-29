@@ -31,4 +31,6 @@ cd apps/api && DOLT_BIN=/path/to/dolt npm test     # guards.spec + versioning.e2
 cd apps/web && npx ng test                          # includes dolt-explorer.spec
 NODE_PATH=... DOLT_BIN=... CHROME_BIN=... node scripts/explorer-ui-e2e.mjs /tmp/shots   # browser E2E
 ```
+The browser E2E mounts only the explorer module with a fake sign-in guard (the real AdminGuard is used) and a stand-in identity provider. The older screens (assignments, activations, plugins) need the Rust core, so the harness answers their read calls with fixed demo data; they are covered by the other e2e suites.
+
 GitHub Actions budget is blocked at 0, so tests run locally only.

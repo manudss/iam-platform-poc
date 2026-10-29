@@ -123,7 +123,7 @@ export interface TableData { ref: string; kind: string; table: string; columns: 
 export interface SqlResult { mode: string; columns?: string[]; rows?: Record<string, unknown>[]; truncated?: boolean; rowCount?: number; ms?: number; committed?: string | null; dryRun?: boolean; destructive?: boolean; changes?: TableSummary[]; samples?: Record<string, { columns: string[]; rows: RowDiff[] }>; statements?: number; affectedRows?: number; note?: string }
 export interface PullRequestInfo { id: number; title: string; body: string; source: string; target: string; status: 'open' | 'merged' | 'closed'; author: string; createdAt: string; mergedAt: string | null; mergeCommit: string | null }
 export interface PullRequestDetail {
-  pullRequest: PullRequestInfo; comments: { id: number; author: string; kind: string; body: string; createdAt: string }[]; approvals: string[]; requiredApprovals: number;
+  viewer?: string; pullRequest: PullRequestInfo; comments: { id: number; author: string; kind: string; body: string; createdAt: string }[]; approvals: string[]; requiredApprovals: number;
   commits: { commit: string; author: string; date: string; message: string }[]; diff: DiffSummary | null; checks: { mergeable: boolean; reasons: string[]; conflicts: number; violations: { identity: string; roleA: string; roleB: string }[] } | null;
 }
 

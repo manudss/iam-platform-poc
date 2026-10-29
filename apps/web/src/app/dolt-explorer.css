@@ -24,3 +24,12 @@ textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monos
 pre { background: #f0f4f8; padding: .5rem; overflow-x: auto; font-size: .8rem; }
 .ok { color: #1a7f37; } .ko { color: #b42318; }
 label.inline { flex-direction: row; align-items: center; gap: .35rem; }
+/* Same base look as the rest of the console (its styles are scoped to the app component and do not reach this one). */
+label { display: inline-flex; flex-direction: column; font-size: .85rem; margin-right: .75rem; gap: .2rem; }
+input, select { padding: .35rem .5rem; border: 1px solid #9fb3c8; border-radius: 4px; font-size: .95rem; background: #fff; }
+button { padding: .4rem .8rem; border: 1px solid #3b6fd4; background: #3b6fd4; color: #fff; border-radius: 4px; cursor: pointer; margin-top: .5rem; }
+button:hover:not(:disabled) { background: #2c57ad; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.tabs button:hover:not(:disabled):not(.on) { background: #eef3fb; }
+button.link:hover:not(:disabled) { background: none; }
+.explorer h3 { margin-top: 1.2rem; }

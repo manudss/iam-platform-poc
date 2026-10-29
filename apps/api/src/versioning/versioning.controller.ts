@@ -56,7 +56,7 @@ export class VersioningController {
   // pull requests
   @Get('pulls') pulls(@Param('tenant') t: string, @Query('status') s?: string) { return this.prs.list(t, s); }
   @Post('pulls') openPull(@Param('tenant') t: string, @Body() b: { title?: string; body?: string; source?: string; target?: string }, @Req() r: Req_) { return this.prs.create(t, b ?? {}, r.user?.sub); }
-  @Get('pulls/:id') pull(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number) { return this.prs.get(t, id); }
+  @Get('pulls/:id') pull(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Req() r: Req_) { return this.prs.get(t, id, r.user?.sub); }
   @Post('pulls/:id/comments') comment(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Body() b: { body?: string; kind?: string }, @Req() r: Req_) { return this.prs.comment(t, id, b ?? {}, r.user?.sub); }
   @Post('pulls/:id/close') close(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number) { return this.prs.close(t, id); }
   @Post('pulls/:id/merge') merge(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Req() r: Req_) { return this.prs.merge(t, id, r.user?.sub); }

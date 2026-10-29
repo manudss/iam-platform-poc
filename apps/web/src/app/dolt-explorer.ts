@@ -68,7 +68,7 @@ export class DoltExplorer {
     if (t === 'branches') await this.refreshRefs();
     if (t === 'history') await this.loadLog(true);
     if (t === 'data') await this.loadTables();
-    if (t === 'pulls') await this.loadPulls();
+    if (t === 'pulls') { await this.refreshRefs(); await this.loadPulls(); }
   }
 
   // branches and tags
@@ -76,6 +76,9 @@ export class DoltExplorer {
     await this.run(async () => {
       const b = await this.v.branches(); this.branches.set(b.branches); this.defaultBranch.set(b.default);
       this.tags.set((await this.v.tags()).tags);
+      // pre-select a source branch for a new pull request (the first branch that is not the target)
+      if (!b.branches.some((x) => x.name === this.prForm.source)) this.prForm.source = b.branches.find((x) => x.name !== b.default)?.name ?? '';
+      if (!b.branches.some((x) => x.name === this.prForm.target)) this.prForm.target = b.default;
     }, true);
   }
   protected async createBranch() {
@@ -157,7 +160,7 @@ export class DoltExplorer {
   protected async loadPulls() { const r = await this.run(() => this.v.pulls(this.prFilter === 'all' ? undefined : this.prFilter), true); if (r) this.prs.set(r.pullRequests); }
   protected async openPull() {
     const r = await this.run(() => this.v.openPull(this.prForm.title, this.prForm.body, this.prForm.source, this.prForm.target));
-    if (r) { this.prForm = { title: '', body: '', source: '', target: this.defaultBranch() }; await this.loadPulls(); await this.showPull(r.id); }
+    if (r) { this.prForm = { title: '', body: '', source: '', target: this.defaultBranch() }; await this.refreshRefs(); await this.loadPulls(); await this.showPull(r.id); }
   }
   protected async showPull(id: number) { const r = await this.run(() => this.v.pull(id), true); if (r) { this.pr.set(r); this.rowDiff.set(null); } }
   protected async prDiff(table: string) { const p = this.pr()!.pullRequest; await this.showRowDiff(table, p.target, p.source, true); }
