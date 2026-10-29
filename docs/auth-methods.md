@@ -13,7 +13,7 @@ Status: working POC slice. Code: `apps/api/src/authn/`, gate protocol in `core/c
 
 1. **Levels are declared, not measured.** The level on a method or chain is what the administrator decides. It is never summed across steps. A chain level must be at least its strongest step; that is a sanity bound, not a scientific rule. The console "Suggest level" button proposes the strongest step as a starting point only.
 2. **More steps are not more factors.** The chain is `mfa: true` only when at least two **different factor categories** (knowledge, possession, inherence) were really verified. Two knowledge steps (password then PIN) are two steps, one factor category.
-3. **Simulated steps do not count.** The e-mail code goes to a **demo outbox** that administrators can read. It proves nothing about owning a mailbox. A chain with a simulated step gets an `effectiveLevel` capped by the best really verified step, and the step is listed in `auth_simulated` and left out of `amr`.
+3. **Simulated steps do not count.** Unless the server is configured for real SMTP (below), the e-mail code goes to a **demo outbox** that administrators can read, and the sign-in page says so ("DEMO ONLY: no e-mail is sent"). It proves nothing about owning a mailbox. A chain with a simulated step gets an `effectiveLevel` capped by the best really verified step, and the step is listed in `auth_simulated` and left out of `amr`.
 4. A TOTP secret provisioned by an administrator in the demo is known to that administrator: a real product enrolls from the user's own session.
 
 ## Claims in the id_token
@@ -25,18 +25,32 @@ Status: working POC slice. Code: `apps/api/src/authn/`, gate protocol in `core/c
 | Type | Factor | State |
 | --- | --- | --- |
 | Password | knowledge | real, through the base password slot (lockout still applies) |
-| Authenticator app (TOTP, RFC 6238) | possession | real verification (tested on RFC vectors); demo enrollment by an admin |
-| One-time code by e-mail | possession | **simulated delivery** (demo outbox); an adapter interface exists, no real mailer is wired |
-| Digit code | knowledge | real verification; the whole PIN or digits asked at random positions |
+| Authenticator app (TOTP, RFC 6238) | possession | real verification (tested on RFC vectors, a used time step is refused again); demo enrollment by an admin |
+| One-time code by e-mail | possession | **simulated** (demo outbox) by default. **Real** only when the method's delivery is `SMTP` and the server has `IAM_SMTP_*` set; then it counts as a verified possession factor |
+| PIN on a shuffled keypad | knowledge | real verification of a whole PIN (scrypt hash) |
 | Passkey, recovery codes, external IdP | | catalogue entries only, cannot be created |
 
-### About the "bank-style digit code"
+### PIN on a shuffled keypad
 
-The exact meaning is not confirmed with the product owner. The POC implements an enrolled PIN entered in full or as a few digits at random positions. A PIN is stored as a scrypt hash plus per-position HMAC verifiers keyed with a server-side pepper (so positions can be verified). This is weaker than a clean hash: a 4 to 8 digit space can be brute forced by anyone who gets the file and the pepper. Do not use a real PIN. Treat it as a demo of the chain mechanism; a production design would use an HSM-backed or one-time-code approach, and collect a PIN only through an out-of-chat enrollment.
+Requirement from the product owner: a numeric PIN typed with on-screen buttons shown in a different order each time, with the small letters of a phone keypad, where each button carries a code the backend decodes, so the PIN digits are not sent in clear.
+
+- Every page shows the 10 digits in a new random order. Each button is a form submit whose value is an **opaque id valid for that page only**; the server keeps the id-to-digit map in the sign-in session and the digits entered so far. One press is one POST (no JavaScript: the sign-in pages have a strict CSP).
+- An id the page did not carry (replayed or forged), more than 40 presses, a wrong length or a wrong PIN ends the attempt. Submitting needs exactly the configured number of digits (4 to 8, default 6). Wrong PINs count toward the per-step tries and the per-account throttle.
+- Only a salted scrypt hash of the whole PIN is stored, outside Dolt. No per-position verifiers, no pepper, no clear PIN, and the PIN is never returned by the API.
+- **This is obfuscation, not encryption.** It keeps digits out of simple form logs and screen scrapers of the posted data, nothing more: anyone who can read the page and the session (or malware on the device) sees the mapping. HTTPS is required. A 4 to 8 digit PIN can be brute forced offline by anyone who gets the hash file. This is a POC with fictional PINs, not a bank-grade authentication.
+- The page deliberately has no fingerprint button and no working "forgot" link: only what is implemented is shown.
+
+### E-mail codes
+
+- The address comes from the **user profile** (new `email` column of `identities`, edited on the Users page, versioned on the working branch and live after Apply). The demo enrollment address is only a fallback.
+- First step: the page asks for the user name and answers the same way whether the account exists or not; an unknown account gets the page and no message. Later step: the already identified account's address is used, nothing is asked again.
+- Real delivery is **configured only by server environment**, never in the console or the database: `IAM_SMTP_HOST`, `IAM_SMTP_FROM` (required, no default sender), `IAM_SMTP_PORT` (587), `IAM_SMTP_SECURE` (`1` for implicit TLS), `IAM_SMTP_USER`, `IAM_SMTP_PASS`. No provider, sending domain or sender identity is chosen by the code. Until they are set, a method set to `SMTP` stays simulated and says so.
+- A delivery failure is logged on the server (without the code) and never shown on the page.
+- Tested: message construction and recipient filtering through the mail transport, routing to the profile address, claims. **Not tested against a real SMTP server.**
 
 ## Sign-in flow
 
-First step failure is a generic denial and an unknown user gets a decoy flow (no account enumeration). Later steps allow 3 tries. Sessions last 5 minutes. Throttling: 10 failures and 30 starts per 10 minutes per account. The JSON `/authorize` path cannot run multi-step chains and denies them; use the browser flow.
+First step failure is a generic denial and an unknown user gets a decoy flow (no account enumeration). Later steps allow 3 tries. Sessions last 5 minutes; a code or keypad id is valid for one page or one use. Throttling: 10 failures and 30 starts per 10 minutes per account. The JSON `/authorize` path cannot run multi-step chains and denies them; use the browser flow.
 
 ## API (tenants/:t/auth, sign-in required, writes need the admin capability and a working branch)
 
@@ -44,4 +58,4 @@ First step failure is a generic denial and an unknown user gets a decoy flow (no
 
 ## Known limits
 
-No real e-mail or SMS, no passkeys, no service-level gating by `auth_level` yet, no self-service enrollment, a single `core-authn` document per tenant, mobile console layout reuses the existing shell.
+No SMS, no real e-mail until an SMTP provider is configured and tested, no passkeys, no service-level gating by `auth_level` yet, no self-service enrollment, a single `core-authn` document per tenant, mobile console layout reuses the existing shell.
