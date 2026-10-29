@@ -41,12 +41,12 @@ let browser;
 try {
   for (let i = 0; i < 160; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
   browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
   const errors = []; page.on('pageerror', (e) => errors.push(e.message)); page.on('dialog', (d) => d.accept());
   let lastToken = null;
   page.on('response', async (r) => { if (r.url().endsWith('/token') && r.ok()) { try { lastToken = (await r.json()).id_token; } catch {} } });
   const BASE = 'http://localhost:4200';
-  const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: page.viewportSize().width > 600 });
+  const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: false });
   const claims = () => JSON.parse(Buffer.from(lastToken.split('.')[1], 'base64url').toString());
   const noAlert = async (l) => assert.equal(await page.locator('[role=alert]').count(), 0, l + ': no alert (' + (await page.locator('[role=alert]').allInnerTexts()).join('|') + ')');
   const fillRow = async (id, sel, value) => page.locator(`tr:has(small:text-is("${id}")) ${sel}`).first().fill(String(value));
@@ -94,7 +94,7 @@ try {
   const a1 = await c1.locator('.analysis').innerText(), a2 = await c2.locator('.analysis').innerText();
   assert.match(a1, /Multi-factor/); assert.match(a2, /Not multi-factor/); assert.match(a2, /simulated/i);
   await shot('2-chains-desktop');
-  await page.setViewportSize({ width: 390, height: 800 }); await shot('2b-chains-mobile'); await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setViewportSize({ width: 390, height: 800 }); await shot('2b-chains-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
   await page.click('#authn-save'); await page.waitForSelector('#authn-note'); await noAlert('save');
   // staged only: the live sign-in still shows the classic form until Apply
   const probe = async () => { const r = await fetch(BASE + '/core/authorize?client_id=demo-web&redirect_uri=' + encodeURIComponent(BASE + '/callback') + '&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256&state=x&response_type=code'); return r.text(); };
@@ -121,7 +121,7 @@ try {
   assert.match(await page.textContent('body'), /Sign-in failed|Wrong|incorrect/i); await shot('4a-first-step-denied-mobile-desktop');
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await submit();
   await page.waitForSelector('input[name=a_code]'); assert.match(await page.textContent('body'), /Step 2 of 2/);
-  await page.setViewportSize({ width: 390, height: 780 }); await shot('4b-step2-authenticator-mobile'); await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setViewportSize({ width: 390, height: 780 }); await shot('4b-step2-authenticator-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
   await page.fill('input[name=a_code]', '000000'); await submit();
   assert.match(await page.textContent('body'), /Incorrect|attempt/i);
   await page.fill('input[name=a_code]', totpAt(secret, Date.now(), 30, 6)); await Promise.all([page.waitForURL(/localhost:4200(?!\/core)/), page.click('button[type=submit]')]);
@@ -145,13 +145,13 @@ try {
   const box = await (await call('GET', '/auth/outbox')).json();
   assert.equal(box.simulated, true); const mail = box.messages.at(-1); assert.equal(mail.to, 'alice@example.invalid');
   const code = mail.text.match(/\b(\d{6})\b/)[1];
-  await page.setViewportSize({ width: 390, height: 780 }); await shot('5c-chain2-email-step-mobile'); await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setViewportSize({ width: 390, height: 780 }); await shot('5c-chain2-email-step-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
   await page.fill('input[name=a_code]', code); await submit();
   await page.waitForSelector('.pad'); assert.match(await page.textContent('body'), /Step 2 of 2/);
   assert.equal(await page.locator('input[type=text],input[type=password]').count(), 0, 'no text input carries the PIN');
   await shot('5d-chain2-keypad-desktop');
   const order1 = await page.locator('.pad button.k b').allInnerTexts();
-  await page.setViewportSize({ width: 390, height: 780 }); await shot('5e-chain2-keypad-mobile'); await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setViewportSize({ width: 390, height: 780 }); await shot('5e-chain2-keypad-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
   const pin = '246810'; let orders = [order1.join('')];
   for (const d of pin) {
     await Promise.all([page.waitForLoadState('load'), page.locator(`.pad button.k:has(b:text-is("${d}"))`).first().click()]);
