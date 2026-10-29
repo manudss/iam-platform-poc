@@ -59,7 +59,9 @@ describe('application path on the docker-compose services (Dolt, PostgreSQL, NAT
     assert.equal((await svc.activate(T, await new DoltService().head(), `req-${T}-1`)).seq, 1); // idempotent per request id
     for (let i = 0; i < 80 && !handled.includes(`${T}:1`); i++) { await svc.relay(); await sleep(150); }
     assert.deepEqual(handled.filter((k) => k === `${T}:1`), [`${T}:1`]);
-    const n = (await pool.query('select count(*)::int n from processed_events where tenant=$1', [T])).rows[0].n;
+    // the handler runs inside the consumer's transaction: `handled` fills before the COMMIT, so wait for the row (same assertion, no race)
+    let n = 0;
+    for (let i = 0; i < 40 && n !== 1; i++) { n = (await pool.query('select count(*)::int n from processed_events where tenant=$1', [T])).rows[0].n; if (n !== 1) await sleep(100); }
     assert.equal(n, 1);
   });
 });
