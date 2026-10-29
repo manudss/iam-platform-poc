@@ -19,6 +19,7 @@
     "@temporalio/workflow": "^1.25.0",
     "mysql2": "^3.24.6",
     "nats": "^2.29.3",
+    "nodemailer": "^6.10.1",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@nestjs/testing": "^12.3.2",
     "@types/node": "^26.6.5",
+    "@types/nodemailer": "^6.4.24",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "supertest": "^7.3.1",

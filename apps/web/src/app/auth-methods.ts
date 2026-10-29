@@ -53,7 +53,7 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
         @if (entry(m.type)?.provisioning==='admin-demo') { <div class="enroll"><h4>Demo enrollment for a user</h4>
           <p class="hint">Provisioned by an administrator for this demo only and stored outside the database. A secret or a generated PIN is shown once, here, and cannot be shown again. Save the method first.</p>
           <div class="row"><label>User<input type="text" name="enrolluser" [(ngModel)]="enrollUser" /></label>
-          @if (m.type==='email-otp') { <label>E-mail address<input type="text" name="enrollemail" [(ngModel)]="enrollEmail" /></label> }
+          @if (m.type==='email-otp') { <label>Demo address (used only when the user has no e-mail on the profile)<input type="text" name="enrollemail" [(ngModel)]="enrollEmail" /></label> }
           @if (m.type==='digit-code') { <label>PIN (exactly the digits set in Settings, or leave empty to generate)<input type="password" name="enrollpin" [(ngModel)]="enrollPin" autocomplete="off" inputmode="numeric" /></label> }
           <button (click)="enroll(m)" [disabled]="busy()">Provision</button></div>
           @if (shown() && shownFor()===m.id) { <div class="result" id="authn-shown"><b>Shown once.</b> {{shown()}}</div> }

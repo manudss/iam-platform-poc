@@ -193,4 +193,4 @@ export const shortHash = (h: string | null | undefined) => (h ?? '').slice(0, 8)
 /** Table cell text: NULL is shown as such, objects (JSON columns) as compact JSON. */
 export function cellText(v: unknown): string { return v === null || v === undefined ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v); }
 
-export interface UserProfile { id:string; display_name:string; department:string; manager_id:string|null; login_enabled:boolean; hasCredential:boolean; }
+export interface UserProfile { id:string; display_name:string; department:string; email?:string|null; manager_id:string|null; login_enabled:boolean; hasCredential:boolean; }

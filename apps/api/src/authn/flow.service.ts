@@ -7,7 +7,8 @@ import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, analyzeChain, parseStored, validateConfig } from './config.js';
 import { EnrollmentStore } from './enroll-store.js';
-import { CATALOGUE, DemoOutbox, MethodCtx, Prompt, methodType } from './methods.js';
+import { SmtpMailAdapter } from './mail.js';
+import { CATALOGUE, DemoOutbox, MailAdapter, MethodCtx, Prompt, methodType } from './methods.js';
 
 export interface GateRequest { tenant: string; subject?: string; session?: string; answers?: Record<string, string> }
 export type GateResponse =
@@ -36,6 +37,8 @@ const SESSION_MS = 5 * 60_000, MAX_TRIES = 3, THROTTLE_N = 10, THROTTLE_MS = 10 
 export class AuthnService {
   readonly enroll = new EnrollmentStore();
   readonly outbox = new DemoOutbox();
+  /** Set from the server environment only; tests may replace it. */
+  smtp: MailAdapter | null = SmtpMailAdapter.fromEnv();
   private sessions = new Map<string, Session>();
   private fails = new Map<string, number[]>();
   now = () => Date.now();
@@ -60,12 +63,17 @@ export class AuthnService {
     if (process.env.IAM_DIRECTORY_AUTH === '1' && this.users) { try { return (await this.users.list('main')).some((u) => u.id === subject && u.login_enabled && u.hasCredential); } catch { return false; } }
     return true;
   }
+  /** Live (main) profile address of the user, only when the directory is the source of accounts. */
+  private async profileEmail(subject: string): Promise<string | undefined> {
+    if (process.env.IAM_DIRECTORY_AUTH !== '1' || !this.users) return undefined;
+    try { return ((await this.users.list('main')).find((u) => u.id === subject && u.login_enabled && u.hasCredential) as { email?: string | null } | undefined)?.email || undefined; } catch { return undefined; }
+  }
   private async passwordCheck(tenant: string, subject: string, password: string) {
     const r = await (await this.registry('live')).callSlot<AuthenticateResult>(tenant, 'auth.password', 'auth.authenticate', { tenant, subject, credential: { password } });
     return r.result.outcome === 'allow';
   }
   private ctx(s: Session, step: Session['steps'][number]): MethodCtx {
-    return { tenant: s.tenant, subject: s.subject, instanceId: step.id, config: step.config as Record<string, any>, known: s.known, enroll: this.enroll, mail: this.outbox, passwordCheck: (t, u, p) => this.passwordCheck(t, u, p), now: this.now };
+    return { tenant: s.tenant, subject: s.subject, instanceId: step.id, config: step.config as Record<string, any>, known: s.known, enroll: this.enroll, mail: this.outbox, smtp: this.smtp, profileEmail: () => this.profileEmail(s.subject), passwordCheck: (t, u, p) => this.passwordCheck(t, u, p), now: this.now };
   }
   private audit(e: Record<string, unknown>) { console.log('[authn]', JSON.stringify(e)); }
   private throttled(key: string) { const t = (this.fails.get(key) ?? []).filter((x) => x > this.now() - THROTTLE_MS); this.fails.set(key, t); return t.length >= THROTTLE_N; }

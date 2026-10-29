@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto
 import type { SettingField } from '../plugins/v1/manifest.js';
 import type { EnrollmentStore } from './enroll-store.js';
 import { totpVerify } from './totp.js';
+import { smtpConfigured } from './mail.js';
 
 export type Factor = 'knowledge' | 'possession' | 'inherence';
 export interface KeypadKey { id: string; digit: string; letters: string }
@@ -29,6 +30,10 @@ export interface MethodCtx {
   /** False when the account does not exist or cannot sign in: methods still behave the same way from the outside (no enumeration). */
   known: boolean;
   enroll: EnrollmentStore; mail: DemoOutbox;
+  /** Real mail adapter when the server is configured for it (see mail.ts), else null. */
+  smtp: MailAdapter | null;
+  /** E-mail address from the user's profile (live data), if any. */
+  profileEmail(): Promise<string | undefined>;
   /** Password check through the platform's auth.password slot (so a lockout replacement keeps working). */
   passwordCheck(tenant: string, subject: string, password: string): Promise<boolean>;
   now(): number;
@@ -68,19 +73,25 @@ export const emailOtp: AuthMethodType = {
   settings: [
     { key: 'codeLength', type: 'number', label: 'Code length', default: 6, min: 4, max: 8, group: 'Code' },
     { key: 'ttlSeconds', type: 'number', label: 'Code lifetime (seconds)', default: 300, min: 60, max: 900, group: 'Code' },
-    { key: 'delivery', type: 'select', label: 'Delivery', default: 'demo-outbox', options: [{ value: 'demo-outbox', label: 'Demo outbox (simulated, no e-mail sent)' }], help: 'A real mail adapter (SMTP) is not implemented in this POC.', group: 'Delivery' },
+    { key: 'delivery', type: 'select', label: 'Delivery', default: 'demo-outbox', options: [{ value: 'demo-outbox', label: 'Demo outbox (simulated, no e-mail sent)' }, { value: 'smtp', label: 'SMTP (real e-mail, needs the server to be configured)' }], help: 'SMTP is configured on the server by IAM_SMTP_* variables, never here. Until it is, this method stays simulated.', group: 'Delivery' },
   ],
   provisioning: 'admin-demo',
   inlineWithUsername: () => false,
-  verification: (c) => (c.delivery ?? 'demo-outbox') === 'demo-outbox'
-    ? { real: false, note: 'SIMULATED: the code is written to a demo outbox that administrators can read, so it does not prove possession of a mailbox.' }
-    : { real: true, note: 'Code delivered by a real mail adapter.' },
+  verification: (c) => c.delivery === 'smtp' && smtpConfigured()
+    ? { real: true, note: 'Code delivered by SMTP to the address on the user profile: proves access to that mailbox.' }
+    : { real: false, note: 'SIMULATED: the code is written to a demo outbox that administrators can read, so it does not prove possession of a mailbox.' },
   async prepare(ctx) {
     const len = Number(ctx.config.codeLength ?? 6), ttl = Number(ctx.config.ttlSeconds ?? 300);
     const code = String(randomInt(0, 10 ** len)).padStart(len, '0');
-    const to = ctx.known ? (await ctx.enroll.email(ctx.tenant, ctx.subject, ctx.instanceId)) ?? `${ctx.subject}@mail.example.invalid` : '';
-    if (ctx.known) await ctx.mail.send({ tenant: ctx.tenant, to, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in ${Math.round(ttl / 60)} minute(s).`, subjectUser: ctx.subject });
-    return { prompt: { title: 'Check your e-mail', message: (ctx.config.delivery ?? 'demo-outbox') === 'demo-outbox' ? 'DEMO ONLY: no e-mail is sent. In this prototype the code is written to a demo outbox that an administrator can read.' : 'If the account exists, a code was sent to its e-mail address.', fields: [{ name: 'code', label: 'Code', type: 'digits', maxLength: len, hint: `${len} digits` }] },
+    const real = ctx.config.delivery === 'smtp' && !!ctx.smtp && smtpConfigured();
+    // The profile address first, the demo enrollment address as a fallback. Unknown accounts get the same page and no message.
+    const to = ctx.known ? (await ctx.profileEmail()) ?? (await ctx.enroll.email(ctx.tenant, ctx.subject, ctx.instanceId)) ?? `${ctx.subject}@mail.example.invalid` : '';
+    if (ctx.known) {
+      const msg = { tenant: ctx.tenant, to, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in ${Math.round(ttl / 60)} minute(s). If you did not try to sign in, ignore this message.`, subjectUser: ctx.subject };
+      if (real) { try { await ctx.smtp!.send(msg); } catch (e) { console.error('[authn] smtp delivery failed:', (e as Error).message); } }  // never reveal a delivery failure to the page
+      else await ctx.mail.send(msg);
+    }
+    return { prompt: { title: 'Check your e-mail', message: real ? 'If the account exists, a code was sent to its e-mail address.' : 'DEMO ONLY: no e-mail is sent. In this prototype the code is written to a demo outbox that an administrator can read.', fields: [{ name: 'code', label: 'Code', type: 'digits', maxLength: len, hint: `${len} digits` }] },
       state: { hash: sha(`${ctx.instanceId}:${code}`), exp: ctx.now() + ttl * 1000, used: false } };
   },
   async verify(ctx, st, a) {

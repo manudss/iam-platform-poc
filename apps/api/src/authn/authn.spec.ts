@@ -169,6 +169,27 @@ describe('authentication methods and chains', () => {
       assert.equal(done.claims.auth_level_declared, 4); assert.equal(done.claims.auth_level, 4); // capped by the really verified PIN (4)
     });
 
+    it('with SMTP configured, the e-mail step goes to the profile address, is real, and counts as a verified possession factor', async () => {
+      const nm = (await import('nodemailer')).default, { SmtpMailAdapter } = await import('./mail.js');
+      const sent: any[] = []; const t = nm.createTransport({ jsonTransport: true }); const orig = t.sendMail.bind(t);
+      (t as any).sendMail = async (o: any) => { const r = await orig(o); sent.push(o); return r; };
+      const envOld = [process.env.IAM_SMTP_HOST, process.env.IAM_SMTP_FROM, process.env.IAM_DIRECTORY_AUTH];
+      process.env.IAM_SMTP_HOST = 'smtp.example.test'; process.env.IAM_SMTP_FROM = 'no-reply@example.test';
+      const oldSmtp = svc.smtp; svc.smtp = new SmtpMailAdapter(t as any, 'no-reply@example.test'); (svc as any).profileEmail = async (u: string) => (u === 'demo-bob' ? 'bob.profile@example.test' : undefined);
+      try {
+        await put(cfg([m('pw', 'password', 3), m('mail', 'email-otp', 4, { delivery: 'smtp' })], [{ id: 'pw-mail', name: 'Password then e-mail', steps: ['pw', 'mail'], level: 6 }], 'pw-mail')).expect(200);
+        const c1 = (await gate({ tenant: T, subject: 'demo-bob', answers: { password: 'demo-only-not-a-secret' } })).body;
+        assert.equal(c1.outcome, 'challenge'); assert.equal(c1.step.type, 'email-otp'); assert.doesNotMatch(c1.step.message, /DEMO ONLY/);
+        assert.equal(sent.length, 1); assert.equal(sent[0].to, 'bob.profile@example.test');
+        const before = (await http().get(`/tenants/${T}/auth/outbox`).set(adm)).body.messages.length;
+        const done = (await gate({ tenant: T, session: c1.session, answers: { code: /code is (\d{6})/.exec(sent[0].text)![1] } })).body;
+        assert.equal(done.outcome, 'allow'); assert.deepEqual(done.claims.auth_simulated, []); assert.equal(done.claims.auth_mfa, true);
+        assert.equal((await http().get(`/tenants/${T}/auth/outbox`).set(adm)).body.messages.length, before, 'nothing went to the demo outbox');
+        // an unknown account gets the same page and no message
+        const u = (await gate({ tenant: T, subject: 'nobody-at-all', answers: { password: 'x' } })).body; assert.ok(['challenge', 'deny'].includes(u.outcome)); assert.equal(sent.length, 1);
+      } finally { svc.smtp = oldSmtp; delete (svc as any).profileEmail; [process.env.IAM_SMTP_HOST, process.env.IAM_SMTP_FROM, process.env.IAM_DIRECTORY_AUTH] = envOld as any; if (envOld[0] === undefined) delete process.env.IAM_SMTP_HOST; if (envOld[1] === undefined) delete process.env.IAM_SMTP_FROM; if (envOld[2] === undefined) delete process.env.IAM_DIRECTORY_AUTH; }
+    });
+
     it('a later step cannot be skipped or answered early, and a finished session cannot be reused', async () => {
       await put(cfg([m('mail', 'email-otp', 4), m('pin', 'digit-code', 4)], [{ id: 'mail-pin2', name: 'Mail then PIN', steps: ['mail', 'pin'], level: 4 }], 'mail-pin2'));
       await provision('demo-bob', 'mail', { email: 'bobb@example.test' });
@@ -233,6 +254,16 @@ describe('authentication methods and chains', () => {
     });
   });
 
+  it('smtp adapter builds the message through a transport and refuses a bad recipient', async () => {
+    const nm = (await import('nodemailer')).default;
+    const sent: any[] = []; const t = nm.createTransport({ jsonTransport: true });
+    const orig = t.sendMail.bind(t); (t as any).sendMail = async (o: any) => { const r = await orig(o); sent.push(JSON.parse((r as any).message)); return r; };
+    const { SmtpMailAdapter } = await import('./mail.js'); const a = new SmtpMailAdapter(t as any, 'IAM POC <no-reply@example.test>');
+    await a.send({ tenant: 'x', to: 'alice@example.test', subject: 'Your sign-in code', text: 'Your sign-in code is 123456.', subjectUser: 'alice' });
+    assert.equal(sent[0].to[0].address, 'alice@example.test'); assert.equal(sent[0].from.address, 'no-reply@example.test'); assert.match(sent[0].text, /123456/);
+    await assert.rejects(a.send({ tenant: 'x', to: 'a@b.test, evil@c.test', subject: 's', text: 't', subjectUser: 'a' }));
+    await assert.rejects(a.send({ tenant: 'x', to: 'x\r\nBcc: evil@c.test', subject: 's', text: 't', subjectUser: 'a' }));
+  });
   it('totp helpers match the RFC 6238 test vector', () => {
     const secret = base32Encode(Buffer.from('12345678901234567890'));
     assert.equal(totpAt(secret, 59_000, 30, 8), '94287082');
