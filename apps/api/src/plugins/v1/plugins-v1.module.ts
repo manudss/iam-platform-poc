@@ -1,3 +1,4 @@
+import { BranchRegistries } from './branch-registries.js';
 import { DoltPluginStore } from './dolt-stores.js';
 import { VersioningModule } from '../../versioning/versioning.module.js';
 import { VersioningService } from '../../versioning/versioning.service.js';
@@ -19,10 +20,11 @@ import { AuthGateController } from './auth-gate.controller.js';
 @Module({
   imports: [VersioningModule, UsersModule],
   controllers: [PluginsAdminController, AuthGateController],
-  providers: [{
+  providers: [BranchRegistries, {
     provide: PluginRegistry,
-    inject: [VersioningService, UsersService],
-    useFactory: async (v: VersioningService, users: UsersService) => {
+    inject: [VersioningService, UsersService, BranchRegistries],
+    useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries) => {
+      if (process.env.IAM_WORKSPACE_MODE === '1') return branches.get('main');
       const audit = (e: unknown) => console.log(`[plugins] ${JSON.stringify(e)}`);
       const url = process.env.IAM_PG_URL;
       const pgs = url ? new PgPluginStore(new pg.Pool({ connectionString: url, max: 2 })) : undefined;
@@ -37,6 +39,6 @@ import { AuthGateController } from './auth-gate.controller.js';
       return r;
     },
   }],
-  exports: [PluginRegistry],
+  exports: [PluginRegistry, BranchRegistries],
 })
 export class PluginsV1Module {}

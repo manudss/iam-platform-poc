@@ -16,6 +16,8 @@ export interface Change { branch: string; commit: string; violations: Violation[
  */
 export class ApiClient {
   private token = '';
+  branch = '';
+
   constructor(private readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a), private readonly onUnauthorized: () => void = () => {}) {}
 
   get loggedIn() { return !!this.token; }
@@ -75,11 +77,12 @@ export class ApiClient {
 
   private async call<T>(method: string, path: string, body?: object, extra: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
-    const sentToken = this.token;
+    const sentToken = this.token, sentBranch=this.branch;
     const r = await this.f(`/api/tenants/${this.tenant}${path}`, {
-      method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...extra }, body: body ? JSON.stringify(body) : undefined,
+      method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...(this.branch ? {'x-iam-branch':this.branch} : {}), ...extra }, body: body ? JSON.stringify(body) : undefined,
     });
     const data = (await r.json().catch(() => ({}))) as T;
+    if(this.branch!==sentBranch)throw new Error('Working branch changed. Request result ignored.');
     if (this.token !== sentToken) throw new Error('Session changed. Request result ignored; check the current state.');
     if (r.status === 401 && this.token === sentToken) throw this.unauthorized();
     if (!r.ok && r.status !== 409) throw new Error((data as { message?: string }).message ?? `HTTP ${r.status}`);

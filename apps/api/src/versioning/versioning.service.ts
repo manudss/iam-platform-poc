@@ -1,3 +1,4 @@
+import { applyContext, workspaceMode, currentBranch } from '../workspace/context.js';
 import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { createConnection, Connection, FieldPacket } from 'mysql2/promise';
 import { SOD_SQL } from '../dolt/dolt.service.js';
@@ -89,6 +90,7 @@ export class VersioningService {
   /** Write guard: protected branch refused, working set must be clean, failure resets the branch working set. */
   async writeOn<T>(branch: string, fn: (c: Connection) => Promise<T>): Promise<T> {
     branchName(branch);
+    if(workspaceMode() && !applyContext.getStore() && branch!==currentBranch(true))throw new ForbiddenException('Write must use globally selected branch');
     if (this.isProtected(branch)) throw new ForbiddenException(`branch ${branch} is protected: open a pull request instead`);
     return this.lock(() => this.at(branch, async (c, r) => {
       if (r.kind !== 'branch') throw new BadRequestException('only a branch can be changed');
@@ -156,6 +158,7 @@ export class VersioningService {
   /** Moves a branch back to an earlier commit. The commits after it stay reachable by hash (and from other branches) but leave the branch history. */
   resetBranch(name: string, commit: string, confirm: boolean) {
     branchName(name);
+    if(workspaceMode() && name!==currentBranch(true))throw new ForbiddenException('Restore must use globally selected branch');
     if (!confirm) throw new ConflictException({ code: 'confirmation-required', message: 'restoring a branch drops the later commits from its history: send confirm=true' });
     if (this.isProtected(name)) throw new ForbiddenException(`branch ${name} is protected: use "revert" on a new branch and a pull request`);
     return this.lock(async () => {
@@ -298,6 +301,8 @@ export class VersioningService {
 
   /** Row edits on a branch, committed together in ONE commit (author = the signed-in user). */
   editRows(branch: string, table: string, ops: EditOp[], message: string | undefined, sub: unknown) {
+    if (workspaceMode() && branch !== currentBranch(true)) throw new ForbiddenException('Edit must use the selected working branch');
+    if (ops?.some(o=>'values' in o && Object.keys(o.values).some(k=>k.toLowerCase()==='credential_revision'))) throw new ForbiddenException('Credential revisions are managed by Users only');
     if (table.toLowerCase().startsWith('plugin_runtime_')) throw new ForbiddenException('Use Plugins to change runtime settings, grants and state');
     tableName(table);
     if (!Array.isArray(ops) || ops.length < 1 || ops.length > 100) throw new BadRequestException('1 to 100 operations expected');
@@ -367,6 +372,7 @@ export class VersioningService {
    * Destructive statements (DROP, TRUNCATE, ALTER ... DROP, UPDATE/DELETE without WHERE) need `confirmDestructive`.
    */
   sqlWrite(branch: string, sql: string, opts: { message?: string; dryRun?: boolean; confirmDestructive?: boolean }, sub: unknown) {
+    if (workspaceMode() && branch !== currentBranch(true)) throw new ForbiddenException('SQL writes must use selected working branch');
     return this.otherDatabases().then((others) => this.sqlWriteChecked(branch, sql, opts, sub, others));
   }
   private sqlWriteChecked(branch: string, sql: string, opts: { message?: string; dryRun?: boolean; confirmDestructive?: boolean }, sub: unknown, others: string[]) {
@@ -432,9 +438,11 @@ export class VersioningService {
   }
 
   /** Performs the merge (merge commit) when every check passes. Called under the lock by the pull request service. */
-  async mergeInto(source: string, target: string, message: string, sub: unknown) {
+  async mergeInto(source: string, target: string, message: string, sub: unknown, expectedHead?: string) {
+    if (workspaceMode() && target === 'main' && !applyContext.getStore()) throw new ForbiddenException('Use the global Apply action to merge into main');
     return this.lock(() => this.at(target, async (c) => {
       await this.cleanOrFail(c, target);
+      if(expectedHead){const [heads]=await c.query('select hash from dolt_branches where name=?',[source]);if((heads as {hash:string}[])[0]?.hash!==expectedHead)throw new ConflictException('Working branch changed. Review again before Apply.');}
       try {
         const checks = await this.mergeChecks(c, source, true, message);
         if (!checks.mergeable) return { ...checks, commit: null };
@@ -447,7 +455,7 @@ export class VersioningService {
 
   private async mergeChecks(c: Connection, source: string, keep: boolean, _message: string) {
     const [runtimeDiff] = await c.query('select * from dolt_diff_summary(?)', [`HEAD...${source}`]);
-    if ((runtimeDiff as {from_table_name:string;to_table_name:string}[]).some(x=>[x.from_table_name,x.to_table_name].some(n=>n?.toLowerCase().startsWith('plugin_runtime_')))) throw new ForbiddenException('Plugin runtime state differs. Use Plugins, not a database merge, to change grants or enablement.');
+    if (!applyContext.getStore() && (runtimeDiff as {from_table_name:string;to_table_name:string}[]).some(x=>[x.from_table_name,x.to_table_name].some(n=>n?.toLowerCase().startsWith('plugin_runtime_')))) throw new ForbiddenException('Plugin runtime state differs. Use Plugins, not a database merge, to change grants or enablement.');
     const [m] = await c.query("CALL DOLT_MERGE('--no-ff', '--no-commit', ?)", [source]);
     const r = (m as { conflicts: number; message: string }[])[0];
     const reasons: string[] = [];

@@ -4,9 +4,9 @@ import type { Connection } from 'mysql2/promise';
 
 /** Non-secret runtime plugin data on Dolt main. Writes are serialized with the explorer, each with a commit. */
 export class DoltPluginStore implements MigrationStore, SettingsStore, StateStore {
-  constructor(private readonly v: VersioningService) {}
+  constructor(private readonly v: VersioningService, private readonly ref = 'main') {}
   private ready?: Promise<void>;
-  private init() { return this.ready ??= this.v.lock(() => this.v.at('main', async c => {
+  private init() { return this.ready ??= this.v.lock(() => this.v.at(this.ref, async c => {
     await c.query('create table if not exists plugin_runtime_state (tenant varchar(32), plugin varchar(64), installed boolean not null, enabled boolean not null, faulted boolean not null, grants_json json not null, primary key(tenant,plugin))');
     await c.query('create table if not exists plugin_runtime_settings (tenant varchar(32), plugin varchar(64), settings json not null, primary key(tenant,plugin))');
     await c.query('create table if not exists plugin_runtime_migrations (plugin varchar(64), id varchar(80), checksum varchar(64), primary key(plugin,id))');
@@ -17,8 +17,8 @@ export class DoltPluginStore implements MigrationStore, SettingsStore, StateStor
     const [d] = await c.query('select * from dolt_status'); if (!(d as unknown[]).length) return;
     for (const row of d as {table_name:string}[]) if (row.table_name.startsWith('plugin_runtime_') || row.table_name.startsWith('plg_')) await c.query('call dolt_add(?)', [row.table_name]); await c.query('call dolt_commit(\'-m\', ?)', [msg]);
   }
-  private async read<T>(fn: (c: Connection) => Promise<T>) { await this.init(); return this.v.at('main', fn); }
-  private async write(fn: (c: Connection) => Promise<void>, msg: string) { await this.init(); return this.v.lock(() => this.v.at('main', async c => { await fn(c); await this.commit(c, msg); })); }
+  private async read<T>(fn: (c: Connection) => Promise<T>) { await this.init(); return this.v.at(this.ref, fn); }
+  private async write(fn: (c: Connection) => Promise<void>, msg: string) { await this.init(); return this.v.lock(() => this.v.at(this.ref, async c => { await fn(c); await this.commit(c, msg); })); }
   async applied(plugin: string) { return this.read(async c => { const [r] = await c.query('select id,checksum from plugin_runtime_migrations where plugin=?', [plugin]); return r as {id:string;checksum:string}[]; }); }
   async apply(plugin: string, id: string, checksum: string, sql: string[]) { await this.write(async c => {
     for (const s of sql) await c.query(s.replace(/\btext\b/gi, 'varchar(255)').replace(/\btimestamptz\b/gi, 'datetime'));

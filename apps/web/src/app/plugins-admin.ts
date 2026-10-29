@@ -18,7 +18,7 @@ export class PluginsAdmin {
   /** Plugin shown in the detail panel, driven by the route (/plugins/:id). */
   @Input() pluginId: string | null = null;
   @Output() opened = new EventEmitter<string | null>();
-  private readonly session = inject(Session);
+  protected readonly session = inject(Session);
   protected admin!: PluginAdminClient;
   protected readonly plugins = signal<PluginInfo[]>([]);
   protected readonly selected = signal<PluginInfo | null>(null);

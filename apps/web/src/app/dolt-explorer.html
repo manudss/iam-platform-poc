@@ -131,7 +131,7 @@
           @if (editorOpen) {
             <div class="panel">
               <h4>{{editKey ? 'Edit row' : 'Add a row'}} on {{d.ref}}</h4>
-              <div class="field-editor">@for(c of d.columns;track c.name){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}</div>
+              <div class="field-editor">@for(c of d.columns;track c.name){@if(c.name!=='credential_revision'){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
               <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
               <button type="button" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
             </div>

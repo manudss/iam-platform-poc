@@ -115,7 +115,7 @@ describe('routing and sign-in guard', () => {
     expect(nav).toEqual(['/overview', '/users', '/assignments', '/activation', '/plugins', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);
     expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
     expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
-    expect(el.textContent).toContain('Activate current main');
+    expect(el.textContent).toContain('Choose your working branch');
   });
 
   it('unknown address falls back to the dashboard (through sign-in when needed)', async () => {

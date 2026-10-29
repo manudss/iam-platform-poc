@@ -1,3 +1,6 @@
+import { Optional } from '@nestjs/common';
+import { BranchRegistries } from './branch-registries.js';
+import { currentBranch, workspaceMode } from '../../workspace/context.js';
 import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, Param, Post, Put, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../../auth/auth.guard.js';
 import { AdminGuard } from '../../auth/admin.guard.js';
@@ -24,24 +27,25 @@ function grants(b: unknown): Grants {
 @UseGuards(AuthGuard)
 @Controller('tenants/:tenant/plugins')
 export class PluginsAdminController {
-  constructor(private readonly reg: PluginRegistry) {}
+  constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries) {}
+  private async registry(write=false) { return workspaceMode() ? this.branches.get(currentBranch(write)) : this.reg; }
 
-  @Get() list(@Param('tenant') t: string) { return { tenant: t, plugins: this.reg.list(t) }; }
-  @Get('screens') screens(@Param('tenant') t: string) { return { tenant: t, screens: this.reg.screens(t) }; }
-  @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(() => this.reg.form(t, id)); }
+  @Get() async list(@Param('tenant') t: string) { return { tenant: t, plugins: (await this.registry()).list(t) }; }
+  @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
+  @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
 
   @UseGuards(AdminGuard) @Post(':id/install')
-  install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await this.reg.install(t, id, grants(b)); return { installed: id }; }); }
+  install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).install(t, id, grants(b)); return { installed: id }; }); }
 
   @UseGuards(AdminGuard) @Put(':id/settings')
   settings(@Param('tenant') t: string, @Param('id') id: string, @Body() b: { values?: Record<string, unknown> }) {
     if (!b?.values || typeof b.values !== 'object' || Array.isArray(b.values)) throw new BadRequestException('values object required');
-    return wrap(async () => { await this.reg.configure(t, id, b.values!); return { configured: id }; });
+    return wrap(async () => { await (await this.registry(true)).configure(t, id, b.values!); return { configured: id }; });
   }
 
   @UseGuards(AdminGuard) @Post(':id/enable')
-  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await this.reg.enable(t, id, grants(b)); return { enabled: id }; }); }
+  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); return { enabled: id }; }); }
 
   @UseGuards(AdminGuard) @Post(':id/disable')
-  disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await this.reg.disable(t, id); return { disabled: id }; }); }
+  disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }
 }

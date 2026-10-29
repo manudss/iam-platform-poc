@@ -18,6 +18,10 @@ export class Session implements OnDestroy {
   readonly api = new ApiClient('acme-demo', (...args) => fetch(...args), () => this.expire());
   readonly loggedIn = signal(false);
   readonly user = signal('');
+  readonly branch = signal('');
+  readonly branchEpoch = signal(0);
+  selectBranch(branch:string){this.api.branch=branch;this.branch.set(branch);this.branchEpoch.update(x=>x+1);this.change.set(null);this.assignments.set([]);this.activations.set([]);}
+
   readonly message = signal('');
   readonly tone = signal<Tone>('info');
   /** Admin capability token typed by the operator (local setups only; the hosted edge injects it server-side). Memory only. */
@@ -51,7 +55,7 @@ export class Session implements OnDestroy {
 
   signOut() {
     this.expired.set(false); clearTimeout(this.expiryTimer);
-    this.api.logout(); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
+    this.api.logout();this.selectBranch(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
     this.assignments.set([]); this.activations.set([]); this.adminToken.set(''); this.say('Signed out.');
   }
 

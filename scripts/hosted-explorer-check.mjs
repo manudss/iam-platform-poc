@@ -4,10 +4,10 @@ import { mkdirSync } from 'node:fs'; import { join, resolve } from 'node:path'; 
 const { chromium } = createRequire(import.meta.url)('playwright-core');
 const base = process.argv[2]; const out = resolve(process.argv[3] ?? '/tmp/hosted-shots'); mkdirSync(out, { recursive: true });
 const b = await chromium.launch({ executablePath: process.env.CHROME_BIN, args: ['--no-sandbox'] });
-const page = await (await b.newContext({ viewport: { width: 1100, height: 1500 } })).newPage(); page.setDefaultTimeout(90000);
+const page = await (await b.newContext({ viewport: { width: 1100, height: 1500 } })).newPage(); page.setDefaultTimeout(20000);
 page.on('dialog', (d) => d.accept());
 const btn = (n) => page.locator('.explorer button').filter({ hasText: new RegExp(`^${n}$`) }).first();
-const nav = (p) => page.click(`nav a[data-nav="${p}"]`);
+const nav = (p) => {console.log('NAV',p);return page.click(`nav a[data-nav="${p}"]`);};
 const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
 try {
   await page.goto(base + '/'); await page.click('#signin-browser'); await page.waitForSelector('input[name=password]');
@@ -20,7 +20,7 @@ try {
   const br = 'hosted-' + Date.now().toString(36);
   await page.fill('input[name=nb]', br); await btn('Create branch').click(); await page.waitForSelector(`td:has-text("${br}")`);
   await nav('/database/data'); await page.selectOption('select[name=dr]', br); await page.click('button:has-text("roles")'); await page.waitForSelector('th:has-text("label")');
-  await btn('Add a row').click(); await page.fill('textarea[name=ej]', JSON.stringify({ id: 'auditor-' + br, label: 'Auditor', is_sensitive: 0 }));
+  await btn('Add a row').click(); await page.fill('[data-edit-field="id"] textarea', 'auditor-' + br); await page.locator('[data-edit-field="label"] input[type=checkbox]').uncheck(); await page.fill('[data-edit-field="label"] textarea','Auditor'); await page.locator('[data-edit-field="is_sensitive"] input[type=checkbox]').uncheck(); await page.fill('[data-edit-field="is_sensitive"] textarea','0');
   await page.fill('input[name=em]', 'add role'); await btn('Commit change').click(); await page.waitForSelector('td:has-text("Auditor")');
   await nav('/database/pulls'); await page.selectOption('select[name=ps]', br); await page.fill('input[name=pti]', 'Hosted check ' + br); await btn('Open pull request').click();
   await page.waitForSelector('text=Can be merged'); assert.equal(await btn('Approve').isDisabled(), true); await shot('h2-pull-request');

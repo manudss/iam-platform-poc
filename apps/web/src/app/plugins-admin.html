@@ -19,7 +19,7 @@
     @if (!p.base && !p.installed) {
       <p>Installing runs this plugin's own migrations (tables prefixed with its id). Grant that explicitly.</p>
       @if (p.requests.install) { <label class="row"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> Allow its install migrations</label> }
-      <button type="button" id="plugin-install" (click)="install()">Install</button>
+      <button type="button" [disabled]="session.branch()==='main'" id="plugin-install" (click)="install()">Install</button>
     }
     @if (model(); as m) {
       <form (ngSubmit)="save()" id="plugin-form">
@@ -41,7 +41,7 @@
             }
           </fieldset>
         }
-        <button type="submit" id="plugin-save" [disabled]="!p.installed && !p.base">Save settings</button>
+        <button type="submit" id="plugin-save" [disabled]="session.branch()==='main' || (!p.installed && !p.base)">Save settings</button>
       </form>
     }
     @if (!p.base && p.installed) {
@@ -51,9 +51,9 @@
           @for (h of p.requests.sensitiveHooks; track h) { <label class="row"><input type="checkbox" [attr.data-hook]="h" [ngModelOptions]="{ standalone: true }" [(ngModel)]="grantHooks[h]" /> {{ h }}</label> }
         }
         @if (p.requests.uiComponents) { <label class="row"><input type="checkbox" name="gc" [(ngModel)]="grantComponents" /> Allow its packaged UI components to run in the console</label> }
-        <button type="button" id="plugin-enable" (click)="enable()">Enable</button>
+        <button type="button" [disabled]="session.branch()==='main'" id="plugin-enable" (click)="enable()">Enable</button>
       } @else {
-        <button type="button" id="plugin-disable" (click)="disable()">Disable and return to base</button>
+        <button type="button" [disabled]="session.branch()==='main'" id="plugin-disable" (click)="disable()">Disable and return to base</button>
       }
     }
     <p class="msg" role="status" id="plugin-note">{{ note() }}</p>
