@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { pathToFileURL } from 'node:url';
 // Orchestrates the per-PR Render preview service (one all-in-one Docker web service:
 // Dolt + Rust core + NestJS API + Angular console, built from demo/Dockerfile) from a
 // TRUSTED GitHub Actions workflow (pull_request_target, base-branch code only, never PR code).
@@ -132,6 +133,11 @@ async function cleanup() {
   await upsertComment(`### Preview Render pour la PR #${pr}\nPR fermee : le service de preview (et ses donnees Dolt embarquees) a ete supprime.`);
 }
 
-if (MODE === 'ensure') await ensure();
-else if (MODE === 'cleanup') await cleanup();
-else throw new Error('usage: ensure|cleanup');
+export { ensure, cleanup };
+
+const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedAsScript) {
+  if (MODE === 'ensure') await ensure();
+  else if (MODE === 'cleanup') await cleanup();
+  else throw new Error('usage: ensure|cleanup');
+}
