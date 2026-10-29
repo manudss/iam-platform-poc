@@ -17,3 +17,8 @@ tr.sel { background: #f5f3ff; } tr.detail td { background: #faf9ff; }
 .scroll { overflow-x: auto; }
 label.inline { display: inline-flex; gap: .4rem; align-items: center; }
 @media (max-width: 700px) { .row { flex-direction: column; align-items: stretch; } .name { min-width: 0; } }
+
+/* readable step lines and full chain / method names */
+.steps li > b { margin-right: .5rem; }
+.steps li > small { margin-right: .75rem; }
+input.name { min-width: 24rem; width: 100%; }

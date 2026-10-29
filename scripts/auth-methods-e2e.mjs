@@ -79,8 +79,8 @@ try {
   // ---- 2. build methods and chains in the console
   await page.click('#authn-starter');
   const add = async (type, name) => { await page.selectOption('select[name=newtype]', type); await page.fill('input[name=newname]', name); await page.click('#authn-add-method'); };
-  await add('totp', 'Authenticator app'); await add('email-otp', 'E-mail code'); await add('digit-code', 'Bank digit code');
-  await page.waitForSelector('tr:has(small:text-is("bank-digit-code"))');
+  await add('totp', 'Authenticator app'); await add('email-otp', 'E-mail code'); await add('digit-code', 'PIN keypad');
+  await page.waitForSelector('tr:has(small:text-is("pin-keypad"))');
   const addChain = async (name, steps, level) => {
     await page.fill('input[name=newchain]', name); await page.click('#authn-add-chain');
     const c = page.locator(`.chain[data-chain="${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}"]`);
@@ -88,7 +88,7 @@ try {
     await c.locator('input.lvl').fill(String(level)); return c;
   };
   const c1 = await addChain('Password then authenticator', ['password', 'authenticator-app'], 8);
-  const c2 = await addChain('E-mail then bank digit code', ['e-mail-code', 'bank-digit-code'], 7);
+  const c2 = await addChain('E-mail then PIN keypad', ['e-mail-code', 'pin-keypad'], 7);
   await c1.locator('input[type=radio]').check();
   await page.waitForFunction(() => document.querySelectorAll('.analysis').length >= 3);
   const a1 = await c1.locator('.analysis').innerText(), a2 = await c2.locator('.analysis').innerText();
@@ -107,9 +107,9 @@ try {
   await page.waitForSelector('#authn-shown');
   const secret = (await page.locator('#authn-shown').innerText()).match(/: ([A-Z2-7]{16,})/)[1];
   await shot('3-enrolled-totp');
-  await enroll('bank-digit-code'); await enroll('e-mail-code');
+  await enroll('pin-keypad'); await enroll('e-mail-code');
   await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollemail]', 'alice@example.invalid'); await page.getByRole('button', { name: 'Provision' }).click();
-  await enroll('e-mail-code'); await enroll('bank-digit-code');
+  await enroll('e-mail-code'); await enroll('pin-keypad');
   await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollpin]', '246810'); await page.getByRole('button', { name: 'Provision' }).click();
   await noAlert('enroll');
   await shot('3b-methods-enrolled-desktop');
@@ -133,8 +133,8 @@ try {
   await page.waitForSelector('[name=globalBranch]');
   await page.locator('details.token').evaluate((e) => (e.open = true)); await page.fill('[name=admintoken]', ADMIN_TOKEN);
   await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('authn-work2');
-  await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="e-mail-then-bank-digit-code"]');
-  await page.locator('.chain[data-chain="e-mail-then-bank-digit-code"] input[type=radio]').check();
+  await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="e-mail-then-pin-keypad"]');
+  await page.locator('.chain[data-chain="e-mail-then-pin-keypad"] input[type=radio]').check();
   await page.click('#authn-save'); await page.waitForSelector('#authn-note');
   await shot('5-chain2-selected-desktop');
   const ap2 = await (await call('POST', '/workspace/apply', { confirm: true }, 'authn-work2')).json(); assert.equal(ap2.applied, true, JSON.stringify(ap2));

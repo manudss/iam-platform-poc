@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
-import { analyzeChain, validateConfig } from './config.js';
+import { analyzeChain, validateConfig, parseStored } from './config.js';
 import { totpAt, base32Decode, hotp, base32Encode } from './totp.js';
 
 const ADMIN = 'x'.repeat(20), GATE = 'gate-token-1234', T = 'acme-demo', PW = 'demo-only-not-a-secret';
@@ -149,7 +149,7 @@ describe('authentication methods and chains', () => {
       assert.equal((await gate({ tenant: T, session: c.session, answers: { code: code('tp', -1) } })).body.outcome, 'deny');
     });
 
-    it('e-mail code then bank-style digits (order is free): the e-mail is only a demo outbox and the claims say so', async () => {
+    it('e-mail code then PIN keypad (order is free): the e-mail is only a demo outbox and the claims say so', async () => {
       await put(cfg([m('mail', 'email-otp', 4), m('pin', 'digit-code', 4)], [{ id: 'mail-pin', name: 'E-mail code then PIN digits', steps: ['mail', 'pin'], level: 4 }], 'mail-pin')).expect(200);
       await provision('demo-bob', 'mail', { email: 'bob@example.test' });
       const pin = (await provision('demo-bob', 'pin', { length: 6 })).shownOnce.pin as string; assert.match(pin, /^\d{6}$/);
@@ -268,5 +268,23 @@ describe('authentication methods and chains', () => {
     const secret = base32Encode(Buffer.from('12345678901234567890'));
     assert.equal(totpAt(secret, 59_000, 30, 8), '94287082');
     assert.equal(totpAt(secret, 1111111109_000, 30, 8), '07081804');
+  });
+});
+
+describe('authn configuration is checked when staged, so Apply never receives a broken one', () => {
+  const pw = { id: 'pw', type: 'password', name: 'Password', level: 3 };
+  const rejects = (cfg: unknown, re: RegExp) => assert.throws(() => validateConfig(cfg), (e: any) => re.test(String(e.message)));
+  it('refuses unknown steps, repeated steps, levels out of range, a chain weaker than its strongest step and catalogue-only types', () => {
+    rejects({ methods: [pw], chains: [{ id: 'c', name: 'C', steps: ['nope'], level: 3 }] }, /unknown method/);
+    rejects({ methods: [pw], chains: [{ id: 'c', name: 'C', steps: ['pw', 'pw'], level: 3 }] }, /twice/);
+    rejects({ methods: [{ ...pw, level: 11 }], chains: [] }, /1 to 10/);
+    rejects({ methods: [{ ...pw, level: 7 }], chains: [{ id: 'c', name: 'C', steps: ['pw'], level: 3 }] }, /below its strongest step/);
+    rejects({ methods: [{ ...pw, type: 'passkey' }], chains: [] }, /catalogue only|unknown type/);
+    rejects({ methods: [pw], chains: [], defaultChain: 'ghost' }, /unknown chain/);
+    rejects({ methods: [pw], chains: [], extra: 1 }, /unknown configuration field/);
+  });
+  it('a damaged stored value falls back to an empty configuration instead of breaking sign-in', () => {
+    assert.deepEqual(parseStored({ methods: 'garbage' } as any), { methods: [], chains: [], defaultChain: null });
+    assert.deepEqual(parseStored(undefined), { methods: [], chains: [], defaultChain: null });
   });
 });

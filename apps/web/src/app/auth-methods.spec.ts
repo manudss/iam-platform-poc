@@ -15,7 +15,7 @@ describe('authentication methods helpers', () => {
     expect(suggestChainLevel(cfg, [])).toBe(1);
   });
   it('builds unique readable ids', () => {
-    expect(slug('Bank digit code!', [])).toBe('bank-digit-code');
+    expect(slug('PIN keypad!', [])).toBe('pin-keypad');
     expect(slug('Password', ['password'])).toBe('password-2');
     expect(slug('###', [])).toBe('item');
   });
