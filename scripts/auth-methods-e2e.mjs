@@ -153,8 +153,9 @@ try {
   const order1 = await page.locator('.pad button.k b').allInnerTexts();
   await page.setViewportSize({ width: 390, height: 780 }); await shot('5e-chain2-keypad-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
   const pin = '246810'; let orders = [order1.join('')];
-  for (const d of pin) {
-    await Promise.all([page.waitForLoadState('load'), page.locator(`.pad button.k:has(b:text-is("${d}"))`).first().click()]);
+  for (const [n, d] of [...pin].entries()) {
+    await page.locator(`.pad button.k:has(b:text-is("${d}"))`).first().click();
+    await page.waitForFunction((k) => document.querySelectorAll('.dots i.on').length === k, n + 1);
     orders.push((await page.locator('.pad button.k b').allInnerTexts()).join(''));
   }
   assert.ok(new Set(orders).size > 3, 'the keypad order changes between pages: ' + orders.join(' '));
