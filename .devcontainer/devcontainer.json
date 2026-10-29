@@ -1,0 +1,12 @@
+// Branch-native demo in a GitHub Codespace (free monthly quota on personal accounts).
+// After creation: bash scripts/demo-start.sh, then open port 4200 (set its visibility to Public to share).
+{
+  "name": "iam-platform-poc demo",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/rust:1": {}
+  },
+  "forwardPorts": [4200, 3000, 8081, 3307],
+  "postCreateCommand": "bash scripts/demo-setup.sh"
+}
