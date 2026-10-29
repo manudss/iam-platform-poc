@@ -8,7 +8,8 @@ import { AuditController } from './access/audit.controller.js';
 import { AuditService } from './access/audit.service.js';
 import { AgentController } from './access/agent.controller.js';
 import { PluginsModule } from './plugins/plugins.module.js';
+import { VersioningModule } from './versioning/versioning.module.js';
 import { PluginsV1Module } from './plugins/v1/plugins-v1.module.js';
 
-@Module({ imports: [DoltModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController], providers: [AuditService] })
+@Module({ imports: [DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController], providers: [AuditService] })
 export class AppModule {}
