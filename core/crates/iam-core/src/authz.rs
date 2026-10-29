@@ -13,7 +13,7 @@ use std::{collections::HashMap, sync::Arc};
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;") }
 fn pct(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect() }
 
-const STYLE: &str = "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f1f5f9;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#0f172a}main{width:min(26rem,calc(100vw - 2rem));background:#fff;border:1px solid #e2e8f0;border-radius:.9rem;padding:1.4rem 1.5rem;box-shadow:0 8px 28px #4f46e51f}h1{font-size:1.35rem;margin:0 0 .4rem}p{margin:.4rem 0;color:#475569}label{display:block;margin:.8rem 0 0;font-weight:600}input{display:block;width:100%;margin-top:.25rem;padding:.65rem .75rem;font:inherit;border:1px solid #cbd5e1;border-radius:.55rem}input:focus{outline:2px solid #6366f1;border-color:#6366f1}button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:#fff;background:#4f46e5;border:0;border-radius:.55rem;cursor:pointer}.demo{background:#fffbeb;border:1px solid #fcd34d;border-radius:.55rem;padding:.5rem .7rem;color:#92400e}</style>";
+const STYLE: &str = "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f1f5f9;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#0f172a}main{width:min(26rem,calc(100vw - 2rem));background:#fff;border:1px solid #e2e8f0;border-radius:.9rem;padding:1.4rem 1.5rem;box-shadow:0 8px 28px #4f46e51f}h1{font-size:1.35rem;margin:0 0 .4rem}p{margin:.4rem 0;color:#475569}label{display:block;margin:.8rem 0 0;font-weight:600}input{display:block;width:100%;margin-top:.25rem;padding:.65rem .75rem;font:inherit;border:1px solid #cbd5e1;border-radius:.55rem}input:focus{outline:2px solid #6366f1;border-color:#6366f1}button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:#fff;background:#4f46e5;border:0;border-radius:.55rem;cursor:pointer}.dots{display:flex;gap:.5rem;justify-content:center;margin:1rem 0}.dots i{width:.85rem;height:.85rem;border-radius:50%;border:2px solid #6366f1}.dots i.on{background:#4f46e5}.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}.pad .k{margin:0;padding:.7rem 0;background:#eef2ff;color:#1e1b4b;display:flex;flex-direction:column;align-items:center;line-height:1.1;min-height:3.4rem}.pad .k b{font-size:1.4rem}.pad .k small{font-size:.65rem;letter-spacing:.18em;color:#64748b;min-height:.8rem}.pad .del{justify-content:center;font-size:1.3rem}.pad .go{grid-column:1/-1;background:#4f46e5;color:#fff;min-height:0;padding:.75rem}.pad .go:disabled{background:#cbd5e1;color:#64748b;cursor:default}.demo{background:#fffbeb;border:1px solid #fcd34d;border-radius:.55rem;padding:.5rem .7rem;color:#92400e}</style>";
 fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response {
     let mut r = (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     let h = r.headers_mut();
@@ -38,6 +38,7 @@ fn origin_of(p: &HashMap<String, String>) -> String {
 fn input_html(f: &Value) -> Option<String> {
     let name = f["name"].as_str().filter(|n| !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))?;
     let label = f["label"].as_str().unwrap_or(name);
+    if f["type"].as_str() == Some("keypad") { return keypad_html(f, label); }
     let max = f["maxLength"].as_u64().filter(|m| (1..=64).contains(m)).map(|m| format!(" maxlength=\"{m}\"")).unwrap_or_default();
     let hint = f["hint"].as_str().map(|h| format!(" placeholder=\"{}\"", esc(h))).unwrap_or_default();
     // A step named "password" keeps the classic field name so the classic form and scripts keep working; every other input is a_<name>.
@@ -45,6 +46,26 @@ fn input_html(f: &Value) -> Option<String> {
     let kind = match f["type"].as_str() { Some("password") => "type=\"password\" autocomplete=\"off\"", Some("digits") => "type=\"text\" inputmode=\"numeric\" autocomplete=\"one-time-code\"", _ => "type=\"text\" autocomplete=\"off\"" };
     let kind = if name == "password" { "type=\"password\" autocomplete=\"current-password\"" } else { kind };
     Some(format!("<label>{} <input name=\"{attr}\" {kind}{max}{hint}></label> ", esc(label)))
+}
+
+/// Shuffled keypad: every button is a submit carrying only an opaque id valid for this page (the digit is never a form value).
+/// Works without JavaScript (the page CSP forbids scripts): one POST per press, the server keeps the digits entered so far.
+fn keypad_html(f: &Value, label: &str) -> Option<String> {
+    let ok_id = |s: &str| !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    let keys: Vec<(String, String, String)> = f["keys"].as_array()?.iter().filter_map(|k| {
+        let (id, d, l) = (k["id"].as_str()?, k["digit"].as_str()?, k["letters"].as_str().unwrap_or(""));
+        (ok_id(id) && d.len() == 1 && d.as_bytes()[0].is_ascii_digit() && l.len() <= 4 && l.bytes().all(|b| b.is_ascii_uppercase())).then(|| (id.to_string(), d.to_string(), l.to_string()))
+    }).collect();
+    if keys.len() != 10 { return None; }
+    let len = f["length"].as_u64().filter(|n| (1..=12).contains(n)).unwrap_or(6) as usize;
+    let got = (f["entered"].as_u64().unwrap_or(0) as usize).min(len);
+    let dots: String = (0..len).map(|i| if i < got { "<i class=\"on\"></i>" } else { "<i></i>" }).collect();
+    let btn = |k: &(String, String, String)| format!("<button type=\"submit\" class=\"k\" name=\"a_key\" value=\"{}\"><b>{}</b><small>{}</small></button>", esc(&k.0), esc(&k.1), esc(&k.2));
+    let mut cells: String = keys[..9].iter().map(btn).collect();
+    cells.push_str("<button type=\"submit\" class=\"k del\" name=\"a_action\" value=\"delete\" aria-label=\"Delete last digit\">&#9003;</button>");
+    cells.push_str(&btn(&keys[9]));
+    cells.push_str(&format!("<button type=\"submit\" class=\"k go\" name=\"a_action\" value=\"submit\"{}>Sign in</button>", if got == len { "" } else { " disabled" }));
+    Some(format!("<div class=\"dots\" role=\"img\" aria-label=\"{got} of {len} digits entered\">{dots}</div><div class=\"pad\" aria-label=\"{}\">{cells}</div>", esc(label)))
 }
 
 /// First page. `fields` None = the classic user + password form (no chain is live). Some(fields) = user name plus the first step's inputs (possibly none).
@@ -69,9 +90,10 @@ fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>) -> Res
     let msg = st["message"].as_str().map(|m| format!("<p{}>{}</p>", if m.starts_with("DEMO") { " class=\"demo\"" } else { "" }, esc(m))).unwrap_or_default();
     let err = error.or(v["error"].as_str()).map(|e| format!("<p style=\"color:#b91c1c\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
     let inputs = st["fields"].as_array().map(|f| f.iter().filter_map(input_html).collect::<String>()).unwrap_or_default();
+    let cont = if inputs.contains("class=\"pad\"") { "" } else { "<button type=\"submit\">Continue</button>" };
     page(if error.is_some() || v["error"].is_string() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
         "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Sign in, step {i} of {n}</title><main><h1>{}</h1><p>Step {i} of {n}.</p>{msg}{err}\
-         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}<button type=\"submit\">Continue</button></form></main>",
+         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}{cont}</form></main>",
         esc(title), hidden(p), esc(v["session"].as_str().unwrap_or(""))), Some(&origin_of(p)))
 }
 

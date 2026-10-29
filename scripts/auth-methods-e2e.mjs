@@ -147,17 +147,24 @@ try {
   const code = mail.text.match(/\b(\d{6})\b/)[1];
   await page.setViewportSize({ width: 390, height: 780 }); await shot('5c-chain2-email-step-mobile'); await page.setViewportSize({ width: 1280, height: 900 });
   await page.fill('input[name=a_code]', code); await submit();
-  await page.waitForSelector('input[name^=a_d]'); assert.match(await page.textContent('body'), /Step 2 of 2/); await shot('5d-chain2-pin-digits');
-  const names = await page.locator('input[name^=a_d]').evaluateAll((els) => els.map((e) => e.name));
-  const pin = '246810';
-  for (const n of names) await page.fill(`input[name=${n}]`, pin[Number(n.slice(3))]);
-  console.log('digit positions asked:', names.join(','));
-  await Promise.all([page.waitForURL(/localhost:4200(?!\/core)/), page.click('button[type=submit]')]);
+  await page.waitForSelector('.pad'); assert.match(await page.textContent('body'), /Step 2 of 2/);
+  assert.equal(await page.locator('input[type=text],input[type=password]').count(), 0, 'no text input carries the PIN');
+  await shot('5d-chain2-keypad-desktop');
+  const order1 = await page.locator('.pad button.k b').allInnerTexts();
+  await page.setViewportSize({ width: 390, height: 780 }); await shot('5e-chain2-keypad-mobile'); await page.setViewportSize({ width: 1280, height: 900 });
+  const pin = '246810'; let orders = [order1.join('')];
+  for (const d of pin) {
+    await Promise.all([page.waitForLoadState('load'), page.locator(`.pad button.k:has(b:text-is("${d}"))`).first().click()]);
+    orders.push((await page.locator('.pad button.k b').allInnerTexts()).join(''));
+  }
+  assert.ok(new Set(orders).size > 3, 'the keypad order changes between pages: ' + orders.join(' '));
+  await shot('5f-chain2-keypad-full');
+  await Promise.all([page.waitForURL(/localhost:4200(?!\/core)/), page.locator('.pad .go').click()]);
   await page.waitForSelector('nav'); const k2 = claims();
   console.log('chain 2 claims', JSON.stringify({ amr: k2.amr, auth_level: k2.auth_level, auth_level_declared: k2.auth_level_declared, auth_mfa: k2.auth_mfa, auth_simulated: k2.auth_simulated }));
   assert.equal(k2.auth_mfa, false); assert.ok(!k2.amr.includes('email'), 'simulated e-mail is not claimed as verified'); assert.ok(k2.auth_simulated.length > 0);
   assert.deepEqual(errors, []);
-  console.log('PASS authn: methods and chains built in the console, staged until Apply, chain 1 (password+TOTP) MFA claims, chain 2 (simulated e-mail + PIN digits) not MFA');
+  console.log('PASS authn: methods and chains built in the console, staged until Apply, chain 1 (password+TOTP) MFA claims, chain 2 (simulated e-mail + shuffled PIN keypad) not MFA');
 } catch (e) {
   console.error('FAILED:', e.message); try { console.error((await browser?.contexts()[0]?.pages()[0]?.evaluate(() => [...document.querySelectorAll('.chain select')].map(e=>e.outerHTML).join('\n'))) ?? ''); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
   process.exitCode = 1;
