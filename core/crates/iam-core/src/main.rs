@@ -102,7 +102,7 @@ async fn authorize(State(c): State<Arc<Core>>, Json(r): Json<AuthorizeReq>) -> R
             gate::Gate::Unavailable => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "temporarily_unavailable"})))),
         }
     }
-    c.idp.authorize(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username, &r.password)
+    (if c.gate.is_some() { c.idp.authorize_verified(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username) } else { c.idp.authorize(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username, &r.password) })
         .map(|code| Json(json!({"code": code}))).map_err(idp_err)
 }
 async fn token(State(c): State<Arc<Core>>, Json(r): Json<TokenReq>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {

@@ -1,6 +1,10 @@
 import { TestBed } from '@angular/core/testing';
-import { App } from './app';
-import { ApiClient } from './api';
+import { Router, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
+import { pluginsMatcher, routes } from './app.routes';
+import { RETURN_KEY, safeReturn } from './auth';
+import { Session } from './session';
+import { ApiClient, CORE_PUBLIC, REDIRECT } from './api';
 import { challengeFor } from './pkce';
 
 describe('PKCE', () => {
@@ -43,8 +47,8 @@ describe('browser sign-in flow (client side)', () => {
     const s = store(); let url = '';
     await new ApiClient().startBrowserLogin(s, (u) => (url = u));
     const q = new URL(url).searchParams;
-    expect(url.startsWith('http://127.0.0.1:8081/authorize?')).toBe(true);
-    expect([q.get('response_type'), q.get('code_challenge_method'), q.get('redirect_uri')]).toEqual(['code', 'S256', 'http://localhost:4200/callback']);
+    expect(url.startsWith(`${CORE_PUBLIC}/authorize?`)).toBe(true);
+    expect([q.get('response_type'), q.get('code_challenge_method'), q.get('redirect_uri')]).toEqual(['code', 'S256', REDIRECT]);
     expect(await challengeFor(s.getItem('iam.pkce.verifier')!)).toBe(q.get('code_challenge'));
     expect(s.getItem('iam.pkce.state')).toBe(q.get('state'));
     expect(url).not.toContain('password');
@@ -66,15 +70,97 @@ describe('browser sign-in flow (client side)', () => {
   });
 });
 
-describe('App', () => {
-  beforeEach(async () => { await TestBed.configureTestingModule({ imports: [App] }).compileComponents(); });
+describe('safeReturn', () => {
+  it('only accepts local app paths and never loops back to sign-in', () => {
+    expect(safeReturn('/database/pulls')).toBe('/database/pulls');
+    expect(safeReturn('//evil.example/x')).toBe('/overview');
+    expect(safeReturn('https://evil.example')).toBe('/overview');
+    expect(safeReturn('/login')).toBe('/overview'); expect(safeReturn('/callback?code=1')).toBe('/overview');
+    expect(safeReturn(null)).toBe('/overview');
+  });
+});
 
-  it('renders title and the sign-in form first', async () => {
-    const fixture = TestBed.createComponent(App);
-    await fixture.whenStable();
-    const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('h1')?.textContent).toContain('IAM platform POC');
-    expect(el.querySelector('input[type=password]')).toBeTruthy();
+describe('plugins route matcher', () => {
+  it('matches /plugins and /plugins/:id on one route, nothing else', () => {
+    const seg = (...p: string[]) => p.map((path) => ({ path, parameters: {} }) as never);
+    expect(pluginsMatcher(seg('plugins'), null as never, null as never)?.posParams).toEqual({});
+    expect((pluginsMatcher(seg('plugins', 'risk-geo'), null as never, null as never)?.posParams as Record<string, { path: string }>)['id'].path).toBe('risk-geo');
+    expect(pluginsMatcher(seg('plugins', 'a', 'b'), null as never, null as never)).toBeNull();
+    expect(pluginsMatcher(seg('database'), null as never, null as never)).toBeNull();
+  });
+});
+
+describe('routing and sign-in guard', () => {
+  beforeEach(async () => { sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents(); });
+
+  it('sends a direct link to sign-in when there is no token, and remembers the page to come back to', async () => {
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/database/pulls');
+    expect(TestBed.inject(Router).url).toBe('/login');
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe('/database/pulls');
+    const el = h.routeNativeElement as HTMLElement;
+    expect(el.textContent).toContain('IAM platform POC');
+    expect(el.querySelector('#signin-browser')).toBeTruthy();
     expect(el.textContent).not.toContain('Merge into main');
+  });
+
+  it('once signed in, shows the administration layout with the whole navigation and the requested page', async () => {
+    const s = TestBed.inject(Session);
+    s.loggedIn.set(true); s.user.set('demo-alice');
+    s.api.raw = (async () => ({ status: 200, data: [] })) as never;
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/activation');
+    const el = h.routeNativeElement as HTMLElement;
+    const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
+    expect(nav).toEqual(['/overview', '/users', '/assignments', '/activation', '/plugins', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);
+    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
+    expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
+    expect(el.textContent).toContain('Choose your working branch');
+  });
+
+  it('unknown address falls back to the dashboard (through sign-in when needed)', async () => {
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/nope/nothing');
+    expect(TestBed.inject(Router).url).toBe('/login');
+  });
+});
+
+
+describe('session expiry handling', () => {
+  it('clears a 401 token, signals once, and never retries a mutation; a 403 does not sign out', async () => {
+    let status = 200, count = 0, expired = 0;
+    const f = (async (u: string) => {
+      if (u === '/core/authorize') return { ok: true, json: async () => ({ code: 'c' }) } as Response;
+      if (u === '/core/token') return { ok: true, json: async () => ({ id_token: 'tok' }) } as Response;
+      count++; return { ok: false, status, json: async () => ({ message: 'denied' }) } as Response;
+    }) as typeof fetch;
+    const api = new ApiClient('acme-demo', f, () => expired++);
+    await api.login('demo-alice', 'x'); status = 403;
+    await expect(api.raw('POST', '/plugins/org-manager/install')).rejects.toThrow('denied');
+    expect(api.loggedIn).toBe(true); expect(expired).toBe(0);
+    status = 401;
+    await expect(api.raw('POST', '/plugins/org-manager/install')).rejects.toThrow('Sign in again');
+    expect(count).toBe(2); expect(api.loggedIn).toBe(false); expect(expired).toBe(1);
+  });
+  it('blocks an already expired token before sending an installation', async () => {
+    let calls = 0, expired = 0;
+    const token = 'a.' + btoa(JSON.stringify({ exp: 1 })) + '.c';
+    const f = (async (u: string) => {
+      if (u === '/core/authorize') return { ok: true, json: async () => ({ code: 'c' }) } as Response;
+      if (u === '/core/token') return { ok: true, json: async () => ({ id_token: token }) } as Response;
+      calls++; return {} as Response;
+    }) as typeof fetch;
+    const api = new ApiClient('acme-demo', f, () => expired++); await api.login('a', 'b');
+    await expect(api.raw('POST', '/plugins/org-manager/install')).rejects.toThrow('not retried');
+    expect(calls).toBe(0); expect(expired).toBe(1);
+  });
+  it('returns to login, retains only the page, clears privileged state and ignores duplicate expiry', async () => {
+    sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents();
+    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('alice'); s.adminToken.set('local-test'); s.api.activations = async () => []; s.api.assignments = async () => [];
+    const h = await RouterTestingHarness.create(); await h.navigateByUrl('/activation');
+    s.expire(); await TestBed.inject(Router).navigateByUrl('/login');
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe('/activation'); expect(s.adminToken()).toBe('');
+    expect(s.loggedIn()).toBe(false); expect(s.expired()).toBe(true);
+    s.expire(); expect(sessionStorage.getItem(RETURN_KEY)).toBe('/activation');
   });
 });

@@ -45,3 +45,13 @@ A suite whose variable is unset is reported as skipped with a reason, never as p
 - `scripts/authz-browser-e2e.mjs` (real headless Chrome through playwright-core, loopback only): starts the real core and a tiny client on `http://localhost:4200`; the client keeps `state` and the PKCE verifier in sessionStorage, the login form is submitted in the browser, the client checks `state` at the callback and exchanges the code. 6 steps: happy path (form, 302, state ok, token exchange, password never in any visited URL, code replay refused), wrong password (form again, no redirect), forged callback with another `state` (code ignored, no exchange), wrong verifier (refused), unregistered redirect_uri (error page, no navigation to the attacker host), `plain` method (error page). Run: `CHROME_BIN=... NODE_PATH=<dir with playwright-core>/node_modules node scripts/authz-browser-e2e.mjs [outDir]` (core binary built first). 6/6 passed locally; screenshots inspected (login form, wrong password, state mismatch, bad redirect). A real Chrome found a real bug the Rust tests could not: the CSP `form-action 'self'` blocked the redirect to the client; the page CSP now allows the validated redirect origin. Added to CI, not run there yet.
 - `effects-wiring.e2e.spec.ts` (needs DOLT_BIN, PG_BIN, NATS_SERVER_BIN and the core binary): the opt-in `EffectsService` (IAM_EFFECTS=1) with real Dolt exports, PostgreSQL, core and NATS and loopback sink/target started by the test. 4/4 passed locally; full API suite 75/75 locally.
 - `scripts/ui-e2e.mjs` now drives the console through the BROWSER sign-in flow (forged callback with another state ignored, wrong password on the core form, then sign-in and back to the console, URL without code/state), then SoD simulate/merge/activate. Passed locally (headless Chrome, real Dolt, core, API, `ng serve`); screenshots inspected.
+
+### Administration data regression
+
+Build API and Rust core, install playwright-core in scripts, then run:
+
+```sh
+DOLT_BIN=/path/to/dolt CHROME_BIN=/path/to/chrome node scripts/admin-data-e2e.mjs /tmp/admin-shots
+```
+
+The harness runs an isolated real Dolt database, Rust gate, Nest API and Angular UI. It removes its processes, database and credential file after testing. Fictional account passwords are test fixtures only. Screenshots are saved for visual inspection, not a substitute for it.

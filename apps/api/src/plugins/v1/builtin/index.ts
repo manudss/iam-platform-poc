@@ -37,7 +37,7 @@ export const notifyLog: PluginImpl = {
 // ---------- Replacements: extend a base, same settings and hooks, may add more ----------
 
 /** Same checks as the base, plus a lockout after repeated failures. Keeps every base setting. */
-export function authPasswordLockout(failures: Map<string, number> = new Map()): PluginImpl {
+export function authPasswordLockout(failures: Map<string, number> = new Map(), base: PluginImpl = authPassword): PluginImpl {
   return {
     manifest: {
       apiVersion: 'plugin/v1', id: 'auth-password-lockout', version: '1.0.0', name: 'Password sign-in with lockout', publisher: 'iam-platform',
@@ -51,10 +51,10 @@ export function authPasswordLockout(failures: Map<string, number> = new Map()): 
       ],
     },
     handlers: {
-      'auth.authenticate': (p: AuthenticatePayload, c): AuthenticateResult => {
+      'auth.authenticate': async (p: AuthenticatePayload, c): Promise<AuthenticateResult> => {
         const n = failures.get(p.subject) ?? 0;
         if (n >= (c.settings.maxFailures as number)) return { outcome: 'deny', reason: 'locked' };
-        const ok = authPassword.handlers['auth.authenticate'](p, c) as AuthenticateResult;
+        const ok = await base.handlers['auth.authenticate'](p, c) as AuthenticateResult;
         if (ok.outcome === 'deny') failures.set(p.subject, n + 1); else failures.delete(p.subject);
         return ok;
       },

@@ -6,6 +6,14 @@ redistribution.
 
 Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md).
 
+## Hosted demo (free tier)
+
+A live fictional demo runs on a free Render web service: <https://iam-poc-demo.onrender.com>
+(sign in as `demo-alice` / `demo-only-not-a-secret`; fictional users and data only).
+Free-tier limits: the instance sleeps after 15 min idle (cold start ~1 min), and
+every wake re-seeds the data. Full details, limits, deploy-your-own on any branch,
+and the GitHub Codespaces branch demo: [docs/demo.md](docs/demo.md).
+
 ## What exists and was tested
 | Part | State |
 |---|---|
@@ -13,7 +21,7 @@ Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [
 | `apps/api` NestJS: health, activation journal (PostgreSQL when `IAM_PG_URL` is set, in-memory fallback otherwise) (A,B,A = 3 activations), async plugin host with idempotent effects, `/access/check` proxy to the Rust core (fails closed) | 4 unit tests (guard overridden, logic only) + 11 end-to-end tests + 4 end-to-end tests against a real Dolt SQL server + 1 wrong-audience test + 2 real PostgreSQL tests (75/75 passed with all binaries present, 0 skipped (local run after the authority fix and the wiring spec, includes `agent.e2e.spec.ts` and `effects-wiring.e2e.spec.ts`; CI run #7 had 75/75, run #5 had 53/53 before the audit specs); the first 48 are detailed below, plus fullstack, gRPC, audit and effects end-to-end tests, incl. 9 activation-protocol tests on real Dolt + the real Rust core and 6 outbox/consumer/loop tests on real PostgreSQL + NATS + core (Dolt stubbed there) (incl. 2 on a real Temporal dev server); wrong audience covered; 4 tests on a real NATS JetStream server, 1 on a real OpenBao dev server), incl. negative auth: no token, garbage, alg=none, tampered payload, expired, other issuer, wrong tenant (403); audience mismatch is covered by a test (`cd core && cargo build -p iam-core`, then `cd apps/api && npm i && npm test`) |
 | `data/demo/01-schema.sql` + `scripts/dolt-smoke.sh`: real Dolt 2.6.1 CLI (no Docker): seed, branch, simulated SoD violation, main untouched before merge, merge | script passes (`DOLT_BIN=/path/to/dolt scripts/dolt-smoke.sh`). Found and fixed a real bug: `sensitive` is a reserved word in Dolt |
 | `core/crates/iam-idp` OAuth/OIDC-inspired authentication PROTOTYPE, not a standard OIDC flow (authorization code + PKCE S256, EdDSA tokens with tenant claim, JWKS, discovery document, fictional users) served by iam-core at `/authorize` (JSON), `/token` (JSON), `/jwks.json` | unit tests pass; the NestJS API verifies these tokens (signature via JWKS, issuer, audience, expiry, tenant) on every business endpoint through `AuthGuard`, no bypass switch. POC-only (local fictional demo mode, never a production configuration): in-memory key regenerated at each start, plain demo passwords, no sessions/MFA/passkeys/SAML/refresh/rotation, JSON instead of the form/redirect flow |
-| `apps/web` Angular console: PKCE sign-in, assignments, simulate, merge, activate (see bullet below) | builds, 4 tests pass (fake fetch) + real-browser script `scripts/ui-e2e.mjs` (passed locally) (`cd apps/web && npm i && npx ng test --watch=false`) |
+| `apps/web` Angular administration (multi-page, sidebar): PKCE sign-in, assignments, simulate, merge, activate, plugins, Dolt explorer (see docs/explorer.md) | builds, 4 tests pass (fake fetch) + real-browser script `scripts/ui-e2e.mjs` (passed locally) (`cd apps/web && npm i && npx ng test --watch=false`) |
 
 ## Demo credentials
 The demo users and their shared password are fictional and exist only for local runs (`policies/`, IdP crate). They must never be reused or presented as a real configuration.
@@ -69,3 +77,5 @@ Full step-by-step guide (Windows PowerShell and bash, prerequisites, configurati
 6. API: `cd apps/api && IAM_CORE_URL=http://127.0.0.1:8081 IAM_ISSUER=http://127.0.0.1:8081 IAM_CORE_ADMIN_TOKEN=local-demo-admin-token DOLT_PASSWORD=<DOLT_ROOT_PASSWORD> IAM_PG_URL=postgres://postgres:<RUNTIME_PG_PASSWORD>@127.0.0.1:5433/runtime node dist/main.js` (port 3000;
    verified against the compose containers: `/health` ok, business routes 401 without a token).
 7. Console: `cd apps/web && npx ng serve`, open http://localhost:4200 (build verified on Windows).
+
+See [docs/explorer.md](docs/explorer.md) for the Dolt database explorer (branches, diff, history, SQL, pull requests).

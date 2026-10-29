@@ -1,0 +1,13 @@
+:host { display: block; }
+.login { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; background: radial-gradient(1200px 600px at 10% -10%, #2a3b8f 0, transparent 60%), linear-gradient(160deg, #0f172a, #1e293b); }
+.hero { width: min(30rem, 100%); padding: 2rem; }
+.brand { display: flex; gap: .9rem; align-items: center; margin-bottom: 1rem; }
+.brand h1 { margin: 0; font-size: 1.35rem; }
+.brand p { margin: 0; color: var(--muted); font-size: .9rem; }
+.logo { display: grid; place-items: center; width: 2.8rem; height: 2.8rem; border-radius: .8rem; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; font-weight: 800; letter-spacing: .05em; font-size: .8rem; }
+.lead { color: var(--muted); line-height: 1.5; }
+.primary { width: 100%; padding: .7rem 1rem; font-size: 1rem; }
+details { margin-top: 1.2rem; border-top: 1px solid var(--line); padding-top: .8rem; }
+summary { cursor: pointer; color: var(--muted); font-size: .88rem; }
+form { display: grid; gap: .5rem; margin-top: .6rem; }
+.foot { margin: 1.2rem 0 0; font-size: .78rem; color: var(--muted); }

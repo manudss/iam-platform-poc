@@ -1,0 +1,218 @@
+<section class="explorer">
+  <p class="hint">Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (Users, Plugins and Assignments use separate validated administration routes to Dolt <code>main</code>.)</p>
+  @if (note()) { <p class="msg" role="status">{{ note() }}</p> }
+  @if (busy()) { <p class="hint">Working...</p> }
+
+  <ng-template #rowdiff>
+    @if (rowDiff(); as d) {
+      <h4>Row changes in {{ d.table }}@if (d.truncated) { (first rows only) }</h4>
+      <div class="scroll"><table class="grid">
+        <thead><tr><th></th>@for (c of d.columns; track c) { <th>{{ c }}</th> }</tr></thead>
+        <tbody>
+        @for (r of d.rows; track $index) {
+          <tr [class]="diffClass(r.type)">
+            <td class="kind">{{ r.type }}</td>
+            @for (c of d.columns; track c) {
+              <td [class.chg]="changed(r, c)">
+                @if (r.type === 'modified' && changed(r, c)) { <s>{{ cell(r.from?.[c]) }}</s> {{ cell(r.to?.[c]) }} }
+                @else { {{ cell((r.to ?? r.from)?.[c]) }} }
+              </td>
+            }
+          </tr>
+        }
+        </tbody>
+      </table></div>
+    }
+  </ng-template>
+
+  @switch (tab()) {
+    @case ('branches') {
+      <h3>Branches</h3>
+      <div class="scroll"><table class="grid">
+        <thead><tr><th>Branch</th><th>Head</th><th>Last change</th><th>Vs {{ defaultBranch() }}</th><th></th></tr></thead>
+        <tbody>
+        @for (b of branches(); track b.name) {
+          <tr>
+            <td><b>{{ b.name }}</b>@if (b.default) { <span class="chip">default</span> }@if (b.protected) { <span class="chip lock">protected</span> }</td>
+            <td><code>{{ short(b.commit) }}</code></td>
+            <td>{{ b.message }} <span class="hint">({{ b.committer }})</span></td>
+            <td>@if (!b.default) { {{ b.aheadOfDefault }} ahead, {{ b.behindDefault }} behind }</td>
+            <td class="act">
+              <button type="button" (click)="showHistory(b.name)">History</button>
+              @if (!b.default) { <button type="button" (click)="compareWithDefault(b.name)">Compare</button> }
+              @if (!b.protected) { <button type="button" class="danger" (click)="deleteBranch(b)">Delete</button> }
+            </td>
+          </tr>
+        }
+        </tbody>
+      </table></div>
+      <form class="row" (ngSubmit)="createBranch()">
+        <label>New branch <input name="nb" [(ngModel)]="newBranch" placeholder="my-change" autocomplete="off" /></label>
+        <label>From <select name="nf" [(ngModel)]="newBranchFrom">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+        <button type="submit">Create branch</button>
+      </form>
+      @if (tags().length) { <p class="hint">Tags: @for (t of tags(); track t.name) { <span class="chip">{{ t.name }} <code>{{ short(t.commit) }}</code></span> }</p> }
+    }
+
+    @case ('history') {
+      <h3>History</h3>
+      <label>Branch or tag <select name="hr" [(ngModel)]="histRef" (ngModelChange)="loadLog(true)">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+      <ol class="log">
+        @for (c of commits(); track c.commit) {
+          <li [class.merge]="c.merge">
+            <button type="button" class="link" (click)="showCommit(c)"><code>{{ short(c.commit) }}</code> {{ c.message }}</button>
+            @for (r of c.refs; track r) { <span class="chip">{{ r }}</span> }
+            <span class="hint">{{ c.author }}, {{ c.date }}@if (c.merge) { , merge of {{ short(c.parents[0]) }} + {{ short(c.parents[1]) }} } @else if (c.parents.length) { , parent {{ short(c.parents[0]) }} }</span>
+          </li>
+        }
+      </ol>
+      @if (hasMore()) { <button type="button" (click)="loadLog(false)">Older commits</button> }
+      @if (selected(); as s) {
+        <div class="panel">
+          <h4>Commit <code>{{ s.commit }}</code></h4>
+          <p>{{ s.message }} <span class="hint">by {{ s.author }}, {{ s.date }}</span></p>
+          <ul>@for (t of s.changes; track t.table) {
+            <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema) }
+              @if (s.parents.length && t.dataChange) { <button type="button" class="link" (click)="go('compare'); from = s.parents[0]; to = s.commit; three = false; compare().then(() => showRowDiff(t.table))">rows</button> }</li>
+          }</ul>
+          <div class="row">
+            <label>Name for a new branch / tag <input name="an" [(ngModel)]="actionName" autocomplete="off" /></label>
+            <button type="button" [disabled]="!actionName" (click)="branchFrom(s.commit)">Branch from here</button>
+            <button type="button" [disabled]="!actionName" (click)="tagCommit(s.commit)">Tag this commit</button>
+            <button type="button" [disabled]="!actionName || !s.parents.length" (click)="revertOnBranch(s.commit)">Undo this commit on a new branch</button>
+            @if (canRestore()) { <button type="button" class="danger" (click)="restoreBranch(s.commit)">Restore {{ histRef }} to here</button> }
+          </div>
+          <p class="hint">Undo adds a new commit on a new branch, then you open a pull request: history is never rewritten. Restore moves the branch back (not allowed on protected branches).</p>
+        </div>
+      }
+    }
+
+    @case ('compare') {
+      <h3>Compare two points</h3>
+      <form class="row" (ngSubmit)="compare()">
+        <label>From <select name="cf" [(ngModel)]="from">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+        <label>To <select name="ct" [(ngModel)]="to">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+        <label class="inline"><input name="c3" type="checkbox" [(ngModel)]="three" /> since common ancestor (like a pull request)</label>
+        <button type="submit">Compare</button>
+      </form>
+      @if (diff(); as d) {
+        @if (!d.tables.length) { <p>No differences.</p> }
+        <ul>@for (t of d.tables; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema changed) } @if (t.dataChange) { <button type="button" class="link" (click)="showRowDiff(t.table)">show rows</button> }</li> }</ul>
+        @for (s of d.schema; track s.table) { <details><summary>Schema of {{ s.table }}</summary><pre>{{ s.from ?? '(none)' }}
+-&gt;
+{{ s.to ?? '(dropped)' }}</pre></details> }
+      }
+      <ng-container *ngTemplateOutlet="rowdiff" />
+    }
+
+    @case ('data') {
+      <h3>Tables and rows</h3>
+      <label>Branch, tag or commit <select name="dr" [(ngModel)]="dataRef" (ngModelChange)="loadTables()">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+      <p class="hint">Branches can be edited unless protected. Tags are read only snapshots.</p>
+      <label>Find a table<input name="tableSearch" [(ngModel)]="tableSearch" /></label>
+      <ul class="tables">@for (t of visibleTables(); track t.name) { <li><button type="button" class="link" (click)="openTable(t.name)">{{ t.name }}</button> ({{ t.rows }} rows)</li> }</ul>
+      @if (data(); as d) {
+        <h4>{{ d.table }} at {{ d.ref }}@if (!editable()) { <span class="chip lock">read only</span> }</h4>
+        <div class="row"><label>Find fields<input name="fieldSearch" [(ngModel)]="fieldSearch" /></label><button class="secondary" (click)="openTable(d.table,d.offset)">Refresh table</button></div>
+        <p class="hint">{{d.columns.length}} fields. Scroll horizontally for wide tables or open a row to inspect every field without truncation. Runtime plugin tables are read only: use Plugins to change them.</p>
+        <div class="scroll data-grid"><table class="grid">
+          <thead><tr><th>Row</th>@for (c of visibleColumns(); track c.name) { <th [title]="c.type">{{ c.name }}@if (c.key === 'PRI') { * }</th> }@if (editable()) { <th></th> }</tr></thead>
+          <tbody>@for (r of d.rows; track $index) {
+            <tr><td class="row-pin"><button type="button" class="link" (click)="rowView.set(r)">View row</button></td>@for (c of visibleColumns(); track c.name) { <td><div class="cell-value" [title]="cell(r[c.name])">{{ cell(r[c.name]) }}</div></td> }
+              @if (editable()) { <td class="act"><button type="button" (click)="startEdit(r)">Edit</button> <button type="button" class="danger" (click)="deleteRow(r)">Delete</button></td> }</tr>
+          }</tbody>
+        </table></div>
+        <p class="hint">{{ d.offset + 1 }} to {{ d.offset + d.rows.length }} of {{ d.total }}. * primary key.
+          @if (d.offset > 0) { <button type="button" class="link" (click)="openTable(d.table, d.offset - d.rows.length)">previous</button> }
+          @if (d.hasMore) { <button type="button" class="link" (click)="openTable(d.table, d.offset + d.rows.length)">next</button> }
+        </p>
+        @if (editable()) {
+          <button type="button" (click)="startInsert()">Add a row</button>
+          @if (editorOpen) {
+            <div class="panel">
+              <h4>{{editKey ? 'Edit row' : 'Add a row'}} on {{d.ref}}</h4>
+              <div class="field-editor">@for(c of d.columns;track c.name){@if(c.name!=='credential_revision'){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
+              <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
+              <button type="button" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
+            </div>
+          }
+        }
+        @if(rowView();as row){<section class="panel row-detail"><h4>All fields · {{d.table}}</h4><dl>@for(c of d.columns;track c.name){<div><dt>{{c.name}} <small>{{c.type}}</small></dt><dd><pre>{{cell(row[c.name])}}</pre></dd></div>}</dl><button type="button" class="secondary" (click)="rowView.set(null)">Close row</button>@if(editable()){<button (click)="startEdit(row)">Edit this row</button>}</section>}
+        <details><summary>Table definition</summary><pre>{{ d.createStatement }}</pre></details>
+      }
+    }
+
+    @case ('sql') {
+      <h3>SQL console</h3>
+      <div class="row">
+        <label>Branch, tag or commit <select name="sr" [(ngModel)]="sqlRef">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+        <label>Mode <select name="sm" [(ngModel)]="sqlMode"><option value="read">Read (SELECT, SHOW, EXPLAIN; changes nothing)</option><option value="write">Write (preview, then commit on the branch)</option></select></label>
+      </div>
+      <textarea name="sq" rows="6" [(ngModel)]="sqlText" spellcheck="false" aria-label="SQL"></textarea>
+      @if (sqlMode === 'read') {
+        <button type="button" (click)="runSql()">Run</button>
+        <p class="hint">One statement. Dolt system tables and diff functions can be read (<code>dolt_log</code>, <code>dolt_diff(...)</code>); commit, merge, reset and branch actions are refused here and live in the screens above.</p>
+      } @else {
+        <label>Commit message <input name="sg" [(ngModel)]="sqlMessage" autocomplete="off" /></label>
+        <label class="inline"><input name="sd" type="checkbox" [(ngModel)]="confirmDestructive" /> I confirm destructive statements (DROP, TRUNCATE, UPDATE or DELETE without WHERE)</label>
+        <button type="button" (click)="runSql(true)">Preview changes</button>
+        <button type="button" class="danger" (click)="runSql(false)">Apply and commit</button>
+        <p class="hint">Not allowed on protected branches. A failing statement undoes the whole run.</p>
+      }
+      @if (sqlResult(); as r) {
+        @if (r.mode === 'read') {
+          <p class="hint">{{ r.rowCount }} row(s) in {{ r.ms }} ms@if (r.truncated) { , first 500 shown }</p>
+          <div class="scroll"><table class="grid"><thead><tr>@for (c of sqlColumns(); track c) { <th>{{ c }}</th> }</tr></thead>
+            <tbody>@for (row of r.rows; track $index) { <tr>@for (c of sqlColumns(); track c) { <td>{{ cell(row[c]) }}</td> }</tr> }</tbody></table></div>
+        } @else {
+          <div class="panel">
+            <p>@if (r.committed) { Committed <code>{{ short(r.committed) }}</code>. } @else if (r.dryRun) { Preview only, nothing was kept. } @else { {{ r.note }} }
+              {{ r.statements }} statement(s), {{ r.affectedRows }} row(s) affected.@if (r.destructive) { <b> Destructive.</b> }</p>
+            <ul>@for (t of r.changes; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema) }</li> }</ul>
+          </div>
+        }
+      }
+    }
+
+    @case ('pulls') {
+      <h3>Pull requests</h3>
+      <label>Show <select name="pf" [(ngModel)]="prFilter" (ngModelChange)="loadPulls()"><option value="open">open</option><option value="merged">merged</option><option value="closed">closed</option><option value="all">all</option></select></label>
+      <ul>@for (p of prs(); track p.id) { <li><button type="button" class="link" (click)="showPull(p.id)">#{{ p.id }} {{ p.title }}</button> <span class="chip">{{ p.status }}</span> <span class="hint">{{ p.source }} into {{ p.target }}, by {{ p.author }}</span></li> }</ul>
+      <form class="panel" (ngSubmit)="openPull()">
+        <h4>New pull request</h4>
+        <div class="row">
+          <label>Source <select name="ps" [(ngModel)]="prForm.source">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
+          <label>Into <select name="pt" [(ngModel)]="prForm.target">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
+        </div>
+        <label>Title <input name="pti" [(ngModel)]="prForm.title" autocomplete="off" /></label>
+        <label>Description <textarea name="pb" rows="3" [(ngModel)]="prForm.body"></textarea></label>
+        <button type="submit">Open pull request</button>
+      </form>
+      @if (pr(); as d) {
+        <div class="panel">
+          <h4>#{{ d.pullRequest.id }} {{ d.pullRequest.title }} <span class="chip">{{ d.pullRequest.status }}</span></h4>
+          <p class="hint">{{ d.pullRequest.source }} into {{ d.pullRequest.target }}, opened by {{ d.pullRequest.author }} on {{ d.pullRequest.createdAt }}@if (d.pullRequest.mergeCommit) { , merged as {{ short(d.pullRequest.mergeCommit) }} }</p>
+          @if (d.pullRequest.body) { <p>{{ d.pullRequest.body }}</p> }
+          @if (d.checks; as k) {
+            <p [class]="k.mergeable ? 'ok' : 'ko'"><b>{{ k.mergeable ? 'Can be merged' : 'Cannot be merged' }}</b>@for (r of k.reasons; track r) { <br />{{ r }} }</p>
+            @for (v of k.violations; track v.roleA + v.roleB + v.identity) { <p class="ko">SoD: {{ v.identity }} would have {{ v.roleA }} and {{ v.roleB }}</p> }
+          }
+          @if (d.requiredApprovals) { <p class="hint">Approvals from others: {{ d.approvals.length }} of {{ d.requiredApprovals }} required.</p> }
+          @if (d.commits.length) { <h5>Commits</h5><ul>@for (c of d.commits; track c.commit) { <li><code>{{ short(c.commit) }}</code> {{ c.message }} <span class="hint">{{ c.author }}</span></li> }</ul> }
+          @if (d.diff; as df) { <h5>Changes</h5><ul>@for (t of df.tables; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b> @if (t.dataChange) { <button type="button" class="link" (click)="prDiff(t.table)">show rows</button> }</li> }</ul> }
+          <ng-container *ngTemplateOutlet="rowdiff" />
+          <h5>Discussion</h5>
+          <ul>@for (c of d.comments; track c.id) { <li><b>{{ c.author }}</b>@if (c.kind === 'approve') { approved }: {{ c.body }}</li> }</ul>
+          @if (d.pullRequest.status === 'open') {
+            @if (d.viewer && d.viewer === d.pullRequest.author) { <p class="hint">You opened this pull request, so someone else has to approve it.</p> }
+            <label>Comment <input name="pc" [(ngModel)]="prComment" autocomplete="off" /></label>
+            <button type="button" [disabled]="!prComment" (click)="sendComment('comment')">Comment</button>
+            <button type="button" [disabled]="d.viewer === d.pullRequest.author" [title]="d.viewer === d.pullRequest.author ? 'The author cannot approve their own pull request' : ''" (click)="sendComment('approve')">Approve</button>
+            <button type="button" class="danger" [disabled]="!d.checks?.mergeable" (click)="mergePull()">Merge</button>
+            <button type="button" (click)="closePull()">Close</button>
+          }
+        </div>
+      }
+    }
+  }
+</section>

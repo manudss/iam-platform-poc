@@ -3,7 +3,7 @@ import { createConnection, Connection } from 'mysql2/promise';
 import { randomBytes } from 'node:crypto';
 
 export interface Violation { identity: string; roleA: string; roleB: string }
-const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
+export const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
   from assignments a join assignments b on a.identity_id = b.identity_id
   join sod_rules r on r.role_a = a.role_id and r.role_b = b.role_id`;
 const NAME = /^[a-z0-9-]{1,32}$/;

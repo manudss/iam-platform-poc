@@ -61,7 +61,7 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
             crate::gate::Gate::Unavailable => return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable"),
         }
     }
-    match c.idp.authorize(g("client_id"), g("redirect_uri"), g("code_challenge"), g("username"), g("password")) {
+    match if c.gate.is_some() { c.idp.authorize_verified(g("client_id"), g("redirect_uri"), g("code_challenge"), g("username")) } else { c.idp.authorize(g("client_id"), g("redirect_uri"), g("code_challenge"), g("username"), g("password")) } {
         Ok(code) => {
             let sep = if g("redirect_uri").contains('?') { '&' } else { '?' };
             let loc = format!("{}{sep}code={}&state={}", g("redirect_uri"), pct(&code), pct(g("state")));
