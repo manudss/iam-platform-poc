@@ -21,4 +21,4 @@ label.inline { display: inline-flex; gap: .4rem; align-items: center; }
 /* readable step lines and full chain / method names */
 .steps li > b { margin-right: .5rem; }
 .steps li > small { margin-right: .75rem; }
-input.name { min-width: 24rem; width: 100%; }
+input.name { min-width: min(24rem, 100%); width: 100%; max-width: 100%; box-sizing: border-box; }
