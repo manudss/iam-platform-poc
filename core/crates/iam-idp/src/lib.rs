@@ -12,7 +12,7 @@ use std::{collections::HashMap, sync::Mutex, time::{SystemTime, UNIX_EPOCH}};
 #[derive(Debug, PartialEq, Eq)]
 pub enum IdpError { InvalidClient, InvalidCredentials, InvalidGrant, InvalidRequest(&'static str) }
 
-struct Code { user: String, challenge: String, redirect_uri: String, client_id: String, exp: u64 }
+struct Code { user: String, challenge: String, redirect_uri: String, client_id: String, exp: u64, extra: serde_json::Map<String, Value> }
 
 pub struct Idp {
     key: SigningKey,
@@ -22,6 +22,26 @@ pub struct Idp {
     users: HashMap<String, String>, // username -> demo password (FICTIONAL, plain text on purpose: demo only)
     codes: Mutex<HashMap<String, Code>>,
     ttl: u64,
+}
+
+/// Authentication facts a sign-in may add to the id_token. Strict whitelist and shapes: the control plane's answer is not trusted to set anything else.
+/// `auth_level` is a level CONFIGURED by an administrator (1..10, 10 = strongest), not a measured assurance; `auth_mfa` is true only when two different
+/// factor categories were verified for real; `auth_simulated` lists steps that were simulated and therefore not counted.
+pub fn safe_auth_claims(extra: &Value) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    let Some(o) = extra.as_object() else { return out };
+    let strs = |v: &Value| v.as_array().filter(|a| a.len() <= 8).filter(|a| a.iter().all(|x| x.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')))).is_some();
+    for (k, v) in o {
+        let ok = match k.as_str() {
+            "amr" | "auth_methods" | "auth_simulated" => strs(v),
+            "auth_level" | "auth_level_declared" => v.as_u64().is_some_and(|n| (1..=10).contains(&n)),
+            "auth_mfa" => v.is_boolean(),
+            "auth_level_basis" | "auth_chain" => v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')),
+            _ => false,
+        };
+        if ok { out.insert(k.clone(), v.clone()); }
+    }
+    out
 }
 
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() }
@@ -80,12 +100,18 @@ impl Idp {
 
     /// Called ONLY after the configured loopback gate verified this user's credentials. No password bypass in HTTP routes.
     pub fn authorize_verified(&self, client_id: &str, redirect_uri: &str, code_challenge: &str, username: &str) -> Result<String, IdpError> {
+        self.authorize_verified_with(client_id, redirect_uri, code_challenge, username, &Value::Null)
+    }
+
+    /// Like `authorize_verified`, plus the sign-in facts the control plane reported (methods used, configured level...). Only the keys and shapes listed in
+    /// `safe_auth_claims` are ever copied into the id_token: an extra can never set iss, sub, aud, exp or any other claim.
+    pub fn authorize_verified_with(&self, client_id: &str, redirect_uri: &str, code_challenge: &str, username: &str, extra: &Value) -> Result<String, IdpError> {
         if !self.check_client(client_id, redirect_uri) { return Err(IdpError::InvalidClient); }
         if code_challenge.len() < 43 { return Err(IdpError::InvalidRequest("code_challenge")); }
         let code = rand_token();
         self.codes.lock().unwrap().insert(code.clone(), Code {
             user: username.into(), challenge: code_challenge.into(), redirect_uri: redirect_uri.into(),
-            client_id: client_id.into(), exp: now() + 60 });
+            client_id: client_id.into(), exp: now() + 60, extra: safe_auth_claims(extra) });
         Ok(code)
     }
 
@@ -95,7 +121,8 @@ impl Idp {
         let ok_pkce = B64.encode(Sha256::digest(verifier.as_bytes())) == c.challenge;
         if !ok_pkce || c.exp < now() || c.redirect_uri != redirect_uri || c.client_id != client_id { return Err(IdpError::InvalidGrant); }
         let t = now();
-        let claims = json!({"iss": self.issuer, "sub": c.user, "aud": c.client_id, "iat": t, "exp": t + self.ttl, "tenant": "acme-demo"});
+        let mut claims = json!({"iss": self.issuer, "sub": c.user, "aud": c.client_id, "iat": t, "exp": t + self.ttl, "tenant": "acme-demo"});
+        for (k, v) in c.extra { claims[k] = v; } // only keys that safe_auth_claims kept, none of which is a registered claim
         Ok(json!({"id_token": self.sign(&claims), "token_type": "Bearer", "expires_in": self.ttl}))
     }
 
@@ -174,6 +201,21 @@ mod tests {
         assert_eq!(i.authorize("demo-web", REDIR, &ch, "demo-alice", "nope").unwrap_err(), IdpError::InvalidCredentials);
         assert_eq!(i.authorize("evil", REDIR, &ch, "demo-alice", "demo-only-not-a-secret").unwrap_err(), IdpError::InvalidClient);
         assert_eq!(i.authorize("demo-web", "http://evil/cb", &ch, "demo-alice", "demo-only-not-a-secret").unwrap_err(), IdpError::InvalidClient);
+    }
+    #[test]
+    fn auth_facts_are_whitelisted_and_cannot_override_registered_claims() {
+        let i = Idp::demo("http://idp.test");
+        let (v, ch) = pkce();
+        let extra = json!({"amr":["pwd","otp"],"auth_level":7,"auth_mfa":true,"auth_chain":"mfa","sub":"evil","iss":"evil","exp":1,"tenant":"other","auth_level_declared":11,"auth_simulated":["<b>"],"role":"admin"});
+        let code = i.authorize_verified_with("demo-web", REDIR, &ch, "demo-alice", &extra).unwrap();
+        let claims = verify(i.token(&code, &v, REDIR, "demo-web").unwrap()["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap();
+        assert_eq!(claims["sub"], "demo-alice"); assert_eq!(claims["tenant"], "acme-demo"); assert_eq!(claims["iss"], "http://idp.test");
+        assert_eq!(claims["auth_level"], 7); assert_eq!(claims["auth_mfa"], true); assert_eq!(claims["amr"], json!(["pwd", "otp"])); assert_eq!(claims["auth_chain"], "mfa");
+        assert!(claims.get("role").is_none() && claims.get("auth_level_declared").is_none() && claims.get("auth_simulated").is_none()); // out of range / unsafe shapes dropped
+        // no extras: the token is unchanged from before
+        let code = i.authorize_verified("demo-web", REDIR, &ch, "demo-alice").unwrap();
+        let claims = verify(i.token(&code, &v, REDIR, "demo-web").unwrap()["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap();
+        assert!(claims.get("amr").is_none() && claims.get("auth_level").is_none());
     }
     #[test]
     fn tampered_token_and_other_issuer_rejected() {

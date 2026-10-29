@@ -17,15 +17,45 @@ pub fn parse_addr(a: &str) -> Option<String> {
 }
 
 pub async fn check(addr: &str, token: &str, tenant: &str, user: &str, password: &str) -> Gate {
-    match tokio::time::timeout(Duration::from_secs(3), call(addr, token, tenant, user, password)).await {
-        Ok(Some(g)) => g,
-        _ => Gate::Unavailable,
+    // JSON /authorize path: a single password, no pages. A chain that needs more steps can only be completed in the browser flow, so it is a denial here.
+    match step(addr, token, json!({"tenant": tenant, "subject": user, "password": password})).await {
+        Step::Allow { .. } => Gate::Allow,
+        Step::Unavailable => Gate::Unavailable,
+        _ => Gate::Deny,
     }
 }
 
-async fn call(addr: &str, token: &str, tenant: &str, user: &str, password: &str) -> Option<Gate> {
-    let body = json!({"tenant": tenant, "subject": user, "password": password}).to_string();
-    let req = format!("POST /internal/auth/authenticate HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nx-gate-token: {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+/// One answer of the control plane to a sign-in request (see apps/api authn/flow.service.ts).
+#[derive(Debug, PartialEq)]
+pub enum Step {
+    /// `subject` is the identity the control plane verified (None for the legacy single-password answer); `claims` are untrusted extras, filtered by the IdP.
+    Allow { subject: Option<String>, claims: Value },
+    Deny(Option<String>),
+    /// A further step is needed: the JSON of the step (title, message, fields) and the opaque session id.
+    Challenge(Value),
+    Unavailable,
+}
+
+/// Asks the gate (loopback) for the next step. FAIL CLOSED: anything but a clear 200 answer is `Unavailable`.
+pub async fn step(addr: &str, token: &str, body: Value) -> Step {
+    match tokio::time::timeout(Duration::from_secs(3), post(addr, token, "/internal/auth/authenticate", &body)).await {
+        Ok(Some(v)) => match v["outcome"].as_str() {
+            Some("allow") => Step::Allow { subject: v["subject"].as_str().map(String::from), claims: v["claims"].clone() },
+            Some("challenge") if v["session"].is_string() && v["step"]["fields"].is_array() => Step::Challenge(v),
+            _ => Step::Deny(v["message"].as_str().map(String::from)),
+        },
+        _ => Step::Unavailable,
+    }
+}
+
+/// First-page description: {"mode":"legacy"} or {"mode":"chain","fields":[...]}. None = gate unavailable.
+pub async fn entry(addr: &str, token: &str, tenant: &str) -> Option<Value> {
+    tokio::time::timeout(Duration::from_secs(3), post(addr, token, "/internal/auth/entry", &json!({"tenant": tenant}))).await.ok().flatten()
+}
+
+async fn post(addr: &str, token: &str, path: &str, body: &Value) -> Option<Value> {
+    let body = body.to_string();
+    let req = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nx-gate-token: {token}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let mut s = TcpStream::connect(addr).await.ok()?;
     s.write_all(req.as_bytes()).await.ok()?;
     let mut buf = Vec::new();
@@ -33,8 +63,7 @@ async fn call(addr: &str, token: &str, tenant: &str, user: &str, password: &str)
     let text = String::from_utf8_lossy(&buf);
     let status: u16 = text.lines().next()?.split_whitespace().nth(1)?.parse().ok()?;
     if status != 200 { return None; }
-    let v: Value = serde_json::from_str(text.split("\r\n\r\n").nth(1)?).ok()?;
-    Some(match v["outcome"].as_str() { Some("allow") => Gate::Allow, _ => Gate::Deny })
+    serde_json::from_str(text.split("\r\n\r\n").nth(1)?).ok()
 }
 
 #[cfg(test)]

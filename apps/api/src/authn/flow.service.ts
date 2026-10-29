@@ -12,7 +12,7 @@ import { CATALOGUE, DemoOutbox, MethodCtx, Prompt, methodType } from './methods.
 export interface GateRequest { tenant: string; subject?: string; session?: string; answers?: Record<string, string> }
 export type GateResponse =
   | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string }
-  | { outcome: 'deny'; reason: string }
+  | { outcome: 'deny'; reason: string; message: string }
   | { outcome: 'challenge'; session: string; step: { index: number; total: number; methodId: string; type: string } & Prompt; error?: string };
 
 interface Session {
@@ -93,9 +93,9 @@ export class AuthnService {
     const cfg = await this.liveConfig(b.tenant), chain = cfg.chains.find((c) => c.id === cfg.defaultChain && c.enabled);
     if (!chain) return null;
     const subject = typeof b.subject === 'string' ? b.subject : '';
-    if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return { outcome: 'deny', reason: 'bad-credentials' };
+    if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     const key = `${b.tenant}/${subject}`;
-    if (this.throttled(key) || this.tooManyStarts(key)) { this.audit({ tenant: b.tenant, subject, outcome: 'throttled' }); return { outcome: 'deny', reason: 'bad-credentials' }; }
+    if (this.throttled(key) || this.tooManyStarts(key)) { this.audit({ tenant: b.tenant, subject, outcome: 'throttled' }); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
     const a = analyzeChain(cfg, chain);
     const steps = chain.steps.map((id) => { const m = cfg.methods.find((x) => x.id === id)!; return { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: methodType(m.type)!.verification(m.config).real }; });
     const s: Session = { id: randomBytes(24).toString('base64url'), tenant: b.tenant, subject, known: await this.known(b.tenant, subject), exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
@@ -107,8 +107,8 @@ export class AuthnService {
   }
   private async answer(b: GateRequest): Promise<GateResponse> {
     const s = this.sessions.get(String(b.session));
-    if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired' }; }
-    if (!b.answers || typeof b.answers !== 'object') return { outcome: 'deny', reason: 'bad-credentials' };
+    if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired', message: 'Your sign-in session expired. Start again.' }; }
+    if (!b.answers || typeof b.answers !== 'object') return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     return this.check(s, b.answers);
   }
   private async prepare(s: Session) {
@@ -129,7 +129,7 @@ export class AuthnService {
     if (!ok) {
       this.fail(key); s.tries++;
       this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'step-failed' });
-      if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'bad-credentials' }; }
+      if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
       return this.challenge(s, `Incorrect answer. ${MAX_TRIES - s.tries} attempt(s) left.`);
     }
     s.done.push({ id: st.id, type: st.type, real: st.real }); s.index++;

@@ -114,7 +114,7 @@ describe('authentication methods and chains', () => {
       const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T }).expect(200)).body;
       assert.equal(e.mode, 'chain'); assert.deepEqual(e.fields.map((f: any) => f.name), ['password']);
       // wrong password: generic deny, nothing about the second step
-      assert.deepEqual((await gate({ tenant: T, subject: 'demo-alice', password: 'wrong' }).expect(200)).body, { outcome: 'deny', reason: 'bad-credentials' });
+      assert.deepEqual((await gate({ tenant: T, subject: 'demo-alice', password: 'wrong' }).expect(200)).body, { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' });
       // right password: second step requested
       const c1 = (await gate({ tenant: T, subject: 'demo-alice', password: PW }).expect(200)).body;
       assert.equal(c1.outcome, 'challenge'); assert.equal(c1.step.index, 1); assert.equal(c1.step.total, 2); assert.equal(c1.step.type, 'totp');
@@ -173,7 +173,7 @@ describe('authentication methods and chains', () => {
       let r: any;
       for (let i = 0; i < 12; i++) { const c = (await gate({ tenant: T, subject: 'victim' })).body; if (c.outcome === 'deny') { r = c; break; } r = (await gate({ tenant: T, session: c.session, answers: { code: '000000' } })).body; }
       assert.equal(r.outcome, 'deny');
-      assert.deepEqual((await gate({ tenant: T, subject: 'victim' })).body, { outcome: 'deny', reason: 'bad-credentials' });
+      assert.deepEqual((await gate({ tenant: T, subject: 'victim' })).body, { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' });
     });
 
     it('a PIN typed in the admin form is kept as verifiers, never echoed back', async () => {
