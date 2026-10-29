@@ -1,0 +1,82 @@
+name: PR Previews
+
+# SECURITY MODEL
+# - pull_request_target: this file and scripts/render-pr-previews.mjs are read from the BASE branch,
+#   a PR cannot change them to read the secrets.
+# - The PR code is NEVER checked out nor executed here. Only the base branch is checked out.
+# - Untrusted metadata (head branch name) only goes through env vars, never inside shell text.
+# - PRs from forks are ignored.
+# - Render builds the PR code itself; the preview service only gets IAM_PUBLIC_ORIGIN (not a secret).
+#   Infra secrets (RENDER_API_KEY) stay in this trusted workflow and never reach the preview service.
+#
+# COST MODEL (free tiers only)
+# - One free Render web service per PR (Docker, 0.1 CPU / 512 MB, spins down after 15 min idle),
+#   created in the "dev" environment of the Render project, deleted when the PR closes.
+# - GitHub-hosted minutes: a few seconds per event (Node script only, no build on the runner).
+# - Render pipeline minutes: each create/update rebuilds the Docker image on Render's side.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-previews-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  ensure:
+    name: Create or update the preview
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out BASE branch only
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Create or update the Render preview service
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+          RENDER_ENVIRONMENT_ID: ${{ vars.RENDER_ENVIRONMENT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/render-pr-previews.mjs ensure
+
+  cleanup:
+    name: Delete the preview
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out BASE branch only
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Delete the Render preview service
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_BRANCH: closed
+        run: node scripts/render-pr-previews.mjs cleanup
