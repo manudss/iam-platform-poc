@@ -14,9 +14,11 @@ import { PluginsAdminController } from './plugins-admin.controller.js';
 import { AuthGateController } from './auth-gate.controller.js';
 import { SigninOptionsController } from '../../authn/signin-options.controller.js';
 import { ProfileService, PROFILE_STORE } from '../../profile/profile.service.js';
+import { ProfileService, PROFILE_STORE, SIGNUP_ALLOWED, defaultSignupAllowed } from '../../profile/profile.service.js';
 import { SignupService } from '../../profile/signup.service.js';
 import { SignupController } from '../../profile/signup.controller.js';
 import { OrgController, OrgService, ORG_STORE, DoltOrgStore, MemoryOrgStore } from '../../profile/orgs.js';
+import { RolesController, RolesService } from '../../profile/roles.js';
 import { ProfileController } from '../../profile/profile.controller.js';
 import { DoltProfileStore, MemoryProfileStore } from '../../profile/store.js';
 import { currentBranch } from '../../workspace/context.js';
@@ -29,8 +31,8 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule],
-  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController],
-  providers: [BranchRegistries, AuthnService, ProfileService, SignupService, OrgService, {
+  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController, RolesController],
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, ProfileService, SignupService, OrgService, RolesService, {
     provide: ORG_STORE,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltOrgStore(v, (w) => currentBranch(w)) : new MemoryOrgStore(),

@@ -7,11 +7,14 @@ import { BASE_FIELDS, CORE_PROFILE_SETTINGS_ID, CatalogField, Context, Effective
 import { ProfileValueStore, Values } from './store.js';
 
 export const PROFILE_STORE = 'PROFILE_VALUE_STORE';
+/** Public sign-up may only exist in the hosted workspace mode, where every administration route is guarded. Provided as a function so tests can exercise the open path without a Dolt-backed workspace. */
+export const SIGNUP_ALLOWED = 'SIGNUP_ALLOWED';
+export const defaultSignupAllowed = () => workspaceMode();
 const SUBJECT = /^[A-Za-z0-9._@-]{1,64}$/;
 
 @Injectable()
 export class ProfileService {
-  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Inject(PROFILE_STORE) private readonly store: ProfileValueStore, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService) {}
+  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Inject(PROFILE_STORE) private readonly store: ProfileValueStore, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService, @Optional() @Inject(SIGNUP_ALLOWED) private readonly signupAllowed: () => boolean = defaultSignupAllowed) {}
 
   private async registry(ref: 'live' | 'work', write = false): Promise<PluginRegistry> {
     if (!workspaceMode()) return this.reg;
@@ -26,6 +29,7 @@ export class ProfileService {
   async config(tenant: string, ref: 'live' | 'work'): Promise<ProfileConfig> { return parseProfileConfig(await (await this.registry(ref)).coreSettings(tenant, CORE_PROFILE_SETTINGS_ID)); }
   async saveConfig(tenant: string, input: unknown): Promise<ProfileConfig> {
     const cfg = validateProfileConfig(input, await this.catalogue(tenant, 'work'));
+    if (cfg.signup?.open && !this.signupAllowed()) throw new BadRequestException('public sign-up can only be opened in the hosted workspace mode (it is refused here, whatever the setting)');
     await (await this.registry('work', true)).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
     return cfg;
   }
@@ -71,7 +75,7 @@ export class ProfileService {
   }
 
   /** Sign-up support. The switch and the schema are the LIVE ones: nothing staged on a branch opens the public form. */
-  async signupOpen(tenant: string): Promise<boolean> { return !!(await this.config(tenant, 'live')).signup?.open; }
+  async signupOpen(tenant: string): Promise<boolean> { return this.signupAllowed() && !!(await this.config(tenant, 'live')).signup?.open; }
   /** Only fields the live sign-up schema offers (authority fields never are). Required plugin fields must be present. */
   async signupValues(tenant: string, input: unknown): Promise<Record<string, string | number | boolean | null>> {
     if (input === undefined) input = {};

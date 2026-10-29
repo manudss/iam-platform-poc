@@ -11,6 +11,7 @@ import { PluginHost } from './plugins/plugin-host.service.js';
 describe('api', () => {
   let app: INestApplication;
   before(async () => {
+    process.env.IAM_API_ADMIN_TOKEN = 'local-demo-simulation-token';
     const m = await Test.createTestingModule({ imports: [AppModule] })
       // Unit-level only: activation logic without auth. Auth is covered end-to-end in e2e.spec.ts.
       .overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
@@ -25,14 +26,14 @@ describe('api', () => {
   });
 
   it('reactivating an older commit is a new activation', async () => {
-    const post = (c: string) => request(app.getHttpServer()).post('/tenants/t1/activations').send({ commit: c });
+    const post = (c: string) => request(app.getHttpServer()).post('/tenants/t1/activations').set('x-api-admin-token', 'local-demo-simulation-token').send({ commit: c });
     assert.equal((await post('aaaaaaaa')).body.seq, 1);
     assert.equal((await post('bbbbbbbb')).body.seq, 2);
     assert.equal((await post('aaaaaaaa')).body.seq, 3);
   });
 
   it('rejects an invalid commit', async () => {
-    await request(app.getHttpServer()).post('/tenants/t1/activations').send({ commit: 'x' }).expect(400);
+    await request(app.getHttpServer()).post('/tenants/t1/activations').set('x-api-admin-token', 'local-demo-simulation-token').send({ commit: 'x' }).expect(400);
   });
 
   it('async plugin is idempotent per activation', async () => {

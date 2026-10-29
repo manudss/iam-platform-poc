@@ -19,8 +19,9 @@ const have = existsSync(coreBin) && existsSync(doltBin);
 const CORE = 'http://127.0.0.1:18091', API = 'http://127.0.0.1:13010', REDIRECT = 'http://localhost:4200/callback';
 const PW = 'demo-only-not-a-secret'; // fictional, local demo only
 
+process.env.IAM_API_ADMIN_TOKEN ??= 'local-demo-simulation-token'; // admin capability for the mutating routes
 const j = (url: string, method: string, token?: string, body?: object) =>
-  fetch(url, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  fetch(url, { method, headers: { 'content-type': 'application/json', ...(process.env.IAM_API_ADMIN_TOKEN ? { 'x-api-admin-token': process.env.IAM_API_ADMIN_TOKEN } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
 
 async function login(): Promise<string> {
   const v = randomBytes(40).toString('base64url');

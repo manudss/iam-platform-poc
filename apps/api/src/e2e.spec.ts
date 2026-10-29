@@ -20,7 +20,7 @@ const REDIRECT = 'http://localhost:4200/callback';
 const DEMO_PASSWORD = 'demo-only-not-a-secret'; // fictional, local demo only
 
 const post = (url: string, body: object, token?: string, extra: Record<string, string> = {}) =>
-  fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...extra, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+  fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...(process.env.IAM_API_ADMIN_TOKEN ? { 'x-api-admin-token': process.env.IAM_API_ADMIN_TOKEN } : {}), ...extra, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
 
 async function login(core: string, user = 'demo-alice'): Promise<string> {
   const verifier = randomBytes(40).toString('base64url');
