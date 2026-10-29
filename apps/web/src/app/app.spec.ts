@@ -124,3 +124,43 @@ describe('routing and sign-in guard', () => {
     expect(TestBed.inject(Router).url).toBe('/login');
   });
 });
+
+
+describe('session expiry handling', () => {
+  it('clears a 401 token, signals once, and never retries a mutation; a 403 does not sign out', async () => {
+    let status = 200, count = 0, expired = 0;
+    const f = (async (u: string) => {
+      if (u === '/core/authorize') return { ok: true, json: async () => ({ code: 'c' }) } as Response;
+      if (u === '/core/token') return { ok: true, json: async () => ({ id_token: 'tok' }) } as Response;
+      count++; return { ok: false, status, json: async () => ({ message: 'denied' }) } as Response;
+    }) as typeof fetch;
+    const api = new ApiClient('acme-demo', f, () => expired++);
+    await api.login('demo-alice', 'x'); status = 403;
+    await expect(api.raw('POST', '/plugins/org-manager/install')).rejects.toThrow('denied');
+    expect(api.loggedIn).toBe(true); expect(expired).toBe(0);
+    status = 401;
+    await expect(api.raw('POST', '/plugins/org-manager/install')).rejects.toThrow('Sign in again');
+    expect(count).toBe(2); expect(api.loggedIn).toBe(false); expect(expired).toBe(1);
+  });
+  it('blocks an already expired token before sending an installation', async () => {
+    let calls = 0, expired = 0;
+    const token = 'a.' + btoa(JSON.stringify({ exp: 1 })) + '.c';
+    const f = (async (u: string) => {
+      if (u === '/core/authorize') return { ok: true, json: async () => ({ code: 'c' }) } as Response;
+      if (u === '/core/token') return { ok: true, json: async () => ({ id_token: token }) } as Response;
+      calls++; return {} as Response;
+    }) as typeof fetch;
+    const api = new ApiClient('acme-demo', f, () => expired++); await api.login('a', 'b');
+    await expect(api.raw('POST', '/plugins/org-manager/install')).rejects.toThrow('not retried');
+    expect(calls).toBe(0); expect(expired).toBe(1);
+  });
+  it('returns to login, retains only the page, clears privileged state and ignores duplicate expiry', async () => {
+    sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents();
+    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('alice'); s.adminToken.set('local-test'); s.api.activations = async () => []; s.api.assignments = async () => [];
+    const h = await RouterTestingHarness.create(); await h.navigateByUrl('/activation');
+    s.expire(); await TestBed.inject(Router).navigateByUrl('/login');
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe('/activation'); expect(s.adminToken()).toBe('');
+    expect(s.loggedIn()).toBe(false); expect(s.expired()).toBe(true);
+    s.expire(); expect(sessionStorage.getItem(RETURN_KEY)).toBe('/activation');
+  });
+});

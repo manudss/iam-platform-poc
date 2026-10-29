@@ -55,3 +55,27 @@ The web app is an Angular multi-page administration (router, sidebar, one page p
 - The admin capability token field (local setups only; empty on the hosted demo, where the edge adds it) is in the sidebar and shared by the plugin and database pages.
 - Small screens: the sidebar becomes a drawer opened by the menu button; the e2e checks that pages do not scroll sideways at 390 px.
 - Tests: `apps/web` unit tests cover the guard, return-URL filter, route matcher and the explorer section/navigation contract; `scripts/ui-e2e.mjs` drives all pages on the real stack (core, API, Dolt), including deep link, refresh and mobile width.
+
+
+### Session expiry and Organizations regression
+
+The demo user's signed token lasts 300 seconds, unchanged. It remains in memory only.
+The console schedules a sign-out at the token's expiry and checks expiry again before an API request
+(to cover a suspended/background tab). A 401 from any tenant API request also clears the session,
+including the local admin capability, and returns to the sign-in page with an explicit expiry/invalid-session notice.
+A 403 remains an authorization error and does not sign the user out. The server still verifies every
+signature, issuer, audience, expiry and tenant. Decoding `exp` in the browser is only a UI hint, never authorization.
+
+After a fresh sign-in the console returns to the same local page. No request or mutation is retained or
+replayed. Grant checkboxes and unfinished forms are reset. If a request was in flight when the session
+ended, check its current state before trying it again: the server may already have completed it.
+Requests completing after logout/new login cannot restore their old results into the new session.
+There is no silent refresh, token lifetime extension, admin bypass or admin secret in hosted browser storage.
+A core restart rotates its signing key, so an old token is rejected and a fresh login is required.
+
+Regression: `scripts/session-expiry-e2e.mjs` starts the real Rust core, Nest API, Dolt and Angular.
+It verifies an expired Organizations installation returns 401, reconnects without installing automatically,
+then tests a real 12-second idle expiry, a return to `/plugins/org-manager`, explicit installation,
+and a core-only restart with old-key rejection/new-key login while the API keeps its JWKS cache.
+The suspended-tab case pauses only the client clock; the server clock and rejection are real.
+Run with the same DOLT_BIN, CHROME_BIN and NODE_PATH prerequisites as `scripts/ui-e2e.mjs`.

@@ -1,6 +1,7 @@
 <main class="login">
   <section class="card hero">
     <div class="brand"><span class="logo" aria-hidden="true">IAM</span><div><h1>IAM platform POC</h1><p>Administration console</p></div></div>
+    @if (s.expired()) { <p class="msg error" role="status">Session expired or invalid. Sign in again to continue. Your action was not retried; check its current state before trying again.</p> }
     @if (s.message()) { <p class="msg" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
     <p class="lead">Sign in with a fictional local user. You leave for the identity provider's login form and come back with a code; this app checks the state and the PKCE verifier.</p>
     <button type="button" id="signin-browser" class="primary" [disabled]="busy()" (click)="signIn()">Sign in (browser flow, recommended)</button>
