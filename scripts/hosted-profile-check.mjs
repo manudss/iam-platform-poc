@@ -87,7 +87,7 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, args: ['--no-sandbox'] });
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); const errs = []; page.on('pageerror', (e) => errs.push(e.message)); page.on('dialog', (d) => d.accept());
   const shot = (n) => page.screenshot({ path: join(out, n + '.png'), fullPage: false });
-  await page.goto(BASE + '/signup'); await page.waitForSelector('#su-closed'); await shot('1-signup-closed-desktop');
+  await page.goto(BASE + '/signup'); await page.waitForSelector('#su-closed'); await sleep(1500); await shot('1-signup-closed-desktop');
   await page.goto(`${BASE}/login`); await page.waitForSelector('#signin-browser'); await Promise.all([page.waitForURL(/\/core\/authorize/), page.click('#signin-browser')]);
   await page.waitForSelector('input[name=username]'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await page.click('button[type=submit]');
   await page.waitForSelector('[name=globalBranch]');
