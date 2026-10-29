@@ -1,5 +1,6 @@
 // Hosted check of profile fields, sign-up (simulated confirmation), organizations, roles, concurrency and persistence. FICTIONAL data only.
 // The hosted edge adds the admin capability to /api calls, so refusals of admin routes for ordinary accounts are proven by the API tests, not here.
+// ONLY_SHOTS=1 skips the API flow (screenshots only: not a full proof). The sign-up endpoint is rate limited to 5 requests per hour per address (shared behind the hosted proxy), the full flow uses 4.
 // Usage: NODE_PATH=... CHROME_BIN=... node scripts/hosted-profile-check.mjs https://<service>.onrender.com [outDir]
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,13 +19,14 @@ const tokenFor = async (username, password) => {
 };
 const mk = (tok) => async (method, path, body, branch) => { const r = await fetch(BASE + '/api/tenants/acme-demo' + path, { method, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + tok, ...(branch ? { 'x-iam-branch': branch } : {}) }, body: body ? JSON.stringify(body) : undefined }); let j = {}; try { j = await r.json(); } catch {} return { s: r.status, j }; };
 const ok = (r, what, st = [200, 201]) => { assert.ok(st.includes(r.s), `${what}: HTTP ${r.s} ${JSON.stringify(r.j).slice(0, 300)}`); return r.j; };
-let browser; const log = (...a) => console.log(...a);
+let browser, page; const log = (...a) => console.log(...a);
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(BASE + '/api/health')).ok) break; } catch {} await sleep(3000); }
   const alice = mk(await tokenFor('demo-alice', 'demo-only-not-a-secret'));
   const newBranch = async (n) => { ok(await alice('POST', '/versioning/branches', { name: n, from: 'main' }, n), 'create branch ' + n); return n; };
   const apply = async (b) => { const w = await alice('GET', '/workspace', undefined, b); const info = await alice('GET', '/versioning/branches', undefined, b); const head = (info.j.branches ?? []).find((x) => x.name === b)?.commit; return alice('POST', '/workspace/apply', { confirm: true, expectedHead: head }, b); };
 
+  if (!process.env.ONLY_SHOTS) {
   // 1. closed by default and nothing live yet
   const b1 = await newBranch('pf-' + RUN);
   assert.equal((await fetch(BASE + '/api/tenants/acme-demo/signup/schema')).status, 404, 'sign-up is closed by default');
@@ -80,9 +82,10 @@ try {
   const orgs = ok(await alice('GET', '/organizations', undefined, 'main'), 'orgs'); assert.ok(orgs.members.some((m) => m.subject === 'demo-bob'));
   log('5 sign-up closed again; role and org persisted');
 
+  }
   // 6. screenshots (desktop + mobile), signed in as demo-alice in the console
   browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); const errs = []; page.on('pageerror', (e) => errs.push(e.message)); page.on('dialog', (d) => d.accept());
+  page = await browser.newPage({ viewport: { width: 1280, height: 900 } }); const errs = []; page.on('pageerror', (e) => errs.push(e.message)); page.on('dialog', (d) => d.accept());
   const shot = (n) => page.screenshot({ path: join(out, n + '.png'), fullPage: false });
   await page.goto(BASE + '/signup'); await page.waitForSelector('#su-closed'); await shot('1-signup-closed-desktop');
   await page.goto(`${BASE}/login`); await page.waitForSelector('#signin-browser'); await Promise.all([page.waitForURL(/\/core\/authorize/), page.click('#signin-browser')]);
@@ -90,10 +93,10 @@ try {
   await page.waitForSelector('[name=globalBranch]');
   const b5 = 'pf5-' + RUN; await page.fill('[name=workspaceNewBranch]', b5); await page.getByRole('button', { name: 'Create & select', exact: true }).click(); await page.waitForFunction((n) => document.body.innerText.includes(n), b5);
   for (const [nav, sel, name] of [['/profile-fields', '#pf-table', '2-profile-fields'], ['/organizations', '#org-table', '3-organizations'], ['/roles', '#role-table', '4-roles'], ['/my-profile', '#mp-form', '5-my-profile'], ['/users', '#users-table', '6-users']]) {
-    await page.locator(`nav a[data-nav="${nav}"]`).click(); await page.waitForSelector(sel); await sleep(500);
+    await page.setViewportSize({ width: 1280, height: 900 }); await page.locator(`nav a[data-nav="${nav}"]`).click(); await page.waitForSelector(sel); await page.waitForLoadState('networkidle'); await page.waitForFunction(() => !document.querySelector('main').innerText.includes('Loading...')); await sleep(2500);
     assert.equal(await page.locator('[role=alert]').count(), 0, nav + ': no alert (' + (await page.locator('[role=alert]').allInnerTexts()).join('|') + ')');
     await page.setViewportSize({ width: 1280, height: 900 }); await shot(name + '-desktop'); await page.setViewportSize({ width: 390, height: 800 }); await shot(name + '-mobile');
   }
   assert.equal(errs.length, 0, 'page errors: ' + errs.join('|'));
   log('6 screenshots in', out, 'HOSTED PROFILE CHECK PASS');
-} catch (e) { console.error('FAILED:', e.message); process.exitCode = 1; } finally { await browser?.close(); }
+} catch (e) { console.error('FAILED:', e.message.split('\n')[0]); try { console.error('PAGE:', page.url(), (await page.innerText('main')).slice(0, 600)); } catch {} process.exitCode = 1; } finally { await browser?.close(); }
