@@ -1,0 +1,28 @@
+name: PR Previews selftest
+
+# Validates the PR-previews script itself (unit tests with a mocked network, no
+# secrets involved, read-only token). This is NOT the preview deployment
+# workflow (pr-previews.yml, pull_request_target): it only checks that the
+# orchestration code is correct. It runs on pull_request so the checks appear
+# on the PR that introduces or changes the preview tooling.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  script-tests:
+    name: render-pr-previews.mjs unit tests
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: node --check scripts/render-pr-previews.mjs
+      - run: node --test scripts/render-pr-previews.test.mjs
