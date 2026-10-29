@@ -85,9 +85,9 @@ try {
   const secret = (await page.locator('#authn-shown').innerText()).match(/: ([A-Z2-7]{16,})/)[1];
   await shot('3-enrolled-totp');
   await enroll('pin-keypad'); await enroll('e-mail-code');
-  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollemail]', 'alice@example.invalid'); await page.getByRole('button', { name: 'Provision', exact: true }).click();
+  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollemail]', 'alice@example.invalid'); await page.getByRole('button', { name: 'Provision', exact: true }).click(); await page.waitForSelector('#authn-shown');
   await enroll('e-mail-code'); await enroll('pin-keypad');
-  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollpin]', '246810'); await page.getByRole('button', { name: 'Provision', exact: true }).click();
+  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollpin]', '246810'); await page.getByRole('button', { name: 'Provision', exact: true }).click(); await page.waitForSelector('#authn-shown'); await sleep(500);
   await noAlert('enroll');
   await shot('3b-methods-enrolled-desktop');
   const ap = await call('POST', '/workspace/apply', { confirm: true }, 'aw-' + RUN); const apj = await ap.json(); assert.equal(apj.applied, true, JSON.stringify(apj));
