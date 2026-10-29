@@ -22,6 +22,7 @@ export class ProfileService {
     const r = await this.registry(ref);
     return [...BASE_FIELDS, ...r.profileFields(tenant).flatMap((p) => toCatalog(p.plugin, p.fields))];
   }
+  async pluginActive(tenant: string, id: string, ref: 'live' | 'work') { return (await this.registry(ref)).isActive(tenant, id); }
   async config(tenant: string, ref: 'live' | 'work'): Promise<ProfileConfig> { return parseProfileConfig(await (await this.registry(ref)).coreSettings(tenant, CORE_PROFILE_SETTINGS_ID)); }
   async saveConfig(tenant: string, input: unknown): Promise<ProfileConfig> {
     const cfg = validateProfileConfig(input, await this.catalogue(tenant, 'work'));
@@ -68,4 +69,21 @@ export class ProfileService {
     }
     return out;
   }
+
+  /** Sign-up support. The switch and the schema are the LIVE ones: nothing staged on a branch opens the public form. */
+  async signupOpen(tenant: string): Promise<boolean> { return !!(await this.config(tenant, 'live')).signup?.open; }
+  /** Only fields the live sign-up schema offers (authority fields never are). Required plugin fields must be present. */
+  async signupValues(tenant: string, input: unknown): Promise<Record<string, string | number | boolean | null>> {
+    if (input === undefined) input = {};
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('values must be an object');
+    const schema = (await this.schema(tenant, 'signup', 'live')).filter((f) => !f.key.startsWith('base.'));
+    const cat = await this.catalogue(tenant, 'live'), out: Record<string, string | number | boolean | null> = {};
+    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      if (!schema.some((f) => f.key === k)) throw new BadRequestException(`${k} is not asked at sign-up`);
+      out[k] = checkValue(cat.find((c) => c.fullKey === k)!, v);
+    }
+    for (const f of schema) if (f.required && (out[f.key] === undefined || out[f.key] === null || out[f.key] === '')) throw new BadRequestException(`${f.label} is required`);
+    return out;
+  }
+  async putWorking(tenant: string, id: string, values: Record<string, string | number | boolean | null>, actor: string) { if (Object.keys(values).length) await this.store.put(tenant, id, values, 'work', actor); }
 }

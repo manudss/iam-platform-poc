@@ -15,10 +15,10 @@ export class UsersService {
   private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string }>> {
     try { return JSON.parse(await readFile(this.path, 'utf8')); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw e; }
   }
-  private async password(id: string, password: string) {
-    const all = await this.credentials(), salt = randomBytes(24).toString('hex');
+  private async password(id: string, password: string, pre?: { salt: string; hash: string }) {
+    const all = await this.credentials(), salt = pre?.salt ?? randomBytes(24).toString('hex');
     const revision = randomBytes(20).toString('hex');
-    all[revision] = { subject:id, salt, hash: scryptSync(password, salt, 64).toString('hex') };
+    all[revision] = { subject:id, salt, hash: pre?.hash ?? scryptSync(password, salt, 64).toString('hex') };
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     await writeFile(this.path + '.tmp', JSON.stringify(all), { mode: 0o600 }); await rename(this.path + '.tmp', this.path); return revision;
   }
@@ -57,14 +57,15 @@ export class UsersService {
     if ((create || b.password !== undefined) && (typeof b.password !== 'string' || b.password.length < 12 || b.password.length > 128)) throw new BadRequestException('password: 12 to 128 characters');
     if (Object.keys(b).some(k => !['id','display_name','department','manager_id','email','login_enabled','password'].includes(k))) throw new BadRequestException('unknown user field');
   }
-  async save(id: string, b: Record<string, unknown>, create: boolean) {
-    const branch = currentBranch(true); this.validate(b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
+  /** `pre`: a credential hashed earlier (sign-up approval). The plain password is never kept. */
+  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }) {
+    const branch = currentBranch(true); this.validate(pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {
       const [rows] = await c.query('select * from identities where id=?', [id]); const prev = (rows as Record<string, unknown>[])[0];
       if (create && prev) throw new ConflictException('user already exists'); if (!create && !prev) throw new NotFoundException('unknown user');
       const r = { display_name:'', department:'', manager_id:null, email:null, login_enabled:true, ...prev, ...b };
       if (r.manager_id) { const [m] = await c.query('select id from identities where id=?', [r.manager_id]); if (!(m as unknown[]).length || r.manager_id === id) throw new BadRequestException('manager must be another existing user'); }
-      const revision = b.password !== undefined ? await this.password(id, b.password as string) : prev?.credential_revision ?? null;
+      const revision = pre ? await this.password(id, '', pre) : b.password !== undefined ? await this.password(id, b.password as string) : prev?.credential_revision ?? null;
       await c.query('insert into identities (id,display_name,manager_id,department,email,login_enabled,credential_revision) values (?,?,?,?,?,?,?) on duplicate key update display_name=values(display_name),manager_id=values(manager_id),department=values(department),email=values(email),login_enabled=values(login_enabled),credential_revision=values(credential_revision)', [id,r.display_name,r.manager_id || null,r.department,r.email || null,r.login_enabled,revision]);
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query('call dolt_commit(\'-m\',?)', [`users: ${create ? 'create' : 'update'} ${id}`]); }

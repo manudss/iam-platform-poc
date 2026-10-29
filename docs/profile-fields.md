@@ -18,3 +18,11 @@ Endpoints: GET/PUT `/tenants/:t/profile-fields`, GET `/tenants/:t/profile-schema
 - Organizations and roles sections/CRUD.
 - Hooks `profile.validate` / `signup.check`; `profile.enrich` is declared but never called.
 - Deviation from the plan: one core values table, not one table per plugin.
+
+## Update: sign-up, organizations, roles (second commit)
+- Sign-up (`/signup` page, `POST /tenants/:t/signup`): closed unless an admin enabled it AND applied it. A request lives outside Dolt (in memory, max 50, 24 h, 5 per IP per hour), needs a confirmation code (simulated outbox, no real mail), then an admin approval; approval creates an account on the working branch with NO role, department or manager. Answers are neutral (taken id/e-mail look like success). Password is hashed at once and never stored in clear.
+- Organizations plugin: CRUD + memberships by an admin, tables `organizations` and `org_memberships` on Dolt (branch, live after Apply). Memberships are not a profile field and not editable by the person; shown read only on the profile.
+- Roles: existing assignments are shown read only on the profile; roles definitions and their permissions stay in policies (no role CRUD in this PR).
+- Concurrency: same field/person edited by an admin on a branch and by the person on main = explicit Dolt conflict at Apply ("data conflict(s)"), neither value lost (tested).
+- Claims: a user self-edit changes only `profile_field_values` (tested byte-identical identities/roles/assignments).
+- Known risk before opening sign-up on a real deployment: several non-admin routes accept any valid token when not in workspace mode (e.g. connectors, activations). Keep sign-up off outside the hosted workspace mode.

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { DoltProfileStore } from './store.js';
+import { DoltOrgStore } from './orgs.js';
 
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
@@ -49,5 +50,41 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     assert.deepEqual(await store.get(T, 'demo-alice', 'live'), { 'hr-attributes.job_title': 'Accountant', 'hr-attributes.language': 'fr', 'hr-attributes.phone': '+33 6 12 34 56 78' });
     await store.put(T, 'demo-alice', { 'hr-attributes.phone': null }, 'live', 'demo-alice');
     assert.equal('hr-attributes.phone' in (await store.get(T, 'demo-alice', 'live')), false);
+  });
+
+  it('same field, same person: self edit on main after the admin edit on the branch is an explicit conflict, never a silent loss', async () => {
+    const v = new VersioningService(); const branch = 'work-conflict';
+    const store = new DoltProfileStore(v, () => branch);
+    await v.lock(() => v.at('main', async (c) => { await c.query('call dolt_branch(?)', [branch]); }));
+    await store.put(T, 'demo-carol', { 'hr-attributes.job_title': 'Admin says Lead' }, 'work', 'admin');
+    await store.put(T, 'demo-carol', { 'hr-attributes.job_title': 'Carol says Manager' }, 'live', 'demo-carol');
+    const r = await v.mergeInto(branch, 'main', 'Apply conflict', 'demo-carol');
+    assert.equal(r.mergeable, false);
+    assert.ok(r.conflicts > 0 && r.reasons.some((x: string) => /conflict/.test(x)), JSON.stringify(r));
+    assert.deepEqual(await store.get(T, 'demo-carol', 'live'), { 'hr-attributes.job_title': 'Carol says Manager' }, 'main keeps the user value');
+    assert.deepEqual(await store.get(T, 'demo-carol', 'work'), { 'hr-attributes.job_title': 'Admin says Lead' }, 'the branch keeps the admin value');
+  });
+
+  it('organizations and memberships: written on the branch, absent from main until the merge, then live', async () => {
+    const v = new VersioningService(); const branch = 'work-orgs';
+    await v.lock(() => v.at('main', async (c) => { await c.query('call dolt_branch(?)', [branch]); }));
+    const st = new DoltOrgStore(v, () => branch);
+    await st.write(T, 'admin', (x) => { x.orgs.push({ id: 'acme', name: 'Acme', parent_id: null }, { id: 'fin', name: 'Finance', parent_id: 'acme' }); x.members.push({ subject: 'demo-alice', org_id: 'fin' }); });
+    assert.deepEqual((await st.list(T, 'live')), { orgs: [], members: [] });
+    assert.equal((await st.list(T, 'work')).orgs.length, 2);
+    const r = await v.mergeInto(branch, 'main', 'Apply work-orgs', 'admin'); assert.equal(r.mergeable, true, JSON.stringify(r));
+    const live = await st.list(T, 'live'); assert.equal(live.orgs.length, 2); assert.deepEqual(live.members, [{ subject: 'demo-alice', org_id: 'fin' }]);
+    await st.write(T, 'admin', (x) => { x.members = []; x.orgs = x.orgs.filter((o) => o.id !== 'fin'); });
+    assert.equal((await st.list(T, 'work')).orgs.length, 1);
+  });
+
+  it('claims safety: a user edit touches only profile_field_values; identities, roles and assignments are byte-identical', async () => {
+    const v = new VersioningService(); const st = new DoltProfileStore(v, () => 'main');
+    const snap = () => v.at('main', async (c) => { const out: Record<string, unknown> = {}; for (const t of ['identities', 'roles', 'assignments']) { const [r] = await c.query(`select * from ${t} order by 1,2`); out[t] = r; } return JSON.stringify(out); });
+    const before = await snap();
+    await st.put(T, 'demo-alice', { 'hr-attributes.job_title': 'Chief', 'hr-attributes.employee_grade': 'G99' }, 'live', 'demo-alice');
+    assert.equal(await snap(), before);
+    const tables = await v.at('main', async (c) => { const [r] = await c.query("select to_table_name t from dolt_diff_summary('HEAD~1','HEAD')"); return (r as { t: string }[]).map((x) => x.t); });
+    assert.deepEqual(tables, ['profile_field_values']);
   });
 });
