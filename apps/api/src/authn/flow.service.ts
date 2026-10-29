@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import type { AuthenticateResult } from '../plugins/v1/hooks.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
-import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, analyzeChain, parseStored, validateConfig } from './config.js';
+import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG, isEmptyConfig, analyzeChain, parseStored, validateConfig } from './config.js';
 import { EnrollmentStore } from './enroll-store.js';
 import { SmtpMailAdapter } from './mail.js';
 import { CATALOGUE, DemoOutbox, MailAdapter, MethodCtx, Prompt, methodType } from './methods.js';
@@ -33,8 +33,11 @@ const SESSION_MS = 5 * 60_000, MAX_TRIES = 3, THROTTLE_N = 10, THROTTLE_MS = 10 
  * a wrong answer at the first step ends the attempt with a generic denial; later steps allow up to 3 tries; unknown accounts get the same prompts and always fail;
  * a technical failure of a method throws (the gate answers 503 and the core refuses the sign-in: fail closed).
  */
+/** Published FICTIONAL demo credentials for demo-alice (opt-in demo seed only). */
+export const DEMO_TOTP_SECRET = 'JBSWY3DPEHPK3PXP', DEMO_PIN = '246810', DEMO_PIN8 = '24681024';
+
 @Injectable()
-export class AuthnService {
+export class AuthnService implements OnApplicationBootstrap {
   readonly enroll = new EnrollmentStore();
   readonly outbox = new DemoOutbox();
   /** Set from the server environment only; tests may replace it. */
@@ -47,6 +50,29 @@ export class AuthnService {
   private async registry(ref: 'live' | 'work', write = false): Promise<PluginRegistry> {
     if (!workspaceMode()) return this.reg;
     return this.branches!.get(ref === 'live' ? 'main' : currentBranch(write));
+  }
+  /**
+   * DEMO ONLY, opt-in with IAM_AUTHN_DEMO_SEED=1 (the hosted demo sets it): when no authentication configuration is stored on main,
+   * store the example methods and chains (no chain selected for sign-in, so live sign-in does not change) and enroll the FICTIONAL
+   * account demo-alice with published fictional credentials so the examples can be tried at once. Never replaces an existing
+   * configuration or enrollment. No real secret is created.
+   */
+  async onApplicationBootstrap() {
+    if (process.env.IAM_AUTHN_DEMO_SEED !== '1') return;
+    const tenant = process.env.IAM_AUTHN_DEMO_SEED_TENANT || 'acme-demo';
+    try { await this.seedDemo(tenant); } catch (e) { console.warn('authn demo seed skipped:', (e as Error).message); }
+  }
+  async seedDemo(tenant: string): Promise<boolean> {
+    const main = await (workspaceMode() ? this.branches!.get('main') : this.reg);
+    if (!isEmptyConfig(parseStored(await main.coreSettings(tenant, CORE_SETTINGS_ID)))) return false;
+    const cfg = validateConfig(SEED_CONFIG);
+    await main.putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+    const have = await this.enroll.status(tenant, 'demo-alice');
+    if (!have['authenticator-app']) await this.enroll.setTotp(tenant, 'demo-alice', 'authenticator-app', DEMO_TOTP_SECRET);
+    if (!have['pin-keypad']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad', DEMO_PIN);
+    if (!have['pin-keypad-8']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad-8', DEMO_PIN8);
+    if (!have['e-mail-code']) await this.enroll.setEmail(tenant, 'demo-alice', 'e-mail-code', 'alice@example.invalid');
+    return true;
   }
   async liveConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('live')).coreSettings(tenant, CORE_SETTINGS_ID)); }
   async workingConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('work')).coreSettings(tenant, CORE_SETTINGS_ID)); }

@@ -22,3 +22,5 @@ label.inline { display: inline-flex; gap: .4rem; align-items: center; }
 .steps li > b { margin-right: .5rem; }
 .steps li > small { margin-right: .75rem; }
 input.name { min-width: min(24rem, 100%); width: 100%; max-width: 100%; box-sizing: border-box; }
+
+@media (max-width: 600px) { select, button, input { max-width: 100%; box-sizing: border-box; } .row { flex-wrap: wrap; } .row label { min-width: 0; flex: 1 1 100%; } .row select { width: 100%; text-overflow: ellipsis; } }

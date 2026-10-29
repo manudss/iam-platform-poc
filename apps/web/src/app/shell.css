@@ -29,7 +29,8 @@ nav a.active { background: #312e81; color: #fff; box-shadow: inset 3px 0 0 #818c
   .open .scrim { display: block; position: fixed; inset: 0; background: #0f172a99; z-index: 10; }
   .burger { display: inline-block; margin: 0; padding: .35rem .7rem; }
   .top { padding: .7rem 1rem; } .content { padding: 1rem; } .bar { margin: .8rem 1rem 0; }
-  .who { max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who { flex: 0 0 auto; max-width: 5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top { gap: .5rem; } .top h1 { font-size: 1rem; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 .top button { white-space: nowrap; }
 

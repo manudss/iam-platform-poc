@@ -300,3 +300,25 @@ describe('ready-to-try examples', () => {
     assert.equal(isEmptyConfig({ methods: [SEED_CONFIG.methods[0]], chains: [], defaultChain: null }), false);
   });
 });
+
+describe('opt-in persistent demo seed', () => {
+  it('seeds an empty base once: stored examples, enrolled fictional demo-alice, no chain selected; never overwrites', async () => {
+    const f = process.env.IAM_AUTHN_FILE; process.env.IAM_AUTHN_FILE = join(mkdtempSync(join(tmpdir(), 'authn-seed-')), 'e.json');
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
+    const app = mod.createNestApplication(); await app.init(); const svc = app.get(AuthnService);
+    try {
+      assert.equal((await svc.liveConfig('seedt')).methods.length, 0);
+      assert.equal(await svc.seedDemo('seedt'), true);
+      const c = await svc.liveConfig('seedt');
+      assert.ok(c.methods.length > 0 && c.chains.length > 0); assert.equal(c.defaultChain, null);
+      const st = await svc.enroll.status('seedt', 'demo-alice');
+      assert.ok(st['authenticator-app']?.totp && st['pin-keypad']?.pin && st['e-mail-code']?.email);
+      assert.equal(await svc.seedDemo('seedt'), false);
+      await svc.saveConfig('other', { methods: [], chains: [], defaultChain: null });
+      const own = validateConfig({ methods: [m('only', 'password', 3)], chains: [], defaultChain: null });
+      await svc.saveConfig('mine', own);
+      assert.equal(await svc.seedDemo('mine'), false);
+      assert.deepEqual((await svc.liveConfig('mine')).methods.map((x: any) => x.id), ['only']);
+    } finally { process.env.IAM_AUTHN_FILE = f; await app.close(); }
+  });
+});

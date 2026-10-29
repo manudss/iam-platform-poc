@@ -67,3 +67,7 @@ When nothing is stored yet on a branch, the console shows every executable metho
 "Provision demo credentials for demo-alice" (after saving) enrolls the fictional demo user in every method that needs it: the authenticator secret and generated PINs are shown once on screen. Enrollments are never seeded or versioned and no real credential is created.
 
 The console disables Save, "Add method" and the starter set until the configuration has finished loading, so a late response cannot overwrite edits.
+
+### Persistent demo seed (opt-in, hosted demo only)
+
+With `IAM_AUTHN_DEMO_SEED=1` (set in `demo/start.sh`, never the default) the API, at start-up and only when the `acme-demo` tenant has no authentication configuration on main, STORES the example methods and chains (no chain selected, so live sign-in is unchanged) and enrolls the fictional `demo-alice` with PUBLISHED FICTIONAL credentials: authenticator secret `JBSWY3DPEHPK3PXP`, PIN `246810`, 8-digit PIN `24681024`, e-mail `alice@example.invalid`. These are demo values: anyone can read them in this repository, so they must never protect a real account. An existing configuration or enrollment is never overwritten, and a deploy that wipes the demo state simply re-seeds. The chain stays opt-in: select it, save, Apply. Without the flag nothing is stored and the console shows the display defaults above.

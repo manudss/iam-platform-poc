@@ -57,7 +57,8 @@ try {
   await page.waitForSelector('#authn-methods'); await noAlert('page'); await shot('1-empty-desktop');
 
   // ---- 2. build methods and chains in the console
-  await page.waitForSelector('#authn-seeded'); // examples are offered before anything is stored
+  await page.waitForSelector('tr:has(small:text-is("pin-keypad"))'); assert.equal(await page.locator('#authn-seeded').count(), 0, 'the examples are STORED by the demo seed, not a UI default');
+  const live0 = await (await call('GET', '/auth')).json(); assert.ok(JSON.stringify(live0).includes('password-then-authenticator') && JSON.stringify(live0).includes('"defaultChain":null'), 'stored seed, no chain selected');
   assert.equal(await page.locator('tr:has(small:text-is("passkey"))').count(), 0, 'catalogue-only types are not seeded');
   await page.waitForSelector('tr:has(small:text-is("pin-keypad"))');
   // creating a new method and a new chain still works on top of the examples
@@ -79,15 +80,8 @@ try {
   assert.match(await page.textContent('#authn-live'), /Saved on this branch, not live until Apply|single base password/);
 
   // ---- 3. demo enrollment (secret shown once)
-  const enroll = async (id) => { await page.locator(`tr:has(small:text-is("${id}")) button:text-is("Settings")`).click(); };
-  await enroll('authenticator-app'); await page.fill('input[name=enrolluser]', 'demo-alice'); await page.getByRole('button', { name: 'Provision', exact: true }).click();
-  await page.waitForSelector('#authn-shown');
-  const secret = (await page.locator('#authn-shown').innerText()).match(/: ([A-Z2-7]{16,})/)[1];
-  await shot('3-enrolled-totp');
-  await enroll('pin-keypad'); await enroll('e-mail-code');
-  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollemail]', 'alice@example.invalid'); await page.getByRole('button', { name: 'Provision', exact: true }).click(); await page.waitForSelector('#authn-shown');
-  await enroll('e-mail-code'); await enroll('pin-keypad');
-  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollpin]', '246810'); await page.getByRole('button', { name: 'Provision', exact: true }).click(); await page.waitForSelector('#authn-shown'); await sleep(500);
+  // the demo seed already enrolled the fictional demo-alice (TOTP, PIN, e-mail) with the published fictional credentials: nothing is provisioned here
+  const secret = 'JBSWY3DPEHPK3PXP';
   await noAlert('enroll');
   await shot('3b-methods-enrolled-desktop');
   const ap = await call('POST', '/workspace/apply', { confirm: true }, 'aw-' + RUN); const apj = await ap.json(); assert.equal(apj.applied, true, JSON.stringify(apj));
