@@ -1,6 +1,7 @@
-# Local development stack. Not runnable in the authoring sandbox (no Docker); exercised only by the manual CI job "compose" (see README for its result).
+# Local development stack. Exercised by the manual CI job "compose" and started on Windows + Docker Desktop (see README).
 # All published ports are bound to 127.0.0.1 only (never exposed on the host's other interfaces).
-# Usage: cp ../.env.example ../.env && docker compose --env-file ../.env up -d
+# Usage (from the repo root): cp .env.example .env && docker compose --env-file .env -f infra/docker-compose.yml up -d
+# Step-by-step guide (core, API, console on top of this stack): docs/local-setup.md
 services:
   dolt:
     image: dolthub/dolt-sql-server:latest

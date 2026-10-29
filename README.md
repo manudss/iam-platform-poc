@@ -4,7 +4,7 @@ Private proof of concept for a new IAM/IGA platform. Design choices come from th
 (stack: Angular, NestJS, Rust core, Dolt for versioned business data). No license has been granted for
 redistribution.
 
-Docs: [usage](docs/usage.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md).
+Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md).
 
 ## What exists and was tested
 | Part | State |
@@ -35,7 +35,7 @@ The demo users and their shared password are fictional and exist only for local 
 
 ## Written but NOT run or verified
 - `.github/workflows/ci.yml`: manual trigger only (`workflow_dispatch`), each run triggered by hand and bounded. Personal account on GitHub Free, Actions budget $0 with usage blocked (checked read-only before each run), so no paid usage is possible. History: run #1 (commit 4a863df, before the activation protocol) success, https://github.com/manudss/iam-platform-poc/actions/runs/40616112186 ; run #2 (commit 48acd69) success, but its `api` job skipped the suites needing local binaries, so it was NOT a full validation, https://github.com/manudss/iam-platform-poc/actions/runs/40621325634 ; run #3 (commit 8f3feb6, added service binaries to the `api` job) FAILED at 'Install service binaries' (wrong OpenBao asset name pattern), https://github.com/manudss/iam-platform-poc/actions/runs/40622448833 ; run #4 (commit 5938a4c, pattern fixed) success on all 4 jobs (core 3m02, api 6m30, web 26s, compose 1m00), https://github.com/manudss/iam-platform-poc/actions/runs/40623588619 . The `api` job now downloads Dolt, NATS, OpenBao and Temporal release binaries and installs embedded PostgreSQL via npm, then runs `npm test` and the headless-Chrome UI E2E. Run #4 api job log read: `# tests 48 / pass 48 / fail 0 / cancelled 0 / skipped 0` (the compose-stack test inside `npm test` reports itself as SKIP because `COMPOSE_STACK=1` is only set in the separate `compose` job), then `UI E2E PASSED` with headless Chrome. The `compose` job starts the real `infra/docker-compose.yml` containers and runs `compose.e2e.spec.ts` (5 container-level checks: Dolt seed, PostgreSQL journal, NATS JetStream publish, OpenBao KV, Temporal frontend answering). Clean rebuild from the remote copy (no cache of the earlier build tree: fresh `cargo test --locked`, fresh `npm ci`, release binaries re-downloaded): Rust 25/25, API 48/48 with 0 skipped (real Dolt, PostgreSQL, NATS, OpenBao, Temporal binaries). After that, `fullstack.e2e.spec.ts` was added: API 53/53 locally with the fullstack and gRPC specs (Rust: the gRPC change was verified with `cargo test -p iam-core --bin iam-core` = 13/13 and a fresh debug build, other crates unchanged, the full 25-test suite was not re-run after it). Run #5 (commit fa41806, final version, success on all 4 jobs: core 4m28, api 5m48, web 21s, compose 5m43, https://github.com/manudss/iam-platform-poc/actions/runs/40628972198) read from the raw job logs: core `cargo test --locked` 13+4+5+4 = 26 passed, 0 failed; api `# tests 53 / pass 53 / fail 0 / cancelled 0 / skipped 0` then `UI E2E PASSED` (the compose-app and compose-stack specs report SKIP in that job because COMPOSE_STACK is unset there); compose job: 5/5 container checks and compose-app 1/1 passed. web job green (summary not re-read). The gRPC and fullstack specs ran in CI in the api job. Run #6 (commit f44a0fe, https://github.com/manudss/iam-platform-poc/actions/runs/40637117143): core, web and compose green, api tests 75/75 and `UI E2E PASSED`, but the job failed on the next step ('Browser sign-in flow') with `EADDRINUSE 127.0.0.1:4200`: a port conflict caused by a bug in OUR `scripts/ui-e2e.mjs` cleanup (it stopped the npx wrapper and left `ng serve` alive). Fixed (detached process groups, descendant tree stopped, wait for ports 4200/8081/3000/3307 to be free). Run #7 (commit 322290a, https://github.com/manudss/iam-platform-poc/actions/runs/40638577734), success on all 4 jobs (core 3m40, api 7m53, web 15s, compose 4m11), read from the raw job logs: core `cargo test --locked` 15+4+5+4 = 28 passed, 0 failed; api `# tests 75 / pass 75 / fail 0 / skipped 0`, `UI E2E PASSED` (Angular console through the browser flow), 'Browser sign-in flow' 6/6 PASS, no port warning; web 6/6; compose 5/5 container checks and compose-app 1/1. Not run in CI: nothing beyond these jobs; only one browser (Chromium) tested.
-- `infra/docker-compose.yml` (Dolt, two PostgreSQL, Temporal, NATS JetStream, OpenBao dev). Started for real only by the CI job `compose` (container-level smoke checks above), not on the authoring machine (no Docker); the full NestJS+core stack was not run against the compose services.
+- `infra/docker-compose.yml` (Dolt, two PostgreSQL, Temporal, NATS JetStream, OpenBao dev). Started by the CI job `compose` (container-level smoke checks above) and, on 2026-10-28, on a Windows 11 + Docker Desktop machine (6 services running, Dolt seed present, NestJS API started against the Dolt and PostgreSQL containers: `/health` ok). The full NestJS+core+console flow against the compose services was not run there (no Rust toolchain installed on that machine).
 - `proto/decision.proto`: the gRPC contract implemented for `Decide` (see above).
 
 ## Which slice of the design is built (POC scope statement)
@@ -57,6 +57,15 @@ LDAP/database connectors, a real SCIM server, a plugin signing CLI and key rotat
 work before any production use.
 
 ## Local use
-1. `cp .env.example .env` and change the placeholder values (never commit `.env`).
-2. `docker compose --env-file .env -f infra/docker-compose.yml up -d` (the CI `compose` job runs this stack, run #5; not run on the authoring machine, no Docker).
-3. Core: `cd core && IAM_POLICY_FILE=../policies/demo.cedar cargo run -p iam-core`.
+Full step-by-step guide (Windows PowerShell and bash, prerequisites, configuration, start, checks, troubleshooting):
+[docs/local-setup.md](docs/local-setup.md). Short version, from the repository root:
+1. Prerequisites: Docker (Compose v2), Node.js 22+, Rust stable (on Windows also the MSVC C++ Build Tools).
+2. `cp .env.example .env` (PowerShell: `Copy-Item .env.example .env`) and optionally change the placeholder values (never commit `.env`).
+3. Build once: `cd core && cargo build -p iam-core`, `cd apps/api && npm ci && npm run build`, `cd apps/web && npm ci`.
+4. Infrastructure: `docker compose --env-file .env -f infra/docker-compose.yml up -d` (Dolt seeded with the demo data on 3307,
+   PostgreSQL 5433, Temporal 7233, NATS 4222, OpenBao 8200). Started on a Windows 11 + Docker Desktop machine (2026-10-28): all 6
+   services running, Dolt seed present.
+5. Core: `cd core && IAM_CORE_ADMIN_TOKEN=local-demo-admin-token cargo run -p iam-core` (127.0.0.1:8081).
+6. API: `cd apps/api && IAM_CORE_URL=http://127.0.0.1:8081 IAM_ISSUER=http://127.0.0.1:8081 IAM_CORE_ADMIN_TOKEN=local-demo-admin-token DOLT_PASSWORD=<DOLT_ROOT_PASSWORD> IAM_PG_URL=postgres://postgres:<RUNTIME_PG_PASSWORD>@127.0.0.1:5433/runtime node dist/main.js` (port 3000;
+   verified against the compose containers: `/health` ok, business routes 401 without a token).
+7. Console: `cd apps/web && npx ng serve`, open http://localhost:4200 (build verified on Windows).
