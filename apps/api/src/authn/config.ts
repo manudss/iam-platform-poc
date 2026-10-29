@@ -96,3 +96,27 @@ export function analyzeChain(cfg: AuthnConfig, chain: Chain): ChainAnalysis {
   return { id: chain.id, declaredLevel: chain.level, effectiveLevel: effective, maxStepLevel: maxStep, verifiedFactors: factors, simulatedSteps: sim.map((x) => x.m.id), mfa: factors.length >= 2, warnings,
     basis: 'Levels are set by an administrator (10 = strongest). They are declared, not measured, and are never added up across steps.' };
 }
+
+/**
+ * Ready-to-try examples shown when nothing is stored yet on a branch. Fictional, executable types only; catalogue-only types are never seeded.
+ * Nothing is written until an administrator saves, and no chain is selected for sign-in (defaultChain null), so live sign-in does not change.
+ * The e-mail step is simulated unless SMTP is configured. Levels are declared, never measured.
+ */
+export const SEED_CONFIG: AuthnConfig = {
+  methods: [
+    { id: 'password', type: 'password', name: 'Password', enabled: true, level: 3, config: {} },
+    { id: 'authenticator-app', type: 'totp', name: 'Authenticator app', enabled: true, level: 7, config: {} },
+    { id: 'e-mail-code', type: 'email-otp', name: 'E-mail code', enabled: true, level: 4, config: {} },
+    { id: 'pin-keypad', type: 'digit-code', name: 'PIN keypad', enabled: true, level: 3, config: { length: 6 } },
+    { id: 'pin-keypad-8', type: 'digit-code', name: 'PIN keypad (8 digits)', enabled: true, level: 4, config: { length: 8 } },
+  ],
+  chains: [
+    { id: 'password-only', name: 'Password only', enabled: true, steps: ['password'], level: 3 },
+    { id: 'password-then-authenticator', name: 'Password then authenticator', enabled: true, steps: ['password', 'authenticator-app'], level: 8 },
+    { id: 'password-then-e-mail-code', name: 'Password then e-mail code', enabled: true, steps: ['password', 'e-mail-code'], level: 5, note: 'The e-mail step is simulated unless SMTP is configured.' },
+    { id: 'e-mail-then-pin-keypad', name: 'E-mail then PIN keypad', enabled: true, steps: ['e-mail-code', 'pin-keypad'], level: 7, note: 'The e-mail step is simulated unless SMTP is configured.' },
+    { id: 'password-e-mail-pin', name: 'Password, e-mail code, PIN', enabled: true, steps: ['password', 'e-mail-code', 'pin-keypad-8'], level: 8, note: 'Three steps, two factor categories at most.' },
+  ],
+  defaultChain: null,
+};
+export const isEmptyConfig = (c: AuthnConfig) => !c.methods.length && !c.chains.length && !c.defaultChain;

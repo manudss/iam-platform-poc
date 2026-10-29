@@ -30,6 +30,7 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
   </section>
 
   <section class="card" id="authn-methods"><h3>Methods (in order)</h3>
+    @if (seeded()) { <p class="hint" id="authn-seeded">Ready-to-try examples (fictional): every executable method type and some chains. Nothing is stored or live until you press Save on this branch and then Apply; no chain is selected for sign-in yet. Passkey, recovery codes and external IdP are catalogue entries and are not offered.</p> }
     <p class="hint">The order is your display and priority order. Chain steps have their own order below.</p>
     <div class="scroll"><table><thead><tr><th>#</th><th>Name</th><th>Plugin type</th><th>Factor</th><th>Level (1-10)</th><th>On</th><th></th></tr></thead><tbody>
     @for (m of cfg().methods; track m.id; let i = $index) {
@@ -63,8 +64,8 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
     </tbody></table></div>
     <div class="row add"><label>Add a method of type<select name="newtype" [(ngModel)]="newType">@for (t of implemented(); track t.id) {<option [value]="t.id">{{t.name}}</option>}</select></label>
       <label>Name<input type="text" name="newname" [(ngModel)]="newName" maxlength="60" placeholder="for example Authenticator app" /></label>
-      <button id="authn-add-method" (click)="addMethod()">Add method</button>
-      @if (!cfg().methods.length) { <button class="secondary" id="authn-starter" (click)="starter()">Create starter set</button> }</div>
+      <button id="authn-add-method" (click)="addMethod()" [disabled]="!loaded()">Add method</button>
+      @if (!cfg().methods.length) { <button class="secondary" id="authn-starter" (click)="starter()" [disabled]="!loaded()">Create starter set</button> }</div>
   </section>
 
   <section class="card" id="authn-chains"><h3>Chains</h3>
@@ -91,7 +92,8 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
     <div class="row add"><label>New chain name<input type="text" name="newchain" [(ngModel)]="newChain" maxlength="60" placeholder="for example Password then authenticator" /></label><button id="authn-add-chain" (click)="addChain()">Add chain</button></div>
   </section>
 
-  <section class="card"><div class="row"><button id="authn-save" (click)="save()" [disabled]="busy() || !!problem() || (s.branch()==='main')">Save on this branch</button><button class="secondary" (click)="load()">Discard edits and reload</button>
+  @if (allShown().length) { <section class="card result" id="authn-all-shown"><b>Shown once, fictional demo credentials for demo-alice (PINs and secrets cannot be shown again):</b><ul>@for (l of allShown(); track l) { <li>{{l}}</li> }</ul></section> }
+  <section class="card"><div class="row"><button id="authn-save" (click)="save()" [disabled]="busy() || !loaded() || !!problem() || (s.branch()==='main')">Save on this branch</button><button class="secondary" id="authn-enroll-all" (click)="enrollAll()" [disabled]="busy() || dirty() || !loaded()" title="Save first">Provision demo credentials for demo-alice</button><button class="secondary" (click)="load()">Discard edits and reload</button>
     <button class="secondary" (click)="showOutbox()">Demo outbox</button></div>
     @if (s.branch()==='main') { <p class="hint">Choose a working branch (not main) to save. Changes become live only after Apply.</p> }
     @if (outbox()) { <div class="result" id="authn-outbox"><b>Demo outbox (simulated: no e-mail is sent).</b> Codes appear here in clear for administrators.
@@ -109,7 +111,7 @@ export class AuthMethodsPage {
   protected analyses = signal<Analysis[]>([]);
   protected live = signal<{ config: AuthnConfig; signInMode: string } | null>(null);
   protected saved = '';
-  protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected dirty = signal(false);
+  protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected dirty = signal(false); protected loaded = signal(false); protected seeded = signal(false); protected allShown = signal<string[]>([]);
   protected editing = signal(''); protected shown = signal(''); protected shownFor = signal(''); protected outbox = signal<{ at: string; to: string; user: string; text: string }[] | null>(null);
   protected newType = 'totp'; protected newName = ''; protected newChain = ''; protected stepPick: Record<string, string> = {};
   protected enrollUser = 'demo-alice'; protected enrollEmail = ''; protected enrollPin = '';
@@ -133,10 +135,11 @@ export class AuthMethodsPage {
   protected differsFromLive() { return !!this.live() && JSON.stringify(this.cfg()) !== JSON.stringify(this.live()!.config); }
 
   protected async load() {
+    this.loaded.set(false);
     try {
       const r = await this.s.api.raw<any>('GET', '/auth', undefined, this.h());
       this.catalogue.set(r.data.catalogue); this.cfg.set(r.data.working.config); this.analyses.set(r.data.working.analyses); this.live.set({ config: r.data.live.config, signInMode: r.data.live.signInMode });
-      this.saved = JSON.stringify(r.data.working.config); this.dirty.set(false); this.problem.set('');
+      this.saved = r.data.working.seeded ? '' : JSON.stringify(r.data.working.config); this.seeded.set(!!r.data.working.seeded); this.dirty.set(!!r.data.working.seeded); this.problem.set(''); this.loaded.set(true);
     } catch (e) { this.problem.set((e as Error).message); }
   }
   protected touch() { this.dirty.set(JSON.stringify(this.cfg()) !== this.saved); clearTimeout(this.timer); this.timer = setTimeout(() => void this.analyze(), 250); }
@@ -180,6 +183,19 @@ export class AuthMethodsPage {
       const o = r.data.shownOnce; this.shownFor.set(m.id); this.enrollPin = '';
       this.shown.set(o ? (o.secret ? `Authenticator secret for ${this.enrollUser}: ${o.secret}` : `PIN for ${this.enrollUser}: ${o.pin}`) : `Enrolled ${this.enrollUser} for ${m.name}.`);
       this.problem.set('');
+    } catch (e) { this.problem.set((e as Error).message); } finally { this.busy.set(false); }
+  }
+  /** Demo only: enrolls demo-alice in every method that needs enrollment. Secrets and PINs are shown once, here. */
+  protected async enrollAll() {
+    this.busy.set(true); const lines: string[] = [];
+    try {
+      for (const m of this.cfg().methods) {
+        const type = this.entry(m.type); if (type?.provisioning !== 'admin-demo') continue;
+        const body = m.type === 'email-otp' ? { email: 'alice@example.invalid' } : {};
+        const r = await this.s.api.raw<any>('POST', `/auth/enrollments/demo-alice/${encodeURIComponent(m.id)}`, body, this.h()); const o = r.data.shownOnce;
+        lines.push(o?.secret ? `${m.name}: authenticator secret ${o.secret}` : o?.pin ? `${m.name}: PIN ${o.pin}` : `${m.name}: enrolled`);
+      }
+      this.allShown.set(lines); this.problem.set('');
     } catch (e) { this.problem.set((e as Error).message); } finally { this.busy.set(false); }
   }
   protected async showOutbox() { try { this.outbox.set((await this.s.api.raw<any>('GET', '/auth/outbox', undefined, this.h())).data.messages); } catch (e) { this.problem.set((e as Error).message); } }

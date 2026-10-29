@@ -59,3 +59,11 @@ First step failure is a generic denial and an unknown user gets a decoy flow (no
 ## Known limits
 
 No SMS, no real e-mail until an SMTP provider is configured and tested, no passkeys, no service-level gating by `auth_level` yet, no self-service enrollment, a single `core-authn` document per tenant, mobile console layout reuses the existing shell.
+
+## Ready-to-try examples (seed)
+
+When nothing is stored yet on a branch, the console shows every executable method type (password, authenticator app, e-mail code, PIN keypad, a second PIN with 8 digits) and five example chains, so nothing has to be created by hand. This is a display default: nothing is written until an administrator presses "Save on this branch", and no chain is selected for sign-in, so live sign-in does not change until a chain is chosen, saved and applied. An existing stored configuration is never replaced. Catalogue-only types (passkey, recovery codes, external IdP) are not seeded. The e-mail step stays simulated unless SMTP is configured.
+
+"Provision demo credentials for demo-alice" (after saving) enrolls the fictional demo user in every method that needs it: the authenticator secret and generated PINs are shown once on screen. Enrollments are never seeded or versioned and no real credential is created.
+
+The console disables Save, "Add method" and the starter set until the configuration has finished loading, so a late response cannot overwrite edits.

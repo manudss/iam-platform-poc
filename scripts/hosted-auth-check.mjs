@@ -57,18 +57,15 @@ try {
   await page.waitForSelector('#authn-methods'); await noAlert('page'); await shot('1-empty-desktop');
 
   // ---- 2. build methods and chains in the console
-  await page.waitForLoadState('networkidle'); await sleep(2500); await page.click('#authn-starter'); await page.waitForSelector('tr:has(small:text-is("password"))');
-  const add = async (type, name) => { await page.selectOption('select[name=newtype]', type); await page.fill('input[name=newname]', name); await page.click('#authn-add-method'); };
-  await add('totp', 'Authenticator app'); await add('email-otp', 'E-mail code'); await add('digit-code', 'PIN keypad');
+  await page.waitForSelector('#authn-seeded'); // examples are offered before anything is stored
+  assert.equal(await page.locator('tr:has(small:text-is("passkey"))').count(), 0, 'catalogue-only types are not seeded');
   await page.waitForSelector('tr:has(small:text-is("pin-keypad"))');
-  const addChain = async (name, steps, level) => {
-    await page.fill('input[name=newchain]', name); await page.click('#authn-add-chain');
-    const c = page.locator(`.chain[data-chain="${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}"]`);
-    for (const s of steps) { await c.locator('select').last().evaluate((el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); }, s); await c.getByRole('button', { name: 'Add step', exact: true }).click(); }
-    await c.locator('input.lvl').fill(String(level)); return c;
-  };
-  const c1 = await addChain('Password then authenticator', ['password', 'authenticator-app'], 8);
-  const c2 = await addChain('E-mail then PIN keypad', ['e-mail-code', 'pin-keypad'], 7);
+  // creating a new method and a new chain still works on top of the examples
+  await page.selectOption('select[name=newtype]', 'totp'); await page.fill('input[name=newname]', 'Backup authenticator'); await page.click('#authn-add-method');
+  await page.waitForSelector('tr:has(small:text-is("backup-authenticator"))');
+  const chainBox = (id) => page.locator(`.chain[data-chain="${id}"]`);
+  const c1 = chainBox('password-then-authenticator'), c2 = chainBox('e-mail-then-pin-keypad');
+  await c1.waitFor();
   await c1.locator('input[type=radio]').check();
   await page.waitForFunction(() => document.querySelectorAll('.analysis').length >= 3);
   const a1 = await c1.locator('.analysis').innerText(), a2 = await c2.locator('.analysis').innerText();
@@ -83,14 +80,14 @@ try {
 
   // ---- 3. demo enrollment (secret shown once)
   const enroll = async (id) => { await page.locator(`tr:has(small:text-is("${id}")) button:text-is("Settings")`).click(); };
-  await enroll('authenticator-app'); await page.fill('input[name=enrolluser]', 'demo-alice'); await page.getByRole('button', { name: 'Provision' }).click();
+  await enroll('authenticator-app'); await page.fill('input[name=enrolluser]', 'demo-alice'); await page.getByRole('button', { name: 'Provision', exact: true }).click();
   await page.waitForSelector('#authn-shown');
   const secret = (await page.locator('#authn-shown').innerText()).match(/: ([A-Z2-7]{16,})/)[1];
   await shot('3-enrolled-totp');
   await enroll('pin-keypad'); await enroll('e-mail-code');
-  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollemail]', 'alice@example.invalid'); await page.getByRole('button', { name: 'Provision' }).click();
+  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollemail]', 'alice@example.invalid'); await page.getByRole('button', { name: 'Provision', exact: true }).click();
   await enroll('e-mail-code'); await enroll('pin-keypad');
-  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollpin]', '246810'); await page.getByRole('button', { name: 'Provision' }).click();
+  await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollpin]', '246810'); await page.getByRole('button', { name: 'Provision', exact: true }).click();
   await noAlert('enroll');
   await shot('3b-methods-enrolled-desktop');
   const ap = await call('POST', '/workspace/apply', { confirm: true }, 'aw-' + RUN); const apj = await ap.json(); assert.equal(apj.applied, true, JSON.stringify(apj));

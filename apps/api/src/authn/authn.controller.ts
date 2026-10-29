@@ -4,7 +4,7 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
 import { methodType } from './methods.js';
-import { validateConfig } from './config.js';
+import { SEED_CONFIG, isEmptyConfig, validateConfig } from './config.js';
 import { newTotpSecret, otpauthUri } from './totp.js';
 
 /**
@@ -17,8 +17,8 @@ export class AuthnAdminController {
   constructor(private readonly authn: AuthnService) {}
 
   @Get() async get(@Param('tenant') t: string) {
-    const work = await this.authn.workingConfig(t), live = await this.authn.liveConfig(t);
-    return { tenant: t, catalogue: this.authn.catalogue(), working: { config: work, analyses: this.authn.analyses(work) }, live: { config: live, analyses: this.authn.analyses(live), signInMode: live.defaultChain ? 'chain' : 'base-password' } };
+    const stored = await this.authn.workingConfig(t), live = await this.authn.liveConfig(t), seeded = isEmptyConfig(stored), work = seeded ? validateConfig(SEED_CONFIG) : stored;
+    return { tenant: t, catalogue: this.authn.catalogue(), working: { config: work, seeded, analyses: this.authn.analyses(work) }, live: { config: live, analyses: this.authn.analyses(live), signInMode: live.defaultChain ? 'chain' : 'base-password' } };
   }
   /** Validates and analyzes a DRAFT configuration without saving it, so the console can show levels, factors and warnings while editing. */
   @Post('analyze') analyze(@Body() b: { config?: unknown }) {

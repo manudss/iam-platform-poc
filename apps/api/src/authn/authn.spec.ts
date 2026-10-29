@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
-import { analyzeChain, validateConfig, parseStored } from './config.js';
+import { analyzeChain, validateConfig, parseStored, SEED_CONFIG, isEmptyConfig } from './config.js';
 import { totpAt, base32Decode, hotp, base32Encode } from './totp.js';
 
 const ADMIN = 'x'.repeat(20), GATE = 'gate-token-1234', T = 'acme-demo', PW = 'demo-only-not-a-secret';
@@ -286,5 +286,17 @@ describe('authn configuration is checked when staged, so Apply never receives a 
   it('a damaged stored value falls back to an empty configuration instead of breaking sign-in', () => {
     assert.deepEqual(parseStored({ methods: 'garbage' } as any), { methods: [], chains: [], defaultChain: null });
     assert.deepEqual(parseStored(undefined), { methods: [], chains: [], defaultChain: null });
+  });
+});
+
+describe('ready-to-try examples', () => {
+  it('the seed is valid, executable only, selects no chain for sign-in, and an existing config is never replaced', () => {
+    const cfg = validateConfig(SEED_CONFIG);
+    assert.equal(cfg.defaultChain, null);
+    assert.ok(cfg.methods.length >= 4 && cfg.chains.length >= 4);
+    assert.ok(!cfg.methods.some((m) => ['passkey', 'recovery-codes', 'external-idp'].includes(m.type)));
+    assert.equal(isEmptyConfig(SEED_CONFIG), false);
+    assert.equal(isEmptyConfig({ methods: [], chains: [], defaultChain: null }), true);
+    assert.equal(isEmptyConfig({ methods: [SEED_CONFIG.methods[0]], chains: [], defaultChain: null }), false);
   });
 });
