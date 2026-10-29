@@ -1,8 +1,11 @@
 import { newPkce } from './pkce';
 
-export const REDIRECT = 'http://localhost:4200/callback'; // registered redirect_uri: the console itself, served at http://localhost:4200
-/** Where the BROWSER reaches the core for the form (loopback). Not proxied: the form posts to the core origin. */
-export const CORE_PUBLIC = 'http://127.0.0.1:8081';
+/** Origin of THIS console (http://localhost:4200 in `ng serve`, the public URL of the hosted demo). */
+const ORIGIN = (globalThis as { location?: { origin?: string } }).location?.origin ?? 'http://localhost:4200';
+export const REDIRECT = `${ORIGIN}/callback`; // registered redirect_uri: the console itself, on its own origin
+/** Where the BROWSER reaches the core for the sign-in form: the same origin under /core (proxied by ng serve
+ *  locally and by demo/server.mjs in the hosted demo), so no loopback URL is ever exposed to the browser. */
+export const CORE_PUBLIC = `${ORIGIN}/core`;
 
 export interface Violation { identity: string; roleA: string; roleB: string }
 export interface Change { branch: string; commit: string; violations: Violation[]; mergeable: boolean }

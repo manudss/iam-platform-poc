@@ -27,6 +27,17 @@ pub struct Idp {
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() }
 fn rand_token() -> String { let b: [u8; 24] = rand::random(); B64.encode(b) }
 
+/// Registered redirect URIs of the demo client: the local console, plus any comma-separated
+/// extras in IAM_IDP_EXTRA_REDIRECT_URIS (e.g. a hosted demo origin). Exact-match checked before
+/// any form or redirect, so an unlisted URI is always refused.
+fn demo_redirect_uris() -> Vec<String> {
+    let mut v = vec!["http://localhost:4200/callback".to_string()];
+    if let Ok(extra) = std::env::var("IAM_IDP_EXTRA_REDIRECT_URIS") {
+        v.extend(extra.split(',').map(str::trim).filter(|u| !u.is_empty()).map(str::to_string));
+    }
+    v
+}
+
 impl Idp {
     pub fn demo(issuer: &str) -> Self {
         let seed: [u8; 32] = rand::random();
@@ -35,7 +46,7 @@ impl Idp {
         users.insert("demo-bob".to_string(), "demo-only-not-a-secret".to_string());
         Self {
             key: SigningKey::from_bytes(&seed), issuer: issuer.into(), client_id: "demo-web".into(),
-            redirect_uris: vec!["http://localhost:4200/callback".into()], users, codes: Mutex::new(HashMap::new()), ttl: 300,
+            redirect_uris: demo_redirect_uris(), users, codes: Mutex::new(HashMap::new()), ttl: 300,
         }
     }
 

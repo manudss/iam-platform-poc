@@ -1,4 +1,8 @@
 {
   "/core": { "target": "http://127.0.0.1:8081", "pathRewrite": { "^/core": "" } },
-  "/api": { "target": "http://127.0.0.1:3000", "pathRewrite": { "^/api": "" } }
+  "/api": { "target": "http://127.0.0.1:3000", "pathRewrite": { "^/api": "" } },
+  "/authorize": { "target": "http://127.0.0.1:8081" },
+  "/token": { "target": "http://127.0.0.1:8081" },
+  "/jwks.json": { "target": "http://127.0.0.1:8081" },
+  "/.well-known": { "target": "http://127.0.0.1:8081" }
 }
