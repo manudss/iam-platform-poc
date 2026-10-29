@@ -75,7 +75,7 @@ export const emailOtp: AuthMethodType = {
     const code = String(randomInt(0, 10 ** len)).padStart(len, '0');
     const to = ctx.known ? (await ctx.enroll.email(ctx.tenant, ctx.subject, ctx.instanceId)) ?? `${ctx.subject}@mail.example.invalid` : '';
     if (ctx.known) await ctx.mail.send({ tenant: ctx.tenant, to, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in ${Math.round(ttl / 60)} minute(s).`, subjectUser: ctx.subject });
-    return { prompt: { title: 'Check your e-mail', message: 'If the account exists, a code was sent to its e-mail address.', fields: [{ name: 'code', label: 'Code', type: 'digits', maxLength: len, hint: `${len} digits` }] },
+    return { prompt: { title: 'Check your e-mail', message: (ctx.config.delivery ?? 'demo-outbox') === 'demo-outbox' ? 'DEMO ONLY: no e-mail is sent. In this prototype the code is written to a demo outbox that an administrator can read.' : 'If the account exists, a code was sent to its e-mail address.', fields: [{ name: 'code', label: 'Code', type: 'digits', maxLength: len, hint: `${len} digits` }] },
       state: { hash: sha(`${ctx.instanceId}:${code}`), exp: ctx.now() + ttl * 1000, used: false } };
   },
   async verify(ctx, st, a) {

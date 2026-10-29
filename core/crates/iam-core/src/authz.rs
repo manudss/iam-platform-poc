@@ -13,6 +13,7 @@ use std::{collections::HashMap, sync::Arc};
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;") }
 fn pct(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect() }
 
+const STYLE: &str = "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f1f5f9;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#0f172a}main{width:min(26rem,calc(100vw - 2rem));background:#fff;border:1px solid #e2e8f0;border-radius:.9rem;padding:1.4rem 1.5rem;box-shadow:0 8px 28px #4f46e51f}h1{font-size:1.35rem;margin:0 0 .4rem}p{margin:.4rem 0;color:#475569}label{display:block;margin:.8rem 0 0;font-weight:600}input{display:block;width:100%;margin-top:.25rem;padding:.65rem .75rem;font:inherit;border:1px solid #cbd5e1;border-radius:.55rem}input:focus{outline:2px solid #6366f1;border-color:#6366f1}button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:#fff;background:#4f46e5;border:0;border-radius:.55rem;cursor:pointer}.demo{background:#fffbeb;border:1px solid #fcd34d;border-radius:.55rem;padding:.5rem .7rem;color:#92400e}</style>";
 fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response {
     let mut r = (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     let h = r.headers_mut();
@@ -49,15 +50,15 @@ fn input_html(f: &Value) -> Option<String> {
 /// First page. `fields` None = the classic user + password form (no chain is live). Some(fields) = user name plus the first step's inputs (possibly none).
 fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value]>) -> Response {
     let hid = hidden(p);
-    let err = error.map(|e| format!("<p style=\"color:#b00\">{}</p>", esc(e))).unwrap_or_default();
+    let err = error.map(|e| format!("<p style=\"color:#b91c1c\">{}</p>", esc(e))).unwrap_or_default();
     let inputs = match fields {
         None => "<label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\"></label> ".to_string(),
         Some(f) => f.iter().filter_map(input_html).collect::<String>(),
     };
     let button = if fields.is_some_and(|f| f.is_empty()) { "Continue" } else { "Sign in" };
     page(if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>Sign in (local prototype)</title><h1>Sign in</h1><p>OAuth/OIDC-inspired authentication prototype, local demo accounts only.</p>{err}\
-         <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form>"), Some(&origin_of(p)))
+        "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Sign in (local prototype)</title><main><h1>Sign in</h1><p>OAuth/OIDC-inspired authentication prototype, local demo accounts only.</p>{err}\
+         <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form></main>"), Some(&origin_of(p)))
 }
 
 /// A later step of a chain: the opaque session id is the only link to the first page (the user name is not sent again).
@@ -65,12 +66,12 @@ fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>) -> Res
     let st = &v["step"];
     let title = st["title"].as_str().unwrap_or("Verification");
     let (i, n) = (st["index"].as_u64().unwrap_or(0) + 1, st["total"].as_u64().unwrap_or(1));
-    let msg = st["message"].as_str().map(|m| format!("<p>{}</p>", esc(m))).unwrap_or_default();
-    let err = error.or(v["error"].as_str()).map(|e| format!("<p style=\"color:#b00\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
+    let msg = st["message"].as_str().map(|m| format!("<p{}>{}</p>", if m.starts_with("DEMO") { " class=\"demo\"" } else { "" }, esc(m))).unwrap_or_default();
+    let err = error.or(v["error"].as_str()).map(|e| format!("<p style=\"color:#b91c1c\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
     let inputs = st["fields"].as_array().map(|f| f.iter().filter_map(input_html).collect::<String>()).unwrap_or_default();
     page(if error.is_some() || v["error"].is_string() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>Sign in, step {i} of {n}</title><h1>{}</h1><p>Step {i} of {n}.</p>{msg}{err}\
-         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}<button type=\"submit\">Continue</button></form>",
+        "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Sign in, step {i} of {n}</title><main><h1>{}</h1><p>Step {i} of {n}.</p>{msg}{err}\
+         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}<button type=\"submit\">Continue</button></form></main>",
         esc(title), hidden(p), esc(v["session"].as_str().unwrap_or(""))), Some(&origin_of(p)))
 }
 
