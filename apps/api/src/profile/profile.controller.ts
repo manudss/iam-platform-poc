@@ -19,7 +19,7 @@ export class ProfileController {
     return { readOnly: true, organizations: await this.orgs.section(t, subject, ref), roles };
   }
 
-  @Get('profile-fields') async fields(@Param('tenant') t: string) {
+  @UseGuards(AdminGuard) @Get('profile-fields') async fields(@Param('tenant') t: string) {
     const [wc, lc, wcat, lcat] = [await this.p.config(t, 'work'), await this.p.config(t, 'live'), await this.p.catalogue(t, 'work'), await this.p.catalogue(t, 'live')];
     const eff = (cat: typeof wcat, cfg: typeof wc) => Object.fromEntries(cat.map((f) => [f.fullKey, settingFor(f, cfg)]));
     return { tenant: t, catalogue: wcat, working: { config: wc, settings: eff(wcat, wc) }, live: { config: lc, catalogue: lcat, settings: eff(lcat, lc) } };
