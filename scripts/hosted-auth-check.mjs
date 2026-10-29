@@ -58,7 +58,7 @@ try {
 
   // ---- 2. build methods and chains in the console
   await page.waitForSelector('tr:has(small:text-is("pin-keypad"))'); assert.equal(await page.locator('#authn-seeded').count(), 0, 'the examples are STORED by the demo seed, not a UI default');
-  const live0 = await (await call('GET', '/auth')).json(); assert.ok(JSON.stringify(live0).includes('password-then-authenticator') && JSON.stringify(live0).includes('"defaultChain":null'), 'stored seed, no chain selected');
+  const live0 = await (await call('GET', '/auth', undefined, 'aw-' + RUN)).json(); assert.ok(JSON.stringify(live0).includes('password-then-authenticator') && JSON.stringify(live0).includes('"defaultChain":null'), 'stored seed, no chain selected ' + JSON.stringify(live0).slice(0, 300));
   assert.equal(await page.locator('tr:has(small:text-is("passkey"))').count(), 0, 'catalogue-only types are not seeded');
   await page.waitForSelector('tr:has(small:text-is("pin-keypad"))');
   // creating a new method and a new chain still works on top of the examples
