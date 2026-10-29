@@ -7,7 +7,7 @@ interface F { key: string; label: string; type: string; help?: string; options?:
 @Component({
   selector: 'app-signup', imports: [FormsModule], styleUrl: './login.css',
   template: `
-  <main class="login"><h1>Request an account</h1>
+  <main class="login"><section class="card hero"><h1>Request an account</h1>
   @if (state()==='loading') { <p>Loading...</p> }
   @else if (state()==='closed') { <p id="su-closed" role="status">Sign-up is closed.</p> }
   @else if (state()==='sent') { <p id="su-sent" role="status">{{msg()}}</p>
@@ -24,7 +24,7 @@ interface F { key: string; label: string; type: string; help?: string; options?:
         @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
         @else { <input [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event" /> }</label> }
       <button id="su-send">Send request</button></form> }
-  </main>`,
+  </section></main>`,
 })
 export class SignupPage {
   protected state = signal<'loading' | 'closed' | 'form' | 'sent'>('loading'); protected fields = signal<F[]>([]); protected err = signal(''); protected msg = signal(''); protected confirmed = signal('');
