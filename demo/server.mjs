@@ -32,7 +32,12 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
     if (p === '/core' || p.startsWith('/core/')) return proxy(req, res, CORE, true);
-    if (p === '/api' || p.startsWith('/api/')) return proxy(req, res, API, true);
+    if (p === '/api' || p.startsWith('/api/')) {
+      // The admin capability token lives only server-side: the edge attaches it to proxied API calls so
+      // signed-in demo visitors can use simulation / plugin admin without ever seeing the secret.
+      if (process.env.IAM_API_ADMIN_TOKEN) req.headers['x-api-admin-token'] = process.env.IAM_API_ADMIN_TOKEN;
+      return proxy(req, res, API, true);
+    }
     if (p === '/authorize' || p === '/authorize/login' || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false);
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('method not allowed'); }
     const safe = normalize(p).replace(/^(\.\.[/\\])+/, '');
