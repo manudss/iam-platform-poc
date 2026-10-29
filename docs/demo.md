@@ -101,10 +101,17 @@ registered by default; to SHARE the demo, set port 4200 visibility to Public
 and `demo-start.sh` registers the Codespaces forwarded origin
 (`https://<name>-4200.app.github.dev/callback`) with the IdP automatically.
 
-Status: the dev container and scripts are configured and reviewed against the
-hosted-demo environment contract (same issuer / redirect-URI derivation), but
-this exact Codespaces path has NOT been exercised end-to-end in a real
-Codespace yet. The hosted demo above is the verified path.
+Status: verified end-to-end on 2026-10-29 in a real Codespace created on the
+`demo` branch (2-core machine, free monthly quota): the dev container built,
+`postCreateCommand` ran `demo-setup.sh` unattended (Dolt install, `cargo
+build -p iam-core`, `npm ci` for API and web, Dolt seed), `demo-start.sh`
+started Dolt + core + API + the console and auto-registered the public
+forwarded origin with the IdP. With port 4200 set to Public, the full flow
+worked on `https://<codespace>-4200.app.github.dev`: PKCE sign-in as
+demo-alice, assignments read from Dolt main, and a simulation of demo-bob +
+payment-approver showing the SoD violation with `mergeable: false` on a Dolt
+change branch. The Codespace was deleted after the test so it stops consuming
+the storage quota; recreating it is one click (Code > Codespaces > Create).
 
 Personal GitHub accounts include a free monthly Codespaces quota (see GitHub's
 billing documentation for current numbers); stop the Codespace when done so
