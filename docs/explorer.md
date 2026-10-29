@@ -25,6 +25,9 @@ PRs live in a separate unversioned database `<db>_meta` (not in branches, so the
 ## Limits
 No conflict-resolution UI (conflicting merges are refused), single-instance lock, no real multi-tenant data split.
 
+## Hosted test copy
+A second free Render service, `iam-poc-explorer-test` (https://iam-poc-explorer-test.onrender.com), builds branch `feature/dolt-explorer` with `demo/Dockerfile` (env `IAM_PUBLIC_ORIGIN` only, health `/healthz`, auto-deploy OFF: redeploy by hand). It is separate from `iam-poc-demo` (branch `demo`). The edge server adds the admin capability to proxied calls, so nobody types a token there; anonymous calls get 401. Sign in as `demo-alice` / `demo-only-not-a-secret` (fictional). Free-tier facts: Hobby plan, no card, 750 free instance hours per month shared by the whole workspace, 500 pipeline minutes, sleep after 15 minutes, data and PRs reset on restart. `scripts/hosted-explorer-check.mjs <url>` runs the live check (fresh browser, no token typed).
+
 ## Tests
 Integrated check on the real stack: `scripts/ui-e2e.mjs` (real Rust core + real NestJS API with all IAM/plugin routes + Dolt + the console on `ng serve`) signs in through the core, runs the existing flows (SoD refusal, merge, activation, plugin install/enable/disable) and then drives the explorer (branch, row edit, compare, SQL refusals, pull request, approve disabled for the author, merge, history), checking after each step that no error banner shows and that activation still works after a PR merge. Build the core first: `cd core && cargo build -p iam-core --locked`.
 ```
