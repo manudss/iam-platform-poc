@@ -111,3 +111,61 @@ export function formValues(model: FormModel, edited: Record<string, unknown>): R
   }
   return out;
 }
+
+// ---- Database explorer (Dolt branches, history, diffs, data, SQL console, pull requests; see docs/explorer.md) ----
+export interface BranchInfo { name: string; commit: string; committer: string; date: string; message: string; protected: boolean; default: boolean; aheadOfDefault: number; behindDefault: number }
+export interface CommitInfo { commit: string; author: string; date: string; message: string; parents: string[]; refs: string[]; merge: boolean }
+export interface TableSummary { table: string; from: string | null; kind: string; dataChange: boolean; schemaChange: boolean }
+export interface DiffSummary { from: string; to: string; three: boolean; tables: TableSummary[]; schema: { table: string; from: string | null; to: string | null }[] }
+export interface RowDiff { type: string; from: Record<string, unknown> | null; to: Record<string, unknown> | null }
+export interface ColumnInfo { name: string; type: string; nullable: boolean; key: string }
+export interface TableData { ref: string; kind: string; table: string; columns: ColumnInfo[]; primaryKey: string[]; total: number; offset: number; hasMore: boolean; rows: Record<string, unknown>[]; createStatement: string }
+export interface SqlResult { mode: string; columns?: string[]; rows?: Record<string, unknown>[]; truncated?: boolean; rowCount?: number; ms?: number; committed?: string | null; dryRun?: boolean; destructive?: boolean; changes?: TableSummary[]; samples?: Record<string, { columns: string[]; rows: RowDiff[] }>; statements?: number; affectedRows?: number; note?: string }
+export interface PullRequestInfo { id: number; title: string; body: string; source: string; target: string; status: 'open' | 'merged' | 'closed'; author: string; createdAt: string; mergedAt: string | null; mergeCommit: string | null }
+export interface PullRequestDetail {
+  pullRequest: PullRequestInfo; comments: { id: number; author: string; kind: string; body: string; createdAt: string }[]; approvals: string[]; requiredApprovals: number;
+  commits: { commit: string; author: string; date: string; message: string }[]; diff: DiffSummary | null; checks: { mergeable: boolean; reasons: string[]; conflicts: number; violations: { identity: string; roleA: string; roleB: string }[] } | null;
+}
+
+/**
+ * Explorer calls. Every route needs the sign-in AND the admin capability. In the hosted demo the edge server adds the capability on its own;
+ * locally the operator types it (kept in memory only, like the user token). 409 is returned as an error with the server's message.
+ */
+export class VersioningClient {
+  adminToken = '';
+  constructor(private readonly api: ApiClient) {}
+  private async req<T>(method: string, path: string, body?: object): Promise<T> {
+    const r = await this.api.raw<T & { message?: string }>(method, `/versioning${path}`, body, { 'x-api-admin-token': this.adminToken });
+    if (r.status >= 400) throw new Error((r.data as { message?: string }).message ?? `HTTP ${r.status}`);
+    return r.data;
+  }
+  private q(o: Record<string, string | number | boolean | undefined>) {
+    const p = Object.entries(o).filter(([, v]) => v !== undefined && v !== '' && v !== false).map(([k, v]) => `${k}=${encodeURIComponent(String(v === true ? 1 : v))}`);
+    return p.length ? `?${p.join('&')}` : '';
+  }
+  branches() { return this.req<{ default: string; branches: BranchInfo[] }>('GET', '/branches'); }
+  createBranch(name: string, from: string) { return this.req<{ branch: string; commit: string }>('POST', '/branches', { name, from }); }
+  deleteBranch(name: string) { return this.req('DELETE', `/branches/${encodeURIComponent(name)}`); }
+  restoreBranch(name: string, commit: string) { return this.req('POST', `/branches/${encodeURIComponent(name)}/restore`, { commit, confirm: true }); }
+  tags() { return this.req<{ tags: { name: string; commit: string; date: string; message: string }[] }>('GET', '/tags'); }
+  createTag(name: string, commit: string) { return this.req('POST', '/tags', { name, commit }); }
+  log(ref: string, offset = 0, limit = 30) { return this.req<{ ref: string; commits: CommitInfo[]; hasMore: boolean }>('GET', `/log${this.q({ ref, offset, limit })}`); }
+  commit(hash: string) { return this.req<{ commit: string; message: string; author: string; date: string; parents: string[]; changes: TableSummary[] }>('GET', `/commits/${hash}`); }
+  revert(hash: string, newBranch: string) { return this.req<{ branch: string; commit: string }>('POST', `/commits/${hash}/revert`, { newBranch }); }
+  diff(from: string, to: string, three: boolean) { return this.req<DiffSummary>('GET', `/diff${this.q({ from, to, three })}`); }
+  diffTable(table: string, from: string, to: string, three: boolean) { return this.req<{ table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }>('GET', `/diff/${table}${this.q({ from, to, three })}`); }
+  tables(ref: string) { return this.req<{ ref: string; kind: string; tables: { name: string; rows: number }[] }>('GET', `/tables${this.q({ ref })}`); }
+  rows(ref: string, table: string, offset = 0, limit = 25) { return this.req<TableData>('GET', `/tables/${table}${this.q({ ref, offset, limit })}`); }
+  edit(branch: string, table: string, ops: object[], message: string) { return this.req<{ commit: string }>('POST', `/tables/${table}/edit`, { branch, ops, message }); }
+  sql(body: { ref: string; sql: string; mode: 'read' | 'write'; message?: string; dryRun?: boolean; confirmDestructive?: boolean }) { return this.req<SqlResult>('POST', '/sql', body); }
+  pulls(status?: string) { return this.req<{ pullRequests: PullRequestInfo[] }>('GET', `/pulls${this.q({ status })}`); }
+  openPull(title: string, body: string, source: string, target: string) { return this.req<PullRequestInfo>('POST', '/pulls', { title, body, source, target }); }
+  pull(id: number) { return this.req<PullRequestDetail>('GET', `/pulls/${id}`); }
+  comment(id: number, body: string, kind: 'comment' | 'approve' = 'comment') { return this.req('POST', `/pulls/${id}/comments`, { body, kind }); }
+  closePull(id: number) { return this.req('POST', `/pulls/${id}/close`, {}); }
+  mergePull(id: number) { return this.req<{ commit: string }>('POST', `/pulls/${id}/merge`, {}); }
+}
+
+export const shortHash = (h: string | null | undefined) => (h ?? '').slice(0, 8);
+/** Table cell text: NULL is shown as such, objects (JSON columns) as compact JSON. */
+export function cellText(v: unknown): string { return v === null || v === undefined ? 'NULL' : typeof v === 'object' ? JSON.stringify(v) : String(v); }

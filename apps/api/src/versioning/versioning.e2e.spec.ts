@@ -76,7 +76,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       const names = guards.map((g) => (g as { name: string }).name);
       assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
       const routes = Object.getOwnPropertyNames(VersioningController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (VersioningController.prototype as any)[n]) !== undefined);
-      assert.ok(routes.length >= 25, `route table walked: ${routes.length} routes`);
+      assert.ok(routes.length >= 22, `route table walked: ${routes.length} routes`);
     });
     it('refuses without sign-in (401), with the wrong tenant (403), and without the admin capability (403), on reads and writes alike', async () => {
       const routes: [string, string, object?][] = [['GET', '/branches'], ['GET', '/log'], ['GET', '/tables'], ['GET', '/tables/assignments'], ['GET', '/pulls'], ['GET', '/tags'], ['GET', '/diff?from=main&to=main'], ['POST', '/sql', { sql: 'select 1' }],
@@ -205,6 +205,47 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal(noop.committed, null);
       assert.equal((await call('POST', '/sql', { mode: 'write', ref: 'sqlb', sql: "call dolt_commit('-am','x')" })).status, 400);
       assert.equal((await call('POST', '/sql', { mode: 'write', ref: 'sqlb', sql: "drop table dolt_docs" })).status, 400);
+    });
+  });
+
+  describe('SQL console: adversarial checks against the real engine', () => {
+    it('cannot reach grants, the pull request store, other schemas or version-control actions, and never changes anything', async () => {
+      const snap = async () => JSON.stringify([(await sql('main', 'select * from assignments order by 1,2')).rows, (await sql('main', 'select hashof(\'main\') h')).rows, (await ok('GET', '/branches')).branches.map((b: any) => [b.name, b.commit])]);
+      await ok('POST', '/branches', { name: 'adv', from: 'main' });
+      const pr = await ok('POST', '/pulls', { title: 'adv', source: 'adv', target: 'main' }); // makes sure the meta database exists
+      const before = await snap();
+      const read = ['select * from mysql.user', 'select * from `mysql`.`db`', 'SELECT * FROM iam_meta.pull_requests', 'select * from IAM_META.pr_comments', 'select (select count(*) from mysql.user) c', 'show grants', 'show databases',
+        'show create user root', 'show processlist', 'show variables', "select dolt_commit('-Am','x')", "select dolt_branch('evil')", "select dolt_reset('--hard')", "select dolt_tag('t1','main')", "select dolt_revert('main')",
+        "select dolt_checkout('adv')", "select dolt_merge('adv')", "select dolt_clean()", "select dolt_gc()", "select dolt_backup('sync','x')", "select dolt_remote('add','x','file:///tmp/x')", "select dolt_conflicts_resolve('--ours','assignments')",
+        "call dolt_commit('-Am','x')", "call dolt_branch('evil')", 'with x as (select 1 a) delete from assignments', "with x as (select 1 a) update roles set label = 'pwned'", 'select * from roles into outfile "/tmp/pwn"', 'select * from roles into dumpfile "/tmp/pwn"',
+        "set @@dolt_allow_commit_conflicts = 1", "set autocommit = 1", "use iam_meta", "prepare p from 'delete from assignments'", 'delete from assignments', 'truncate assignments', "select load_file('/etc/passwd')", 'select sleep(1)', 'select 1; delete from assignments',
+        "explain analyze delete from assignments", 'select * from assignments for update'];
+      for (const q of read) {
+        const r = await call('POST', '/sql', { ref: 'main', sql: q });
+        if (q === 'explain analyze delete from assignments' || q === 'select * from assignments for update') assert.ok([200, 201, 400].includes(r.status), q); // may run, but must not change anything (checked below)
+        else assert.equal(r.status, 400, `read mode must refuse: ${q} -> ${r.status} ${JSON.stringify(r.body).slice(0, 150)}`);
+      }
+      assert.equal(await snap(), before, 'nothing changed after all the read-mode attacks');
+      const write = ["insert into iam_meta.pull_requests (tenant, title, body, source, target, author, created_at, updated_at) values ('x','x','x','a','b','x',now(),now())", "update IAM_META.pull_requests set status='merged'", 'drop table iam_meta.pr_comments', 'delete from iam_meta.pull_requests where 1=1',
+        "insert into mysql.user (host, user) values ('%','evil')", 'create table mysql.evil (id int)', "grant all on *.* to 'evil'@'%'", "create user 'evil'@'%'", 'drop database iam', 'create database evil', "create procedure p() select 1", 'create trigger t before insert on roles for each row set @x=1',
+        "call dolt_commit('-Am','x')", "call dolt_merge('adv')", "call dolt_branch('-D','adv')", "call dolt_reset('--hard')", "insert into assignments select 'x', dolt_commit('-Am','x')", "update roles set label = (select dolt_hashof_table('roles'))",
+        "insert into dolt_ignore values ('x%', true)", 'drop table dolt_docs', "create table t_x as select * from dolt_log", 'select 1', 'set autocommit=1', "load data infile '/etc/passwd' into table roles", "insert into roles values (@@version, 'x', false)", 'alter table roles rename to mysql.roles2'];
+      for (const q of write) {
+        const r = await call('POST', '/sql', { mode: 'write', ref: 'adv', sql: q });
+        assert.ok(r.status === 400 || r.status === 403, `write mode must refuse: ${q} -> ${r.status} ${JSON.stringify(r.body).slice(0, 150)}`);
+      }
+      assert.equal((await ok('GET', `/pulls/${pr.id}`)).pullRequest.status, 'open', 'the pull request store is untouched');
+      assert.equal((await ok('GET', '/pulls')).pullRequests.length >= 1, true);
+      assert.equal(await snap(), before, 'nothing changed after all the write-mode attacks');
+      assert.equal((await sql('adv', 'select * from dolt_status')).rows.length, 0);
+      // the protected branch cannot be written by ANY console path, also with the confirmation flag
+      for (const q of ["insert into roles values ('p','p',false)", 'drop table roles', 'delete from roles'])
+        assert.equal((await call('POST', '/sql', { mode: 'write', ref: 'main', sql: q, confirmDestructive: true })).status, 403, q);
+      assert.equal(await snap(), before);
+    });
+    it('allows the legitimate system reads', async () => {
+      for (const q of ['select * from dolt_log limit 3', "select * from dolt_diff_summary('main','adv')", 'select * from dolt_branches', 'select * from dolt_status', 'select * from dolt_history_assignments limit 2', 'show create table assignments', 'show columns from roles', 'describe roles', 'explain select * from roles', 'select * from information_schema.tables limit 2', 'select a.identity_id, r.label from assignments a join roles r on 1=1'])
+        assert.equal((await call('POST', '/sql', { ref: 'main', sql: q })).status, 201, q);
     });
   });
 

@@ -2,10 +2,11 @@ import { Component, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ApiClient, Change } from './api';
 import { PluginsAdmin } from './plugins-admin';
+import { DoltExplorer } from './dolt-explorer';
 
 @Component({
   selector: 'app-root',
-  imports: [FormsModule, PluginsAdmin],
+  imports: [FormsModule, PluginsAdmin, DoltExplorer],
   styleUrl: './app.css',
   templateUrl: './app.html',
 })

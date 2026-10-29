@@ -37,5 +37,7 @@
     <ul>@for (a of activations(); track a.seq) { <li>#{{ a.seq }} {{ a.commit }}</li> }</ul>
 
     <app-plugins-admin [api]="api" />
+
+    <app-dolt-explorer [api]="api" />
   }
 </main>

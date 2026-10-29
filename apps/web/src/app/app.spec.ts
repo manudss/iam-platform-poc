@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { App } from './app';
-import { ApiClient } from './api';
+import { ApiClient, CORE_PUBLIC, REDIRECT } from './api';
 import { challengeFor } from './pkce';
 
 describe('PKCE', () => {
@@ -43,8 +43,8 @@ describe('browser sign-in flow (client side)', () => {
     const s = store(); let url = '';
     await new ApiClient().startBrowserLogin(s, (u) => (url = u));
     const q = new URL(url).searchParams;
-    expect(url.startsWith('http://127.0.0.1:8081/authorize?')).toBe(true);
-    expect([q.get('response_type'), q.get('code_challenge_method'), q.get('redirect_uri')]).toEqual(['code', 'S256', 'http://localhost:4200/callback']);
+    expect(url.startsWith(`${CORE_PUBLIC}/authorize?`)).toBe(true);
+    expect([q.get('response_type'), q.get('code_challenge_method'), q.get('redirect_uri')]).toEqual(['code', 'S256', REDIRECT]);
     expect(await challengeFor(s.getItem('iam.pkce.verifier')!)).toBe(q.get('code_challenge'));
     expect(s.getItem('iam.pkce.state')).toBe(q.get('state'));
     expect(url).not.toContain('password');

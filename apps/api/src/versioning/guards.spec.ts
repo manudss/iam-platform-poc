@@ -15,7 +15,7 @@ describe('SQL console guard: read mode', () => {
   it('refuses every way to write or to call version-control actions', () => {
     for (const s of ["call dolt_commit('-am','x')", "select dolt_commit('-am','x')", "select DOLT_MERGE('b1')", "select dolt_checkout('b1')", "select dolt_reset('--hard')", "select dolt_branch('x')", "select dolt_push('origin','main')",
       "select dolt_conflicts_resolve('--ours','t')", 'select * from `dolt_commit`(\'x\')', "select * from dolt_commit ('x')", 'insert into assignments values (1,2)', 'update roles set label=1', 'drop table roles', 'delete from roles', 'set @@autocommit=0',
-      'use mysql', 'grant all on *.* to x', 'select * from roles into outfile "/tmp/x"', 'select sleep(5)', 'select benchmark(100000000, md5(1))', 'select load_file("/etc/passwd")', 'select @@global.max_connections', 'select 1; select 2',
+      'use mysql', 'grant all on *.* to x', 'select * from mysql.user', 'select * from `mysql`.`user`', 'SELECT * FROM MYSQL . user', 'select (select count(*) from mysql.db)', 'show grants', 'show databases', 'show create user root', 'show processlist', 'show variables', 'select * from performance_schema.threads', 'select * from roles into outfile "/tmp/x"', 'select sleep(5)', 'select benchmark(100000000, md5(1))', 'select load_file("/etc/passwd")', 'select @@global.max_connections', 'select 1; select 2',
       '/*! select 1 */ select 2', 'select 1 /*+ x */', "select 'unterminated", 'select /* unterminated', '', '   ']) bad(s, 'read');
   });
   it('is not fooled by comments, quoting or case', () => {
@@ -25,6 +25,19 @@ describe('SQL console guard: read mode', () => {
     bad("select 1; call dolt_commit('-am','x')", 'read');
     bad('select * from `dolt_Commit_Ancestors_x`', 'read'); // unknown dolt_ table name: refused, only the listed read-only ones pass
     bad('select DoLt_ReVeRt(hashof(\'main\'))', 'read');
+  });
+});
+
+const others = ['iam_meta'];
+describe('cross-schema access', () => {
+  it('refuses the pull request store and system schemas in both modes, accepts own table.column references', () => {
+    assert.throws(() => checkSql('select * from iam_meta.pull_requests', 'read', others));
+    assert.throws(() => checkSql("insert into iam_meta.pull_requests (id) values (1)", 'write', others));
+    assert.throws(() => checkSql('drop table IAM_META.pr_comments', 'write', others));
+    assert.throws(() => checkSql('insert into mysql.user values (1)', 'write', others));
+    assert.throws(() => checkSql('create table mysql.x (id int)', 'write', others));
+    assert.doesNotThrow(() => checkSql('select a.identity_id, r.label from assignments a join roles r on r.id = a.role_id', 'read', others));
+    assert.doesNotThrow(() => checkSql('select * from iam.assignments', 'read', others));
   });
 });
 

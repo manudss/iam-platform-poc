@@ -77,3 +77,5 @@ Full step-by-step guide (Windows PowerShell and bash, prerequisites, configurati
 6. API: `cd apps/api && IAM_CORE_URL=http://127.0.0.1:8081 IAM_ISSUER=http://127.0.0.1:8081 IAM_CORE_ADMIN_TOKEN=local-demo-admin-token DOLT_PASSWORD=<DOLT_ROOT_PASSWORD> IAM_PG_URL=postgres://postgres:<RUNTIME_PG_PASSWORD>@127.0.0.1:5433/runtime node dist/main.js` (port 3000;
    verified against the compose containers: `/health` ok, business routes 401 without a token).
 7. Console: `cd apps/web && npx ng serve`, open http://localhost:4200 (build verified on Windows).
+
+See [docs/explorer.md](docs/explorer.md) for the Dolt database explorer (branches, diff, history, SQL, pull requests).

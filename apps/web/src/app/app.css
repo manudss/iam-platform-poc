@@ -1,5 +1,5 @@
 :host { display: block; font-family: system-ui, sans-serif; color: #1f2933; }
-main { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+main { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
 h1 { font-size: 1.6rem; margin-bottom: .5rem; }
 h2 { font-size: 1.1rem; margin: 1.6rem 0 .5rem; padding-top: .8rem; border-top: 1px solid #d9e2ec; }
 .msg { background: #eef4ff; border-left: 4px solid #3b6fd4; padding: .5rem .75rem; border-radius: 3px; }

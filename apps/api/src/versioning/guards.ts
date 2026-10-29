@@ -80,7 +80,9 @@ export function scanSql(sql: string): ScannedSql {
   return { statements, skeletons };
 }
 
-const READ_FIRST = /^(select|show|describe|desc|explain|with)\b/i;
+const READ_FIRST = /^(select|describe|desc|explain|with)\b|^show\s+(full\s+)?(tables|columns|fields|create\s+table|create\s+view|index|indexes|keys|table\s+status|warnings|errors)\b/i;
+/** Schemas of the server that are never reachable from the console: grants and password hashes (mysql), the pull request store, other databases. */
+const ALWAYS_OTHER_DBS = ['mysql', 'performance_schema', 'sys', 'dolt_cluster'];
 const WRITE_FIRST = /^(insert|update|delete|replace)\b|^(create|alter|drop)\s+(unique\s+)?(table|index|view)\b|^rename\s+table\b|^truncate\b/i;
 const FORBIDDEN_ANYWHERE = /\bsleep\s*\(|\bbenchmark\s*\(|\bload_file\s*\(|\bget_lock\s*\(|@@/i;
 const DESTRUCTIVE = /^(drop|truncate)\b|^alter\s+table\s+\S+\s+drop\b/i;
@@ -92,16 +94,18 @@ function doltNames(skeleton: string): string[] {
 export interface CheckedSql { statements: string[]; destructive: boolean }
 
 /** Throws BadRequestException when the SQL is not allowed in the requested mode. */
-export function checkSql(sql: string, mode: 'read' | 'write'): CheckedSql {
+export function checkSql(sql: string, mode: 'read' | 'write', otherDatabases: string[] = []): CheckedSql {
+  const blocked = [...new Set([...ALWAYS_OTHER_DBS, ...otherDatabases.map((d) => d.toLowerCase())])];
   const { statements, skeletons } = scanSql(sql);
   if (mode === 'read' && statements.length !== 1) throw new BadRequestException('read mode runs exactly one statement');
   if (statements.length > 50) throw new BadRequestException('at most 50 statements per run');
   let destructive = false;
   skeletons.forEach((s) => {
+    for (const m of s.matchAll(/([A-Za-z_][A-Za-z0-9_$]*)\s*\./g)) if (blocked.includes(m[1].toLowerCase())) throw new BadRequestException(`schema "${m[1]}" is not reachable from the console (only the versioned database is)`);
     if (FORBIDDEN_ANYWHERE.test(s)) throw new BadRequestException('this statement uses a feature the console does not allow (SLEEP, BENCHMARK, LOAD_FILE, GET_LOCK, @@variables)');
     if (mode === 'read') {
       if (/\binto\b/i.test(s)) throw new BadRequestException('SELECT ... INTO is not allowed');
-      if (!READ_FIRST.test(s)) throw new BadRequestException('read mode accepts SELECT, SHOW, DESCRIBE, EXPLAIN or WITH only');
+      if (!READ_FIRST.test(s)) throw new BadRequestException('read mode accepts SELECT, SHOW TABLES/COLUMNS/CREATE TABLE/INDEX, DESCRIBE, EXPLAIN or WITH only');
       for (const n of doltNames(s)) {
         if (n.toLowerCase().startsWith('dolt_') ? !DOLT_READ_ALLOWED.test(n) : !OTHER_FUNCTIONS_ALLOWED.has(n.toLowerCase())) throw new BadRequestException(`"${n}" is not available in the console (version-control actions have dedicated screens)`);
       }

@@ -340,8 +340,14 @@ export class VersioningService {
 
   // ---------------------------------------------------------------------------------------- SQL console
 
+  /** Other databases on the same server (the pull request store, mysql, ...): refused as qualified names in console SQL. */
+  private async otherDatabases(): Promise<string[]> {
+    const c = await this.connect();
+    try { const [r] = await c.query('show databases'); return (r as Row[]).map((x) => String(Object.values(x)[0])).filter((d) => d !== this.dbName && d !== 'information_schema'); } finally { await c.end(); }
+  }
+
   async sqlRead(ref: string, sql: string) {
-    const { statements } = checkSql(sql, 'read');
+    const { statements } = checkSql(sql, 'read', await this.otherDatabases());
     const started = Date.now();
     return this.at(ref, async (c, r) => {
       try {
@@ -360,7 +366,10 @@ export class VersioningService {
    * Destructive statements (DROP, TRUNCATE, ALTER ... DROP, UPDATE/DELETE without WHERE) need `confirmDestructive`.
    */
   sqlWrite(branch: string, sql: string, opts: { message?: string; dryRun?: boolean; confirmDestructive?: boolean }, sub: unknown) {
-    const { statements, destructive } = checkSql(sql, 'write');
+    return this.otherDatabases().then((others) => this.sqlWriteChecked(branch, sql, opts, sub, others));
+  }
+  private sqlWriteChecked(branch: string, sql: string, opts: { message?: string; dryRun?: boolean; confirmDestructive?: boolean }, sub: unknown, others: string[]) {
+    const { statements, destructive } = checkSql(sql, 'write', others);
     return this.writeOn(branch, async (c) => {
       let affectedRows = 0;
       for (const s of statements) {
