@@ -64,7 +64,7 @@ try {
   // recommended flow: console -> core login form -> back to the console with code+state
   await page.goto('http://localhost:4200/');
   await page.screenshot({ path: join(out, '1-signin.png') });
-  await Promise.all([page.waitForURL(/127\.0\.0\.1:8081\/authorize/), page.click('#signin-browser')]);
+  await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.click('#signin-browser')]);
   await page.waitForSelector('input[name=password]'); await page.screenshot({ path: join(out, '1b-core-login-form.png') });
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'wrong');
   await Promise.all([page.waitForLoadState('load'), page.click('button[type=submit]')]);
@@ -113,6 +113,56 @@ try {
   await page.click('#plugin-disable');
   await page.waitForSelector('#plugin-enable');
   await noBanner('disabled'); await page.screenshot({ path: join(out, '7-plugin-disabled-back-to-base.png'), fullPage: true });
+  // ---- Database explorer on the same real stack (core + API + Dolt + console): the older screens above keep working next to it ----
+  await page.setViewportSize({ width: 1100, height: 1500 });
+  page.on('dialog', (d) => d.accept());
+  const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
+  const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
+  await page.fill('input[name=vadmin]', ADMIN_TOKEN);
+  await noBanner('before explorer');
+  await btn('Branches').click(); await page.waitForSelector('text=protected');
+  await shot('8-explorer-1-branches');
+
+  // new branch from main
+  await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
+  // edit a row on the branch through the Data tab
+  await btn('Data').click(); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
+  await page.waitForSelector('th:has-text("label")');
+  await btn('Add a row').click();
+  await page.fill('textarea[name=ej]', JSON.stringify({ id: 'auditor', label: 'Auditor', is_sensitive: 0 }));
+  await page.fill('input[name=em]', 'add auditor role'); await btn('Commit change').click();
+  await page.waitForSelector('td:has-text("Auditor")'); await shot('8-explorer-2-data-edit');
+  // main is read only
+  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('text=read only');
+  assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
+  // compare
+  await btn('Compare').first().click(); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
+  await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
+  // SQL: a write on main is refused, a dry run on the branch shows the change
+  await btn('SQL').click(); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
+  await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
+  await page.waitForSelector('.explorer .msg:has-text("protected")');
+  await page.selectOption('select[name=sr]', 'ui-demo'); await page.fill('textarea[name=sq]', "update roles set label = 'Internal auditor' where id = 'auditor'"); await btn('Preview changes').click();
+  await page.waitForSelector('text=Preview only'); await shot('8-explorer-4-sql-preview');
+  await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', "select * from mysql.user"); await btn('Run').click();
+  await page.waitForSelector('.explorer .msg:has-text("not reachable")');
+  // pull request, merge
+  await btn('Pull requests').click(); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
+  await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();
+  await page.waitForSelector('text=Can be merged');
+  // the author (demo-alice) cannot approve through the UI
+  assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
+  assert.doesNotMatch(await page.locator('p.msg').first().innerText(), /Cannot|error|failed/i); await page.waitForSelector('text=demo-alice');
+  await shot('8-explorer-5-pull-request');
+  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
+  // history on main shows the merge commit
+  await btn('History').click(); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
+  const text = await page.locator('.explorer ol.log').innerText(); assert.match(text, /Merge pull request #1: Add auditor role/);
+  await noBanner('explorer end');
+  // the older screens still work after the explorer merged a PR into Dolt main
+  await page.getByRole('button', { name: 'Activate current main' }).click();
+  await page.waitForFunction(() => /Activated main head as #\d+/.test(document.querySelector('[role=status]')?.textContent ?? ''));
+  await noBanner('activation after PR merge');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('UI E2E PASSED; screenshots in ' + out);
 } finally {

@@ -26,6 +26,7 @@ PRs live in a separate unversioned database `<db>_meta` (not in branches, so the
 No conflict-resolution UI (conflicting merges are refused), single-instance lock, no real multi-tenant data split.
 
 ## Tests
+Integrated check on the real stack: `scripts/ui-e2e.mjs` (real Rust core + real NestJS API with all IAM/plugin routes + Dolt + the console on `ng serve`) signs in through the core, runs the existing flows (SoD refusal, merge, activation, plugin install/enable/disable) and then drives the explorer (branch, row edit, compare, SQL refusals, pull request, approve disabled for the author, merge, history), checking after each step that no error banner shows and that activation still works after a PR merge. Build the core first: `cd core && cargo build -p iam-core --locked`.
 ```
 cd apps/api && DOLT_BIN=/path/to/dolt npm test     # guards.spec + versioning.e2e.spec (real Dolt 2.6.1)
 cd apps/web && npx ng test                          # includes dolt-explorer.spec
