@@ -25,8 +25,12 @@ Verified on 2026-10-29 in a real browser (headless Chrome):
 5. Simulate identity `demo-alice`, role `accountant`: no violation, merge
    succeeds, and "Activate current main" applies and journals the activation
    (`#1`, `event: disabled` because NATS is not part of the free demo scope).
-6. The Plugins section lists the base plugins. The admin capability token is
-   random per boot and printed in the service logs (Render dashboard > Logs).
+6. The Plugins section lists the base plugins; install/enable/disable works
+   out of the box in the hosted demo: the admin capability token is random per
+   boot and stays server-side (the edge server attaches it to proxied API
+   calls), so visitors never see or type it. The "Admin capability token"
+   console field can be left empty. In the local/Codespaces path instead,
+   `demo-start.sh` prints the token for the operator to type into that field.
 
 ### What the live demo is (and is not)
 
