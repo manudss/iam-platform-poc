@@ -32,6 +32,9 @@ export class Shell {
     { title: 'Overview', items: [{ path: '/overview', label: 'Dashboard', icon: '◧' }] },
     { title: 'Access (IAM)', items: [
       { path: '/users', label: 'Users', icon: '♙' },
+      { path: '/profile-fields', label: 'Profile fields', icon: '☰' },
+      { path: '/organizations', label: 'Organizations', icon: '⌂' },
+      { path: '/my-profile', label: 'My profile', icon: '☺' },
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },

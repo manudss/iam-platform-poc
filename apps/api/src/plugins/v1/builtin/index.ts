@@ -112,3 +112,9 @@ export const hrAttributes: PluginImpl = {
   },
   handlers: {},
 };
+
+/** Example profile plugin: organizations. It adds screens (organizations CRUD, memberships) and a read-only section on the profile. Membership is an assignment by an administrator, never a profile field. */
+export const organizations: PluginImpl = {
+  manifest: { apiVersion: 'plugin/v1', id: 'organizations', version: '1.0.0', name: 'Organizations (example)', publisher: 'iam-platform', kinds: ['profile'], hooks: [], settings: [] },
+  handlers: {},
+};

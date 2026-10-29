@@ -4,6 +4,10 @@ import { CallbackPage, LoginPage } from './login';
 import { ActivationPage, AssignmentsPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
 import { UsersPage } from './users';
 import { AuthMethodsPage } from './auth-methods';
+import { ProfileFieldsPage } from './profile-fields';
+import { MyProfilePage } from './my-profile';
+import { SignupPage } from './signup-page';
+import { OrganizationsPage } from './organizations';
 import { Shell } from './shell';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
@@ -12,12 +16,16 @@ export const pluginsMatcher: UrlMatcher = (segs: UrlSegment[]) =>
 
 export const routes: Routes = [
   { path: 'callback', component: CallbackPage },
+  { path: 'signup', component: SignupPage, title: 'Request an account' },
   { path: 'login', component: LoginPage, title: 'Sign in' },
   {
     path: '', component: Shell, canActivate: [authGuard], children: [
       { path: '', pathMatch: 'full', redirectTo: 'overview' },
       { path: 'overview', component: OverviewPage, title: 'Dashboard' },
       { path: 'users', component: UsersPage, title: 'Users' },
+      { path: 'profile-fields', component: ProfileFieldsPage, title: 'Profile fields' },
+      { path: 'organizations', component: OrganizationsPage, title: 'Organizations' },
+      { path: 'my-profile', component: MyProfilePage, title: 'My profile' },
       { path: 'auth-methods', component: AuthMethodsPage, title: 'Authentication methods' },
       { path: 'assignments', component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', component: ActivationPage, title: 'Activation' },
