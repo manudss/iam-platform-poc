@@ -22,7 +22,7 @@ describe('ordinary valid token: no administration route answers', () => {
   const routes: [string, string][] = [
     ['post', 'changes'], ['post', 'connectors/csv'], ['post', 'connectors/scim'], ['post', 'changes/x/merge'], 
     ['post', 'activations'], ['post', 'activations/reconcile'], ['post', 'activation-workflows'],
-    ['post', 'users'], ['put', 'users/demo-alice'], ['get', 'users'], ['put', 'profile-fields'], ['patch', 'users/demo-alice/profile'],
+    ['post', 'users'], ['put', 'users/demo-alice'], ['get', 'users'], ['put', 'profile-fields'], ['get', 'profile-fields'], ['patch', 'users/demo-alice/profile'],
     ['post', 'workspace/assignment'], ['post', 'workspace/apply'], ['put', 'auth'], ['post', 'plugins/hr-attributes/enable'], ['post', 'organizations'], ['get', 'roles'], ['post', 'roles'], ['patch', 'roles/x'], ['delete', 'roles/x'], ['post', 'roles/sod-rules'], ['post', 'roles/sod-rules/remove'], ['get', 'signup/requests'], ['post', 'signup/requests/x/approve'],
   ];
   for (const tenant of ['acme-demo', 'other-tenant'])
@@ -45,7 +45,7 @@ describe('edge attaches the capability to everyone: the subject decides', () => 
     app = mod.createNestApplication(); await app.init();
   });
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; if (env.s === undefined) delete process.env.IAM_API_ADMIN_SUBJECTS; else process.env.IAM_API_ADMIN_SUBJECTS = env.s; await app.close(); });
-  const routes: [string, string][] = [['post', 'changes'], ['post', 'connectors/csv'], ['post', 'users'], ['get', 'users'], ['put', 'profile-fields'], ['post', 'workspace/apply'], ['put', 'auth'], ['post', 'plugins/hr-attributes/enable'], ['post', 'organizations'], ['get', 'roles'], ['post', 'roles'], ['post', 'activations']];
+  const routes: [string, string][] = [['post', 'changes'], ['post', 'connectors/csv'], ['post', 'users'], ['get', 'users'], ['get', 'profile-fields'], ['put', 'profile-fields'], ['post', 'workspace/apply'], ['put', 'auth'], ['post', 'plugins/hr-attributes/enable'], ['post', 'organizations'], ['get', 'roles'], ['post', 'roles'], ['post', 'activations']];
   it('ordinary subject with the edge header is refused on admin routes', async () => {
     sub = 'new-nora';
     for (const [m, p] of routes) { const r = await (request(app.getHttpServer()) as any)[m](`/tenants/acme-demo/${p}`).set('x-api-admin-token', ADMIN).send({}); assert.equal(r.status, 403, `${m} ${p} -> ${r.status}`); }
