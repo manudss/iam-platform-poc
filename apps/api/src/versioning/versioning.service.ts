@@ -298,7 +298,7 @@ export class VersioningService {
 
   /** Row edits on a branch, committed together in ONE commit (author = the signed-in user). */
   editRows(branch: string, table: string, ops: EditOp[], message: string | undefined, sub: unknown) {
-    if (table.startsWith('plugin_runtime_')) throw new ForbiddenException('Use Plugins to change runtime settings, grants and state');
+    if (table.toLowerCase().startsWith('plugin_runtime_')) throw new ForbiddenException('Use Plugins to change runtime settings, grants and state');
     tableName(table);
     if (!Array.isArray(ops) || ops.length < 1 || ops.length > 100) throw new BadRequestException('1 to 100 operations expected');
     return this.writeOn(branch, async (c) => {
@@ -447,7 +447,7 @@ export class VersioningService {
 
   private async mergeChecks(c: Connection, source: string, keep: boolean, _message: string) {
     const [runtimeDiff] = await c.query('select * from dolt_diff_summary(?)', [`HEAD...${source}`]);
-    if ((runtimeDiff as {from_table_name:string;to_table_name:string}[]).some(x=>[x.from_table_name,x.to_table_name].some(n=>n?.startsWith('plugin_runtime_')))) throw new ForbiddenException('Plugin runtime state differs. Use Plugins, not a database merge, to change grants or enablement.');
+    if ((runtimeDiff as {from_table_name:string;to_table_name:string}[]).some(x=>[x.from_table_name,x.to_table_name].some(n=>n?.toLowerCase().startsWith('plugin_runtime_')))) throw new ForbiddenException('Plugin runtime state differs. Use Plugins, not a database merge, to change grants or enablement.');
     const [m] = await c.query("CALL DOLT_MERGE('--no-ff', '--no-commit', ?)", [source]);
     const r = (m as { conflicts: number; message: string }[])[0];
     const reasons: string[] = [];
