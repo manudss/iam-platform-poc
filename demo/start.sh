@@ -20,6 +20,10 @@ GOMEMLIMIT="${DOLT_GOMEMLIMIT:-250MiB}" dolt sql-server -H 127.0.0.1 -P 3307 -l 
 # Per-boot random admin tokens (never committed, never reused across restarts).
 CORE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export IAM_CORE_ADMIN_TOKEN="$CORE_TOKEN"
+# Admin capability token for the API (simulation / plugin admin): random per boot, server-side only;
+# demo/server.mjs attaches it to proxied /api calls so demo visitors never see or type it.
+API_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+export IAM_API_ADMIN_TOKEN="$API_TOKEN"
 export IAM_POLICY_FILE=/app/policies/demo.cedar
 export IAM_CORE_STATE_DIR="$HOME_DIR/core-state"
 export IAM_IDP_EXTRA_REDIRECT_URIS="${PUBLIC_ORIGIN}/callback,http://localhost:4200/callback"
