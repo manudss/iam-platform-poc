@@ -19,6 +19,10 @@ export class ApiClient {
   constructor(private readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a)) {}
 
   get loggedIn() { return !!this.token; }
+  /** Display name of the signed-in identity: the `sub` claim of the in-memory token (display only, nothing is trusted from it). */
+  get identity(): string {
+    try { const b = this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return (JSON.parse(atob(b)) as { sub?: string }).sub ?? ''; } catch { return ''; }
+  }
   logout() { this.token = ''; }
 
   /** Recommended sign-in: browser code+PKCE flow. Keeps a fresh state + verifier in sessionStorage and leaves for the core's login form. */

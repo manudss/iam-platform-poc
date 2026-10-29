@@ -1,8 +1,5 @@
 <section id="plugins">
-  <h2>Plugins</h2>
-  <label>Admin capability token (memory only) <input name="admintoken" type="password" [(ngModel)]="adminToken" autocomplete="off" /></label>
-  <table>
-    <thead><tr><th>Plugin</th><th>Kinds</th><th>Slot</th><th>State</th><th></th></tr></thead>
+  <div class="card scroll"><table class="grid">    <thead><tr><th>Plugin</th><th>Kinds</th><th>Slot</th><th>State</th><th></th></tr></thead>
     <tbody>
       @for (p of plugins(); track p.id) {
         <tr [attr.data-plugin]="p.id">
@@ -14,9 +11,10 @@
         </tr>
       }
     </tbody>
-  </table>
+  </table></div>
 
   @if (selected(); as p) {
+    <div class="card detail">
     <h3>{{ p.name }}</h3>
     @if (!p.base && !p.installed) {
       <p>Installing runs this plugin's own migrations (tables prefixed with its id). Grant that explicitly.</p>
@@ -59,5 +57,6 @@
       }
     }
     <p class="msg" role="status" id="plugin-note">{{ note() }}</p>
+    </div>
   }
 </section>

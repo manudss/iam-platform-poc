@@ -67,18 +67,20 @@ try {
   page.on('dialog', (d) => d.accept());
   const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
   const status = () => page.locator('.explorer .msg').first().innerText();
+  const nav = (p) => page.click(`nav a[data-nav="${p}"]`);
+  const setToken = async () => { await page.evaluate(() => { document.querySelector('details.token').open = true; }); await page.fill('input[name=admintoken]', ADMIN); };
   const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
 
   await page.goto(`http://127.0.0.1:${WEB_PORT}/`);
-  await page.click('#signin-browser'); await page.waitForSelector('app-dolt-explorer');
-  await page.fill('input[name=vadmin]', ADMIN);
-  await btn('Branches').click(); await page.waitForSelector('text=protected');
+  await page.click('#signin-browser'); await page.waitForSelector('nav a[data-nav="/database/branches"]');
+  await setToken();
+  await nav('/database/branches'); await page.waitForSelector('text=protected');
   await shot('1-branches');
 
   // new branch from main
   await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
   // edit a row on the branch through the Data tab
-  await btn('Data').click(); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
+  await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
   await btn('Add a row').click();
   await page.fill('textarea[name=ej]', JSON.stringify({ id: 'auditor', label: 'Auditor', is_sensitive: 0 }));
@@ -88,10 +90,10 @@ try {
   await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('text=read only');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
   // compare
-  await btn('Compare').first().click(); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
+  await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
   await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('3-compare');
   // SQL: a write on main is refused, a dry run on the branch shows the change
-  await btn('SQL').click(); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
+  await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
   await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
   await page.waitForSelector('.explorer .msg:has-text("protected")');
   await page.selectOption('select[name=sr]', 'ui-demo'); await page.fill('textarea[name=sq]', "update roles set label = 'Internal auditor' where id = 'auditor'"); await btn('Preview changes').click();
@@ -99,16 +101,16 @@ try {
   await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', "select * from mysql.user"); await btn('Run').click();
   await page.waitForSelector('.explorer .msg:has-text("not reachable")');
   // pull request, merge
-  await btn('Pull requests').click(); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
+  await nav('/database/pulls'); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
   await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();
   await page.waitForSelector('text=Can be merged');
   // the author (demo-alice) cannot approve through the UI
   assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
-  assert.doesNotMatch(await page.locator('p.msg').first().innerText(), /Cannot|error|failed/i); await page.waitForSelector('text=demo-alice');
+  assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
   await shot('5-pull-request');
   await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
   // history on main shows the merge commit
-  await btn('History').click(); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('6-history');
+  await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('6-history');
   const text = await page.locator('.explorer ol.log').innerText(); assert.match(text, /Merge pull request #1: Add auditor role/);
   console.log('UI e2e OK; screenshots in', out);
 } catch (e) { console.error('UI e2e FAILED:', e); process.exitCode = 1; try { await (await browser?.contexts()[0]?.pages()[0])?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {} }

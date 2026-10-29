@@ -1,0 +1,31 @@
+<div class="layout" [class.open]="menu()">
+  <aside class="side" aria-label="Main navigation">
+    <div class="brand"><span class="logo" aria-hidden="true">IAM</span><span>IAM platform<small>POC console</small></span></div>
+    <nav>
+      @for (g of nav; track g.title) {
+        <p class="group">{{ g.title }}</p>
+        @for (i of g.items; track i.path) {
+          <a [routerLink]="i.path" routerLinkActive="active" [attr.data-nav]="i.path"><span class="ico" aria-hidden="true">{{ i.icon }}</span>{{ i.label }}</a>
+        }
+      }
+    </nav>
+    <details class="token">
+      <summary>Admin capability (local only)</summary>
+      <label>Token (memory only; leave empty on the hosted demo, the server adds it)
+        <input name="admintoken" type="password" [ngModel]="s.adminToken()" (ngModelChange)="s.adminToken.set($event)" autocomplete="off" />
+      </label>
+    </details>
+  </aside>
+  <div class="scrim" (click)="menu.set(false)"></div>
+  <div class="main">
+    <header class="top">
+      <button type="button" class="burger secondary" aria-label="Toggle menu" (click)="menu.set(!menu())">☰</button>
+      <h1>{{ title() }}</h1>
+      <span class="spacer"></span>
+      <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
+      <button type="button" class="secondary" (click)="signOut()">Sign out</button>
+    </header>
+    @if (s.message()) { <p class="msg bar" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
+    <main class="content"><router-outlet /></main>
+  </div>
+</div>

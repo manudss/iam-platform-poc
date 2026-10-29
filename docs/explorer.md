@@ -1,6 +1,6 @@
 # Dolt database explorer
 
-A "Database explorer (Dolt)" panel in the web app, backed by `apps/api/src/versioning/` (routes `tenants/:tenant/versioning/*`, 22 routes, all behind `AuthGuard` + `AdminGuard`).
+The "Database (Dolt)" section of the administration (six pages, see [Administration layout](#administration-layout)), backed by `apps/api/src/versioning/` (routes `tenants/:tenant/versioning/*`, 22 routes, all behind `AuthGuard` + `AdminGuard`).
 
 ## What you can do
 - **Branches**: list (ahead/behind vs main), create, delete, tags.
@@ -38,3 +38,20 @@ NODE_PATH=... DOLT_BIN=... CHROME_BIN=... node scripts/explorer-ui-e2e.mjs /tmp/
 The browser E2E mounts only the explorer module with a fake sign-in guard (the real AdminGuard is used) and a stand-in identity provider. The older screens (assignments, activations, plugins) need the Rust core, so the harness answers their read calls with fixed demo data; they are covered by the other e2e suites.
 
 GitHub Actions budget is blocked at 0, so tests run locally only.
+
+## Administration layout
+The web app is an Angular multi-page administration (router, sidebar, one page per feature) instead of one long page. Nothing was removed: the same components and API calls sit behind the new routes.
+
+| Address | Page |
+|---|---|
+| `/login`, `/callback` | sign-in (browser code+PKCE flow, legacy JSON login as a diagnostic); `/callback` checks state + verifier, then returns to the page you asked for |
+| `/overview` | dashboard: live counts (assignments, activations, plugins, branches, open pull requests) |
+| `/assignments` | assignments on Dolt main, simulate a role change on a branch, merge (refused on a Separation-of-Duties conflict) |
+| `/activation` | activate the current main, journal |
+| `/plugins`, `/plugins/:id` | plugin list; the second form opens the settings/grants of one plugin |
+| `/database/branches`, `history`, `compare`, `data`, `sql`, `pulls` | the Dolt explorer, one section per page (one component instance: branch, comparison and form state survive moving between sections) |
+
+- The token is in memory only. A reload or a pasted link therefore goes to `/login` first and comes back to the same page after sign-in (only local app paths are accepted as return target).
+- The admin capability token field (local setups only; empty on the hosted demo, where the edge adds it) is in the sidebar and shared by the plugin and database pages.
+- Small screens: the sidebar becomes a drawer opened by the menu button; the e2e checks that pages do not scroll sideways at 390 px.
+- Tests: `apps/web` unit tests cover the guard, return-URL filter, route matcher and the explorer section/navigation contract; `scripts/ui-e2e.mjs` drives all pages on the real stack (core, API, Dolt), including deep link, refresh and mobile width.

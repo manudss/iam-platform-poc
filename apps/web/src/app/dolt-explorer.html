@@ -1,15 +1,5 @@
 <section class="explorer">
-  <h2>Database explorer (Dolt)</h2>
-  <p class="hint">Branches, history, comparisons, data, SQL and pull requests on the versioned database. Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (Older screens above still write to Dolt <code>main</code> through their own routes.)</p>
-  <label>Admin capability token (memory only; leave empty on the hosted demo)
-    <input name="vadmin" type="password" [(ngModel)]="adminToken" (ngModelChange)="setToken()" autocomplete="off" />
-  </label>
-
-  <nav class="tabs" role="tablist">
-    @for (t of [['branches','Branches'],['history','History'],['compare','Compare'],['data','Data'],['sql','SQL'],['pulls','Pull requests']]; track t[0]) {
-      <button type="button" role="tab" [class.on]="tab() === t[0]" [attr.aria-selected]="tab() === t[0]" (click)="open($any(t[0]))">{{ t[1] }}</button>
-    }
-  </nav>
+  <p class="hint">Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (The Assignments page still writes to Dolt <code>main</code> through its own routes.)</p>
   @if (note()) { <p class="msg" role="status">{{ note() }}</p> }
   @if (busy()) { <p class="hint">Working...</p> }
 
@@ -83,7 +73,7 @@
           <p>{{ s.message }} <span class="hint">by {{ s.author }}, {{ s.date }}</span></p>
           <ul>@for (t of s.changes; track t.table) {
             <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema) }
-              @if (s.parents.length && t.dataChange) { <button type="button" class="link" (click)="tab.set('compare'); from = s.parents[0]; to = s.commit; three = false; compare().then(() => showRowDiff(t.table))">rows</button> }</li>
+              @if (s.parents.length && t.dataChange) { <button type="button" class="link" (click)="go('compare'); from = s.parents[0]; to = s.commit; three = false; compare().then(() => showRowDiff(t.table))">rows</button> }</li>
           }</ul>
           <div class="row">
             <label>Name for a new branch / tag <input name="an" [(ngModel)]="actionName" autocomplete="off" /></label>

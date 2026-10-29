@@ -1,35 +1,8 @@
 :host { display: block; }
-.explorer { margin-top: 2rem; }
-.hint { color: #52606d; font-size: .82rem; }
-.tabs { display: flex; flex-wrap: wrap; gap: .25rem; margin: 1rem 0 .5rem; }
-.tabs button { background: #fff; color: #3b6fd4; margin: 0; }
-.tabs button.on { background: #3b6fd4; color: #fff; }
-.row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; }
-.panel { border: 1px solid #d9e2ec; border-radius: 6px; padding: .6rem .8rem; margin: .8rem 0; background: #fafcff; }
+.row { gap: .5rem; }
 .panel label, .explorer > label { display: flex; margin: .4rem 0; }
-.scroll { overflow-x: auto; }
-table.grid { border-collapse: collapse; font-size: .85rem; min-width: 100%; }
-table.grid th, table.grid td { border: 1px solid #d9e2ec; padding: .25rem .5rem; text-align: left; vertical-align: top; }
-table.grid th { background: #f0f4f8; }
 tr.add td { background: #e6f6ea; } tr.del td { background: #fde8e8; } tr.mod td.chg { background: #fff4d6; }
 td.kind { font-weight: 600; text-transform: uppercase; font-size: .7rem; }
 td.act button, button.danger { margin-top: 0; }
-button.danger { background: #b42318; border-color: #b42318; }
-button.danger:hover { background: #8f1d14; }
-button.link { background: none; border: 0; color: #2c57ad; text-decoration: underline; padding: 0; margin: 0 .3rem; font-size: inherit; }
-.chip { display: inline-block; font-size: .72rem; border: 1px solid #9fb3c8; border-radius: 10px; padding: 0 .45rem; margin-left: .35rem; background: #fff; }
-.chip.lock { border-color: #b42318; color: #b42318; }
-ol.log { list-style: none; padding-left: 0; } ol.log li { padding: .25rem .4rem; border-left: 3px solid #9fb3c8; margin-bottom: .2rem; } ol.log li.merge { border-left-color: #7c3aed; }
-textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: .85rem; padding: .4rem; border: 1px solid #9fb3c8; border-radius: 4px; }
-pre { background: #f0f4f8; padding: .5rem; overflow-x: auto; font-size: .8rem; }
-.ok { color: #1a7f37; } .ko { color: #b42318; }
-label.inline { flex-direction: row; align-items: center; gap: .35rem; }
-/* Same base look as the rest of the console (its styles are scoped to the app component and do not reach this one). */
-label { display: inline-flex; flex-direction: column; font-size: .85rem; margin-right: .75rem; gap: .2rem; }
-input, select { padding: .35rem .5rem; border: 1px solid #9fb3c8; border-radius: 4px; font-size: .95rem; background: #fff; }
-button { padding: .4rem .8rem; border: 1px solid #3b6fd4; background: #3b6fd4; color: #fff; border-radius: 4px; cursor: pointer; margin-top: .5rem; }
-button:hover:not(:disabled) { background: #2c57ad; }
-button:disabled { opacity: .5; cursor: not-allowed; }
-.tabs button:hover:not(:disabled):not(.on) { background: #eef3fb; }
-button.link:hover:not(:disabled) { background: none; }
+ol.log { list-style: none; padding-left: 0; } ol.log li { padding: .35rem .6rem; border-left: 3px solid #cbd5e1; margin-bottom: .25rem; background: #fff; border-radius: 0 .4rem .4rem 0; } ol.log li.merge { border-left-color: #7c3aed; }
 .explorer h3 { margin-top: 1.2rem; }

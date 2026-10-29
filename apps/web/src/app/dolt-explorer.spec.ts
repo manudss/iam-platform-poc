@@ -66,7 +66,7 @@ describe('DoltExplorer (rendering with a fake API)', () => {
   });
   it('offers row editing on an unprotected branch only, and read only on protected main', async () => {
     const { f, el, c } = await mount(routes());
-    await click(f, el, 'Data'); c['dataRef'] = 'main'; await c['openTable']('roles'); f.detectChanges();
+    f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges(); c['dataRef'] = 'main'; await c['openTable']('roles'); f.detectChanges();
     expect(el.textContent).toContain('read only'); expect([...el.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Edit')).toBe(false);
     c['dataRef'] = 'feat-a'; await c['openTable']('roles'); f.detectChanges();
     expect([...el.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Edit')).toBe(true);
@@ -84,5 +84,18 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ status: 403, data: { message: 'branch main is protected: open a pull request instead' } }) }));
     c['sqlMode'] = 'write'; c['sqlRef'] = 'main'; c['sqlText'] = "insert into roles values ('x','x',false)"; await c['runSql'](false); f.detectChanges();
     expect(el.querySelector('.msg')?.textContent).toContain('protected');
+  });
+
+  it('follows the route section, and announces its own jumps so the address can follow', async () => {
+    const { api } = fakeApi(routes());
+    const f = TestBed.createComponent(DoltExplorer); f.componentRef.setInput('api', api); f.componentRef.setInput('section', 'history');
+    const seen: string[] = []; f.componentInstance.navigate.subscribe((t) => seen.push(t));
+    f.detectChanges(); await f.whenStable(); await new Promise((r) => setTimeout(r, 0)); f.detectChanges();
+    const c = f.componentInstance as unknown as Record<string, any>;
+    expect(c['tab']()).toBe('history');
+    c['compareWithDefault']('feat-a');
+    expect(c['tab']()).toBe('compare'); expect(seen).toContain('compare');
+    f.componentRef.setInput('section', 'sql'); await f.whenStable();
+    expect(c['tab']()).toBe('sql');
   });
 });

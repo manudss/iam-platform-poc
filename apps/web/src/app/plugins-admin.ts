@@ -1,4 +1,5 @@
-import { Component, Input, signal } from '@angular/core';
+import { Component, EventEmitter, Input, Output, inject, signal } from '@angular/core';
+import { Session } from './session';
 import { FormsModule } from '@angular/forms';
 import { ApiClient, FormModel, PluginAdminClient, PluginInfo, formValues, visibleFields } from './api';
 
@@ -14,23 +15,30 @@ import { ApiClient, FormModel, PluginAdminClient, PluginInfo, formValues, visibl
 })
 export class PluginsAdmin {
   @Input({ required: true }) api!: ApiClient;
+  /** Plugin shown in the detail panel, driven by the route (/plugins/:id). */
+  @Input() pluginId: string | null = null;
+  @Output() opened = new EventEmitter<string | null>();
+  private readonly session = inject(Session);
   protected admin!: PluginAdminClient;
   protected readonly plugins = signal<PluginInfo[]>([]);
   protected readonly selected = signal<PluginInfo | null>(null);
   protected readonly model = signal<FormModel | null>(null);
   protected readonly note = signal('');
   protected edited: Record<string, unknown> = {};
-  protected adminToken = '';
   protected grantInstall = false;
   protected grantComponents = false;
   protected grantHooks: Record<string, boolean> = {};
 
-  async ngOnInit() { this.admin = new PluginAdminClient(this.api); await this.refresh(); }
+  async ngOnInit() {
+    this.admin = new PluginAdminClient(this.api); await this.refresh();
+    const want = this.plugins().find((p) => p.id === this.pluginId); if (want) await this.open(want, false);
+  }
 
   protected async refresh() {
     try { this.plugins.set(await this.admin.list()); } catch (e) { this.note.set((e as Error).message); }
   }
-  protected async open(p: PluginInfo) {
+  protected async open(p: PluginInfo, announce = true) {
+    if (announce) this.opened.emit(p.id);
     this.selected.set(p); this.note.set(''); this.grantInstall = false; this.grantComponents = false; this.grantHooks = {};
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
@@ -40,7 +48,7 @@ export class PluginsAdmin {
   protected fields(g: { fields: import('./api').FormField[] }) { return visibleFields(g.fields, this.edited); }
 
   protected async act(fn: () => Promise<unknown>, ok: string) {
-    this.admin.adminToken = this.adminToken;
+    this.admin.adminToken = this.session.adminToken();
     try { await fn(); this.note.set(ok); await this.refresh(); const s = this.selected(); if (s) await this.open(this.plugins().find((p) => p.id === s.id)!).then(() => this.note.set(ok)); }
     catch (e) { this.note.set((e as Error).message); }
   }

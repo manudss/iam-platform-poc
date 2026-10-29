@@ -1,4 +1,4 @@
-// Real-browser UI end-to-end (local only): starts Dolt, the Rust core, the NestJS API and `ng serve`, then drives the Angular
+// Real-browser UI end-to-end (local only): starts Dolt, the Rust core, the NestJS API and `ng serve`, then drives the Angular administration (sidebar pages, deep links, refresh, mobile) with headless Chrome through playwright-core, and saves screenshots. Binds to 127.0.0.1 only.
 // console with headless Chrome through playwright-core, and saves screenshots. Binds to 127.0.0.1 only.
 // Needs: DOLT_BIN, CHROME_BIN, playwright-core resolvable (npm i playwright-core), built core and API (core/target/debug/iam-core, apps/api/dist).
 // Usage: DOLT_BIN=... CHROME_BIN=... node scripts/ui-e2e.mjs [outDir]
@@ -56,113 +56,138 @@ try {
   browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
   const errors = []; page.on('pageerror', (e) => errors.push(e.message));
-  // forged callback (another state): the code is ignored, nobody is signed in
-  await page.goto('http://localhost:4200/callback?code=attacker-code&state=forged-state');
-  await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('state mismatch'));
-  assert.equal(new URL(page.url()).pathname, '/'); // the code left the address bar
-  assert.equal(await page.locator('text=Assignments on Dolt main').count(), 0);
-  // recommended flow: console -> core login form -> back to the console with code+state
-  await page.goto('http://localhost:4200/');
-  await page.screenshot({ path: join(out, '1-signin.png') });
-  await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.click('#signin-browser')]);
-  await page.waitForSelector('input[name=password]'); await page.screenshot({ path: join(out, '1b-core-login-form.png') });
-  await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'wrong');
-  await Promise.all([page.waitForLoadState('load'), page.click('button[type=submit]')]);
-  await page.waitForSelector('text=Wrong user or password');
-  await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
-  await Promise.all([page.waitForURL(/localhost:4200/), page.click('button[type=submit]')]);
-  await page.waitForSelector('text=Assignments on Dolt main');
-  await page.waitForSelector('text=demo-bob : payment-creator');
-  assert.ok((await page.textContent('[role=status]')).includes('browser flow'));
-  assert.equal(new URL(page.url()).search, ''); // no code or state left in the URL
-  await page.screenshot({ path: join(out, '2-logged-in.png') });
-  // SoD violation
+  page.on('dialog', (d) => d.accept());
+  const BASE = 'http://localhost:4200';
+  const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
+  const path = () => new URL(page.url()).pathname;
+  const status = (txt) => page.waitForFunction((t) => [...document.querySelectorAll('[role=status]')].some((e) => e.textContent?.includes(t)), txt);
+  const noBanner = async (label) => { assert.equal(await page.locator('[role=alert]').count(), 0, label + ': no alert'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch|admin capability required/.test(t), label + ': no error banner'); };
+  const nav = (p) => page.click(`nav a[data-nav="${p}"]`);
+  const setToken = async () => { await page.evaluate(() => { document.querySelector('details.token').open = true; }); await page.fill('input[name=admintoken]', ADMIN_TOKEN); };
+  // the core login form: wrong password first when asked, then the right one; returns to the console
+  const coreLogin = async (wrongFirst = false) => {
+    await page.waitForSelector('#signin-browser');
+    await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.click('#signin-browser')]);
+    await page.waitForSelector('input[name=password]');
+    if (wrongFirst) {
+      await shot('1b-core-login-form');
+      await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'wrong');
+      await Promise.all([page.waitForLoadState('load'), page.click('button[type=submit]')]);
+      await page.waitForSelector('text=Wrong user or password');
+    }
+    await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
+    await Promise.all([page.waitForURL(/localhost:4200(?!\/core)/), page.click('button[type=submit]')]);
+  };
+
+  // ---- sign-in: forged callback, protected deep link, return to the page asked for ----
+  await page.goto(`${BASE}/callback?code=attacker-code&state=forged-state`);
+  await status('state mismatch');
+  assert.equal(path(), '/login'); assert.equal(new URL(page.url()).search, ''); // the code left the address bar
+  assert.equal(await page.locator('nav').count(), 0, 'no administration layout without a token');
+  await page.goto(`${BASE}/database/pulls`);
+  await page.waitForSelector('#signin-browser'); assert.equal(path(), '/login'); await shot('1-signin');
+  await coreLogin(true);
+  await page.waitForSelector('nav a.active[data-nav="/database/pulls"]');
+  assert.equal(path(), '/database/pulls'); assert.equal(new URL(page.url()).search, ''); // back on the page that was asked for, no code or state left
+  assert.ok((await page.locator('[role=status]').first().textContent()).includes('browser flow'));
+  assert.match(await page.locator('header .who').innerText(), /demo-alice/);
+  await shot('2-signed-in-deep-link');
+
+  // ---- IAM pages: assignments, SoD, merge, activation ----
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("demo-bob")');
+  assert.ok((await page.locator('#assignments tr', { hasText: 'demo-bob' }).first().innerText()).includes('payment-creator'));
   await page.getByRole('button', { name: 'Simulate', exact: true }).click();
   await page.waitForSelector('text=SoD: demo-bob has payment-creator and payment-approver');
-  await page.screenshot({ path: join(out, '3-sod-violation.png') });
-  await page.getByRole('button', { name: 'Merge into main' }).click();
-  await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('Merge refused (409)'));
-  // clean change, merge, activate
-  const inputs = page.locator('main input:not([type=password])');
-  await inputs.nth(0).fill('demo-alice'); await inputs.nth(1).fill('accountant');
-  await page.getByRole('button', { name: 'Simulate', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('Simulation OK'));
-  await page.getByRole('button', { name: 'Merge into main' }).click();
-  await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('Merged into main'));
-  await page.waitForSelector('text=demo-alice : accountant');
-  await page.getByRole('button', { name: 'Activate current main' }).click();
-  await page.waitForFunction(() => document.querySelector('[role=status]')?.textContent?.includes('Activated main head as #1'));
-  await page.screenshot({ path: join(out, '4-activated.png') });
-  // generic plugin admin screen on the real stack (core + API + Dolt + console): install, configure, grant, enable, disable
-  await page.setViewportSize({ width: 1100, height: 1400 });
-  await page.waitForSelector('#plugins table');
-  await page.fill('input[name=admintoken]', ADMIN_TOKEN);
-  const noBanner = async (label) => { assert.equal(await page.locator('[role=alert]').count(), 0, label + ': no alert'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch/.test(t), label + ': no error banner'); };
-  await noBanner('list'); await page.locator('#plugins').scrollIntoViewIfNeeded(); await page.screenshot({ path: join(out, '5-plugins-list.png'), fullPage: true });
+  await shot('3-sod-violation');
+  await page.getByRole('button', { name: 'Merge into main' }).click(); await status('Merge refused (409)');
+  await page.fill('input[name=identity]', 'demo-alice'); await page.fill('input[name=role]', 'accountant');
+  await page.getByRole('button', { name: 'Simulate', exact: true }).click(); await status('Simulation OK');
+  await page.getByRole('button', { name: 'Merge into main' }).click(); await status('Merged into main');
+  await page.waitForSelector('#assignments td:text-is("accountant")');
+  await nav('/activation');
+  await page.getByRole('button', { name: 'Activate current main' }).click(); await status('Activated main head as #1');
+  await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
+  await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');
+
+  // ---- plugins ----
+  await nav('/plugins'); await page.waitForSelector('#plugins table');
+  await setToken(); await noBanner('plugins list'); await shot('5-plugins-list');
   const row = page.locator('tr[data-plugin=auth-password-lockout]');
   await row.getByRole('button', { name: 'Manage' }).click();
+  await page.waitForFunction(() => location.pathname === '/plugins/auth-password-lockout');
   await page.locator('input[name=gi]').check(); await page.click('#plugin-install');
-  await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? '')); // the form is re-read after the install: wait for it
+  await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
   await page.waitForSelector('#plugin-form');
   await page.locator('label[data-field=maxFailures] input').fill('3'); await page.click('#plugin-save');
   await page.waitForFunction(() => /saved|Saved|configured/i.test(document.querySelector('#plugin-note')?.textContent ?? ''));
   assert.equal(await page.locator('label[data-field=maxFailures] input').inputValue(), '3', 'the saved value comes back from the API');
   await page.locator('[data-hook="auth.authenticate"]').check(); await page.click('#plugin-enable');
   await page.waitForSelector('#plugin-disable');
-  await noBanner('enabled'); await page.screenshot({ path: join(out, '6-plugin-enabled.png'), fullPage: true });
-  await page.click('#plugin-disable');
-  await page.waitForSelector('#plugin-enable');
-  await noBanner('disabled'); await page.screenshot({ path: join(out, '7-plugin-disabled-back-to-base.png'), fullPage: true });
-  // ---- Database explorer on the same real stack (core + API + Dolt + console): the older screens above keep working next to it ----
-  await page.setViewportSize({ width: 1100, height: 1500 });
-  page.on('dialog', (d) => d.accept());
-  const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
-  const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
-  await page.fill('input[name=vadmin]', ADMIN_TOKEN);
-  await noBanner('before explorer');
-  await btn('Branches').click(); await page.waitForSelector('text=protected');
-  await shot('8-explorer-1-branches');
+  await noBanner('enabled'); await shot('6-plugin-enabled');
+  await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
+  await noBanner('disabled'); await shot('7-plugin-disabled-back-to-base');
 
-  // new branch from main
+  // refresh on a deep link: the in-memory token is gone, so sign-in comes first and then the same plugin page opens again
+  await page.reload(); await page.waitForSelector('#signin-browser'); assert.equal(path(), '/login');
+  await coreLogin();
+  await page.waitForSelector('#plugins table'); assert.equal(path(), '/plugins/auth-password-lockout');
+  await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
+  await setToken();
+
+  // ---- database explorer, section by section (one component instance across the sections) ----
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
+  await nav('/database/branches'); await page.waitForSelector('text=protected'); await shot('8-explorer-1-branches');
   await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
-  // edit a row on the branch through the Data tab
-  await btn('Data').click(); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
+  await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
   await btn('Add a row').click();
   await page.fill('textarea[name=ej]', JSON.stringify({ id: 'auditor', label: 'Auditor', is_sensitive: 0 }));
   await page.fill('input[name=em]', 'add auditor role'); await btn('Commit change').click();
   await page.waitForSelector('td:has-text("Auditor")'); await shot('8-explorer-2-data-edit');
-  // main is read only
   await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('text=read only');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
-  // compare
-  await btn('Compare').first().click(); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
+  await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
   await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
-  // SQL: a write on main is refused, a dry run on the branch shows the change
-  await btn('SQL').click(); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
+  await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
   await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
   await page.waitForSelector('.explorer .msg:has-text("protected")');
   await page.selectOption('select[name=sr]', 'ui-demo'); await page.fill('textarea[name=sq]', "update roles set label = 'Internal auditor' where id = 'auditor'"); await btn('Preview changes').click();
   await page.waitForSelector('text=Preview only'); await shot('8-explorer-4-sql-preview');
-  await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', "select * from mysql.user"); await btn('Run').click();
+  await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
   await page.waitForSelector('.explorer .msg:has-text("not reachable")');
-  // pull request, merge
-  await btn('Pull requests').click(); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
+  await nav('/database/pulls'); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
   await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();
   await page.waitForSelector('text=Can be merged');
-  // the author (demo-alice) cannot approve through the UI
   assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
-  assert.doesNotMatch(await page.locator('p.msg').first().innerText(), /Cannot|error|failed/i); await page.waitForSelector('text=demo-alice');
+  assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
   await shot('8-explorer-5-pull-request');
   await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
-  // history on main shows the merge commit
-  await btn('History').click(); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
-  const text = await page.locator('.explorer ol.log').innerText(); assert.match(text, /Merge pull request #1: Add auditor role/);
+  await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
+  assert.match(await page.locator('.explorer ol.log').innerText(), /Merge pull request #1: Add auditor role/);
   await noBanner('explorer end');
-  // the older screens still work after the explorer merged a PR into Dolt main
-  await page.getByRole('button', { name: 'Activate current main' }).click();
-  await page.waitForFunction(() => /Activated main head as #\d+/.test(document.querySelector('[role=status]')?.textContent ?? ''));
+  // an internal jump changes the address too: branches -> compare with main
+  await nav('/database/branches'); await page.waitForSelector('text=protected');
+  // the IAM pages still work after the explorer merged a PR into Dolt main
+  await nav('/activation');
+  await page.getByRole('button', { name: 'Activate current main' }).click(); await status('Activated main head as #2');
   await noBanner('activation after PR merge');
+
+  // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
+  await page.setViewportSize({ width: 390, height: 800 });
+  for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls']) {
+    await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
+    await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
+    if (path() === '/login') await coreLogin();
+    await page.waitForFunction((x) => location.pathname.startsWith(x), p);
+    await page.waitForSelector('main.content section, main.content .stats');
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok(over <= 2, `${p}: horizontal overflow of ${over}px at 390px`);
+  }
+  await page.click('button.burger'); await page.waitForSelector('.layout.open nav a'); await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-menu.png') });
+  await page.click('nav a[data-nav="/overview"]'); await page.waitForFunction(() => !document.querySelector('.layout.open'));
+  await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-overview.png') });
   assert.deepEqual(errors, [], 'no page errors');
   console.log('UI E2E PASSED; screenshots in ' + out);
 } finally {

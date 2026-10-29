@@ -1,9 +1,10 @@
-import { Component, Input, signal, computed } from '@angular/core';
+import { Component, EventEmitter, Input, Output, inject, signal, computed } from '@angular/core';
+import { Session } from './session';
 import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiClient, BranchInfo, CommitInfo, DiffSummary, PullRequestDetail, PullRequestInfo, RowDiff, SqlResult, TableData, VersioningClient, cellText, shortHash } from './api';
 
-type Tab = 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
+export type Tab = 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
 interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }
 
 /**
@@ -14,13 +15,17 @@ interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; trunc
 @Component({ selector: 'app-dolt-explorer', imports: [FormsModule, NgTemplateOutlet], templateUrl: './dolt-explorer.html', styleUrl: './dolt-explorer.css' })
 export class DoltExplorer {
   @Input({ required: true }) api!: ApiClient;
+  /** The section shown, driven by the route (/database/:tab). Internal jumps (e.g. branch -> compare) are announced through `navigate`. */
+  @Input() set section(t: Tab) { this.wanted = t; if (this.ready && t !== this.tab()) void this.open(t); }
+  @Output() navigate = new EventEmitter<Tab>();
+  private readonly session = inject(Session);
+  private wanted: Tab = 'branches'; private ready = false;
   protected v!: VersioningClient;
   protected readonly tab = signal<Tab>('branches');
   protected readonly note = signal('');
   protected readonly busy = signal(false);
   protected readonly short = shortHash;
   protected readonly cell = cellText;
-  protected adminToken = '';
 
   protected readonly branches = signal<BranchInfo[]>([]);
   protected readonly tags = signal<{ name: string; commit: string }[]>([]);
@@ -55,16 +60,20 @@ export class DoltExplorer {
   protected prForm = { title: '', body: '', source: '', target: 'main' };
   protected prComment = '';
 
-  async ngOnInit() { this.v = new VersioningClient(this.api); await this.refreshRefs(); }
-
-  protected setToken() { this.v.adminToken = this.adminToken; }
+  async ngOnInit() {
+    this.v = new VersioningClient(this.api);
+    // one admin capability token for the whole console (shell sidebar); read at each call, never stored anywhere else
+    Object.defineProperty(this.v, 'adminToken', { get: () => this.session.adminToken(), set: () => {}, configurable: true });
+    this.ready = true; await this.open(this.wanted); if (this.wanted !== 'branches') await this.refreshRefs();
+  }
+  protected go(t: Tab) { this.tab.set(t); this.navigate.emit(t); }
   /** Runs an API call with the busy flag. `keepNote` is for follow-up reloads, so they do not wipe the message of the action that triggered them. */
   protected async run<T>(fn: () => Promise<T>, keepNote = false): Promise<T | undefined> {
     this.busy.set(true); if (!keepNote) this.note.set('');
     try { return await fn(); } catch (e) { this.note.set((e as Error).message); return undefined; } finally { this.busy.set(false); }
   }
   protected async open(t: Tab) {
-    this.tab.set(t); this.note.set('');
+    this.go(t); this.note.set('');
     if (t === 'branches') await this.refreshRefs();
     if (t === 'history') await this.loadLog(true);
     if (t === 'data') await this.loadTables();
@@ -90,7 +99,7 @@ export class DoltExplorer {
     if (await this.run(() => this.v.deleteBranch(b.name)) !== undefined) { this.note.set(`Branch ${b.name} deleted.`); await this.refreshRefs(); }
   }
   protected showHistory(ref: string) { this.histRef = ref; void this.open('history'); }
-  protected compareWithDefault(ref: string) { this.from = this.defaultBranch(); this.to = ref; this.three = true; this.tab.set('compare'); void this.compare(); }
+  protected compareWithDefault(ref: string) { this.from = this.defaultBranch(); this.to = ref; this.three = true; this.go('compare'); void this.compare(); }
 
   // history
   protected async loadLog(reset: boolean) {

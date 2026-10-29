@@ -1,5 +1,9 @@
 import { TestBed } from '@angular/core/testing';
-import { App } from './app';
+import { Router, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
+import { pluginsMatcher, routes } from './app.routes';
+import { RETURN_KEY, safeReturn } from './auth';
+import { Session } from './session';
 import { ApiClient, CORE_PUBLIC, REDIRECT } from './api';
 import { challengeFor } from './pkce';
 
@@ -66,15 +70,57 @@ describe('browser sign-in flow (client side)', () => {
   });
 });
 
-describe('App', () => {
-  beforeEach(async () => { await TestBed.configureTestingModule({ imports: [App] }).compileComponents(); });
+describe('safeReturn', () => {
+  it('only accepts local app paths and never loops back to sign-in', () => {
+    expect(safeReturn('/database/pulls')).toBe('/database/pulls');
+    expect(safeReturn('//evil.example/x')).toBe('/overview');
+    expect(safeReturn('https://evil.example')).toBe('/overview');
+    expect(safeReturn('/login')).toBe('/overview'); expect(safeReturn('/callback?code=1')).toBe('/overview');
+    expect(safeReturn(null)).toBe('/overview');
+  });
+});
 
-  it('renders title and the sign-in form first', async () => {
-    const fixture = TestBed.createComponent(App);
-    await fixture.whenStable();
-    const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('h1')?.textContent).toContain('IAM platform POC');
-    expect(el.querySelector('input[type=password]')).toBeTruthy();
+describe('plugins route matcher', () => {
+  it('matches /plugins and /plugins/:id on one route, nothing else', () => {
+    const seg = (...p: string[]) => p.map((path) => ({ path, parameters: {} }) as never);
+    expect(pluginsMatcher(seg('plugins'), null as never, null as never)?.posParams).toEqual({});
+    expect((pluginsMatcher(seg('plugins', 'risk-geo'), null as never, null as never)?.posParams as Record<string, { path: string }>)['id'].path).toBe('risk-geo');
+    expect(pluginsMatcher(seg('plugins', 'a', 'b'), null as never, null as never)).toBeNull();
+    expect(pluginsMatcher(seg('database'), null as never, null as never)).toBeNull();
+  });
+});
+
+describe('routing and sign-in guard', () => {
+  beforeEach(async () => { sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents(); });
+
+  it('sends a direct link to sign-in when there is no token, and remembers the page to come back to', async () => {
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/database/pulls');
+    expect(TestBed.inject(Router).url).toBe('/login');
+    expect(sessionStorage.getItem(RETURN_KEY)).toBe('/database/pulls');
+    const el = h.routeNativeElement as HTMLElement;
+    expect(el.textContent).toContain('IAM platform POC');
+    expect(el.querySelector('#signin-browser')).toBeTruthy();
     expect(el.textContent).not.toContain('Merge into main');
+  });
+
+  it('once signed in, shows the administration layout with the whole navigation and the requested page', async () => {
+    const s = TestBed.inject(Session);
+    s.loggedIn.set(true); s.user.set('demo-alice');
+    s.api.raw = (async () => ({ status: 200, data: [] })) as never;
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/activation');
+    const el = h.routeNativeElement as HTMLElement;
+    const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
+    expect(nav).toEqual(['/overview', '/assignments', '/activation', '/plugins', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);
+    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
+    expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
+    expect(el.textContent).toContain('Activate current main');
+  });
+
+  it('unknown address falls back to the dashboard (through sign-in when needed)', async () => {
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/nope/nothing');
+    expect(TestBed.inject(Router).url).toBe('/login');
   });
 });
