@@ -24,6 +24,9 @@ export IAM_CORE_ADMIN_TOKEN="$CORE_TOKEN"
 # demo/server.mjs attaches it to proxied /api calls so demo visitors never see or type it.
 API_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export IAM_API_ADMIN_TOKEN="$API_TOKEN"
+# The edge attaches the capability to every call, so the API also requires the verified subject to be a demo administrator.
+# Anyone else (including accounts created through public sign-up) is refused on admin routes.
+export IAM_API_ADMIN_SUBJECTS="${IAM_API_ADMIN_SUBJECTS:-demo-alice}"
 export IAM_POLICY_FILE=/app/policies/demo.cedar
 export IAM_CORE_STATE_DIR="$HOME_DIR/core-state"
 export IAM_IDP_EXTRA_REDIRECT_URIS="${PUBLIC_ORIGIN}/callback,http://localhost:4200/callback"

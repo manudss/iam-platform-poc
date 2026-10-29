@@ -34,3 +34,25 @@ describe('ordinary valid token: no administration route answers', () => {
       }
     });
 });
+
+// Hosted edge model: the capability header is attached to every call. A signed-up ordinary subject must still be refused; only the listed demo admin passes.
+describe('edge attaches the capability to everyone: the subject decides', () => {
+  let app: INestApplication; let sub = 'new-nora'; const env = { a: process.env.IAM_API_ADMIN_TOKEN, s: process.env.IAM_API_ADMIN_SUBJECTS };
+  before(async () => {
+    process.env.IAM_API_ADMIN_TOKEN = ADMIN; process.env.IAM_API_ADMIN_SUBJECTS = 'demo-alice';
+    const guard = { canActivate: (c: any) => { c.switchToHttp().getRequest().user = { sub, tenant: 'acme-demo' }; return true; } };
+    const mod = await Test.createTestingModule({ imports: [AppModule] }).overrideGuard(AuthGuard).useValue(guard).compile();
+    app = mod.createNestApplication(); await app.init();
+  });
+  after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; if (env.s === undefined) delete process.env.IAM_API_ADMIN_SUBJECTS; else process.env.IAM_API_ADMIN_SUBJECTS = env.s; await app.close(); });
+  const routes: [string, string][] = [['post', 'changes'], ['post', 'connectors/csv'], ['post', 'users'], ['get', 'users'], ['put', 'profile-fields'], ['post', 'workspace/apply'], ['put', 'auth'], ['post', 'plugins/hr-attributes/enable'], ['post', 'organizations'], ['get', 'roles'], ['post', 'roles'], ['post', 'activations']];
+  it('ordinary subject with the edge header is refused on admin routes', async () => {
+    sub = 'new-nora';
+    for (const [m, p] of routes) { const r = await (request(app.getHttpServer()) as any)[m](`/tenants/acme-demo/${p}`).set('x-api-admin-token', ADMIN).send({}); assert.equal(r.status, 403, `${m} ${p} -> ${r.status}`); }
+  });
+  it('the listed demo administrator is not refused by the guard', async () => {
+    sub = 'demo-alice';
+    const r = await request(app.getHttpServer()).get('/tenants/acme-demo/users').set('x-api-admin-token', ADMIN);
+    assert.notEqual(r.status, 403);
+  });
+});

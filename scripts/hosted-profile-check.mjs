@@ -63,6 +63,11 @@ try {
   assert.equal((await nora('PATCH', '/me/profile', { values: { 'hr-attributes.language': 'de' } })).s, 400, 'wrong value refused');
   assert.equal((await nora('PATCH', '/me/profile', { values: { 'hr-attributes.language': 'en' }, subject: 'demo-alice' })).s, 400, 'spoofed subject refused');
   const alice2 = ok(await alice('GET', '/users/demo-alice/profile', undefined, 'main'), 'alice profile'); assert.equal(alice2.values['hr-attributes.language'], undefined, "another person's values untouched");
+  // The public edge attaches the admin capability to every /api call: an ordinary signed-in account must STILL be refused (through the public URL, not the backend directly).
+  const adminRoutes = [['GET', '/users'], ['GET', '/roles'], ['GET', '/organizations'], ['GET', '/signup/requests'], ['GET', '/profile-fields'], ['PUT', '/profile-fields'], ['POST', '/roles'], ['POST', '/organizations'], ['PUT', '/organizations/memberships/demo-bob'], ['POST', '/changes'], ['POST', '/connectors/csv'], ['POST', '/activations'], ['POST', '/users'], ['PUT', '/auth'], ['POST', '/plugins/hr-attributes/disable'], ['POST', '/workspace/apply'], ['POST', '/workspace/assignment'], ['POST', '/versioning/branches'], ['GET', '/auth/outbox']];
+  for (const [m, pth] of adminRoutes) { const r = await nora(m, pth, ['GET'].includes(m) ? undefined : {}); assert.equal(r.s, 403, `ordinary account via the public URL: ${m} ${pth} -> ${r.s}`); }
+  assert.ok((await alice('GET', '/roles')).s === 200 && (await alice('GET', '/users')).s === 200, 'the demo administrator still reaches the admin routes');
+  log('3 ordinary account refused on', adminRoutes.length, 'admin routes through the public URL (edge adds the capability, API checks the subject); demo administrator unaffected');
   log('3 self-service and refusals: ok');
   // 4. concurrency on the SAME field/person: admin on a branch, person on main, then Apply = explicit conflict
   const b3 = await newBranch('pf3-' + RUN);
@@ -95,7 +100,7 @@ try {
   for (const [nav, sel, name] of [['/profile-fields', '#pf-table', '2-profile-fields'], ['/organizations', '#org-table', '3-organizations'], ['/roles', '#role-table', '4-roles'], ['/my-profile', '#mp-form', '5-my-profile'], ['/users', '#users-table', '6-users']]) {
     await page.setViewportSize({ width: 1280, height: 900 }); await page.locator(`nav a[data-nav="${nav}"]`).click(); await page.waitForSelector(sel); await page.waitForLoadState('networkidle'); await page.waitForFunction(() => !document.querySelector('main').innerText.includes('Loading...')); await sleep(2500);
     assert.equal(await page.locator('[role=alert]').count(), 0, nav + ': no alert (' + (await page.locator('[role=alert]').allInnerTexts()).join('|') + ')');
-    await page.setViewportSize({ width: 1280, height: 900 }); await shot(name + '-desktop'); await page.setViewportSize({ width: 390, height: 800 }); await shot(name + '-mobile');
+    await page.setViewportSize({ width: 1280, height: 900 }); await shot(name + '-desktop'); await page.setViewportSize({ width: 390, height: 800 }); await sleep(800); const sw = await page.evaluate(() => ({ side: Math.round(document.querySelector('.side').getBoundingClientRect().right), over: document.documentElement.scrollWidth - innerWidth })); assert.ok(sw.side <= 0, name + ': mobile menu closed after load (side right edge ' + sw.side + ')'); log(name, 'mobile 390px: menu closed, horizontal overflow of the page', sw.over, 'px'); await shot(name + '-mobile'); await page.locator(sel).scrollIntoViewIfNeeded(); await sleep(300); await shot(name + '-mobile-table');
   }
   assert.equal(errs.length, 0, 'page errors: ' + errs.join('|'));
   log('6 screenshots in', out, 'HOSTED PROFILE CHECK PASS');
