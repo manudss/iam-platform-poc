@@ -12,8 +12,6 @@ import { PgPluginStore } from './pg-stores.js';
 import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations } from './builtin/index.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
 import { AuthGateController } from './auth-gate.controller.js';
-import { SigninOptionsController } from '../../authn/signin-options.controller.js';
-import { ProfileService, PROFILE_STORE } from '../../profile/profile.service.js';
 import { ProfileService, PROFILE_STORE, SIGNUP_ALLOWED, defaultSignupAllowed } from '../../profile/profile.service.js';
 import { SignupService } from '../../profile/signup.service.js';
 import { SignupController } from '../../profile/signup.controller.js';
