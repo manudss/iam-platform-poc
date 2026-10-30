@@ -1,7 +1,7 @@
-import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { Connection, Edge, Node, Vflow } from 'ngx-vflow';
+import { Connection, CustomNodeComponent, Edge, HandleComponent, Node, Vflow } from 'ngx-vflow';
 import { Session } from './session';
 import { ApiClient } from './api';
 
@@ -25,6 +25,48 @@ export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; hi
   { type: 'revoke-role', label: 'Revoke role', simulated: false, hint: 'Real, on the run branch' },
   { type: 'set-department', label: 'Set department', simulated: false, hint: 'Real, on the run branch' },
 ];
+
+
+// ---- Visual node for the workflow canvas: readable name, wrapped text, SIMULATED/REAL badge, side handles ----
+export interface WfNodeData { name: string; simulated: boolean }
+
+@Component({
+  selector: 'app-wf-node',
+  imports: [HandleComponent],
+  template: `
+    <div class="wf-node" [class.real]="!data()?.simulated" [class.selected]="selected()">
+      <span class="wf-node-name">{{ data()?.name }}</span>
+      <span class="wf-node-badge" [class.real]="!data()?.simulated">{{ data()?.simulated ? 'SIMULATED' : 'REAL' }}</span>
+    </div>
+    <handle type="target" position="left" />
+    <handle type="source" position="right" />
+  `,
+  styles: [`
+    :host { display: block; position: relative; }
+    .wf-node {
+      box-sizing: border-box; width: 190px; min-height: 64px; padding: 10px 12px;
+      background: #ffffff; border: 1.5px solid #b7c3d8; border-left: 5px solid #6b7fd7; border-radius: 10px;
+      box-shadow: 0 1px 3px rgba(20, 30, 60, .12); cursor: pointer;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .wf-node.real { border-left-color: #2e9e6b; }
+    .wf-node.selected { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79, 70, 229, .25); }
+    .wf-node-name {
+      font-size: 13px; font-weight: 600; line-height: 1.3; color: #1c2440;
+      overflow-wrap: anywhere; white-space: normal;
+    }
+    .wf-node-badge {
+      align-self: flex-start; font-size: 10px; font-weight: 700; letter-spacing: .04em;
+      padding: 2px 7px; border-radius: 999px; background: #ece9fd; color: #5b4fd0;
+    }
+    .wf-node-badge.real { background: #dcf5e8; color: #177a4e; }
+    handle { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
+      background: #ffffff; border: 2px solid #6b7fd7; transform: translateY(-50%); }
+    handle[position="left"] { left: -6px; }
+    handle[position="right"] { right: -6px; }
+  `],
+})
+export class WfNodeComponent extends CustomNodeComponent<WfNodeData> {}
 
 export class WorkflowClient {
   constructor(private readonly api: ApiClient, private readonly adminToken: () => string) {}
@@ -123,7 +165,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @for (t of types; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{t.simulated ? 'SIMULATED' : 'REAL'}}</small><br /><small>{{t.hint}}</small></button>}
 </section>
 <section class="card wf-canvas">
-<vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
+<vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [background]="'#f2f5fb'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
 </section>
 <section class="card"><h3>Selected</h3>
 @if (selectedNode(); as nid) {@if (state.get(nid); as st) {
@@ -154,6 +196,8 @@ export class WorkflowEditPage implements OnInit {
   protected readonly samples = SAMPLE_WORKFLOWS;
   protected vfNodes = signal<Node[]>([]);
   protected vfEdges = signal<Edge[]>([]);
+  private readonly vflow = viewChild(Vflow);
+  private fitCanvas() { setTimeout(() => this.vflow()?.fitView({ padding: 0.18, duration: 150 }), 60); }
   protected state = new Map<string, NodeState>();
   /** Selection is tracked by the library on each entity's own `selected` signal. */
   protected selectedNode = computed(() => this.vfNodes().find((n) => n.selected?.())?.id ?? null);
@@ -167,7 +211,18 @@ export class WorkflowEditPage implements OnInit {
   protected typeOf(t: StepType) { return STEP_TYPES.find((x) => x.type === t)!; }
 
   private makeNode(id: string, st: NodeState, i: number): Node {
-    return { id, type: 'default', text: signal(`${st.name}\n[${this.typeOf(st.type).simulated ? 'SIMULATED' : 'REAL'}]`), point: signal({ x: 40 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 120 }), selected: signal(false) } as Node;
+    return {
+      id, type: WfNodeComponent,
+      data: signal<WfNodeData>({ name: st.name, simulated: this.typeOf(st.type).simulated }),
+      point: signal({ x: 40 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
+      selected: signal(false),
+    } as Node;
+  }
+  private makeEdge(id: string, source: string, target: string): Edge {
+    return {
+      id, source, target, selected: signal(false),
+      markers: signal({ end: { type: 'arrow-closed', width: 16, height: 16, color: '#8a94ac' } }),
+    } as Edge;
   }
 
   protected addNode(type: StepType) {
@@ -186,7 +241,7 @@ export class WorkflowEditPage implements OnInit {
   protected rename(id: string, v: string) {
     const st = this.state.get(id)!; st.name = v;
     const n = this.vfNodes().find((x) => x.id === id);
-    if (n && n.type === 'default') n.text?.set(`${v}\n[${this.typeOf(st.type).simulated ? 'SIMULATED' : 'REAL'}]`);
+    if (n?.type === WfNodeComponent) n.data?.set({ name: v, simulated: this.typeOf(st.type).simulated });
   }
   protected setCfg(id: string, k: string, v: unknown) { this.state.get(id)!.config[k] = k === 'seconds' ? Number(v) : v; }
   protected noop(_e: unknown) {}
@@ -194,7 +249,7 @@ export class WorkflowEditPage implements OnInit {
     if (!c.source || !c.target) return;
     const id = `${c.source}->${c.target}`;
     if (this.vfEdges().some((e) => e.id === id)) return;
-    this.vfEdges.update((es) => [...es, { id, source: c.source, target: c.target, selected: signal(false) } as Edge]);
+    this.vfEdges.update((es) => [...es, this.makeEdge(id, c.source!, c.target!)]);
   }
   protected deleteNode(id: string) {
     this.state.delete(id);
@@ -210,7 +265,8 @@ export class WorkflowEditPage implements OnInit {
     const nodes: Node[] = [];
     sm.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); });
     this.vfNodes.set(nodes);
-    this.vfEdges.set(sm.edges.map((e) => ({ id: `${e.from}->${e.to}`, source: e.from, target: e.to, selected: signal(false) }) as Edge));
+    this.vfEdges.set(sm.edges.map((e) => this.makeEdge(`${e.from}->${e.to}`, e.from, e.to)));
+    this.fitCanvas();
   }
 
   private async load() {
@@ -221,7 +277,8 @@ export class WorkflowEditPage implements OnInit {
       const nodes: Node[] = [];
       definition.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });
       this.vfNodes.set(nodes);
-      this.vfEdges.set(definition.graph.edges.map((e) => ({ id: `${e.from}->${e.to}`, source: e.from, target: e.to, selected: signal(false) }) as Edge));
+      this.vfEdges.set(definition.graph.edges.map((e) => this.makeEdge(`${e.from}->${e.to}`, e.from, e.to)));
+      this.fitCanvas();
     } catch (e) { this.note.set((e as Error).message); }
   }
 

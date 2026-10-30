@@ -118,3 +118,20 @@ export const organizations: PluginImpl = {
   manifest: { apiVersion: 'plugin/v1', id: 'organizations', version: '1.0.0', name: 'Organizations (example)', publisher: 'iam-platform', kinds: ['profile'], hooks: [], settings: [] },
   handlers: {},
 };
+/**
+ * Feature gate for the IGA workflows module (editor, runs, tracking): the feature exists only while this plugin
+ * is enabled for the tenant. While disabled, the console hides the Workflows menu and every /workflows* endpoint
+ * answers 403. A run already executing when the plugin is disabled is left to finish (its data stays on its own
+ * Dolt branch; publishing to main always stays a human merge); retry/cancel/review are refused until re-enabled.
+ */
+export const workflowsIga: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'workflows-iga', version: '0.1.0', name: 'Workflows (IGA)', publisher: 'iam-platform',
+    kinds: ['workflow', 'ui'],
+    description: 'Visual IGA workflow scenarios: build a graph of steps, run it, follow every step. Simulated steps (wait, notification, deliberate failure) never have an external effect; real data steps write on the run\'s own Dolt branch, merged by a human review.',
+    hooks: [],
+    settings: [],
+    screens: [{ id: 'workflows', title: 'Workflows', area: 'admin', render: 'schema' }],
+  },
+  handlers: {},
+};
