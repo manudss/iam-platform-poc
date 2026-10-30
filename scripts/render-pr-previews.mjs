@@ -2,11 +2,26 @@
 import { pathToFileURL } from 'node:url';
 // Orchestrates the per-PR Render preview service (one all-in-one Docker web service:
 // Dolt + Rust core + NestJS API + Angular console, built from demo/Dockerfile) from a
-// TRUSTED GitHub Actions workflow (pull_request_target, base-branch code only, never PR code).
-// Untrusted values (branch name) only travel through env vars and are validated here.
-// Usage: node scripts/render-pr-previews.mjs ensure|cleanup
-// Env: RENDER_API_KEY, RENDER_OWNER_ID, RENDER_ENVIRONMENT_ID, GITHUB_TOKEN, GITHUB_REPOSITORY,
-//      PR_NUMBER, PR_HEAD_BRANCH, PR_HEAD_SHA (ensure only), DRY_RUN=1 to print the plan only.
+// TRUSTED GitHub Actions workflow (pull_request_target, or issue_comment /
+// workflow_dispatch which run the DEFAULT branch version: never PR code).
+//
+// DEPLOY ON DEMAND (since 2026-10-30): a push on a PR branch NEVER starts a Render
+// build. Each Docker build (Rust + Node multi-stage) costs ~10-20 of the 500 free
+// pipeline minutes/month shared by the workspace, so the preview only builds when
+// someone actually wants to test:
+//   - ensure   (PR opened / updated): no build, no service creation. Only maintains
+//              the status comment on the PR.
+//   - refresh  (`/preview` PR comment from OWNER/MEMBER/COLLABORATOR, or the manual
+//              Actions dispatch): creates the service if needed and deploys the latest
+//              commit of the PR branch. The head branch/sha are read back from the
+//              GitHub API here, never taken from event or env metadata.
+//   - cleanup  (PR closed): deletes the service.
+// Untrusted values (branch name) are validated before use. Infra secrets
+// (RENDER_API_KEY) stay in the trusted workflow and never reach the preview service.
+// Usage: node scripts/render-pr-previews.mjs ensure|refresh|cleanup
+// Env: RENDER_API_KEY, GITHUB_TOKEN, GITHUB_REPOSITORY, PR_NUMBER,
+//      RENDER_OWNER_ID + RENDER_ENVIRONMENT_ID (refresh only, service creation),
+//      DRY_RUN=1 to print the plan only.
 const MODE = process.argv[2];
 const e = process.env;
 const DRY = e.DRY_RUN === '1';
@@ -14,10 +29,6 @@ const pr = Number(e.PR_NUMBER);
 if (!Number.isInteger(pr) || pr <= 0) throw new Error('PR_NUMBER invalid');
 const repoFull = e.GITHUB_REPOSITORY ?? '';
 if (!/^[\w.-]+\/[\w.-]+$/.test(repoFull)) throw new Error('GITHUB_REPOSITORY invalid');
-const branch = e.PR_HEAD_BRANCH ?? '';
-if (MODE === 'ensure' && !/^[\w./-]{1,200}$/.test(branch)) throw new Error('PR_HEAD_BRANCH rejected');
-const headSha = e.PR_HEAD_SHA ?? '';
-if (MODE === 'ensure' && !/^[0-9a-f]{40}$/.test(headSha)) throw new Error('PR_HEAD_SHA rejected');
 
 const RENDER = 'https://api.render.com/v1';
 const name = `iam-pr${pr}`;
@@ -59,22 +70,71 @@ async function upsertComment(markdown) {
 }
 const urlOf = (s, fallback) => s?.serviceDetails?.url ?? fallback;
 
-async function ensure() {
-  const repo = `https://github.com/${repoFull}`;
-  if (!e.RENDER_ENVIRONMENT_ID) throw new Error('RENDER_ENVIRONMENT_ID is required (IAM POOC project, dev environment)');
-  const guess = `https://${name}.onrender.com`;
+function intro() {
+  return `### Preview Render pour la PR #${pr}`;
+}
+function links(url) {
+  return [
+    `| Composant | Lien |`, '|---|---|',
+    `| Demo tout-en-un (console + API + core + Dolt) | ${url} |`,
+    `| Sante | ${url}/healthz |`,
+  ].join('\n');
+}
+const HOWTO = "Pour deployer ou mettre a jour la preview avec le dernier commit : commente `/preview` sur cette PR (ou onglet **Actions > PR Previews > Run workflow** avec le numero de la PR).";
 
-  // The all-in-one demo image needs demo/Dockerfile in the PR branch; skip cleanly otherwise.
-  const dockerfile = await gh('GET', `/contents/demo/Dockerfile?ref=${headSha}`);
-  if (!dockerfile) {
+// ensure: PR opened/updated. Never builds; only keeps the status comment accurate.
+async function ensure() {
+  const svc = await findService(name);
+  const guess = `https://${name}.onrender.com`;
+  if (!svc) {
     await upsertComment([
-      `### Preview Render pour la PR #${pr}`,
-      `Pas de preview automatique : cette branche ne contient pas \`demo/Dockerfile\` (image Docker tout-en-un Dolt + core + API + console).`,
-      'Ajoute ce fichier sur la branche pour obtenir une preview a la prochaine mise a jour de la PR.',
+      intro(),
+      '**Preview a la demande** : les pushes ne lancent plus de build (chaque build Docker consomme une part des 500 minutes de pipeline gratuites partagees du mois).',
+      '',
+      HOWTO,
+      '',
+      `Une fois construite depuis \`demo/Dockerfile\` (tout-en-un : Dolt + core + API + console), la preview sera sur ${guess}. Le service est supprime a la fermeture de la PR.`,
     ].join('\n'));
-    console.log('demo/Dockerfile absent from the PR branch: no preview created.');
+    console.log('no preview service: status comment only, no build.');
     return;
   }
+  const realUrl = urlOf(svc, guess);
+  await upsertComment([
+    intro(),
+    links(realUrl),
+    '',
+    'Les pushes ne redeploient plus automatiquement. ' + HOWTO,
+    'Le service se met en veille apres 15 min sans trafic (le premier appel peut prendre ~1 min) ; il est supprime a la fermeture de la PR.',
+  ].join('\n'));
+  console.log('preview exists: status comment refreshed, no build.');
+}
+
+// refresh: explicit request to (re)deploy the latest commit of the PR branch.
+async function refresh() {
+  // Read the head back from the API: never trust event/env metadata for what gets built.
+  const d = await gh('GET', `/pulls/${pr}`);
+  if (!d || d.state !== 'open') throw new Error(`PR #${pr} is not open`);
+  if (d.head?.repo?.full_name !== repoFull) throw new Error('fork PR: refused');
+  const branch = d.head?.ref ?? '';
+  const sha = d.head?.sha ?? '';
+  if (!/^[\w./-]{1,200}$/.test(branch)) throw new Error('head branch rejected');
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('head sha rejected');
+
+  // The all-in-one demo image needs demo/Dockerfile in the PR branch; skip cleanly otherwise.
+  const dockerfile = await gh('GET', `/contents/demo/Dockerfile?ref=${sha}`);
+  if (!dockerfile) {
+    await upsertComment([
+      intro(),
+      'Pas de preview : cette branche ne contient pas `demo/Dockerfile` (image Docker tout-en-un Dolt + core + API + console).',
+      'Ajoute ce fichier sur la branche, puis commente `/preview`.',
+    ].join('\n'));
+    console.log('demo/Dockerfile absent from the PR branch: no preview deployed.');
+    return;
+  }
+
+  if (!e.RENDER_ENVIRONMENT_ID) throw new Error('RENDER_ENVIRONMENT_ID is required (IAM POOC project, dev environment)');
+  const repo = `https://github.com/${repoFull}`;
+  const guess = `https://${name}.onrender.com`;
 
   let svc = await findService(name);
   let created = false;
@@ -83,7 +143,7 @@ async function ensure() {
       ownerId: e.RENDER_OWNER_ID,
       environmentId: e.RENDER_ENVIRONMENT_ID,
       // autoDeploy 'no' ON PURPOSE: Render's own webhook AND the workflow's explicit
-      // deploy call would otherwise start two builds of the same SHA at each PR update
+      // deploy call would otherwise start two builds of the same SHA
       // (observed on the Allegria previews). The workflow is the single deploy trigger.
       repo, branch, autoDeploy: 'no',
       type: 'web_service', name,
@@ -102,6 +162,8 @@ async function ensure() {
   // Changing an env var makes Render redeploy by itself, so skip the explicit deploy in that case.
   let envRedeploy = false;
   if (!created) {
+    // Track the branch the service points at: a PR whose head branch was force-renamed
+    // would otherwise keep building the old ref. Same-name branch: nothing to do.
     const vars = await render('GET', `/services/${svc.id}/env-vars`);
     const current = (Array.isArray(vars) ? vars : []).map((x) => x.envVar ?? x).find((v) => v.key === 'IAM_PUBLIC_ORIGIN');
     if (!current || current.value !== realUrl) {
@@ -110,19 +172,19 @@ async function ensure() {
     }
   }
   if (!created && !envRedeploy) {
-    // PR update: do not rely on Render's GitHub webhook; explicitly deploy the newest commit of the branch.
+    // Explicit demand: deploy the newest commit of the branch (one build only).
     await render('POST', `/services/${svc.id}/deploys`, { clearCache: 'do_not_clear' });
   }
 
   await upsertComment([
-    `### Preview Render pour la PR #${pr}`,
-    `| Composant | Lien |`, '|---|---|',
-    `| Demo tout-en-un (console + API + core + Dolt) | ${realUrl} |`,
-    `| Sante | ${realUrl}/healthz |`,
+    intro(),
+    `Preview demandee : deploiement du dernier commit \`${sha.slice(0, 7)}\` lance.`,
+    '',
+    links(realUrl),
     '',
     'Un seul service Docker gratuit (plan Free, Frankfurt), construit depuis `demo/Dockerfile` de cette branche, dans le projet Render **IAM POOC** (environnement `dev`).',
     'Les donnees Dolt sont les seeds fictives embarquees dans le conteneur : elles sont propres a cette preview et disparaissent avec elle.',
-    'Le service se met en veille apres 15 min sans trafic (le premier appel peut prendre ~1 min) et chaque mise a jour de la branche relance un build Docker (compte dans les minutes de pipeline gratuites).',
+    'Le service se met en veille apres 15 min sans trafic (le premier appel peut prendre ~1 min). Chaque `/preview` relance un build Docker (compte dans les minutes de pipeline gratuites).',
     'Il est supprime a la fermeture de la PR.',
   ].join('\n'));
 }
@@ -133,11 +195,12 @@ async function cleanup() {
   await upsertComment(`### Preview Render pour la PR #${pr}\nPR fermee : le service de preview (et ses donnees Dolt embarquees) a ete supprime.`);
 }
 
-export { ensure, cleanup };
+export { ensure, refresh, cleanup };
 
 const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedAsScript) {
   if (MODE === 'ensure') await ensure();
+  else if (MODE === 'refresh') await refresh();
   else if (MODE === 'cleanup') await cleanup();
-  else throw new Error('usage: ensure|cleanup');
+  else throw new Error('usage: ensure|refresh|cleanup');
 }

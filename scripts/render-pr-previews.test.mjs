@@ -12,8 +12,6 @@ const BASE_ENV = {
   GITHUB_TOKEN: 'ghp-test',
   GITHUB_REPOSITORY: 'manudss/iam-platform-poc',
   PR_NUMBER: '3',
-  PR_HEAD_BRANCH: 'feature/x',
-  PR_HEAD_SHA: SHA,
 };
 
 function mockFetch(handler) {
@@ -28,6 +26,11 @@ function mockFetch(handler) {
 }
 const json200 = (obj) => ({ ok: true, status: 200, json: async () => obj, text: async () => JSON.stringify(obj) });
 const notFound = { ok: false, status: 404, json: async () => ({}), text: async () => '{}' };
+const openPr = (over = {}) => json200({
+  state: 'open',
+  head: { ref: 'feature/x', sha: SHA, repo: { full_name: 'manudss/iam-platform-poc' } },
+  ...over,
+});
 
 async function load(env = {}) {
   for (const k of Object.keys(process.env)) if (k.startsWith('RENDER_') || k.startsWith('PR_') || k === 'GITHUB_TOKEN' || k === 'GITHUB_REPOSITORY' || k === 'DRY_RUN' || k === 'GH_DRY') delete process.env[k];
@@ -39,22 +42,73 @@ async function load(env = {}) {
 const renderCalls = (calls, method, re) => calls.filter((c) => c.method === method && re.test(c.url));
 const ghCalls = (calls, method, re) => calls.filter((c) => c.method === method && c.url.includes('api.github.com') && re.test(c.url));
 
-test('rejects an invalid PR_HEAD_BRANCH', async () => {
-  await assert.rejects(load({ PR_HEAD_BRANCH: 'bad;branch' }), /PR_HEAD_BRANCH rejected/);
+test('rejects an invalid PR_NUMBER', async () => {
+  await assert.rejects(load({ PR_NUMBER: 'abc' }), /PR_NUMBER invalid/);
 });
-test('rejects an invalid PR_HEAD_SHA', async () => {
-  await assert.rejects(load({ PR_HEAD_SHA: 'xyz' }), /PR_HEAD_SHA rejected/);
+test('rejects an invalid GITHUB_REPOSITORY', async () => {
+  await assert.rejects(load({ GITHUB_REPOSITORY: 'a/b/c' }), /GITHUB_REPOSITORY invalid/);
 });
 
-test('ensure creates the service once, with autoDeploy off, and comments', async () => {
+// --- ensure: deploy on demand means a push never builds ---
+
+test('ensure with no service writes nothing to Render and comments the how-to', async () => {
   const calls = mockFetch(async (u) => {
+    if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
+    return json200([]); // GET /services?name=... -> no existing service
+  });
+  const m = await load();
+  await m.ensure();
+  assert.equal(renderCalls(calls, 'POST', /\/v1\/services/).length, 0, 'no service creation');
+  assert.equal(renderCalls(calls, 'POST', /\/deploys/).length, 0, 'no deploy');
+  assert.equal(renderCalls(calls, 'PUT', /.*/).length + renderCalls(calls, 'DELETE', /.*/).length, 0, 'no other Render write');
+  assert.equal(ghCalls(calls, 'GET', /\/pulls\/3/).length, 0, 'ensure does not need the PR head');
+  const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
+  assert.equal(comments.length, 1);
+  assert.match(comments[0].body.body, /render-previews-iam/);
+  assert.match(comments[0].body.body, /\/preview/, 'comment tells how to deploy on demand');
+  assert.match(comments[0].body.body, /https:\/\/iam-pr3\.onrender\.com/, 'comment shows the future URL');
+});
+
+test('ensure with an existing service keeps the link, adds the refresh how-to, and never deploys', async () => {
+  const calls = mockFetch(async (u) => {
+    if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
+    if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
+    return json200({});
+  });
+  const m = await load();
+  await m.ensure();
+  assert.equal(renderCalls(calls, 'POST', /\/deploys/).length, 0, 'a push must not start a build');
+  assert.equal(renderCalls(calls, 'PUT', /env-vars/).length, 0, 'no env rewrite from ensure');
+  const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
+  assert.equal(comments.length, 1);
+  assert.match(comments[0].body.body, /https:\/\/iam-pr3\.onrender\.com/);
+  assert.match(comments[0].body.body, /\/preview/);
+});
+
+test('ensure updates an existing marked comment instead of posting a new one', async () => {
+  const calls = mockFetch(async (u) => {
+    if (u.includes('api.github.com') && u.includes('/comments')) return json200([{ id: 42, body: '<!-- render-previews-iam -->\nold' }]);
+    return json200([]);
+  });
+  const m = await load();
+  await m.ensure();
+  assert.equal(ghCalls(calls, 'PATCH', /\/issues\/comments\/42/).length, 1);
+  assert.equal(ghCalls(calls, 'POST', /\/issues\/3\/comments/).length, 0);
+});
+
+// --- refresh: explicit on-demand deploy ---
+
+test('refresh reads the head from the pulls API and creates the service once, with autoDeploy off', async () => {
+  const calls = mockFetch(async (u) => {
+    if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('/services') && !u.includes('name=')) return json200({ service: { id: 'srv-new', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } });
     return json200([]); // GET /services?name=... -> no existing service
   });
-  const m = await load();
-  await m.ensure();
+  const m = await load({ MODE: 'refresh' });
+  await m.refresh();
+  assert.equal(ghCalls(calls, 'GET', /\/pulls\/3/).length, 1, 'head read back from the API');
   const creates = renderCalls(calls, 'POST', /\/v1\/services$/);
   assert.equal(creates.length, 1, 'exactly one service creation');
   const body = creates[0].body;
@@ -73,64 +127,75 @@ test('ensure creates the service once, with autoDeploy off, and comments', async
   assert.equal(renderCalls(calls, 'POST', /\/deploys/).length, 0, 'no explicit deploy on creation: Render deploys on create');
   const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
   assert.equal(comments.length, 1);
-  assert.match(comments[0].body.body, /render-previews-iam/);
+  assert.match(comments[0].body.body, /aaaaaaa/, 'comment names the deployed short sha');
   assert.match(comments[0].body.body, /https:\/\/iam-pr3\.onrender\.com/);
 });
 
-test('ensure on update triggers exactly one explicit deploy when the origin is unchanged', async () => {
+test('refresh on an existing service triggers exactly one explicit deploy when the origin is unchanged', async () => {
   const calls = mockFetch(async (u) => {
+    if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('/env-vars')) return json200([{ envVar: { key: 'IAM_PUBLIC_ORIGIN', value: 'https://iam-pr3.onrender.com' } }]);
     if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
     return json200({});
   });
-  const m = await load();
-  await m.ensure();
+  const m = await load({ MODE: 'refresh' });
+  await m.refresh();
   assert.equal(renderCalls(calls, 'POST', /\/v1\/services$/).length, 0, 'no second creation');
   assert.equal(renderCalls(calls, 'POST', /\/services\/srv-old\/deploys/).length, 1, 'exactly one explicit deploy: no double build');
   assert.equal(renderCalls(calls, 'PUT', /env-vars/).length, 0, 'no env update when origin already right');
 });
 
-test('ensure on update with a changed URL updates the env var and does NOT also trigger a deploy', async () => {
+test('refresh with a changed URL updates the env var and does NOT also trigger a deploy', async () => {
   const calls = mockFetch(async (u) => {
+    if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('/env-vars')) return json200([{ envVar: { key: 'IAM_PUBLIC_ORIGIN', value: 'https://old.onrender.com' } }]);
     if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
     return json200({});
   });
-  const m = await load();
-  await m.ensure();
+  const m = await load({ MODE: 'refresh' });
+  await m.refresh();
   assert.equal(renderCalls(calls, 'PUT', /\/services\/srv-old\/env-vars\/IAM_PUBLIC_ORIGIN/).length, 1);
   assert.equal(renderCalls(calls, 'POST', /\/deploys/).length, 0, 'env change redeploys by itself: no second trigger');
 });
 
-test('ensure skips cleanly when the branch has no demo/Dockerfile', async () => {
+test('refresh refuses a fork PR', async () => {
+  mockFetch(async (u) => {
+    if (u.includes('/pulls/3')) return openPr({ head: { ref: 'feature/x', sha: SHA, repo: { full_name: 'someone/else' } } });
+    return json200([]);
+  });
+  const m = await load({ MODE: 'refresh' });
+  await assert.rejects(m.refresh(), /fork/);
+});
+
+test('refresh refuses a closed PR', async () => {
+  mockFetch(async (u) => {
+    if (u.includes('/pulls/3')) return openPr({ state: 'closed' });
+    return json200([]);
+  });
+  const m = await load({ MODE: 'refresh' });
+  await assert.rejects(m.refresh(), /not open/);
+});
+
+test('refresh skips cleanly when the branch has no demo/Dockerfile', async () => {
   const calls = mockFetch(async (u) => {
+    if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return notFound;
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     return json200([]);
   });
-  const m = await load();
-  await m.ensure();
+  const m = await load({ MODE: 'refresh' });
+  await m.refresh();
   assert.equal(renderCalls(calls, 'POST', /\/v1\/services/).length, 0, 'no Render write at all');
   const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
   assert.equal(comments.length, 1);
   assert.match(comments[0].body.body, /demo\/Dockerfile/);
 });
 
-test('ensure updates an existing marked comment instead of posting a new one', async () => {
-  const calls = mockFetch(async (u) => {
-    if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
-    if (u.includes('api.github.com') && u.includes('/comments')) return json200([{ id: 42, body: '<!-- render-previews-iam -->\nold' }]);
-    return json200([]);
-  });
-  const m = await load();
-  await m.ensure();
-  assert.equal(ghCalls(calls, 'PATCH', /\/issues\/comments\/42/).length, 1);
-  assert.equal(ghCalls(calls, 'POST', /\/issues\/3\/comments/).length, 0);
-});
+// --- cleanup: unchanged ---
 
 test('cleanup deletes the service and comments', async () => {
   const calls = mockFetch(async (u) => {
@@ -138,7 +203,7 @@ test('cleanup deletes the service and comments', async () => {
     if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3' } }]);
     return json200({});
   });
-  const m = await load({ PR_HEAD_BRANCH: 'closed' });
+  const m = await load();
   await m.cleanup();
   assert.equal(renderCalls(calls, 'DELETE', /\/services\/srv-old/).length, 1);
   const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
@@ -151,7 +216,7 @@ test('cleanup is a no-op on Render when the service does not exist', async () =>
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     return json200([]);
   });
-  const m = await load({ PR_HEAD_BRANCH: 'closed' });
+  const m = await load();
   await m.cleanup();
   assert.equal(renderCalls(calls, 'DELETE', /\/services\//).length, 0);
 });
