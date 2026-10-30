@@ -14,9 +14,14 @@ export class Shell {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
   protected branches=signal<BranchInfo[]>([]);protected newBranch='';protected working='';protected review=signal<any>(null);protected workingBusy=signal(false);
-  async ngOnInit(){await this.loadBranches();}
+  protected personal=signal('');protected renameTo='';
+  /** Opens (or reuses) the signed-in user's own working branch so the console is ready to use on arrival. */
+  protected async ensurePersonal(){try{const r=await this.s.api.raw<{branch:string;status:string}>('POST','/workspace/personal',undefined,this.headers());this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;if(this.s.branch()!==r.data.branch)this.s.selectBranch(r.data.branch);this.s.say(r.data.status==='reused'?'Back on your personal branch '+r.data.branch+'. Your work in progress is kept.':'Your personal branch '+r.data.branch+' is ready. Changes stay on it until Apply.');}catch(e){const m=(e as Error).message;this.s.say(/admin capability|disabled/.test(m)?'Enter the admin capability token, then press Refresh branches to open your personal branch.':m,/admin capability|disabled/.test(m)?'info':'error');}}
+  protected async refresh(){if(!this.personal())await this.ensurePersonal();await this.loadBranches();}
+  protected async rename(){try{const r=await this.s.api.raw<{branch:string}>('POST','/workspace/personal/rename',{name:this.renameTo},this.headers());this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;this.s.selectBranch(r.data.branch);await this.loadBranches();this.s.say('Personal branch renamed to '+r.data.branch+'.');}catch(e){this.s.say((e as Error).message,'error');}}
+  async ngOnInit(){await this.ensurePersonal();await this.loadBranches();}
   private headers():Record<string,string>{return this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{};}
-  protected async loadBranches(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);}catch(e){this.s.say((e as Error).message,'error');}}
+  protected async loadBranches(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
   protected async select(){this.s.selectBranch(this.working);this.review.set(null);this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
   protected async create(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();await v.createBranch(this.newBranch,'main');this.working=this.newBranch;this.newBranch='';await this.loadBranches();await this.select();}catch(e){this.s.say((e as Error).message,'error');}}
   protected async prepareApply(){this.workingBusy.set(true);try{await this.loadBranches();const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());this.review.set(r.data);}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
@@ -47,5 +52,5 @@ export class Shell {
     let r = this.router.routerState.snapshot.root; while (r.firstChild) r = r.firstChild;
     return (r.title as string | undefined) ?? '';
   }
-  protected signOut() { this.s.signOut(); void this.router.navigateByUrl('/login'); }
+  protected async signOut() { try { await this.s.api.raw('POST','/workspace/personal/release',undefined,this.headers()); } catch { /* best effort: idle empty branches are swept later */ } this.s.signOut(); void this.router.navigateByUrl('/login'); }
 }
