@@ -46,11 +46,21 @@ export class ProfileService {
   }
   /** The user's own profile, as the LIVE configuration shows it. The subject always comes from the token. */
   async selfEditPolicy(tenant: string): Promise<'immediate' | 'review'> { return (await this.config(tenant, 'live')).selfEditPolicy === 'review' ? 'review' : 'immediate'; }
+  /** Base fields (name, e-mail, department, manager) live in the identity directory, not in the value store: show them from there. Stored values win. */
+  private async baseValues(sub: string, ref: 'live' | 'work'): Promise<Record<string, unknown>> {
+    if (!this.users || !workspaceMode()) return {};
+    try {
+      const u = (await this.users.list(ref === 'live' ? 'main' : currentBranch())).find((x) => x.id === sub); if (!u) return {};
+      const r = u as unknown as Record<string, unknown>; const out: Record<string, unknown> = {};
+      for (const k of ['display_name', 'email', 'department', 'manager_id']) if (r[k] !== null && r[k] !== undefined && r[k] !== '') out['base.' + k] = r[k];
+      return out;
+    } catch { return {}; }
+  }
   async self(tenant: string, sub: string) {
     await this.subject(tenant, sub, 'live');
     const policy = await this.selfEditPolicy(tenant);
     const live = await this.store.get(tenant, sub, 'live'), pending = policy === 'review' ? await this.store.pending(tenant, sub) : {};
-    const shown = { ...live } as Record<string, unknown>; for (const [k, v] of Object.entries(pending)) { if (v === null) delete shown[k]; else shown[k] = v; }
+    const shown = { ...(await this.baseValues(sub, 'live')), ...live } as Record<string, unknown>; for (const [k, v] of Object.entries(pending)) { if (v === null) delete shown[k]; else shown[k] = v; }
     return { ...(await this.visible(tenant, 'self', 'live', shown as Values)), policy, pending: Object.keys(pending) };
   }
   /** Immediate policy: live at once (main). Review policy: the edits wait on the person's own branch until a validator accepts them. */
@@ -79,7 +89,7 @@ export class ProfileService {
     await this.store.resolvePending(tenant, subject, accept, actor);
     return { resolved: accept ? 'accepted' : 'refused', subject };
   }
-  async admin(tenant: string, id: string) { await this.subject(tenant, id, 'work'); return this.visible(tenant, 'admin', 'work', await this.store.get(tenant, id, 'work')); }
+  async admin(tenant: string, id: string) { await this.subject(tenant, id, 'work'); return this.visible(tenant, 'admin', 'work', { ...(await this.baseValues(id, 'work')), ...(await this.store.get(tenant, id, 'work')) } as Values); }
   async patchAdmin(tenant: string, id: string, input: unknown, actor: string) {
     await this.subject(tenant, id, 'work');
     const changes = await this.check(tenant, 'work', 'admin', input);

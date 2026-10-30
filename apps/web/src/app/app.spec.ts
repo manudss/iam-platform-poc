@@ -145,7 +145,7 @@ describe('routing and sign-in guard', () => {
       expect(el.textContent).toContain('recommended');
       expect(el.textContent).toContain('simulated step (no real e-mail is sent)');
       expect(el.textContent).not.toContain('Legacy JSON login');
-      expect(el.querySelector('input[type=password]')).toBeNull();
+      expect([...el.querySelectorAll('input[type=password]')].filter((i) => !i.closest('#signup-embedded'))).toHaveLength(0); // the only password field is the sign-up form's
       expect(el.textContent).not.toContain('Merge into main');
     } finally { globalThis.fetch = real; }
   });
