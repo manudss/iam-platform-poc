@@ -20,7 +20,7 @@ export interface RunView { run: { id: string; name: string; branch: string | nul
 export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; hint: string }[] = [
   { type: 'wait', label: 'Wait', simulated: true, hint: 'Simulated delay (seconds)' },
   { type: 'notify', label: 'Notify', simulated: true, hint: 'Simulated: logged, never sent' },
-  { type: 'fail', label: 'Fail on purpose', simulated: true, hint: 'Simulated error, to demo retry' },
+  { type: 'fail', label: 'Fail on purpose', simulated: true, hint: 'Simulated error: fails once, recovers on retry' },
   { type: 'assign-role', label: 'Assign role', simulated: false, hint: 'Real, on the run branch' },
   { type: 'revoke-role', label: 'Revoke role', simulated: false, hint: 'Real, on the run branch' },
   { type: 'set-department', label: 'Set department', simulated: false, hint: 'Real, on the run branch' },

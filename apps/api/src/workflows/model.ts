@@ -51,9 +51,13 @@ function configFor(type: StepType, cfg: Record<string, unknown>): Record<string,
       out.recipient = str(cfg.recipient, 'notify.recipient', 80);
       out.message = str(cfg.message, 'notify.message', 200);
       break;
-    case 'fail':
+    case 'fail': {
       out.message = str(cfg.message, 'fail.message', 200, false) || 'step configured to fail';
+      const mode = str(cfg.mode, 'fail.mode', 10, false) || 'once';
+      if (mode !== 'once' && mode !== 'always') throw new BadRequestException('fail.mode: "once" (recovers on retry) or "always"');
+      out.mode = mode;
       break;
+    }
     case 'assign-role':
     case 'revoke-role': {
       const identity = str(cfg.identity, `${type}.identity`, 32), role = str(cfg.role, `${type}.role`, 32);

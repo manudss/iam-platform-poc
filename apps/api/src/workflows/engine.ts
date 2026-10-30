@@ -15,7 +15,7 @@ const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b a
  *
  * Honest scope:
  *  - SIMULATED steps only produce log lines (a wait actually waits; a notification is never sent;
- *    a fail step always fails). They prove orchestration, retry and tracking, nothing else.
+ *    a fail step fails on its first attempt and recovers on retry, unless mode=always). They prove orchestration, retry and tracking, nothing else.
  *  - REAL data steps write on the run's own Dolt branch `wf-<run>` (created from main), one commit
  *    per step, with a SoD check after assignment changes. Main is never written by a run.
  *  - A run interrupted by an API restart is RESUMED from its pending steps on boot (state is in _meta).
@@ -81,7 +81,7 @@ export class WorkflowEngine implements OnModuleInit {
     say(`step started (${STEP_TYPES[node.type].simulated ? 'SIMULATED - no external effect' : 'REAL data change on branch ' + (run.branch ?? 'pending')})`);
     await this.store.patchStep(run.id, node.id, { status: 'running', started_at: step.started_at ?? now(), attempts: step.attempts + 1, log: logs, error: null });
     try {
-      if (STEP_TYPES[node.type].simulated) await this.simulated(run, node, say);
+      if (STEP_TYPES[node.type].simulated) await this.simulated(run, node, step.attempts, say);
       else await this.dataStep(run, node, say);
       await this.store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs });
       return true;
@@ -99,7 +99,7 @@ export class WorkflowEngine implements OnModuleInit {
     }
   }
 
-  private async simulated(run: RunRow, node: WfNode, say: (l: string) => void) {
+  private async simulated(run: RunRow, node: WfNode, attempts: number, say: (l: string) => void) {
     const cfg = node.config;
     switch (node.type) {
       case 'wait': {
@@ -117,9 +117,18 @@ export class WorkflowEngine implements OnModuleInit {
         say(`SIMULATED notification to "${String(cfg.recipient)}": ${String(cfg.message)}`);
         say('nothing was sent: no e-mail, no message, no external call (demo on purpose)');
         break;
-      case 'fail':
-        say(`this step is configured to fail, to demonstrate error handling and retry`);
-        throw new Error(String(cfg.message ?? 'step configured to fail'));
+      case 'fail': {
+        if (cfg.mode === 'always') {
+          say('this step is configured to fail on every attempt (mode "always"), to show a permanently blocked run');
+          throw new Error(String(cfg.message ?? 'step configured to fail'));
+        }
+        if (attempts === 0) {
+          say('simulates an external system that fails on the first call, to demonstrate error tracking');
+          throw new Error(String(cfg.message ?? 'step configured to fail'));
+        }
+        say('SIMULATED recovery: the external system answers on retry (demo convention, no real call ever happens)');
+        break;
+      }
     }
   }
 

@@ -156,11 +156,24 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.deepEqual(v.steps.map((s) => s.status), ['done', 'failed', 'skipped']);
     assert.ok((v.run.error ?? '').includes('boom for the demo'));
     assert.equal((await call('POST', `/workflow-runs/${started.run.id}/review`)).status, 409); // only completed runs
-    // retry: the failed step is attempted again (attempts 2), the run fails the same way (deterministic demo)
+    // retry: the failed step is attempted again (attempts 2) and recovers (default mode "once"), the run completes
     await ok('POST', `/workflow-runs/${started.run.id}/retry`);
-    const v2 = await waitRun(started.run.id, ['failed']);
+    const v2 = await waitRun(started.run.id, ['completed']);
     assert.equal(v2.steps[1].attempts, 2);
-    assert.deepEqual(v2.steps.map((s) => s.status), ['done', 'failed', 'skipped']);
+    assert.deepEqual(v2.steps.map((s) => s.status), ['done', 'done', 'done']);
+    assert.ok(v2.steps[1].log.some((l) => l.includes('SIMULATED recovery')));
+  });
+
+  it('fail mode "always": the step keeps failing on retry, the run stays failed', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Always broken', graph: { nodes: [
+      { id: 'f', type: 'fail', name: 'never recovers', config: { message: 'down for good', mode: 'always' } },
+    ], edges: [] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['failed']);
+    await ok('POST', `/workflow-runs/${started.run.id}/retry`);
+    const v = await waitRun(started.run.id, ['failed']);
+    assert.equal(v.steps[0].attempts, 2);
+    assert.ok((v.run.error ?? '').includes('down for good'));
   });
 
   it('data step failure: unknown role fails the run, the branch keeps earlier commits only', async () => {

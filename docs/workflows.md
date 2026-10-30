@@ -7,7 +7,7 @@ The workflows feature demonstrates identity-governance scenarios (joiner, leaver
 
 | Family | Types | Effect |
 |---|---|---|
-| **SIMULATED** | `wait`, `notify`, `fail` | Orchestration only. A wait really waits; a `notify` step **only writes a log line — nothing is ever sent** (no e-mail, no message); a `fail` step always fails so errors and retry can be demonstrated. |
+| **SIMULATED** | `wait`, `notify`, `fail` | Orchestration only. A wait really waits; a `notify` step **only writes a log line — nothing is ever sent** (no e-mail, no message); a `fail` step fails on its first attempt and recovers on retry (`config.mode: "always"` keeps failing, to show a permanently blocked run). |
 | **REAL** (data) | `assign-role`, `revoke-role`, `set-department` | Write business data in Dolt, **always on the run's own branch `wf-<run>` created from `main`**, one commit per step, with the SoD check after an assignment. **A run never writes on `main`.** |
 
 Publishing stays the existing human path: from a completed run, "Review & open a pull request" opens the Dolt pull
@@ -33,7 +33,7 @@ merge refused at review).
 - Start: **Run** on the definitions page. At most 3 active runs per definition (demo guard).
 - Follow: the run page shows every step in execution order with its status (`pending/running/done/failed/skipped`),
   attempts, and its log; the page auto-refreshes while the run is active.
-- **Retry** (failed or canceled run): re-runs from the failed step; earlier `done` steps are NOT re-executed.
+- **Retry** (failed or canceled run): re-runs from the failed step; earlier `done` steps are NOT re-executed. A simulated `fail` step recovers on retry, so a retry normally unblocks the run.
 - **Cancel**: stops a running run (a simulated wait ends at the next tick).
 - The run's data branch appears on the run; its commits are visible in Database → History, and the review opens the
   pull request. Deleting definitions while a run is active is refused.
@@ -75,7 +75,7 @@ algorithm; `apps/api/src/workflows/model.ts`).
 - `src/workflows/workflows.e2e.spec.ts`: 9 end-to-end tests against a **real Dolt server** (set `DOLT_BIN`; the fake
   auth mirrors the real guard's contract, the real AdminGuard is used): simulated run (nothing sent, no branch),
   data run on `wf-<run>` with main untouched until the human merge, SoD conflict logged then refused (409), failure
-  + skip + retry, failed data step leaves earlier commits only, cancel, definition CRUD.
+  + skip + retry with simulated recovery, fail mode "always", failed data step leaves earlier commits only, cancel, definition CRUD.
 
 ## Limits (POC)
 
