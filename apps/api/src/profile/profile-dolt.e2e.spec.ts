@@ -53,6 +53,25 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     assert.equal('hr-attributes.phone' in (await store.get(T, 'demo-alice', 'live')), false);
   });
 
+  it('review policy: a personal branch holds the proposal, main is untouched until accepted, a refusal deletes it, the branch is reused', async () => {
+    const v = new VersioningService(); const store = new DoltProfileStore(v, () => 'main');
+    const F = 'hr-attributes.job_title';
+    await store.put(T, 'pend-dan', { [F]: 'Old' }, 'live', 'pend-dan');
+    await store.putPending(T, 'pend-dan', { [F]: 'New', 'hr-attributes.language': 'fr' }, 'pend-dan');
+    await store.putPending(T, 'pend-dan', { 'hr-attributes.language': 'en' }, 'pend-dan'); // same branch reused
+    assert.deepEqual(await store.get(T, 'pend-dan', 'live'), { [F]: 'Old' }, 'main untouched');
+    assert.deepEqual(await store.pending(T, 'pend-dan'), { [F]: 'New', 'hr-attributes.language': 'en' });
+    assert.ok((await store.listPending(T)).includes('pend-dan'));
+    assert.equal((await v.branches()).branches.filter((b) => b.name === 'profile-pend-dan').length, 1);
+    await store.resolvePending(T, 'pend-dan', true, 'validator');
+    assert.deepEqual(await store.get(T, 'pend-dan', 'live'), { [F]: 'New', 'hr-attributes.language': 'en' });
+    assert.deepEqual(await store.pending(T, 'pend-dan'), {}); assert.ok(!(await store.listPending(T)).includes('pend-dan'));
+    await store.putPending(T, 'pend-dan', { [F]: 'Bad' }, 'pend-dan'); await store.resolvePending(T, 'pend-dan', false, 'validator');
+    assert.equal((await store.get(T, 'pend-dan', 'live'))[F], 'New'); assert.deepEqual(await store.pending(T, 'pend-dan'), {});
+    await store.putPending(T, 'Odd.User@x', { [F]: 'x' }, 'Odd.User@x'); assert.ok((await store.listPending(T)).includes('Odd.User@x'), 'subject encoding round-trips');
+    await store.resolvePending(T, 'Odd.User@x', false, 'validator');
+  });
+
   it('same field, same person: self edit on main after the admin edit on the branch is an explicit conflict, never a silent loss', async () => {
     const v = new VersioningService(); const branch = 'work-conflict';
     const store = new DoltProfileStore(v, () => branch);

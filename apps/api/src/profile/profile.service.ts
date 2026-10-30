@@ -25,6 +25,7 @@ export class ProfileService {
     const r = await this.registry(ref);
     return [...BASE_FIELDS, ...r.profileFields(tenant).flatMap((p) => toCatalog(p.plugin, p.fields))];
   }
+  async activePlugins(tenant: string): Promise<string[]> { return (await this.registry('live')).list(tenant).filter((x: { id: string; enabled?: boolean; active?: boolean }) => x.enabled ?? x.active).map((x: { id: string }) => x.id); }
   async pluginActive(tenant: string, id: string, ref: 'live' | 'work') { return (await this.registry(ref)).isActive(tenant, id); }
   async config(tenant: string, ref: 'live' | 'work'): Promise<ProfileConfig> { return parseProfileConfig(await (await this.registry(ref)).coreSettings(tenant, CORE_PROFILE_SETTINGS_ID)); }
   async saveConfig(tenant: string, input: unknown): Promise<ProfileConfig> {
@@ -44,12 +45,39 @@ export class ProfileService {
     return { fields, values: Object.fromEntries(fields.filter((f) => f.key in values).map((f) => [f.key, values[f.key]])) };
   }
   /** The user's own profile, as the LIVE configuration shows it. The subject always comes from the token. */
-  async self(tenant: string, sub: string) { await this.subject(tenant, sub, 'live'); return this.visible(tenant, 'self', 'live', await this.store.get(tenant, sub, 'live')); }
+  async selfEditPolicy(tenant: string): Promise<'immediate' | 'review'> { return (await this.config(tenant, 'live')).selfEditPolicy === 'review' ? 'review' : 'immediate'; }
+  async self(tenant: string, sub: string) {
+    await this.subject(tenant, sub, 'live');
+    const policy = await this.selfEditPolicy(tenant);
+    const live = await this.store.get(tenant, sub, 'live'), pending = policy === 'review' ? await this.store.pending(tenant, sub) : {};
+    const shown = { ...live } as Record<string, unknown>; for (const [k, v] of Object.entries(pending)) { if (v === null) delete shown[k]; else shown[k] = v; }
+    return { ...(await this.visible(tenant, 'self', 'live', shown as Values)), policy, pending: Object.keys(pending) };
+  }
+  /** Immediate policy: live at once (main). Review policy: the edits wait on the person's own branch until a validator accepts them. */
   async patchSelf(tenant: string, sub: string, input: unknown) {
     await this.subject(tenant, sub, 'live');
     const changes = await this.check(tenant, 'live', 'self', input);
-    await this.store.put(tenant, sub, changes, 'live', sub);
+    if (await this.selfEditPolicy(tenant) === 'review') await this.store.putPending(tenant, sub, changes, sub);
+    else await this.store.put(tenant, sub, changes, 'live', sub);
     return this.self(tenant, sub);
+  }
+  /** Validator view: who has pending edits and what would change (current live value next to the proposed one). Profile values only: no authority field can be in a pending set. */
+  async reviews(tenant: string) {
+    const out = [];
+    for (const s of await this.store.listPending(tenant)) {
+      const pend = await this.store.pending(tenant, s); if (!Object.keys(pend).length) continue;
+      const live = await this.store.get(tenant, s, 'live'), cat = await this.catalogue(tenant, 'live');
+      out.push({ subject: s, changes: Object.entries(pend).map(([k, to]) => ({ key: k, label: cat.find((c) => c.fullKey === k)?.label ?? k, from: live[k] ?? null, to })) });
+    }
+    return { policy: await this.selfEditPolicy(tenant), reviews: out };
+  }
+  /** A validator cannot accept their own edits (separation of duties). Accepting merges the personal branch into main, refusing deletes it. */
+  async resolveReview(tenant: string, subject: string, accept: boolean, actor: string) {
+    if (!SUBJECT.test(subject)) throw new BadRequestException('invalid user id');
+    if (accept && subject === actor) throw new ForbiddenException('you cannot accept your own pending edits: another validator must');
+    if (!Object.keys(await this.store.pending(tenant, subject)).length) throw new NotFoundException('nothing pending for this user');
+    await this.store.resolvePending(tenant, subject, accept, actor);
+    return { resolved: accept ? 'accepted' : 'refused', subject };
   }
   async admin(tenant: string, id: string) { await this.subject(tenant, id, 'work'); return this.visible(tenant, 'admin', 'work', await this.store.get(tenant, id, 'work')); }
   async patchAdmin(tenant: string, id: string, input: unknown, actor: string) {
