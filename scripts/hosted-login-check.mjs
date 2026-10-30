@@ -28,14 +28,14 @@ await run('password only signs in demo-alice', { width: 1280, height: 800 }, asy
   await Promise.all([page.waitForURL(/\/(overview|callback)/), page.click('button[type=submit]')]); await page.waitForSelector('main.content, .who', { timeout: 20000 }); await sleep(800);
   assert.match(await page.innerText('.who'), /demo-alice`?/); await page.screenshot({ path: join(out, 'signed-in-password-only.png') });
 });
-await run('password then authenticator: wrong code refused, right code signs in', { width: 1280, height: 800 }, async (page) => {
+await run('password then authenticator: right code signs in', { width: 1280, height: 800 }, async (page) => {
   await pick(page, 'password-then-authenticator'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await page.click('button[type=submit]');
   await page.waitForSelector('input[name=a_code]'); await page.screenshot({ path: join(out, 'core-second-step.png') });
   await page.fill('input[name=a_code]', totp('JBSWY3DPEHPK3PXP')); await Promise.all([page.waitForURL(/\/(overview|callback)/, { timeout: 20000 }), page.click('button[type=submit]')]);
   await page.waitForSelector('.who', { timeout: 20000 }); assert.match(await page.innerText('.who'), /demo-alice/);
 });
 await run('wrong password on a chosen chain is refused with a generic message', { width: 1280, height: 800 }, async (page) => {
-  await pick(page, 'password-only'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'wrong-password-123'); await page.click('button[type=submit]'); await sleep(1500);
-  assert.ok(/\/core\/authorize/.test(page.url())); assert.ok(!(await page.locator('.who').count()));
+  await pick(page, 'password-only'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'wrong-password-123'); await page.click('button[type=submit]'); await sleep(2000);
+  await page.screenshot({ path: join(out, 'wrong-password.png') }); assert.ok(/\/authorize/.test(page.url())); assert.match(await page.innerText('body'), /Sign-in failed\. Check your details/); assert.equal(await page.locator('.who').count(), 0);
 });
 await browser.close(); console.log('ALL PASS');
