@@ -58,6 +58,10 @@ export class DemoDataService implements OnApplicationBootstrap {
     for (const id of ['organizations', 'hr-attributes']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
     await (await this.branches!.get('main')).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, { fields: { 'hr-attributes.job_title': { selfEdit: true, signup: 'optional' }, 'hr-attributes.phone': { selfEdit: true }, 'hr-attributes.language': { selfEdit: true, signup: 'optional' } }, signup: { open: true }, selfEditPolicy: 'immediate' });
     for (const a of ACCOUNTS) await this.store!.put(tenant, a.id, { 'hr-attributes.job_title': a.title, 'hr-attributes.phone': a.phone, 'hr-attributes.language': a.language, 'hr-attributes.employee_grade': a.grade }, 'live', 'demo-seed');
+    await this.v.lock(() => this.v.at('main', async (c) => {
+      for (const [id, name, dept, mail] of [['demo-alice', 'Alice Durand', 'it', 'alice.durand@example.invalid'], ['demo-bob', 'Bob Marchand', 'finance', 'bob.marchand@example.invalid']]) await c.query("update identities set display_name=?, department=?, email=? where id=? and (display_name is null or display_name='')", [name, dept, mail, id]);
+      await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('--allow-empty','-m','demo seed: names for the two sign-in accounts')");
+    }));
     await this.store!.put(tenant, 'demo-alice', { 'hr-attributes.job_title': 'IAM administrator', 'hr-attributes.language': 'en', 'hr-attributes.employee_grade': 'G6' }, 'live', 'demo-seed');
     await this.store!.put(tenant, 'demo-bob', { 'hr-attributes.job_title': 'Accounts payable officer', 'hr-attributes.language': 'fr', 'hr-attributes.employee_grade': 'G3' }, 'live', 'demo-seed');
     console.log('[demo] demo data seeded (fictional)');
