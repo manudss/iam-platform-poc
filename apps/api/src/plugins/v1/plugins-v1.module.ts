@@ -9,9 +9,18 @@ import { PluginRegistry } from './registry.js';
 import pg from 'pg';
 import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from './memory-stores.js';
 import { PgPluginStore } from './pg-stores.js';
-import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } from './builtin/index.js';
+import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations } from './builtin/index.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
 import { AuthGateController } from './auth-gate.controller.js';
+import { ProfileService, PROFILE_STORE, SIGNUP_ALLOWED, defaultSignupAllowed } from '../../profile/profile.service.js';
+import { SignupService } from '../../profile/signup.service.js';
+import { SignupController } from '../../profile/signup.controller.js';
+import { OrgController, OrgService, ORG_STORE, DoltOrgStore, MemoryOrgStore } from '../../profile/orgs.js';
+import { RolesController, RolesService } from '../../profile/roles.js';
+import { ProfileController } from '../../profile/profile.controller.js';
+import { DoltProfileStore, MemoryProfileStore } from '../../profile/store.js';
+import { currentBranch } from '../../workspace/context.js';
+import { DemoDataService } from '../../profile/demo-data.service.js';
 import { SigninOptionsController } from '../../authn/signin-options.controller.js';
 import { AuthnService } from '../../authn/flow.service.js';
 import { AuthnAdminController } from '../../authn/authn.controller.js';
@@ -22,8 +31,16 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule],
-  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, SigninOptionsController],
-  providers: [BranchRegistries, AuthnService, {
+  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController, RolesController, SigninOptionsController],
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, RolesService, {
+    provide: ORG_STORE,
+    inject: [VersioningService],
+    useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltOrgStore(v, (w) => currentBranch(w)) : new MemoryOrgStore(),
+  }, {
+    provide: PROFILE_STORE,
+    inject: [VersioningService],
+    useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltProfileStore(v, (w) => currentBranch(w)) : new MemoryProfileStore(),
+  }, {
     provide: PluginRegistry,
     inject: [VersioningService, UsersService, BranchRegistries],
     useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries) => {
@@ -34,7 +51,7 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
       const ds = process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltPluginStore(v) : undefined;
       const r = ds ? new PluginRegistry(ds, ds, audit, ds) : pgs ? new PluginRegistry(pgs, pgs, audit, pgs) : new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), audit, new MemoryStateStore());
       const base = process.env.IAM_DIRECTORY_AUTH === '1' ? { ...authPassword, handlers: { 'auth.authenticate': async (p: any) => (await users.authenticate(p.tenant, p.subject, p.credential.password)) ? { outcome: 'allow', subject: p.subject, methods: ['pwd'] } : { outcome: 'deny', reason: 'bad-credentials' } } } : authPassword;
-      for (const p of [base, notifyLog, authPasswordLockout(new Map(), base), orgManager, riskGeo]) {
+      for (const p of [base, notifyLog, authPasswordLockout(new Map(), base), orgManager, riskGeo, hrAttributes, organizations]) {
         if (ds && p.manifest.settings.some(f => f.type === 'secret')) throw new Error('Dolt plugin store refuses secret settings; use a secret store');
         r.register(p);
       }

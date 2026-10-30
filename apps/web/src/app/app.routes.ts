@@ -4,6 +4,13 @@ import { CallbackPage, LoginPage } from './login';
 import { ActivationPage, AssignmentsPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
 import { UsersPage } from './users';
 import { AuthMethodsPage } from './auth-methods';
+import { ProfileFieldsPage } from './profile-fields';
+import { MyProfilePage } from './my-profile';
+import { SignupPage } from './signup-page';
+import { OrganizationsPage } from './organizations';
+import { RolesAdminPage } from './roles-admin';
+import { ProfileReviewsPage } from './profile-reviews';
+import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
@@ -12,18 +19,24 @@ export const pluginsMatcher: UrlMatcher = (segs: UrlSegment[]) =>
 
 export const routes: Routes = [
   { path: 'callback', component: CallbackPage },
+  { path: 'signup', component: SignupPage, title: 'Request an account' },
   { path: 'login', component: LoginPage, title: 'Sign in' },
   {
     path: '', component: Shell, canActivate: [authGuard], children: [
       { path: '', pathMatch: 'full', redirectTo: 'overview' },
-      { path: 'overview', component: OverviewPage, title: 'Dashboard' },
-      { path: 'users', component: UsersPage, title: 'Users' },
-      { path: 'auth-methods', component: AuthMethodsPage, title: 'Authentication methods' },
-      { path: 'assignments', component: AssignmentsPage, title: 'Assignments & changes' },
-      { path: 'activation', component: ActivationPage, title: 'Activation' },
-      { matcher: pluginsMatcher, component: PluginsPage, title: 'Plugins' },
+      { path: 'overview', component: OverviewPage, title: 'Dashboard', canActivate: [accessGuard] },
+      { path: 'users', component: UsersPage, title: 'Users', canActivate: [accessGuard] },
+      { path: 'profile-fields', canActivate: [accessGuard], component: ProfileFieldsPage, title: 'Profile fields' },
+      { path: 'organizations', component: OrganizationsPage, title: 'Organizations', canActivate: [accessGuard, pluginGuard('organizations')] },
+      { path: 'profile-reviews', component: ProfileReviewsPage, title: 'Profile reviews', canActivate: [accessGuard] },
+      { path: 'roles', canActivate: [accessGuard], component: RolesAdminPage, title: 'Roles' },
+      { path: 'my-profile', component: MyProfilePage, title: 'My profile' },
+      { path: 'auth-methods', canActivate: [accessGuard], component: AuthMethodsPage, title: 'Authentication methods' },
+      { path: 'assignments', canActivate: [accessGuard], component: AssignmentsPage, title: 'Assignments & changes' },
+      { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
+      { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
       { path: 'database', pathMatch: 'full', redirectTo: 'database/branches' },
-      { path: 'database/:tab', component: ExplorerPage, title: 'Database (Dolt)' },
+      { path: 'database/:tab', canActivate: [accessGuard], component: ExplorerPage, title: 'Database (Dolt)' },
     ],
   },
   { path: '**', redirectTo: '' },

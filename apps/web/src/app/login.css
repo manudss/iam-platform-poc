@@ -17,3 +17,7 @@ form { display: grid; gap: .5rem; margin-top: .6rem; }
 .tag { font-size: .7rem; font-weight: 600; background: #ffffff33; border-radius: 999px; padding: .1rem .5rem; }
 .methods small { color: var(--muted); }
 .sim { color: #b45309; }
+.signup { margin-top: 1.4rem; padding-top: 1rem; border-top: 1px solid #0001; }
+.signup h2 { margin: 0 0 .4rem; font-size: 1.05rem; }
+.btn { display: inline-block; text-decoration: none; text-align: center; padding: .6rem 1rem; border-radius: 8px; }
+.signup-embedded{margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e2e8f0}.signup-embedded label{display:block;margin:.5rem 0}.signup-embedded input,.signup-embedded select{width:100%;box-sizing:border-box}
