@@ -26,14 +26,14 @@ export class AuthGateController {
 
   /** First page of the sign-in form: which inputs sit next to the user name. `legacy` = no chain is live, the classic user + password form. */
   @Post('entry') @HttpCode(200)
-  async entry(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string }) {
+  async entry(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string; chain?: string }) {
     this.gate(tok);
     if (!this.authn || typeof b?.tenant !== 'string') return { mode: 'legacy' };
-    try { return await this.authn.entry(b.tenant); } catch { throw new HttpException({ outcome: 'error', code: 'plugin-failed' }, 503); }
+    try { return await this.authn.entry(b.tenant, typeof b.chain === 'string' ? b.chain.slice(0, 40) : undefined); } catch { throw new HttpException({ outcome: 'error', code: 'plugin-failed' }, 503); }
   }
 
   @Post('authenticate') @HttpCode(200)
-  async authenticate(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string; subject?: string; password?: string; session?: string; answers?: Record<string, string> }) {
+  async authenticate(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string; subject?: string; password?: string; session?: string; chain?: string; answers?: Record<string, string> }) {
     const want = process.env.IAM_AUTH_GATE_TOKEN;
     if (!want || want.length < 8) throw new NotFoundException();
     const a = Buffer.from(tok ?? ''), w = Buffer.from(want);
@@ -41,7 +41,7 @@ export class AuthGateController {
     if (this.authn && typeof b?.tenant === 'string' && (typeof b.session === 'string' || typeof b.subject === 'string')) {
       // Chain mode: the control plane runs the steps (a bare password is the first step's answer when that step is a password). null = no chain is live, fall through to the base password path.
       try {
-        const r = await this.authn.authenticate({ tenant: b.tenant, subject: b.subject, session: b.session, answers: b.answers && typeof b.answers === 'object' && !Array.isArray(b.answers) ? b.answers : typeof b.password === 'string' ? { password: b.password } : undefined });
+        const r = await this.authn.authenticate({ tenant: b.tenant, subject: b.subject, session: b.session, chain: typeof b.chain === 'string' ? b.chain : undefined, answers: b.answers && typeof b.answers === 'object' && !Array.isArray(b.answers) ? b.answers : typeof b.password === 'string' ? { password: b.password } : undefined });
         if (r) return r;
       } catch (e) { throw new HttpException({ outcome: 'error', code: (e as { code?: string }).code ?? 'plugin-failed' }, 503); }
     }

@@ -48,9 +48,10 @@ pub async fn step(addr: &str, token: &str, body: Value) -> Step {
     }
 }
 
-/// First-page description: {"mode":"legacy"} or {"mode":"chain","fields":[...]}. None = gate unavailable.
-pub async fn entry(addr: &str, token: &str, tenant: &str) -> Option<Value> {
-    tokio::time::timeout(Duration::from_secs(3), post(addr, token, "/internal/auth/entry", &json!({"tenant": tenant}))).await.ok().flatten()
+/// First-page description: {"mode":"legacy"}, {"mode":"choice","chains":[...]} or {"mode":"chain","chain":{..},"fields":[...]}. None = gate unavailable.
+pub async fn entry(addr: &str, token: &str, tenant: &str, chain: Option<&str>) -> Option<Value> {
+    let body = match chain { Some(c) if !c.is_empty() => json!({"tenant": tenant, "chain": c}), _ => json!({"tenant": tenant}) };
+    tokio::time::timeout(Duration::from_secs(3), post(addr, token, "/internal/auth/entry", &body)).await.ok().flatten()
 }
 
 async fn post(addr: &str, token: &str, path: &str, body: &Value) -> Option<Value> {

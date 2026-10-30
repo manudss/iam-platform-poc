@@ -25,7 +25,7 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
   @if (note()) { <p role="status" class="msg" id="authn-note">{{note()}}</p> }
   @if (problem()) { <p role="alert" class="msg bad" id="authn-problem">{{problem()}}</p> }
   <section class="card" id="authn-live"><h3>Live sign-in</h3>
-    <p>@if (liveMode()==='chain') { Live sign-in runs the chain <b>{{liveChain()}}</b>. } @else { Live sign-in uses the single base password plugin (no chain is applied yet). }
+    <p>@if (liveMode()==='chain') { The sign-in page offers every enabled chain of the live configuration ({{liveChains()}}) and the person picks one.@if (liveChain()) { Recommended: <b>{{liveChain()}}</b>. } } @else { No chain is enabled live: sign-in uses the single base password (nothing to choose). }
     @if (dirty()) { <span class="pill warn">Unsaved edits</span> } @else if (differsFromLive()) { <span class="pill warn">Saved on this branch, not live until Apply</span> } @else { <span class="pill ok">Same as live</span> }</p>
   </section>
 
@@ -75,7 +75,7 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
         <div class="row"><label>Name<input type="text" class="name" [name]="'cn'+c.id" [ngModel]="c.name" (ngModelChange)="c.name=$event;touch()" maxlength="60" /></label>
           <label>Declared level (1-10)<input type="number" class="lvl" min="1" max="10" [name]="'cl'+c.id" [ngModel]="c.level" (ngModelChange)="c.level=+$event;touch()" /></label>
           <label class="inline"><input type="checkbox" [name]="'ce'+c.id" [ngModel]="c.enabled" (ngModelChange)="c.enabled=$event;touch()" /> Enabled</label>
-          <label class="inline"><input type="radio" name="defaultchain" [value]="c.id" [ngModel]="cfg().defaultChain" (ngModelChange)="cfg().defaultChain=$event;touch()" /> Used for sign-in</label>
+          <label class="inline"><input type="radio" name="defaultchain" [value]="c.id" [ngModel]="cfg().defaultChain" (ngModelChange)="cfg().defaultChain=$event;touch()" /> Recommended (marked on the sign-in page)</label>
           <button class="secondary" (click)="suggest(c)">Suggest level</button><button class="secondary" (click)="removeChain(c.id)">Remove chain</button></div>
         <ol class="steps">@for (s of c.steps; track s; let si = $index) { <li><b>{{methodName(s)}}</b> <small>level {{methodLevel(s)}} · {{factor(methodType(s))}}@if (simId(s)) { · simulated }</small>
           <button class="secondary" (click)="move(c.steps,si,-1)" [disabled]="si===0" aria-label="Step up">↑</button><button class="secondary" (click)="move(c.steps,si,1)" [disabled]="si===c.steps.length-1" aria-label="Step down">↓</button><button class="secondary" (click)="c.steps.splice(si,1);touch()">Remove step</button></li> }
@@ -131,6 +131,7 @@ export class AuthMethodsPage {
   protected analysis(id: string) { return this.analyses().find((a) => a.id === id); }
   protected fields(m: MethodInstance) { return (this.entry(m.type)?.settings ?? []).filter((f) => !f.visibleIf || (m.config[f.visibleIf.key] ?? this.entry(m.type)?.settings.find((x) => x.key === f.visibleIf!.key)?.default) === f.visibleIf.equals); }
   protected liveMode() { return this.live()?.signInMode ?? 'base-password'; }
+  protected liveChains() { const l = this.live(); return (l?.config.chains ?? []).filter((c) => c.enabled).map((c) => c.name).join(', '); }
   protected liveChain() { const l = this.live(); return l?.config.chains.find((c) => c.id === l.config.defaultChain)?.name ?? ''; }
   protected differsFromLive() { return !!this.live() && JSON.stringify(this.cfg()) !== JSON.stringify(this.live()!.config); }
 

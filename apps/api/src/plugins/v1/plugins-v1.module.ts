@@ -12,6 +12,7 @@ import { PgPluginStore } from './pg-stores.js';
 import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } from './builtin/index.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
 import { AuthGateController } from './auth-gate.controller.js';
+import { SigninOptionsController } from '../../authn/signin-options.controller.js';
 import { AuthnService } from '../../authn/flow.service.js';
 import { AuthnAdminController } from '../../authn/authn.controller.js';
 
@@ -21,7 +22,7 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule],
-  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController],
+  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, SigninOptionsController],
   providers: [BranchRegistries, AuthnService, {
     provide: PluginRegistry,
     inject: [VersioningService, UsersService, BranchRegistries],

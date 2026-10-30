@@ -11,7 +11,7 @@ const btn = (n) => page.locator('.explorer button').filter({ hasText: new RegExp
 const nav = (p) => {console.log('NAV',p);return page.click(`nav a[data-nav="${p}"]`);};
 const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
 try {
-  await page.goto(base + '/'); await page.click('#signin-browser'); await page.waitForSelector('input[name=password]');
+  await page.goto(base + '/'); await page.click('#signin-browser, [data-chain=password-only]'); await page.waitForSelector('input[name=password]');
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
   await page.click('button[type=submit]'); await page.waitForSelector('nav a[data-nav="/database/branches"]');
   assert.equal(await page.locator('input[name=admintoken]').inputValue(), ''); // no token typed: the edge adds it
@@ -29,8 +29,8 @@ try {
   await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("demo-bob")'); await nav('/plugins'); await page.waitForSelector('#plugins table');
   assert.equal(await page.locator('[role=alert]').count(), 0);
   assert.doesNotMatch((await page.textContent('body')) ?? '', /capability required|Failed to fetch/);
-  await page.goto(base + '/database/pulls'); await page.waitForSelector('#signin-browser'); // a direct link needs sign-in again (token is memory only), then returns to that page
-  await page.click('#signin-browser'); await page.waitForSelector('input[name=password]'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await page.click('button[type=submit]');
+  await page.goto(base + '/database/pulls'); await page.waitForSelector('#signin-browser, [data-chain=password-only]'); // a direct link needs sign-in again (token is memory only), then returns to that page
+  await page.click('#signin-browser, [data-chain=password-only]'); await page.waitForSelector('input[name=password]'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await page.click('button[type=submit]');
   await page.waitForSelector('nav a.active[data-nav="/database/pulls"]');
   console.log('HOSTED CHECK OK', base, br);
 } catch (e) { console.error('FAILED', e.message); await shot('h-failure'); process.exitCode = 1; } finally { await b.close(); }

@@ -10,7 +10,7 @@ import { EnrollmentStore } from './enroll-store.js';
 import { SmtpMailAdapter } from './mail.js';
 import { CATALOGUE, DemoOutbox, MailAdapter, MethodCtx, Prompt, methodType } from './methods.js';
 
-export interface GateRequest { tenant: string; subject?: string; session?: string; answers?: Record<string, string> }
+export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; answers?: Record<string, string> }
 export type GateResponse =
   | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string }
   | { outcome: 'deny'; reason: string; message: string }
@@ -109,23 +109,53 @@ export class AuthnService implements OnApplicationBootstrap {
   private fail(key: string) { (this.fails.get(key) ?? this.fails.set(key, []).get(key)!).push(this.now()); }
   private sweep() { const n = this.now(); for (const [k, s] of this.sessions) if (s.exp < n) this.sessions.delete(k); while (this.sessions.size > 2000) this.sessions.delete(this.sessions.keys().next().value as string); }
 
-  /** Which fields the very first page must show next to the user name: the first step's inputs when it needs no server action before input. */
-  async entry(tenant: string): Promise<{ mode: 'legacy' } | { mode: 'chain'; fields: Prompt['fields'] }> {
-    const cfg = await this.liveConfig(tenant), chain = cfg.chains.find((c) => c.id === cfg.defaultChain && c.enabled);
-    if (!chain) return { mode: 'legacy' };
+  /** Chains a person may pick at sign-in: enabled chains of the LIVE configuration whose methods are all enabled. */
+  private offered(cfg: AuthnConfig) {
+    return cfg.chains.filter((c) => c.enabled && c.steps.every((id) => cfg.methods.find((m) => m.id === id)?.enabled));
+  }
+  /** Public description of what can be chosen on the sign-in page. No enrollment, user or secret information. */
+  async options(tenant: string) {
+    const cfg = await this.liveConfig(tenant), list = this.offered(cfg);
+    return {
+      mode: list.length ? 'choice' as const : 'legacy' as const,
+      chains: list.map((c) => {
+        const a = analyzeChain(cfg, c);
+        return { id: c.id, name: c.name, declaredLevel: c.level, effectiveLevel: a.effectiveLevel, mfa: a.mfa, simulated: a.simulatedSteps.length > 0, recommended: cfg.defaultChain === c.id,
+          steps: c.steps.map((id) => { const m = cfg.methods.find((x) => x.id === id)!; return { name: m.name, type: m.type, simulated: !methodType(m.type)!.verification(m.config).real }; }), ...(c.note ? { note: c.note } : {}) };
+      }),
+      note: 'Levels are declared by an administrator (10 = strongest), not measured. A simulated step proves nothing.',
+    };
+  }
+  /** Which chain a sign-in uses: the one the person picked, else the administrator's default, else the plain single-password chain (JSON /authorize, scripts). None = refuse. */
+  private resolve(cfg: AuthnConfig, requested?: string) {
+    const list = this.offered(cfg);
+    if (typeof requested === 'string' && requested) return list.find((c) => c.id === requested);
+    const def = list.find((c) => c.id === cfg.defaultChain);
+    if (def) return def;
+    return list.find((c) => c.steps.length === 1 && methodType(cfg.methods.find((m) => m.id === c.steps[0])!.type)?.id === 'password');
+  }
+
+  /** First page of the core's form. No chain is configured: classic form. Chains exist and none is picked: the list to choose from. A chain is picked: its first inputs. */
+  async entry(tenant: string, chainId?: string): Promise<{ mode: 'legacy' } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields'] }> {
+    const cfg = await this.liveConfig(tenant), list = this.offered(cfg);
+    if (!list.length) return { mode: 'legacy' };
+    const chain = typeof chainId === 'string' && chainId ? list.find((c) => c.id === chainId) : undefined;
+    if (!chain) return { mode: 'choice', chains: (await this.options(tenant)).chains };
     const m = cfg.methods.find((x) => x.id === chain.steps[0])!, t = methodType(m.type)!;
-    if (!t.inlineWithUsername(m.config)) return { mode: 'chain', fields: [] };
+    if (!t.inlineWithUsername(m.config)) return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: [] };
     const s = { tenant, subject: '', known: false } as Session;
     const p = await t.prepare!(this.ctx(s, { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: true }));
-    return { mode: 'chain', fields: p.prompt.fields };
+    return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: p.prompt.fields };
   }
 
   /** Returns null when no chain is live: the caller then uses the single base-password path unchanged. */
   async authenticate(b: GateRequest): Promise<GateResponse | null> {
     this.sweep();
     if (b.session) return this.answer(b);
-    const cfg = await this.liveConfig(b.tenant), chain = cfg.chains.find((c) => c.id === cfg.defaultChain && c.enabled);
-    if (!chain) return null;
+    const cfg = await this.liveConfig(b.tenant);
+    if (!this.offered(cfg).length) return null;   // nothing configured and enabled: the classic single-password path, unchanged
+    const chain = this.resolve(cfg, typeof b.chain === 'string' ? b.chain.slice(0, 40) : undefined);
+    if (!chain) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };   // chains exist: never fall back to a laxer path
     const subject = typeof b.subject === 'string' ? b.subject : '';
     if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     const key = `${b.tenant}/${subject}`;

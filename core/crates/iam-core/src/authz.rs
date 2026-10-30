@@ -27,7 +27,7 @@ fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response
 fn error_page(status: StatusCode, msg: &str) -> Response { page(status, format!("<!doctype html><title>Sign-in error</title><p>{}</p>", esc(msg)), None) }
 
 fn hidden(p: &HashMap<String, String>) -> String {
-    ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method"].iter()
+    ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain"].iter()
         .map(|k| format!("<input type=\"hidden\" name=\"{k}\" value=\"{}\">", esc(p.get(*k).map(String::as_str).unwrap_or("")))).collect::<String>()
 }
 fn origin_of(p: &HashMap<String, String>) -> String {
@@ -82,6 +82,22 @@ fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value
          <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form></main>"), Some(&origin_of(p)))
 }
 
+/// The chains the live configuration offers: one link each (plain HTML, no script). The link only adds `chain=<id>`; the control plane re-checks the id at every step.
+fn choice_page(p: &HashMap<String, String>, chains: &[Value]) -> Response {
+    let base = ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method"].iter()
+        .filter_map(|k| p.get(*k).map(|v| format!("{k}={}", pct(v)))).collect::<Vec<_>>().join("&");
+    let items = chains.iter().filter_map(|c| {
+        let id = c["id"].as_str().filter(|i| !i.is_empty() && i.len() <= 40 && i.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))?;
+        let steps = c["steps"].as_array().map(|a| a.iter().filter_map(|s| s["name"].as_str().map(esc)).collect::<Vec<_>>().join(" &rarr; ")).unwrap_or_default();
+        let lvl = c["effectiveLevel"].as_u64().unwrap_or(0);
+        let sim = if c["simulated"].as_bool().unwrap_or(false) { " <span class=\"demo\">includes a simulated step (no real e-mail)</span>" } else { "" };
+        let rec = if c["recommended"].as_bool().unwrap_or(false) { " <b>(recommended)</b>" } else { "" };
+        Some(format!("<li><a class=\"chain\" href=\"/authorize?{base}&amp;chain={}\"><b>{}</b>{rec}</a><br><small>{steps} &middot; declared level {lvl} of 10{sim}</small></li>", pct(id), esc(c["name"].as_str().unwrap_or(id))))
+    }).collect::<String>();
+    page(StatusCode::OK, format!(
+        "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Choose how to sign in</title><main><h1>Choose how to sign in</h1><p>Pick one of the methods configured and enabled for this demo. Levels are declared by an administrator (10 = strongest), not measured. Fictional accounts only.</p><ul style=\"padding-left:1.1rem;line-height:1.7\">{items}</ul></main>"), Some(&origin_of(p)))
+}
+
 /// A later step of a chain: the opaque session id is the only link to the first page (the user name is not sent again).
 fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>) -> Response {
     let st = &v["step"];
@@ -111,8 +127,9 @@ fn validate(c: &Core, p: &HashMap<String, String>) -> Result<(), Response> {
 pub async fn authorize_form(State(c): State<Arc<Core>>, Query(p): Query<HashMap<String, String>>) -> Response {
     if let Err(r) = validate(&c, &p) { return r; }
     let Some((addr, tok)) = &c.gate else { return form(&p, None, None) };
-    match crate::gate::entry(addr, tok, "acme-demo").await {
+    match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str)).await {
         None => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable"),
+        Some(v) if v["mode"] == "choice" => choice_page(&p, v["chains"].as_array().map(Vec::as_slice).unwrap_or(&[])),
         Some(v) if v["mode"] == "chain" => form(&p, None, Some(v["fields"].as_array().map(Vec::as_slice).unwrap_or(&[]))),
         Some(_) => form(&p, None, None),
     }
@@ -129,10 +146,10 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
         for (k, v) in &p { if let Some(n) = k.strip_prefix("a_").filter(|n| !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())) { answers.insert(n.to_string(), json!(v)); } }
         let session = g("session");
         let mut body = json!({"tenant": "acme-demo"});
-        if !session.is_empty() { body["session"] = json!(session); } else { body["subject"] = json!(g("username")); if !g("password").is_empty() { body["password"] = json!(g("password")); } }
+        if !session.is_empty() { body["session"] = json!(session); } else { body["subject"] = json!(g("username")); if !g("password").is_empty() { body["password"] = json!(g("password")); } if !g("chain").is_empty() { body["chain"] = json!(g("chain")); } }
         if !answers.is_empty() { body["answers"] = Value::Object(answers); }
         // A step page has no first-page inputs: after a failed first page, show the first page again.
-        let first_page = || async { match crate::gate::entry(addr, tok, "acme-demo").await { Some(v) if v["mode"] == "chain" => Some(v["fields"].as_array().cloned().unwrap_or_default()), _ => None } };
+        let first_page = || async { match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str)).await { Some(v) if v["mode"] == "chain" => Some(v["fields"].as_array().cloned().unwrap_or_default()), _ => None } };
         match crate::gate::step(addr, tok, body).await {
             crate::gate::Step::Allow { subject, claims } => {
                 if !session.is_empty() { match subject { Some(s) => who = s, None => return form(&p, Some("Sign-in failed. Check your details and try again."), None) } } else if let Some(s) = subject { who = s; }
@@ -245,7 +262,9 @@ mod tests {
     }
 
     // ---- multi-step sign-in through a fake control-plane gate ----
-    async fn fake_gate() -> String {
+    async fn fake_gate() -> String { fake_gate_with(false).await }
+    /// `choice`: the control plane offers two chains and only accepts the one the form forwarded.
+    async fn fake_gate_with(choice: bool) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let addr = l.local_addr().unwrap().to_string();
         tokio::spawn(async move { loop {
@@ -255,7 +274,9 @@ mod tests {
                 if let Some(h) = t.find("\r\n\r\n") { let cl = t[..h].lines().find_map(|l| l.to_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap())).unwrap_or(0); if buf.len() >= h + 4 + cl { break; } } if n == 0 { break; } }
             let t = String::from_utf8_lossy(&buf).to_string(); let path = t.split_whitespace().nth(1).unwrap().to_string();
             let body: Value = serde_json::from_str(t.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-            let out = if path.ends_with("/entry") { json!({"mode":"chain","fields":[{"name":"password","label":"Password","type":"password"}]}) }
+            let out = if choice && path.ends_with("/entry") { if body["chain"] == "pw-only" { json!({"mode":"chain","chain":{"id":"pw-only","name":"Password only"},"fields":[{"name":"password","label":"Password","type":"password"}]}) } else { json!({"mode":"choice","chains":[{"id":"pw-only","name":"Password <only>","effectiveLevel":3,"simulated":false,"recommended":true,"steps":[{"name":"Password"}]},{"id":"bad id","name":"Evil","steps":[]},{"id":"mail","name":"E-mail code","effectiveLevel":4,"simulated":true,"steps":[{"name":"E-mail"}]}]}) } }
+            else if choice && body["session"].is_null() { if body["chain"] == "pw-only" && body["password"] == "pw" && body["subject"] == "demo-alice" { json!({"outcome":"allow","subject":"demo-alice","chain":"pw-only","claims":{"auth_chain":"pw-only"}}) } else { json!({"outcome":"deny","reason":"bad-credentials","message":"Sign-in failed. Check your details and try again."}) } }
+            else if path.ends_with("/entry") { json!({"mode":"chain","fields":[{"name":"password","label":"Password","type":"password"}]}) }
             else if body["session"] == "sess1" {
                 if body["answers"]["code"] == "123456" { json!({"outcome":"allow","subject":"demo-alice","chain":"mfa","claims":{"amr":["pwd","otp"],"auth_level":8,"auth_level_declared":9,"auth_mfa":true,"auth_level_basis":"configured","iss":"evil","sub":"evil","exp":1,"role":"admin"}}) }
                 else { json!({"outcome":"challenge","session":"sess1","error":"Incorrect answer. 2 attempt(s) left.","step":{"index":1,"total":2,"title":"Authenticator code","fields":[{"name":"code","label":"Code","type":"digits","maxLength":6}]}}) }
@@ -295,5 +316,24 @@ mod tests {
         let c = Arc::new(core);
         assert_eq!(send(&c, get(&q(""))).await.0, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(send(&c, post_login(&login_body("demo-alice", "demo-only-not-a-secret"))).await.0, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn the_form_lists_the_offered_chains_and_forwards_the_picked_one() {
+        let addr = fake_gate_with(true).await;
+        let mut core = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test")); core.gate = Some((addr, "tok-12345678".into()));
+        let c = Arc::new(core);
+        let (st, _, body) = send(&c, get(&q(""))).await; assert_eq!(st, StatusCode::OK);
+        assert!(body.contains("Choose how to sign in") && body.contains("chain=pw-only") && body.contains("chain=mail"), "{body}");
+        assert!(body.contains("Password &lt;only&gt;") && !body.contains("<only>"), "names are escaped");
+        assert!(!body.contains("bad%20id") && !body.contains("Evil"), "an id outside [a-z0-9-] is never turned into a link");
+        assert!(body.contains("simulated step") && body.contains("(recommended)"));
+        assert!(!body.contains("name=\"password\""), "no password box before a method is picked");
+        let (st, _, body) = send(&c, get(&q("&chain=pw-only"))).await; assert_eq!(st, StatusCode::OK);
+        assert!(body.contains("name=\"chain\" value=\"pw-only\"") && body.contains("name=\"password\""), "{body}");
+        let with = |chain: &str, pw: &str| post_login(&format!("{}&chain={chain}", login_body("demo-alice", pw)));
+        let (st, h, _) = send(&c, with("pw-only", "pw")).await; assert_eq!(st, StatusCode::FOUND, "picked chain signs in"); assert!(h.get(header::LOCATION).is_some());
+        let (st, h, _) = send(&c, with("mail", "pw")).await; assert_eq!(st, StatusCode::UNAUTHORIZED); assert!(h.get(header::LOCATION).is_none(), "another chain id is refused by the control plane");
+        let (st, h, _) = send(&c, post_login(&login_body("demo-alice", "pw"))).await; assert_eq!(st, StatusCode::UNAUTHORIZED); assert!(h.get(header::LOCATION).is_none(), "no chain picked: no sign-in");
     }
 }

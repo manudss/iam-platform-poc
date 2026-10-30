@@ -70,6 +70,17 @@ describe('browser sign-in flow (client side)', () => {
   });
 });
 
+describe('chosen chain', () => {
+  it('is carried to the authorize URL only when it is a plain id', async () => {
+    const s = { setItem: () => {} }; let url = '';
+    await new ApiClient().startBrowserLogin(s, (u) => (url = u), 'pw-totp');
+    expect(new URL(url).searchParams.get('chain')).toBe('pw-totp');
+    await new ApiClient().startBrowserLogin(s, (u) => (url = u), 'x&evil=1');
+    expect(new URL(url).searchParams.get('chain')).toBeNull();
+    expect(url).not.toContain('evil');
+  });
+});
+
 describe('safeReturn', () => {
   it('only accepts local app paths and never loops back to sign-in', () => {
     expect(safeReturn('/database/pulls')).toBe('/database/pulls');
@@ -93,15 +104,42 @@ describe('plugins route matcher', () => {
 describe('routing and sign-in guard', () => {
   beforeEach(async () => { sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents(); });
 
+  const OPTIONS = { mode: 'choice', chains: [
+    { id: 'pw-only', name: 'Password only', declaredLevel: 3, effectiveLevel: 3, mfa: false, simulated: false, recommended: false, steps: [{ name: 'Password', type: 'password', simulated: false }] },
+    { id: 'pw-totp', name: 'Password then authenticator', declaredLevel: 7, effectiveLevel: 7, mfa: true, simulated: false, recommended: true, steps: [{ name: 'Password', type: 'password', simulated: false }, { name: 'Authenticator', type: 'totp', simulated: false }] },
+    { id: 'mail', name: 'E-mail code', declaredLevel: 4, effectiveLevel: 4, mfa: false, simulated: true, recommended: false, steps: [{ name: 'E-mail code', type: 'email-otp', simulated: true }] },
+  ] };
+
   it('sends a direct link to sign-in when there is no token, and remembers the page to come back to', async () => {
-    const h = await RouterTestingHarness.create();
-    await h.navigateByUrl('/database/pulls');
-    expect(TestBed.inject(Router).url).toBe('/login');
-    expect(sessionStorage.getItem(RETURN_KEY)).toBe('/database/pulls');
-    const el = h.routeNativeElement as HTMLElement;
-    expect(el.textContent).toContain('IAM platform POC');
-    expect(el.querySelector('#signin-browser')).toBeTruthy();
-    expect(el.textContent).not.toContain('Merge into main');
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify(OPTIONS))) as typeof fetch;
+    try {
+      const h = await RouterTestingHarness.create();
+      await h.navigateByUrl('/database/pulls');
+      await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+      expect(TestBed.inject(Router).url).toBe('/login');
+      expect(sessionStorage.getItem(RETURN_KEY)).toBe('/database/pulls');
+      const el = h.routeNativeElement as HTMLElement;
+      expect(el.textContent).toContain('IAM platform POC');
+      const buttons = Array.from(el.querySelectorAll('#signin-methods button'));
+      expect(buttons.map((b) => b.getAttribute('data-chain'))).toEqual(['pw-only', 'pw-totp', 'mail']);
+      expect(el.textContent).toContain('recommended');
+      expect(el.textContent).toContain('simulated step (no real e-mail is sent)');
+      expect(el.textContent).not.toContain('Legacy JSON login');
+      expect(el.querySelector('input[type=password]')).toBeNull();
+      expect(el.textContent).not.toContain('Merge into main');
+    } finally { globalThis.fetch = real; }
+  });
+
+  it('falls back to one plain Sign in button when the live configuration has no enabled chain', async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ mode: 'legacy', chains: [] }))) as typeof fetch;
+    try {
+      const h = await RouterTestingHarness.create();
+      await h.navigateByUrl('/database/pulls');
+      await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+      expect((h.routeNativeElement as HTMLElement).querySelector('#signin-browser')).toBeTruthy();
+    } finally { globalThis.fetch = real; }
   });
 
   it('once signed in, shows the administration layout with the whole navigation and the requested page', async () => {

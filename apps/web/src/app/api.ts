@@ -7,6 +7,8 @@ export const REDIRECT = `${ORIGIN}/callback`; // registered redirect_uri: the co
  *  locally and by demo/server.mjs in the hosted demo), so no loopback URL is ever exposed to the browser. */
 export const CORE_PUBLIC = `${ORIGIN}/core`;
 
+export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
+export interface SigninOptions { mode: 'choice' | 'legacy'; chains: SigninChain[]; note?: string }
 export interface Violation { identity: string; roleA: string; roleB: string }
 export interface Change { branch: string; commit: string; violations: Violation[]; mergeable: boolean }
 
@@ -33,11 +35,11 @@ export class ApiClient {
   logout() { this.token = ''; }
 
   /** Recommended sign-in: browser code+PKCE flow. Keeps a fresh state + verifier in sessionStorage and leaves for the core's login form. */
-  async startBrowserLogin(storage: Pick<Storage, 'setItem'>, go: (url: string) => void) {
+  async startBrowserLogin(storage: Pick<Storage, 'setItem'>, go: (url: string) => void, chain?: string) {
     const { verifier, challenge } = await newPkce();
     const state = (await newPkce()).verifier;
     storage.setItem('iam.pkce.verifier', verifier); storage.setItem('iam.pkce.state', state);
-    const q = new URLSearchParams({ response_type: 'code', client_id: 'demo-web', redirect_uri: REDIRECT, state, code_challenge: challenge, code_challenge_method: 'S256' });
+    const q = new URLSearchParams({ response_type: 'code', client_id: 'demo-web', redirect_uri: REDIRECT, state, code_challenge: challenge, code_challenge_method: 'S256', ...(chain && /^[a-z0-9-]{1,40}$/.test(chain) ? { chain } : {}) });
     go(`${CORE_PUBLIC}/authorize?${q}`);
   }
 
@@ -53,7 +55,14 @@ export class ApiClient {
     this.token = ((await t.json()) as { id_token: string }).id_token;
   }
 
-  /** LEGACY / diagnostic: JSON login (credentials posted by this page). The browser flow above is the recommended path. */
+  /** Public list of the sign-in methods (chains) the live configuration offers. Names and declared levels only. */
+  async signinOptions(): Promise<SigninOptions> {
+    const r = await this.f(`/api/tenants/${encodeURIComponent(this.tenant)}/signin/options`);
+    if (!r.ok) throw new Error('cannot load the sign-in methods');
+    return (await r.json()) as SigninOptions;
+  }
+
+  /** Automated tests only: the console no longer offers this JSON login. The browser flow above is the only sign-in path of the UI. */
   async login(username: string, password: string) {
     const { verifier, challenge } = await newPkce();
     const post = (path: string, body: object) => this.f(`/core${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });

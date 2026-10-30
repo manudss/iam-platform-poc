@@ -31,8 +31,8 @@ try {
   const noAlert = async (l) => assert.equal(await page.locator('[role=alert]').count(), 0, l + ': no alert (' + (await page.locator('[role=alert]').allInnerTexts()).join('|') + ')');
   const fillRow = async (id, sel, value) => page.locator(`tr:has(small:text-is("${id}")) ${sel}`).first().fill(String(value));
   const signInFirstStep = async (user, pw) => {
-    await page.waitForSelector('#signin-browser');
-    await Promise.all([page.waitForURL(/\/core\/authorize/), page.click('#signin-browser')]);
+    await page.waitForSelector('#signin-browser, [data-chain=password-only]');
+    await Promise.all([page.waitForURL(/\/core\/authorize/), page.click('#signin-browser, [data-chain=password-only]')]);
     await page.waitForSelector('input[name=username]');
     await page.fill('input[name=username]', user);
     if (pw !== undefined) await page.fill('input[name=password]', pw);

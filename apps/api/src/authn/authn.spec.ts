@@ -119,11 +119,26 @@ describe('authentication methods and chains', () => {
       assert.equal((await gate({ tenant: T, subject: 'demo-alice', password: 'nope' }).expect(200)).body.outcome, 'deny');
     });
 
+    it('chains enabled live: the entry lists them (choice), a picked chain opens, a forged id never falls back to a laxer path', async () => {
+      await put(cfg([m('pw', 'password', 3), m('tp', 'totp', 7)], [{ id: 'pw-only', name: 'Password only', steps: ['pw'], level: 3 }, { id: 'mfa', name: 'Password + TOTP', steps: ['pw', 'tp'], level: 8 }], 'mfa')).expect(200);
+      const entry = (b: object) => http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, ...b }).expect(200);
+      const ch = (await entry({})).body; assert.equal(ch.mode, 'choice');
+      assert.deepEqual(ch.chains.map((c: any) => [c.id, c.recommended]), [['pw-only', false], ['mfa', true]]);
+      assert.equal((await http().get(`/tenants/${T}/signin/options`).expect(200)).body.mode, 'choice');
+      assert.equal((await entry({ chain: 'pw-only' })).body.mode, 'chain');
+      assert.equal((await entry({ chain: 'ghost' })).body.mode, 'choice', 'unknown id: the list again, not a sign-in');
+      // a picked chain is the one that runs: password only allows after one step, and the claim says so
+      const ok = (await gate({ tenant: T, chain: 'pw-only', subject: 'demo-alice', password: PW }).expect(200)).body; assert.equal(ok.outcome, 'allow'); assert.equal(ok.claims.auth_chain, 'pw-only');
+      assert.equal((await gate({ tenant: T, chain: 'ghost', subject: 'demo-alice', password: PW }).expect(200)).body.outcome, 'deny');
+      // no chain id: the recommended chain (JSON API path), never a silent downgrade
+      assert.equal((await gate({ tenant: T, subject: 'demo-alice', password: PW }).expect(200)).body.outcome, 'challenge');
+    });
+
     it('password then authenticator code: wrong password ends at once, wrong code retries, replay is refused, claims are honest', async () => {
       await put(cfg([m('pw', 'password', 3), m('tp', 'totp', 7)], [{ id: 'mfa', name: 'Password + TOTP', steps: ['pw', 'tp'], level: 8 }], 'mfa')).expect(200);
       const tp = await provision('demo-alice', 'tp'); secrets.tp = tp.shownOnce.secret; assert.match(tp.shownOnce.otpauthUri, /^otpauth:\/\/totp\//);
       assert.deepEqual((await http().get(`/tenants/${T}/auth/enrollments/demo-alice`).set(adm)).body.enrollments.tp, { totp: true, pin: false, email: null });
-      const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T }).expect(200)).body;
+      const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, chain: 'mfa' }).expect(200)).body;
       assert.equal(e.mode, 'chain'); assert.deepEqual(e.fields.map((f: any) => f.name), ['password']);
       // wrong password: generic deny, nothing about the second step
       assert.deepEqual((await gate({ tenant: T, subject: 'demo-alice', password: 'wrong' }).expect(200)).body, { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' });
@@ -153,7 +168,7 @@ describe('authentication methods and chains', () => {
       await put(cfg([m('mail', 'email-otp', 4), m('pin', 'digit-code', 4)], [{ id: 'mail-pin', name: 'E-mail code then PIN digits', steps: ['mail', 'pin'], level: 4 }], 'mail-pin')).expect(200);
       await provision('demo-bob', 'mail', { email: 'bob@example.test' });
       const pin = (await provision('demo-bob', 'pin', { length: 6 })).shownOnce.pin as string; assert.match(pin, /^\d{6}$/);
-      const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T })).body; assert.deepEqual(e, { mode: 'chain', fields: [] });
+      const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, chain: 'mail-pin' })).body; assert.deepEqual(e, { mode: 'chain', chain: { id: 'mail-pin', name: 'E-mail code then PIN digits' }, fields: [] });
       const c1 = (await gate({ tenant: T, subject: 'demo-bob' })).body;
       assert.equal(c1.outcome, 'challenge'); assert.equal(c1.step.type, 'email-otp');
       const mail = (await http().get(`/tenants/${T}/auth/outbox`).set(adm)).body; assert.equal(mail.simulated, true);
@@ -229,7 +244,7 @@ describe('authentication methods and chains', () => {
       await put(cfg([m('pin', 'digit-code', 3)], [{ id: 'pin-only', name: 'PIN', steps: ['pin'], level: 3 }], 'pin-only')).expect(200);
       const r = await provision('demo-alice', 'pin', { pin: '482915' }); assert.equal(r.shownOnce, undefined); assert.ok(!JSON.stringify(r).includes('482915'));
       await http().post(`/tenants/${T}/auth/enrollments/demo-alice/pin`).set(adm).send({ pin: '4829' }).expect(400); // wrong length for this method
-      assert.deepEqual((await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T })).body, { mode: 'chain', fields: [] });
+      assert.equal((await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, chain: 'pin-only' })).body.mode, 'chain');
       const stored = JSON.stringify(JSON.parse(readFileSync(process.env.IAM_AUTHN_FILE!, 'utf8'))); assert.ok(!stored.includes('482915') && !/"pos"|pepper/.test(stored), 'no clear PIN, no per-position verifiers');
       const c = (await gate({ tenant: T, subject: 'demo-alice' })).body, k1 = c.step.fields[0].keys;
       const p2 = (await gate({ tenant: T, session: c.session, answers: { key: k1.find((k: any) => k.digit === '4').id } })).body, k2 = p2.step.fields[0].keys;
