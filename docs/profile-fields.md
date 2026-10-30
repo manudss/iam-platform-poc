@@ -27,3 +27,14 @@ Endpoints: GET/PUT `/tenants/:t/profile-fields`, GET `/tenants/:t/profile-schema
 - Claims: a user self-edit changes only `profile_field_values` (tested byte-identical identities/roles/assignments).
 - Enforced in the API: public sign-up cannot be opened, and the form/endpoint stay 404, outside the hosted workspace mode (tested). Mutating routes that took any valid token (changes, CSV/SCIM connectors, merge, activations, activation workflows) now need the admin capability (tested for two tenants). The tenant-bound reads (assignments, decision audit, activation journal) still answer to any valid token of that tenant: restrict them before real people can sign up (out of scope here). `POST access/check`, agent delegations and tool calls stay open to a valid token: they act only as the token subject.
 - Still out of scope: real e-mail (confirmation uses the simulated outbox; SMTP not wired to sign-up, no real address ever mailed), persistent pending requests (in memory), e-mail change with re-authentication, per-plugin value tables, `profile.validate`/`signup.check` hooks, policy editing, IdP-side enforcement that a new account cannot sign in before Apply (login works only after Apply because credentials are checked against main).
+
+## Personal space, edit policy and reviews
+
+- Every signed-in account has "My profile" (self-service). It is separate from the admin screens; an ordinary account sees only that entry. `GET /api/tenants/{t}/me/access` tells the console who is admin and which plugins are active.
+- `selfEditPolicy` (profile config): `immediate` (default) writes self-edits straight to the active data (Dolt main); `review` writes them to a personal branch `profile-<subject>` that a validator (admin) accepts (merge into main) or refuses (branch deleted) in "Profile reviews" (`GET profile-reviews`, `POST profile-reviews/:id/accept|refuse`). An author cannot accept their own edits. Authority fields are never self-editable.
+- Plugins that are not enabled are hidden from the menu and their pages are guarded.
+- Sign-up is offered on the sign-in page when sign-up is open. The confirmation e-mail is simulated (admin outbox, no real mail); approval by an admin is still required and grants no role.
+
+## Demo data seed
+
+`IAM_DEMO_DATA_SEED=1` (set in demo/start.sh, workspace mode, only when main has no organizations): fictional accounts (password `demo-only-not-a-secret`, `example.invalid` addresses), 6 organizations with members, extra roles, the `organizations` and `hr-attributes` plugins enabled, profile values, sign-up open. Permission-engine effects of the seeded roles appear at the next Apply.
