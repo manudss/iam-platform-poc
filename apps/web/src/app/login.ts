@@ -3,9 +3,10 @@ import { Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
 import { SigninChain, SigninOptions } from './api';
 import { Session } from './session';
+import { SignupPage } from './signup-page';
 
 /** Sign-in page: lists the methods (chains) configured and enabled live, the person picks one, then the browser code+PKCE flow runs that chain. No JSON login in the UI. */
-@Component({ selector: 'app-login', templateUrl: './login.html', styleUrl: './login.css' })
+@Component({ selector: 'app-login', imports: [SignupPage], templateUrl: './login.html', styleUrl: './login.css' })
 export class LoginPage {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);

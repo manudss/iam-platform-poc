@@ -1,15 +1,18 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, input, signal } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 interface F { key: string; label: string; type: string; help?: string; options?: { value: string; label: string }[]; required: boolean }
 
 /** Public form (no sign-in). Closed unless an administrator opened and applied it. It only sends a request. */
 @Component({
-  selector: 'app-signup', imports: [FormsModule], styleUrl: './login.css',
+  selector: 'app-signup', imports: [FormsModule, NgTemplateOutlet], styleUrl: './login.css',
   template: `
-  <main class="login"><section class="card hero"><h1>Request an account</h1>
+  @if (embedded()) { <section class="signup-embedded" id="signup-embedded"><h2>New here? Create an account</h2><ng-container *ngTemplateOutlet="body" /></section> }
+  @else { <main class="login"><section class="card hero"><h1>Request an account</h1><ng-container *ngTemplateOutlet="body" /></section></main> }
+  <ng-template #body>
   @if (state()==='loading') { <p>Loading...</p> }
-  @else if (state()==='closed') { <p id="su-closed" role="status">Sign-up is closed.</p> }
+  @else if (state()==='closed') { @if (!embedded()) { <p id="su-closed" role="status">Sign-up is closed.</p> } }
   @else if (state()==='sent') { <p id="su-sent" role="status">{{msg()}}</p>
     <form (ngSubmit)="confirm()"><label>Confirmation code<input name="code" [(ngModel)]="code" autocomplete="off" /></label><button id="su-confirm">Confirm</button></form>
     @if (confirmed()) { <p role="status">{{confirmed()}}</p> } }
@@ -24,9 +27,10 @@ interface F { key: string; label: string; type: string; help?: string; options?:
         @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
         @else { <input [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event" /> }</label> }
       <button id="su-send">Send request</button></form> }
-  </section></main>`,
+  </ng-template>`,
 })
 export class SignupPage {
+  readonly embedded = input(false);
   protected state = signal<'loading' | 'closed' | 'form' | 'sent'>('loading'); protected fields = signal<F[]>([]); protected err = signal(''); protected msg = signal(''); protected confirmed = signal('');
   protected id = ''; protected dn = ''; protected em = ''; protected pw = ''; protected code = ''; protected vals: Record<string, string> = {};
   private base = '/api/tenants/acme-demo/signup';
