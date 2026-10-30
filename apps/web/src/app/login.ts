@@ -12,12 +12,14 @@ export class LoginPage {
   protected readonly busy = signal(false);
   protected readonly state = signal<'loading' | 'ready' | 'error'>('loading');
   protected readonly error = signal('');
+  protected readonly signupOpen = signal(false);
   protected readonly options = signal<SigninOptions>({ mode: 'legacy', chains: [] });
 
   constructor() { if (this.s.loggedIn()) void this.router.navigateByUrl('/overview'); else void this.load(); }
 
   protected async load() {
     this.state.set('loading');
+    try { this.signupOpen.set((await fetch('/api/tenants/acme-demo/signup/schema')).ok); } catch { this.signupOpen.set(false); }
     try { this.options.set(await this.s.api.signinOptions()); this.state.set('ready'); }
     catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
   }

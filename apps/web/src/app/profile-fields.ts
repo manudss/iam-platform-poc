@@ -28,6 +28,10 @@ export const lockedFor = (f: CatField) => f.klass === 'authority';
     <td><input type="checkbox" [name]="'ae'+f.fullKey" [(ngModel)]="c.adminEdit" (ngModelChange)="dirty.set(true)" [attr.aria-label]="'Admin edits '+f.fullKey" /></td></tr> } }
   @empty { <tr><td colspan="8">{{loaded() ? 'No fields.' : 'Loading...'}}</td></tr> }
   </tbody></table></div></section>
+  <section class="card" id="pf-policy"><h3>How people's own edits are published</h3>
+    <label>Policy <select name="selfEditPolicy" [(ngModel)]="policy" (ngModelChange)="dirty.set(true)" aria-label="Own-edit policy"><option value="immediate">Immediate: a person's edits go live at once (Dolt main)</option><option value="review">Validated: edits wait on a personal change set until a validator accepts them</option></select></label>
+    <p class="hint">Live only after Save and Apply. With validation, each person's edits stay on an automatic personal Dolt branch (not a Git branch); a validator (an administrator other than the author) reviews the changes on the page Profile reviews, then accepts (merge into main) or refuses (the change set is deleted). Live policy: <b id="pf-livepolicy">{{livePolicy()}}</b>.</p>
+  </section>
   <section class="card" id="pf-signup"><h3>Public sign-up</h3>
     <label class="inline"><input type="checkbox" name="signupopen" [(ngModel)]="signupOpen" (ngModelChange)="dirty.set(true)" /> Open the sign-up form (off by default)</label>
     <p class="hint">Live only after Save and Apply. Anyone with the link can then send a request: it needs e-mail confirmation (simulated here: the code goes to the demo outbox, not to a mailbox) and your approval. Approval creates an account with <b>no role, department or manager</b>. Fictional data only; do not open this on a public demo with real people.</p>
@@ -45,7 +49,7 @@ export const lockedFor = (f: CatField) => f.klass === 'authority';
 export class ProfileFieldsPage {
   protected readonly s = inject(Session);
   protected cat = signal<CatField[]>([]); protected cfg = signal<Record<string, Setting>>({});
-  protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected dirty = signal(false); protected loaded = signal(false); protected signupOpen = false; protected liveOpen = signal(false); protected requests = signal<{ id: string; display_name: string; email: string; confirmed: boolean }[]>([]);
+  protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected dirty = signal(false); protected loaded = signal(false); protected signupOpen = false; protected policy: 'immediate' | 'review' = 'immediate'; protected livePolicy = signal('immediate'); protected liveOpen = signal(false); protected requests = signal<{ id: string; display_name: string; email: string; confirmed: boolean }[]>([]);
   constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   protected locked = lockedFor;
@@ -57,7 +61,7 @@ export class ProfileFieldsPage {
       const defaults = (f: CatField): Setting => ({ enabled: true, signup: 'off', selfView: true, selfEdit: false, adminEdit: true });
       const eff: Record<string, Setting> = {};
       for (const f of r.data.catalogue as CatField[]) eff[f.fullKey] = { ...defaults(f), ...(r.data.working.settings?.[f.fullKey] ?? {}) };
-      this.signupOpen = !!r.data.working.config.signup?.open; this.liveOpen.set(!!r.data.live.config.signup?.open); void this.loadRequests(); this.cat.set(r.data.catalogue); this.cfg.set(eff); this.dirty.set(false); this.problem.set(''); this.loaded.set(true);
+      this.signupOpen = !!r.data.working.config.signup?.open; this.policy = r.data.working.config.selfEditPolicy === 'review' ? 'review' : 'immediate'; this.livePolicy.set(r.data.live.config.selfEditPolicy === 'review' ? 'review' : 'immediate'); this.liveOpen.set(!!r.data.live.config.signup?.open); void this.loadRequests(); this.cat.set(r.data.catalogue); this.cfg.set(eff); this.dirty.set(false); this.problem.set(''); this.loaded.set(true);
     } catch (e) { this.problem.set((e as Error).message); }
   }
   protected async loadRequests() { try { const r = await this.s.api.raw<any>('GET', '/signup/requests', undefined, this.h()); this.requests.set(r.status < 400 ? r.data.requests : []); } catch { this.requests.set([]); } }
@@ -71,7 +75,7 @@ export class ProfileFieldsPage {
   protected async save() {
     this.busy.set(true);
     try {
-      const r = await this.s.api.raw<any>('PUT', '/profile-fields', { config: { fields: this.cfg(), signup: { open: this.signupOpen } } }, this.h());
+      const r = await this.s.api.raw<any>('PUT', '/profile-fields', { config: { fields: this.cfg(), signup: { open: this.signupOpen }, selfEditPolicy: this.policy } }, this.h());
       if (r.status >= 400) throw new Error(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused');
       this.note.set('Saved on the working branch. Nothing changes for people until Apply.'); this.problem.set(''); await this.load();
     } catch (e) { this.problem.set((e as Error).message); } finally { this.busy.set(false); }

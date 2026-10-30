@@ -40,7 +40,8 @@ export class ProfileController {
   @Get('me/access') async access(@Param('tenant') t: string, @Req() req: { user: { sub: string }; headers: Record<string, unknown> }) {
     let admin = true; try { new AdminGuard().canActivate({ switchToHttp: () => ({ getRequest: () => req }) } as never); } catch { admin = false; }
     const plugins = Object.fromEntries((await this.p.activePlugins(t)).map((id) => [id, true]));
-    return { subject: req.user.sub, admin, plugins };
+    const restricted = (process.env.IAM_API_ADMIN_SUBJECTS ?? '').split(',').some((x) => x.trim());
+    return { subject: req.user.sub, admin, restricted, plugins };
   }
   @UseGuards(AdminGuard) @Get('users/:id/profile') async user(@Param('tenant') t: string, @Param('id') id: string) { return { ...(await this.p.admin(t, id)), sections: await this.sections(t, id, 'work') }; }
   @UseGuards(AdminGuard) @Patch('users/:id/profile') patchUser(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: unknown) { return this.p.patchAdmin(t, id, b, req.user.sub); }
