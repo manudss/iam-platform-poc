@@ -58,6 +58,17 @@ export class UsersService {
     if (Object.keys(b).some(k => !['id','display_name','department','manager_id','email','login_enabled','password'].includes(k))) throw new BadRequestException('unknown user field');
   }
   /** `pre`: a credential hashed earlier (sign-up approval). The plain password is never kept. */
+  /** DEMO SEED ONLY (called at start-up with IAM_DEMO_DATA_SEED=1): creates a FICTIONAL account on main when it does not exist. Never overwrites. */
+  async seedAccount(a: { id: string; display_name: string; department: string; manager_id: string | null; email: string }, password: string) {
+    await this.init();
+    return this.v.lock(() => this.v.at('main', async (c) => {
+      const [rows] = await c.query('select id from identities where id=?', [a.id]); if ((rows as unknown[]).length) return false;
+      const revision = await this.password(a.id, password);
+      await c.query('insert into identities (id,display_name,manager_id,department,email,login_enabled,credential_revision) values (?,?,?,?,?,true,?)', [a.id, a.display_name, a.manager_id, a.department, a.email, revision]);
+      await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`demo seed: account ${a.id}`]);
+      return true;
+    }));
+  }
   async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }) {
     const branch = currentBranch(true); this.validate(pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {

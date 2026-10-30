@@ -11,6 +11,9 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { DoltProfileStore } from './store.js';
 import { DoltOrgStore } from './orgs.js';
 import { RolesService } from './roles.js';
+import { DemoDataService } from './demo-data.service.js';
+import { UsersService } from '../users/users.service.js';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
@@ -128,5 +131,20 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
       await inBranch(() => rs.removeRule('admin', 'auditor', first, true));
       l = await inBranch(() => rs.remove('admin', 'auditor')); assert.ok(!l.roles.some((r) => r.id === 'auditor'));
     } finally { delete process.env.IAM_WORKSPACE_MODE; }
+  });
+
+  it('demo data seed: organizations and HR plugins enabled, people with profile values, sign-up open, idempotent', async () => {
+    const ST = 'seed-demo'; process.env.IAM_WORKSPACE_MODE = '1'; process.env.IAM_CREDENTIAL_FILE = join(dir, 'cred.json');
+    try {
+      const v = new VersioningService(), users = new UsersService(v), br = new BranchRegistries(v, users), store = new DoltProfileStore(v, () => 'main');
+      const seed = new DemoDataService(v, users, br, store);
+      assert.equal(await seed.seed(ST), true); assert.equal(await seed.seed(ST), false, 'second start does nothing');
+      const reg = await br.get('main');
+      assert.equal(reg.isActive(ST, 'organizations'), true); assert.equal(reg.isActive(ST, 'hr-attributes'), true);
+      const list = await users.list('main'); assert.ok(list.length >= 10 && list.filter((u) => u.hasCredential && u.login_enabled).length >= 10);
+      const orgs = await new DoltOrgStore(v, () => 'main').list(ST, 'live'); assert.ok(orgs.orgs.length >= 6 && orgs.members.length >= 10);
+      assert.equal((await store.get(ST, 'camille-martin', 'live'))['hr-attributes.job_title'], 'Chief accountant');
+      const cfg = await reg.coreSettings(ST, 'core-profile-fields') as { signup?: { open: boolean } }; assert.equal(cfg.signup?.open, true);
+    } finally { delete process.env.IAM_WORKSPACE_MODE; delete process.env.IAM_CREDENTIAL_FILE; }
   });
 });
