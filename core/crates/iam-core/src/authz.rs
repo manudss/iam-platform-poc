@@ -30,6 +30,12 @@ fn hidden(p: &HashMap<String, String>) -> String {
     ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain"].iter()
         .map(|k| format!("<input type=\"hidden\" name=\"{k}\" value=\"{}\">", esc(p.get(*k).map(String::as_str).unwrap_or("")))).collect::<String>()
 }
+/// Back to the list of methods: only on pages of a chosen chain. It abandons the running attempt (its session id is not carried) and the sign-in page starts a new one with a fresh state and PKCE verifier.
+fn back_link(p: &HashMap<String, String>) -> String {
+    let o = origin_of(p);
+    if p.get("chain").map(|c| c.is_empty()).unwrap_or(true) || o.is_empty() { return String::new(); }
+    format!("<p class=\"back\"><a id=\"back-to-methods\" href=\"{}/login\">&larr; Choose another sign-in method</a></p>", esc(&o))
+}
 fn origin_of(p: &HashMap<String, String>) -> String {
     let ru = p.get("redirect_uri").map(String::as_str).unwrap_or("");
     ru.splitn(4, '/').take(3).collect::<Vec<_>>().join("/") // scheme://host[:port] of a registered redirect_uri
@@ -79,7 +85,7 @@ fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value
     let button = if fields.is_some_and(|f| f.is_empty()) { "Continue" } else { "Sign in" };
     page(if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
         "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Sign in (local prototype)</title><main><h1>Sign in</h1><p>OAuth/OIDC-inspired authentication prototype, local demo accounts only.</p>{err}\
-         <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form></main>"), Some(&origin_of(p)))
+         <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form>{}</main>", back_link(p)), Some(&origin_of(p)))
 }
 
 /// The chains the live configuration offers: one link each (plain HTML, no script). The link only adds `chain=<id>`; the control plane re-checks the id at every step.
@@ -109,8 +115,8 @@ fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>) -> Res
     let cont = if inputs.contains("class=\"pad\"") { "" } else { "<button type=\"submit\">Continue</button>" };
     page(if error.is_some() || v["error"].is_string() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
         "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Sign in, step {i} of {n}</title><main><h1>{}</h1><p>Step {i} of {n}.</p>{msg}{err}\
-         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}{cont}</form></main>",
-        esc(title), hidden(p), esc(v["session"].as_str().unwrap_or(""))), Some(&origin_of(p)))
+         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}{cont}</form>{}</main>",
+        esc(title), hidden(p), esc(v["session"].as_str().unwrap_or("")), back_link(p)), Some(&origin_of(p)))
 }
 
 /// Validates the authorization request parameters. Err = (status, message), never a redirect.
@@ -203,6 +209,15 @@ mod tests {
     fn q(extra: &str) -> String { format!("response_type=code&client_id=demo-web&redirect_uri=http%3A%2F%2Flocalhost%3A4200%2Fcallback&state=st%20ate&code_challenge={CH}&code_challenge_method=S256{extra}") }
     fn login_body(user: &str, pw: &str) -> String { format!("client_id=demo-web&redirect_uri=http%3A%2F%2Flocalhost%3A4200%2Fcallback&state=st%20ate&code_challenge={CH}&code_challenge_method=S256&username={user}&password={pw}") }
 
+    #[test]
+    fn back_link_only_for_a_chosen_chain_and_never_carries_the_session() {
+        let mut p: HashMap<String, String> = HashMap::new();
+        p.insert("redirect_uri".into(), "https://app.example/callback".into());
+        assert_eq!(super::back_link(&p), "");
+        p.insert("chain".into(), "password-only".into());
+        let l = super::back_link(&p);
+        assert!(l.contains("href=\"https://app.example/login\"") && l.contains("Choose another sign-in method") && !l.contains("session") && !l.contains("state"));
+    }
     #[tokio::test]
     async fn full_browser_flow_form_login_redirect_token() {
         let c = core();
