@@ -127,7 +127,7 @@ export class WorkflowEngine implements OnModuleInit {
   private async dataStep(run: RunRow, node: WfNode, say: (l: string) => void) {
     const cfg = node.config;
     if (!run.branch) {
-      const branch = `wf-${run.id.slice(0, 8)}`;
+      const branch = `wf-${run.id.replace(/^run-/, '').slice(0, 8)}`;
       await this.v.createBranch(branch, this.v.defaultBranch);
       await this.store.updateRun(run.id, { branch });
       run.branch = branch;
@@ -143,6 +143,8 @@ export class WorkflowEngine implements OnModuleInit {
           if (!k.i) throw new Error(`unknown identity "${String(cfg.identity)}"`);
           if (!k.r) throw new Error(`unknown role "${String(cfg.role)}"`);
           await c.query('INSERT IGNORE INTO assignments VALUES (?, ?)', [cfg.identity, cfg.role]);
+          const [dirty] = await c.query('select count(*) n from dolt_status');
+          if (!Number((dirty as { n: number }[])[0].n)) { say(`${String(cfg.identity)} already has role "${String(cfg.role)}" on this branch: no change, nothing committed`); break; }
           const [viol] = await c.query(SOD_SQL);
           const v = viol as { identity: string; roleA: string; roleB: string }[];
           const hash = await commit(c, `workflow ${run.id}: assign ${String(cfg.role)} to ${String(cfg.identity)}`, author);
