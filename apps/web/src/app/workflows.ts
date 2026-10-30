@@ -63,11 +63,11 @@ export interface WfNodeData { name: string; simulated: boolean }
     .wf-node.real { border-left-color: #2e9e6b; }
     .wf-node.selected { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79, 70, 229, .25); }
     .wf-node-name {
-      font-size: 13px; font-weight: 600; line-height: 1.3; color: #1c2440;
+      font-size: 14px; font-weight: 600; line-height: 1.35; color: #1c2440;
       overflow-wrap: anywhere; white-space: normal;
     }
     .wf-node-badge {
-      align-self: flex-start; font-size: 10px; font-weight: 700; letter-spacing: .04em;
+      align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .04em;
       padding: 2px 7px; border-radius: 999px; background: #ece9fd; color: #5b4fd0;
     }
     .wf-node-badge.real { background: #dcf5e8; color: #177a4e; }
@@ -176,7 +176,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @for (t of types; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{t.simulated ? 'SIMULATED' : 'REAL'}}</small><br /><small>{{t.hint}}</small></button>}
 </section>
 <section class="card wf-canvas">
-<vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [background]="'#f2f5fb'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
+<vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [minZoom]="0.4" [maxZoom]="1.6" [background]="'#f2f5fb'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
 </section>
 <section class="card"><h3>Selected</h3>
 @if (selectedNode(); as nid) {@if (state.get(nid); as st) {
@@ -208,7 +208,23 @@ export class WorkflowEditPage implements OnInit {
   protected vfNodes = signal<Node[]>([]);
   protected vfEdges = signal<Edge[]>([]);
   private readonly vflow = viewChild(VflowComponent);
-  private fitCanvas() { setTimeout(() => this.vflow()?.fitView({ padding: 0.18, duration: 150 }), 60); }
+  private fitCanvas() {
+    // Fit everything first so the shape of the graph is visible; if the fit had to shrink the nodes
+    // below comfortable reading size, zoom back toward 1:1 anchored on the leftmost node (the user pans).
+    setTimeout(() => {
+      const v = this.vflow();
+      if (!v) return;
+      v.fitView({ padding: 0.14, duration: 120 });
+      setTimeout(() => {
+        const vp = v.viewport();
+        const first = this.vfNodes().reduce((a, n) => (n.point().x < a.point().x ? n : a), this.vfNodes()[0]);
+        if (first && vp.zoom < 0.9) {
+          const z = 0.9;
+          v.viewportTo({ zoom: z, x: 24 - first.point().x * z, y: 24 - first.point().y * z });
+        }
+      }, 200);
+    }, 60);
+  }
   protected state = new Map<string, NodeState>();
   /** Selection is tracked by the library on each entity's own `selected` signal. */
   protected selectedNode = computed(() => this.vfNodes().find((n) => n.selected?.())?.id ?? null);
