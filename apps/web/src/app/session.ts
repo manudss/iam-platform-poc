@@ -1,5 +1,6 @@
 import { Injectable, OnDestroy, inject, signal } from '@angular/core';
 import { ApiClient, Change } from './api';
+import type { Access } from './access';
 import { Router } from '@angular/router';
 
 export type Tone = 'info' | 'error';
@@ -30,6 +31,14 @@ export class Session implements OnDestroy {
   readonly activations = signal<Activation[]>([]);
   readonly change = signal<Change | null>(null);
 
+  readonly access = signal<Access | null>(null);
+  private accessLoad?: Promise<Access>;
+  /** Loaded once per sign-in. If it cannot be read the person is treated as ordinary (nothing is revealed that the API would refuse). */
+  loadAccess(): Promise<Access> {
+    return this.accessLoad ??= this.api.raw<Access>('GET', '/me/access', undefined, this.adminToken() ? { 'x-api-admin-token': this.adminToken() } : {}).then((r) => (r.status < 400 ? r.data : { subject: '', admin: false, restricted: true, plugins: {} })).catch(() => ({ subject: '', admin: false, restricted: true, plugins: {} } as Access)).then((a) => { const n = { ...a, plugins: a.plugins ?? {} }; this.access.set(n); return n; });
+  }
+  refreshAccess() { this.accessLoad = undefined; return this.loadAccess(); }
+
   ngOnDestroy() { clearTimeout(this.expiryTimer); }
 
   say(text: string, tone: Tone = 'info') { this.message.set(text); this.tone.set(tone); }
@@ -55,7 +64,7 @@ export class Session implements OnDestroy {
 
   signOut() {
     this.expired.set(false); clearTimeout(this.expiryTimer);
-    this.api.logout();this.selectBranch(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
+    this.api.logout();this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
     this.assignments.set([]); this.activations.set([]); this.adminToken.set(''); this.say('Signed out.');
   }
 
