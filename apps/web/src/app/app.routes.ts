@@ -10,7 +10,7 @@ import { SignupPage } from './signup-page';
 import { OrganizationsPage } from './organizations';
 import { RolesAdminPage } from './roles-admin';
 import { ProfileReviewsPage } from './profile-reviews';
-import { accessGuard, pluginGuard } from './access';
+import { accessGuard, pluginGuard } from './access';import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage } from './workflows';
 import { Shell } from './shell';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
@@ -34,7 +34,9 @@ export const routes: Routes = [
       { path: 'auth-methods', canActivate: [accessGuard], component: AuthMethodsPage, title: 'Authentication methods' },
       { path: 'assignments', canActivate: [accessGuard], component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
-      { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
+      { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },      { path: 'workflows', component: WorkflowsPage, title: 'Workflows', canActivate: [accessGuard] },
+      { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [accessGuard] },
+      { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [accessGuard] },
       { path: 'database', pathMatch: 'full', redirectTo: 'database/branches' },
       { path: 'database/:tab', canActivate: [accessGuard], component: ExplorerPage, title: 'Database (Dolt)' },
     ],

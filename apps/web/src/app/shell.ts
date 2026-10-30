@@ -47,6 +47,7 @@ export class Shell {
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
+    { title: 'Automation (IGA)', items: [{ path: '/workflows', label: 'Workflows', icon: '⟳' }] },
     { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }] },
     { title: 'Database (Dolt)', items: [
       { path: '/database/branches', label: 'Branches', icon: '⑂' },
