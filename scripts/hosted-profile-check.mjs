@@ -66,7 +66,7 @@ try {
   // The public edge attaches the admin capability to every /api call: an ordinary signed-in account must STILL be refused (through the public URL, not the backend directly).
   const adminRoutes = [['GET', '/users'], ['GET', '/roles'], ['GET', '/organizations'], ['GET', '/signup/requests'], ['GET', '/profile-fields'], ['PUT', '/profile-fields'], ['POST', '/roles'], ['POST', '/organizations'], ['PUT', '/organizations/memberships/demo-bob'], ['POST', '/changes'], ['POST', '/connectors/csv'], ['POST', '/activations'], ['POST', '/users'], ['PUT', '/auth'], ['POST', '/plugins/hr-attributes/disable'], ['POST', '/workspace/apply'], ['POST', '/workspace/assignment'], ['POST', '/versioning/branches'], ['GET', '/auth/outbox']];
   for (const [m, pth] of adminRoutes) { const r = await nora(m, pth, ['GET'].includes(m) ? undefined : {}); assert.equal(r.s, 403, `ordinary account via the public URL: ${m} ${pth} -> ${r.s}`); }
-  assert.ok((await alice('GET', '/roles')).s === 200 && (await alice('GET', '/users')).s === 200, 'the demo administrator still reaches the admin routes');
+  assert.ok((await alice('GET', '/roles', undefined, 'main')).s === 200 && (await alice('GET', '/users', undefined, 'main')).s === 200 && (await alice('GET', '/profile-fields', undefined, 'main')).s === 200, 'the demo administrator still reaches the admin routes');
   log('3 ordinary account refused on', adminRoutes.length, 'admin routes through the public URL (edge adds the capability, API checks the subject); demo administrator unaffected');
   log('3 self-service and refusals: ok');
   // 4. concurrency on the SAME field/person: admin on a branch, person on main, then Apply = explicit conflict
