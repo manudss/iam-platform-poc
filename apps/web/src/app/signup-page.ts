@@ -35,7 +35,7 @@ export class SignupPage {
   protected id = ''; protected dn = ''; protected em = ''; protected pw = ''; protected code = ''; protected vals: Record<string, string> = {};
   private base = '/api/tenants/acme-demo/signup';
   async ngOnInit() {
-    try { const r = await fetch(`${this.base}/schema`); if (!r.ok) { this.state.set('closed'); return; } this.fields.set((await r.json()).fields); this.state.set('form'); } catch { this.state.set('closed'); }
+    try { const r = await fetch(`${this.base}/schema`); if (!r.ok) { this.state.set('closed'); return; } this.fields.set(((await r.json()).fields as F[]).filter((f) => !/(^|\.)(display_name|email|id|password)$/.test(f.key))); this.state.set('form'); } catch { this.state.set('closed'); }
   }
   protected async send() {
     this.err.set('');
