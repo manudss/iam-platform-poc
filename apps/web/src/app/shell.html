@@ -2,8 +2,7 @@
   <aside class="side" aria-label="Main navigation">
     <div class="brand"><span class="logo" aria-hidden="true">IAM</span><span>IAM platform<small>POC console</small></span></div>
     <nav>
-      @for (g of visibleNav(); track g.title) {
-        <p class="group">{{ g.title }}</p>
+      @for (g of visibleNav(); track g.title) {        <p class="group">{{ g.title }}</p>
         @for (i of g.items; track i.path) {
           <a [routerLink]="i.path" routerLinkActive="active" [attr.data-nav]="i.path"><span class="ico" aria-hidden="true">{{ i.icon }}</span>{{ i.label }}</a>
         }

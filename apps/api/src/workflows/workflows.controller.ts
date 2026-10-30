@@ -1,3 +1,4 @@
+import { WorkflowsEnabledGuard } from './workflows-enabled.guard.js';
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -9,7 +10,7 @@ interface Req_ { user?: { sub?: string } }
  * Workflow definitions and runs. Same capability level as the users administration (AuthGuard + AdminGuard):
  * starting a run CAN write real data (on its own Dolt branch only), so it is an admin action.
  */
-@UseGuards(AuthGuard, AdminGuard)
+@UseGuards(AuthGuard, AdminGuard, WorkflowsEnabledGuard)
 @Controller('tenants/:tenant')
 export class WorkflowsController {
   constructor(private readonly wf: WorkflowsService) {}

@@ -1,11 +1,22 @@
 import { Component, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, CanActivateFn, Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { Connection, CustomNodeComponent, Edge, HandleComponent, Node, Vflow } from 'ngx-vflow';
+import { Connection, CustomNodeComponent, Edge, HandleComponent, Node, Vflow, VflowComponent } from 'ngx-vflow';
 import { Session } from './session';
 import { ApiClient } from './api';
 
 // ---- Workflows: visual editor for IGA demo workflows (see docs/workflows.md) ----
+// The whole feature is gated by the `workflows-iga` plugin: while disabled, the menu entry is hidden
+// (shell.ts), these routes redirect to /plugins, and every API endpoint answers 403.
+
+/** Route guard: the Workflows pages are inaccessible while the workflows-iga plugin is disabled. */
+export const workflowsEnabledGuard: CanActivateFn = async () => {
+  const s = inject(Session);
+  const router = inject(Router);
+  if (await s.refreshWorkflowsEnabled()) return true;
+  s.say('The Workflows (IGA) plugin is disabled. Enable it from the Plugins page to use workflows.', 'info');
+  return router.parseUrl('/plugins');
+};
 // SIMULATED steps (wait/notify/fail) demonstrate orchestration only: a notification is never sent.
 // REAL data steps (assign-role/revoke-role/set-department) write on the run's own Dolt branch only;
 // publishing to main stays the human review/merge path.
@@ -196,7 +207,7 @@ export class WorkflowEditPage implements OnInit {
   protected readonly samples = SAMPLE_WORKFLOWS;
   protected vfNodes = signal<Node[]>([]);
   protected vfEdges = signal<Edge[]>([]);
-  private readonly vflow = viewChild(Vflow);
+  private readonly vflow = viewChild(VflowComponent);
   private fitCanvas() { setTimeout(() => this.vflow()?.fitView({ padding: 0.18, duration: 150 }), 60); }
   protected state = new Map<string, NodeState>();
   /** Selection is tracked by the library on each entity's own `selected` signal. */

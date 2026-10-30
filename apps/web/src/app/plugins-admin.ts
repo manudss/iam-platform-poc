@@ -49,7 +49,7 @@ export class PluginsAdmin {
 
   protected async act(fn: () => Promise<unknown>, ok: string) {
     this.admin.adminToken = this.session.adminToken();
-    try { await fn(); this.note.set(ok); await this.refresh(); const s = this.selected(); if (s) await this.open(this.plugins().find((p) => p.id === s.id)!).then(() => this.note.set(ok)); }
+    try { await fn(); this.note.set(ok); await this.refresh(); this.session.pluginsVersion.update((v) => v + 1); await this.session.refreshWorkflowsEnabled(true); const s = this.selected(); if (s) await this.open(this.plugins().find((p) => p.id === s.id)!).then(() => this.note.set(ok)); }
     catch (e) { this.note.set((e as Error).message); }
   }
   protected grants() { return { install: this.grantInstall, uiComponents: this.grantComponents, hooks: Object.keys(this.grantHooks).filter((h) => this.grantHooks[h]) }; }

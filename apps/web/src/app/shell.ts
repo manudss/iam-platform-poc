@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
@@ -19,7 +19,7 @@ export class Shell {
   protected async ensurePersonal(){try{const r=await this.s.api.raw<{branch:string;status:string}>('POST','/workspace/personal',undefined,this.headers());this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;if(this.s.branch()!==r.data.branch)this.s.selectBranch(r.data.branch);this.s.say(r.data.status==='reused'?'Back on your personal branch '+r.data.branch+'. Your work in progress is kept.':'Your personal branch '+r.data.branch+' is ready. Changes stay on it until Apply.');}catch(e){const m=(e as Error).message;this.s.say(/admin capability|disabled/.test(m)?'Enter the admin capability token, then press Refresh branches to open your personal branch.':m,/admin capability|disabled/.test(m)?'info':'error');}}
   protected async refresh(){if(!this.personal())await this.ensurePersonal();await this.loadBranches();}
   protected async rename(){try{const r=await this.s.api.raw<{branch:string}>('POST','/workspace/personal/rename',{name:this.renameTo},this.headers());this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;this.s.selectBranch(r.data.branch);await this.loadBranches();this.s.say('Personal branch renamed to '+r.data.branch+'.');}catch(e){this.s.say((e as Error).message,'error');}}
-  async ngOnInit(){await this.s.loadAccess();if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();}else if(!this.router.url.startsWith('/my-profile'))void this.router.navigateByUrl('/my-profile');}
+  async ngOnInit(){await this.s.loadAccess();if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();await this.s.refreshWorkflowsEnabled();}else if(!this.router.url.startsWith('/my-profile'))void this.router.navigateByUrl('/my-profile');}
   private headers():Record<string,string>{return this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{};}
   protected async loadBranches(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
   protected async select(){this.s.selectBranch(this.working);this.review.set(null);this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
@@ -35,7 +35,8 @@ export class Shell {
   }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
   protected readonly title = signal('');
-  protected readonly nav: NavGroup[] = [
+  protected readonly nav = computed<NavGroup[]>(() => {
+    const groups: NavGroup[] = [
     { title: 'Overview', items: [{ path: '/overview', label: 'Dashboard', icon: '◧' }] },
     { title: 'Access (IAM)', items: [
       { path: '/users', label: 'Users', icon: '♙' },
@@ -47,7 +48,7 @@ export class Shell {
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
-    { title: 'Automation (IGA)', items: [{ path: '/workflows', label: 'Workflows', icon: '⟳' }] },
+    ...(this.s.workflowsEnabled() ? [{ title: 'Automation (IGA)', items: [{ path: '/workflows', label: 'Workflows', icon: '⟳' }] }] : []),
     { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }] },
     { title: 'Database (Dolt)', items: [
       { path: '/database/branches', label: 'Branches', icon: '⑂' },
@@ -56,7 +57,10 @@ export class Shell {
       { path: '/database/data', label: 'Data', icon: '▦' },
       { path: '/database/sql', label: 'SQL', icon: '❯' },
       { path: '/database/pulls', label: 'Pull requests', icon: '⤴' }] },
-  ];
+  ]
+    return groups;
+  });
+
 
   constructor() {
     this.router.events.pipe(filter((e) => e instanceof NavigationEnd)).subscribe(() => { this.menu.set(false); this.title.set(this.leafTitle()); });

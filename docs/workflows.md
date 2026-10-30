@@ -3,6 +3,21 @@
 The workflows feature demonstrates identity-governance scenarios (joiner, leaver, access change, access review) as
 **graphs of typed steps** built in a visual editor, executed by the API, and followed step by step.
 
+## Enabling the feature (plugin)
+
+Workflows are a built-in **plugin** (`workflows-iga`, kind `workflow` + `ui`), managed like every other plugin from the
+**Plugins** page. It is **disabled by default** for a tenant: an administrator installs it, then enables it (no grant
+is required: the plugin declares no hook, no migration, no component screen).
+
+While the plugin is disabled:
+
+- the console hides the **Automation (IGA) / Workflows** menu and the `/workflows*` routes redirect to the Plugins page;
+- every workflow API endpoint answers **403** (`the Workflows (IGA) plugin is disabled…`) — the gate is server-side,
+  not just hidden navigation;
+- **a run already executing when the plugin is disabled is left to finish**: its data stays on its own `wf-<run>`
+  Dolt branch and main is untouched. Retry, cancel, review and every other action are refused until the plugin is
+  re-enabled. Disabling never deletes definitions, runs or branches.
+
 ## Two kinds of steps, never mixed up
 
 | Family | Types | Effect |

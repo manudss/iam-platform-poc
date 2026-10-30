@@ -75,6 +75,11 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13432);
+    // The feature is gated by the workflows-iga plugin: disabled by default, every route 403 until an admin enables it.
+    assert.equal((await call('GET', '/workflows')).status, 403, 'workflows must be refused while the plugin is disabled');
+    await ok('POST', '/plugins/workflows-iga/install', {});
+    await ok('POST', '/plugins/workflows-iga/enable', {});
+    assert.equal((await call('GET', '/workflows')).status, 200, 'workflows must answer once the plugin is enabled');
   });
   after(async () => { await app?.close(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
@@ -106,6 +111,26 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(v.steps.every((s) => s.simulated));
     assert.ok(v.steps[1].log.some((l) => l.includes('nothing was sent')));
     assert.equal((await call('POST', `/workflow-runs/${started.run.id}/review`)).status, 400); // no data branch to review
+  });
+
+  it('plugin disabled mid-run: the run in flight finishes, every route answers 403 until re-enabled', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'In flight while disabled', graph: { nodes: [
+      { id: 'w', type: 'wait', name: 'slow', config: { seconds: 2 } },
+      { id: 'n', type: 'notify', name: 'after', config: { recipient: 'hr', message: 'hi' } },
+    ], edges: [{ from: 'w', to: 'n' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await ok('POST', '/plugins/workflows-iga/disable');
+    try {
+      assert.equal((await call('GET', '/workflows')).status, 403);
+      assert.equal((await call('GET', `/workflow-runs/${started.run.id}`)).status, 403);
+      assert.equal((await call('POST', `/workflows/${def.definition.id}/runs`, {})).status, 403);
+      // documented choice: a run already executing is left to finish (its data stays on its own branch)
+      await new Promise((r) => setTimeout(r, 3000));
+    } finally {
+      await ok('POST', '/plugins/workflows-iga/enable', {});
+    }
+    const v = await waitRun(started.run.id, ['completed']);
+    assert.deepEqual(v.steps.map((s) => s.status), ['done', 'done']);
   });
 
   it('data run: assignment lands on the run branch only, review opens a Dolt PR, main changes only on merge', async () => {
