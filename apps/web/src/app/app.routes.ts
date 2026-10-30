@@ -3,6 +3,7 @@ import { authGuard } from './auth';
 import { CallbackPage, LoginPage } from './login';
 import { ActivationPage, AssignmentsPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
 import { UsersPage } from './users';
+import { AuthMethodsPage } from './auth-methods';
 import { Shell } from './shell';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
@@ -17,6 +18,7 @@ export const routes: Routes = [
       { path: '', pathMatch: 'full', redirectTo: 'overview' },
       { path: 'overview', component: OverviewPage, title: 'Dashboard' },
       { path: 'users', component: UsersPage, title: 'Users' },
+      { path: 'auth-methods', component: AuthMethodsPage, title: 'Authentication methods' },
       { path: 'assignments', component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, component: PluginsPage, title: 'Plugins' },

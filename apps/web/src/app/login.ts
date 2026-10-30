@@ -1,33 +1,32 @@
 import { Component, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
+import { SigninChain, SigninOptions } from './api';
 import { Session } from './session';
 
-/** Sign-in page: the browser code+PKCE flow (recommended) and the legacy JSON login kept as a diagnostic. */
-@Component({ selector: 'app-login', imports: [FormsModule], templateUrl: './login.html', styleUrl: './login.css' })
+/** Sign-in page: lists the methods (chains) configured and enabled live, the person picks one, then the browser code+PKCE flow runs that chain. No JSON login in the UI. */
+@Component({ selector: 'app-login', templateUrl: './login.html', styleUrl: './login.css' })
 export class LoginPage {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
-  protected readonly user = signal('demo-alice');
-  protected password = '';
   protected readonly busy = signal(false);
+  protected readonly state = signal<'loading' | 'ready' | 'error'>('loading');
+  protected readonly error = signal('');
+  protected readonly options = signal<SigninOptions>({ mode: 'legacy', chains: [] });
 
-  constructor() { if (this.s.loggedIn()) void this.router.navigateByUrl('/overview'); }
+  constructor() { if (this.s.loggedIn()) void this.router.navigateByUrl('/overview'); else void this.load(); }
 
-  protected async signIn() {
-    this.busy.set(true);
-    try { await this.s.api.startBrowserLogin(sessionStorage, (u) => location.assign(u)); }
-    catch (e) { this.s.say((e as Error).message, 'error'); this.busy.set(false); }
+  protected async load() {
+    this.state.set('loading');
+    try { this.options.set(await this.s.api.signinOptions()); this.state.set('ready'); }
+    catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
   }
+  protected stepNames(c: SigninChain) { return c.steps.map((x) => x.name).join(' \u2192 '); }
 
-  protected async legacy() {
-    try {
-      await this.s.api.login(this.user(), this.password); this.password = '';
-      this.s.signedIn(this.user()); this.s.say('Signed in with the legacy JSON flow (in-memory token).');
-      await this.s.refresh().catch(() => undefined);
-      await this.router.navigateByUrl(safeReturn(sessionStorage.getItem(RETURN_KEY)));
-    } catch (e) { this.s.say((e as Error).message, 'error'); }
+  protected async signIn(chain?: string) {
+    this.busy.set(true);
+    try { await this.s.api.startBrowserLogin(sessionStorage, (u) => location.assign(u), chain); }
+    catch (e) { this.s.say((e as Error).message, 'error'); this.busy.set(false); }
   }
 }
 

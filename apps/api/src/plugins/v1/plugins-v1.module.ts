@@ -12,6 +12,9 @@ import { PgPluginStore } from './pg-stores.js';
 import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } from './builtin/index.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
 import { AuthGateController } from './auth-gate.controller.js';
+import { SigninOptionsController } from '../../authn/signin-options.controller.js';
+import { AuthnService } from '../../authn/flow.service.js';
+import { AuthnAdminController } from '../../authn/authn.controller.js';
 
 /**
  * Plugin registry v1. With IAM_PG_URL set, settings, enablement, grants, faults and the migration ledger live in PostgreSQL and survive a restart
@@ -19,8 +22,8 @@ import { AuthGateController } from './auth-gate.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule],
-  controllers: [PluginsAdminController, AuthGateController],
-  providers: [BranchRegistries, {
+  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, SigninOptionsController],
+  providers: [BranchRegistries, AuthnService, {
     provide: PluginRegistry,
     inject: [VersioningService, UsersService, BranchRegistries],
     useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries) => {
@@ -39,6 +42,6 @@ import { AuthGateController } from './auth-gate.controller.js';
       return r;
     },
   }],
-  exports: [PluginRegistry, BranchRegistries],
+  exports: [PluginRegistry, BranchRegistries, AuthnService],
 })
 export class PluginsV1Module {}

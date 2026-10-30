@@ -3,6 +3,8 @@
 Status: first usable slice in the POC (registry, manifest, install ledger, settings forms, base/replacement with fallback, admin API and a generic admin screen). State is in memory by default and in PostgreSQL when `IAM_PG_URL` is set (settings, grants, enablement, faults, migration ledger, seeds). Fictional data. Not a marketplace, not production.
 Code: `apps/api/src/plugins/v1/`, console: `apps/web/src/app/plugins-admin.*`. The v0 contract (`docs/plugin-contract-v0.md`) stays for the WASM blocking hook and the old async host.
 
+See also `docs/auth-methods.md` for authentication methods, chains and levels.
+
 ## 1. Ideas in one page
 
 - A plugin is a **manifest** (data) plus **handlers** (code). The manifest says what the plugin is, which hooks it listens to, what it installs, which settings it exposes.

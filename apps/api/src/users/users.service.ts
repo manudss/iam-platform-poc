@@ -29,6 +29,10 @@ export class UsersService {
         await c.query('alter table identities add column login_enabled boolean not null default true');
         await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m','users: login eligibility')");
       }
+      if (!(cols as { Field: string }[]).some(x => x.Field === 'email')) {
+        await c.query('alter table identities add column email varchar(254) null');
+        await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m','users: e-mail address on the profile')");
+      }
       if (!(cols as { Field: string }[]).some(x => x.Field === 'credential_revision')) {
         await c.query('alter table identities add column credential_revision varchar(40)');
         const all = await this.credentials();
@@ -41,26 +45,27 @@ export class UsersService {
     });
   }); }
   async list(ref = currentBranch()) { await this.init(); return this.v.at(ref, async c => {
-    const [r] = await c.query('select id, display_name, manager_id, department, login_enabled, credential_revision from identities order by id');
+    const [r] = await c.query('select id, display_name, manager_id, department, email, login_enabled, credential_revision from identities order by id');
     const creds = await this.credentials();
     return (r as Record<string, unknown>[]).map(x => ({ ...x, id: String(x.id), credential_revision: x.credential_revision, login_enabled: !!x.login_enabled, hasCredential: !!creds[String(x.credential_revision)] }));
   }); }
   private validate(b: Record<string, unknown>, create: boolean) {
     if (create && (typeof b.id !== 'string' || !/^[a-z0-9-]{1,32}$/.test(b.id))) throw new BadRequestException('id: lowercase letters, digits, hyphens; max 32');
-    for (const [k, max] of [['display_name',80], ['department',40], ['manager_id',32]] as const) if (b[k] !== undefined && b[k] !== null && (typeof b[k] !== 'string' || (b[k] as string).length > max)) throw new BadRequestException(`invalid ${k}`);
+    for (const [k, max] of [['display_name',80], ['department',40], ['manager_id',32], ['email',254]] as const) if (b[k] !== undefined && b[k] !== null && (typeof b[k] !== 'string' || (b[k] as string).length > max)) throw new BadRequestException(`invalid ${k}`);
+    if (typeof b.email === 'string' && b.email !== '' && !/^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}$/.test(b.email)) throw new BadRequestException('invalid email address');
     if (b.login_enabled !== undefined && typeof b.login_enabled !== 'boolean') throw new BadRequestException('login_enabled must be boolean');
     if ((create || b.password !== undefined) && (typeof b.password !== 'string' || b.password.length < 12 || b.password.length > 128)) throw new BadRequestException('password: 12 to 128 characters');
-    if (Object.keys(b).some(k => !['id','display_name','department','manager_id','login_enabled','password'].includes(k))) throw new BadRequestException('unknown user field');
+    if (Object.keys(b).some(k => !['id','display_name','department','manager_id','email','login_enabled','password'].includes(k))) throw new BadRequestException('unknown user field');
   }
   async save(id: string, b: Record<string, unknown>, create: boolean) {
     const branch = currentBranch(true); this.validate(b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {
       const [rows] = await c.query('select * from identities where id=?', [id]); const prev = (rows as Record<string, unknown>[])[0];
       if (create && prev) throw new ConflictException('user already exists'); if (!create && !prev) throw new NotFoundException('unknown user');
-      const r = { display_name:'', department:'', manager_id:null, login_enabled:true, ...prev, ...b };
+      const r = { display_name:'', department:'', manager_id:null, email:null, login_enabled:true, ...prev, ...b };
       if (r.manager_id) { const [m] = await c.query('select id from identities where id=?', [r.manager_id]); if (!(m as unknown[]).length || r.manager_id === id) throw new BadRequestException('manager must be another existing user'); }
       const revision = b.password !== undefined ? await this.password(id, b.password as string) : prev?.credential_revision ?? null;
-      await c.query('insert into identities (id,display_name,manager_id,department,login_enabled,credential_revision) values (?,?,?,?,?,?) on duplicate key update display_name=values(display_name),manager_id=values(manager_id),department=values(department),login_enabled=values(login_enabled),credential_revision=values(credential_revision)', [id,r.display_name,r.manager_id || null,r.department,r.login_enabled,revision]);
+      await c.query('insert into identities (id,display_name,manager_id,department,email,login_enabled,credential_revision) values (?,?,?,?,?,?,?) on duplicate key update display_name=values(display_name),manager_id=values(manager_id),department=values(department),email=values(email),login_enabled=values(login_enabled),credential_revision=values(credential_revision)', [id,r.display_name,r.manager_id || null,r.department,r.email || null,r.login_enabled,revision]);
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query('call dolt_commit(\'-m\',?)', [`users: ${create ? 'create' : 'update'} ${id}`]); }
     };
