@@ -26,7 +26,7 @@ export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; hi
   { type: 'set-department', label: 'Set department', simulated: false, hint: 'Real, on the run branch' },
 ];
 
-class WorkflowClient {
+export class WorkflowClient {
   constructor(private readonly api: ApiClient, private readonly adminToken: () => string) {}
   private req<T>(method: string, path: string, body?: object) {
     return this.api.raw<T & { message?: string }>(method, path, body, { 'x-api-admin-token': this.adminToken() }).then((r) => {
@@ -88,6 +88,23 @@ export class WorkflowsPage implements OnInit {
   }
 }
 
+export const SAMPLE_WORKFLOWS: { name: string; description: string; nodes: WfNode[]; edges: WfEdge[] }[] = [
+    { name: 'Sample: onboarding', description: 'Joiner: account ready, then access, manager informed (simulated)', nodes: [
+      { id: 'prepare', type: 'wait', name: 'Prepare (simulated)', config: { seconds: 2 } },
+      { id: 'grant', type: 'assign-role', name: 'Grant accountant to demo-bob', config: { identity: 'demo-bob', role: 'accountant' } },
+      { id: 'tell', type: 'notify', name: 'Inform the manager (simulated)', config: { recipient: 'manager-of:demo-bob', message: 'Bob is now accountant' } },
+    ], edges: [{ from: 'prepare', to: 'grant' }, { from: 'grant', to: 'tell' }] },
+    { name: 'Sample: offboarding', description: 'Leaver: access removed, then confirmation (simulated)', nodes: [
+      { id: 'revoke', type: 'revoke-role', name: 'Revoke payment-creator from demo-bob', config: { identity: 'demo-bob', role: 'payment-creator' } },
+      { id: 'move', type: 'set-department', name: 'Move demo-bob to alumni', config: { identity: 'demo-bob', department: 'alumni' } },
+      { id: 'tell', type: 'notify', name: 'Confirm to HR (simulated)', config: { recipient: 'hr', message: 'Offboarding done' } },
+    ], edges: [{ from: 'revoke', to: 'move' }, { from: 'move', to: 'tell' }] },
+    { name: 'Sample: SoD blocked', description: 'A grant that breaks segregation of duties: run completes, merge is refused at review', nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Give payment-approver to demo-bob', config: { identity: 'demo-bob', role: 'payment-approver' } },
+      { id: 'oops', type: 'fail', name: 'External ticket fails (simulated)', config: { message: 'ticket system unreachable (demo)' } },
+    ], edges: [{ from: 'grant', to: 'oops' }] },
+  ];
+
 interface NodeState { type: StepType; name: string; config: Record<string, unknown> }
 
 @Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow], styleUrl: './pages.css', template: `
@@ -134,6 +151,7 @@ export class WorkflowEditPage implements OnInit {
   protected name = ''; protected description = '';
   protected note = signal(''); protected busy = signal(false);
   protected readonly types = STEP_TYPES;
+  protected readonly samples = SAMPLE_WORKFLOWS;
   protected vfNodes = signal<Node[]>([]);
   protected vfEdges = signal<Edge[]>([]);
   protected state = new Map<string, NodeState>();
@@ -141,22 +159,6 @@ export class WorkflowEditPage implements OnInit {
   protected selectedNode = computed(() => this.vfNodes().find((n) => n.selected?.())?.id ?? null);
   protected selectedEdge = computed(() => (this.selectedNode() ? null : this.vfEdges().find((e) => e.selected?.())?.id ?? null));
   private seq = 0;
-  protected readonly samples: { name: string; description: string; nodes: WfNode[]; edges: WfEdge[] }[] = [
-    { name: 'Sample: onboarding', description: 'Joiner: account ready, then access, manager informed (simulated)', nodes: [
-      { id: 'prepare', type: 'wait', name: 'Prepare (simulated)', config: { seconds: 2 } },
-      { id: 'grant', type: 'assign-role', name: 'Grant accountant to demo-bob', config: { identity: 'demo-bob', role: 'accountant' } },
-      { id: 'tell', type: 'notify', name: 'Inform the manager (simulated)', config: { recipient: 'manager-of:demo-bob', message: 'Bob is now accountant' } },
-    ], edges: [{ from: 'prepare', to: 'grant' }, { from: 'grant', to: 'tell' }] },
-    { name: 'Sample: offboarding', description: 'Leaver: access removed, then confirmation (simulated)', nodes: [
-      { id: 'revoke', type: 'revoke-role', name: 'Revoke payment-creator from demo-bob', config: { identity: 'demo-bob', role: 'payment-creator' } },
-      { id: 'move', type: 'set-department', name: 'Move demo-bob to alumni', config: { identity: 'demo-bob', department: 'alumni' } },
-      { id: 'tell', type: 'notify', name: 'Confirm to HR (simulated)', config: { recipient: 'hr', message: 'Offboarding done' } },
-    ], edges: [{ from: 'revoke', to: 'move' }, { from: 'move', to: 'tell' }] },
-    { name: 'Sample: SoD blocked', description: 'A grant that breaks segregation of duties: run completes, merge is refused at review', nodes: [
-      { id: 'grant', type: 'assign-role', name: 'Give payment-approver to demo-bob', config: { identity: 'demo-bob', role: 'payment-approver' } },
-      { id: 'oops', type: 'fail', name: 'External ticket fails (simulated)', config: { message: 'ticket system unreachable (demo)' } },
-    ], edges: [{ from: 'grant', to: 'oops' }] },
-  ];
 
   ngOnInit() {
     this.id = this.route.snapshot.paramMap.get('id') ?? 'new';
