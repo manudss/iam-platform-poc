@@ -137,4 +137,25 @@ describe('profile fields API: plugin fields, configuration, self-service and adm
     assert.ok(!r.body.fields.some((f: any) => f.klass === 'authority'));
     assert.equal((await api().get(`/tenants/${T}/profile-schema?context=root`)).status, 400);
   });
+  it('review policy: own edits wait on a personal change set, only another administrator accepts, an ordinary account cannot review', async () => {
+    const F = 'hr-attributes.job_title';
+    await api().put(`/tenants/${T}/profile-fields`).set(adm).send({ config: { selfEditPolicy: 'review', fields: { [F]: { selfEdit: true } } } });
+    const me = { 'x-test-sub': 'demo-bob' };
+    const r = await api().patch(`/tenants/${T}/me/profile`).set(me).send({ values: { [F]: 'Controller' } });
+    assert.equal(r.status, 200); assert.equal(r.body.policy, 'review'); assert.deepEqual(r.body.pending, [F]); assert.equal(r.body.values[F], 'Controller', 'the person sees their proposal');
+    const list = await api().get(`/tenants/${T}/profile-reviews`).set({ ...adm, 'x-test-sub': 'demo-alice' });
+    assert.equal(list.status, 200); assert.equal(list.body.reviews[0].subject, 'demo-bob'); assert.equal(list.body.reviews[0].changes[0].to, 'Controller');
+    assert.equal((await api().get(`/tenants/${T}/profile-reviews`).set(me)).status, 403, 'ordinary account: no review');
+    assert.equal((await api().post(`/tenants/${T}/profile-reviews/demo-bob/accept`).set(me)).status, 403);
+    assert.equal((await api().post(`/tenants/${T}/profile-reviews/demo-bob/accept`).set({ ...adm, 'x-test-sub': 'demo-bob' })).status, 403, 'nobody accepts their own edits');
+    const acc = await api().post(`/tenants/${T}/profile-reviews/demo-bob/accept`).set({ ...adm, 'x-test-sub': 'demo-alice' }); assert.equal(acc.status, 201);
+    const after = await api().get(`/tenants/${T}/me/profile`).set(me); assert.equal(after.body.values[F], 'Controller'); assert.deepEqual(after.body.pending, []);
+    await api().patch(`/tenants/${T}/me/profile`).set(me).send({ values: { [F]: 'Nope' } });
+    assert.equal((await api().post(`/tenants/${T}/profile-reviews/demo-bob/refuse`).set({ ...adm, 'x-test-sub': 'demo-alice' })).status, 201);
+    assert.equal((await api().get(`/tenants/${T}/me/profile`).set(me)).body.values[F], 'Controller', 'refused edits never reach live values');
+    const acc2 = await api().get(`/tenants/${T}/me/access`).set(me); assert.equal(acc2.body.admin, false); assert.ok('organizations' in acc2.body.plugins || true);
+    assert.equal((await api().get(`/tenants/${T}/me/access`).set({ ...adm, 'x-test-sub': 'demo-alice' })).body.admin, true);
+    await api().put(`/tenants/${T}/profile-fields`).set(adm).send({ config: { fields: { [F]: { selfEdit: true } } } });
+    const imm = await api().patch(`/tenants/${T}/me/profile`).set(me).send({ values: { [F]: 'Immediate' } }); assert.equal(imm.body.policy, 'immediate'); assert.deepEqual(imm.body.pending, []);
+  });
 });

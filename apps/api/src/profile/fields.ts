@@ -41,7 +41,9 @@ export interface FieldSetting {
 }
 export const SAFE_DEFAULTS: FieldSetting = { enabled: true, signup: 'off', selfView: true, selfEdit: false, adminEdit: true };
 /** `signup.open` is the switch for the public form. Absent means closed. */
-export interface ProfileConfig { fields: Record<string, Partial<FieldSetting>>; signup?: { open: boolean } }
+/** `selfEditPolicy`: absent or 'immediate' = a person's own edits go live at once (Dolt main). 'review' = each person's edits go to an automatic personal Dolt branch that a validator accepts (merge) or refuses (delete). */
+export type SelfEditPolicy = 'immediate' | 'review';
+export interface ProfileConfig { fields: Record<string, Partial<FieldSetting>>; signup?: { open: boolean }; selfEditPolicy?: SelfEditPolicy }
 export const EMPTY_PROFILE_CONFIG: ProfileConfig = { fields: {} };
 export const CORE_PROFILE_SETTINGS_ID = 'core-profile-fields';
 export type Context = 'signup' | 'self' | 'admin';
@@ -87,14 +89,16 @@ export function settingFor(f: CatalogField, cfg: ProfileConfig): FieldSetting {
 export function parseProfileConfig(v: Record<string, unknown> | undefined): ProfileConfig {
   const f = (v as { fields?: unknown } | undefined)?.fields;
   const su = (v as { signup?: { open?: unknown } } | undefined)?.signup;
-  return { fields: f && typeof f === 'object' && !Array.isArray(f) ? (f as Record<string, FieldSetting>) : {}, ...(su && su.open === true ? { signup: { open: true } } : {}) };
+  const pol = (v as { selfEditPolicy?: unknown } | undefined)?.selfEditPolicy;
+  return { fields: f && typeof f === 'object' && !Array.isArray(f) ? (f as Record<string, FieldSetting>) : {}, ...(su && su.open === true ? { signup: { open: true } } : {}), ...(pol === 'review' ? { selfEditPolicy: 'review' as const } : {}) };
 }
 
 /** Validates a whole configuration against the catalogue. The security rules are enforced here, not in the screen. */
 export function validateProfileConfig(input: unknown, catalogue: CatalogField[]): ProfileConfig {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return bad('configuration object required');
   const i = input as Record<string, unknown>;
-  if (Object.keys(i).some((k) => k !== 'fields' && k !== 'signup')) bad('unknown configuration field');
+  if (Object.keys(i).some((k) => k !== 'fields' && k !== 'signup' && k !== 'selfEditPolicy')) bad('unknown configuration field');
+  if (i.selfEditPolicy !== undefined && i.selfEditPolicy !== 'immediate' && i.selfEditPolicy !== 'review') bad('selfEditPolicy: immediate or review');
   const su = i.signup as Record<string, unknown> | undefined;
   if (su !== undefined && (!su || typeof su !== 'object' || Array.isArray(su) || Object.keys(su).some((k) => k !== 'open') || typeof su.open !== 'boolean')) bad('signup: { open: boolean }');
   const fields = i.fields; if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return bad('fields: object required');
@@ -115,7 +119,7 @@ export function validateProfileConfig(input: unknown, catalogue: CatalogField[])
     if (s.selfEdit && !s.selfView) bad(`${k}: selfEdit needs selfView`);
     out[k] = { ...r } as unknown as FieldSetting;
   }
-  return { fields: out, ...(su?.open ? { signup: { open: true } } : {}) };
+  return { fields: out, ...(su?.open ? { signup: { open: true } } : {}), ...(i.selfEditPolicy === 'review' ? { selfEditPolicy: 'review' as const } : {}) };
 }
 
 export interface EffectiveField { key: string; plugin: string; label: string; type: ProfileFieldType; help?: string; options?: { value: string; label: string }[]; klass: FieldClass; pii: Pii; group?: string; order: number; visible: boolean; editable: boolean; required: boolean }
