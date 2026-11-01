@@ -7,7 +7,7 @@ import { DefinitionRow, WorkflowStore } from './store.js';
  * definitions so the feature is alive out of the box - a joiner, a mover and a leaver scenario that
  * start by themselves on application events. Idempotent (fixed ids, never overwritten).
  */
-const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: 'assign-role' | 'revoke-role' | 'notify'; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
+const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: 'assign-role' | 'revoke-role' | 'notify' | 'set-profile-field'; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
   {
     id: 'wf-joiner', name: 'Joiner: new hire baseline', description: 'Starts when a user is created: grants the employee baseline role (real, on the run branch) and informs the manager (simulated).',
     trigger: { event: 'user.created' },
@@ -34,6 +34,50 @@ const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger
       { id: 'tell', type: 'notify', name: 'Inform security (simulated)', config: { recipient: 'security', message: '{{event.subject}} disabled: baseline access removed, review remaining roles' } },
     ],
     edges: [{ from: 'revoke', to: 'tell' }],
+  },
+  {
+    id: 'wf-registration', name: 'Registration: a sign-up request is triaged', description: 'Starts when someone registers on the public sign-up page: HR is told a request waits for e-mail confirmation then approval (simulated).',
+    trigger: { event: 'signup.requested' },
+    nodes: [
+      { id: 'tell', type: 'notify', name: 'Inform HR (simulated)', config: { recipient: 'hr', message: 'sign-up request from {{event.subject}} ({{event.email}}): waiting for confirmation and approval' } },
+    ],
+    edges: [],
+  },
+  {
+    id: 'wf-onboarding', name: 'Onboarding: a validated registration provisions the account', description: 'Starts when an administrator approves a sign-up: records the entry grade (real) and grants the employee baseline (real) on the run branch, informs the manager (simulated).',
+    trigger: { event: 'signup.approved' },
+    nodes: [
+      { id: 'grade', type: 'set-profile-field', name: 'Record the entry grade', config: { identity: '{{event.subject}}', field: 'hr-attributes.employee_grade', value: 'G1' } },
+      { id: 'grant', type: 'assign-role', name: 'Grant the employee baseline', config: { identity: '{{event.subject}}', role: 'employee' } },
+      { id: 'tell', type: 'notify', name: 'Inform the manager (simulated)', config: { recipient: 'manager-of:{{event.subject}}', message: '{{event.subject}} approved and provisioned: grade G1 recorded, employee granted, pending review' } },
+    ],
+    edges: [{ from: 'grade', to: 'grant' }, { from: 'grant', to: 'tell' }],
+  },
+  {
+    id: 'wf-profile-validation', name: 'Validation: an accepted profile review unlocks baseline', description: 'Starts when a validator accepts someone\'s profile edits: grants the employee baseline (real) and informs HR (simulated). A refused review starts nothing.',
+    trigger: { event: 'profile.review-resolved', match: { decision: 'accepted' } },
+    nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Grant the employee baseline', config: { identity: '{{event.subject}}', role: 'employee' } },
+      { id: 'tell', type: 'notify', name: 'Inform HR (simulated)', config: { recipient: 'hr', message: 'profile of {{event.subject}} validated by {{event.actor}}: baseline access granted, pending review' } },
+    ],
+    edges: [{ from: 'grant', to: 'tell' }],
+  },
+  {
+    id: 'wf-finance-member', name: 'Organizations: a finance member becomes payment-creator', description: 'Starts when a user joins the finance organization: grants the payment-creator role (real) and informs the finance manager (simulated).',
+    trigger: { event: 'organization.member-added', match: { organization: 'finance' } },
+    nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Grant payment-creator', config: { identity: '{{event.subject}}', role: 'payment-creator' } },
+      { id: 'tell', type: 'notify', name: 'Inform the finance manager (simulated)', config: { recipient: 'finance-manager', message: '{{event.subject}} joined finance: payment-creator granted, pending review' } },
+    ],
+    edges: [{ from: 'grant', to: 'tell' }],
+  },
+  {
+    id: 'wf-security-member', name: 'Organizations: a security member is only logged', description: 'Starts when a user joins the security office: informs the security office (simulated). The sensitive security-analyst role is never granted by a workflow.',
+    trigger: { event: 'organization.member-added', match: { organization: 'security' } },
+    nodes: [
+      { id: 'tell', type: 'notify', name: 'Inform the security office (simulated)', config: { recipient: 'security', message: '{{event.subject}} joined the security office: review access manually, nothing granted' } },
+    ],
+    edges: [],
   },
 ];
 
