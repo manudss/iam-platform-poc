@@ -1,6 +1,7 @@
 # All-in-one hosted-demo image (fictional data only). Build context = repository root.
 # One container: Dolt sql-server + Rust core + NestJS API + Angular console (static, same-origin proxy).
-# Optional pieces of the local stack (PostgreSQL journal, NATS, Temporal, OpenBao) are OFF here:
+# Core bus: a local nats-server runs INSIDE this container (loopback, per-boot random password; IAM_DEMO_NATS=0 turns it off).
+# Optional pieces of the local stack (PostgreSQL journal, API-side NATS, Temporal, OpenBao) are OFF here:
 # the API runs on its in-memory fallbacks, documented in docs/demo.md.
 
 FROM rust:1-bookworm AS corebuild
@@ -26,9 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 ARG DOLT_VERSION=v2.6.1
 RUN curl -sSfL "https://github.com/dolthub/dolt/releases/download/${DOLT_VERSION}/dolt-linux-amd64.tar.gz" | tar xz -C /opt \
  && ln -s /opt/dolt-linux-amd64/bin/dolt /usr/local/bin/dolt
+ARG NATS_VERSION=v2.15.2
+RUN curl -sSfL "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" | tar xz -C /opt \
+ && ln -s /opt/nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
 WORKDIR /app
 COPY --from=corebuild /src/core/target/release/iam-core /app/iam-core
 COPY policies/ /app/policies/
+COPY conf/nats-local.conf /app/conf/nats-local.conf
 COPY data/demo/ /app/data/demo/
 COPY --from=apibuild /src/apps/api/dist /app/api/dist
 COPY --from=apibuild /src/apps/api/node_modules /app/api/node_modules
