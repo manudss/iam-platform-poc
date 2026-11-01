@@ -1,7 +1,7 @@
-import { Component, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, CanActivateFn, Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { Connection, CustomNodeComponent, Edge, HandleComponent, Node, Vflow, VflowComponent } from 'ngx-vflow';
+import { Connection, CustomNodeComponent, Edge, HandleComponent, Node, Vflow, VflowComponent, ViewportState } from 'ngx-vflow';
 import { Session } from './session';
 import { ApiClient } from './api';
 
@@ -99,6 +99,27 @@ export class WorkflowClient {
   cancel(id: string) { return this.req<RunView>('POST', `/workflow-runs/${id}/cancel`, {}); }
   review(id: string) { return this.req<{ pullRequest: { id: number }; reused: boolean }>('POST', `/workflow-runs/${id}/review`, {}); }
 }
+
+// ---- Initial canvas framing ----
+// Custom component nodes only report their real size after Angular renders them, so fitting the view on a
+// fixed timer races the node measurement and sometimes frames the graph half-clipped or tiny. These helpers
+// keep the framing deterministic: wait for real readiness, fit, verify the visible result, retry if wrong.
+
+/** Leftmost node of the graph: the stable anchor the initial framing zooms back to. */
+export const leftmostNode = (nodes: Node[]): Node | null =>
+  nodes.reduce<Node | null>((a, n) => (!a || n.point().x < a.point().x ? n : a), null);
+
+/** Viewport that anchors the leftmost node near the top-left corner at a comfortable reading zoom. */
+export const anchorViewport = (nodes: Node[], zoom = 0.9, margin = 24): ViewportState | null => {
+  const first = leftmostNode(nodes);
+  return first ? { zoom, x: margin - first.point().x * zoom, y: margin - first.point().y * zoom } : null;
+};
+
+export interface FrameRect { left: number; top: number; right: number; bottom: number }
+
+/** True when every inner rect is fully visible inside the outer rect (small tolerance for sub-pixel rounding). */
+export const rectsWithin = (inner: FrameRect[], outer: FrameRect, tolerance = 2): boolean =>
+  inner.every((r) => r.left >= outer.left - tolerance && r.top >= outer.top - tolerance && r.right <= outer.right + tolerance && r.bottom <= outer.bottom + tolerance);
 
 const clientOf = (s: Session) => new WorkflowClient(s.api, () => s.adminToken());
 
@@ -208,22 +229,47 @@ export class WorkflowEditPage implements OnInit {
   protected vfNodes = signal<Node[]>([]);
   protected vfEdges = signal<Edge[]>([]);
   private readonly vflow = viewChild(VflowComponent);
+  private readonly host = inject(ElementRef<HTMLElement>);
+
   private fitCanvas() {
+    // Deterministic initial framing (no blind fixed timeouts): wait until the canvas is initialized and
+    // every node is really measured in the DOM, fit the whole graph, then verify the visible result.
+    this.frameWhenReady(1, 0);
+  }
+
+  private nodeRects(): DOMRect[] {
+    return [...this.host.nativeElement.querySelectorAll('.wf-node')].map((el) => el.getBoundingClientRect());
+  }
+
+  private frameWhenReady(attempt: number, waitedFrames: number) {
+    const v = this.vflow();
+    const canvas = this.host.nativeElement.querySelector('vflow');
+    if (!v || !canvas) return; // the page was left before the framing finished
+    const rects = this.nodeRects();
+    const ready = v.initialized() && canvas.clientWidth > 0 && rects.length === this.vfNodes().length && rects.every((r) => r.width > 0 && r.height > 0);
+    if (!ready) {
+      if (waitedFrames < 600) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt, waitedFrames + 1)));
+      else v.fitView({ padding: 0.14, duration: 120 }); // last-resort best effort, same as the old behavior
+      return;
+    }
+    v.fitView({ padding: 0.14, duration: 120 });
+    this.verifyFraming(attempt, performance.now());
+  }
+
+  private verifyFraming(attempt: number, fitAt: number) {
+    const v = this.vflow();
+    const canvas = this.host.nativeElement.querySelector('vflow');
+    if (!v || !canvas) return;
+    if (performance.now() - fitAt < 200) { requestAnimationFrame(() => this.verifyFraming(attempt, fitAt)); return; } // let the fit animation finish and the DOM catch up
+    if (!rectsWithin(this.nodeRects(), canvas.getBoundingClientRect())) {
+      // The fit ran on stale sizes: retry from the readiness gate, bounded, until the framing is right.
+      if (attempt < 12) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt + 1, 0)));
+      return;
+    }
     // Fit everything first so the shape of the graph is visible; if the fit had to shrink the nodes
     // below comfortable reading size, zoom back toward 1:1 anchored on the leftmost node (the user pans).
-    setTimeout(() => {
-      const v = this.vflow();
-      if (!v) return;
-      v.fitView({ padding: 0.14, duration: 120 });
-      setTimeout(() => {
-        const vp = v.viewport();
-        const first = this.vfNodes().reduce((a, n) => (n.point().x < a.point().x ? n : a), this.vfNodes()[0]);
-        if (first && vp.zoom < 0.9) {
-          const z = 0.9;
-          v.viewportTo({ zoom: z, x: 24 - first.point().x * z, y: 24 - first.point().y * z });
-        }
-      }, 200);
-    }, 60);
+    const anchor = v.viewport().zoom < 0.9 ? anchorViewport(this.vfNodes()) : null;
+    if (anchor) v.viewportTo(anchor);
   }
   protected state = new Map<string, NodeState>();
   /** Selection is tracked by the library on each entity's own `selected` signal. */

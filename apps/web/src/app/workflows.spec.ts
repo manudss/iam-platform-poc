@@ -1,5 +1,7 @@
+import { signal } from '@angular/core';
+import { Node } from 'ngx-vflow';
 import { ApiClient } from './api';
-import { SAMPLE_WORKFLOWS, STEP_TYPES, WorkflowClient } from './workflows';
+import { SAMPLE_WORKFLOWS, STEP_TYPES, WorkflowClient, anchorViewport, leftmostNode, rectsWithin } from './workflows';
 
 describe('workflow step types', () => {
   it('marks exactly wait/notify/fail as simulated; data steps are real', () => {
@@ -34,6 +36,28 @@ describe('sample workflows', () => {
   it('cover the demo story: onboarding, offboarding and a SoD case that fails then refuses the merge', () => {
     const names = SAMPLE_WORKFLOWS.map((s) => s.name).join(' ');
     expect(names).toContain('onboarding'); expect(names).toContain('offboarding'); expect(names).toContain('SoD');
+  });
+});
+
+
+describe('initial canvas framing', () => {
+  const node = (id: string, x: number, y: number) => ({ id, point: signal({ x, y }) }) as unknown as Node;
+  it('anchors on the leftmost node near the top-left corner at reading zoom', () => {
+    expect(anchorViewport([node('b', 300, 40), node('a', 40, 300)])).toEqual({ zoom: 0.9, x: 24 - 40 * 0.9, y: 24 - 300 * 0.9 });
+  });
+  it('picks the leftmost node and handles one or zero nodes', () => {
+    expect(leftmostNode([node('b', 300, 40), node('a', 40, 300)])?.id).toBe('a');
+    expect(leftmostNode([node('only', 5, 5)])?.id).toBe('only');
+    expect(leftmostNode([])).toBeNull();
+    expect(anchorViewport([])).toBeNull();
+  });
+  it('accepts fully visible nodes and rejects clipped or off-canvas ones (the load-framing defect)', () => {
+    const canvas = { left: 0, top: 0, right: 800, bottom: 600 };
+    expect(rectsWithin([{ left: 10, top: 10, right: 200, bottom: 120 }], canvas)).toBe(true);
+    expect(rectsWithin([{ left: -40, top: 10, right: 200, bottom: 120 }], canvas)).toBe(false); // clipped left (mobile defect)
+    expect(rectsWithin([{ left: 10, top: -20, right: 200, bottom: 120 }], canvas)).toBe(false); // clipped top
+    expect(rectsWithin([{ left: 10, top: 10, right: 900, bottom: 120 }], canvas)).toBe(false); // beyond the right edge
+    expect(rectsWithin([{ left: 10, top: 10, right: 200, bottom: 700 }], canvas)).toBe(false); // beyond the bottom edge
   });
 });
 
