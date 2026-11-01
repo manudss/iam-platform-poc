@@ -56,6 +56,11 @@ try {
   browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
   const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() => { // records every distinct [role=status] text of the current document
+    window.__statuses = [];
+    const rec = () => { for (const e of document.querySelectorAll('[role=status]')) { const t = (e.textContent ?? '').trim(); if (t && !window.__statuses.includes(t)) window.__statuses.push(t); } };
+    new MutationObserver(rec).observe(document, { subtree: true, childList: true, characterData: true });
+  });
   page.on('dialog', (d) => d.accept());
   const BASE = 'http://localhost:4200';
   const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
@@ -89,13 +94,19 @@ try {
   await coreLogin(true);
   await page.waitForSelector('nav a.active[data-nav="/database/pulls"]');
   assert.equal(path(), '/database/pulls'); assert.equal(new URL(page.url()).search, ''); // back on the page that was asked for, no code or state left
-  assert.ok((await page.locator('[role=status]').first().textContent()).includes('browser flow'));
+  // The console later replaces this message (e.g. when it opens the personal branch), so the sign-in message is read from every status text seen by this document, not only the current one.
+  assert.ok((await page.evaluate(() => window.__statuses)).some((t) => t.includes('browser flow')), 'the browser-flow sign-in message was shown');
   assert.match(await page.locator('header .who').innerText(), /demo-alice/);
   await shot('2-signed-in-deep-link');
 
   // ---- IAM pages: assignments, SoD, merge, activation ----
   await page.setViewportSize({ width: 1280, height: 900 });
-  await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("demo-bob")');
+  await nav('/assignments');
+  try { await page.waitForSelector('#assignments td:text-is("demo-bob")', { timeout: 30000 }); }
+  catch (e) { // diagnostics for CI: what the page really showed, so a failure is explainable from the log alone
+    console.log('DIAG url', page.url(), '\nDIAG statuses', JSON.stringify(await page.evaluate(() => window.__statuses)), '\nDIAG body', (await page.evaluate(() => document.body.innerText)).slice(0, 1500));
+    await shot('diag-assignments').catch(() => undefined); throw e;
+  }
   assert.ok((await page.locator('#assignments tr', { hasText: 'demo-bob' }).first().innerText()).includes('payment-creator'));
   await page.getByRole('button', { name: 'Simulate', exact: true }).click();
   await page.waitForSelector('text=SoD: demo-bob has payment-creator and payment-approver');
