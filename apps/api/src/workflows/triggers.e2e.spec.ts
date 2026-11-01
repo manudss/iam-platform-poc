@@ -18,6 +18,9 @@ import { UsersService } from '../users/users.service.js';
 import { EventsModule } from '../events/events.module.js';
 import { AppEvents } from '../events/app-events.service.js';
 import { SignupService } from '../profile/signup.service.js';
+import { ProfileService } from '../profile/profile.service.js';
+import { MemoryProfileStore } from '../profile/store.js';
+import { OrgService, MemoryOrgStore } from '../profile/orgs.js';
 
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
@@ -95,7 +98,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
   it('the event catalog is published for the editor', async () => {
     const c = (await ok('GET', '/workflows-events')) as { events: { type: string; payload: string[] }[] };
     const types = c.events.map((e) => e.type);
-    for (const t of ['user.created', 'user.department-changed', 'user.disabled', 'signup.approved']) assert.ok(types.includes(t), `catalog missing ${t}`);
+    for (const t of ['user.created', 'user.department-changed', 'user.disabled', 'signup.approved', 'signup.requested', 'profile.updated', 'profile.review-resolved', 'organization.member-added']) assert.ok(types.includes(t), `catalog missing ${t}`);
     assert.ok(c.events.find((e) => e.type === 'user.created')!.payload.includes('subject'));
   });
 
@@ -184,6 +187,93 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     assert.ok(view.steps[0].log.some((l) => l.includes('ida-hope approved (ida@example.invalid)')), 'both placeholders resolved from the approval');
     // The approval creates the user too, which is also a user.created event: the joiner starts as well.
     await waitForRun(joiner, 2);
+  });
+
+  it('submitting a sign-up request emits signup.requested and starts its workflow', async () => {
+    const reg = ((await ok('POST', '/workflows', { name: 'Registration triage', description: '', trigger: { event: 'signup.requested' }, graph: { nodes: [
+      { id: 'tell', type: 'notify', name: 'Tell HR (simulated)', config: { recipient: 'hr', message: 'sign-up request from {{event.subject}} ({{event.email}})' } },
+    ], edges: [] } })) as { definition: { id: string } }).definition.id;
+    const profileStub = { signupOpen: async () => true, signupValues: async () => ({}) };
+    const authnStub = { outbox: { send: async () => {} } };
+    const svc = new SignupService(profileStub as never, users, authnStub as never, events);
+    await svc.submit(T, { id: 'ron-hope', display_name: 'Ron Hope', email: 'ron@example.invalid', password: 'x'.repeat(12) }, '10.0.0.9');
+    const run = await waitForRun(reg, 1);
+    assert.equal(run.status, 'completed', JSON.stringify(run));
+    assert.equal(run.startedBy, 'event:signup.requested');
+    const view = (await ok('GET', `/workflow-runs/${run.id}`)) as { steps: { node_id: string; log: string[] }[] };
+    assert.ok(view.steps[0].log.some((l) => l.includes('sign-up request from ron-hope (ron@example.invalid)')), 'subject and email placeholders resolved');
+  });
+
+  it('set-profile-field records a value on the run branch only (real data step)', async () => {
+    const def = ((await ok('POST', '/workflows', { name: 'Grade on arrival', description: '', trigger: { event: 'user.created', match: { department: 'hr' } }, graph: { nodes: [
+      { id: 'grade', type: 'set-profile-field', name: 'Record the entry grade', config: { identity: '{{event.subject}}', field: 'hr-attributes.employee_grade', value: 'G1' } },
+    ], edges: [] } })) as { definition: { id: string } }).definition.id;
+    sql(`use iam; create table if not exists profile_field_values (tenant varchar(32) not null, subject varchar(32) not null, field_key varchar(80) not null, value json not null, primary key (tenant, subject, field_key)); call dolt_add('profile_field_values'); call dolt_commit('-m','test: profile values table on main')`);
+    await users.save('ida-hr', { id: 'ida-hr', display_name: 'Ida Hr', department: 'hr', password: 'x'.repeat(12) }, true, undefined, T);
+    const run = await waitForRun(def, 1);
+    assert.equal(run.status, 'completed', JSON.stringify(run));
+    const onBranch = sql(`select value from iam.profile_field_values as of '${run.branch}' where tenant='${T}' and subject='ida-hr' and field_key='hr-attributes.employee_grade'`);
+    assert.ok(onBranch.includes('G1'), `run branch has the recorded grade: ${onBranch}`);
+    const onMain = sql(`select count(*) as n from iam.profile_field_values as of 'main' where subject='ida-hr'`);
+    assert.ok(onMain.trim().endsWith('0') || onMain.includes('\n0'), `main stays clean: ${onMain}`);
+    const view = (await ok('GET', `/workflow-runs/${run.id}`)) as { steps: { node_id: string; log: string[] }[] };
+    assert.ok(view.steps[0].log.some((l) => l.includes('recorded and committed')), 'the step logged its real commit');
+  });
+
+  it('admin profile edits emit profile.updated; a resolved review emits profile.review-resolved', async () => {
+    const onUpdate = ((await ok('POST', '/workflows', { name: 'Profile watch', description: '', trigger: { event: 'profile.updated' }, graph: { nodes: [
+      { id: 'tell', type: 'notify', name: 'Log (simulated)', config: { recipient: 'audit', message: '{{event.actor}} edited {{event.subject}}: {{event.keys}}' } },
+    ], edges: [] } })) as { definition: { id: string } }).definition.id;
+    const onReview = ((await ok('POST', '/workflows', { name: 'Validated profile grants role', description: '', trigger: { event: 'profile.review-resolved', match: { decision: 'accepted' } }, graph: { nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Grant employee', config: { identity: '{{event.subject}}', role: 'employee' } },
+    ], edges: [] } })) as { definition: { id: string } }).definition.id;
+    sql(`use iam; insert ignore into roles values ('employee','Employee (baseline)',0); call dolt_add('roles'); call dolt_commit('-m','test: employee role on main')`);
+    const store = new MemoryProfileStore();
+    const svc = new ProfileService(undefined as never, store, undefined, undefined, () => true, events);
+    (svc as unknown as { subject: () => Promise<void> }).subject = async () => {};
+    (svc as unknown as { check: (t: string, r: string, c: string, input: { values: Record<string, string> }) => Promise<Record<string, string>> }).check = async (_t, _r, _c, input) => input.values;
+    (svc as unknown as { admin: () => Promise<object> }).admin = async () => ({});
+    await svc.patchAdmin(T, 'jane-doe', { values: { 'hr-attributes.employee_grade': 'G4' } }, 'demo-alice');
+    const upd = await waitForRun(onUpdate, 1);
+    assert.equal(upd.status, 'completed', JSON.stringify(upd));
+    const updView = (await ok('GET', `/workflow-runs/${upd.id}`)) as { steps: { node_id: string; log: string[] }[] };
+    assert.ok(updView.steps[0].log.some((l) => l.includes('demo-alice edited jane-doe: hr-attributes.employee_grade')), 'actor, subject and keys resolved');
+    // The validation workflow: a validator accepts the pending edit of someone else, the run grants the role on its branch.
+    await store.putPending(T, 'jane-doe', { 'hr-attributes.phone': '+33 1 00 00 00 00' });
+    await svc.resolveReview(T, 'jane-doe', true, 'demo-boss');
+    const rev = await waitForRun(onReview, 1);
+    assert.equal(rev.status, 'completed', JSON.stringify(rev));
+    assert.equal(rev.startedBy, 'event:profile.review-resolved');
+    const grant = sql(`select role_id from iam.assignments as of '${rev.branch}' where identity_id='jane-doe'`);
+    assert.ok(grant.includes('employee'), `validation run branch grants the role: ${grant}`);
+    // A refusal does not match the filter.
+    await store.putPending(T, 'jane-doe', { 'hr-attributes.phone': '+33 1 00 00 00 01' });
+    await svc.resolveReview(T, 'jane-doe', false, 'demo-boss');
+    await new Promise((r) => setTimeout(r, 2000));
+    assert.equal((await runsOf(onReview)).length, 1, 'a refused review starts nothing');
+  });
+
+  it('joining an organization emits organization.member-added; the match filter picks the org', async () => {
+    const fin = ((await ok('POST', '/workflows', { name: 'Finance member', description: '', trigger: { event: 'organization.member-added', match: { organization: 'finance' } }, graph: { nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Grant payment-creator', config: { identity: '{{event.subject}}', role: 'payment-creator' } },
+      { id: 'tell', type: 'notify', name: 'Inform (simulated)', config: { recipient: 'finance-manager', message: '{{event.subject}} joined finance' } },
+    ], edges: [{ from: 'grant', to: 'tell' }] } })) as { definition: { id: string } }).definition.id;
+    const orgs = new OrgService({ pluginActive: async () => true } as never, new MemoryOrgStore(), events);
+    await orgs.create(T, 'demo-alice', { id: 'finance', name: 'Finance' });
+    await orgs.create(T, 'demo-alice', { id: 'sales', name: 'Sales' });
+    await orgs.assign(T, 'demo-alice', 'jane-doe', ['sales']);
+    await new Promise((r) => setTimeout(r, 2000));
+    assert.equal((await runsOf(fin)).length, 0, 'joining sales must not start the finance workflow');
+    await orgs.assign(T, 'demo-alice', 'jane-doe', ['sales', 'finance']);
+    const run = await waitForRun(fin, 1);
+    assert.equal(run.status, 'completed', JSON.stringify(run));
+    assert.equal(run.startedBy, 'event:organization.member-added');
+    const grant = sql(`select role_id from iam.assignments as of '${run.branch}' where identity_id='jane-doe'`);
+    assert.ok(grant.includes('payment-creator'), `run branch has the org-driven grant: ${grant}`);
+    // Re-assigning the same set emits nothing new.
+    await orgs.assign(T, 'demo-alice', 'jane-doe', ['sales', 'finance']);
+    await new Promise((r) => setTimeout(r, 2000));
+    assert.equal((await runsOf(fin)).length, 1, 'no new membership, no new run');
   });
 
   it('while the workflows-iga plugin is disabled, events start nothing (and the API itself 403s)', async () => {

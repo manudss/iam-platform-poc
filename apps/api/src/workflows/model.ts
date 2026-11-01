@@ -30,7 +30,11 @@ export const WF_EVENTS: Record<string, { label: string; payload: string[] }> = {
   'user.created': { label: 'A user is created (joiner)', payload: ['subject', 'displayName', 'department', 'email'] },
   'user.department-changed': { label: "A user's department changes (mover)", payload: ['subject', 'from', 'to'] },
   'user.disabled': { label: 'A user account is disabled (leaver)', payload: ['subject'] },
+  'signup.requested': { label: 'A sign-up request is submitted (registration)', payload: ['subject', 'email'] },
   'signup.approved': { label: 'A sign-up request is approved', payload: ['subject', 'email'] },
+  'profile.updated': { label: "A user's profile values are updated", payload: ['subject', 'keys', 'actor'] },
+  'profile.review-resolved': { label: 'A profile edit review is accepted or refused', payload: ['subject', 'decision', 'actor'] },
+  'organization.member-added': { label: 'A user joins an organization', payload: ['subject', 'organization', 'actor'] },
 };
 
 /** Start trigger of a definition: run automatically when `event` fires and every `match` key equals the payload value. */

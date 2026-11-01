@@ -5,6 +5,7 @@ import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { BASE_FIELDS, CORE_PROFILE_SETTINGS_ID, CatalogField, Context, EffectiveField, ProfileConfig, checkValue, effectiveSchema, parseProfileConfig, settingFor, toCatalog, validateProfileConfig } from './fields.js';
 import { ProfileValueStore, Values } from './store.js';
+import { AppEvents } from '../events/app-events.service.js';
 
 export const PROFILE_STORE = 'PROFILE_VALUE_STORE';
 /** Public sign-up may only exist in the hosted workspace mode, where every administration route is guarded. Provided as a function so tests can exercise the open path without a Dolt-backed workspace. */
@@ -14,7 +15,7 @@ const SUBJECT = /^[A-Za-z0-9._@-]{1,64}$/;
 
 @Injectable()
 export class ProfileService {
-  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Inject(PROFILE_STORE) private readonly store: ProfileValueStore, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService, @Optional() @Inject(SIGNUP_ALLOWED) private readonly signupAllowed: () => boolean = defaultSignupAllowed) {}
+  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Inject(PROFILE_STORE) private readonly store: ProfileValueStore, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService, @Optional() @Inject(SIGNUP_ALLOWED) private readonly signupAllowed: () => boolean = defaultSignupAllowed, @Optional() private readonly events?: AppEvents) {}
 
   private async registry(ref: 'live' | 'work', write = false): Promise<PluginRegistry> {
     if (!workspaceMode()) return this.reg;
@@ -68,7 +69,10 @@ export class ProfileService {
     await this.subject(tenant, sub, 'live');
     const changes = await this.check(tenant, 'live', 'self', input);
     if (await this.selfEditPolicy(tenant) === 'review') await this.store.putPending(tenant, sub, changes, sub);
-    else await this.store.put(tenant, sub, changes, 'live', sub);
+    else {
+      await this.store.put(tenant, sub, changes, 'live', sub);
+      this.events?.emit({ type: 'profile.updated', tenant, branch: 'main', at: new Date().toISOString(), payload: { subject: sub, keys: Object.keys(changes).join(','), actor: sub } });
+    }
     return this.self(tenant, sub);
   }
   /** Validator view: who has pending edits and what would change (current live value next to the proposed one). Profile values only: no authority field can be in a pending set. */
@@ -87,6 +91,7 @@ export class ProfileService {
     if (accept && subject === actor) throw new ForbiddenException('you cannot accept your own pending edits: another validator must');
     if (!Object.keys(await this.store.pending(tenant, subject)).length) throw new NotFoundException('nothing pending for this user');
     await this.store.resolvePending(tenant, subject, accept, actor);
+    this.events?.emit({ type: 'profile.review-resolved', tenant, branch: 'main', at: new Date().toISOString(), payload: { subject, decision: accept ? 'accepted' : 'refused', actor } });
     return { resolved: accept ? 'accepted' : 'refused', subject };
   }
   async admin(tenant: string, id: string) { await this.subject(tenant, id, 'work'); return this.visible(tenant, 'admin', 'work', { ...(await this.baseValues(id, 'work')), ...(await this.store.get(tenant, id, 'work')) } as Values); }
@@ -94,6 +99,7 @@ export class ProfileService {
     await this.subject(tenant, id, 'work');
     const changes = await this.check(tenant, 'work', 'admin', input);
     await this.store.put(tenant, id, changes, 'work', actor);
+    this.events?.emit({ type: 'profile.updated', tenant, branch: currentBranch(), at: new Date().toISOString(), payload: { subject: id, keys: Object.keys(changes).join(','), actor } });
     return this.admin(tenant, id);
   }
   /** Every rule is enforced here, on the server, from the configuration of the right side (live for a user, working for an admin). */

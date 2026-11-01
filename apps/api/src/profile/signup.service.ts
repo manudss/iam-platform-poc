@@ -54,6 +54,7 @@ export class SignupService {
     const token = randomBytes(24).toString('base64url'), salt = randomBytes(24).toString('hex');
     this.pending.set(b.id, { id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
     await this.authn?.outbox.send({ tenant, to: b.email, subject: 'Confirm your sign-up request (demo)', text: `Confirmation code: ${token}`, subjectUser: b.id });
+    this.events?.emit({ type: 'signup.requested', tenant, branch: currentBranch(), at: new Date().toISOString(), payload: { subject: b.id, email: b.email } });
     return NEUTRAL;
   }
 
