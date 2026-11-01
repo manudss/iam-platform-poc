@@ -24,7 +24,9 @@ export const workflowsEnabledGuard: CanActivateFn = async () => {
 export type StepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department';
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
 export interface WfEdge { from: string; to: string }
-export interface DefinitionSummary { id: string; name: string; description: string; steps: number; simulatedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
+export interface WfTrigger { event: string; match?: Record<string, string> }
+export interface WfEvent { type: string; label: string; payload: string[] }
+export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; steps: number; simulatedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
 export interface RunSummary { id: string; definitionId: string; name: string; branch: string | null; status: string; error: string | null; startedBy: string; startedAt: string; finishedAt: string | null; hasDataSteps: boolean }
 export interface RunView { run: { id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[] }; steps: { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null }[] }
 
@@ -88,9 +90,10 @@ export class WorkflowClient {
     });
   }
   list() { return this.req<{ definitions: DefinitionSummary[] }>('GET', '/workflows'); }
-  get(id: string) { return this.req<{ definition: { id: string; name: string; description: string; graph: { nodes: WfNode[]; edges: WfEdge[] }; order: string[] } }>('GET', `/workflows/${id}`); }
-  create(name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }) { return this.req<{ definition: { id: string } }>('POST', '/workflows', { name, description, graph }); }
-  update(id: string, name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }) { return this.req('PUT', `/workflows/${id}`, { name, description, graph }); }
+  get(id: string) { return this.req<{ definition: { id: string; name: string; description: string; trigger: WfTrigger | null; graph: { nodes: WfNode[]; edges: WfEdge[] }; order: string[] } }>('GET', `/workflows/${id}`); }
+  events() { return this.req<{ events: WfEvent[] }>('GET', '/workflows-events'); }
+  create(name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null) { return this.req<{ definition: { id: string } }>('POST', '/workflows', trigger ? { name, description, graph, trigger } : { name, description, graph }); }
+  update(id: string, name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null) { return this.req('PUT', `/workflows/${id}`, trigger ? { name, description, graph, trigger } : { name, description, graph }); }
   remove(id: string) { return this.req('DELETE', `/workflows/${id}`); }
   start(id: string) { return this.req<RunView>('POST', `/workflows/${id}/runs`, {}); }
   runs(definition?: string) { return this.req<{ runs: RunSummary[] }>('GET', `/workflow-runs${definition ? `?definition=${definition}` : ''}`); }
@@ -128,10 +131,10 @@ const clientOf = (s: Session) => new WorkflowClient(s.api, () => s.adminToken())
 <b>Simulated</b> steps never touch anything (a notification is only logged, never sent). <b>Real</b> steps write business data on the run's own Dolt branch, which a human then reviews and merges.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <section class="card"><div class="row"><h3 style="flex:1">Definitions</h3><a class="btn" routerLink="/workflows/edit/new">New workflow</a><button class="secondary" (click)="load()">Refresh</button></div>
-<div class="scroll"><table><thead><tr><th>Name</th><th>Steps</th><th>Simulated</th><th>Real</th><th>By</th><th></th></tr></thead><tbody>
-@for (d of defs(); track d.id) {<tr><td><a [routerLink]="['/workflows/edit', d.id]">{{d.name}}</a><br /><small>{{d.description}}</small></td><td>{{d.steps}}</td><td>{{d.simulatedSteps}}</td><td>{{d.dataSteps}}</td><td>{{d.createdBy}}</td>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Trigger</th><th>Steps</th><th>Simulated</th><th>Real</th><th>By</th><th></th></tr></thead><tbody>
+@for (d of defs(); track d.id) {<tr><td><a [routerLink]="['/workflows/edit', d.id]">{{d.name}}</a><br /><small>{{d.description}}</small></td><td>@if (d.trigger) {<span class="chip" data-status="real">auto: {{d.trigger.event}}</span>} @else {<small>manual</small>}</td><td>{{d.steps}}</td><td>{{d.simulatedSteps}}</td><td>{{d.dataSteps}}</td><td>{{d.createdBy}}</td>
 <td><button (click)="start(d)" [disabled]="busy()">Run</button> <a class="btn secondary" [routerLink]="['/workflows/edit', d.id]">Edit</a> <button class="secondary" (click)="remove(d)" [disabled]="busy()">Delete</button></td></tr>}
-@empty {<tr><td colspan="6">No workflow yet. Create one, or open the editor and load a sample.</td></tr>}
+@empty {<tr><td colspan="7">No workflow yet. Create one, or open the editor and load a sample.</td></tr>}
 </tbody></table></div></section>
 <section class="card"><h3>Recent runs</h3>
 <div class="scroll"><table><thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Branch</th><th>Started</th><th></th></tr></thead><tbody>
@@ -162,7 +165,20 @@ export class WorkflowsPage implements OnInit {
   }
 }
 
-export const SAMPLE_WORKFLOWS: { name: string; description: string; nodes: WfNode[]; edges: WfEdge[] }[] = [
+export const SAMPLE_WORKFLOWS: { name: string; description: string; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[] }[] = [
+    { name: 'Sample: joiner on user.created', trigger: { event: 'user.created' }, description: 'Starts BY ITSELF when a user is created: baseline role for the newcomer, manager informed (simulated)', nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Grant employee to the newcomer', config: { identity: '{{event.subject}}', role: 'employee' } },
+      { id: 'tell', type: 'notify', name: 'Inform the manager (simulated)', config: { recipient: 'hr', message: '{{event.displayName}} joined {{event.department}}' } },
+    ], edges: [{ from: 'grant', to: 'tell' }] },
+    { name: 'Sample: mover into finance', trigger: { event: 'user.department-changed', match: { to: 'finance' } }, description: 'Starts when someone moves INTO finance (match: to = finance): payment access granted, reviewed by a human', nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Grant payment-creator', config: { identity: '{{event.subject}}', role: 'payment-creator' } },
+      { id: 'tell', type: 'notify', name: 'Inform the finance admin (simulated)', config: { recipient: 'finance-admin', message: '{{event.subject}} moved to finance' } },
+    ], edges: [{ from: 'grant', to: 'tell' }] },
+    { name: 'Sample: leaver on user.disabled', trigger: { event: 'user.disabled' }, description: 'Starts when an account is disabled: access removed for real, on the run branch', nodes: [
+      { id: 'revoke', type: 'revoke-role', name: 'Revoke employee', config: { identity: '{{event.subject}}', role: 'employee' } },
+      { id: 'move', type: 'set-department', name: 'Move the account to alumni', config: { identity: '{{event.subject}}', department: 'alumni' } },
+    ], edges: [{ from: 'revoke', to: 'move' }] },
+
     { name: 'Sample: onboarding', description: 'Joiner: account ready, then access, manager informed (simulated)', nodes: [
       { id: 'prepare', type: 'wait', name: 'Prepare (simulated)', config: { seconds: 2 } },
       { id: 'grant', type: 'assign-role', name: 'Grant accountant to demo-bob', config: { identity: 'demo-bob', role: 'accountant' } },
@@ -187,6 +203,12 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 <section class="card"><div class="row">
 <label>Name<input name="wfName" [(ngModel)]="name" maxlength="80" /></label>
 <label>Description<input name="wfDesc" [(ngModel)]="description" maxlength="500" /></label>
+<label>Start trigger<select name="wfTrigger" [(ngModel)]="triggerEvent" (ngModelChange)="match.set({})">
+<option value="">Manual start only</option>
+@for (ev of events(); track ev.type) {<option [value]="ev.type">{{ev.label}}</option>}
+</select></label>
+@if (triggerEvent) {<span class="hint">Starts by itself on this event. Step fields may use placeholders: {{placeholderHint()}}</span>
+@for (k of payloadKeys(); track k) {<label>only if {{k}} =<input [name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
 <button (click)="save()" [disabled]="busy()">Save</button>
 <a class="btn secondary" routerLink="/workflows">Back</a>
 @for (sm of samples; track sm.name) {<button class="secondary" (click)="loadSample(sm)">{{sm.name}}</button>}
@@ -226,6 +248,13 @@ export class WorkflowEditPage implements OnInit {
   protected note = signal(''); protected busy = signal(false);
   protected readonly types = STEP_TYPES;
   protected readonly samples = SAMPLE_WORKFLOWS;
+  protected events = signal<WfEvent[]>([]);
+  protected triggerEvent = '';
+  protected match = signal<Record<string, string>>({});
+  protected payloadKeys() { return this.events().find((e) => e.type === this.triggerEvent)?.payload ?? []; }
+  protected placeholderHint() { return this.payloadKeys().map((k) => `{{event.${k}}}`).join('  '); }
+  protected setMatch(k: string, v: string) { this.match.update((m) => { const n = { ...m }; if (v) n[k] = v; else delete n[k]; return n; }); }
+  private triggerPayload(): WfTrigger | null { return this.triggerEvent ? { event: this.triggerEvent, ...(Object.keys(this.match()).length ? { match: this.match() } : {}) } : null; }
   protected vfNodes = signal<Node[]>([]);
   protected vfEdges = signal<Edge[]>([]);
   private readonly vflow = viewChild(VflowComponent);
@@ -279,6 +308,7 @@ export class WorkflowEditPage implements OnInit {
 
   ngOnInit() {
     this.id = this.route.snapshot.paramMap.get('id') ?? 'new';
+    void clientOf(this.s).events().then((r) => this.events.set(r.events)).catch(() => this.events.set([]));
     if (this.id !== 'new') void this.load();
   }
   protected typeOf(t: StepType) { return STEP_TYPES.find((x) => x.type === t)!; }
@@ -334,6 +364,7 @@ export class WorkflowEditPage implements OnInit {
   protected loadSample(sm: (typeof this.samples)[number]) {
     this.name = sm.name.replace('Sample: ', 'Demo: ');
     this.description = sm.description;
+    this.triggerEvent = sm.trigger?.event ?? ''; this.match.set({ ...(sm.trigger?.match ?? {}) });
     this.state.clear();
     const nodes: Node[] = [];
     sm.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); });
@@ -346,6 +377,7 @@ export class WorkflowEditPage implements OnInit {
     try {
       const { definition } = await clientOf(this.s).get(this.id);
       this.name = definition.name; this.description = definition.description;
+      this.triggerEvent = definition.trigger?.event ?? ''; this.match.set({ ...(definition.trigger?.match ?? {}) });
       this.state.clear();
       const nodes: Node[] = [];
       definition.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });
@@ -363,8 +395,9 @@ export class WorkflowEditPage implements OnInit {
         edges: this.vfEdges().map((e) => ({ from: e.source, to: e.target })),
       };
       const c = clientOf(this.s);
-      if (this.id === 'new') { const r = await c.create(this.name, this.description, graph); this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`); }
-      else { await c.update(this.id, this.name, this.description, graph); this.note.set('Workflow saved.'); }
+      const trigger = this.triggerPayload();
+      if (this.id === 'new') { const r = await c.create(this.name, this.description, graph, trigger); this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`); }
+      else { await c.update(this.id, this.name, this.description, graph, trigger); this.note.set('Workflow saved.'); }
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
 }
@@ -375,7 +408,7 @@ export class WorkflowEditPage implements OnInit {
 @if (view(); as v) {<section class="card"><div class="row">
 <span class="chip" [attr.data-status]="v.run.status">{{v.run.status}}</span>
 @if (v.run.simulatedOnly) {<span class="chip" data-status="simulated">fully simulated</span>} @else {<span class="chip" data-status="real">writes on branch {{v.run.branch || '(created at first real step)'}}</span>}
-<span class="spacer"></span>
+<small>started by {{v.run.started_by}}</small><span class="spacer"></span>
 <button class="secondary" (click)="refresh()">Refresh</button>
 @if (v.run.status === 'running' || v.run.status === 'queued') {<button class="secondary" (click)="cancel()">Cancel</button>}
 @if (v.run.status === 'failed' || v.run.status === 'canceled') {<button (click)="retry()">Retry from the failed step</button>}

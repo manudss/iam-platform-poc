@@ -3,6 +3,15 @@ import { Node } from 'ngx-vflow';
 import { ApiClient } from './api';
 import { SAMPLE_WORKFLOWS, STEP_TYPES, WorkflowClient, anchorViewport, leftmostNode, rectsWithin } from './workflows';
 
+// Mirrors the server catalog (apps/api/src/workflows/model.ts WF_EVENTS): the editor fetches it live,
+// the samples are checked against this copy so a drift between the two fails here.
+const EVENT_PAYLOADS: Record<string, string[]> = {
+  'user.created': ['subject', 'displayName', 'department', 'email'],
+  'user.department-changed': ['subject', 'from', 'to'],
+  'user.disabled': ['subject'],
+  'signup.approved': ['subject', 'email'],
+};
+
 describe('workflow step types', () => {
   it('marks exactly wait/notify/fail as simulated; data steps are real', () => {
     const simulated = STEP_TYPES.filter((t) => t.simulated).map((t) => t.type);
@@ -31,6 +40,19 @@ describe('sample workflows', () => {
       for (const n of s.nodes) { expect(known.has(n.type)).toBe(true); expect(n.name.length).toBeGreaterThan(0); }
       for (const e of s.edges) { expect(ids).toContain(e.from); expect(ids).toContain(e.to); }
       expect(topo(s.nodes, s.edges)).toBe(s.nodes.length); // no cycle
+    }
+  });
+  it('triggered samples use a known event, valid match keys and placeholders that exist in the payload', () => {
+    const triggered = SAMPLE_WORKFLOWS.filter((s) => s.trigger);
+    expect(triggered.length).toBeGreaterThanOrEqual(3); // joiner / mover / leaver start by themselves
+    for (const s of triggered) {
+      const t = s.trigger!;
+      const payload = EVENT_PAYLOADS[t.event];
+      expect(payload, `unknown event ${t.event}`).toBeDefined();
+      for (const k of Object.keys(t.match ?? {})) expect(payload).toContain(k);
+      const keys = [...JSON.stringify(s.nodes).matchAll(/\{\{event\.([a-zA-Z]+)\}\}/g)].map((m) => m[1]);
+      expect(keys.length).toBeGreaterThan(0);
+      for (const k of keys) expect(payload, `${s.name}: {{event.${k}}}`).toContain(k);
     }
   });
   it('cover the demo story: onboarding, offboarding and a SoD case that fails then refuses the merge', () => {
@@ -67,7 +89,7 @@ describe('WorkflowClient', () => {
   it('sends every call with the admin capability header and maps definitions/runs endpoints', async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const c = new WorkflowClient(new ApiClient('acme-demo', fakeFetch(calls)), () => 'adm');
-    await c.list(); await c.create('n', 'd', { nodes: [], edges: [] });
+    await c.list(); await c.create('n', 'd', { nodes: [], edges: [] }, null);
     await c.runs(); await c.retry('r1'); await c.cancel('r1'); await c.review('r1');
     const h = (i: number) => (calls[i].init.headers as Record<string, string>)['x-api-admin-token'];
     expect(calls[0].url).toBe('/api/tenants/acme-demo/workflows'); expect(calls[0].init.method).toBe('GET');
@@ -78,6 +100,17 @@ describe('WorkflowClient', () => {
     expect(calls[4].url).toBe('/api/tenants/acme-demo/workflow-runs/r1/cancel');
     expect(calls[5].url).toBe('/api/tenants/acme-demo/workflow-runs/r1/review');
     for (let i = 0; i < 6; i++) expect(h(i)).toBe('adm');
+  });
+  it('maps the event catalog and sends the trigger with the definition', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const c = new WorkflowClient(new ApiClient('acme-demo', fakeFetch(calls, { definition: { id: 'w1' } })), () => 'adm');
+    await c.events();
+    expect(calls[0].url).toBe('/api/tenants/acme-demo/workflows-events');
+    const trigger = { event: 'user.created', match: { department: 'finance' } };
+    await c.create('n', 'd', { nodes: [], edges: [] }, trigger);
+    expect(JSON.parse(calls[1].init.body as string).trigger).toEqual(trigger);
+    await c.update('w1', 'n', 'd', { nodes: [], edges: [] }, trigger);
+    expect(JSON.parse(calls[2].init.body as string).trigger).toEqual(trigger);
   });
   it('surfaces the API error message', async () => {
     const fail = (async () => ({ ok: false, status: 403, json: async () => ({ message: 'admin only' }) }) as Response) as unknown as typeof fetch;
