@@ -28,3 +28,10 @@
 .btn { display: inline-block; border-radius: .4rem; padding: .35rem .8rem; background: var(--accent, #4f46e5); color: #fff; text-decoration: none; border: 0; cursor: pointer; font-size: .9rem; }
 .btn.secondary { background: transparent; color: inherit; border: 1px solid currentColor; }
 @media (max-width: 900px) { .wf-grid { grid-template-columns: 1fr; } .wf-canvas { height: 360px; } }
+
+/* Workflow editor head row: the Start trigger select has long option labels; flex items default to
+   min-width:auto (never shrink below content), which overflowed the card on a 390px screen. Same
+   pattern as the workspace bar: let fields shrink, full-width under 600px. */
+.wf-head label { min-width: 0; }
+.wf-head select, .wf-head input { max-width: 100%; box-sizing: border-box; }
+@media (max-width:600px){ .wf-head label { width: 100%; } .wf-head select, .wf-head input { width: 100%; } }

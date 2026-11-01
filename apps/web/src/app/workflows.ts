@@ -200,7 +200,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow], styleUrl: './pages.css', template: `
 <p class="lead">{{id === 'new' ? 'New workflow' : 'Edit workflow'}} — add steps, drag them, connect them in order. The graph must be acyclic; steps run in topological order.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
-<section class="card"><div class="row">
+<section class="card"><div class="row wf-head">
 <label>Name<input name="wfName" [(ngModel)]="name" maxlength="80" /></label>
 <label>Description<input name="wfDesc" [(ngModel)]="description" maxlength="500" /></label>
 <label>Start trigger<select name="wfTrigger" [(ngModel)]="triggerEvent" (ngModelChange)="match.set({})">
