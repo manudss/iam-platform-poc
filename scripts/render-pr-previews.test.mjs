@@ -2,6 +2,7 @@
 // no secrets). Run: node --test scripts/render-pr-previews.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 let importCounter = 0;
 const SHA = 'a'.repeat(40);
@@ -196,6 +197,18 @@ test('refresh skips cleanly when the branch has no demo/Dockerfile', async () =>
 });
 
 // --- cleanup: unchanged ---
+
+
+test('workflow never pins trusted-code checkouts to pull_request metadata (stale base.sha ran an old script)', () => {
+  // pull_request_target reads the workflow from the default branch head, but
+  // github.event.pull_request.base.sha in the event payload can lag behind it: an ensure checkout pinned
+  // to it ran an OLDER render-pr-previews.mjs (whose ensure guard required PR_HEAD_BRANCH, no longer
+  // passed) and failed every synchronize. Trusted code must always come from the default branch head,
+  // exactly like the workflow file itself — so no checkout may take a ref from pull_request metadata.
+  const wf = readFileSync(new URL('../.github/workflows/pr-previews.yml', import.meta.url), 'utf8');
+  assert.ok((wf.match(/uses: actions\/checkout@/g) ?? []).length >= 3, 'expected several checkout steps');
+  assert.ok(!/ref:\s*\$\{\{\s*github\.event\.pull_request/.test(wf), 'a checkout must never take its ref from pull_request event metadata');
+});
 
 test('cleanup deletes the service and comments', async () => {
   const calls = mockFetch(async (u) => {
