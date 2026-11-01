@@ -22,7 +22,7 @@ A plugin lists one or more `kinds`. Kinds say what it is for; hooks say what it 
 | `profile` | enrich the user profile and claims | `profile.enrich`, `identity.changed` | organizations and hierarchy, manager lookup, cost center, HR attributes, derived claims (is_contractor), photo, locale |
 | `notifier` | deliver messages | `notify.send` | log (base), SMTP, Teams/Slack, webhook, SMS, mobile push, digest |
 | `workflow` | steps of approval and certification flows | `workflow.step`, `identity.changed` | manager approval, access review campaign, SoD exception with expiry, four-eyes, escalation after N days, ticketing |
-| `ui` | extra screens | `ui.screens` (static) | organizations screen, campaign dashboard, sign-in map, self-service access request page |
+| `ui` | extra screens | `ui.screens` (static) | organizations screen, campaign dashboard, sign-in map, self-service access request page | Hooks journal (optional, see [hooks-journal.md](hooks-journal.md)).
 | `connector` | read from or write to a target | `connector.import`, `connector.provision` | CSV, SCIM, LDAP/AD, Entra ID, Google Workspace, SAP, a database, a SaaS API |
 | `policy` | contribute to access decisions | `access.decide` (runs in the Rust core as WASM) | off-hours deny, geo fence, device posture, time-boxed access, break-glass |
 | `audit-sink` | forward audit events | `audit.event` | syslog, SIEM, object storage with retention |
