@@ -141,6 +141,43 @@ try {
   await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
   await setToken();
 
+  // ---- hooks journal plugin: off by default, enable, a REAL hook call (sign-in gate -> plugin registry), read it, rights, disable ----
+  const gate = (subject) => fetch('http://127.0.0.1:3000/internal/auth/authenticate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-gate-token': GATE.IAM_AUTH_GATE_TOKEN }, body: JSON.stringify({ tenant: 'acme-demo', subject, password: 'Pa55-never-stored-' + subject }) });
+  assert.equal(await page.locator('nav a[data-nav="/journal"]').count(), 0, 'journal menu entry absent while the plugin is off');
+  await nav('/plugins'); await page.waitForSelector('#plugins table');
+  await gate('e2e-before-enable'); // a real hook call made while the plugin is off: must never appear
+  await page.locator('tr[data-plugin=hooks-journal]').getByRole('button', { name: 'Manage' }).click();
+  await page.waitForFunction(() => location.pathname === '/plugins/hooks-journal');
+  await page.click('#plugin-install'); await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
+  await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
+  await page.waitForSelector('nav a[data-nav="/journal"]', { timeout: 15000 });
+  const r1 = await gate('e2e-journal-A'); assert.equal(r1.status, 200); // real auth.authenticate through the registry
+  await nav('/journal'); await page.waitForSelector('#jr-table');
+  await page.click('#jr-next'); await page.waitForSelector('#jr-step');
+  const stepText = await page.locator('#jr-step').innerText();
+  assert.match(stepText, /auth\.authenticate/); assert.match(stepText, /auth-password/); assert.match(stepText, /\[masked\]/);
+  const body1 = (await page.textContent('body')) ?? '';
+  assert.ok(!body1.includes('Pa55-never-stored'), 'no password in the journal page'); assert.ok(!body1.includes('e2e-before-enable'), 'nothing before the plugin was enabled');
+  assert.match(body1, /e2e-journal-A/); assert.equal(await page.locator('#jr-table tbody tr').count(), 1);
+  const pos0 = await page.inputValue('#jr-scrub'); await page.selectOption('#jr-speed', { label: 'Fit the period in 60 s' }); await page.click('#jr-play');
+  await page.waitForFunction((p) => document.querySelector('#jr-scrub').value !== p, pos0); await page.click('#jr-play');
+  assert.match(await page.locator('#jr-clock').innerText(), /no hook is called again/);
+  await shot('6b-journal-player');
+  // rights: without the admin capability the journal answers 403 (the token is only typed in the console on local setups)
+  await page.evaluate(() => { document.querySelector('details.token').open = true; }); await page.fill('input[name=admintoken]', ''); await page.click('#jr-period'); await page.selectOption('#jr-period', '1h');
+  await page.waitForSelector('#jr-problem'); assert.match(await page.locator('#jr-problem').innerText(), /admin/i); await setToken();
+  // disable: the page disappears, a call made while disabled is not recorded after re-enabling
+  await nav('/plugins'); await page.locator('tr[data-plugin=hooks-journal]').getByRole('button', { name: 'Manage' }).click();
+  await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
+  await page.waitForFunction(() => !document.querySelector('nav a[data-nav="/journal"]'), null, { timeout: 15000 });
+  await gate('e2e-while-disabled'); await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
+  await gate('e2e-journal-C'); await nav('/journal'); await page.waitForSelector('#jr-table'); await page.click('#jr-period'); await page.selectOption('#jr-period', '24h');
+  await page.locator('#jr-scrub').fill('1000'); // move to the end of the period: every recorded call has been "seen"
+  await page.waitForSelector('#jr-table tbody tr td:has-text("auth.authenticate")');
+  await page.waitForFunction(() => document.querySelectorAll('#jr-table tbody tr').length >= 2);
+  assert.equal(await page.locator('#jr-table tbody tr').count(), 2, 'A and C only: the call made while disabled is absent');
+  await noBanner('journal');
+
   // ---- database explorer, section by section (one component instance across the sections) ----
   await page.setViewportSize({ width: 1280, height: 1100 });
   const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
