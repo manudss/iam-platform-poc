@@ -31,7 +31,7 @@ export class Shell {
   protected visibleNav(): NavGroup[] {
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
     const plugin: Record<string, string> = { '/organizations': 'organizations' };
-    return this.nav.map((g) => ({ title: g.title, items: g.items.filter((i) => i.path === '/my-profile' || (adminOk && (!plugin[i.path] || !a || a.plugins?.[plugin[i.path]]))) })).filter((g) => g.items.length);
+    return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-profile' || (adminOk && (!plugin[i.path] || !a || a.plugins?.[plugin[i.path]]))) })).filter((g: NavGroup) => g.items.length);
   }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
   protected readonly title = signal('');
