@@ -1,0 +1,15 @@
+[package]
+name = "nats-step0-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Spike jetable de l'étape 0 : faisabilité NATS (appels par plugin, droits, JetStream, comptes). Hors workspace du core."
+
+[workspace]
+
+[dependencies]
+async-nats = "*"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+serde_json = "1"
+bytes = "1"
