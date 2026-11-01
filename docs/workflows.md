@@ -43,6 +43,13 @@ Three sample scenarios can be loaded from the editor: onboarding (simulated prep
 offboarding (real revoke + move + simulated confirmation) and an SoD-blocked grant (completes with a logged conflict,
 merge refused at review).
 
+Initial canvas framing: custom component nodes only report their real size after Angular renders them, so the editor
+does not fit the view on a fixed timer (which raced the measurement and sometimes framed the graph half-clipped or
+tiny). It waits until the canvas is initialized and every node is measured in the DOM, fits the whole graph, verifies
+the visible result (every node inside the canvas) and retries a bounded number of times when the fit ran on stale
+sizes. When the fit has to shrink the graph below comfortable reading size, the view zooms back toward 1:1 anchored on
+the leftmost node and the user pans to the rest.
+
 ## Runs
 
 - Start: **Run** on the definitions page. At most 3 active runs per definition (demo guard).
