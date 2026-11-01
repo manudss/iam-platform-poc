@@ -182,6 +182,17 @@ export class WorkflowEngine implements OnModuleInit {
           say(`department updated and committed on ${branch} (commit ${hash.slice(0, 10)})`);
           break;
         }
+        case 'set-profile-field': {
+          const [chk] = await c.query('select count(*) n from identities where id = ?', [cfg.identity]);
+          if (!Number((chk as { n: number }[])[0].n)) throw new Error(`unknown identity "${String(cfg.identity)}"`);
+          await c.query('create table if not exists profile_field_values (tenant varchar(32) not null, subject varchar(32) not null, field_key varchar(80) not null, value json not null, primary key (tenant, subject, field_key))');
+          await c.query('insert into profile_field_values values (?,?,?,?) on duplicate key update value=values(value)', [run.tenant, cfg.identity, cfg.field, JSON.stringify(cfg.value)]);
+          const [dirty] = await c.query("select count(*) n from dolt_status where table_name='profile_field_values'");
+          if (!Number((dirty as { n: number }[])[0].n)) { say(`profile field "${String(cfg.field)}" already has this value: no change, nothing committed`); break; }
+          const hash = await commit(c, `workflow ${run.id}: record ${String(cfg.field)} for ${String(cfg.identity)}`, author);
+          say(`profile field "${String(cfg.field)}" recorded and committed on ${branch} (commit ${hash.slice(0, 10)})`);
+          break;
+        }
       }
     }));
   }

@@ -9,7 +9,7 @@ import { BadRequestException } from '@nestjs/common';
  *    the run's own Dolt branch (wf-<run id>), never on main. Publishing stays the existing explicit
  *    review/merge path (pull request / Apply), done by a human, not by the workflow.
  */
-export type StepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department';
+export type StepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department' | 'set-profile-field';
 
 export const STEP_TYPES: Record<StepType, { simulated: boolean; label: string }> = {
   wait: { simulated: true, label: 'Wait (simulated delay)' },
@@ -18,6 +18,7 @@ export const STEP_TYPES: Record<StepType, { simulated: boolean; label: string }>
   'assign-role': { simulated: false, label: 'Assign a role (real, on the run branch)' },
   'revoke-role': { simulated: false, label: 'Revoke a role (real, on the run branch)' },
   'set-department': { simulated: false, label: 'Set department (real, on the run branch)' },
+  'set-profile-field': { simulated: false, label: 'Set a profile field (real, on the run branch)' },
 };
 
 /**
@@ -133,6 +134,16 @@ function configFor(type: StepType, cfg: Record<string, unknown>): Record<string,
       if (!NAME32.test(identity) && !placeholderKeys(identity).length) throw new BadRequestException('set-department.identity: lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders');
       out.identity = identity;
       out.department = str(cfg.department, 'set-department.department', 40);
+      break;
+    }
+    case 'set-profile-field': {
+      const identity = str(cfg.identity, 'set-profile-field.identity', 64);
+      if (!NAME32.test(identity) && !placeholderKeys(identity).length) throw new BadRequestException('set-profile-field.identity: lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders');
+      out.identity = identity;
+      const field = str(cfg.field, 'set-profile-field.field', 80);
+      if (!/^[a-z0-9][a-z0-9-]{0,30}\.[a-z0-9_]{1,40}$/.test(field)) throw new BadRequestException('set-profile-field.field: a profile field key like "hr-attributes.employee_grade"');
+      out.field = field;
+      out.value = str(cfg.value, 'set-profile-field.value', 200);
       break;
     }
   }

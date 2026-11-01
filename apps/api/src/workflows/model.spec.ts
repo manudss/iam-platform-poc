@@ -36,8 +36,13 @@ describe('workflow graph validation', () => {
     assert.throws(() => validateGraph({ nodes: [node('a', 'assign-role', { identity: 'UPPER', role: 'ok' })], edges: [] }), /identity uses lowercase/);
     assert.throws(() => validateGraph({ nodes: [node('a', 'assign-role', { identity: 'ok', role: 'ok', extra: 1 })], edges: [] }), /unknown config key/);
     assert.throws(() => validateGraph({ nodes: [node('a', 'set-department', { identity: 'ok' })], edges: [] }), /department is required/);
+    assert.throws(() => validateGraph({ nodes: [node('a', 'set-profile-field', { identity: 'ok', field: 'noDot', value: 'x' })], edges: [] }), /profile field key/);
+    assert.throws(() => validateGraph({ nodes: [node('a', 'set-profile-field', { identity: 'ok', field: 'hr-attributes.employee_grade' })], edges: [] }), /value is required/);
+    assert.throws(() => validateGraph({ nodes: [node('a', 'set-profile-field', { identity: 'ok', field: 'hr-attributes.employee_grade', value: 'G1', extra: 1 })], edges: [] }), /unknown config key/);
     const { graph } = validateGraph({ nodes: [node('a', 'wait')], edges: [] });
     assert.equal(graph.nodes[0].config.seconds, 2); // default
+    const spf = validateGraph({ nodes: [node('a', 'set-profile-field', { identity: '{{event.subject}}', field: 'hr-attributes.employee_grade', value: 'G1' })], edges: [] }).graph;
+    assert.equal(spf.nodes[0].config.value, 'G1');
   });
   it('marks simulated-only graphs vs graphs with real data steps', () => {
     const sim = validateGraph({ nodes: [node('a', 'wait'), node('b', 'notify', { recipient: 'x', message: 'y' })], edges: seq('a', 'b') }).graph;
