@@ -1,15 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { createConnection, Connection } from 'mysql2/promise';
-import { WfGraph } from './model.js';
+import { WfGraph, WfTrigger } from './model.js';
 
 /**
  * Persistence for workflow definitions and runs, in the UNVERSIONED `<db>_meta` database: the same
  * place as Dolt pull request records and personal branch names. This is platform metadata, never
  * business data, so it is not versioned, never merged, and invisible to the data branches a run creates.
  */
-export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; created_by: string; created_at: string; updated_at: string }
+export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; trigger: WfTrigger | null; created_by: string; created_at: string; updated_at: string }
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
-export interface RunRow { id: string; tenant: string; definition_id: string; name: string; graph: WfGraph; branch: string | null; status: RunStatus; error: string | null; started_by: string; started_at: string; finished_at: string | null }
+export interface RunRow { id: string; tenant: string; definition_id: string; name: string; graph: WfGraph; branch: string | null; base_branch: string | null; status: RunStatus; error: string | null; started_by: string; started_at: string; finished_at: string | null }
 export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export interface StepRow { run_id: string; node_id: string; status: StepStatus; simulated: boolean; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null }
 
@@ -29,8 +29,13 @@ export class WorkflowStore {
         try { await c.query(`CREATE DATABASE IF NOT EXISTS \`${this.metaDb}\``); } finally { await c.end(); }
         const m = await this.open();
         try {
-          await m.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
-          await m.query('CREATE TABLE IF NOT EXISTS workflow_runs (id VARCHAR(40) NOT NULL PRIMARY KEY, tenant VARCHAR(32) NOT NULL, definition_id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, graph JSON NOT NULL, branch VARCHAR(63) NULL, status VARCHAR(16) NOT NULL, error VARCHAR(500) NULL, started_by VARCHAR(64) NOT NULL, started_at DATETIME(3) NOT NULL, finished_at DATETIME(3) NULL, KEY wf_runs_tenant (tenant, started_at))');
+          await m.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
+          await m.query('CREATE TABLE IF NOT EXISTS workflow_runs (id VARCHAR(40) NOT NULL PRIMARY KEY, tenant VARCHAR(32) NOT NULL, definition_id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, graph JSON NOT NULL, branch VARCHAR(63) NULL, base_branch VARCHAR(63) NULL, status VARCHAR(16) NOT NULL, error VARCHAR(500) NULL, started_by VARCHAR(64) NOT NULL, started_at DATETIME(3) NOT NULL, finished_at DATETIME(3) NULL, KEY wf_runs_tenant (tenant, started_at))');
+          // Existing demo databases: add the columns once (idempotent).
+          for (const [table, column, ddl] of [['workflow_definitions', 'trigger_json', 'JSON NULL'], ['workflow_runs', 'base_branch', 'VARCHAR(63) NULL']] as const) {
+            const [cols] = await m.query(`show columns from ${table} like ?`, [column]);
+            if (!(cols as unknown[]).length) await m.query(`alter table ${table} add column ${column} ${ddl}`);
+          }
           await m.query('CREATE TABLE IF NOT EXISTS workflow_steps (run_id VARCHAR(40) NOT NULL, node_id VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, simulated BOOLEAN NOT NULL, attempts INT NOT NULL DEFAULT 0, error VARCHAR(500) NULL, log JSON NULL, started_at DATETIME(3) NULL, finished_at DATETIME(3) NULL, PRIMARY KEY (run_id, node_id))');
         } finally { await m.end(); }
       })().catch((e) => { this.ready = undefined; throw e; });
@@ -40,10 +45,11 @@ export class WorkflowStore {
   }
 
   private static def(r: Record<string, unknown>): DefinitionRow {
-    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, created_by: String(r.created_by), created_at: String(r.created_at), updated_at: String(r.updated_at) };
+    const trig = typeof r.trigger_json === 'string' ? JSON.parse(r.trigger_json) : r.trigger_json;
+    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, created_by: String(r.created_by), created_at: String(r.created_at), updated_at: String(r.updated_at) };
   }
   private static run(r: Record<string, unknown>): RunRow {
-    return { id: String(r.id), tenant: String(r.tenant), definition_id: String(r.definition_id), name: String(r.name), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfRow_graph, branch: r.branch === null ? null : String(r.branch), status: r.status as RunStatus, error: r.error === null ? null : String(r.error), started_by: String(r.started_by), started_at: String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at) };
+    return { id: String(r.id), tenant: String(r.tenant), definition_id: String(r.definition_id), name: String(r.name), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfRow_graph, branch: r.branch === null ? null : String(r.branch), base_branch: r.base_branch === null || r.base_branch === undefined ? null : String(r.base_branch), status: r.status as RunStatus, error: r.error === null ? null : String(r.error), started_by: String(r.started_by), started_at: String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at) };
   }
   private static step(r: Record<string, unknown>): StepRow {
     const log = typeof r.log === 'string' ? JSON.parse(r.log) : r.log;
@@ -60,7 +66,7 @@ export class WorkflowStore {
   }
   async putDefinition(d: DefinitionRow): Promise<void> {
     const m = await this.meta();
-    try { await m.query('insert into workflow_definitions (tenant, id, name, description, graph, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.created_by, d.created_at, d.updated_at]); } finally { await m.end(); }
+    try { await m.query('insert into workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), trigger_json=values(trigger_json), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.trigger ? JSON.stringify(d.trigger) : null, d.created_by, d.created_at, d.updated_at]); } finally { await m.end(); }
   }
   async deleteDefinition(tenant: string, id: string): Promise<boolean> {
     const m = await this.meta();
@@ -70,7 +76,7 @@ export class WorkflowStore {
   async createRun(run: RunRow, steps: StepRow[]): Promise<void> {
     const m = await this.meta();
     try {
-      await m.query('insert into workflow_runs (id, tenant, definition_id, name, graph, branch, status, error, started_by, started_at, finished_at) values (?,?,?,?,?,?,?,?,?,?,?)', [run.id, run.tenant, run.definition_id, run.name, JSON.stringify(run.graph), run.branch, run.status, run.error, run.started_by, run.started_at, run.finished_at]);
+      await m.query('insert into workflow_runs (id, tenant, definition_id, name, graph, branch, base_branch, status, error, started_by, started_at, finished_at) values (?,?,?,?,?,?,?,?,?,?,?,?)', [run.id, run.tenant, run.definition_id, run.name, JSON.stringify(run.graph), run.branch, run.base_branch, run.status, run.error, run.started_by, run.started_at, run.finished_at]);
       for (const s of steps) await m.query('insert into workflow_steps (run_id, node_id, status, simulated, attempts, error, log) values (?,?,?,?,0,null,?)', [s.run_id, s.node_id, s.status, s.simulated, JSON.stringify([])]);
     } finally { await m.end(); }
   }

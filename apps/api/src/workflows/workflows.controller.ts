@@ -3,6 +3,7 @@ import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, UseGuards 
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { WorkflowsService } from './workflows.service.js';
+import { WF_EVENTS } from './model.js';
 
 interface Req_ { user?: { sub?: string } }
 
@@ -15,6 +16,7 @@ interface Req_ { user?: { sub?: string } }
 export class WorkflowsController {
   constructor(private readonly wf: WorkflowsService) {}
 
+  @Get('workflows-events') events() { return { events: Object.entries(WF_EVENTS).map(([type, e]) => ({ type, ...e })) }; }
   @Get('workflows') list(@Param('tenant') t: string) { return this.wf.list(t); }
   @Post('workflows') create(@Param('tenant') t: string, @Body() b: Record<string, unknown>, @Req() r: Req_) { return this.wf.save(t, undefined, b ?? {}, r.user?.sub, true); }
   @Get('workflows/:id') get(@Param('tenant') t: string, @Param('id') id: string) { return this.wf.get(t, id); }

@@ -3,6 +3,8 @@ import { randomBytes, scryptSync, createHash } from 'node:crypto';
 import { UsersService } from '../users/users.service.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { ProfileService } from './profile.service.js';
+import { AppEvents } from '../events/app-events.service.js';
+import { currentBranch } from '../workspace/context.js';
 
 interface Pending { id: string; display_name: string; email: string; values: Record<string, string | number | boolean | null>; salt: string; hash: string; tokenHash: string; confirmed: boolean; at: number }
 const ID = /^[a-z0-9-]{1,32}$/, EMAIL = /^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}$/;
@@ -19,7 +21,7 @@ export class SignupService {
   private pending = new Map<string, Pending>();
   private hits = new Map<string, number[]>();
   static MAX_PENDING = 50; static PER_IP_HOUR = 5; static TTL_MS = 24 * 3600 * 1000;
-  constructor(private readonly profile: ProfileService, @Optional() private readonly users?: UsersService, @Optional() private readonly authn?: AuthnService) {}
+  constructor(private readonly profile: ProfileService, @Optional() private readonly users?: UsersService, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: AppEvents) {}
 
   private limit(ip: string) {
     const now = Date.now(), h = (this.hits.get(ip) ?? []).filter((t) => now - t < 3600_000);
@@ -68,9 +70,10 @@ export class SignupService {
     const p = this.pending.get(id); if (!p) throw new NotFoundException('unknown request');
     if (!p.confirmed) throw new ConflictException('the e-mail address is not confirmed yet');
     if (!this.users) throw new ForbiddenException('no directory');
-    const user = await this.users.save(p.id, { id: p.id, display_name: p.display_name, email: p.email, login_enabled: true }, true, { salt: p.salt, hash: p.hash });
+    const user = await this.users.save(p.id, { id: p.id, display_name: p.display_name, email: p.email, login_enabled: true }, true, { salt: p.salt, hash: p.hash }, tenant);
     await this.profile.putWorking(tenant, p.id, p.values, actor);
     this.pending.delete(id);
+    this.events?.emit({ type: 'signup.approved', tenant, branch: currentBranch(), at: new Date().toISOString(), payload: { subject: p.id, email: p.email } });
     return { approved: true, user, note: 'Created on the working branch with no role. Sign-in works after Apply.' };
   }
   reject(id: string) { if (!this.pending.delete(id)) throw new NotFoundException('unknown request'); return { rejected: true }; }

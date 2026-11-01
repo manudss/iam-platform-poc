@@ -137,10 +137,11 @@ export class WorkflowEngine implements OnModuleInit {
     const cfg = node.config;
     if (!run.branch) {
       const branch = `wf-${run.id.replace(/^run-/, '').slice(0, 8)}`;
-      await this.v.createBranch(branch, this.v.defaultBranch);
+      const base = run.base_branch ?? this.v.defaultBranch; // a triggered run branches from the branch its event happened on
+      await this.v.createBranch(branch, base);
       await this.store.updateRun(run.id, { branch });
       run.branch = branch;
-      say(`created Dolt branch ${branch} from ${this.v.defaultBranch}: every data change of this run stays on it until a human review merges it`);
+      say(`created Dolt branch ${branch} from ${base}: every data change of this run stays on it until a human review merges it`);
     }
     const branch = run.branch;
     const author = authorOf(`wf-${run.started_by}`);

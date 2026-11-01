@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
-import { hasDataSteps, STEP_TYPES, validateGraph, WfGraph } from './model.js';
+import { hasDataSteps, placeholderKeys, STEP_TYPES, substituteEventPayload, validateGraph, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { WorkflowEngine } from './engine.js';
 import { DefinitionRow, RunRow, StepRow, WorkflowStore } from './store.js';
 
@@ -23,7 +23,7 @@ export class WorkflowsService {
 
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant);
-    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => STEP_TYPES[n.type].simulated).length, dataSteps: d.graph.nodes.filter((n) => !STEP_TYPES[n.type].simulated).length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
+    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => STEP_TYPES[n.type].simulated).length, dataSteps: d.graph.nodes.filter((n) => !STEP_TYPES[n.type].simulated).length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -37,11 +37,19 @@ export class WorkflowsService {
     const name = String(body?.name ?? '').trim();
     if (!name || name.length > 80) throw new BadRequestException('a name is required (max 80)');
     const description = String(body?.description ?? '').slice(0, 500);
-    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph'].includes(k))) throw new BadRequestException('unknown field');
+    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger'].includes(k))) throw new BadRequestException('unknown field');
+    const trigger = validateTrigger(body?.trigger);
     const { graph } = validateGraph(body?.graph);
+    // Every {{event.<key>}} placeholder must resolve from the chosen trigger's payload; without a trigger there is no event at all.
+    for (const n of graph.nodes) for (const v of Object.values(n.config)) {
+      for (const key of placeholderKeys(v)) {
+        if (!trigger) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the workflow has no start trigger`);
+        if (!WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event].payload.join(', ')})`);
+      }
+    }
     const existing = create ? null : await this.store.getDefinition(tenant, wid);
     if (!create && !existing) throw new NotFoundException('unknown workflow');
-    const def: DefinitionRow = { id: wid, tenant, name, description, graph, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
+    const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
     await this.store.putDefinition(def);
     return { definition: def };
   }
@@ -54,15 +62,18 @@ export class WorkflowsService {
     return { deleted: wid };
   }
 
-  async start(tenant: string, id: unknown, sub: unknown) {
+  async start(tenant: string, id: unknown, sub: unknown, event?: { branch: string; payload: Record<string, string> }) {
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'));
     if (!d) throw new NotFoundException('unknown workflow');
     const active = (await this.store.listRuns(tenant, d.id, 100)).filter((r) => r.status === 'queued' || r.status === 'running');
     if (active.length >= 3) throw new ConflictException('3 runs of this workflow are already active: wait for one to finish (demo guard)');
-    const { order } = validateGraph(d.graph);
-    const run: RunRow = { id: `run-${randomBytes(6).toString('hex')}`, tenant, definition_id: d.id, name: d.name, graph: d.graph, branch: null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null };
+    // Resolve {{event.<key>}} placeholders from the triggering event (a manual start keeps the graph as saved,
+    // so a definition that still needs placeholders cannot start manually: the error says which key is missing).
+    const resolved = event ? substituteEventPayload(d.graph, event.payload) : substituteEventPayload(d.graph, {});
+    const { order, graph } = validateGraph(resolved);
+    const run: RunRow = { id: `run-${randomBytes(6).toString('hex')}`, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: event?.branch ?? null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null };
     const steps: StepRow[] = order.map((nodeId) => {
-      const n = d.graph.nodes.find((x) => x.id === nodeId)!;
+      const n = graph.nodes.find((x) => x.id === nodeId)!;
       return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], started_at: null, finished_at: null };
     });
     await this.store.createRun(run, steps);
@@ -87,7 +98,7 @@ export class WorkflowsService {
     const nodes = new Map(r.graph.nodes.map((n) => [n.id, n]));
     const { order } = validateGraph(r.graph);
     return {
-      run: { id: r.id, tenant: r.tenant, definition_id: r.definition_id, name: r.name, branch: r.branch, status: r.status, error: r.error, started_by: r.started_by, started_at: r.started_at, finished_at: r.finished_at, simulatedOnly: !hasDataSteps(r.graph), order },
+      run: { id: r.id, tenant: r.tenant, definition_id: r.definition_id, name: r.name, branch: r.branch, base_branch: r.base_branch, status: r.status, error: r.error, started_by: r.started_by, started_at: r.started_at, finished_at: r.finished_at, simulatedOnly: !hasDataSteps(r.graph), order },
       steps: order.map((nodeId) => {
         const s = steps.find((x) => x.node_id === nodeId);
         const n = nodes.get(nodeId)!;
@@ -127,7 +138,8 @@ export class WorkflowsService {
     const open = await this.prs.list(tenant, 'open');
     const existing = open.pullRequests.find((p) => p.source === r.branch);
     if (existing) return { pullRequest: existing, reused: true };
-    const pr = await this.prs.create(tenant, { title: `Workflow run ${r.id}: ${r.name}`, body: `Data changes produced by workflow run ${r.id} on branch ${r.branch}. Simulated steps have no effect; only the commits on this branch are reviewed here.`, source: r.branch, target: 'main' }, sub);
+    const target = r.base_branch ?? 'main';
+    const pr = await this.prs.create(tenant, { title: `Workflow run ${r.id}: ${r.name}`, body: `Data changes produced by workflow run ${r.id} on branch ${r.branch}. Simulated steps have no effect; only the commits on this branch are reviewed here.`, source: r.branch, target }, sub);
     return { pullRequest: pr, reused: false };
   }
 }

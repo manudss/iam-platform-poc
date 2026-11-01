@@ -6,6 +6,7 @@ import { WorkflowStore } from './store.js';
 import { WorkflowEngine } from './engine.js';
 import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsController } from './workflows.controller.js';
+import { WorkflowTriggersService } from './triggers.js';
 
-@Module({ imports: [VersioningModule, PluginsV1Module], controllers: [WorkflowsController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard] })
+@Module({ imports: [VersioningModule, PluginsV1Module], controllers: [WorkflowsController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService] })
 export class WorkflowsModule {}

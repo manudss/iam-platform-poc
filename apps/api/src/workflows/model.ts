@@ -20,6 +20,68 @@ export const STEP_TYPES: Record<StepType, { simulated: boolean; label: string }>
   'set-department': { simulated: false, label: 'Set department (real, on the run branch)' },
 };
 
+/**
+ * Application events a workflow can start on (its "start trigger"). This is the hook catalog the
+ * editor offers; each event names the payload keys that {{event.<key>}} placeholders resolve from.
+ * Events fire after a real application write; a triggered run still writes only on its own Dolt branch.
+ */
+export const WF_EVENTS: Record<string, { label: string; payload: string[] }> = {
+  'user.created': { label: 'A user is created (joiner)', payload: ['subject', 'displayName', 'department', 'email'] },
+  'user.department-changed': { label: "A user's department changes (mover)", payload: ['subject', 'from', 'to'] },
+  'user.disabled': { label: 'A user account is disabled (leaver)', payload: ['subject'] },
+  'signup.approved': { label: 'A sign-up request is approved', payload: ['subject', 'email'] },
+};
+
+/** Start trigger of a definition: run automatically when `event` fires and every `match` key equals the payload value. */
+export interface WfTrigger { event: string; match?: Record<string, string> }
+
+const PLACEHOLDER = /\{\{event\.([a-zA-Z]+)\}\}/g;
+
+/** Placeholder keys used in a config string, e.g. "{{event.subject}}" -> ["subject"]. */
+export function placeholderKeys(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  return [...value.matchAll(new RegExp(PLACEHOLDER.source, 'g'))].map((m) => m[1]);
+}
+
+/** Validates a trigger object (or null/undefined = manual start only). Match keys must exist in the event payload. */
+export function validateTrigger(input: unknown): WfTrigger | null {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) throw new BadRequestException('trigger must be an object {event, match?} or null');
+  const t = input as Record<string, unknown>;
+  if (Object.keys(t).some((k) => !['event', 'match'].includes(k))) throw new BadRequestException('trigger: only event and match are allowed');
+  const event = String(t.event ?? '');
+  if (!Object.hasOwn(WF_EVENTS, event)) throw new BadRequestException(`trigger.event: unknown event "${event}" (known: ${Object.keys(WF_EVENTS).join(', ')})`);
+  const out: WfTrigger = { event };
+  if (t.match !== undefined && t.match !== null) {
+    if (typeof t.match !== 'object' || Array.isArray(t.match)) throw new BadRequestException('trigger.match must be an object of payload filters');
+    const match: Record<string, string> = {};
+    for (const [k, v] of Object.entries(t.match as Record<string, unknown>)) {
+      if (!WF_EVENTS[event].payload.includes(k)) throw new BadRequestException(`trigger.match: "${k}" is not a payload key of ${event} (${WF_EVENTS[event].payload.join(', ')})`);
+      if (typeof v !== 'string' || !v || v.length > 40) throw new BadRequestException('trigger.match: values are texts of 1 to 40 characters');
+      match[k] = v;
+    }
+    if (Object.keys(match).length) out.match = match;
+  }
+  return out;
+}
+
+/** Resolves {{event.<key>}} placeholders in every config string of the graph. Unknown keys refuse the run start. */
+export function substituteEventPayload(graph: WfGraph, payload: Record<string, string>): WfGraph {
+  const nodes = graph.nodes.map((n) => {
+    const config: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(n.config)) {
+      if (typeof v !== 'string') { config[k] = v; continue; }
+      config[k] = v.replace(new RegExp(PLACEHOLDER.source, 'g'), (_m, key: string) => {
+        const val = payload[key];
+        if (val === undefined) throw new BadRequestException(`step "${n.id}": no value for {{event.${key}}} in the triggering event`);
+        return val;
+      });
+    }
+    return { ...n, config };
+  });
+  return { nodes, edges: graph.edges.map((e) => ({ ...e })) };
+}
+
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
 export interface WfEdge { from: string; to: string }
 export interface WfGraph { nodes: WfNode[]; edges: WfEdge[] }
@@ -60,14 +122,15 @@ function configFor(type: StepType, cfg: Record<string, unknown>): Record<string,
     }
     case 'assign-role':
     case 'revoke-role': {
-      const identity = str(cfg.identity, `${type}.identity`, 32), role = str(cfg.role, `${type}.role`, 32);
-      if (!NAME32.test(identity) || !NAME32.test(role)) throw new BadRequestException(`${type}: identity and role use lowercase letters, digits, hyphens (max 32)`);
+      const identity = str(cfg.identity, `${type}.identity`, 64), role = str(cfg.role, `${type}.role`, 64);
+      for (const [k, v] of [['identity', identity], ['role', role]] as const)
+        if (!NAME32.test(v) && !placeholderKeys(v).length) throw new BadRequestException(`${type}: ${k} uses lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders`);
       out.identity = identity; out.role = role;
       break;
     }
     case 'set-department': {
-      const identity = str(cfg.identity, 'set-department.identity', 32);
-      if (!NAME32.test(identity)) throw new BadRequestException('set-department.identity: lowercase letters, digits, hyphens (max 32)');
+      const identity = str(cfg.identity, 'set-department.identity', 64);
+      if (!NAME32.test(identity) && !placeholderKeys(identity).length) throw new BadRequestException('set-department.identity: lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders');
       out.identity = identity;
       out.department = str(cfg.department, 'set-department.department', 40);
       break;
