@@ -17,7 +17,7 @@ describe('workflow step types', () => {
     const simulated = STEP_TYPES.filter((t) => t.simulated).map((t) => t.type);
     expect(simulated).toEqual(['wait', 'notify', 'fail']);
     const real = STEP_TYPES.filter((t) => !t.simulated).map((t) => t.type);
-    expect(real).toEqual(['assign-role', 'revoke-role', 'set-department']);
+    expect(real).toEqual(['assign-role', 'revoke-role', 'set-department', 'set-profile-field']);
   });
 });
 

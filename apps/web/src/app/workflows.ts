@@ -21,7 +21,7 @@ export const workflowsEnabledGuard: CanActivateFn = async () => {
 // REAL data steps (assign-role/revoke-role/set-department) write on the run's own Dolt branch only;
 // publishing to main stays the human review/merge path.
 
-export type StepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department';
+export type StepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department' | 'set-profile-field';
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
 export interface WfEdge { from: string; to: string }
 export interface WfTrigger { event: string; match?: Record<string, string> }
@@ -37,6 +37,7 @@ export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; hi
   { type: 'assign-role', label: 'Assign role', simulated: false, hint: 'Real, on the run branch' },
   { type: 'revoke-role', label: 'Revoke role', simulated: false, hint: 'Real, on the run branch' },
   { type: 'set-department', label: 'Set department', simulated: false, hint: 'Real, on the run branch' },
+  { type: 'set-profile-field', label: 'Set profile field', simulated: false, hint: 'Real, on the run branch' },
 ];
 
 
@@ -232,6 +233,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @case ('assign-role') {<label>Identity<input name="arId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Role<input name="arRole" [ngModel]="st.config['role']" (ngModelChange)="setCfg(nid,'role',$event)" maxlength="32" /></label>}
 @case ('revoke-role') {<label>Identity<input name="rrId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Role<input name="rrRole" [ngModel]="st.config['role']" (ngModelChange)="setCfg(nid,'role',$event)" maxlength="32" /></label>}
 @case ('set-department') {<label>Identity<input name="sdId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Department<input name="sdDept" [ngModel]="st.config['department']" (ngModelChange)="setCfg(nid,'department',$event)" maxlength="40" /></label>}
+@case ('set-profile-field') {<label>Identity<input name="spfId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Profile field<input name="spfField" [ngModel]="st.config['field']" (ngModelChange)="setCfg(nid,'field',$event)" maxlength="80" placeholder="hr-attributes.employee_grade" /></label><label>Value<input name="spfValue" [ngModel]="st.config['value']" (ngModelChange)="setCfg(nid,'value',$event)" maxlength="200" /></label>}
 }
 <button class="secondary" (click)="deleteNode(nid)">Delete step</button>
 }} @else if (selectedEdge(); as eid) {<p>Link {{eid}}</p><button class="secondary" (click)="deleteEdge(eid)">Delete link</button>}
@@ -332,7 +334,7 @@ export class WorkflowEditPage implements OnInit {
     const id = `step-${++this.seq}`;
     const defaults: Record<StepType, Record<string, unknown>> = {
       wait: { seconds: 2 }, notify: { recipient: '', message: '' }, fail: { message: 'step configured to fail' },
-      'assign-role': { identity: 'demo-bob', role: 'accountant' }, 'revoke-role': { identity: 'demo-bob', role: 'payment-creator' }, 'set-department': { identity: 'demo-bob', department: '' },
+      'assign-role': { identity: 'demo-bob', role: 'accountant' }, 'revoke-role': { identity: 'demo-bob', role: 'payment-creator' }, 'set-department': { identity: 'demo-bob', department: '' }, 'set-profile-field': { identity: 'demo-bob', field: 'hr-attributes.employee_grade', value: '' },
     };
     const st: NodeState = { type, name: this.typeOf(type).label, config: { ...defaults[type] } };
     this.state.set(id, st);
