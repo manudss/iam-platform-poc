@@ -99,6 +99,10 @@ try {
   assert.match(await page.locator('header .who').innerText(), /demo-alice/);
   await shot('2-signed-in-deep-link');
 
+  // Sections run independently: a failure in one is recorded and reported at the end (never hidden), so a later section (e.g. the journal) still proves itself on the real services.
+  const failures = [];
+  const section = async (name, fn) => { try { await fn(); console.log('SECTION OK', name); } catch (e) { failures.push(name); console.log('SECTION FAILED', name, '\n', e && e.stack ? e.stack : e); } };
+  await section('iam-pages-and-plugins', async () => {
   // ---- IAM pages: assignments, SoD, merge, activation ----
   await page.setViewportSize({ width: 1280, height: 900 });
   await nav('/assignments');
@@ -146,6 +150,9 @@ try {
   await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
   await setToken();
 
+  });
+  await section('hooks-journal', async () => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   // ---- hooks journal plugin: off by default, enable, a REAL hook call (sign-in gate -> plugin registry), read it, rights, disable ----
   const gate = (subject) => fetch('http://127.0.0.1:3000/internal/auth/authenticate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-gate-token': GATE.IAM_AUTH_GATE_TOKEN }, body: JSON.stringify({ tenant: 'acme-demo', subject, password: 'Pa55-never-stored-' + subject }) });
   assert.equal(await page.locator('nav a[data-nav="/journal"]').count(), 0, 'journal menu entry absent while the plugin is off');
@@ -182,6 +189,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#jr-table tbody tr').length >= 2);
   assert.equal(await page.locator('#jr-table tbody tr').count(), 2, 'A and C only: the call made while disabled is absent');
   await noBanner('journal');
+  });
 
   // ---- database explorer, section by section (one component instance across the sections) ----
   await page.setViewportSize({ width: 1280, height: 1100 });
@@ -236,6 +244,7 @@ try {
   await page.click('button.burger'); await page.waitForSelector('.layout.open nav a'); await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-menu.png') });
   await page.click('nav a[data-nav="/overview"]'); await page.waitForFunction(() => !document.querySelector('.layout.open'));
   await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-overview.png') });
+  assert.deepEqual(failures, [], 'sections failed: ' + failures.join(', '));
   assert.deepEqual(errors, [], 'no page errors');
   console.log('UI E2E PASSED; screenshots in ' + out);
 } finally {
