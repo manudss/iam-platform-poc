@@ -115,3 +115,19 @@ describe('sign-up outside the hosted workspace mode: refused by the API, whateve
     assert.equal((await api().post(`/tenants/${T}/signup`).send(good)).status, 404);
   });
 });
+
+describe('sign-up request in workspace mode without a branch header (public form)', () => {
+  it('is accepted and emits signup.requested on main (no working branch in a public request)', async () => {
+    const mode = process.env.IAM_WORKSPACE_MODE; process.env.IAM_WORKSPACE_MODE = '1';
+    const emitted: any[] = [];
+    try {
+      const profile = { signupOpen: async () => true, signupValues: async () => ({}) };
+      const users = { list: async () => [] };
+      const events = { emit: (e: unknown) => emitted.push(e) };
+      const su = new SignupService(profile as never, users as never, undefined, events as never);
+      const r = await su.submit(T, { id: 'public-pia', display_name: 'Pia Public', email: 'pia@example.invalid', password: 'a-fictional-password-1', values: {} }, '127.0.0.1');
+      assert.equal((r as { status: string }).status, 'received');
+      assert.equal(emitted.length, 1); assert.equal(emitted[0].type, 'signup.requested'); assert.equal(emitted[0].branch, 'main'); assert.equal(emitted[0].payload.subject, 'public-pia');
+    } finally { if (mode === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = mode; }
+  });
+});
