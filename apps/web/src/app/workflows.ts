@@ -208,7 +208,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @for (ev of events(); track ev.type) {<option [value]="ev.type">{{ev.label}}</option>}
 </select></label>
 @if (triggerEvent) {<span class="hint">Starts by itself on this event. Step fields may use placeholders: {{placeholderHint()}}</span>
-@for (k of payloadKeys(); track k) {<label>only if {{k}} =<input [name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
+@for (k of payloadKeys(); track k) {<label>only if {{k}} =<input [attr.name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
 <button (click)="save()" [disabled]="busy()">Save</button>
 <a class="btn secondary" routerLink="/workflows">Back</a>
 @for (sm of samples; track sm.name) {<button class="secondary" (click)="loadSample(sm)">{{sm.name}}</button>}
