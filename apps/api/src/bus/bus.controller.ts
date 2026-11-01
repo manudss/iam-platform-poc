@@ -23,7 +23,7 @@ export function scrub(r: any) {
  * Needs a sign-in and the admin capability. The core admin token never leaves the server.
  */
 @UseGuards(AuthGuard, AdminGuard)
-@Controller('bus')
+@Controller('tenants/:tenant/bus')
 export class BusObserverController {
   @Get('records')
   async records(@Query('after') after?: string, @Query('limit') limit?: string) {

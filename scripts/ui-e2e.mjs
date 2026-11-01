@@ -22,6 +22,7 @@ mkdirSync(home); mkdirSync(data);
 const env = { ...process.env, HOME: home };
 for (const [k, v] of [['user.name', 'poc'], ['user.email', 'poc@example.invalid']]) spawnSync(dolt, ['config', '--global', '--add', k, v], { env });
 assert.equal(spawnSync(dolt, ['sql'], { cwd: data, env, input: readFileSync(join(root, 'data/demo/01-schema.sql')) }).status, 0);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const procs = [];
 // Each child starts in its OWN process group (detached) so the whole tree (npx -> ng serve, node, ...) can be stopped by group, never by a name pattern.
 const run = (cmd, args, opts) => procs.push(spawn(cmd, args, { stdio: 'ignore', detached: true, ...opts }));
@@ -46,10 +47,13 @@ const stopAll = async () => {
 run(dolt, ['sql-server', '--host', '127.0.0.1', '--port', '3307', '--data-dir', data], { cwd: data, env });
 const GATE = { IAM_AUTH_GATE_ADDR: '127.0.0.1:3000', IAM_AUTH_GATE_TOKEN: 'local-gate-token-demo' }; // sign-in goes through the plugin gate (API on :3000)
 const ADMIN_TOKEN = 'local-demo-plugin-admin-token';
-run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE } });
-run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } });
-run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const CORE_TOKEN = 'local-core-admin-token-demo';
+// Optional event bus: with NATS_BIN set, a local nats-server is started and the core connects to it (the "Event bus" page is then checked).
+const NATS = process.env.NATS_BIN;
+if (NATS) { run(NATS, ['-c', join(root, 'conf/nats-local.conf')]); await sleep(1000); }
+run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE, IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, ...(NATS ? { IAM_CORE_NATS_URL: '127.0.0.1:4222', IAM_CORE_NATS_PASSWORD: 'core-dev' } : {}) } });
+run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } });
+if (!process.env.WEB_ALREADY_SERVED) run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
 let browser;
 try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
@@ -121,6 +125,23 @@ try {
   await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
   await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');
 
+  // ---- event bus observer (real core + NATS; only with NATS_BIN) ----
+  if (NATS) {
+    await nav('/event-bus'); await page.waitForSelector('#bo-player');
+    await noBanner('event bus');
+    await page.waitForFunction(() => document.querySelector('#bo-since')?.textContent?.match(/[1-9]\d* exchange/));
+    await page.selectOption('#bo-speed', { label: 'x10' }); await page.click('#bo-next');
+    await page.fill('#bo-scrub', '1000'); await page.dispatchEvent('#bo-scrub', 'input');
+    await page.waitForSelector('#bo-table tbody tr td:text("activation.applied")');
+    const row = page.locator('#bo-table tbody tr', { hasText: 'activation.applied' }).first();
+    assert.ok((await row.textContent()).includes('audit-log'), 'who answered is shown');
+    assert.ok(await row.locator('.chip.mute:text("mail-notifier")').count(), 'the expected party that stayed silent is shown');
+    const body = (await page.textContent('body')) ?? '';
+    assert.ok(!/local-core-admin-token-demo|local-demo-plugin-admin-token|core-dev/.test(body), 'no secret on the page');
+    assert.equal(await page.locator('#bo-player button:text-matches("send|emit|replay again|re-run", "i")').count(), 0, 'no write control');
+    await shot('4c-event-bus');
+  }
+
   // ---- plugins ----
   await nav('/plugins'); await page.waitForSelector('#plugins table');
   await setToken(); await noBanner('plugins list'); await shot('5-plugins-list');
@@ -187,7 +208,7 @@ try {
 
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
   await page.setViewportSize({ width: 390, height: 800 });
-  for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls']) {
+  for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
     await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
     if (path() === '/login') await coreLogin();

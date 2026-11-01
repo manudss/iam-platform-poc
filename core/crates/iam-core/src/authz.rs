@@ -162,6 +162,7 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
                 extra = claims;
             }
             crate::gate::Step::Deny(m) => {
+                c.bus_emit("signin.refused", serde_json::json!({"subject": g("username"), "client_id": g("client_id")}), None);
                 let msg = m.unwrap_or_else(|| "Wrong user or password.".into());
                 return match first_page().await { Some(f) => form(&p, Some(&msg), Some(&f)), None => form(&p, Some(&msg), None) };
             }

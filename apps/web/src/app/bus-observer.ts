@@ -66,7 +66,7 @@ export function stepTo(rs: BusRec[], cursor: number, dir: 1 | -1): number | unde
   @for (e of seen(); track e.seq) { <tr [class.bo-now]="e === current()">
     <td>{{time(e)}}</td><td>{{e.kind}}<br><small>{{e.mode}} - {{e.envelope_id}}</small></td>
     <td>@for (x of e.expected; track x.id) { <span class="chip">{{x.id}}</span> } @empty { - }</td>
-    <td>@for (a of ans(e); track a) { <span class="chip ok">{{a}}</span> } @empty { <span class="chip warn">nobody</span> }@for (s of mute(e); track s) { <span class="chip mute" title="expected, did not answer">{{s}}</span> }</td>
+    <td>@for (a of ans(e); track a) { <span class="chip ok">{{a}}</span> } @empty { <span class="chip warn">nobody</span> }@for (s of mute(e); track s) { <span class="chip mute" title="expected, did not answer">silent: {{s}}</span> }</td>
     <td>{{label(e)}}</td><td>{{e.elapsed_ms}} ms</td></tr> }
   @empty { <tr><td colspan="6">@if (list().length) { Press Play: exchanges appear as the playback reaches them. } @else { No exchange recorded yet. }</td></tr> }</tbody></table></div></section> }`,
   styles: [`.chip.ok{background:#dcfce7}.chip.warn{background:#fef3c7}.chip.mute{background:#f1f5f9}.bo-now{background:#eef2ff}.bo-scrub{display:block;margin:.5rem 0}.bo-scrub input{width:100%}`],

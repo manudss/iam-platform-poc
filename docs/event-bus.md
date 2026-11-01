@@ -54,3 +54,10 @@ The API's own `IAM_NATS_URL` (JetStream stream `IAM_EVENTS`, subjects `iam.>`) i
 `cd core && cargo test --workspace`. The NATS end-to-end file (`tests/nats_e2e.rs`) needs `nats-server` (`NATS_SERVER_BIN` or PATH) and is **skipped with a message** otherwise;
 set `IAM_REQUIRE_NATS=1` to make a missing binary a failure (the manual CI `core` job does).
 Note: `ci.yml` runs only when started by hand (`workflow_dispatch`), so these tests do not run on every push.
+
+## Observer (read only) - implemented
+- **Core**: every exchange through the bus is recorded in a ring of the last 500 (in memory, lost on core restart; `first_seq` tells a reader when older ones were dropped). `GET /v1/bus/records?after=<seq>` needs the core admin token. It only reads: it never emits, replays or answers.
+- **What is recorded**: envelope id (correlation), kind, mode, effectKey, masked payload, who was **expected** (with mandatory flag), who **answered** and with what verdict, who stayed **silent**, invalid answers, delay (ms), verdict. Masking (core `iam-bus::mask`, then again in the API): credential-like keys replaced by `[masked]`, e-mails partly hidden, scalars only, values cut at 120 chars.
+- **Real events** now sent to the bus (notifications only, no decision depends on them): `activation.applied` (effectKey `activation:<tenant>:<seq>`), `signin.succeeded`, `signin.refused`. Core-hosted subscribers: `audit-log` (answers through NATS) and `mail-notifier` (declared, never started: shows as "expected, silent").
+- **API**: `GET /tenants/:tenant/bus/records` (sign-in + admin capability, read only, scrubs again, core token never leaves the server). **Console**: page "Event bus" (player: play, speed, position, previous/next, detail card with expected/answered/silent, correlation id, masked data).
+- **Not done / limits**: no persistence (ring in memory), no timeline over days, a mandatory silent subscriber is shown as "refused" from the record but no mandatory control exists yet in production flows, no signal for NATS reconnects in the page, single core instance only. Time-outs appear as `silent` with the dispatcher's detail.
