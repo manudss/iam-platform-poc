@@ -93,7 +93,7 @@ async fn observer_sees_every_exchange_without_payload_and_changes_nothing() {
     let rec = Arc::new(Rec(Default::default()));
     d.observe(rec.clone());
     d.subscribe(sub("ghost", "auth.check", true, None)).unwrap();
-    let r = d.call(&env("1", "auth.check", json!({"secret": "x"})), None).await.unwrap();
+    let r = d.call(&env("1", "auth.check", json!({"secret": "x", "subject": "alice", "email": "alice@example.com", "nested": {"a": 1}})), None).await.unwrap();
     assert_eq!(r.verdict, Verdict::Deny);
     d.notify(&env("2", "user.created", json!({}))).await.unwrap();
     d.query(&env("3", "profile.get", json!({}) ), None).await.unwrap();
@@ -101,5 +101,19 @@ async fn observer_sees_every_exchange_without_payload_and_changes_nothing() {
     assert_eq!(got.iter().map(|g| (g.envelope_id.as_str(), g.mode)).collect::<Vec<_>>(), vec![("1", Mode::Control), ("2", Mode::Notify), ("3", Mode::Query)]);
     assert_eq!(got[0].verdict, Some(Verdict::Deny));
     assert!(matches!(got[0].outcomes[0].status, SubStatus::Silent(_)), "silent subscriber is visible to observers");
-    assert!(got[0].payload_bytes > 0 && !format!("{:?}", got[0]).contains("secret"), "payload content is never exposed");
+    assert!(got[0].payload_bytes > 0);
+    assert_eq!(got[0].payload.get("secret").map(String::as_str), Some("[masked]"), "credential-like keys are masked");
+    assert!(!format!("{:?}", got[0]).contains("\"x\""), "the secret value never appears");
+}
+
+#[test]
+fn masking_rules() {
+    use iam_bus::mask::*;
+    assert_eq!(mask_email("alice@example.com"), "a***@e***.com");
+    let m = mask_payload(&json!({"password": "p", "authToken": "t", "effectKey": "e-1", "subject": "bob", "mail": "bob@corp.io", "o": {"x": 1}, "n": 5, "list": ["a@b.fr", "c"], "gone": null}));
+    assert_eq!(m["password"], "[masked]"); assert_eq!(m["authToken"], "[masked]");
+    assert_eq!(m["effectKey"], "e-1"); assert_eq!(m["subject"], "bob");
+    assert_eq!(m["mail"], "b***@c***.io"); assert_eq!(m["o"], "[object]"); assert_eq!(m["n"], "5");
+    assert_eq!(m["list"], "a***@b***.fr,c"); assert!(!m.contains_key("gone"));
+    assert_eq!(mask_payload(&json!({"long": "x".repeat(500)}))["long"].len(), 120);
 }

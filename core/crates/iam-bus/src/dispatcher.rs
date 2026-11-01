@@ -29,7 +29,7 @@ pub struct MergedData {
 }
 
 /// One exchange seen by the core, handed to observers after the fact (step 1 prepares the later bus-observation milestone).
-/// The payload is NOT included (only its size): an observer must not become a way to read sensitive data.
+/// The payload is included only MASKED (see `mask.rs`: credential-like keys replaced, e-mails partly hidden, scalars only, cut at 120 chars).
 #[derive(Debug, Clone, PartialEq)]
 pub struct BusRecord {
     pub envelope_id: String,
@@ -38,6 +38,9 @@ pub struct BusRecord {
     pub tenant: Option<String>,
     pub effect_key: Option<String>,
     pub payload_bytes: usize,
+    pub payload: std::collections::BTreeMap<String, String>,
+    /// Unix milliseconds when the exchange finished.
+    pub at_ms: u64,
     pub elapsed_ms: u64,
     pub outcomes: Vec<SubOutcome>,
     /// Control calls only: the merged verdict.
@@ -66,7 +69,8 @@ impl Dispatcher {
         let obs = self.observers.read().unwrap();
         if obs.is_empty() { return }
         let r = BusRecord { envelope_id: env.id.clone(), kind: env.kind.clone(), mode, tenant: env.tenant.clone(), effect_key: env.effect_key.clone(),
-            payload_bytes: env.payload.to_string().len(), elapsed_ms: t.elapsed().as_millis() as u64, outcomes: outcomes.to_vec(), verdict };
+            payload_bytes: env.payload.to_string().len(), payload: crate::mask::mask_payload(&env.payload),
+            at_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0), elapsed_ms: t.elapsed().as_millis() as u64, outcomes: outcomes.to_vec(), verdict };
         for o in obs.iter() { o.record(&r) }
     }
     pub fn unsubscribe(&self, subscriber: &str) { self.registry.remove(subscriber) }

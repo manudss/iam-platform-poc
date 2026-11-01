@@ -6,6 +6,7 @@ pub mod catalogue;
 pub mod dispatcher;
 pub mod envelope;
 pub mod handler;
+pub mod mask;
 pub mod nats;
 pub mod registry;
 pub mod transport;

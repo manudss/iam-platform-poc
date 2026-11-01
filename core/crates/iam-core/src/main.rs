@@ -62,6 +62,10 @@ impl Core {
         std::fs::write(&tmp, serde_json::to_vec(a).map_err(std::io::Error::other)?)?;
         std::fs::rename(tmp, dir.join(format!("{tenant}.json")))
     }
+    /// Tells the bus about something that really happened. Never blocks, never fails the caller; no bus = nothing happens.
+    pub fn bus_emit(&self, kind: &'static str, payload: Value, effect_key: Option<String>) {
+        if let Some(b) = &self.bus { b.emit(kind, payload, effect_key); }
+    }
     pub fn new(engine: Engine, plugin: Option<(PluginRuntime, Vec<u8>)>, idp: Idp) -> Self {
         Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None, bus: None }
     }
@@ -74,6 +78,7 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/v1/activate", post(activate))
         .route("/v1/version", get(version))
         .route("/v1/bus", get(bus_wiring::status))
+        .route("/v1/bus/records", get(bus_wiring::records))
         .route("/.well-known/openid-configuration", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.discovery()) }))
         .route("/jwks.json", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.jwks()) }))
         .route("/authorize", post(authorize).get(authz::authorize_form))
@@ -143,6 +148,7 @@ async fn activate(State(c): State<Arc<Core>>, headers: axum::http::HeaderMap, Js
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("cannot persist active version: {e}")})));
     }
     map.insert(r.tenant.clone(), a);
+    c.bus_emit("activation.applied", json!({"tenant": r.tenant, "seq": r.seq, "commit": r.commit}), Some(format!("activation:{}:{}", r.tenant, r.seq)));
     (StatusCode::OK, Json(json!({"status": "applied", "seq": r.seq, "commit": r.commit})))
 }
 
