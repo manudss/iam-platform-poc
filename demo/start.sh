@@ -24,6 +24,9 @@ export IAM_CORE_ADMIN_TOKEN="$CORE_TOKEN"
 # demo/server.mjs attaches it to proxied /api calls so demo visitors never see or type it.
 API_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export IAM_API_ADMIN_TOKEN="$API_TOKEN"
+# The edge attaches the capability to every call, so the API also requires the verified subject to be a demo administrator.
+# Anyone else (including accounts created through public sign-up) is refused on admin routes.
+export IAM_API_ADMIN_SUBJECTS="${IAM_API_ADMIN_SUBJECTS:-demo-alice}"
 export IAM_POLICY_FILE=/app/policies/demo.cedar
 export IAM_CORE_STATE_DIR="$HOME_DIR/core-state"
 export IAM_IDP_EXTRA_REDIRECT_URIS="${PUBLIC_ORIGIN}/callback,http://localhost:4200/callback"
@@ -31,7 +34,7 @@ export IAM_ISSUER="${PUBLIC_ORIGIN}/core"
 GATE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export IAM_AUTH_GATE_TOKEN="$GATE_TOKEN" IAM_AUTH_GATE_ADDR=127.0.0.1:3000
 export IAM_WORKSPACE_MODE=1
-export IAM_AUTHN_DEMO_SEED=1
+export IAM_AUTHN_DEMO_SEED=1 IAM_DEMO_DATA_SEED=1
 export IAM_DIRECTORY_AUTH=1 IAM_PLUGIN_STORE=dolt IAM_CREDENTIAL_FILE="$HOME_DIR/core-state/credentials.json"
 echo '[demo] starting iam-core on 127.0.0.1:8081'
 /app/iam-core >"$HOME_DIR/core.log" 2>&1 &

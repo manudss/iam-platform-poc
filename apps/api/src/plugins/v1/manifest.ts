@@ -1,3 +1,5 @@
+import type { ProfileFieldDecl } from '../../profile/fields.js';
+import { validateFieldDecls } from '../../profile/fields.js';
 /**
  * Plugin manifest v1 (see docs/plugins.md).
  * A manifest is pure data: what a plugin is, which hooks it listens to, what it installs,
@@ -89,6 +91,8 @@ export interface PluginManifest {
   install?: InstallSpec;
   settings: SettingField[];
   screens?: UiScreen[];
+  /** Profile fields this plugin adds (kind `profile`). Values live in the core profile value store; a plugin cannot add columns to the identities table. */
+  profileFields?: ProfileFieldDecl[];
 }
 
 const ID = /^[a-z][a-z0-9-]{1,48}$/;
@@ -139,6 +143,7 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     }
   }
   for (const s of m.install?.seed ?? []) if (!s.table.toLowerCase().startsWith(prefix)) errs.push(`seed table ${s.table} must start with ${prefix}`);
+  errs.push(...validateFieldDecls(m.id, m.profileFields));
   if (m.base && m.extends) errs.push('a base plugin cannot extend another plugin');
   if (m.base && !(m.provides?.length)) errs.push('a base plugin must provide a slot');
   if (m.extends && !(m.provides?.length)) errs.push('a replacement plugin must provide the slot of its base');

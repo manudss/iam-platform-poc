@@ -4,7 +4,7 @@ import { Session } from './session';
 import { UserProfile } from './api';
 @Component({ selector:'app-users', imports:[FormsModule], styleUrl:'./pages.css', template:`
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
-<p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. New accounts have demo administrator access, not production permissions.</p>
+<p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one in Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <section class="card"><div class="row"><label>Search users<input name="search" [(ngModel)]="search" /></label><button (click)="start()" [disabled]="busy() || s.branch()==='main'">Create user</button><button class="secondary" (click)="load()">Refresh</button></div>
 <div class="scroll"><table id="users-table"><thead><tr><th>User</th><th>Display name</th><th>Department</th><th>E-mail</th><th>Manager</th><th>Sign-in</th><th></th></tr></thead><tbody>
@@ -17,14 +17,22 @@ import { UserProfile } from './api';
 <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
 <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>
 <p class="hint">12 to 128 characters. Sent only in the request body; never returned in the table, SQL, history or logs. Do not use a real password in this public demo.</p>
+@if (key && pfields().length) { <h4>Profile fields (plugins)</h4><p class="hint">Fields the administrator configuration lets an administrator edit. Saved on the working branch like the rest.</p>
+@for (f of pfields(); track f.key) { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
+@if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
+@else {<input [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}</label> } }
 <button id="user-save" [disabled]="busy()">Save user</button><button type="button" class="secondary" (click)="cancel()">Cancel</button></form></section>}
 ` })
 export class UsersPage {
   protected readonly s=inject(Session); protected users=signal<UserProfile[]>([]); protected note=signal(''); protected busy=signal(false); protected editing=signal(false);
+  protected pfields=signal<any[]>([]);protected pvals=signal<Record<string,unknown>>({});private pchanged:Record<string,unknown>={};
   protected search='';protected key:string|null=null;protected password='';protected form={id:'',display_name:'',email:'',department:'',manager_id:'',login_enabled:true};
   ngOnInit(){void this.load();} protected filtered(){const q=this.search.toLowerCase();return this.users().filter(u=>[u.id,u.display_name,u.department].some(x=>x?.toLowerCase().includes(q)));}
   protected async load(){try{const r=await this.s.api.raw<{users:UserProfile[]}>('GET','/users',undefined,this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{});this.users.set(r.data.users);}catch(e){this.note.set((e as Error).message);}}
-  protected start(u?:UserProfile){this.key=u?.id??null;this.form={id:u?.id??'',display_name:u?.display_name??'',email:u?.email??'',department:u?.department??'',manager_id:u?.manager_id??'',login_enabled:u?.login_enabled??true};this.password='';this.editing.set(true);}
+  protected start(u?:UserProfile){this.key=u?.id??null;this.form={id:u?.id??'',display_name:u?.display_name??'',email:u?.email??'',department:u?.department??'',manager_id:u?.manager_id??'',login_enabled:u?.login_enabled??true};this.password='';this.editing.set(true);this.pfields.set([]);this.pchanged={};if(u)void this.loadP(u.id);}
+  private h():Record<string,string>{return this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{};}
+  private async loadP(id:string){try{const r=await this.s.api.raw<any>('GET','/users/'+encodeURIComponent(id)+'/profile',undefined,this.h());if(r.status<400){this.pfields.set(r.data.fields.filter((f:any)=>!f.key.startsWith('base.')));this.pvals.set(r.data.values);}}catch{}}
+  protected setP(k:string,v:unknown){this.pvals.update(x=>({...x,[k]:v}));this.pchanged[k]=v===''?null:v;}
   protected cancel(){this.password='';this.editing.set(false);}
-  protected async save(){this.busy.set(true);try{const b:Record<string,unknown>={...this.form};if(this.password)b['password']=this.password;await this.s.api.saveUser(this.key,b,this.s.adminToken());this.cancel();await this.load();this.note.set('User saved on the working branch. Apply is required before live sign-in changes.');}catch(e){this.note.set((e as Error).message);}finally{this.password='';this.busy.set(false);}}
+  protected async save(){this.busy.set(true);try{const b:Record<string,unknown>={...this.form};if(this.password)b['password']=this.password;await this.s.api.saveUser(this.key,b,this.s.adminToken());if(this.key&&Object.keys(this.pchanged).length){const r=await this.s.api.raw<any>('PATCH','/users/'+encodeURIComponent(this.key)+'/profile',{values:this.pchanged},this.h());if(r.status>=400)throw new Error(Array.isArray(r.data.message)?r.data.message.join(' '):r.data.message??'Profile fields refused');}this.cancel();await this.load();this.note.set('User saved on the working branch. Apply is required before live sign-in changes.');}catch(e){this.note.set((e as Error).message);}finally{this.password='';this.busy.set(false);}}
 }

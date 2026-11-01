@@ -97,3 +97,24 @@ export const riskGeo: PluginImpl = {
   },
   handlers: { 'risk.score': () => ({ score: 10 }) },
 };
+
+/** Example profile plugin: fictional HR attributes. Shipped disabled; an admin enables it, then configures each field. Its authority field shows that the user can never edit it. */
+export const hrAttributes: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'hr-attributes', version: '1.0.0', name: 'HR attributes (example)', publisher: 'iam-platform',
+    kinds: ['profile'], hooks: [], settings: [],
+    profileFields: [
+      { key: 'job_title', type: 'string', label: 'Job title', max: 60, pii: 'none', defaults: { selfEdit: true, signup: 'optional' } },
+      { key: 'phone', type: 'phone', label: 'Phone', pii: 'personal', defaults: { selfEdit: true } },
+      { key: 'language', type: 'select', label: 'Language', pii: 'none', options: [{ value: 'fr', label: 'Français' }, { value: 'en', label: 'English' }], defaults: { selfEdit: true, signup: 'optional' } },
+      { key: 'employee_grade', type: 'string', label: 'Grade', max: 20, klass: 'authority', pii: 'none', help: 'Read by access decisions: only an administrator can set it.' },
+    ],
+  },
+  handlers: {},
+};
+
+/** Example profile plugin: organizations. It adds screens (organizations CRUD, memberships) and a read-only section on the profile. Membership is an assignment by an administrator, never a profile field. */
+export const organizations: PluginImpl = {
+  manifest: { apiVersion: 'plugin/v1', id: 'organizations', version: '1.0.0', name: 'Organizations (example)', publisher: 'iam-platform', kinds: ['profile'], hooks: [], settings: [] },
+  handlers: {},
+};

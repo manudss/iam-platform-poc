@@ -70,6 +70,25 @@ describe('browser sign-in flow (client side)', () => {
   });
 });
 
+describe('personal space and plugin visibility', () => {
+  beforeEach(async () => { sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents(); });
+  const as = (access: object) => { const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('x'); s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? access : { fields: [], values: {}, sections: {} } })) as never; return s; };
+  it('an ordinary account sees only its own profile: no administration menu, admin URLs lead back to My profile', async () => {
+    as({ subject: 'demo-bob', admin: false, restricted: true, plugins: { organizations: true } });
+    const h = await RouterTestingHarness.create(); await h.navigateByUrl('/roles'); await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+    expect(TestBed.inject(Router).url).toBe('/my-profile');
+    const el = h.routeNativeElement as HTMLElement;
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'))).toEqual(['/my-profile']);
+    expect(el.textContent).not.toContain('Working data branch'); expect(el.textContent).not.toContain('Admin capability');
+  });
+  it('a plugin that is not enabled has no menu entry and no page', async () => {
+    as({ subject: 'demo-alice', admin: true, restricted: true, plugins: {} });
+    const h = await RouterTestingHarness.create(); await h.navigateByUrl('/organizations'); await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+    expect(TestBed.inject(Router).url).toBe('/overview');
+    expect([...(h.routeNativeElement as HTMLElement).querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'))).not.toContain('/organizations');
+  });
+});
+
 describe('chosen chain', () => {
   it('is carried to the authorize URL only when it is a plain id', async () => {
     const s = { setItem: () => {} }; let url = '';
@@ -126,7 +145,7 @@ describe('routing and sign-in guard', () => {
       expect(el.textContent).toContain('recommended');
       expect(el.textContent).toContain('simulated step (no real e-mail is sent)');
       expect(el.textContent).not.toContain('Legacy JSON login');
-      expect(el.querySelector('input[type=password]')).toBeNull();
+      expect([...el.querySelectorAll('input[type=password]')].filter((i) => !i.closest('#signup-embedded'))).toHaveLength(0); // the only password field is the sign-up form's
       expect(el.textContent).not.toContain('Merge into main');
     } finally { globalThis.fetch = real; }
   });
@@ -145,12 +164,12 @@ describe('routing and sign-in guard', () => {
   it('once signed in, shows the administration layout with the whole navigation and the requested page', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
-    s.api.raw = (async () => ({ status: 200, data: [] })) as never;
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: { organizations: true } } : [] })) as never;
     const h = await RouterTestingHarness.create();
     await h.navigateByUrl('/activation');
     const el = h.routeNativeElement as HTMLElement;
     const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
-    expect(nav).toEqual(['/overview', '/users', '/auth-methods', '/assignments', '/activation', '/plugins', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);
+    expect(nav).toEqual(['/overview', '/users', '/profile-fields', '/organizations', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/plugins', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);
     expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
     expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
     expect(el.textContent).toContain('Choose your working branch');
@@ -194,7 +213,7 @@ describe('session expiry handling', () => {
   });
   it('returns to login, retains only the page, clears privileged state and ignores duplicate expiry', async () => {
     sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents();
-    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('alice'); s.adminToken.set('local-test'); s.api.activations = async () => []; s.api.assignments = async () => [];
+    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('alice'); s.adminToken.set('local-test'); s.api.raw = (async () => ({ status: 200, data: { subject: 'alice', admin: true, restricted: true, plugins: {} } })) as never; s.api.activations = async () => []; s.api.assignments = async () => [];
     const h = await RouterTestingHarness.create(); await h.navigateByUrl('/activation');
     s.expire(); await TestBed.inject(Router).navigateByUrl('/login');
     expect(sessionStorage.getItem(RETURN_KEY)).toBe('/activation'); expect(s.adminToken()).toBe('');
