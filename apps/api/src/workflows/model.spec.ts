@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { hasDataSteps, validateGraph } from './model.js';
+import { hasDataSteps, placeholderKeys, substituteEventPayload, validateGraph, validateTrigger } from './model.js';
 
 const node = (id: string, type: string, config: object = {}, name = id) => ({ id, type, name, config });
 const seq = (...ids: string[]) => ids.slice(1).map((to, i) => ({ from: ids[i], to }));
@@ -33,7 +33,7 @@ describe('workflow graph validation', () => {
   it('validates per-type config and rejects unknown keys', () => {
     assert.throws(() => validateGraph({ nodes: [node('a', 'wait', { seconds: 600 })], edges: [] }), /0 to 60/);
     assert.throws(() => validateGraph({ nodes: [node('a', 'notify', { message: 'x' })], edges: [] }), /recipient is required/);
-    assert.throws(() => validateGraph({ nodes: [node('a', 'assign-role', { identity: 'UPPER', role: 'ok' })], edges: [] }), /identity and role/);
+    assert.throws(() => validateGraph({ nodes: [node('a', 'assign-role', { identity: 'UPPER', role: 'ok' })], edges: [] }), /identity uses lowercase/);
     assert.throws(() => validateGraph({ nodes: [node('a', 'assign-role', { identity: 'ok', role: 'ok', extra: 1 })], edges: [] }), /unknown config key/);
     assert.throws(() => validateGraph({ nodes: [node('a', 'set-department', { identity: 'ok' })], edges: [] }), /department is required/);
     const { graph } = validateGraph({ nodes: [node('a', 'wait')], edges: [] });
@@ -48,5 +48,34 @@ describe('workflow graph validation', () => {
   it('keeps a duplicated link only once', () => {
     const { graph } = validateGraph({ nodes: [node('a', 'wait'), node('b', 'wait')], edges: [{ from: 'a', to: 'b' }, { from: 'a', to: 'b' }] });
     assert.equal(graph.edges.length, 1);
+  });
+});
+
+describe('workflow start triggers', () => {
+  it('validates the trigger: known event, payload-bound match keys, no smuggled fields', () => {
+    assert.deepEqual(validateTrigger(undefined), null);
+    assert.deepEqual(validateTrigger({ event: 'user.created' }), { event: 'user.created' });
+    assert.deepEqual(validateTrigger({ event: 'user.department-changed', match: { to: 'finance' } }), { event: 'user.department-changed', match: { to: 'finance' } });
+    assert.throws(() => validateTrigger({ event: 'user.deleted' }), /unknown event/);
+    assert.throws(() => validateTrigger({ event: 'user.created', match: { role: 'x' } }), /not a payload key/);
+    assert.throws(() => validateTrigger({ event: 'user.created', admin: true }), /only event and match/);
+  });
+  it('accepts {{event.<key>}} placeholders in step configs, still refuses garbage', () => {
+    const { graph } = validateGraph({ nodes: [node('a', 'assign-role', { identity: '{{event.subject}}', role: 'employee' })], edges: [] });
+    assert.equal(graph.nodes[0].config.identity, '{{event.subject}}');
+    assert.throws(() => validateGraph({ nodes: [node('a', 'assign-role', { identity: '{{event.subject}', role: 'employee' })], edges: [] }), /identity uses lowercase/);
+    assert.throws(() => validateGraph({ nodes: [node('a', 'assign-role', { identity: 'UPPER', role: 'employee' })], edges: [] }), /identity uses lowercase/);
+    assert.deepEqual(placeholderKeys('x {{event.subject}} y {{event.to}}'), ['subject', 'to']);
+    assert.deepEqual(placeholderKeys('plain'), []);
+  });
+  it('resolves placeholders from the event payload and refuses a missing key', () => {
+    const { graph } = validateGraph({ nodes: [node('a', 'assign-role', { identity: '{{event.subject}}', role: 'employee' }), node('b', 'notify', { recipient: 'manager', message: '{{event.displayName}} arrived' })], edges: seq('a', 'b') });
+    const resolved = substituteEventPayload(graph, { subject: 'jane-doe', displayName: 'Jane Doe' });
+    assert.equal(resolved.nodes[0].config.identity, 'jane-doe');
+    assert.equal(resolved.nodes[1].config.message, 'Jane Doe arrived');
+    assert.throws(() => substituteEventPayload(graph, { displayName: 'Jane Doe' }), /no value for \{\{event.subject\}\}/);
+    // The resolved graph is validated again at start: a bad payload value is caught there.
+    const bad = substituteEventPayload(graph, { subject: 'UPPER CASE', displayName: 'x' });
+    assert.throws(() => validateGraph(bad), /identity uses lowercase/);
   });
 });

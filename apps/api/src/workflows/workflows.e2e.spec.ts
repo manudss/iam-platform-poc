@@ -88,7 +88,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 11);
+    assert.equal(routes.length, 12);
   });
 
   it('refuses an invalid graph (cycle, unknown type) and an unknown field', async () => {
