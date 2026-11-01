@@ -164,15 +164,30 @@ describe('routing and sign-in guard', () => {
   it('once signed in, shows the administration layout with the whole navigation and the requested page', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
-    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: { organizations: true } } : [] })) as never;
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: { organizations: true } } : [] })) as never;    s.workflowsEnabled.set(true); // plugin gate: the Automation menu only exists while the workflows-iga plugin is enabled
     const h = await RouterTestingHarness.create();
     await h.navigateByUrl('/activation');
     const el = h.routeNativeElement as HTMLElement;
     const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
-    expect(nav).toEqual(['/overview', '/users', '/profile-fields', '/organizations', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/plugins', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);
-    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
+    expect(nav).toEqual(['/overview', '/users', '/profile-fields', '/organizations', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
     expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
     expect(el.textContent).toContain('Choose your working branch');
+  });
+
+  it('workflows-iga plugin disabled: the Workflows menu entry is hidden and its routes fall back to /plugins', async () => {
+    const s = TestBed.inject(Session);
+    s.loggedIn.set(true); s.user.set('demo-alice');
+    s.api.raw = (async (m: string, path: string) => path === '/plugins'
+      ? { status: 200, data: { plugins: [{ id: 'workflows-iga', enabled: false }] } }
+      : { status: 200, data: [] }) as never;
+    s.workflowsEnabled.set(false);
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/overview');
+    const el = h.routeNativeElement as HTMLElement;
+    const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
+    expect(nav).not.toContain('/workflows');
+    await h.navigateByUrl('/workflows');
+    expect(TestBed.inject(Router).url).toBe('/plugins');
   });
 
   it('unknown address falls back to the dashboard (through sign-in when needed)', async () => {

@@ -1,4 +1,5 @@
 import { WorkspaceModule } from './workspace/workspace.module.js';
+import { WorkflowsModule } from './workflows/workflows.module.js';
 import { UsersModule } from './users/users.module.js';
 import { Module } from '@nestjs/common';
 import { HealthController } from './health.controller.js';
@@ -12,6 +13,7 @@ import { AgentController } from './access/agent.controller.js';
 import { PluginsModule } from './plugins/plugins.module.js';
 import { VersioningModule } from './versioning/versioning.module.js';
 import { PluginsV1Module } from './plugins/v1/plugins-v1.module.js';
+import { EventsModule } from './events/events.module.js';
 
-@Module({ imports: [WorkspaceModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController], providers: [AuditService] })
+@Module({ imports: [EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController], providers: [AuditService] })
 export class AppModule {}

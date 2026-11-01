@@ -41,7 +41,8 @@ export class OrganizationsPage {
       const r = await this.s.api.raw<any>('GET', '/organizations', undefined, this.h());
       if (r.status === 404) { this.off.set(true); this.problem.set(''); return; }
       if (this.fail(r)) return; this.off.set(false); this.orgs.set(r.data.orgs); this.members.set(r.data.members); this.problem.set('');
-      this.users.set(await this.s.api.users().catch(() => []));
+      const u = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.h());
+      this.users.set(u.status < 400 ? u.data.users : []);
     } catch (e) { this.problem.set((e as Error).message); }
   }
   private async run(method: string, path: string, body: object | undefined, ok: string) { const r = await this.s.api.raw<any>(method, path, body, this.h()); if (this.fail(r)) return; this.note.set(ok + ' Saved on the working branch; live after Apply.'); this.problem.set(''); await this.load(); }

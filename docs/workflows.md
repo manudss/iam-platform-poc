@@ -1,0 +1,165 @@
+# Workflows (IGA scenarios)
+
+The workflows feature demonstrates identity-governance scenarios (joiner, leaver, access change, access review) as
+**graphs of typed steps** built in a visual editor, executed by the API, and followed step by step.
+
+## Enabling the feature (plugin)
+
+Workflows are a built-in **plugin** (`workflows-iga`, kind `workflow` + `ui`), managed like every other plugin from the
+**Plugins** page. It is **disabled by default** for a tenant: an administrator installs it, then enables it (no grant
+is required: the plugin declares no hook, no migration, no component screen).
+
+While the plugin is disabled:
+
+- the console hides the **Automation (IGA) / Workflows** menu and the `/workflows*` routes redirect to the Plugins page;
+- every workflow API endpoint answers **403** (`the Workflows (IGA) plugin is disabled…`) — the gate is server-side,
+  not just hidden navigation;
+- **a run already executing when the plugin is disabled is left to finish**: its data stays on its own `wf-<run>`
+  Dolt branch and main is untouched. Retry, cancel, review and every other action are refused until the plugin is
+  re-enabled. Disabling never deletes definitions, runs or branches.
+
+## Two kinds of steps, never mixed up
+
+| Family | Types | Effect |
+|---|---|---|
+| **SIMULATED** | `wait`, `notify`, `fail` | Orchestration only. A wait really waits; a `notify` step **only writes a log line — nothing is ever sent** (no e-mail, no message); a `fail` step fails on its first attempt and recovers on retry (`config.mode: "always"` keeps failing, to show a permanently blocked run). |
+| **REAL** (data) | `assign-role`, `revoke-role`, `set-department`, `set-profile-field` | Write business data in Dolt, **always on the run's own branch `wf-<run>` created from `main`**, one commit per step, with the SoD check after an assignment. `set-profile-field` records one profile value (`profile_field_values`) for a person. **A run never writes on `main`.** |
+
+Publishing stays the existing human path: from a completed run, "Review & open a pull request" opens the Dolt pull
+request for the run branch; a person reviews the diff and merges (a SoD conflict is refused with 409, exactly like a
+manual change). The workflow itself never merges.
+
+## Editor
+
+The console page **Workflows** (`/workflows`) lists definitions and recent runs. The editor (`/workflows/edit/:id`)
+uses **ngx-vflow** (MIT, Angular-native node-graph editor — <https://github.com/artem-mangilev/ngx-vflow>).
+
+Editor choice, checked on 2026-10-30: Temporal has **no official visual workflow editor** (the Temporal Web UI is
+read-only observability); community Temporal graph editors are experimental. Reusing an existing, maintained,
+framework-native graph library (ngx-vflow, peer dependency Angular >= 19.2.17, this repo uses Angular 22) covers the
+n8n-style editing experience without rebuilding one.
+
+Six sample scenarios can be loaded from the editor: three start manually (onboarding, offboarding, an SoD-blocked
+grant whose merge is refused at review) and three start by themselves on application events (joiner on
+`user.created`, mover into finance on `user.department-changed` with a match filter, leaver on `user.disabled`).
+
+Initial canvas framing: custom component nodes only report their real size after Angular renders them, so the editor
+does not fit the view on a fixed timer (which raced the measurement and sometimes framed the graph half-clipped or
+tiny). It waits until the canvas is initialized and every node is measured in the DOM, fits the whole graph, verifies
+the visible result (every node inside the canvas) and retries a bounded number of times when the fit ran on stale
+sizes. When the fit has to shrink the graph below comfortable reading size, the view zooms back toward 1:1 anchored on
+the leftmost node and the user pans to the rest.
+
+## Start triggers (application events)
+
+A definition can carry a **start trigger**: an application event it answers to. When the event fires, a run starts
+by itself — no click. The catalog (`GET /tenants/:t/workflows-events`) is published by the server and feeds the
+editor's trigger select:
+
+| event | fires when | payload keys |
+| --- | --- | --- |
+| `user.created` | an administrator creates a user | `subject`, `displayName`, `department`, `email` |
+| `user.department-changed` | a user's department changes | `subject`, `from`, `to` |
+| `user.disabled` | an account is disabled | `subject` |
+| `signup.requested` | a sign-up request is submitted on the public page (registration) | `subject`, `email` |
+| `signup.approved` | a sign-up request is approved | `subject`, `email` |
+| `profile.updated` | profile values change (administrator edit, or a user's own edit under the immediate policy) | `subject`, `keys`, `actor` |
+| `profile.review-resolved` | a validator accepts or refuses pending profile edits | `subject`, `decision` (`accepted`/`refused`), `actor` |
+| `organization.member-added` | a user joins an organization (one event per newly added organization) | `subject`, `organization`, `actor` |
+
+- **Match filter**: a trigger may restrict the event, e.g. `{event: "user.department-changed", match: {to: "finance"}}`
+  starts only on moves INTO finance. Match keys must be payload keys of the event.
+- **Placeholders**: step configs may use `{{event.<key>}}` (e.g. `{{event.subject}}` as the identity of a grant).
+  The server refuses a definition whose placeholders do not exist in the trigger's payload, and refuses a manual
+  start of a definition that still needs placeholders — only a real event supplies the values.
+- A triggered run follows the exact same rules as a manual one: same guard (max 3 active runs per definition),
+  real steps write only on the run's own branch `wf-<run>`, the human review merges it. It branches from the branch
+  the event happened on and is reviewed back into it. The run's "started by" reads `event:<type>`.
+- Safety: events are fire-and-forget (a failing workflow never breaks the user write that fired it), trigger
+  dispatch cannot loop (the engine writes through SQL, never through the services that emit events), and nothing
+  starts while the `workflows-iga` plugin is disabled on that branch.
+- Events are emitted from the single write funnels (`UsersService.save`, also used by sign-up approval;
+  `SignupService.submit`; `ProfileService` admin/self edits and review resolution; `OrgService.assign`), so both the
+  admin console and the API produce them. Live-side events (public sign-up, a user's own profile edit, a review
+  decision) happen on `main`; in the hosted workspace demo the demo seed enables `workflows-iga` on `main` so those
+  runs are visible too, and their branches are reviewed back into `main` like any other run.
+
+## Demo scenarios (seeded)
+
+`IAM_DEMO_DATA_SEED=1` seeds triggered definitions that exercise the whole catalog (all idempotent: a re-seed only
+adds what is missing):
+
+- **Joiner / Mover / Leaver**: `user.created` grants the employee baseline, `user.department-changed` into finance
+  grants accountant, `user.disabled` revokes the baseline (real steps on the run branch + a simulated notify each).
+- **Registration**: `signup.requested` tells HR a request waits (simulated only).
+- **Onboarding**: `signup.approved` records the entry grade (`set-profile-field`, real) and grants the employee
+  baseline (real), then informs the manager (simulated). Approving a sign-up also creates the user, so the Joiner
+  fires on the same action — two workflows answering one registration; the duplicate grant is a logged no-op.
+- **Validation**: `profile.review-resolved` with `decision=accepted` grants the employee baseline (real) — a refused
+  review starts nothing.
+- **Organizations**: `organization.member-added` into finance grants payment-creator (real); into the security
+  office it only logs (simulated) — the sensitive security-analyst role is never granted by a workflow.
+
+## Runs
+
+- Start: **Run** on the definitions page, or automatically via the definition's start trigger. At most 3 active runs per definition (demo guard).
+- Follow: the run page shows every step in execution order with its status (`pending/running/done/failed/skipped`),
+  attempts, and its log; the page auto-refreshes while the run is active.
+- **Retry** (failed or canceled run): re-runs from the failed step; earlier `done` steps are NOT re-executed. A simulated `fail` step recovers on retry, so a retry normally unblocks the run.
+- **Cancel**: stops a running run (a simulated wait ends at the next tick).
+- The run's data branch appears on the run; its commits are visible in Database → History, and the review opens the
+  pull request. Deleting definitions while a run is active is refused.
+
+## Execution engine (honest scope)
+
+The default engine is a **local runner inside the API process** (not Temporal): the hosted demo on Render has no
+Temporal server. Run state is persisted in the unversioned `<db>_meta` database (same place as Dolt pull requests),
+so a run interrupted by an API restart **resumes from its pending steps** (a `done` step is never re-done; a data
+step that crashed mid-write left no partial write, the branch working set is reset by the write guard).
+
+The project already runs **activation** through real Temporal when `IAM_TEMPORAL_ADDR` is set
+(`src/temporal/`, tested against a real `temporal server start-dev`). Executing these workflow graphs through
+Temporal as well is a documented next step; the local runner is what the demo shows today, and it is never presented
+as Temporal.
+
+## API (all routes behind AuthGuard + AdminGuard, tenant-scoped)
+
+```
+GET    /tenants/:t/workflows-events               start-trigger catalog (events + payload keys)
+GET    /tenants/:t/workflows                      list definitions (+ trigger)
+POST   /tenants/:t/workflows                      create {name, description, graph, trigger?}
+GET    /tenants/:t/workflows/:id                  one definition (+ execution order)
+PUT    /tenants/:t/workflows/:id                  replace
+DELETE /tenants/:t/workflows/:id                  delete (refused while a run is active)
+POST   /tenants/:t/workflows/:id/runs             start a run
+GET    /tenants/:t/workflow-runs[?definition=]    list runs
+GET    /tenants/:t/workflow-runs/:runId           run + steps + logs
+POST   /tenants/:t/workflow-runs/:runId/retry     retry from the failed step
+POST   /tenants/:t/workflow-runs/:runId/cancel    cancel
+POST   /tenants/:t/workflow-runs/:runId/review    open (or reuse) the Dolt pull request for the run branch
+```
+
+A graph has 1-20 steps, unique ids, typed configs with no unknown keys, and must be acyclic (validated with Kahn's
+algorithm; `apps/api/src/workflows/model.ts`).
+
+## Tests
+
+- `src/workflows/model.spec.ts`: graph validation, trigger validation, placeholder extraction and substitution
+  (10 unit tests, no server needed).
+- `src/workflows/workflows.e2e.spec.ts`: 9 end-to-end tests against a **real Dolt server** (set `DOLT_BIN`; the fake
+  auth mirrors the real guard's contract, the real AdminGuard is used): simulated run (nothing sent, no branch),
+  data run on `wf-<run>` with main untouched until the human merge, SoD conflict logged then refused (409), failure
+  + skip + retry with simulated recovery, fail mode "always", failed data step leaves earlier commits only, cancel, definition CRUD.
+- `src/workflows/triggers.e2e.spec.ts`: 6 end-to-end tests of the start triggers against a real Dolt server: the
+  event catalog, trigger/placeholder validation (400s), `user.created` starts the joiner (placeholders resolved,
+  grant on the run branch only, main untouched), the match filter (a move to sales ignored, finance starts the
+  mover), `user.disabled` starts the leaver which revokes for real on its branch while main keeps the grant until
+  review, and a disabled plugin stops every trigger.
+
+## Limits (POC)
+
+- Sequential execution in topological order (parallel branches of a diamond run one after another, each once).
+- Step types are the six above; there is no expression language, no looping, no compensation.
+- The local runner has exactly-once *effects* per run attempt but a retry re-runs the failed step: data steps are
+  idempotent by construction (INSERT IGNORE / checked DELETE / no-change detection).
+- Definitions and runs live in `_meta`: durable while the Dolt data dir lives, wiped with it on the free hosted demo.

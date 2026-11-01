@@ -1,6 +1,7 @@
 import { currentBranch, workspaceMode } from '../workspace/context.js';
-import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, NotFoundException, Optional } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
+import { AppEvents } from '../events/app-events.service.js';
 import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -8,7 +9,7 @@ import { dirname } from 'node:path';
 /** Profiles are business data on Dolt main. Password hashes NEVER enter Dolt or SQL, including history. */
 @Injectable()
 export class UsersService {
-  constructor(private readonly v: VersioningService) {}
+  constructor(private readonly v: VersioningService, @Optional() private readonly events?: AppEvents) {}
   private ready?: Promise<void>;
   async onModuleInit() { if (workspaceMode()) await this.init(); }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
@@ -69,7 +70,7 @@ export class UsersService {
       return true;
     }));
   }
-  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }) {
+  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo') {
     const branch = currentBranch(true); this.validate(pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {
       const [rows] = await c.query('select * from identities where id=?', [id]); const prev = (rows as Record<string, unknown>[])[0];
@@ -81,8 +82,18 @@ export class UsersService {
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query('call dolt_commit(\'-m\',?)', [`users: ${create ? 'create' : 'update'} ${id}`]); }
     };
-    if(workspaceMode()) await this.v.writeOn(branch,save); else await this.v.lock(()=>this.v.at(branch,save));
-    return (await this.list()).find(x => x.id === id);
+    let prev: Record<string, unknown> | undefined;
+    const capture = async (c: import('mysql2/promise').Connection) => { const [rows] = await c.query('select * from identities where id=?', [id]); prev = (rows as Record<string, unknown>[])[0]; await save(c); };
+    if(workspaceMode()) await this.v.writeOn(branch,capture); else await this.v.lock(()=>this.v.at(branch,capture));
+    const saved = (await this.list()).find(x => x.id === id) as Record<string, unknown> | undefined;
+    // Application events (workflow start triggers): emitted after the write succeeded, fire-and-forget.
+    const at = new Date().toISOString();
+    if (create) this.events?.emit({ type: 'user.created', tenant, branch, at, payload: { subject: id, displayName: String(saved?.display_name ?? ''), department: String(saved?.department ?? ''), email: String(saved?.email ?? '') } });
+    else if (prev) {
+      if (String(prev.department ?? '') !== String(saved?.department ?? '')) this.events?.emit({ type: 'user.department-changed', tenant, branch, at, payload: { subject: id, from: String(prev.department ?? ''), to: String(saved?.department ?? '') } });
+      if (!!prev.login_enabled && saved && !saved.login_enabled) this.events?.emit({ type: 'user.disabled', tenant, branch, at, payload: { subject: id } });
+    }
+    return saved;
   }
   async authenticate(tenant: string, id: string, password: string) {
     if (tenant !== 'acme-demo') return false;

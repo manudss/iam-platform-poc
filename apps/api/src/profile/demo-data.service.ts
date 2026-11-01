@@ -49,13 +49,13 @@ export class DemoDataService implements OnApplicationBootstrap {
       await c.query('create table if not exists org_memberships (tenant varchar(32) not null, subject varchar(32) not null, org_id varchar(32) not null, primary key (tenant, subject, org_id))');
       for (const [id, name, parent] of ORGS) await c.query('insert ignore into organizations values (?,?,?,?)', [tenant, id, name, parent]);
       for (const [s, o] of [['demo-alice', 'root'], ['demo-bob', 'finance'], ...ACCOUNTS.flatMap((a) => a.orgs.map((o) => [a.id, o]))]) await c.query('insert ignore into org_memberships values (?,?,?)', [tenant, s, o]);
-      for (const [id, label, sens] of [['hr-partner', 'HR partner', false], ['security-analyst', 'Security analyst', true], ['sales-rep', 'Sales representative', false]] as const) await c.query('insert ignore into roles values (?,?,?)', [id, label, sens]);
+      for (const [id, label, sens] of [['employee', 'Employee (baseline)', false], ['hr-partner', 'HR partner', false], ['security-analyst', 'Security analyst', true], ['sales-rep', 'Sales representative', false]] as const) await c.query('insert ignore into roles values (?,?,?)', [id, label, sens]);
       for (const a of ACCOUNTS) for (const r of a.roles) await c.query('insert ignore into assignments values (?,?)', [a.id, r]);
       await c.query('insert ignore into assignments values (?,?),(?,?),(?,?)', ['yanis-leroy', 'hr-partner', 'ines-roux', 'security-analyst', 'sarah-fontaine', 'sales-rep']);
       await c.query("call dolt_add('-A')"); await c.query("call dolt_commit('-m', 'demo seed: organizations, memberships, roles and assignments (fictional)')");
     }));
     const reg = await this.branches!.get('main');
-    for (const id of ['organizations', 'hr-attributes']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
+    for (const id of ['organizations', 'hr-attributes', 'workflows-iga']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
     await (await this.branches!.get('main')).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, { fields: { 'hr-attributes.job_title': { selfEdit: true, signup: 'optional' }, 'hr-attributes.phone': { selfEdit: true }, 'hr-attributes.language': { selfEdit: true, signup: 'optional' } }, signup: { open: true }, selfEditPolicy: 'immediate' });
     for (const a of ACCOUNTS) await this.store!.put(tenant, a.id, { 'hr-attributes.job_title': a.title, 'hr-attributes.phone': a.phone, 'hr-attributes.language': a.language, 'hr-attributes.employee_grade': a.grade }, 'live', 'demo-seed');
     await this.v.lock(() => this.v.at('main', async (c) => {

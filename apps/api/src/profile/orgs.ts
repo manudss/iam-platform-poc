@@ -1,7 +1,9 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import type { Connection } from 'mysql2/promise';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ProfileService } from './profile.service.js';
+import { AppEvents } from '../events/app-events.service.js';
+import { currentBranch } from '../workspace/context.js';
 import { Body, Controller, Delete, Param, Patch, Post, Put, Get, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
@@ -58,7 +60,7 @@ export class DoltOrgStore implements OrgStore {
 const ID = /^[a-z0-9-]{1,32}$/;
 @Injectable()
 export class OrgService {
-  constructor(private readonly profile: ProfileService, @Inject(ORG_STORE) private readonly store: OrgStore) {}
+  constructor(private readonly profile: ProfileService, @Inject(ORG_STORE) private readonly store: OrgStore, @Optional() private readonly events?: AppEvents) {}
   private async need(t: string, ref: 'live' | 'work') { if (!(await this.profile.pluginActive(t, 'organizations', ref))) throw new NotFoundException('the organizations plugin is not enabled'); }
   async list(t: string) { await this.need(t, 'work'); return this.store.list(t, 'work'); }
   async create(t: string, actor: string, b: { id?: unknown; name?: unknown; parent_id?: unknown }) {
@@ -101,10 +103,12 @@ export class OrgService {
     await this.need(t, 'work');
     if (!ID.test(subject)) throw new BadRequestException('invalid user id');
     if (!Array.isArray(orgIds) || orgIds.length > 20 || orgIds.some((x) => typeof x !== 'string')) throw new BadRequestException('orgIds: list of organization ids');
+    const before = new Set((await this.store.list(t, 'work')).members.filter((m) => m.subject === subject).map((m) => m.org_id));
     await this.store.write(t, actor, (s) => {
       for (const id of orgIds as string[]) if (!s.orgs.some((o) => o.id === id)) throw new BadRequestException(`unknown organization ${id}`);
       s.members = s.members.filter((m) => m.subject !== subject).concat([...new Set(orgIds as string[])].map((org_id) => ({ subject, org_id })));
     });
+    for (const org of [...new Set(orgIds as string[])]) if (!before.has(org)) this.events?.emit({ type: 'organization.member-added', tenant: t, branch: currentBranch(), at: new Date().toISOString(), payload: { subject, organization: org, actor } });
     return { subject, orgIds: [...new Set(orgIds as string[])] };
   }
   /** Read-only section shown on a profile (live for the person, working for the administrator). Empty when the plugin is off. */

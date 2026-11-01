@@ -31,6 +31,19 @@ export class Session implements OnDestroy {
   readonly activations = signal<Activation[]>([]);
   readonly change = signal<Change | null>(null);
 
+  /** Feature flags from the plugin registry (workflows-iga gates the Workflows feature). Refreshed by the shell; bumped via pluginsVersion after enable/disable. */
+  readonly pluginsVersion = signal(0);
+  readonly workflowsEnabled = signal<boolean | null>(null);
+  private pluginsLoadedAt = 0;
+  async refreshWorkflowsEnabled(force = false): Promise<boolean> {
+    if (!force && this.workflowsEnabled() !== null && Date.now() - this.pluginsLoadedAt < 15000) return this.workflowsEnabled()!;
+    try {
+      const r = await this.api.raw<{ plugins: { id: string; enabled: boolean }[] }>('GET', '/plugins');
+      const on = !!r.data.plugins?.find((p) => p.id === 'workflows-iga')?.enabled;
+      this.workflowsEnabled.set(on); this.pluginsLoadedAt = Date.now();
+      return on;
+    } catch { return this.workflowsEnabled() ?? false; }
+  }
   readonly access = signal<Access | null>(null);
   private accessLoad?: Promise<Access>;
   /** Loaded once per sign-in. If it cannot be read the person is treated as ordinary (nothing is revealed that the API would refuse). */
@@ -38,7 +51,6 @@ export class Session implements OnDestroy {
     return this.accessLoad ??= this.api.raw<Access>('GET', '/me/access', undefined, this.adminToken() ? { 'x-api-admin-token': this.adminToken() } : {}).then((r) => (r.status < 400 ? r.data : { subject: '', admin: false, restricted: true, plugins: {} })).catch(() => ({ subject: '', admin: false, restricted: true, plugins: {} } as Access)).then((a) => { const n = { ...a, plugins: a.plugins ?? {} }; this.access.set(n); return n; });
   }
   refreshAccess() { this.accessLoad = undefined; return this.loadAccess(); }
-
   ngOnDestroy() { clearTimeout(this.expiryTimer); }
 
   say(text: string, tone: Tone = 'info') { this.message.set(text); this.tone.set(tone); }
