@@ -16,6 +16,8 @@ import { VersioningModule } from '../versioning/versioning.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { UsersService } from '../users/users.service.js';
 import { EventsModule } from '../events/events.module.js';
+import { AppEvents } from '../events/app-events.service.js';
+import { SignupService } from '../profile/signup.service.js';
 
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
@@ -65,7 +67,7 @@ const sql = (q: string) => {
 };
 
 describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary missing' }, () => {
-  let dolt: ChildProcess, app: INestApplication, dir: string, home = '', users: UsersService;
+  let dolt: ChildProcess, app: INestApplication, dir: string, home = '', users: UsersService, events: AppEvents;
   let joiner = '', mover = '', leaver = '';
 
   before(async () => {
@@ -84,7 +86,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [EventsModule, WorkflowsModule, VersioningModule, UsersModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13436);
-    users = m.get(UsersService);
+    users = m.get(UsersService); events = m.get(AppEvents);
     await ok('POST', '/plugins/workflows-iga/install', {});
     await ok('POST', '/plugins/workflows-iga/enable', {});
   });
@@ -155,15 +157,45 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     assert.ok(onMain.trim().endsWith('1'), `main keeps the grant until review: ${onMain}`);
   });
 
+  it('user.disabled fires only on the enabled -> disabled transition', async () => {
+    await users.save('jane-doe', { login_enabled: false }, false, undefined, T); // already disabled: no transition
+    await new Promise((r) => setTimeout(r, 2000));
+    assert.equal((await runsOf(leaver)).length, 1, 'saving an already-disabled account starts nothing');
+    await users.save('jane-doe', { login_enabled: true }, false, undefined, T); // re-enable: not a disable
+    await users.save('jane-doe', { login_enabled: false }, false, undefined, T); // real transition again
+    const run = await waitForRun(leaver, 2);
+    assert.equal(run.status, 'completed');
+    assert.equal(run.startedBy, 'event:user.disabled');
+  });
+
+  it('approving a sign-up request really emits signup.approved and starts its workflow', async () => {
+    const signup = ((await ok('POST', '/workflows', { name: 'Signup welcome', description: '', trigger: { event: 'signup.approved' }, graph: { nodes: [
+      { id: 'tell', type: 'notify', name: 'Welcome (simulated)', config: { recipient: 'hr', message: '{{event.subject}} approved ({{event.email}})' } },
+    ], edges: [] } })) as { definition: { id: string } }).definition.id;
+    // Real SignupService with stubbed profile/outbox dependencies; the pending entry is what submit()+confirm() would have stored.
+    const profileStub = { putWorking: async () => {} };
+    const svc = new SignupService(profileStub as never, users, undefined, events);
+    (svc as unknown as { pending: Map<string, unknown> }).pending.set('ida-hope', { id: 'ida-hope', display_name: 'Ida Hope', email: 'ida@example.invalid', values: {}, salt: 's', hash: 'h', tokenHash: 't', confirmed: true, at: Date.now() });
+    await svc.approve(T, 'ida-hope', 'demo-alice');
+    const run = await waitForRun(signup, 1);
+    assert.equal(run.status, 'completed', JSON.stringify(run));
+    assert.equal(run.startedBy, 'event:signup.approved');
+    const view = (await ok('GET', `/workflow-runs/${run.id}`)) as { steps: { node_id: string; log: string[] }[] };
+    assert.ok(view.steps[0].log.some((l) => l.includes('ida-hope approved (ida@example.invalid)')), 'both placeholders resolved from the approval');
+    // The approval creates the user too, which is also a user.created event: the joiner starts as well.
+    await waitForRun(joiner, 2);
+  });
+
   it('while the workflows-iga plugin is disabled, events start nothing (and the API itself 403s)', async () => {
+    const before = (await runsOf(joiner)).length;
     await ok('POST', '/plugins/workflows-iga/disable', {});
     await users.save('john-doe', { id: 'john-doe', display_name: 'John Doe', department: 'it', password: 'x'.repeat(12) }, true, undefined, T);
     await new Promise((r) => setTimeout(r, 2500));
     assert.equal((await call('GET', `/workflow-runs?definition=${joiner}`)).status, 403, 'the whole feature is gated while disabled');
     await ok('POST', '/plugins/workflows-iga/enable', {});
-    assert.equal((await runsOf(joiner)).length, 1, 'no run was started while the plugin was disabled');
+    assert.equal((await runsOf(joiner)).length, before, 'no run was started while the plugin was disabled');
     await users.save('jules-doe', { id: 'jules-doe', display_name: 'Jules Doe', department: 'it', password: 'x'.repeat(12) }, true, undefined, T);
-    const run = await waitForRun(joiner, 2);
+    const run = await waitForRun(joiner, before + 1);
     assert.equal(run.status, 'completed');
   });
 });
