@@ -21,6 +21,7 @@ export class BranchRegistries {
     const ds=new DoltPluginStore(this.v,ref);
     const base={...authPassword,handlers:{'auth.authenticate':async(p:any)=>(await this.users.authenticate(p.tenant,p.subject,p.credential.password))?{outcome:'allow',subject:p.subject,methods:['pwd']}:{outcome:'deny',reason:'bad-credentials'}}};
     const r=new PluginRegistry(ds,ds,e=>console.log('[plugins]',JSON.stringify({...e,branch:ref})),ds);
-    for(const p of [base,notifyLog,authPasswordLockout(new Map(),base),orgManager,riskGeo,hrAttributes,organizations,workflowsIga])r.register(p);    await r.load();return r;
+    for(const p of [base,notifyLog,authPasswordLockout(new Map(),base),orgManager,riskGeo,hrAttributes,organizations,workflowsIga])r.register(p);
+    await r.load();return r;
   }
 }
