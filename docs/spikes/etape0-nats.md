@@ -37,7 +37,7 @@ Configuration : `publish` limité à `core.in.<id>`, `subscribe` limité à `plu
 
 ### JetStream (D5, D16, mail E3)
 - Flux `EVT` (`evt.>`), consommateur durable partagé `mail`, fenêtre de déduplication 120 s.
-- Même `Nats-Msg-Id` publié deux fois : `doublon=true` à la deuxième, un seul message stocké. C'est le mécanisme pour qu'un chemin local et un chemin NATS ne produisent pas d'effet double (avec un identifiant d'effet déterministe, effectKey).
+- Même `Nats-Msg-Id` publié deux fois : `doublon=true` à la deuxième, un seul message stocké. Cela ne dédoublonne que la **publication**, dans la fenêtre de déduplication (120 s ici). Cela ne garantit pas l'absence de double effet : une relivraison (ack perdu, `ack_wait` dépassé, crash du consommateur), un message hors fenêtre, ou un chemin local plus un chemin NATS peuvent exécuter deux fois. L'exécutant doit rester idempotent avec un effectKey (identifiant d'effet déterministe) vérifié côté exécution. Ce comportement n'a pas été testé ici (voir « Non testé »).
 - Deux plugins mail (`e1`, `e2`) tirent depuis le même consommateur : sur 7 messages stockés (1 dédoublonné), `e1` en traite 4 et `e2` 3, sans doublon.
 - Droits JetStream minimaux qui ont suffi pour un consommateur en tirage : `publish` sur `$JS.API.CONSUMER.INFO.EVT.mail`, `$JS.API.CONSUMER.MSG.NEXT.EVT.mail`, `$JS.ACK.EVT.mail.>`, et `subscribe` sur son inbox. Le consommateur est créé par le core.
 - `e1` ne peut pas créer de flux : `Permissions Violation for Publish to $JS.API.STREAM.CREATE.PIRATE`, la requête expire côté client.
@@ -75,5 +75,6 @@ Limites de ces chiffres :
 - Droits sur un serveur Synadia Cloud (authentification par identifiants et JWT, pas par mot de passe).
 - Auth callout, JWT décentralisés, import/export de services entre comptes (lus dans la documentation officielle, pas essayés).
 - Mesure sur le conteneur Render réel, redémarrage et perte de données JetStream.
+- Crash et reprise : relivraison après `ack_wait` dépassé, plugin qui plante avant l'ack, doublon hors fenêtre de déduplication, chemin local plus chemin NATS (D16). L'idempotence par effectKey côté exécutant n'est donc pas démontrée, seulement la déduplication de publication.
 - Comportement après redémarrage du serveur (relecture, durabilité), reprise des consommateurs.
 - Version async-nats et nats-server : essais faits uniquement avec async-nats 0.51.0 et nats-server 2.15.2.
