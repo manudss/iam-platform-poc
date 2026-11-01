@@ -30,7 +30,7 @@ export class Shell {
   /** Ordinary accounts see only their own space. Administration items need the administrator, plugin items need the plugin live. */
   protected visibleNav(): NavGroup[] {
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
-    const plugin: Record<string, string> = { '/organizations': 'organizations' };
+    const plugin: Record<string, string> = { '/organizations': 'organizations', '/journal': 'hooks-journal' };
     return this.nav.map((g) => ({ title: g.title, items: g.items.filter((i) => i.path === '/my-profile' || (adminOk && (!plugin[i.path] || !a || a.plugins?.[plugin[i.path]]))) })).filter((g) => g.items.length);
   }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
@@ -47,7 +47,7 @@ export class Shell {
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
-    { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }] },
+    { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }, { path: '/journal', label: 'Hooks journal', icon: '≋' }] },
     { title: 'Database (Dolt)', items: [
       { path: '/database/branches', label: 'Branches', icon: '⑂' },
       { path: '/database/history', label: 'History', icon: '◷' },

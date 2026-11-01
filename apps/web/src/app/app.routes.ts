@@ -11,6 +11,7 @@ import { OrganizationsPage } from './organizations';
 import { RolesAdminPage } from './roles-admin';
 import { ProfileReviewsPage } from './profile-reviews';
 import { accessGuard, pluginGuard } from './access';
+import { JournalPage } from './journal';
 import { Shell } from './shell';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
@@ -35,6 +36,7 @@ export const routes: Routes = [
       { path: 'assignments', canActivate: [accessGuard], component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
+      { path: 'journal', component: JournalPage, title: 'Hooks journal', canActivate: [accessGuard, pluginGuard('hooks-journal')] },
       { path: 'database', pathMatch: 'full', redirectTo: 'database/branches' },
       { path: 'database/:tab', canActivate: [accessGuard], component: ExplorerPage, title: 'Database (Dolt)' },
     ],
