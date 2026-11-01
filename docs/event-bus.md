@@ -18,6 +18,12 @@ NATS server. It is **not** wired to any real emitter yet: no existing behaviour 
 | WASM subscriber | `handler.rs` | wraps the existing v0 runtime (`decide(hour, sensitive)`); trap, out of fuel or bad payload = silent |
 | Executor idempotency | `handler.rs` `EffectLedger` | an effect with a given `effect_key` runs once per ledger |
 
+### Observation points (prepares the bus-observation milestone, PR #11 idea)
+`Dispatcher::observe(Arc<dyn Observer>)` hands a `BusRecord` to observers after every notify / call / query: envelope id, kind, mode,
+reserved tenant, effect key, payload SIZE (never the content), duration, per-subscriber outcome (replied, silent with reason, invalid reply), merged verdict.
+Silent and refused exchanges are visible. Limits: in process only, synchronous callback (an observer must queue and return), no persistence, so records are lost if
+the core restarts or an observer drops them; only exchanges that go through this core are seen. A durable, loss-free viewer needs a persisted record stream (later step).
+
 ## What is prepared, NOT built (later steps)
 
 Plugin host / contract v2, API protocol, JetStream consumers for durable delivery, journal plugin (D6), absorbing AppEvents of PR #7
@@ -27,6 +33,7 @@ Plugin host / contract v2, API protocol, JetStream consumers for durable deliver
 
 - `EffectLedger` is in memory: it does **not** survive a restart. Crash and resume were NOT tested. One process only; no multi-instance test.
 - Delivery is at most once (request/reply, no redelivery). The NATS `Nats-Msg-Id` dedup (measured in step 0, PR #13) covers publication only and is not used here.
+- Connection: the core retries for up to 20 s at startup (slow host), then runs without the bus and says so in its log. After a first connection async-nats reconnects by itself; while NATS is down the `/v1/bus` self-test returns `deny` (mandatory subscriber silent), checked by stopping and restarting nats-server.
 - Nothing in the existing flows depends on the bus. If NATS is down the core starts and runs without it (`/v1/bus` says `enabled: false`);
   no existing authorization path falls back to "allow" because of the bus. A future flow that needs a mandatory control must treat a missing bus as refusal.
 - Resource numbers (measured locally, debug build): nats-server 13 MB RSS idle; core 23-25 MB. They say nothing about the 0.1 CPU free host.

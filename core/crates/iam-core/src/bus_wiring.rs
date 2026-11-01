@@ -17,7 +17,16 @@ impl Handler for Allow {
 
 impl BusLink {
     pub async fn connect(url: &str, user: &str, pass: &str) -> Result<Self, String> {
-        let (client, errors) = nats::connect(url, user, pass, None).await?;
+        // nats-server may still be starting (slow hosts): retry for a bounded time, then give up with an explicit error.
+        // After the first connection async-nats reconnects by itself; while it is down a mandatory control is refused (fail closed).
+        let started = std::time::Instant::now();
+        let (client, errors) = loop {
+            match nats::connect(url, user, pass, None).await {
+                Ok(c) => break c,
+                Err(e) if started.elapsed() < Duration::from_secs(20) => { tracing::info!("waiting for NATS: {e}"); tokio::time::sleep(Duration::from_millis(500)).await; }
+                Err(e) => return Err(e),
+            }
+        };
         // The self-test subscriber is hosted by the core itself and still reached through NATS (D16).
         nats::serve(client.clone(), "core-selftest", Arc::new(Allow)).await?;
         let cat = Catalogue::new().declare("core.selftest", Mode::Control);

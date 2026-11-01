@@ -41,7 +41,7 @@ if [ "${IAM_DEMO_NATS:-1}" = "1" ] && command -v nats-server >/dev/null 2>&1; th
   NATS_PASS="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   echo '[demo] starting nats-server on 127.0.0.1:4222 (core bus)'
   nats-server -c "$HOME_DIR/nats.conf" >"$HOME_DIR/nats.log" 2>&1 &
-  sleep 1
+  for i in $(seq 1 30); do node -e "require('net').connect(4222,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" 2>/dev/null && break; sleep 1; done
   export IAM_CORE_NATS_URL=127.0.0.1:4222 IAM_CORE_NATS_PASSWORD="$NATS_PASS"
 fi
 echo '[demo] starting iam-core on 127.0.0.1:8081'

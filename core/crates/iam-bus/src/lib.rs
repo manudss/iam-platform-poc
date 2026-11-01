@@ -11,7 +11,7 @@ pub mod registry;
 pub mod transport;
 
 pub use catalogue::{Catalogue, Mode};
-pub use dispatcher::{CallOutcome, Dispatcher, MergedData, SubOutcome, SubStatus};
+pub use dispatcher::{BusRecord, CallOutcome, Observer, Dispatcher, MergedData, SubOutcome, SubStatus};
 pub use envelope::{Envelope, Reply, Verdict};
 pub use handler::{EffectLedger, Handler, HandlerResult, WasmHandler};
 pub use registry::{Registry, Subscription};

@@ -28,7 +28,26 @@ pub struct MergedData {
     pub outcomes: Vec<SubOutcome>,
 }
 
+/// One exchange seen by the core, handed to observers after the fact (step 1 prepares the later bus-observation milestone).
+/// The payload is NOT included (only its size): an observer must not become a way to read sensitive data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BusRecord {
+    pub envelope_id: String,
+    pub kind: String,
+    pub mode: Mode,
+    pub tenant: Option<String>,
+    pub effect_key: Option<String>,
+    pub payload_bytes: usize,
+    pub elapsed_ms: u64,
+    pub outcomes: Vec<SubOutcome>,
+    /// Control calls only: the merged verdict.
+    pub verdict: Option<Verdict>,
+}
+/// Called synchronously after each notify/call/query; must be fast and must not block (queue the record elsewhere).
+pub trait Observer: Send + Sync { fn record(&self, r: &BusRecord); }
+
 pub struct Dispatcher {
+    observers: std::sync::RwLock<Vec<Arc<dyn Observer>>>,
     catalogue: Catalogue,
     registry: Registry,
     transport: Arc<dyn Transport>,
@@ -38,9 +57,18 @@ pub struct Dispatcher {
 
 impl Dispatcher {
     pub fn new(catalogue: Catalogue, transport: Arc<dyn Transport>, default_timeout: Duration) -> Self {
-        Dispatcher { catalogue, registry: Registry::new(), transport, default_timeout, rr: Mutex::new(HashMap::new()) }
+        Dispatcher { observers: Default::default(), catalogue, registry: Registry::new(), transport, default_timeout, rr: Mutex::new(HashMap::new()) }
     }
     pub fn subscribe(&self, s: Subscription) -> Result<(), BusError> { self.registry.add(&self.catalogue, s) }
+    /// Observers see every exchange, including refused ones and silent subscribers. Registering one changes no delivery behaviour.
+    pub fn observe(&self, o: Arc<dyn Observer>) { self.observers.write().unwrap().push(o) }
+    fn emit(&self, env: &Envelope, mode: Mode, t: std::time::Instant, outcomes: &[SubOutcome], verdict: Option<Verdict>) {
+        let obs = self.observers.read().unwrap();
+        if obs.is_empty() { return }
+        let r = BusRecord { envelope_id: env.id.clone(), kind: env.kind.clone(), mode, tenant: env.tenant.clone(), effect_key: env.effect_key.clone(),
+            payload_bytes: env.payload.to_string().len(), elapsed_ms: t.elapsed().as_millis() as u64, outcomes: outcomes.to_vec(), verdict };
+        for o in obs.iter() { o.record(&r) }
+    }
     pub fn unsubscribe(&self, subscriber: &str) { self.registry.remove(subscriber) }
 
     /// One request per subscriber, in parallel, each with its own timeout and its own error: one subscriber failing
@@ -86,13 +114,17 @@ impl Dispatcher {
             chosen.push(members[*n % members.len()].clone());
             *n += 1;
         }
-        Ok(self.ask(env, chosen, self.default_timeout).await)
+        let t = std::time::Instant::now();
+        let out = self.ask(env, chosen, self.default_timeout).await;
+        self.emit(env, Mode::Notify, t, &out, None);
+        Ok(out)
     }
 
     /// Blocking control with a timeout. Any valid deny = deny. A mandatory subscriber without a usable answer = deny
     /// (fail closed, D3). An optional subscriber without a usable answer is ignored. No subscriber at all = allow.
     pub async fn call(&self, env: &Envelope, timeout: Option<Duration>) -> Result<CallOutcome, BusError> {
         self.catalogue.expect(&env.kind, Mode::Control)?;
+        let t0 = std::time::Instant::now();
         let outcomes = self.ask(env, self.registry.matching(&env.kind), timeout.unwrap_or(self.default_timeout)).await;
         let mut reason = None;
         for o in &outcomes {
@@ -107,12 +139,15 @@ impl Dispatcher {
                 _ => {}
             }
         }
-        Ok(CallOutcome { verdict: if reason.is_some() { Verdict::Deny } else { Verdict::Allow }, reason, outcomes })
+        let verdict = if reason.is_some() { Verdict::Deny } else { Verdict::Allow };
+        self.emit(env, Mode::Control, t0, &outcomes, Some(verdict));
+        Ok(CallOutcome { verdict, reason, outcomes })
     }
 
     /// Query: merges the JSON objects given by subscribers (shallow union). Silent optional subscribers are omitted.
     pub async fn query(&self, env: &Envelope, timeout: Option<Duration>) -> Result<MergedData, BusError> {
         self.catalogue.expect(&env.kind, Mode::Query)?;
+        let t0 = std::time::Instant::now();
         let outcomes = self.ask(env, self.registry.matching(&env.kind), timeout.unwrap_or(self.default_timeout)).await;
         let (mut data, mut conflicts, mut refused) = (Map::new(), vec![], None);
         for o in &outcomes {
@@ -132,6 +167,7 @@ impl Dispatcher {
                 _ => {}
             }
         }
+        self.emit(env, Mode::Query, t0, &outcomes, None);
         Ok(MergedData { data: Value::Object(data), conflicts, refused, outcomes })
     }
 }

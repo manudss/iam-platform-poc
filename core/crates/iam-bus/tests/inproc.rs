@@ -83,3 +83,23 @@ async fn trapping_wasm_is_isolated_from_other_subscribers() {
     assert_eq!(r.verdict, Verdict::Allow);
     assert!(matches!(r.outcomes.iter().find(|o| o.subscriber == "loop").unwrap().status, SubStatus::Silent(_)));
 }
+
+#[tokio::test]
+async fn observer_sees_every_exchange_without_payload_and_changes_nothing() {
+    struct Rec(std::sync::Mutex<Vec<BusRecord>>);
+    impl Observer for Rec { fn record(&self, r: &BusRecord) { self.0.lock().unwrap().push(r.clone()) } }
+    let t = Arc::new(InProcTransport::new());
+    let d = Dispatcher::new(cat(), t, Duration::from_millis(50));
+    let rec = Arc::new(Rec(Default::default()));
+    d.observe(rec.clone());
+    d.subscribe(sub("ghost", "auth.check", true, None)).unwrap();
+    let r = d.call(&env("1", "auth.check", json!({"secret": "x"})), None).await.unwrap();
+    assert_eq!(r.verdict, Verdict::Deny);
+    d.notify(&env("2", "user.created", json!({}))).await.unwrap();
+    d.query(&env("3", "profile.get", json!({}) ), None).await.unwrap();
+    let got = rec.0.lock().unwrap().clone();
+    assert_eq!(got.iter().map(|g| (g.envelope_id.as_str(), g.mode)).collect::<Vec<_>>(), vec![("1", Mode::Control), ("2", Mode::Notify), ("3", Mode::Query)]);
+    assert_eq!(got[0].verdict, Some(Verdict::Deny));
+    assert!(matches!(got[0].outcomes[0].status, SubStatus::Silent(_)), "silent subscriber is visible to observers");
+    assert!(got[0].payload_bytes > 0 && !format!("{:?}", got[0]).contains("secret"), "payload content is never exposed");
+}
