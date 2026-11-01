@@ -118,3 +118,21 @@ export const organizations: PluginImpl = {
   manifest: { apiVersion: 'plugin/v1', id: 'organizations', version: '1.0.0', name: 'Organizations (example)', publisher: 'iam-platform', kinds: ['profile'], hooks: [], settings: [] },
   handlers: {},
 };
+
+/**
+ * Hooks journal (read only): a timeline of what the plugin registry did - which plugins could answer a hook and which one did.
+ * Enabling it starts the recording from that moment; nothing earlier is reconstructed. Viewing is a visual re-reading: it never
+ * calls a hook, emits an event or assigns a role. Payloads are masked (credentials dropped, e-mail addresses shortened).
+ * Business events of the application bus are not recorded yet (that bus is not on this branch).
+ */
+export const hooksJournal: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'hooks-journal', version: '0.1.0', name: 'Hooks journal', publisher: 'iam-platform',
+    kinds: ['ui'],
+    description: 'Read-only timeline of plugin hook calls: who could answer, who answered, per period. Starts recording when enabled; never replays anything.',
+    hooks: [],
+    settings: [],
+    screens: [{ id: 'hooks-journal', title: 'Hooks journal', area: 'admin', render: 'schema' }],
+  },
+  handlers: {},
+};

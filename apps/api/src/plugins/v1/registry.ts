@@ -1,4 +1,5 @@
 import { HOOKS, HookHandler, PluginContext } from './hooks.js';
+import { observe } from '../../journal/journal.js';
 import { PluginManifest, validateManifest } from './manifest.js';
 import { settingsExtend, toFormModel, validateSettings, FormModel } from './settings.js';
 
@@ -261,6 +262,22 @@ export class PluginRegistry {
    * - The way out of a fault is an explicit admin action: `disable` (return to a valid base configuration, audited) or `enable` again.
    */
   async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
+    const t0 = Date.now();
+    const candidates = () => [...this.impls.values()].filter((i) => this.isActive(tenant, i.manifest.id) && (i.manifest.provides?.includes(slot) || i.manifest.hooks.some((h) => h.name === hook))).map((i) => i.manifest.id);
+    const seen = (answered: string[], outcome: 'ok' | 'fell-back' | 'refused' | 'error', detail?: string) => {
+      if (!this.isActive(tenant, 'hooks-journal')) return;
+      observe({ tenant, kind: 'plugin-hook', name: hook, slot, mode: 'blocking', candidates: candidates(), answered, outcome, fellBack: outcome === 'fell-back', durationMs: Date.now() - t0, detail, payload, journalActive: true });
+    };
+    try {
+      const r = await this.callSlotInner<R>(tenant, slot, hook, payload, timeoutMs);
+      seen([r.servedBy], r.fellBack ? 'fell-back' : 'ok');
+      return r;
+    } catch (e) {
+      seen([], e instanceof PluginError && e.code === 'plugin-failed' ? 'refused' : 'error', (e as Error).message);
+      throw e;
+    }
+  }
+  private async callSlotInner<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs: number): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
     const primary = this.resolve(tenant, slot);
     const run = async (p: PluginImpl) => {
       const h = p.handlers[hook];
@@ -289,6 +306,8 @@ export class PluginRegistry {
   private done = new Set<string>();
   async emit(tenant: string, hook: string, payload: { effectKey: string }) {
     const out: { plugin: string; result: unknown }[] = [];
+    const answered: string[] = [];
+    const candidates = [...this.impls.values()].filter((i) => this.isActive(tenant, i.manifest.id) && i.manifest.hooks.some((h) => h.name === hook && h.mode === 'async')).map((i) => i.manifest.id);
     for (const p of this.impls.values()) {
       if (!this.isActive(tenant, p.manifest.id)) continue;
       const decl = p.manifest.hooks.find((h) => h.name === hook && h.mode === 'async');
@@ -296,9 +315,17 @@ export class PluginRegistry {
       const key = `${tenant}:${p.manifest.id}:${hook}:${payload.effectKey}`;
       if (this.done.has(key)) continue;
       const settings = validateSettings(p.manifest.settings, (await this.settings.get(tenant, p.manifest.id)) ?? {}).values;
-      out.push({ plugin: p.manifest.id, result: await p.handlers[hook](payload, { tenant, settings }) });
-      this.done.add(key);
+      const t0 = Date.now();
+      try {
+        out.push({ plugin: p.manifest.id, result: await p.handlers[hook](payload, { tenant, settings }) });
+        this.done.add(key);
+        answered.push(p.manifest.id);
+      } catch (e) {
+        observe({ tenant, kind: 'plugin-hook', name: hook, mode: 'async', candidates, answered: [], outcome: 'error', durationMs: Date.now() - t0, detail: (e as Error).message, payload, journalActive: this.isActive(tenant, 'hooks-journal') });
+        throw e;
+      }
     }
+    observe({ tenant, kind: 'plugin-hook', name: hook, mode: 'async', candidates, answered, outcome: answered.length ? 'ok' : 'no-consumer', payload, journalActive: this.isActive(tenant, 'hooks-journal') });
     return out;
   }
 

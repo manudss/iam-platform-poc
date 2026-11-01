@@ -3,7 +3,7 @@ import { VersioningService } from '../../versioning/versioning.service.js';
 import { UsersService } from '../../users/users.service.js';
 import { PluginRegistry } from './registry.js';
 import { DoltPluginStore } from './dolt-stores.js';
-import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations } from './builtin/index.js';
+import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, hooksJournal } from './builtin/index.js';
 /** Separate registries per branch. Authentication always asks for main, never request's working branch. */
 @Injectable()
 export class BranchRegistries {
@@ -21,7 +21,7 @@ export class BranchRegistries {
     const ds=new DoltPluginStore(this.v,ref);
     const base={...authPassword,handlers:{'auth.authenticate':async(p:any)=>(await this.users.authenticate(p.tenant,p.subject,p.credential.password))?{outcome:'allow',subject:p.subject,methods:['pwd']}:{outcome:'deny',reason:'bad-credentials'}}};
     const r=new PluginRegistry(ds,ds,e=>console.log('[plugins]',JSON.stringify({...e,branch:ref})),ds);
-    for(const p of [base,notifyLog,authPasswordLockout(new Map(),base),orgManager,riskGeo,hrAttributes,organizations])r.register(p);
+    for(const p of [base,notifyLog,authPasswordLockout(new Map(),base),orgManager,riskGeo,hrAttributes,organizations,hooksJournal])r.register(p);
     await r.load();return r;
   }
 }
