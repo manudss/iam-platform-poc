@@ -23,7 +23,7 @@ While the plugin is disabled:
 | Family | Types | Effect |
 |---|---|---|
 | **SIMULATED** | `wait`, `notify`, `fail` | Orchestration only. A wait really waits; a `notify` step **only writes a log line — nothing is ever sent** (no e-mail, no message); a `fail` step fails on its first attempt and recovers on retry (`config.mode: "always"` keeps failing, to show a permanently blocked run). |
-| **REAL** (data) | `assign-role`, `revoke-role`, `set-department` | Write business data in Dolt, **always on the run's own branch `wf-<run>` created from `main`**, one commit per step, with the SoD check after an assignment. **A run never writes on `main`.** |
+| **REAL** (data) | `assign-role`, `revoke-role`, `set-department`, `set-profile-field` | Write business data in Dolt, **always on the run's own branch `wf-<run>` created from `main`**, one commit per step, with the SoD check after an assignment. `set-profile-field` records one profile value (`profile_field_values`) for a person. **A run never writes on `main`.** |
 
 Publishing stays the existing human path: from a completed run, "Review & open a pull request" opens the Dolt pull
 request for the run branch; a person reviews the diff and merges (a SoD conflict is refused with 409, exactly like a
@@ -61,7 +61,11 @@ editor's trigger select:
 | `user.created` | an administrator creates a user | `subject`, `displayName`, `department`, `email` |
 | `user.department-changed` | a user's department changes | `subject`, `from`, `to` |
 | `user.disabled` | an account is disabled | `subject` |
+| `signup.requested` | a sign-up request is submitted on the public page (registration) | `subject`, `email` |
 | `signup.approved` | a sign-up request is approved | `subject`, `email` |
+| `profile.updated` | profile values change (administrator edit, or a user's own edit under the immediate policy) | `subject`, `keys`, `actor` |
+| `profile.review-resolved` | a validator accepts or refuses pending profile edits | `subject`, `decision` (`accepted`/`refused`), `actor` |
+| `organization.member-added` | a user joins an organization (one event per newly added organization) | `subject`, `organization`, `actor` |
 
 - **Match filter**: a trigger may restrict the event, e.g. `{event: "user.department-changed", match: {to: "finance"}}`
   starts only on moves INTO finance. Match keys must be payload keys of the event.
@@ -74,8 +78,27 @@ editor's trigger select:
 - Safety: events are fire-and-forget (a failing workflow never breaks the user write that fired it), trigger
   dispatch cannot loop (the engine writes through SQL, never through the services that emit events), and nothing
   starts while the `workflows-iga` plugin is disabled on that branch.
-- Events are emitted from the single write funnel (`UsersService.save`, also used by sign-up approval), so both the
-  admin console and the API produce them.
+- Events are emitted from the single write funnels (`UsersService.save`, also used by sign-up approval;
+  `SignupService.submit`; `ProfileService` admin/self edits and review resolution; `OrgService.assign`), so both the
+  admin console and the API produce them. Live-side events (public sign-up, a user's own profile edit, a review
+  decision) happen on `main`; in the hosted workspace demo the demo seed enables `workflows-iga` on `main` so those
+  runs are visible too, and their branches are reviewed back into `main` like any other run.
+
+## Demo scenarios (seeded)
+
+`IAM_DEMO_DATA_SEED=1` seeds triggered definitions that exercise the whole catalog (all idempotent: a re-seed only
+adds what is missing):
+
+- **Joiner / Mover / Leaver**: `user.created` grants the employee baseline, `user.department-changed` into finance
+  grants accountant, `user.disabled` revokes the baseline (real steps on the run branch + a simulated notify each).
+- **Registration**: `signup.requested` tells HR a request waits (simulated only).
+- **Onboarding**: `signup.approved` records the entry grade (`set-profile-field`, real) and grants the employee
+  baseline (real), then informs the manager (simulated). Approving a sign-up also creates the user, so the Joiner
+  fires on the same action — two workflows answering one registration; the duplicate grant is a logged no-op.
+- **Validation**: `profile.review-resolved` with `decision=accepted` grants the employee baseline (real) — a refused
+  review starts nothing.
+- **Organizations**: `organization.member-added` into finance grants payment-creator (real); into the security
+  office it only logs (simulated) — the sensitive security-analyst role is never granted by a workflow.
 
 ## Runs
 
