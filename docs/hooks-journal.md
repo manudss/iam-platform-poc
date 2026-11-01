@@ -13,7 +13,7 @@ Plugins screen: install `hooks-journal`, then enable it (admin only). Until then
 The journal only contains calls made while the plugin is enabled. `recordingSince` is the time of the first recorded call (null before any call). Earlier periods are empty, never reconstructed. The store is bounded in memory; set `IAM_JOURNAL_FILE` to also append JSON lines (survives restarts).
 
 ## Player ("replay" = watching the history again)
-The page plays the chosen period like an accelerated video: play/pause, speed (x1 to x30; at x1 the whole period lasts 60 s), a position slider, previous/next call, and a detail card for the current call (who could answer, who answered, masked data). Use it to follow what happened, debug, or understand a problem (for example why an access was refused). It never calls a hook again.
+The page plays the chosen period like an accelerated video: play/pause, speed (x1 = real time, x10, x60, x600, x3600, or a separate "Fit the period in 60 s" compressed mode whose effective factor depends on the chosen period and is always displayed), a position slider, previous/next call, and a detail card for the current call (who could answer, who answered, masked data). Use it to follow what happened, debug, or understand a problem (for example why an access was refused). It never calls a hook again.
 
 ## "Replay" = reading
 The screen and API are read only (`GET /tenants/:tenant/journal/entries`, `/summary`). Nothing re-emits a hook or event, answers a request or assigns a role. A replay with effects would be a separate mode needing explicit confirmation.

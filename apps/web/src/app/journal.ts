@@ -16,12 +16,16 @@ export function bucketize(entries: JEntry[], from: number, to: number, n = 24): 
   }
   return out;
 }
-/** Playback: at speed x1 the whole period plays in PLAY_SECONDS seconds (an accelerated video of the recorded history). Pure, no side effect. */
-export const PLAY_SECONDS = 60;
+/** Playback speed is a multiplier of REAL time: x1 = one second of playback is one second of recorded history. `FIT` (0) is a separate compressed mode: the whole period lasts FIT_SECONDS, so its effective factor depends on the period and is always displayed. Pure, no side effect. */
+export const FIT = 0;
+export const FIT_SECONDS = 60;
+export function factor(speed: number, from: number, to: number): number { return speed === FIT ? Math.max(1, (to - from) / (FIT_SECONDS * 1000)) : speed; }
 export function advance(cursor: number, dtMs: number, speed: number, from: number, to: number): { cursor: number; done: boolean } {
-  const c = cursor + dtMs * speed * ((to - from) / (PLAY_SECONDS * 1000));
+  const c = cursor + dtMs * factor(speed, from, to);
   return c >= to ? { cursor: to, done: true } : { cursor: Math.max(from, c), done: false };
 }
+/** Human label of the effective factor, e.g. "x3600 (1 s = 1 h)". */
+export function factorLabel(f: number): string { const r = Math.round(f * 10) / 10; const h = f >= 3600 ? `${Math.round(f / 360) / 10} h` : f >= 60 ? `${Math.round(f / 6) / 10} min` : `${r} s`; return `x${r} (1 s of playback = ${h} of history)`; }
 /** Entries already "seen" at the cursor, oldest first. Display only: nothing is called, emitted or assigned. */
 export function seenAt(entries: JEntry[], cursor: number): JEntry[] { return entries.filter((e) => Date.parse(e.at) <= cursor).sort((a, b) => Date.parse(a.at) - Date.parse(b.at)); }
 /** Time of the previous/next recorded entry relative to the cursor (undefined when there is none). */
@@ -57,10 +61,10 @@ export function silent(e: JEntry): string[] { return e.candidates.filter((c) => 
       <button type="button" id="jr-play" (click)="toggle()" [disabled]="!entries().length">{{playing() ? 'Pause' : (atEnd() ? 'Replay from start' : 'Play')}}</button>
       <button type="button" id="jr-prev" (click)="step(-1)" [disabled]="!entries().length">Previous call</button>
       <button type="button" id="jr-next" (click)="step(1)" [disabled]="!entries().length">Next call</button>
-      <label>Speed<select name="jsp" [ngModel]="speed()" (ngModelChange)="speed.set(+$event)" id="jr-speed"><option [ngValue]="1">x1</option><option [ngValue]="2">x2</option><option [ngValue]="5">x5</option><option [ngValue]="10">x10</option><option [ngValue]="30">x30</option></select></label>
+      <label>Speed<select name="jsp" [ngModel]="speed()" (ngModelChange)="speed.set(+$event)" id="jr-speed"><option [ngValue]="1">x1 (real time)</option><option [ngValue]="10">x10</option><option [ngValue]="60">x60</option><option [ngValue]="600">x600</option><option [ngValue]="3600">x3600</option><option [ngValue]="0">Fit the period in 60 s</option></select></label>
     </div>
     <label class="jr-scrub">Position in the period<input type="range" id="jr-scrub" name="jscr" min="0" max="1000" step="1" [ngModel]="pos()" (ngModelChange)="seek(+$event)" [attr.aria-valuetext]="cursorLabel()"></label>
-    <p class="hint" id="jr-clock">Playback position: {{cursorLabel()}} ({{seen().length}} of {{entries().length}} calls seen). At x1 the period plays in {{playSeconds}} s. This only re-reads the journal: no hook is called again, no event re-emitted, no role assigned.</p>
+    <p class="hint" id="jr-clock">Playback position: {{cursorLabel()}} ({{seen().length}} of {{entries().length}} calls seen). Speed: {{speedLabel()}}. This only re-reads the journal: no hook is called again, no event re-emitted, no role assigned.</p>
     @if (current(); as c) { <div id="jr-step" class="card"><strong>{{c.name}}</strong> at {{c.at.slice(11,19)}} - {{c.outcome}}<br>
       Could answer: @for (x of c.candidates; track x) { <span class="chip">{{x}}</span> } @empty { - } Answered: @for (x of c.answered; track x) { <span class="chip ok">{{x}}</span> } @empty { <span class="chip warn">nobody</span> }
       <br><small>Data sent (masked): {{payloadText(c)}}</small></div> }
@@ -79,8 +83,8 @@ export class JournalPage implements OnDestroy {
   protected entries = signal<JEntry[]>([]); protected buckets = signal<Bucket[]>([]); protected total = signal(0); protected since = signal('');
   protected problem = signal(''); protected off = signal(false); protected period = signal('24h'); protected kind = signal('');
   constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
-  protected silent = silent; protected readonly playSeconds = PLAY_SECONDS;
-  protected playing = signal(false); protected speed = signal(1); protected cursor = signal(0); protected range = signal<[number, number]>([0, 1]);
+  protected silent = silent; 
+  protected playing = signal(false); protected speed = signal(60); protected cursor = signal(0); protected range = signal<[number, number]>([0, 1]);
   private timer: ReturnType<typeof setInterval> | undefined;
   protected pos = computed(() => Math.round(((this.cursor() - this.range()[0]) / Math.max(1, this.range()[1] - this.range()[0])) * 1000));
   protected cursorX = computed(() => (this.pos() / 1000) * 480);
@@ -88,6 +92,7 @@ export class JournalPage implements OnDestroy {
   protected current = computed(() => this.seen().at(-1));
   protected atEnd = computed(() => this.cursor() >= this.range()[1]);
   protected cursorLabel = computed(() => new Date(this.cursor()).toISOString().slice(0, 19).replace('T', ' ') + ' UTC');
+  protected speedLabel = computed(() => (this.speed() === FIT ? 'compressed mode, whole period in ' + FIT_SECONDS + ' s, effective ' : '') + factorLabel(factor(this.speed(), this.range()[0], this.range()[1])));
   protected payloadText(e: JEntry) { return JSON.stringify(e.payload); }
   protected toggle() {
     if (this.playing()) return this.stop();
