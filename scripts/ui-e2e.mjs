@@ -101,7 +101,12 @@ try {
 
   // ---- IAM pages: assignments, SoD, merge, activation ----
   await page.setViewportSize({ width: 1280, height: 900 });
-  await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("demo-bob")');
+  await nav('/assignments');
+  try { await page.waitForSelector('#assignments td:text-is("demo-bob")', { timeout: 30000 }); }
+  catch (e) { // diagnostics for CI: what the page really showed, so a failure is explainable from the log alone
+    console.log('DIAG url', page.url(), '\nDIAG statuses', JSON.stringify(await page.evaluate(() => window.__statuses)), '\nDIAG body', (await page.evaluate(() => document.body.innerText)).slice(0, 1500));
+    await shot('diag-assignments').catch(() => undefined); throw e;
+  }
   assert.ok((await page.locator('#assignments tr', { hasText: 'demo-bob' }).first().innerText()).includes('payment-creator'));
   await page.getByRole('button', { name: 'Simulate', exact: true }).click();
   await page.waitForSelector('text=SoD: demo-bob has payment-creator and payment-approver');
