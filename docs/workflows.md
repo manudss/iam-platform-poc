@@ -39,9 +39,9 @@ read-only observability); community Temporal graph editors are experimental. Reu
 framework-native graph library (ngx-vflow, peer dependency Angular >= 19.2.17, this repo uses Angular 22) covers the
 n8n-style editing experience without rebuilding one.
 
-Three sample scenarios can be loaded from the editor: onboarding (simulated prep + real grant + simulated notice),
-offboarding (real revoke + move + simulated confirmation) and an SoD-blocked grant (completes with a logged conflict,
-merge refused at review).
+Six sample scenarios can be loaded from the editor: three start manually (onboarding, offboarding, an SoD-blocked
+grant whose merge is refused at review) and three start by themselves on application events (joiner on
+`user.created`, mover into finance on `user.department-changed` with a match filter, leaver on `user.disabled`).
 
 Initial canvas framing: custom component nodes only report their real size after Angular renders them, so the editor
 does not fit the view on a fixed timer (which raced the measurement and sometimes framed the graph half-clipped or
@@ -50,9 +50,36 @@ the visible result (every node inside the canvas) and retries a bounded number o
 sizes. When the fit has to shrink the graph below comfortable reading size, the view zooms back toward 1:1 anchored on
 the leftmost node and the user pans to the rest.
 
+## Start triggers (application events)
+
+A definition can carry a **start trigger**: an application event it answers to. When the event fires, a run starts
+by itself — no click. The catalog (`GET /tenants/:t/workflows-events`) is published by the server and feeds the
+editor's trigger select:
+
+| event | fires when | payload keys |
+| --- | --- | --- |
+| `user.created` | an administrator creates a user | `subject`, `displayName`, `department`, `email` |
+| `user.department-changed` | a user's department changes | `subject`, `from`, `to` |
+| `user.disabled` | an account is disabled | `subject` |
+| `signup.approved` | a sign-up request is approved | `subject`, `email` |
+
+- **Match filter**: a trigger may restrict the event, e.g. `{event: "user.department-changed", match: {to: "finance"}}`
+  starts only on moves INTO finance. Match keys must be payload keys of the event.
+- **Placeholders**: step configs may use `{{event.<key>}}` (e.g. `{{event.subject}}` as the identity of a grant).
+  The server refuses a definition whose placeholders do not exist in the trigger's payload, and refuses a manual
+  start of a definition that still needs placeholders — only a real event supplies the values.
+- A triggered run follows the exact same rules as a manual one: same guard (max 3 active runs per definition),
+  real steps write only on the run's own branch `wf-<run>`, the human review merges it. It branches from the branch
+  the event happened on and is reviewed back into it. The run's "started by" reads `event:<type>`.
+- Safety: events are fire-and-forget (a failing workflow never breaks the user write that fired it), trigger
+  dispatch cannot loop (the engine writes through SQL, never through the services that emit events), and nothing
+  starts while the `workflows-iga` plugin is disabled on that branch.
+- Events are emitted from the single write funnel (`UsersService.save`, also used by sign-up approval), so both the
+  admin console and the API produce them.
+
 ## Runs
 
-- Start: **Run** on the definitions page. At most 3 active runs per definition (demo guard).
+- Start: **Run** on the definitions page, or automatically via the definition's start trigger. At most 3 active runs per definition (demo guard).
 - Follow: the run page shows every step in execution order with its status (`pending/running/done/failed/skipped`),
   attempts, and its log; the page auto-refreshes while the run is active.
 - **Retry** (failed or canceled run): re-runs from the failed step; earlier `done` steps are NOT re-executed. A simulated `fail` step recovers on retry, so a retry normally unblocks the run.
@@ -75,8 +102,9 @@ as Temporal.
 ## API (all routes behind AuthGuard + AdminGuard, tenant-scoped)
 
 ```
-GET    /tenants/:t/workflows                      list definitions
-POST   /tenants/:t/workflows                      create {name, description, graph}
+GET    /tenants/:t/workflows-events               start-trigger catalog (events + payload keys)
+GET    /tenants/:t/workflows                      list definitions (+ trigger)
+POST   /tenants/:t/workflows                      create {name, description, graph, trigger?}
 GET    /tenants/:t/workflows/:id                  one definition (+ execution order)
 PUT    /tenants/:t/workflows/:id                  replace
 DELETE /tenants/:t/workflows/:id                  delete (refused while a run is active)
@@ -93,11 +121,17 @@ algorithm; `apps/api/src/workflows/model.ts`).
 
 ## Tests
 
-- `src/workflows/model.spec.ts`: graph validation (7 unit tests, no server needed).
+- `src/workflows/model.spec.ts`: graph validation, trigger validation, placeholder extraction and substitution
+  (10 unit tests, no server needed).
 - `src/workflows/workflows.e2e.spec.ts`: 9 end-to-end tests against a **real Dolt server** (set `DOLT_BIN`; the fake
   auth mirrors the real guard's contract, the real AdminGuard is used): simulated run (nothing sent, no branch),
   data run on `wf-<run>` with main untouched until the human merge, SoD conflict logged then refused (409), failure
   + skip + retry with simulated recovery, fail mode "always", failed data step leaves earlier commits only, cancel, definition CRUD.
+- `src/workflows/triggers.e2e.spec.ts`: 6 end-to-end tests of the start triggers against a real Dolt server: the
+  event catalog, trigger/placeholder validation (400s), `user.created` starts the joiner (placeholders resolved,
+  grant on the run branch only, main untouched), the match filter (a move to sales ignored, finance starts the
+  mover), `user.disabled` starts the leaver which revokes for real on its branch while main keeps the grant until
+  review, and a disabled plugin stops every trigger.
 
 ## Limits (POC)
 
