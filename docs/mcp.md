@@ -38,16 +38,26 @@ tokens: they open only the MCP route, and every other route of the platform keep
 | Area | Tools |
 | --- | --- |
 | Read data | `list_users` (no credential fields), `list_tables`, `read_table`, `query` (one read-only statement), `list_branches`, `diff_vs_main`, `list_pull_requests`, `session_status` |
-| Prepare changes | `execute_write` (filtered write SQL, one Dolt commit), `upsert_user` (created users have `login_enabled=false` and no known password), `assign_role` (with separation-of-duties check) |
+| Read configuration | `list_roles`, `list_organizations`, `list_plugins`, `get_authn_config`, `list_workflows`, `get_workflow`, `list_workflow_runs`, `list_event_records` (event bus observability, scrubbed; the bus has no write route anywhere) |
+| Prepare users and roles | `execute_write` (filtered write SQL, one Dolt commit), `upsert_user` (created users have `login_enabled=false` and no known password), `assign_role` / `unassign_role`, `save_role`, `delete_role`, `add_sod_rule`, `remove_sod_rule` (needs `confirm=true`: it loosens a control) |
+| Prepare configuration | `save_profile_config` (profile fields, validated against the catalogue), `create_organization` / `update_organization` / `delete_organization` / `assign_organizations`, `install_plugin` / `configure_plugin` / `set_plugin_enabled` (sensitive grants - ui components, event hooks - stay console-only), `save_authn_config` (sign-in methods and chains, validated against the methods catalogue) |
+| Prepare workflows | `save_workflow` (create or edit a definition: name, steps graph, start trigger), `delete_workflow` |
 | Work cycle | `request_new_branch` (fresh branch **from main**), `rebase_on_main` (merge main in, conflicts reported), `submit_pull_request` (opens the PR for human review) |
 
 Reads and writes run on the session branch through the **same guarded services as the human console**: the SQL
-filters (`checkSql`), branch write guards, and SoD checks are shared code, not copies.
+filters (`checkSql`), branch write guards, SoD checks, plugin registry, profile/authentication validators and
+the workflow graph validator are shared code, not copies. Feature gates also match the console: organization
+tools need the organizations plugin enabled on the branch, workflow tools need workflows-iga.
 
-Explicitly **not** covered by the MCP surface in this iteration: plugin enable/disable routes, workflow
-operations, profile review flows, mail/outbox handling, authentication-method administration. The AI can still
-edit those areas' *versioned data tables* through `execute_write` where applicable, but their dedicated API
-routes stay human-only.
+**Workflow definitions are versioned** (table `workflow_definitions` in the Dolt database, migrated once from
+the old meta storage at startup): the AI creates and edits them on its branch, the diff is reviewed in the data
+pull request, and they only go live when a human applies it. Runs and steps (execution state) stay unversioned
+in the meta database, and a manual or triggered run always uses the **live** (main) definition, never an
+unreviewed branch edit.
+
+Explicitly **not** covered by the MCP surface: starting or cancelling workflow runs (they execute effects),
+publishing/applying anything to main, user credential enrollments and the outbox, and the Cedar policies
+themselves (they live in git, not in Dolt: changing them is a code review, not a data pull request).
 
 ## What the AI can never do
 
@@ -63,6 +73,9 @@ routes stay human-only.
   contains `secret`/`token`/`password`, the meta database (sessions, PRs) and `information_schema` are refused.
   The check runs on the SQL *skeleton* (literals emptied, comments stripped), so aliases, CTEs, subqueries and
   pre-made views cannot smuggle a sensitive name past it; adversarial shapes are covered by tests.
+- **Execute effects.** `save_workflow` only prepares a definition; no tool starts or cancels a run, so no
+  notification, role grant or provisioning can fire from an MCP call. Sensitive plugin grants (ui components,
+  event hooks) are never granted by MCP tools: they remain a human console action.
 
 ## Authorization per call
 
