@@ -54,10 +54,14 @@ describe('bus host e2e (step 2): plugins served by the core bus', { skip: false 
   let reg: PluginRegistry; let available = false;
 
   before(async () => {
+    let natsErr = false;
     nats = startNats();
-    if (!nats || !(await waitHealth(`http://127.0.0.1:${CORE_PORT}/health`, 1))) { /* core not started yet */ }
-    if (!nats) { if (process.env.IAM_REQUIRE_NATS) assert.fail('nats-server required'); console.error('SKIPPED: no nats-server'); return; }
-    await new Promise((r) => setTimeout(r, 500));
+    nats?.on('error', () => { natsErr = true; });
+    await new Promise((r) => setTimeout(r, 600));
+    if (!nats || natsErr || nats.exitCode !== null) {
+      if (process.env.IAM_REQUIRE_NATS) assert.fail('nats-server required');
+      console.error('SKIPPED: no nats-server'); return;
+    }
     core = startCore();
     if (!core || !(await waitHealth(`http://127.0.0.1:${CORE_PORT}/health`))) {
       if (process.env.IAM_REQUIRE_NATS) assert.fail('core binary required');
