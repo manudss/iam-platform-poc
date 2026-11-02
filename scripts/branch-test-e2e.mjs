@@ -72,6 +72,7 @@ try {
   await page.getByRole('button', { name: 'Refresh branches' }).click();
   await page.waitForFunction(() => document.body.innerText.includes('personal branch'));
   await page.waitForSelector('#test-signin');
+  await page.waitForFunction(() => /demo-alice/.test(document.querySelector('select[name=globalBranch]')?.value ?? ''), undefined, { timeout: 10000 });
   assert.match(await page.locator('select[name=globalBranch]').inputValue(), /demo-alice/, 'the personal branch is selected');
   await shot(page, '1-console-branch-bar');
 
@@ -111,5 +112,24 @@ try {
   assert.equal(await popup.locator('#branch-test-banner').count(), 0, 'banner gone after exit');
   assert.equal(new URL(popup.url()).search, '', 'no branch or ticket left in the address bar');
   await shot(popup, '5-exit-normal-login');
+
+  // ---- stable link from the console: created, shown, persisted as a hash, authorizes the gate, revocable ----
+  await page.click('#stable-link');
+  await page.waitForSelector('#stable-url');
+  const su = await page.locator('#stable-url').inputValue();
+  assert.ok(su.includes('/login?branch=') && su.includes('ticket='), 'the stable URL is shown');
+  const stableTicket = new URL(su).searchParams.get('ticket');
+  await page.waitForFunction(() => document.querySelectorAll('[data-revoke]').length > 0);
+  await shot(page, '6-stable-link-console');
+  const gateOk = await fetch(`http://127.0.0.1:4200/api/tenants/acme-demo/signin/options?branch=demo-alice&ticket=${encodeURIComponent(stableTicket)}`);
+  assert.equal(gateOk.status, 200, 'a stable link authorizes the branch sign-in gate');
+  const meta = spawnSync(dolt, ['--data-dir', data, 'sql', '-q', 'select branch, label, length(token_hash) as h, token_hash from iam_meta.branch_test_links'], { encoding: 'utf8' });
+  assert.equal(meta.status, 0, 'meta db readable: ' + meta.stderr);
+  assert.ok(meta.stdout.includes('demo-alice'), 'the stable link persists in the meta database');
+  assert.ok(!meta.stdout.includes(stableTicket), 'only a hash of the secret is stored');
+  await page.click('[data-revoke]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-revoke]').length === 0, undefined, { timeout: 10000 });
+  const gateRefused = await fetch(`http://127.0.0.1:4200/api/tenants/acme-demo/signin/options?branch=demo-alice&ticket=${encodeURIComponent(stableTicket)}`);
+  assert.ok(gateRefused.status >= 400, 'a revoked stable link no longer authorizes the gate');
   console.log('branch-test UI e2e: OK - screenshots in ' + out);
 } finally { if (browser) await browser.close(); await stopAll(); }
