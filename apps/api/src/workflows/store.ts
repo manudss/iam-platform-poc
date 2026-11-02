@@ -44,16 +44,32 @@ export class WorkflowStore {
             if (!(cols as unknown[]).length) await m.query(`alter table ${table} add column ${column} ${ddl}`);
           }
           await m.query('CREATE TABLE IF NOT EXISTS workflow_steps (run_id VARCHAR(40) NOT NULL, node_id VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, simulated BOOLEAN NOT NULL, attempts INT NOT NULL DEFAULT 0, error VARCHAR(500) NULL, log JSON NULL, started_at DATETIME(3) NULL, finished_at DATETIME(3) NULL, PRIMARY KEY (run_id, node_id))');
+          // One-time migration marker: without it, a definition deleted on main would be resurrected from a stale meta row at the next restart.
+          await m.query('CREATE TABLE IF NOT EXISTS workflow_store_meta (k VARCHAR(40) NOT NULL PRIMARY KEY, v VARCHAR(200) NOT NULL)');
         } finally { await m.end(); }
-        // Definitions moved to the versioned database: create the table on main and copy any pre-existing meta rows once (INSERT IGNORE is a no-op afterwards).
+        // Definitions moved to the versioned database: create the table on main and copy any pre-existing meta rows ONCE (startup-only code, never reachable from a request).
         if (this.v) {
           const v = this.v;
-          await v.lock(() => v.at(v.defaultBranch, async (c) => {
-            await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
-            await c.query(`INSERT IGNORE INTO workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) SELECT tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at FROM \`${this.metaDb}\`.workflow_definitions`);
-            const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
-            if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
-          }));
+          const m = await this.open();
+          let already = true;
+          try { const [r] = await m.query("select v from workflow_store_meta where k = 'defs_migrated'"); already = (r as unknown[]).length > 0; } finally { await m.end(); }
+          if (!already) {
+            await v.lock(() => v.at(v.defaultBranch, async (c) => {
+              await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
+              await c.query(`INSERT IGNORE INTO workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) SELECT tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at FROM \`${this.metaDb}\`.workflow_definitions`);
+              const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
+              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
+            }));
+            const m2 = await this.open();
+            try { await m2.query("insert into workflow_store_meta (k, v) values ('defs_migrated', ?)", [new Date().toISOString()]); } finally { await m2.end(); }
+          } else {
+            // Marker set: still make sure the versioned table exists (fresh main after the marker db was kept).
+            await v.lock(() => v.at(v.defaultBranch, async (c) => {
+              await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
+              const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
+              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
+            }));
+          }
         }
       })().catch((e) => { this.ready = undefined; throw e; });
     }

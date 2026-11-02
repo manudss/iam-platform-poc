@@ -64,6 +64,31 @@ export class WorkflowsService {
     return { deleted: wid };
   }
 
+  /**
+   * Test a definition ON THE CURRENT REF without executing anything: validates the graph, walks it in order,
+   * substitutes the sample event payload, and describes what every step WOULD do. No run row, no run branch,
+   * no write on any branch, no notification: the only record of the test is the caller's own trace.
+   */
+  async dryRun(tenant: string, id: unknown, payload?: Record<string, unknown>) {
+    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), currentBranch());
+    if (!d) throw new NotFoundException('unknown workflow');
+    const { order } = validateGraph(d.graph);
+    const eventPayload: Record<string, string> = {};
+    for (const [k, v] of Object.entries(payload ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) eventPayload[k] = String(v).slice(0, 200);
+    const autoFilled: string[] = [];
+    if (d.trigger) for (const key of WF_EVENTS[d.trigger.event]?.payload ?? []) if (!(key in eventPayload)) { eventPayload[key] = `<${key}>`; autoFilled.push(key); }
+    const resolved = substituteEventPayload(d.graph, eventPayload);
+    const steps = order.map((nodeId) => {
+      const n = resolved.nodes.find((x) => x.id === nodeId)!;
+      const simulated = STEP_TYPES[n.type].simulated;
+      return {
+        step: n.id, type: n.type, name: n.name, simulated, config: n.config,
+        would: simulated ? 'write a log line only (a simulated step never has an external effect)' : 'a REAL data write on the run branch - NOT executed in this test',
+      };
+    });
+    return { definition: d.id, name: d.name, trigger: d.trigger, autoFilledEventKeys: autoFilled, steps, dataSteps: steps.filter((x) => !x.simulated).length, executed: false, note: 'test only: nothing was executed, written, sent or stored' };
+  }
+
   async start(tenant: string, id: unknown, sub: unknown, event?: { branch: string; payload: Record<string, string> }) {
     // A run executes effects now, so it always uses the LIVE (main) definition, never an unreviewed branch edit.
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), this.store.liveRef);

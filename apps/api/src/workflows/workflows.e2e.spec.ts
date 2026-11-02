@@ -14,6 +14,9 @@ import { WorkflowsModule } from './workflows.module.js';
 import { WorkflowsController } from './workflows.controller.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
+import { VersioningService } from '../versioning/versioning.service.js';
+import { WorkflowStore } from './store.js';
+import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
 
 const root = resolve(process.cwd(), '../..');
@@ -234,5 +237,23 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(list.definitions.some((d) => d.id === def.definition.id && d.steps === 2));
     await ok('DELETE', `/workflows/${def.definition.id}`);
     assert.equal((await call('GET', `/workflows/${def.definition.id}`)).status, 404);
+  });
+
+  it('meta->main migration runs ONCE: a definition deleted afterwards is not resurrected at the next startup', async () => {
+    // simulate a pre-migration meta row (the old unversioned storage) and force re-migration
+    const meta = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam_meta', dateStrings: true });
+    try {
+      await meta.query('delete from workflow_definitions where tenant=? and id=?', [T, 'wf-stale-meta']);
+      await meta.query("delete from workflow_store_meta where k='defs_migrated'");
+      await meta.query('insert into workflow_definitions (tenant,id,name,description,graph,trigger_json,created_by,created_at,updated_at) values (?,?,?,?,?,null,?,?,?)',
+        [T, 'wf-stale-meta', 'Stale from meta', 'old storage', JSON.stringify({ nodes: [{ id: 'n', type: 'notify', name: 'N', config: { recipient: 'x', message: 'y' } }], edges: [] }), 'test', '2026-01-01 00:00:00.000', '2026-01-01 00:00:00.000']);
+    } finally { await meta.end(); }
+    const s1 = new WorkflowStore(app.get(VersioningService));
+    await s1.listRuns(T); // first meta access runs the startup bootstrap, including the migration
+    assert.ok(await s1.getDefinition(T, 'wf-stale-meta', s1.liveRef), 'first startup migrates the stale meta row to main');
+    assert.ok(await s1.deleteDefinition(T, 'wf-stale-meta', s1.liveRef), 'deleted on main');
+    const s2 = new WorkflowStore(app.get(VersioningService)); // a second "restart"
+    await s2.listRuns(T);
+    assert.equal(await s2.getDefinition(T, 'wf-stale-meta', s2.liveRef), null, 'the marker prevents resurrection from the stale meta row');
   });
 });
