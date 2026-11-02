@@ -8,8 +8,9 @@ CREATE TABLE IF NOT EXISTS assignments (identity_id VARCHAR(32), role_id VARCHAR
 CREATE TABLE IF NOT EXISTS plugin_config (tenant VARCHAR(32), plugin VARCHAR(64), enabled BOOLEAN NOT NULL DEFAULT FALSE, settings JSON NOT NULL, PRIMARY KEY (tenant, plugin));
 CREATE TABLE IF NOT EXISTS sod_rules (role_a VARCHAR(32), role_b VARCHAR(32), PRIMARY KEY (role_a, role_b));
 INSERT IGNORE INTO identities VALUES ('demo-alice','Alice Demo',NULL,'finance'),('demo-bob','Bob Demo','demo-alice','finance');
-INSERT IGNORE INTO roles VALUES ('accountant','Accountant',FALSE),('payment-approver','Payment approver',TRUE),('payment-creator','Payment creator',TRUE);
+INSERT IGNORE INTO roles VALUES ('accountant','Accountant',FALSE),('payment-approver','Payment approver',TRUE),('payment-creator','Payment creator',TRUE),('mcp-operator','MCP operator (AI sessions)',TRUE);
 INSERT IGNORE INTO assignments VALUES ('demo-bob','payment-creator');
+INSERT IGNORE INTO assignments VALUES ('demo-alice','mcp-operator');
 INSERT IGNORE INTO sod_rules VALUES ('payment-creator','payment-approver');
 CALL DOLT_ADD('-A');
 CALL DOLT_COMMIT('-m','demo seed');
