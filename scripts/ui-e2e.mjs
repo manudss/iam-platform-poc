@@ -52,7 +52,7 @@ const CORE_TOKEN = 'local-core-admin-token-demo';
 const NATS = process.env.NATS_BIN;
 if (NATS) { run(NATS, ['-c', join(root, 'conf/nats-local.conf')]); await sleep(1000); }
 run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE, IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, ...(NATS ? { IAM_CORE_NATS_URL: '127.0.0.1:4222', IAM_CORE_NATS_PASSWORD: 'core-dev' } : {}) } });
-run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } });
+run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_WORKSPACE_MODE: '1', IAM_PLUGIN_STORE: 'dolt', IAM_DIRECTORY_AUTH: '1', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } }); // the console is built for workspace mode (personal branch + Review & Apply), like demo/start.sh and scripts/workspace-e2e.mjs
 if (!process.env.WEB_ALREADY_SERVED) run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
 let browser;
 try {
@@ -103,7 +103,14 @@ try {
   assert.match(await page.locator('header .who').innerText(), /demo-alice/);
   await shot('2-signed-in-deep-link');
 
-  // ---- IAM pages: assignments, SoD, merge, activation ----
+  // Workspace administration is fail-closed: without the admin capability token the console asks for it and opens no data branch.
+  await status('Enter the admin capability token');
+  assert.ok(((await page.textContent('body')) ?? '').includes('Choose your working branch'), 'no administration page before a working branch is open');
+  await setToken();
+  await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await status('personal branch');
+
+  // ---- IAM pages: assignments, SoD staging, refused then successful Review & Apply, activation journal ----
   await page.setViewportSize({ width: 1280, height: 900 });
   await nav('/assignments');
   try { await page.waitForSelector('#assignments td:text-is("demo-bob")', { timeout: 30000 }); }
@@ -112,17 +119,21 @@ try {
     await shot('diag-assignments').catch(() => undefined); throw e;
   }
   assert.ok((await page.locator('#assignments tr', { hasText: 'demo-bob' }).first().innerText()).includes('payment-creator'));
-  await page.getByRole('button', { name: 'Simulate', exact: true }).click();
+  // Stage the SoD-conflicting assignment on the personal branch, then try to publish it: Apply must be refused with the violation.
+  await page.getByRole('button', { name: 'Stage assignment' }).click();
   await page.waitForSelector('text=SoD: demo-bob has payment-creator and payment-approver');
   await shot('3-sod-violation');
-  await page.getByRole('button', { name: 'Merge into main' }).click(); await status('Merge refused (409)');
+  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
+  await page.click('#workspace-apply'); await status('Apply refused');
+  // The refused change stays on its branch. A clean change goes from a fresh branch to main and is journaled as an activation.
+  await page.fill('input[name=workspaceNewBranch]', 'ui-clean'); await page.getByRole('button', { name: 'Create & select' }).click();
+  await status('Working on ui-clean');
   await page.fill('input[name=identity]', 'demo-alice'); await page.fill('input[name=role]', 'accountant');
-  await page.getByRole('button', { name: 'Simulate', exact: true }).click(); await status('Simulation OK');
-  await page.getByRole('button', { name: 'Merge into main' }).click(); await status('Merged into main');
-  await page.waitForSelector('#assignments td:text-is("accountant")');
-  await nav('/activation');
-  await page.getByRole('button', { name: 'Activate current main' }).click(); await status('Activated main head as #1');
-  await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
+  await page.getByRole('button', { name: 'Stage assignment' }).click(); await status('Simulation OK');
+  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
+  await page.click('#workspace-apply'); await status('Applied');
+  await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("accountant")');
+  await nav('/activation'); await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
   await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');
 
   // ---- event bus observer (real core + NATS; only with NATS_BIN) ----
@@ -163,9 +174,12 @@ try {
   // refresh on a deep link: the in-memory token is gone, so sign-in comes first and then the same plugin page opens again
   await page.reload(); await page.waitForSelector('#signin-browser'); assert.equal(path(), '/login');
   await coreLogin();
+  await status('Enter the admin capability token'); // the automatic open is refused first (no token in memory after a reload)
+  await setToken();
+  await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await status('personal branch');
   await page.waitForSelector('#plugins table'); assert.equal(path(), '/plugins/auth-password-lockout');
   await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
-  await setToken();
 
   // ---- database explorer, section by section (one component instance across the sections) ----
   await page.setViewportSize({ width: 1280, height: 1100 });
@@ -201,9 +215,8 @@ try {
   await noBanner('explorer end');
   // an internal jump changes the address too: branches -> compare with main
   await nav('/database/branches'); await page.waitForSelector('text=protected');
-  // the IAM pages still work after the explorer merged a PR into Dolt main
-  await nav('/activation');
-  await page.getByRole('button', { name: 'Activate current main' }).click(); await status('Activated main head as #2');
+  // the IAM pages still work after the explorer merged a PR into Dolt main (a PR merge changes data only; publishing stays with Apply)
+  await nav('/activation'); await page.waitForSelector('td:text-is("#1")');
   await noBanner('activation after PR merge');
 
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
@@ -211,7 +224,7 @@ try {
   for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
     await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
-    if (path() === '/login') await coreLogin();
+    if (path() === '/login') { await coreLogin(); await status('Enter the admin capability token'); await setToken(); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
     await page.waitForFunction((x) => location.pathname.startsWith(x), p);
     await page.waitForSelector('main.content section, main.content .stats');
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
