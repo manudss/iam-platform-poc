@@ -35,3 +35,6 @@ nav a.active { background: #312e81; color: #fff; box-shadow: inset 3px 0 0 #818c
 .top button { white-space: nowrap; }
 
 .workspace-bar{background:#fff;border-bottom:1px solid var(--line);padding:.7rem 1.5rem}.workspace-bar label{margin:0}.workspace-bar .hint{margin:.5rem 0 0}.workspace-bar input{max-width:170px}.workspace-bar select{max-width:260px}@media(max-width:600px){.workspace-bar{padding:.7rem 1rem}.workspace-bar .row{align-items:stretch}.workspace-bar label{width:100%}.workspace-bar input,.workspace-bar select{width:100%;max-width:none;box-sizing:border-box}}
+
+.test-bar{display:flex;align-items:center;gap:.75rem;padding:.45rem .9rem;background:#fffbeb;border-bottom:1px solid #fcd34d;color:#92400e;font-size:.85rem}
+.test-bar button{margin-left:auto;white-space:nowrap}
