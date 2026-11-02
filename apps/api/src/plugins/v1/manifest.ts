@@ -70,6 +70,19 @@ export interface UiScreen {
   component?: string;
 }
 
+/** v2: a bus-only subscription to a custom event kind of the plugin's own namespace `plg.<id>.*`.
+ * Platform hooks are already declared in `hooks`; this is for events the plugin defines itself. */
+export interface SubscribeDecl {
+  /** Custom kind, must start with `plg.<pluginId>.`. */
+  name: string;
+  /** `async` = notify delivery (fire and forget, `group` allowed); `blocking` = the core waits for an answer (`mandatory` allowed). */
+  mode: HookMode;
+  /** Blocking only: a missing answer refuses the call (fail closed). */
+  mandatory?: boolean;
+  /** Async only: one-of delivery group (one member receives each event). */
+  group?: string;
+}
+
 export interface PluginManifest {
   apiVersion: 'plugin/v1';
   id: string; // lowercase-kebab
@@ -93,6 +106,10 @@ export interface PluginManifest {
   screens?: UiScreen[];
   /** Profile fields this plugin adds (kind `profile`). Values live in the core profile value store; a plugin cannot add columns to the identities table. */
   profileFields?: ProfileFieldDecl[];
+  /** v2: custom event kinds (namespace `plg.<id>.*`) this plugin answers without a platform hook. Each needs a handler of the same name. */
+  subscribes?: SubscribeDecl[];
+  /** v2: custom event kinds (namespace `plg.<id>.*`) this plugin may emit on the bus. The core checks this grant before accepting an emission. */
+  emits?: string[];
 }
 
 const ID = /^[a-z][a-z0-9-]{1,48}$/;
@@ -143,6 +160,17 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     }
   }
   for (const s of m.install?.seed ?? []) if (!s.table.toLowerCase().startsWith(prefix)) errs.push(`seed table ${s.table} must start with ${prefix}`);
+  const ns = `plg.${m.id ?? ''}.`;
+  const hookNames = new Set((m.hooks ?? []).map((h) => h.name));
+  for (const s of m.subscribes ?? []) {
+    if (!s.name?.startsWith(ns)) errs.push(`subscribes: ${s.name} must be in the plugin's own namespace ${ns}*`);
+    if (hookNames.has(s.name)) errs.push(`subscribes: ${s.name} is already a declared hook`);
+    if (s.mode === 'blocking' && s.group) errs.push(`subscribes: ${s.name}: a group only applies to async (notify) kinds`);
+    if (s.mode === 'async' && s.mandatory) errs.push(`subscribes: ${s.name}: mandatory only applies to blocking (control) kinds`);
+  }
+  for (const e of m.emits ?? []) {
+    if (!e?.startsWith(ns)) errs.push(`emits: ${e} must be in the plugin's own namespace ${ns}*`);
+  }
   errs.push(...validateFieldDecls(m.id, m.profileFields));
   if (m.base && m.extends) errs.push('a base plugin cannot extend another plugin');
   if (m.base && !(m.provides?.length)) errs.push('a base plugin must provide a slot');
