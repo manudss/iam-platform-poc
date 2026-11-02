@@ -3,6 +3,7 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
+import { branchName } from '../versioning/guards.js';
 import { BASE_FIELDS, CORE_PROFILE_SETTINGS_ID, CatalogField, Context, EffectiveField, ProfileConfig, checkValue, effectiveSchema, parseProfileConfig, settingFor, toCatalog, validateProfileConfig } from './fields.js';
 import { ProfileValueStore, Values } from './store.js';
 import { AppEvents } from '../events/app-events.service.js';
@@ -61,45 +62,44 @@ export class ProfileService {
     await this.subject(tenant, sub, ref);
     const policy = await this.selfEditPolicy(tenant, ref);
     // Branch test: the values come from the tested branch; the pending-review mechanism (shared personal branches) is not part of a test.
-    const live = await this.store.get(tenant, sub, ref), pending = ref === 'live' && policy === 'review' ? await this.store.pending(tenant, sub) : {};
+    const live = await this.store.get(tenant, sub, ref), pending = policy === 'review' ? await this.store.pending(tenant, sub, ref === 'work' ? currentBranch() : 'main') : {};
     const shown = { ...(await this.baseValues(sub, ref)), ...live } as Record<string, unknown>; for (const [k, v] of Object.entries(pending)) { if (v === null) delete shown[k]; else shown[k] = v; }
     return { ...(await this.visible(tenant, 'self', ref, shown as Values)), policy, pending: Object.keys(pending), ...(ref === 'work' ? { branchTest: true as const } : {}) };
   }
-  /** Immediate policy: live at once (main). Review policy: the edits wait on the person's own branch until a validator accepts them. */
+  /** Immediate policy: the value changes at once (on main live, on the tested branch in a branch test). Review policy: the edits wait on the person's own pending change set until a validator accepts them — the same circuit on main and in a branch test; in a test the set is cut from and merged back into the TESTED branch, never main. */
   async patchSelf(tenant: string, sub: string, input: unknown, ref: 'live' | 'work' = 'live') {
     await this.subject(tenant, sub, ref);
     const changes = await this.check(tenant, ref, 'self', input);
-    if (ref === 'work') {
-      // Branch test: the edit is committed to the TESTED branch only, immediately. It never touches main or the shared
-      // pending-review flow, whatever the configured policy; Apply remains the only way to publish anything.
-      await this.store.put(tenant, sub, changes, 'work', sub);
-      this.events?.emit({ type: 'profile.updated', tenant, branch: currentBranch(), at: new Date().toISOString(), payload: { subject: sub, keys: Object.keys(changes).join(','), actor: sub } });
-      return { ...(await this.self(tenant, sub, ref)), note: 'branch test: written to the tested branch only; the review flow does not apply here' };
-    }
-    if (await this.selfEditPolicy(tenant) === 'review') await this.store.putPending(tenant, sub, changes, sub);
+    const branch = ref === 'work' ? currentBranch() : 'main';
+    if (await this.selfEditPolicy(tenant, ref) === 'review') await this.store.putPending(tenant, sub, changes, sub, branch);
     else {
-      await this.store.put(tenant, sub, changes, 'live', sub);
-      this.events?.emit({ type: 'profile.updated', tenant, branch: 'main', at: new Date().toISOString(), payload: { subject: sub, keys: Object.keys(changes).join(','), actor: sub } });
+      await this.store.put(tenant, sub, changes, ref, sub);
+      this.events?.emit({ type: 'profile.updated', tenant, branch, at: new Date().toISOString(), payload: { subject: sub, keys: Object.keys(changes).join(','), actor: sub } });
     }
-    return this.self(tenant, sub);
+    return this.self(tenant, sub, ref);
   }
   /** Validator view: who has pending edits and what would change (current live value next to the proposed one). Profile values only: no authority field can be in a pending set. */
   async reviews(tenant: string) {
     const out = [];
-    for (const s of await this.store.listPending(tenant)) {
-      const pend = await this.store.pending(tenant, s); if (!Object.keys(pend).length) continue;
-      const live = await this.store.get(tenant, s, 'live'), cat = await this.catalogue(tenant, 'live');
-      out.push({ subject: s, changes: Object.entries(pend).map(([k, to]) => ({ key: k, label: cat.find((c) => c.fullKey === k)?.label ?? k, from: live[k] ?? null, to })) });
+    for (const { subject: s, base } of await this.store.listPending(tenant)) {
+      if (base !== 'main' && currentBranch() !== base) continue; // a branch test's reviews are handled from that branch's console
+      const pend = await this.store.pending(tenant, s, base); if (!Object.keys(pend).length) continue;
+      const ref = base === 'main' ? 'live' : 'work';
+      const live = await this.store.get(tenant, s, ref), cat = await this.catalogue(tenant, ref);
+      out.push({ id: base === 'main' ? s : `${s};${base}`, subject: s, ...(base !== 'main' ? { branch: base } : {}), changes: Object.entries(pend).map(([k, to]) => ({ key: k, label: cat.find((c) => c.fullKey === k)?.label ?? k, from: live[k] ?? null, to })) });
     }
     return { policy: await this.selfEditPolicy(tenant), reviews: out };
   }
-  /** A validator cannot accept their own edits (separation of duties). Accepting merges the personal branch into main, refusing deletes it. */
-  async resolveReview(tenant: string, subject: string, accept: boolean, actor: string) {
+  /** A validator cannot accept their own edits (separation of duties). Accepting merges the personal branch into its base (main, or the tested branch whose console the validator is using), refusing deletes it. */
+  async resolveReview(tenant: string, id: string, accept: boolean, actor: string) {
+    const i = id.lastIndexOf(';');
+    const subject = i < 0 ? id : id.slice(0, i), base = i < 0 ? 'main' : id.slice(i + 1);
     if (!SUBJECT.test(subject)) throw new BadRequestException('invalid user id');
+    if (base !== 'main') { branchName(base); if (currentBranch() !== base) throw new ForbiddenException(`select the ${base} branch to review these edits`); }
     if (accept && subject === actor) throw new ForbiddenException('you cannot accept your own pending edits: another validator must');
-    if (!Object.keys(await this.store.pending(tenant, subject)).length) throw new NotFoundException('nothing pending for this user');
-    await this.store.resolvePending(tenant, subject, accept, actor);
-    this.events?.emit({ type: 'profile.review-resolved', tenant, branch: 'main', at: new Date().toISOString(), payload: { subject, decision: accept ? 'accepted' : 'refused', actor } });
+    if (!Object.keys(await this.store.pending(tenant, subject, base)).length) throw new NotFoundException('nothing pending for this user');
+    await this.store.resolvePending(tenant, subject, accept, actor, base);
+    this.events?.emit({ type: 'profile.review-resolved', tenant, branch: base, at: new Date().toISOString(), payload: { subject, decision: accept ? 'accepted' : 'refused', actor } });
     return { resolved: accept ? 'accepted' : 'refused', subject };
   }
   async admin(tenant: string, id: string) { await this.subject(tenant, id, 'work'); return this.visible(tenant, 'admin', 'work', { ...(await this.baseValues(id, 'work')), ...(await this.store.get(tenant, id, 'work')) } as Values); }

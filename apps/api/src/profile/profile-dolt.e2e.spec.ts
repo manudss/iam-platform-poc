@@ -64,15 +64,32 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     await store.putPending(T, 'pend-dan', { 'hr-attributes.language': 'en' }, 'pend-dan'); // same branch reused
     assert.deepEqual(await store.get(T, 'pend-dan', 'live'), { [F]: 'Old' }, 'main untouched');
     assert.deepEqual(await store.pending(T, 'pend-dan'), { [F]: 'New', 'hr-attributes.language': 'en' });
-    assert.ok((await store.listPending(T)).includes('pend-dan'));
+    assert.ok((await store.listPending(T)).some((p) => p.subject === 'pend-dan' && p.base === 'main'));
     assert.equal((await v.branches()).branches.filter((b) => b.name === 'profile-pend-dan').length, 1);
     await store.resolvePending(T, 'pend-dan', true, 'validator');
     assert.deepEqual(await store.get(T, 'pend-dan', 'live'), { [F]: 'New', 'hr-attributes.language': 'en' });
-    assert.deepEqual(await store.pending(T, 'pend-dan'), {}); assert.ok(!(await store.listPending(T)).includes('pend-dan'));
+    assert.deepEqual(await store.pending(T, 'pend-dan'), {}); assert.ok(!(await store.listPending(T)).some((p) => p.subject === 'pend-dan'));
     await store.putPending(T, 'pend-dan', { [F]: 'Bad' }, 'pend-dan'); await store.resolvePending(T, 'pend-dan', false, 'validator');
     assert.equal((await store.get(T, 'pend-dan', 'live'))[F], 'New'); assert.deepEqual(await store.pending(T, 'pend-dan'), {});
-    await store.putPending(T, 'Odd.User@x', { [F]: 'x' }, 'Odd.User@x'); assert.ok((await store.listPending(T)).includes('Odd.User@x'), 'subject encoding round-trips');
+    await store.putPending(T, 'Odd.User@x', { [F]: 'x' }, 'Odd.User@x'); assert.ok((await store.listPending(T)).some((p) => p.subject === 'Odd.User@x' && p.base === 'main'), 'subject encoding round-trips');
     await store.resolvePending(T, 'Odd.User@x', false, 'validator');
+  });
+
+  it('a pending change set against another base branch merges back into that branch, never main', async () => {
+    const v = new VersioningService(); const store = new DoltProfileStore(v, () => 'main');
+    const F = 'hr-attributes.job_title';
+    await v.createBranch('preprod-x', 'main');
+    await store.putPending(T, 'pend-eve', { [F]: 'Pre' }, 'pend-eve', 'preprod-x');
+    assert.ok((await store.listPending(T)).some((p) => p.subject === 'pend-eve' && p.base === 'preprod-x'));
+    assert.deepEqual(await store.pending(T, 'pend-eve', 'preprod-x'), { [F]: 'Pre' });
+    assert.deepEqual(await store.pending(T, 'pend-eve'), {}, 'main scope untouched');
+    await store.resolvePending(T, 'pend-eve', true, 'validator', 'preprod-x');
+    await v.at('preprod-x', async (c) => {
+      const [rows] = await c.query('select field_key from profile_field_values where tenant=? and subject=?', [T, 'pend-eve']);
+      assert.ok((rows as { field_key: string }[]).some((r) => r.field_key === F), 'value landed on the base branch');
+    });
+    assert.deepEqual(await store.get(T, 'pend-eve', 'live'), {}, 'main untouched by a branch-scoped acceptance');
+    await v.deleteBranch('preprod-x', async () => false);
   });
 
   it('same field, same person: self edit on main after the admin edit on the branch is an explicit conflict, never a silent loss', async () => {
