@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, UseGuards, BadRequestException, ConflictException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Req, UseGuards, BadRequestException, ConflictException } from '@nestjs/common';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -24,7 +24,9 @@ export class WorkspaceController {
  const run=this.chain.then(()=>this.applyOnce(b,req,tenant));this.chain=run.catch(()=>undefined);return run;
  }
  /** Issues the short-lived ticket that opens a sign-in test of one data branch (docs/branch-test.md). Administrators only. */
- @Post('branch-test') createBranchTest(@Param('tenant')tenant:string,@Body()b:{branch?:string},@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.create(req.user?.sub,String(b?.branch??''));}
+ @Post('branch-test') createBranchTest(@Param('tenant')tenant:string,@Body()b:{branch?:string;stable?:boolean;label?:string},@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.create(req.user?.sub,String(b?.branch??''),{stable:b?.stable===true,label:typeof b?.label==='string'?b.label:''});}
+ @Get('branch-test') listBranchTests(@Param('tenant')tenant:string,@Req()req:{user?:{branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.list();}
+ @Delete('branch-test/:id') revokeBranchTest(@Param('tenant')tenant:string,@Param('id')id:string,@Req()req:{user?:{branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.revoke(id);}
  private async applyOnce(b:{confirm?:boolean;expectedHead?:string},req:{user:{sub:string}},tenant:string){
   const branch=currentBranch(true);if(!workspaceMode()||b?.confirm!==true)throw new BadRequestException('Explicit Apply confirmation required');
   const info=(await this.v.branches()).branches.find(x=>x.name===branch);if(!info)throw new BadRequestException('unknown branch');

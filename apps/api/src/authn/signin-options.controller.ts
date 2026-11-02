@@ -17,7 +17,7 @@ export class SigninOptionsController {
     if (typeof branch === 'string' && branch) {
       branchName(branch);
       if (branch === 'main') throw new BadRequestException('main is the live sign-in already: nothing to test');
-      if (!this.branchTest?.check(ticket, branch)) throw new ForbiddenException('a branch test needs the ticket of a test link from the branch bar');
+      if (!(await this.branchTest?.check(ticket, branch))) throw new ForbiddenException('a branch test needs the ticket of a test link from the branch bar');
       try { return await this.authn.options(t, branch); } catch { throw new NotFoundException('unknown data branch'); }
     }
     return this.authn.options(t);

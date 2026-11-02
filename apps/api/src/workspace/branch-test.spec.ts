@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BranchTestService } from './branch-test.js';
+import { BranchTestService, MemoryStableLinkStore } from './branch-test.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { assertNotBranchTest, AuthGuard, OptionalAuthGuard } from '../auth/auth.guard.js';
 
@@ -8,7 +8,7 @@ const branches = (...names: string[]) => ({ branches: async () => ({ default: 'm
 
 function svc(...names: string[]) {
   process.env.IAM_WORKSPACE_MODE = '1'; delete process.env.IAM_BRANCH_TEST;
-  return new BranchTestService(branches(...names) as never);
+  return new BranchTestService(branches(...names) as never, new MemoryStableLinkStore());
 }
 
 test('ticket: created only for an existing non-main branch, bound to it, expiring', async () => {
@@ -18,24 +18,24 @@ test('ticket: created only for an existing non-main branch, bound to it, expirin
   await assert.rejects(() => s.create('admin', 'Bad Name'), /branch/i);
   const t = await s.create('admin', 'feature-x');
   assert.match(t.ticket, /^[A-Za-z0-9_-]{10,64}$/);
-  assert.equal(s.check(t.ticket, 'feature-x'), true);
-  assert.equal(s.check(t.ticket, 'main'), false, 'a ticket never authorizes another branch');
-  assert.equal(s.check('forged-ticket', 'feature-x'), false);
-  assert.equal(s.check(t.ticket, ''), false);
+  assert.equal(await s.check(t.ticket, 'feature-x'), true);
+  assert.equal(await s.check(t.ticket, 'main'), false, 'a ticket never authorizes another branch');
+  assert.equal(await s.check('forged-ticket', 'feature-x'), false);
+  assert.equal(await s.check(t.ticket, ''), false);
   s.now = () => Date.now() + 11 * 60_000;
-  assert.equal(s.check(t.ticket, 'feature-x'), false, 'expired');
+  assert.equal(await s.check(t.ticket, 'feature-x'), false, 'expired');
 });
 
 test('ticket: IAM_BRANCH_TEST=0 disables creation and checks', async () => {
   const s = svc('main', 'feature-x');
   process.env.IAM_BRANCH_TEST = '0';
   await assert.rejects(() => s.create('admin', 'feature-x'), /disabled/);
-  assert.equal(s.check('anything-here', 'feature-x'), false);
+  assert.equal(await s.check('anything-here', 'feature-x'), false);
 });
 
 test('ticket: outside workspace mode there is no branch test at all', async () => {
   process.env.IAM_WORKSPACE_MODE = '0'; delete process.env.IAM_BRANCH_TEST;
-  const s = new BranchTestService(branches('main', 'feature-x') as never);
+  const s = new BranchTestService(branches('main', 'feature-x') as never, new MemoryStableLinkStore());
   await assert.rejects(() => s.create('admin', 'feature-x'), /disabled/);
   process.env.IAM_WORKSPACE_MODE = '1';
 });
@@ -95,4 +95,23 @@ test('a running sign-in session stays bound to its branch', async () => {
   const cont = (branch?: string) => svc.authenticate({ tenant: 'acme', session: 'sess1', ...(branch ? { branch } : {}), answers: {} } as never);
   assert.equal((await cont('feature-y'))?.outcome, 'deny', 'another branch is refused with the generic message');
   await assert.rejects(() => cont('feature-x'), 'the bound branch passes the check and reaches the step verifier (stubbed here)');
+});
+
+test('stable link: no expiry, bound to its branch, revocable, token never listed', async () => {
+  const s = svc('main', 'preprod');
+  const r = await s.create('admin', 'preprod', { stable: true, label: 'preprod preview' });
+  assert.equal(r.stable, true); assert.equal(r.expiresIn, null); assert.ok(r.id);
+  assert.equal(await s.check(r.ticket, 'preprod'), true);
+  assert.equal(await s.check(r.ticket, 'main'), false, 'a stable link never authorizes another branch');
+  assert.equal(await s.check(r.ticket + 'x', 'preprod'), false);
+  s.now = () => Date.now() + 365 * 24 * 3600_000;
+  assert.equal(await s.check(r.ticket, 'preprod'), true, 'no expiry');
+  const list = await s.list();
+  assert.equal(list.length, 1); assert.equal(list[0].label, 'preprod preview'); assert.equal(list[0].createdBy, 'admin');
+  assert.ok(!JSON.stringify(list).includes(r.ticket), 'the token itself is never exposed (hash only)');
+  assert.deepEqual(await s.revoke(list[0].id), { revoked: true });
+  assert.equal(await s.check(r.ticket, 'preprod'), false, 'revoked link refuses');
+  assert.deepEqual(await s.revoke(list[0].id), { revoked: false });
+  const plain = await s.create('admin', 'preprod', {});
+  assert.equal(plain.stable, false); assert.equal(plain.expiresIn, 600, 'default stays the 10-minute ticket');
 });
