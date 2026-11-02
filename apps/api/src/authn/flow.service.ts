@@ -197,7 +197,7 @@ export class AuthnService implements OnApplicationBootstrap {
     return { outcome: 'challenge', session: s.id, step: { index: s.index, total: s.steps.length, methodId: st.id, type: st.type, ...s.prepared!.prompt }, ...(error ? { error } : {}) };
   }
   private async check(s: Session, answers: Record<string, string>): Promise<GateResponse> {
-    const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.subject}`;
+    const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
     const clean: Record<string, string> = {};
     for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= 256 && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
     let ok = false;
