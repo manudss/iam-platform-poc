@@ -99,7 +99,7 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     for (const t of ['list_users', 'query', 'read_table', 'execute_write', 'upsert_user', 'assign_role', 'request_new_branch', 'rebase_on_main', 'submit_pull_request', 'diff_vs_main', 'list_branches', 'list_pull_requests', 'session_status',
       'unassign_role', 'save_role', 'delete_role', 'add_sod_rule', 'remove_sod_rule', 'save_profile_config', 'create_organization', 'update_organization', 'delete_organization', 'assign_organizations',
       'install_plugin', 'configure_plugin', 'set_plugin_enabled', 'list_roles', 'list_organizations', 'list_plugins', 'list_event_records',
-      'list_workflows', 'get_workflow', 'list_workflow_runs', 'save_workflow', 'delete_workflow', 'get_authn_config', 'save_authn_config']) assert.ok(names.includes(t), t);
+      'list_workflows', 'get_workflow', 'list_workflow_runs', 'save_workflow', 'delete_workflow', 'test_workflow', 'get_authn_config', 'save_authn_config']) assert.ok(names.includes(t), t);
     for (const t of names) assert.ok(!/approve|merge|close|apply|checkout/i.test(t), t);
     for (const t of names) assert.ok(!/start|cancel|publish|enroll|provision/i.test(t), t); // runs, publications and credentials stay human
   });
@@ -256,6 +256,35 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.notEqual((await callTool(secret, 'delete_workflow', { id })).result?.isError, true);
     assert.notEqual((await callTool(secret, 'list_workflows')).result?.isError, true);
     assert.notEqual((await callTool(secret, 'list_workflow_runs', {})).result?.isError, true);
+  });
+
+  it('test_workflow: dry-run of the branch definition with zero effect (no run, no branch, no write)', async () => {
+    const g = { nodes: [
+      { id: 'grant', type: 'assign-role', name: 'Grant', config: { identity: '{{event.subject}}', role: 'accountant' } },
+      { id: 'tell', type: 'notify', name: 'Inform', config: { recipient: 'ops', message: '{{event.subject}} granted' } },
+    ], edges: [{ from: 'grant', to: 'tell' }] };
+    const c = await callTool(secret, 'save_workflow', { name: 'Joiner test', graph: g, trigger: { event: 'user.created' } });
+    assert.notEqual(c.result?.isError, true, textOf(c));
+    const id = (JSON.parse(textOf(c)) as { definition: { id: string } }).definition.id;
+    const countBob = async () => Number((JSON.parse(textOf(await callTool(secret, 'query', { sql: "select count(*) n from assignments where identity_id='demo-bob' and role_id='accountant'" }))) as { rows: { n: number }[] }).rows[0].n);
+    const before = await countBob();
+    const dry = JSON.parse(textOf(await callTool(secret, 'test_workflow', { id }))) as { executed: boolean; autoFilledEventKeys: string[]; steps: { step: string; simulated: boolean; would: string }[]; dataSteps: number };
+    assert.equal(dry.executed, false);
+    assert.ok(dry.autoFilledEventKeys.includes('subject')); // no payload given: trigger keys auto-filled
+    assert.equal(dry.steps.length, 2);
+    assert.equal(dry.steps[0].simulated, false); // a real data step: described, not executed
+    assert.match(dry.steps[0].would, /NOT executed/);
+    assert.equal(dry.steps[1].simulated, true);
+    const dry2 = JSON.parse(textOf(await callTool(secret, 'test_workflow', { id, event: { subject: 'demo-bob' } }))) as { steps: { config: Record<string, unknown> }[]; autoFilledEventKeys: string[] };
+    assert.equal(dry2.steps[0].config.identity, 'demo-bob');
+    assert.ok(!dry2.autoFilledEventKeys.includes('subject')); // the provided key is used as-is
+    // zero effect: no assignment written, no run recorded, no wf-* branch created
+    assert.equal(await countBob(), before);
+    const runs = JSON.parse(textOf(await callTool(secret, 'list_workflow_runs', { definition: id }))) as { runs: unknown[] };
+    assert.equal(runs.runs.length, 0);
+    const branches = JSON.parse(textOf(await callTool(secret, 'list_branches'))) as { branches: { name: string }[] };
+    assert.ok(!branches.branches.some((x) => x.name.startsWith('wf-')));
+    assert.notEqual((await callTool(secret, 'delete_workflow', { id })).result?.isError, true);
   });
 
   it('event bus: read-only scrubbed observability', async () => {

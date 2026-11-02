@@ -41,6 +41,19 @@ describe('MCP SQL confinement (skeleton-based)', () => {
     assert.deepEqual(checkMcpSql('insert into plugin_config values (\'acme-demo\',\'mail\',true,\'{"note":"a token word in a literal"}\')', 'write').tables, ['plugin_config']); // literals are emptied: mentioning a sensitive word in a VALUE stays allowed
   });
 
+  it('tool inventory is exactly the reviewed set (39 tools), each with a kind', () => {
+    const names = Object.keys(TOOL_KINDS).sort();
+    assert.equal(names.length, 39);
+    for (const t of names) assert.ok(['read', 'write', 'lifecycle'].includes(TOOL_KINDS[t]), t);
+    assert.deepEqual(names, [
+      'add_sod_rule', 'assign_organizations', 'assign_role', 'configure_plugin', 'create_organization', 'delete_organization', 'delete_role', 'delete_workflow',
+      'diff_vs_main', 'execute_write', 'get_authn_config', 'get_workflow', 'install_plugin', 'list_branches', 'list_event_records', 'list_organizations',
+      'list_plugins', 'list_pull_requests', 'list_roles', 'list_tables', 'list_users', 'list_workflow_runs', 'list_workflows', 'query',
+      'read_table', 'rebase_on_main', 'remove_sod_rule', 'request_new_branch', 'save_authn_config', 'save_profile_config', 'save_role', 'save_workflow',
+      'session_status', 'set_plugin_enabled', 'submit_pull_request', 'test_workflow', 'unassign_role', 'update_organization', 'upsert_user',
+    ]);
+  });
+
   it('tool inventory: no approval, merge, close, apply, or branch-picking tool exists', () => {
     for (const t of Object.keys(TOOL_KINDS)) assert.ok(!/approve|merge|close|apply|delete_branch|checkout/i.test(t), t);
     assert.ok(Object.hasOwn(TOOL_KINDS, 'submit_pull_request'));
