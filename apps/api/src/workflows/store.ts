@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { createConnection, Connection } from 'mysql2/promise';
+import { VersioningService } from '../versioning/versioning.service.js';
+import { workspaceMode } from '../workspace/context.js';
 import { WfGraph, WfTrigger } from './model.js';
 
 /**
- * Persistence for workflow definitions and runs, in the UNVERSIONED `<db>_meta` database: the same
- * place as Dolt pull request records and personal branch names. This is platform metadata, never
- * business data, so it is not versioned, never merged, and invisible to the data branches a run creates.
+ * Persistence for workflow runs and steps, in the UNVERSIONED `<db>_meta` database: execution state,
+ * never business data, so it is not versioned, never merged, and invisible to the data branches a run creates.
+ * Workflow DEFINITIONS are the opposite: they are configuration, versioned in the main Dolt database
+ * (table workflow_definitions), so an edit prepared on a working branch only goes live through a reviewed
+ * data pull request - the same circuit as roles, plugin settings and the sign-in configuration.
  */
 export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; trigger: WfTrigger | null; created_by: string; created_at: string; updated_at: string }
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
@@ -15,7 +19,10 @@ export interface StepRow { run_id: string; node_id: string; status: StepStatus; 
 
 @Injectable()
 export class WorkflowStore {
+  constructor(@Optional() private readonly v?: VersioningService) {}
   private ready?: Promise<void>;
+  /** The live, approved workflow definitions live on Dolt main; edits prepared on a working branch only apply through a reviewed pull request. */
+  get liveRef() { return this.v?.defaultBranch ?? 'main'; }
   private get dbName() { return process.env.DOLT_DATABASE ?? 'iam'; }
   private get metaDb() { return `${this.dbName}_meta`.replace(/[^A-Za-z0-9_]/g, ''); }
 
@@ -38,15 +45,26 @@ export class WorkflowStore {
           }
           await m.query('CREATE TABLE IF NOT EXISTS workflow_steps (run_id VARCHAR(40) NOT NULL, node_id VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, simulated BOOLEAN NOT NULL, attempts INT NOT NULL DEFAULT 0, error VARCHAR(500) NULL, log JSON NULL, started_at DATETIME(3) NULL, finished_at DATETIME(3) NULL, PRIMARY KEY (run_id, node_id))');
         } finally { await m.end(); }
+        // Definitions moved to the versioned database: create the table on main and copy any pre-existing meta rows once (INSERT IGNORE is a no-op afterwards).
+        if (this.v) {
+          const v = this.v;
+          await v.lock(() => v.at(v.defaultBranch, async (c) => {
+            await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
+            await c.query(`INSERT IGNORE INTO workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) SELECT tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at FROM \`${this.metaDb}\`.workflow_definitions`);
+            const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
+            if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
+          }));
+        }
       })().catch((e) => { this.ready = undefined; throw e; });
     }
     await this.ready;
     return this.open();
   }
 
+  private static ts(v: unknown): string { return v instanceof Date ? v.toISOString().slice(0, 23).replace('T', ' ') : String(v); }
   private static def(r: Record<string, unknown>): DefinitionRow {
     const trig = typeof r.trigger_json === 'string' ? JSON.parse(r.trigger_json) : r.trigger_json;
-    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, created_by: String(r.created_by), created_at: String(r.created_at), updated_at: String(r.updated_at) };
+    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, created_by: String(r.created_by), created_at: WorkflowStore.ts(r.created_at), updated_at: WorkflowStore.ts(r.updated_at) };
   }
   private static run(r: Record<string, unknown>): RunRow {
     return { id: String(r.id), tenant: String(r.tenant), definition_id: String(r.definition_id), name: String(r.name), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfRow_graph, branch: r.branch === null ? null : String(r.branch), base_branch: r.base_branch === null || r.base_branch === undefined ? null : String(r.base_branch), status: r.status as RunStatus, error: r.error === null ? null : String(r.error), started_by: String(r.started_by), started_at: String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at) };
@@ -56,21 +74,38 @@ export class WorkflowStore {
     return { run_id: String(r.run_id), node_id: String(r.node_id), status: r.status as StepStatus, simulated: !!r.simulated, attempts: Number(r.attempts), error: r.error === null ? null : String(r.error), log: Array.isArray(log) ? log.map(String) : [], started_at: r.started_at === null ? null : String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at) };
   }
 
-  async listDefinitions(tenant: string): Promise<DefinitionRow[]> {
-    const m = await this.meta();
-    try { const [r] = await m.query('select * from workflow_definitions where tenant = ? order by name', [tenant]); return (r as Record<string, unknown>[]).map(WorkflowStore.def); } finally { await m.end(); }
+  /** Definitions are versioned rows: reads run on the given ref, writes commit on it (working branch in workspace mode, main elsewhere). */
+  private defsRead<T>(ref: string, fn: (c: Connection) => Promise<T>): Promise<T> {
+    if (!this.v) throw new BadRequestException('no database');
+    return this.v.at(ref, fn);
   }
-  async getDefinition(tenant: string, id: string): Promise<DefinitionRow | null> {
-    const m = await this.meta();
-    try { const [r] = await m.query('select * from workflow_definitions where tenant = ? and id = ?', [tenant, id]); const row = (r as Record<string, unknown>[])[0]; return row ? WorkflowStore.def(row) : null; } finally { await m.end(); }
+  private defsWrite<T>(ref: string, fn: (c: Connection) => Promise<T>): Promise<T> {
+    if (!this.v) throw new BadRequestException('no database');
+    return workspaceMode() && ref !== this.v.defaultBranch ? this.v.writeOn(ref, fn) : this.v.lock(() => this.v!.at(ref, fn));
   }
-  async putDefinition(d: DefinitionRow): Promise<void> {
-    const m = await this.meta();
-    try { await m.query('insert into workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), trigger_json=values(trigger_json), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.trigger ? JSON.stringify(d.trigger) : null, d.created_by, d.created_at, d.updated_at]); } finally { await m.end(); }
+  private static async commitDefs(c: Connection, msg: string) {
+    const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
+    if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', ?)", [msg]); }
   }
-  async deleteDefinition(tenant: string, id: string): Promise<boolean> {
-    const m = await this.meta();
-    try { const [r] = await m.query('delete from workflow_definitions where tenant = ? and id = ?', [tenant, id]); return Number((r as { affectedRows: number }).affectedRows) > 0; } finally { await m.end(); }
+  async listDefinitions(tenant: string, ref: string): Promise<DefinitionRow[]> {
+    return this.defsRead(ref, async (c) => { const [r] = await c.query('select * from workflow_definitions where tenant = ? order by name', [tenant]); return (r as Record<string, unknown>[]).map(WorkflowStore.def); });
+  }
+  async getDefinition(tenant: string, id: string, ref: string): Promise<DefinitionRow | null> {
+    return this.defsRead(ref, async (c) => { const [r] = await c.query('select * from workflow_definitions where tenant = ? and id = ?', [tenant, id]); const row = (r as Record<string, unknown>[])[0]; return row ? WorkflowStore.def(row) : null; });
+  }
+  async putDefinition(d: DefinitionRow, ref: string): Promise<void> {
+    await this.defsWrite(ref, async (c) => {
+      await c.query('insert into workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), trigger_json=values(trigger_json), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.trigger ? JSON.stringify(d.trigger) : null, d.created_by, d.created_at, d.updated_at]);
+      await WorkflowStore.commitDefs(c, `workflows: ${d.created_by} saved ${d.id}`);
+    });
+  }
+  async deleteDefinition(tenant: string, id: string, ref: string): Promise<boolean> {
+    return this.defsWrite(ref, async (c) => {
+      const [r] = await c.query('delete from workflow_definitions where tenant = ? and id = ?', [tenant, id]);
+      const gone = Number((r as { affectedRows: number }).affectedRows) > 0;
+      if (gone) await WorkflowStore.commitDefs(c, `workflows: deleted ${id}`);
+      return gone;
+    });
   }
 
   async createRun(run: RunRow, steps: StepRow[]): Promise<void> {

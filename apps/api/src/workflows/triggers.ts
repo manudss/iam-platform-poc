@@ -32,7 +32,7 @@ export class WorkflowTriggersService implements OnModuleInit {
   private async dispatch(e: AppEvent) {
     const registry = workspaceMode() && this.branches ? await this.branches.get(e.branch) : this.reg;
     if (!registry.isActive(e.tenant, 'workflows-iga')) { this.log.log(`${e.type} on ${e.branch}: workflows-iga disabled there, no run started`); return; }
-    const defs = (await this.store.listDefinitions(e.tenant)).filter((d) => {
+    const defs = (await this.store.listDefinitions(e.tenant, this.store.liveRef)).filter((d) => {
       const t = d.trigger;
       if (!t || t.event !== e.type) return false;
       return Object.entries(t.match ?? {}).every(([k, v]) => e.payload[k] === v);
