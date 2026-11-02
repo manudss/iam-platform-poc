@@ -53,6 +53,22 @@ describe('browser sign-in flow (client side)', () => {
     expect(s.getItem('iam.pkce.state')).toBe(q.get('state'));
     expect(url).not.toContain('password');
   });
+  it('carries the branch-test parameters to the core when a test link is used', async () => {
+    const s = store(); let url = '';
+    await new ApiClient().startBrowserLogin(s, (u) => (url = u), undefined, { branch: 'feature-x', ticket: 'ticket-1234567890' });
+    const q = new URL(url).searchParams;
+    expect(q.get('branch')).toBe('feature-x');
+    expect(q.get('ticket')).toBe('ticket-1234567890');
+    let plain = '';
+    await new ApiClient().startBrowserLogin(store(), (u) => (plain = u));
+    expect(new URL(plain).searchParams.get('branch')).toBeNull();
+  });
+  it('loads the sign-in options of a tested branch with its ticket', async () => {
+    const seen: string[] = [];
+    const f = (async (url: string) => { seen.push(url); return { ok: true, status: 200, json: async () => ({ mode: 'legacy', chains: [] }) } as Response; }) as unknown as typeof fetch;
+    await new ApiClient('acme-demo', f).signinOptions({ branch: 'feature-x', ticket: 'ticket-1234567890' });
+    expect(seen[0]).toBe('/api/tenants/acme-demo/signin/options?branch=feature-x&ticket=ticket-1234567890');
+  });
   it('callback: matching state exchanges the code with the verifier; a different state is refused without any request', async () => {
     const s = store(); let url = '';
     const calls: string[] = [];

@@ -4,7 +4,7 @@ import { OrgService } from './orgs.js';
 import { currentBranch } from '../workspace/context.js';
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
-import { AuthGuard } from '../auth/auth.guard.js';
+import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { ProfileService } from './profile.service.js';
 import { Context, settingFor } from './fields.js';
 
@@ -30,16 +30,18 @@ export class ProfileController {
     return { context: c, fields: await this.p.schema(t, c as Context, ref === 'work' ? 'work' : 'live') };
   }
   /** The subject is the token's, never a value from the request. */
-  @Get('me/profile') async me(@Param('tenant') t: string, @Req() req: { user: { sub: string } }) { return { ...(await this.p.self(t, req.user.sub)), sections: await this.sections(t, req.user.sub, 'live') }; }
-  @Patch('me/profile') patchMe(@Param('tenant') t: string, @Req() req: { user: { sub: string } }, @Body() b: unknown) { return this.p.patchSelf(t, req.user.sub, b); }
+  /** A branch-test token (claim set by the core at sign-in) reads and edits its profile on the TESTED branch; every other token stays live. */
+  private ref(req: { user?: { branch?: string } }): 'live' | 'work' { return req.user?.branch ? 'work' : 'live'; }
+  @Get('me/profile') async me(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string } }) { return { ...(await this.p.self(t, req.user.sub, this.ref(req))), sections: await this.sections(t, req.user.sub, this.ref(req)) }; }
+  @Patch('me/profile') patchMe(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string } }, @Body() b: unknown) { return this.p.patchSelf(t, req.user.sub, b, this.ref(req)); }
   /** Validators (administrators for now; finer roles come with the permission model). */
-  @UseGuards(AdminGuard) @Get('profile-reviews') reviews(@Param('tenant') t: string) { return this.p.reviews(t); }
-  @UseGuards(AdminGuard) @Post('profile-reviews/:id/accept') accept(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }) { return this.p.resolveReview(t, id, true, req.user.sub); }
-  @UseGuards(AdminGuard) @Post('profile-reviews/:id/refuse') refuse(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }) { return this.p.resolveReview(t, id, false, req.user.sub); }
+  @UseGuards(AdminGuard) @Get('profile-reviews') reviews(@Param('tenant') t: string, @Req() req: { user?: { branch?: string } }) { assertNotBranchTest(req); return this.p.reviews(t); }
+  @UseGuards(AdminGuard) @Post('profile-reviews/:id/accept') accept(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); return this.p.resolveReview(t, id, true, req.user.sub); }
+  @UseGuards(AdminGuard) @Post('profile-reviews/:id/refuse') refuse(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); return this.p.resolveReview(t, id, false, req.user.sub); }
   /** What the console may show this person: whether they are an administrator, and which plugins are live. Display only: the server checks every call again. */
-  @Get('me/access') async access(@Param('tenant') t: string, @Req() req: { user: { sub: string }; headers: Record<string, unknown> }) {
+  @Get('me/access') async access(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string }; headers: Record<string, unknown> }) {
     let admin = true; try { new AdminGuard().canActivate({ switchToHttp: () => ({ getRequest: () => req }) } as never); } catch { admin = false; }
-    const plugins = Object.fromEntries((await this.p.activePlugins(t)).map((id) => [id, true]));
+    const plugins = Object.fromEntries((await this.p.activePlugins(t, req.user.branch ? 'work' : 'live')).map((id) => [id, true]));
     const restricted = (process.env.IAM_API_ADMIN_SUBJECTS ?? '').split(',').some((x) => x.trim());
     return { subject: req.user.sub, admin, restricted, plugins };
   }

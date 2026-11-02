@@ -48,9 +48,15 @@ pub async fn step(addr: &str, token: &str, body: Value) -> Step {
     }
 }
 
-/// First-page description: {"mode":"legacy"}, {"mode":"choice","chains":[...]} or {"mode":"chain","chain":{..},"fields":[...]}. None = gate unavailable.
-pub async fn entry(addr: &str, token: &str, tenant: &str, chain: Option<&str>) -> Option<Value> {
-    let body = match chain { Some(c) if !c.is_empty() => json!({"tenant": tenant, "chain": c}), _ => json!({"tenant": tenant}) };
+/// First-page description: {"mode":"legacy"}, {"mode":"choice","chains":[...]}, {"mode":"chain","chain":{..},"fields":[...]}
+/// or {"mode":"error","message":...} (e.g. an invalid branch-test link). None = gate unavailable.
+/// `branch`/`ticket` are the validated branch-test parameters of the authorization request: the control plane checks the ticket
+/// before it reveals or uses anything of that branch (see docs/branch-test.md).
+pub async fn entry(addr: &str, token: &str, tenant: &str, chain: Option<&str>, branch: Option<&str>, ticket: Option<&str>) -> Option<Value> {
+    let mut body = json!({"tenant": tenant});
+    if let Some(c) = chain { if !c.is_empty() { body["chain"] = json!(c); } }
+    if let Some(b) = branch { if !b.is_empty() { body["branch"] = json!(b); } }
+    if let Some(t) = ticket { if !t.is_empty() { body["ticket"] = json!(t); } }
     tokio::time::timeout(Duration::from_secs(3), post(addr, token, "/internal/auth/entry", &body)).await.ok().flatten()
 }
 

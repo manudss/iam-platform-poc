@@ -1,22 +1,22 @@
 import { Component, effect, inject, signal } from '@angular/core';
 import { Session } from './session';
 
-interface Review { subject: string; changes: { key: string; label: string; from: unknown; to: unknown }[] }
+interface Review { id?: string; subject: string; branch?: string; changes: { key: string; label: string; from: unknown; to: unknown }[] }
 
 /** Validators: see each person's pending profile edits (current value next to the proposal), accept (merge into main) or refuse (delete). An author cannot accept their own edits. */
 @Component({
   selector: 'app-profile-reviews', styleUrl: './pages.css',
   template: `
   <p class="lead">Profile edits waiting for validation. This only has entries when the policy "Validated" is live (Profile fields).</p>
-  <p class="hint">Live policy: <b id="pr-policy">{{policy()}}</b>. Accepting merges the person's personal change set into Dolt main; refusing deletes it. You cannot accept your own edits.</p>
+  <p class="hint">Live policy: <b id="pr-policy">{{policy()}}</b>. Accepting merges the person's personal change set into its base (main, or the tested branch of a branch test, shown next to the name); refusing deletes it. You cannot accept your own edits.</p>
   @if (note()) { <p role="status" class="msg" id="pr-note">{{note()}}</p> }
   @if (problem()) { <p role="alert" class="msg bad" id="pr-problem">{{problem()}}</p> }
-  @for (r of reviews(); track r.subject) {
-    <section class="card" [attr.data-subject]="r.subject"><h3>{{r.subject}}</h3>
+  @for (r of reviews(); track r.id ?? r.subject) {
+    <section class="card" [attr.data-subject]="r.subject"><h3>{{r.subject}}@if(r.branch){<span class="chip">branch {{r.branch}}</span>}</h3>
       <div class="scroll"><table><thead><tr><th>Field</th><th>Live now</th><th>Proposed</th></tr></thead><tbody>
       @for (c of r.changes; track c.key) { <tr><td>{{c.label}}<br><small>{{c.key}}</small></td><td>{{c.from ?? '-'}}</td><td>{{c.to ?? '(removed)'}}</td></tr> }
       </tbody></table></div>
-      <div class="row"><button class="primary" (click)="decide(r.subject, true)">Accept (merge into main)</button><button class="secondary" (click)="decide(r.subject, false)">Refuse</button></div>
+      <div class="row"><button class="primary" (click)="decide(r.id ?? r.subject, true)">Accept (merge into main)</button><button class="secondary" (click)="decide(r.id ?? r.subject, false)">Refuse</button></div>
     </section>
   } @empty { <section class="card"><p id="pr-empty">{{loaded() ? 'Nothing is waiting for validation.' : 'Loading...'}}</p></section> }`,
 })

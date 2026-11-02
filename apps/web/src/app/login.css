@@ -21,3 +21,5 @@ form { display: grid; gap: .5rem; margin-top: .6rem; }
 .signup h2 { margin: 0 0 .4rem; font-size: 1.05rem; }
 .btn { display: inline-block; text-decoration: none; text-align: center; padding: .6rem 1rem; border-radius: 8px; }
 .signup-embedded{margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e2e8f0}.signup-embedded label{display:block;margin:.5rem 0}.signup-embedded input,.signup-embedded select{width:100%;box-sizing:border-box}
+
+.msg.test{background:#fffbeb;border:1px solid #fcd34d;color:#92400e}
