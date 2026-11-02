@@ -47,7 +47,7 @@ describe('e2e core + api', { skip: !existsSync(bin) && 'core binary not built' }
 
   before(async () => {
     core = spawnCore('127.0.0.1:18081', { IAM_ISSUER: CORE });
-    short = spawnCore('127.0.0.1:18082', { IAM_ISSUER: SHORT, IAM_TOKEN_TTL_SECS: '1' });
+    short = spawnCore('127.0.0.1:18082', { IAM_ISSUER: SHORT, IAM_TOKEN_TTL_SECS: '3' });
     await waitUp(CORE); await waitUp(SHORT);
     process.env.IAM_CORE_URL = CORE; process.env.IAM_API_ADMIN_TOKEN = 'local-demo-simulation-token';
     process.env.IAM_ISSUER = CORE;
@@ -93,13 +93,14 @@ describe('e2e core + api', { skip: !existsSync(bin) && 'core binary not built' }
     assert.equal((await check(`${h}.${p}.${s}`, {})).status, 401);
   });
   it('expired token -> 401 (same issuer and keys, only the lifetime differs)', async () => {
-    // Point the API at the 1s-TTL core for this test only; a fresh token must pass, the same token 2s later must not.
+    // Point the API at the 3s-TTL core for this test only. exp is iat + ttl in whole seconds, so the real lifetime is in (2s, 3s]:
+    // a fresh token must pass, the same token 3.5s later must not. (A 1s TTL could expire before the first check on a slow runner.)
     const prev = { url: process.env.IAM_CORE_URL, iss: process.env.IAM_ISSUER };
     process.env.IAM_CORE_URL = SHORT; process.env.IAM_ISSUER = SHORT;
     try {
       const t = await login(SHORT);
       assert.equal((await check(t, { sod_conflict: false })).status, 201);
-      await new Promise((r) => setTimeout(r, 2200));
+      await new Promise((r) => setTimeout(r, 3500));
       assert.equal((await check(t, { sod_conflict: false })).status, 401);
     } finally { process.env.IAM_CORE_URL = prev.url; process.env.IAM_ISSUER = prev.iss; }
   });

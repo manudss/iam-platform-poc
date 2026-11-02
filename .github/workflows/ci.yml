@@ -14,6 +14,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Install nats-server (core bus end-to-end tests run against a real server)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v2.15.2 -R nats-io/nats-server -p 'nats-server-v2.15.2-linux-amd64.tar.gz' -D /tmp/nats
+          tar xzf /tmp/nats/nats-server-*.tar.gz -C /tmp/nats
+          echo "NATS_SERVER_BIN=$(find /tmp/nats -name nats-server -type f | head -1)" >> $GITHUB_ENV
+          echo "IAM_REQUIRE_NATS=1" >> $GITHUB_ENV
       - run: cargo test --locked
         working-directory: core
   api:

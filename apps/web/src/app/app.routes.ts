@@ -10,6 +10,7 @@ import { SignupPage } from './signup-page';
 import { OrganizationsPage } from './organizations';
 import { RolesAdminPage } from './roles-admin';
 import { ProfileReviewsPage } from './profile-reviews';
+import { BusObserverPage } from './bus-observer';
 import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard } from './workflows';
 import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
@@ -36,6 +37,7 @@ export const routes: Routes = [
       { path: 'assignments', canActivate: [accessGuard], component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
+      { path: 'event-bus', canActivate: [accessGuard], component: BusObserverPage, title: 'Event bus' },
       { path: 'workflows', component: WorkflowsPage, title: 'Workflows', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [workflowsEnabledGuard] },

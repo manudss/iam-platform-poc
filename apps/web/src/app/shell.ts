@@ -49,7 +49,7 @@ export class Shell {
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
     ...(this.s.workflowsEnabled() ? [{ title: 'Automation (IGA)', items: [{ path: '/workflows', label: 'Workflows', icon: '⟳' }] }] : []),
-    { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }] },
+    { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }, { path: '/event-bus', label: 'Event bus', icon: '≋' }] },
     { title: 'Database (Dolt)', items: [
       { path: '/database/branches', label: 'Branches', icon: '⑂' },
       { path: '/database/history', label: 'History', icon: '◷' },

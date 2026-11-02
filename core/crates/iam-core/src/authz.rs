@@ -162,6 +162,7 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
                 extra = claims;
             }
             crate::gate::Step::Deny(m) => {
+                c.bus_emit("signin.refused", serde_json::json!({"subject": g("username"), "client_id": g("client_id")}), None);
                 let msg = m.unwrap_or_else(|| "Wrong user or password.".into());
                 return match first_page().await { Some(f) => form(&p, Some(&msg), Some(&f)), None => form(&p, Some(&msg), None) };
             }
@@ -171,13 +172,17 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
     }
     match if c.gate.is_some() { c.idp.authorize_verified_with(g("client_id"), g("redirect_uri"), g("code_challenge"), &who, &extra) } else { c.idp.authorize(g("client_id"), g("redirect_uri"), g("code_challenge"), g("username"), g("password")) } {
         Ok(code) => {
+            c.bus_emit("signin.succeeded", serde_json::json!({"subject": if c.gate.is_some() { who.clone() } else { g("username").to_string() }, "client_id": g("client_id")}), None);
             let sep = if g("redirect_uri").contains('?') { '&' } else { '?' };
             let loc = format!("{}{sep}code={}&state={}", g("redirect_uri"), pct(&code), pct(g("state")));
             let mut r = (StatusCode::FOUND, [(header::LOCATION, loc)]).into_response();
             r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             r
         }
-        Err(IdpError::InvalidCredentials) => form(&p, Some("Wrong user or password."), None),
+        Err(IdpError::InvalidCredentials) => {
+            c.bus_emit("signin.refused", serde_json::json!({"subject": g("username"), "client_id": g("client_id")}), None);
+            form(&p, Some("Wrong user or password."), None)
+        }
         Err(_) => error_page(StatusCode::BAD_REQUEST, "invalid request"),
     }
 }

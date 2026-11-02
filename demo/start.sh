@@ -36,6 +36,17 @@ export IAM_AUTH_GATE_TOKEN="$GATE_TOKEN" IAM_AUTH_GATE_ADDR=127.0.0.1:3000
 export IAM_WORKSPACE_MODE=1
 export IAM_AUTHN_DEMO_SEED=1 IAM_DEMO_DATA_SEED=1
 export IAM_DIRECTORY_AUTH=1 IAM_PLUGIN_STORE=dolt IAM_CREDENTIAL_FILE="$HOME_DIR/core-state/credentials.json"
+# Core event bus (step 1): local nats-server in the same container, loopback only, random per-boot password.
+if [ "${IAM_DEMO_NATS:-1}" = "1" ] && command -v nats-server >/dev/null 2>&1; then
+  NATS_PASS="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  # Conf of this boot: random password for the core user, demo subscriber users removed, JetStream store inside the demo home.
+  sed -e "s/password: core-dev/password: $NATS_PASS/" -e '/user: sub-/d' -e "s#/tmp/iam-nats-js#$HOME_DIR/nats-js#" /app/conf/nats-local.conf > "$HOME_DIR/nats.conf"
+  chmod 600 "$HOME_DIR/nats.conf"
+  echo '[demo] starting nats-server on 127.0.0.1:4222 (core bus)'
+  nats-server -c "$HOME_DIR/nats.conf" >"$HOME_DIR/nats.log" 2>&1 &
+  for i in $(seq 1 30); do node -e "require('net').connect(4222,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" 2>/dev/null && break; sleep 1; done
+  export IAM_CORE_NATS_URL=127.0.0.1:4222 IAM_CORE_NATS_PASSWORD="$NATS_PASS"
+fi
 echo '[demo] starting iam-core on 127.0.0.1:8081'
 /app/iam-core >"$HOME_DIR/core.log" 2>&1 &
 

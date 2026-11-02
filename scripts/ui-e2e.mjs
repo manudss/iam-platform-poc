@@ -22,6 +22,7 @@ mkdirSync(home); mkdirSync(data);
 const env = { ...process.env, HOME: home };
 for (const [k, v] of [['user.name', 'poc'], ['user.email', 'poc@example.invalid']]) spawnSync(dolt, ['config', '--global', '--add', k, v], { env });
 assert.equal(spawnSync(dolt, ['sql'], { cwd: data, env, input: readFileSync(join(root, 'data/demo/01-schema.sql')) }).status, 0);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const procs = [];
 // Each child starts in its OWN process group (detached) so the whole tree (npx -> ng serve, node, ...) can be stopped by group, never by a name pattern.
 const run = (cmd, args, opts) => procs.push(spawn(cmd, args, { stdio: 'ignore', detached: true, ...opts }));
@@ -46,10 +47,13 @@ const stopAll = async () => {
 run(dolt, ['sql-server', '--host', '127.0.0.1', '--port', '3307', '--data-dir', data], { cwd: data, env });
 const GATE = { IAM_AUTH_GATE_ADDR: '127.0.0.1:3000', IAM_AUTH_GATE_TOKEN: 'local-gate-token-demo' }; // sign-in goes through the plugin gate (API on :3000)
 const ADMIN_TOKEN = 'local-demo-plugin-admin-token';
-run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE } });
-run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } });
-run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const CORE_TOKEN = 'local-core-admin-token-demo';
+// Optional event bus: with NATS_BIN set, a local nats-server is started and the core connects to it (the "Event bus" page is then checked).
+const NATS = process.env.NATS_BIN;
+if (NATS) { run(NATS, ['-c', join(root, 'conf/nats-local.conf')]); await sleep(1000); }
+run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE, IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, ...(NATS ? { IAM_CORE_NATS_URL: '127.0.0.1:4222', IAM_CORE_NATS_PASSWORD: 'core-dev' } : {}) } });
+run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_WORKSPACE_MODE: '1', IAM_PLUGIN_STORE: 'dolt', IAM_DIRECTORY_AUTH: '1', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } }); // the console is built for workspace mode (personal branch + Review & Apply), like demo/start.sh and scripts/workspace-e2e.mjs
+if (!process.env.WEB_ALREADY_SERVED) run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
 let browser;
 try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
@@ -99,7 +103,18 @@ try {
   assert.match(await page.locator('header .who').innerText(), /demo-alice/);
   await shot('2-signed-in-deep-link');
 
-  // ---- IAM pages: assignments, SoD, merge, activation ----
+  // Workspace administration is fail-closed: without the admin capability token the console asks for it and opens no data branch.
+  // (the bar may show the mapped sentence or the raw "admin capability required" of the next guarded call, so match the stable part)
+  try { await page.waitForFunction(() => document.body.innerText.includes('admin capability') && document.body.innerText.includes('Choose your working branch')); }
+  catch (e) { // diagnostics for CI: what the page really showed, so a failure is explainable from the log alone
+    console.log('DIAG url', page.url(), '\nDIAG statuses', JSON.stringify(await page.evaluate(() => window.__statuses)), '\nDIAG body', (await page.evaluate(() => document.body.innerText)).slice(0, 1500));
+    await shot('diag-token-gate').catch(() => undefined); throw e;
+  }
+  await setToken();
+  await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await status('personal branch');
+
+  // ---- IAM pages: assignments, SoD staging, refused then successful Review & Apply, activation journal ----
   await page.setViewportSize({ width: 1280, height: 900 });
   await nav('/assignments');
   try { await page.waitForSelector('#assignments td:text-is("demo-bob")', { timeout: 30000 }); }
@@ -108,18 +123,39 @@ try {
     await shot('diag-assignments').catch(() => undefined); throw e;
   }
   assert.ok((await page.locator('#assignments tr', { hasText: 'demo-bob' }).first().innerText()).includes('payment-creator'));
-  await page.getByRole('button', { name: 'Simulate', exact: true }).click();
+  // Stage the SoD-conflicting assignment on the personal branch, then try to publish it: Apply must be refused with the violation.
+  await page.getByRole('button', { name: 'Stage assignment' }).click();
   await page.waitForSelector('text=SoD: demo-bob has payment-creator and payment-approver');
   await shot('3-sod-violation');
-  await page.getByRole('button', { name: 'Merge into main' }).click(); await status('Merge refused (409)');
+  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
+  await page.click('#workspace-apply'); await status('Apply refused');
+  // The refused change stays on its branch. A clean change goes from a fresh branch to main and is journaled as an activation.
+  await page.fill('input[name=workspaceNewBranch]', 'ui-clean'); await page.getByRole('button', { name: 'Create & select' }).click();
+  await status('Working on ui-clean');
   await page.fill('input[name=identity]', 'demo-alice'); await page.fill('input[name=role]', 'accountant');
-  await page.getByRole('button', { name: 'Simulate', exact: true }).click(); await status('Simulation OK');
-  await page.getByRole('button', { name: 'Merge into main' }).click(); await status('Merged into main');
-  await page.waitForSelector('#assignments td:text-is("accountant")');
-  await nav('/activation');
-  await page.getByRole('button', { name: 'Activate current main' }).click(); await status('Activated main head as #1');
-  await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
+  await page.getByRole('button', { name: 'Stage assignment' }).click(); await status('Simulation OK');
+  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
+  await page.click('#workspace-apply'); await status('Applied');
+  await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("accountant")');
+  await nav('/activation'); await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
   await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');
+
+  // ---- event bus observer (real core + NATS; only with NATS_BIN) ----
+  if (NATS) {
+    await nav('/event-bus'); await page.waitForSelector('#bo-player');
+    await noBanner('event bus');
+    await page.waitForFunction(() => document.querySelector('#bo-since')?.textContent?.match(/[1-9]\d* exchange/));
+    await page.selectOption('#bo-speed', { label: 'x10' }); await page.click('#bo-next');
+    await page.fill('#bo-scrub', '1000'); await page.dispatchEvent('#bo-scrub', 'input');
+    await page.waitForSelector('#bo-table tbody tr td:text("activation.applied")');
+    const row = page.locator('#bo-table tbody tr', { hasText: 'activation.applied' }).first();
+    assert.ok((await row.textContent()).includes('audit-log'), 'who answered is shown');
+    assert.ok(await row.locator('.chip.mute:text("mail-notifier")').count(), 'the expected party that stayed silent is shown');
+    const body = (await page.textContent('body')) ?? '';
+    assert.ok(!/local-core-admin-token-demo|local-demo-plugin-admin-token|core-dev/.test(body), 'no secret on the page');
+    assert.equal(await page.locator('#bo-player button:text-matches("send|emit|replay again|re-run", "i")').count(), 0, 'no write control');
+    await shot('4c-event-bus');
+  }
 
   // ---- plugins ----
   await nav('/plugins'); await page.waitForSelector('#plugins table');
@@ -127,11 +163,17 @@ try {
   const row = page.locator('tr[data-plugin=auth-password-lockout]');
   await row.getByRole('button', { name: 'Manage' }).click();
   await page.waitForFunction(() => location.pathname === '/plugins/auth-password-lockout');
-  await page.locator('input[name=gi]').check(); await page.click('#plugin-install');
+  // Every action re-opens the plugin afterwards and rebuilds the form from the server, so wait for that re-open (the GET of
+  // the form that follows the action) before typing or asserting: filling earlier races the rebuild and the save would send defaults.
+  await page.locator('input[name=gi]').check();
+  const formGet = () => page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/form') && r.status() === 200);
+  await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/install')), page.click('#plugin-install')]);
   await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
-  await page.waitForSelector('#plugin-form');
-  await page.locator('label[data-field=maxFailures] input').fill('3'); await page.click('#plugin-save');
+  await formGet(); await page.waitForSelector('#plugin-form');
+  await page.locator('label[data-field=maxFailures] input').fill('3');
+  await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/settings') && r.request().method() === 'PUT'), page.click('#plugin-save')]);
   await page.waitForFunction(() => /saved|Saved|configured/i.test(document.querySelector('#plugin-note')?.textContent ?? ''));
+  await formGet();
   assert.equal(await page.locator('label[data-field=maxFailures] input').inputValue(), '3', 'the saved value comes back from the API');
   await page.locator('[data-hook="auth.authenticate"]').check(); await page.click('#plugin-enable');
   await page.waitForSelector('#plugin-disable');
@@ -142,28 +184,35 @@ try {
   // refresh on a deep link: the in-memory token is gone, so sign-in comes first and then the same plugin page opens again
   await page.reload(); await page.waitForSelector('#signin-browser'); assert.equal(path(), '/login');
   await coreLogin();
+  await page.waitForFunction(() => document.body.innerText.includes('admin capability')); // the automatic open is refused first (no token in memory after a reload)
+  await setToken();
+  await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await status('personal branch');
   await page.waitForSelector('#plugins table'); assert.equal(path(), '/plugins/auth-password-lockout');
   await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
-  await setToken();
 
   // ---- database explorer, section by section (one component instance across the sections) ----
   await page.setViewportSize({ width: 1280, height: 1100 });
   const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
   await nav('/database/branches'); await page.waitForSelector('text=protected'); await shot('8-explorer-1-branches');
   await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
+  await page.getByRole('button', { name: 'Refresh branches' }).click(); // the explorer created ui-demo behind the shell's back: reload the branch list before selecting it
+  await page.selectOption('select[name=globalBranch]', 'ui-demo'); await status('Working on ui-demo'); // explorer edits and SQL writes must run on the selected working branch
   await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
-  await btn('Add a row').click();
-  await page.fill('textarea[name=ej]', JSON.stringify({ id: 'auditor', label: 'Auditor', is_sensitive: 0 }));
+  await btn('Add a row').click(); await page.waitForSelector('.explorer .panel textarea');
+  await page.fill('label[data-edit-field=id] textarea', 'auditor');
+  for (const f of ['label', 'is_sensitive']) await page.locator(`label[data-edit-field=${f}] input[type=checkbox]`).uncheck(); // nullable columns start as NULL (field disabled)
+  await page.fill('label[data-edit-field=label] textarea', 'Auditor'); await page.fill('label[data-edit-field=is_sensitive] textarea', '0');
   await page.fill('input[name=em]', 'add auditor role'); await btn('Commit change').click();
   await page.waitForSelector('td:has-text("Auditor")'); await shot('8-explorer-2-data-edit');
-  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('text=read only');
+  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('.explorer .chip.lock:text("read only")');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
   await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
   await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
   await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
   await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
-  await page.waitForSelector('.explorer .msg:has-text("protected")');
+  await page.waitForSelector('.explorer .msg:has-text("selected working branch")'); // workspace mode: SQL writes only on the selected working branch
   await page.selectOption('select[name=sr]', 'ui-demo'); await page.fill('textarea[name=sq]', "update roles set label = 'Internal auditor' where id = 'auditor'"); await btn('Preview changes').click();
   await page.waitForSelector('text=Preview only'); await shot('8-explorer-4-sql-preview');
   await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
@@ -174,23 +223,25 @@ try {
   assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
   assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
   await shot('8-explorer-5-pull-request');
-  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
+  // Workspace mode: a pull request review works, but merging it into main is refused - only the global Apply publishes to main.
+  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Use the global Apply")');
+  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
+  await page.click('#workspace-apply'); await status('Applied');
   await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
-  assert.match(await page.locator('.explorer ol.log').innerText(), /Merge pull request #1: Add auditor role/);
+  assert.match(await page.locator('.explorer ol.log').innerText(), /Apply workspace ui-demo/);
   await noBanner('explorer end');
   // an internal jump changes the address too: branches -> compare with main
   await nav('/database/branches'); await page.waitForSelector('text=protected');
-  // the IAM pages still work after the explorer merged a PR into Dolt main
-  await nav('/activation');
-  await page.getByRole('button', { name: 'Activate current main' }).click(); await status('Activated main head as #2');
-  await noBanner('activation after PR merge');
+  // the IAM pages still work after the explorer branch was applied to Dolt main
+  await nav('/activation'); await page.waitForSelector('td:text-is("#2")'); // ui-demo published as activation #2
+  await noBanner('activation after explorer apply');
 
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
   await page.setViewportSize({ width: 390, height: 800 });
-  for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls']) {
+  for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
     await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
-    if (path() === '/login') await coreLogin();
+    if (path() === '/login') { await coreLogin(); await page.waitForFunction(() => document.body.innerText.includes('admin capability')); await setToken(); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
     await page.waitForFunction((x) => location.pathname.startsWith(x), p);
     await page.waitForSelector('main.content section, main.content .stats');
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

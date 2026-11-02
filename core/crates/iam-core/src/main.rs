@@ -1,3 +1,4 @@
+mod bus_wiring;
 mod package;
 mod grpc;
 mod authz;
@@ -23,6 +24,8 @@ pub struct Core {
     pub state_dir: Option<std::path::PathBuf>,
     /// Sign-in gate (loopback host:port, shared token). None = the IdP checks the password alone.
     pub gate: Option<(String, String)>,
+    /// Event bus over NATS (step 1). None unless IAM_CORE_NATS_URL is set: behaviour is then unchanged.
+    pub bus: Option<bus_wiring::BusLink>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -59,8 +62,12 @@ impl Core {
         std::fs::write(&tmp, serde_json::to_vec(a).map_err(std::io::Error::other)?)?;
         std::fs::rename(tmp, dir.join(format!("{tenant}.json")))
     }
+    /// Tells the bus about something that really happened. Never blocks, never fails the caller; no bus = nothing happens.
+    pub fn bus_emit(&self, kind: &'static str, payload: Value, effect_key: Option<String>) {
+        if let Some(b) = &self.bus { b.emit(kind, payload, effect_key); }
+    }
     pub fn new(engine: Engine, plugin: Option<(PluginRuntime, Vec<u8>)>, idp: Idp) -> Self {
-        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None }
+        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None, bus: None }
     }
 }
 
@@ -70,6 +77,8 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/v1/decide", post(decide))
         .route("/v1/activate", post(activate))
         .route("/v1/version", get(version))
+        .route("/v1/bus", get(bus_wiring::status))
+        .route("/v1/bus/records", get(bus_wiring::records))
         .route("/.well-known/openid-configuration", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.discovery()) }))
         .route("/jwks.json", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.jwks()) }))
         .route("/authorize", post(authorize).get(authz::authorize_form))
@@ -139,6 +148,7 @@ async fn activate(State(c): State<Arc<Core>>, headers: axum::http::HeaderMap, Js
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("cannot persist active version: {e}")})));
     }
     map.insert(r.tenant.clone(), a);
+    c.bus_emit("activation.applied", json!({"tenant": r.tenant, "seq": r.seq, "commit": r.commit}), Some(format!("activation:{}:{}", r.tenant, r.seq)));
     (StatusCode::OK, Json(json!({"status": "applied", "seq": r.seq, "commit": r.commit})))
 }
 
@@ -229,6 +239,14 @@ async fn main() {
     }
     if let Ok(d) = std::env::var("IAM_CORE_STATE_DIR") { core.load_state(std::path::Path::new(&d)); }
     core.admin_token = std::env::var("IAM_CORE_ADMIN_TOKEN").ok().filter(|t| t.len() >= 8);
+    if let Ok(url) = std::env::var("IAM_CORE_NATS_URL") {
+        let user = std::env::var("IAM_CORE_NATS_USER").unwrap_or_else(|_| "core".into());
+        let pass = std::env::var("IAM_CORE_NATS_PASSWORD").unwrap_or_default();
+        match bus_wiring::BusLink::connect(&url, &user, &pass).await {
+            Ok(b) => { tracing::info!("core bus connected to NATS {url}"); core.bus = Some(b); }
+            Err(e) => tracing::warn!("core bus disabled: {e} (the core keeps running without it)"),
+        }
+    }
     let engine = Arc::new(core);
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
     let l = tokio::net::TcpListener::bind(&addr).await.unwrap();
