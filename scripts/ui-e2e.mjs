@@ -104,8 +104,12 @@ try {
   await shot('2-signed-in-deep-link');
 
   // Workspace administration is fail-closed: without the admin capability token the console asks for it and opens no data branch.
-  await status('Enter the admin capability token');
-  assert.ok(((await page.textContent('body')) ?? '').includes('Choose your working branch'), 'no administration page before a working branch is open');
+  // (the bar may show the mapped sentence or the raw "admin capability required" of the next guarded call, so match the stable part)
+  try { await page.waitForFunction(() => document.body.innerText.includes('admin capability') && document.body.innerText.includes('Choose your working branch')); }
+  catch (e) { // diagnostics for CI: what the page really showed, so a failure is explainable from the log alone
+    console.log('DIAG url', page.url(), '\nDIAG statuses', JSON.stringify(await page.evaluate(() => window.__statuses)), '\nDIAG body', (await page.evaluate(() => document.body.innerText)).slice(0, 1500));
+    await shot('diag-token-gate').catch(() => undefined); throw e;
+  }
   await setToken();
   await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
@@ -174,7 +178,7 @@ try {
   // refresh on a deep link: the in-memory token is gone, so sign-in comes first and then the same plugin page opens again
   await page.reload(); await page.waitForSelector('#signin-browser'); assert.equal(path(), '/login');
   await coreLogin();
-  await status('Enter the admin capability token'); // the automatic open is refused first (no token in memory after a reload)
+  await page.waitForFunction(() => document.body.innerText.includes('admin capability')); // the automatic open is refused first (no token in memory after a reload)
   await setToken();
   await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
@@ -224,7 +228,7 @@ try {
   for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
     await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
-    if (path() === '/login') { await coreLogin(); await status('Enter the admin capability token'); await setToken(); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
+    if (path() === '/login') { await coreLogin(); await page.waitForFunction(() => document.body.innerText.includes('admin capability')); await setToken(); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
     await page.waitForFunction((x) => location.pathname.startsWith(x), p);
     await page.waitForSelector('main.content section, main.content .stats');
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
