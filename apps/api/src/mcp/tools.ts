@@ -89,7 +89,7 @@ export const TOOL_KINDS: Record<string, Kind> = {
   install_plugin: 'write', configure_plugin: 'write', set_plugin_enabled: 'write',
   list_roles: 'read', list_organizations: 'read', list_plugins: 'read',
   list_event_records: 'read', list_workflows: 'read', get_workflow: 'read', list_workflow_runs: 'read',
-  save_workflow: 'write', delete_workflow: 'write', get_authn_config: 'read', save_authn_config: 'write',
+  save_workflow: 'write', delete_workflow: 'write', test_workflow: 'read', get_authn_config: 'read', save_authn_config: 'write',
   request_new_branch: 'lifecycle', rebase_on_main: 'lifecycle', submit_pull_request: 'lifecycle',
 };
 
@@ -499,6 +499,17 @@ export function registerTools(server: McpServer, ctx: ToolCtx): void {
       await needWorkflows(ctx);
       const r = await onBranch(ctx, () => ctx.wf.remove(ctx.tenant, id));
       return { result: r, detail: `delete workflow ${id}`, targets: ['workflow_definitions'], rowCount: 1 };
+    }));
+
+
+  server.registerTool('test_workflow', {
+    description: 'Test a workflow definition AS PREPARED ON THE WORKING BRANCH without executing anything: walks the validated graph with a sample event payload and reports what every step would do. No run is created, no branch, no write, no notification. Missing trigger payload keys are auto-filled with <placeholders> and listed.',
+    inputSchema: { id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,38}$/), event: z.record(z.string(), z.unknown()).optional() },
+  },
+    ({ id, event }) => guarded(ctx, 'test_workflow', async () => {
+      await needWorkflows(ctx);
+      const r = await onBranch(ctx, () => ctx.wf.dryRun(ctx.tenant, id, event as Record<string, unknown> | undefined));
+      return { result: r, detail: `test workflow ${id} (dry run, nothing executed)`, targets: ['workflow_definitions'], rowCount: r.steps.length };
     }));
 
   server.registerTool('get_authn_config', { description: 'Read the sign-in (authentication) configuration as prepared on the working branch.' },

@@ -41,7 +41,7 @@ tokens: they open only the MCP route, and every other route of the platform keep
 | Read configuration | `list_roles`, `list_organizations`, `list_plugins`, `get_authn_config`, `list_workflows`, `get_workflow`, `list_workflow_runs`, `list_event_records` (event bus observability, scrubbed; the bus has no write route anywhere) |
 | Prepare users and roles | `execute_write` (filtered write SQL, one Dolt commit), `upsert_user` (created users have `login_enabled=false` and no known password), `assign_role` / `unassign_role`, `save_role`, `delete_role`, `add_sod_rule`, `remove_sod_rule` (needs `confirm=true`: it loosens a control) |
 | Prepare configuration | `save_profile_config` (profile fields, validated against the catalogue), `create_organization` / `update_organization` / `delete_organization` / `assign_organizations`, `install_plugin` / `configure_plugin` / `set_plugin_enabled` (sensitive grants - ui components, event hooks - stay console-only), `save_authn_config` (sign-in methods and chains, validated against the methods catalogue) |
-| Prepare workflows | `save_workflow` (create or edit a definition: name, steps graph, start trigger), `delete_workflow` |
+| Prepare workflows | `save_workflow` (create or edit a definition: name, steps graph, start trigger), `delete_workflow`, `test_workflow` (simulated preview of the branch definition with a sample event payload). What it proves: the graph is valid and the placeholder substitution is correct. What it does NOT prove: the real behavior of the steps - nothing is executed, written, sent or stored, so a step that would fail at run time (unknown role, refused write) still passes the preview |
 | Work cycle | `request_new_branch` (fresh branch **from main**), `rebase_on_main` (merge main in, conflicts reported), `submit_pull_request` (opens the PR for human review) |
 
 Reads and writes run on the session branch through the **same guarded services as the human console**: the SQL
@@ -53,7 +53,8 @@ tools need the organizations plugin enabled on the branch, workflow tools need w
 the old meta storage at startup): the AI creates and edits them on its branch, the diff is reviewed in the data
 pull request, and they only go live when a human applies it. Runs and steps (execution state) stay unversioned
 in the meta database, and a manual or triggered run always uses the **live** (main) definition, never an
-unreviewed branch edit.
+unreviewed branch edit. Pre-migration meta rows are copied to main exactly once (a `defs_migrated` marker
+prevents resurrecting a definition deleted after the migration).
 
 Explicitly **not** covered by the MCP surface: starting or cancelling workflow runs (they execute effects),
 publishing/applying anything to main, user credential enrollments and the outbox, and the Cedar policies
