@@ -56,7 +56,9 @@ export class McpPage {
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   protected expired(x: McpSession) { return new Date(x.expiresAt).getTime() <= Date.now(); }
   protected configFor(c: McpSession & { secret: string }) {
-    return JSON.stringify({ mcpServers: { 'iam-poc': { url: `${location.origin.replace(/:\\d+$/, '')}/tenants/acme-demo/mcp`.replace('http://localhost', 'http://localhost:3000'), headers: { Authorization: `Bearer ${c.secret}` } } } }, null, 2);
+    // Local dev (ng serve on :4200) hits the API directly; everywhere else the console origin proxies /api to it.
+    const base = location.port === '4200' ? 'http://localhost:3000' : location.origin + '/api';
+    return JSON.stringify({ mcpServers: { 'iam-poc': { url: `${base}/tenants/acme-demo/mcp`, headers: { Authorization: `Bearer ${c.secret}` } } } }, null, 2);
   }
   private async call(method: string, path: string, body?: object): Promise<Record<string, any> | null> {
     try {
