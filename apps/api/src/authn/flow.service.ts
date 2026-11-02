@@ -1,16 +1,17 @@
 import { randomBytes } from 'node:crypto';
-import { Inject, Injectable, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import type { AuthenticateResult } from '../plugins/v1/hooks.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG, isEmptyConfig, analyzeChain, parseStored, validateConfig } from './config.js';
+import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
 import { SmtpMailAdapter } from './mail.js';
 import { CATALOGUE, DemoOutbox, MailAdapter, MethodCtx, Prompt, methodType } from './methods.js';
 
-export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; answers?: Record<string, string> }
+export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string> }
 export type GateResponse =
   | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string }
   | { outcome: 'deny'; reason: string; message: string }
@@ -18,6 +19,8 @@ export type GateResponse =
 
 interface Session {
   id: string; tenant: string; subject: string; known: boolean; exp: number; index: number;
+  /** Data branch under test (docs/branch-test.md): the whole attempt, its config and its directory lookups stay on it. */
+  branch?: string;
   chain: { id: string; name: string; level: number };
   steps: { id: string; type: string; name: string; level: number; config: Record<string, unknown>; real: boolean }[];
   declared: number;
@@ -51,6 +54,15 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!workspaceMode()) return this.reg;
     return this.branches!.get(ref === 'live' ? 'main' : currentBranch(write));
   }
+  /** Sign-in reads its configuration on Dolt main, or on one tested data branch (the gate checked the ticket before calling here). */
+  private async signinRegistry(branch?: string): Promise<PluginRegistry> {
+    if (!branch) return this.registry('live');
+    if (!workspaceMode()) throw new BadRequestException('branch test needs the hosted workspace mode');
+    branchName(branch);
+    if (branch === 'main') throw new BadRequestException('main is the live sign-in already: nothing to test');
+    return this.branches!.get(branch);
+  }
+  private async signinConfig(tenant: string, branch?: string): Promise<AuthnConfig> { return parseStored(await (await this.signinRegistry(branch)).coreSettings(tenant, CORE_SETTINGS_ID)); }
   /**
    * DEMO ONLY, opt-in with IAM_AUTHN_DEMO_SEED=1 (the hosted demo sets it): when no authentication configuration is stored on main,
    * store the example methods and chains (no chain selected for sign-in, so live sign-in does not change) and enroll the FICTIONAL
@@ -84,22 +96,22 @@ export class AuthnService implements OnApplicationBootstrap {
   analyses(cfg: AuthnConfig): ChainAnalysis[] { return cfg.chains.map((c) => analyzeChain(cfg, c)); }
   catalogue() { return CATALOGUE.map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
 
-  private async known(tenant: string, subject: string): Promise<boolean> {
+  private async known(tenant: string, subject: string, branch?: string): Promise<boolean> {
     if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return false;
-    if (process.env.IAM_DIRECTORY_AUTH === '1' && this.users) { try { return (await this.users.list('main')).some((u) => u.id === subject && u.login_enabled && u.hasCredential); } catch { return false; } }
+    if (process.env.IAM_DIRECTORY_AUTH === '1' && this.users) { try { return (await this.users.list(branch ?? 'main')).some((u) => u.id === subject && u.login_enabled && u.hasCredential); } catch { return false; } }
     return true;
   }
-  /** Live (main) profile address of the user, only when the directory is the source of accounts. */
-  private async profileEmail(subject: string): Promise<string | undefined> {
+  /** Profile address of the user on the relevant data branch (main normally), only when the directory is the source of accounts. */
+  private async profileEmail(subject: string, branch?: string): Promise<string | undefined> {
     if (process.env.IAM_DIRECTORY_AUTH !== '1' || !this.users) return undefined;
-    try { return ((await this.users.list('main')).find((u) => u.id === subject && u.login_enabled && u.hasCredential) as { email?: string | null } | undefined)?.email || undefined; } catch { return undefined; }
+    try { return ((await this.users.list(branch ?? 'main')).find((u) => u.id === subject && u.login_enabled && u.hasCredential) as { email?: string | null } | undefined)?.email || undefined; } catch { return undefined; }
   }
-  private async passwordCheck(tenant: string, subject: string, password: string) {
-    const r = await (await this.registry('live')).callSlot<AuthenticateResult>(tenant, 'auth.password', 'auth.authenticate', { tenant, subject, credential: { password } });
+  private async passwordCheck(tenant: string, subject: string, password: string, branch?: string) {
+    const r = await (await this.signinRegistry(branch)).callSlot<AuthenticateResult>(tenant, 'auth.password', 'auth.authenticate', { tenant, subject, credential: { password } });
     return r.result.outcome === 'allow';
   }
   private ctx(s: Session, step: Session['steps'][number]): MethodCtx {
-    return { tenant: s.tenant, subject: s.subject, instanceId: step.id, config: step.config as Record<string, any>, known: s.known, enroll: this.enroll, mail: this.outbox, smtp: this.smtp, profileEmail: () => this.profileEmail(s.subject), passwordCheck: (t, u, p) => this.passwordCheck(t, u, p), now: this.now };
+    return { tenant: s.tenant, subject: s.subject, instanceId: step.id, config: step.config as Record<string, any>, known: s.known, enroll: this.enroll, mail: this.outbox, smtp: this.smtp, profileEmail: () => this.profileEmail(s.subject, s.branch), passwordCheck: (t, u, p) => this.passwordCheck(t, u, p, s.branch), now: this.now };
   }
   private audit(e: Record<string, unknown>) { console.log('[authn]', JSON.stringify(e)); }
   private throttled(key: string) { const t = (this.fails.get(key) ?? []).filter((x) => x > this.now() - THROTTLE_MS); this.fails.set(key, t); return t.length >= THROTTLE_N; }
@@ -114,8 +126,8 @@ export class AuthnService implements OnApplicationBootstrap {
     return cfg.chains.filter((c) => c.enabled && c.steps.every((id) => cfg.methods.find((m) => m.id === id)?.enabled));
   }
   /** Public description of what can be chosen on the sign-in page. No enrollment, user or secret information. */
-  async options(tenant: string) {
-    const cfg = await this.liveConfig(tenant), list = this.offered(cfg);
+  async options(tenant: string, branch?: string) {
+    const cfg = await this.signinConfig(tenant, branch), list = this.offered(cfg);
     return {
       mode: list.length ? 'choice' as const : 'legacy' as const,
       chains: list.map((c) => {
@@ -124,6 +136,7 @@ export class AuthnService implements OnApplicationBootstrap {
           steps: c.steps.map((id) => { const m = cfg.methods.find((x) => x.id === id)!; return { name: m.name, type: m.type, simulated: !methodType(m.type)!.verification(m.config).real }; }), ...(c.note ? { note: c.note } : {}) };
       }),
       note: 'Levels are declared by an administrator (10 = strongest), not measured. A simulated step proves nothing.',
+      ...(branch ? { branch, test: true as const } : {}),
     };
   }
   /** Which chain a sign-in uses: the one the person picked, else the administrator's default, else the plain single-password chain (JSON /authorize, scripts). None = refuse. */
@@ -136,14 +149,14 @@ export class AuthnService implements OnApplicationBootstrap {
   }
 
   /** First page of the core's form. No chain is configured: classic form. Chains exist and none is picked: the list to choose from. A chain is picked: its first inputs. */
-  async entry(tenant: string, chainId?: string): Promise<{ mode: 'legacy' } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields'] }> {
-    const cfg = await this.liveConfig(tenant), list = this.offered(cfg);
+  async entry(tenant: string, chainId?: string, branch?: string): Promise<{ mode: 'legacy' } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields'] }> {
+    const cfg = await this.signinConfig(tenant, branch), list = this.offered(cfg);
     if (!list.length) return { mode: 'legacy' };
     const chain = typeof chainId === 'string' && chainId ? list.find((c) => c.id === chainId) : undefined;
-    if (!chain) return { mode: 'choice', chains: (await this.options(tenant)).chains };
+    if (!chain) return { mode: 'choice', chains: (await this.options(tenant, branch)).chains };
     const m = cfg.methods.find((x) => x.id === chain.steps[0])!, t = methodType(m.type)!;
     if (!t.inlineWithUsername(m.config)) return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: [] };
-    const s = { tenant, subject: '', known: false } as Session;
+    const s = { tenant, subject: '', known: false, branch } as Session;
     const p = await t.prepare!(this.ctx(s, { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: true }));
     return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: p.prompt.fields };
   }
@@ -152,17 +165,17 @@ export class AuthnService implements OnApplicationBootstrap {
   async authenticate(b: GateRequest): Promise<GateResponse | null> {
     this.sweep();
     if (b.session) return this.answer(b);
-    const cfg = await this.liveConfig(b.tenant);
+    const cfg = await this.signinConfig(b.tenant, b.branch);
     if (!this.offered(cfg).length) return null;   // nothing configured and enabled: the classic single-password path, unchanged
     const chain = this.resolve(cfg, typeof b.chain === 'string' ? b.chain.slice(0, 40) : undefined);
     if (!chain) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };   // chains exist: never fall back to a laxer path
     const subject = typeof b.subject === 'string' ? b.subject : '';
     if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
-    const key = `${b.tenant}/${subject}`;
+    const key = `${b.tenant}/${b.branch ?? 'live'}/${subject}`;
     if (this.throttled(key) || this.tooManyStarts(key)) { this.audit({ tenant: b.tenant, subject, outcome: 'throttled' }); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
     const a = analyzeChain(cfg, chain);
     const steps = chain.steps.map((id) => { const m = cfg.methods.find((x) => x.id === id)!; return { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: methodType(m.type)!.verification(m.config).real }; });
-    const s: Session = { id: randomBytes(24).toString('base64url'), tenant: b.tenant, subject, known: await this.known(b.tenant, subject), exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
+    const s: Session = { id: randomBytes(24).toString('base64url'), tenant: b.tenant, subject, branch: b.branch, known: await this.known(b.tenant, subject, b.branch), exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
     this.sessions.set(s.id, s);
     await this.prepare(s);
     const first = steps[0], t = methodType(first.type)!;

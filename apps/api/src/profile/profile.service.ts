@@ -26,7 +26,7 @@ export class ProfileService {
     const r = await this.registry(ref);
     return [...BASE_FIELDS, ...r.profileFields(tenant).flatMap((p) => toCatalog(p.plugin, p.fields))];
   }
-  async activePlugins(tenant: string): Promise<string[]> { return (await this.registry('live')).list(tenant).filter((x: { id: string; enabled?: boolean; active?: boolean }) => x.enabled ?? x.active).map((x: { id: string }) => x.id); }
+  async activePlugins(tenant: string, ref: 'live' | 'work' = 'live'): Promise<string[]> { return (await this.registry(ref)).list(tenant).filter((x: { id: string; enabled?: boolean; active?: boolean }) => x.enabled ?? x.active).map((x: { id: string }) => x.id); }
   async pluginActive(tenant: string, id: string, ref: 'live' | 'work') { return (await this.registry(ref)).isActive(tenant, id); }
   async config(tenant: string, ref: 'live' | 'work'): Promise<ProfileConfig> { return parseProfileConfig(await (await this.registry(ref)).coreSettings(tenant, CORE_PROFILE_SETTINGS_ID)); }
   async saveConfig(tenant: string, input: unknown): Promise<ProfileConfig> {
@@ -45,8 +45,8 @@ export class ProfileService {
     const fields = await this.schema(tenant, ctx, ref);
     return { fields, values: Object.fromEntries(fields.filter((f) => f.key in values).map((f) => [f.key, values[f.key]])) };
   }
-  /** The user's own profile, as the LIVE configuration shows it. The subject always comes from the token. */
-  async selfEditPolicy(tenant: string): Promise<'immediate' | 'review'> { return (await this.config(tenant, 'live')).selfEditPolicy === 'review' ? 'review' : 'immediate'; }
+  /** The user's own profile, as the relevant side's configuration shows it (live, or the tested data branch). The subject always comes from the token. */
+  async selfEditPolicy(tenant: string, ref: 'live' | 'work' = 'live'): Promise<'immediate' | 'review'> { return (await this.config(tenant, ref)).selfEditPolicy === 'review' ? 'review' : 'immediate'; }
   /** Base fields (name, e-mail, department, manager) live in the identity directory, not in the value store: show them from there. Stored values win. */
   private async baseValues(sub: string, ref: 'live' | 'work'): Promise<Record<string, unknown>> {
     if (!this.users || !workspaceMode()) return {};
@@ -57,17 +57,25 @@ export class ProfileService {
       return out;
     } catch { return {}; }
   }
-  async self(tenant: string, sub: string) {
-    await this.subject(tenant, sub, 'live');
-    const policy = await this.selfEditPolicy(tenant);
-    const live = await this.store.get(tenant, sub, 'live'), pending = policy === 'review' ? await this.store.pending(tenant, sub) : {};
-    const shown = { ...(await this.baseValues(sub, 'live')), ...live } as Record<string, unknown>; for (const [k, v] of Object.entries(pending)) { if (v === null) delete shown[k]; else shown[k] = v; }
-    return { ...(await this.visible(tenant, 'self', 'live', shown as Values)), policy, pending: Object.keys(pending) };
+  async self(tenant: string, sub: string, ref: 'live' | 'work' = 'live') {
+    await this.subject(tenant, sub, ref);
+    const policy = await this.selfEditPolicy(tenant, ref);
+    // Branch test: the values come from the tested branch; the pending-review mechanism (shared personal branches) is not part of a test.
+    const live = await this.store.get(tenant, sub, ref), pending = ref === 'live' && policy === 'review' ? await this.store.pending(tenant, sub) : {};
+    const shown = { ...(await this.baseValues(sub, ref)), ...live } as Record<string, unknown>; for (const [k, v] of Object.entries(pending)) { if (v === null) delete shown[k]; else shown[k] = v; }
+    return { ...(await this.visible(tenant, 'self', ref, shown as Values)), policy, pending: Object.keys(pending), ...(ref === 'work' ? { branchTest: true as const } : {}) };
   }
   /** Immediate policy: live at once (main). Review policy: the edits wait on the person's own branch until a validator accepts them. */
-  async patchSelf(tenant: string, sub: string, input: unknown) {
-    await this.subject(tenant, sub, 'live');
-    const changes = await this.check(tenant, 'live', 'self', input);
+  async patchSelf(tenant: string, sub: string, input: unknown, ref: 'live' | 'work' = 'live') {
+    await this.subject(tenant, sub, ref);
+    const changes = await this.check(tenant, ref, 'self', input);
+    if (ref === 'work') {
+      // Branch test: the edit is committed to the TESTED branch only, immediately. It never touches main or the shared
+      // pending-review flow, whatever the configured policy; Apply remains the only way to publish anything.
+      await this.store.put(tenant, sub, changes, 'work', sub);
+      this.events?.emit({ type: 'profile.updated', tenant, branch: currentBranch(), at: new Date().toISOString(), payload: { subject: sub, keys: Object.keys(changes).join(','), actor: sub } });
+      return { ...(await this.self(tenant, sub, ref)), note: 'branch test: written to the tested branch only; the review flow does not apply here' };
+    }
     if (await this.selfEditPolicy(tenant) === 'review') await this.store.putPending(tenant, sub, changes, sub);
     else {
       await this.store.put(tenant, sub, changes, 'live', sub);

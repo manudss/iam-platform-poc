@@ -1,7 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { createPublicKey, verify, KeyObject } from 'node:crypto';
 
-interface Claims { iss: string; aud: string; sub: string; exp: number; tenant: string }
+interface Claims { iss: string; aud: string; sub: string; exp: number; tenant: string; branch?: string }
 
 /**
  * Verifies the bearer token issued by the core IdP prototype: EdDSA signature (key from the core JWKS),
@@ -54,7 +54,15 @@ export class AuthGuard implements CanActivate {
     if (typeof claims.exp !== 'number' || claims.exp * 1000 <= Date.now()) throw new UnauthorizedException('token expired');
     const tenant = req.params?.tenant;
     if (tenant !== undefined && tenant !== claims.tenant) throw new ForbiddenException('wrong tenant');
+    // Branch test (docs/branch-test.md): a token the core bound to a data branch can never be presented with another branch context.
+    const headerBranch = req.headers?.['x-iam-branch'];
+    if (claims.branch && typeof headerBranch === 'string' && headerBranch && headerBranch !== claims.branch) throw new ForbiddenException('this token is bound to another data branch');
     req.user = claims;
     return true;
   }
+}
+
+/** Routes that act on shared, unversioned state (personal branches, Apply, enrollments, the outbox, profile reviews) refuse a branch-test token. */
+export function assertNotBranchTest(req: { user?: { branch?: string } }) {
+  if (req.user?.branch) throw new ForbiddenException('not available while testing a data branch');
 }
