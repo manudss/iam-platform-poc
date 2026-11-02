@@ -12,7 +12,9 @@ An administrator can try the **full login experience as a visitor would see it o
 
 ## Authorization: tickets, not name knowledge
 
-Knowing a branch name is never enough to test it. A branch test requires a ticket issued by `POST /api/tenants/:tenant/workspace/branch-test` (admin capability required) for an existing, non-`main` branch. The gate checks the ticket on the first page of a test sign-in; an invalid or expired ticket gets a generic refusal. Tickets are bound to one branch: a ticket for `feature-x` never authorizes another branch. Tokens carry the branch in a signed claim, and the API refuses a token presented with a different `x-iam-branch` header.
+Knowing a branch name is never enough to test it. A branch test requires a ticket issued by `POST /api/tenants/:tenant/workspace/branch-test` (admin capability required) for an existing, non-`main` branch. The gate checks the ticket on the first page of a test sign-in; an invalid or expired ticket gets a generic refusal that never echoes the branch. Tickets are bound to one branch: a ticket for `feature-x` never authorizes another branch. Tokens carry the branch in a signed claim, and the API refuses a token presented with a different `x-iam-branch` header; a running sign-in session stays bound to the branch it started on.
+
+**Who creates, who consumes.** Only an administrator creates a ticket. The test link itself is a **bearer secret for 10 minutes**: whoever opens it can load that branch's sign-in configuration and attempt a sign-in — completing it still requires real credentials (enrollments stay live and shared), and the issued token then refuses every shared-state route. Treat the link like a password reset link: fine to open in a fresh browser profile for the test, not to post anywhere.
 
 The public sign-in options endpoint answers for `main` without a ticket; for any other branch it requires the valid ticket, so branch configurations are not exposed by name guessing.
 
@@ -21,6 +23,7 @@ The public sign-in options endpoint answers for `main` without a ticket; for any
 Credentials, enrollments and the rest of the shared, unversioned state stay on the live deployment. A branch-test token is refused on:
 
 - enrollment writes and deletes (`POST/DELETE /tenants/:tenant/authn/enrollments/...`) — no test session ever creates or removes real credentials or secrets;
+- sign-up (`POST /tenants/:tenant/signup`, `confirm`, and the admin approval routes): sign-up stays live and shared for everyone, but a call presenting a branch-test token is refused — a test session never creates a real account, even by a manual API call;
 - the admin outbox (`GET/DELETE /tenants/:tenant/authn/outbox`);
 - personal working branches (`POST /workspace/personal`, `rename`, `release`) and **Apply** (`POST /workspace/apply`) — a test session can never merge anything into `main`;
 - profile reviews (the pending-review queue);
@@ -38,7 +41,7 @@ Limits, visible by design:
 
 - Only in **workspace mode** (Dolt branches); outside it there is nothing to test.
 - Tickets live in memory for 10 minutes; a restart invalidates them. On the free hosted demo they vanish with the data on restart, like everything else.
-- Ticket creation needs the admin capability, so test links are not shareable with non-admins yet — relaxing this is a product decision, the plumbing would not change.
+- Only admins create tickets; the link is bearer for 10 minutes (see above), so sharing it deliberately is possible but must stay a conscious choice — granting a non-admin creation right is a product decision, the plumbing would not change.
 - Enrollments, secrets, the outbox and sign-up stay live and shared: a test session can read what any sign-in reads but cannot write them, and sign-up keeps enrolling real accounts on the live deployment.
 - The test is about **data** (configuration and profiles) on a branch. Method behaviour that depends on shared state (a real e-mail code, a TOTP secret) uses the live enrollments.
 

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BranchTestService } from './branch-test.js';
-import { assertNotBranchTest, AuthGuard } from '../auth/auth.guard.js';
+import { AuthnService } from '../authn/flow.service.js';
+import { assertNotBranchTest, AuthGuard, OptionalAuthGuard } from '../auth/auth.guard.js';
 
 const branches = (...names: string[]) => ({ branches: async () => ({ default: 'main', branches: names.map((name) => ({ name, commit: 'c-' + name })) }) });
 
@@ -61,4 +62,37 @@ test('assertNotBranchTest: a branch-bound token is refused on shared-state route
     await assert.rejects(() => g.canActivate(ctx({ authorization: 'Bearer ' + token, 'x-iam-branch': 'main' }) as never), /bound to another data branch/);
     await assert.rejects(() => g.canActivate(ctx({ authorization: 'Bearer ' + token, 'x-iam-branch': 'feature-y' }) as never), /bound to another data branch/);
   } finally { globalThis.fetch = origFetch; }
+});
+
+test('OptionalAuthGuard: signup stays public, but a presented branch-test token is refused', async () => {
+  const { generateKeyPairSync, sign } = await import('node:crypto');
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const jwk = publicKey.export({ format: 'jwk' }) as { x: string };
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ json: async () => ({ keys: [{ kid: 'k1', x: jwk.x }] }) })) as never;
+  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const tok = (claims: object) => { const h = b64({ alg: 'EdDSA', kid: 'k1' }), b = b64(claims); return h + '.' + b + '.' + sign(null, Buffer.from(h + '.' + b), privateKey).toString('base64url'); };
+  const base = { iss: process.env.IAM_ISSUER ?? 'http://127.0.0.1:8081', aud: process.env.IAM_AUDIENCE ?? 'demo-web', sub: 'u1', exp: Math.floor(Date.now() / 1000) + 60, tenant: 'acme' };
+  const ctx = (headers: Record<string, string>) => { const req = { headers, params: {} }; return { req, c: { switchToHttp: () => ({ getRequest: () => req }) } }; };
+  const g = new OptionalAuthGuard();
+  try {
+    const anon = ctx({});
+    assert.equal(await g.canActivate(anon.c as never), true, 'no token: public as before');
+    assert.equal((anon.req as { user?: unknown }).user, undefined);
+    const live = ctx({ authorization: 'Bearer ' + tok(base) });
+    assert.equal(await g.canActivate(live.c as never), true, 'an ordinary live token still signs up');
+    assert.doesNotThrow(() => assertNotBranchTest(live.req as never));
+    const test = ctx({ authorization: 'Bearer ' + tok({ ...base, branch: 'feature-x' }) });
+    assert.equal(await g.canActivate(test.c as never), true);
+    assert.throws(() => assertNotBranchTest(test.req as never), /testing a data branch/, 'the test token is refused');
+    await assert.rejects(() => g.canActivate(ctx({ authorization: 'Bearer forged.jwt.here' }).c as never), /malformed|bad signature/, 'a forged token never passes');
+  } finally { globalThis.fetch = origFetch; }
+});
+
+test('a running sign-in session stays bound to its branch', async () => {
+  const svc = new AuthnService({ callSlot: async () => { throw new Error('not needed'); } } as never);
+  (svc as unknown as { sessions: Map<string, object> }).sessions.set('sess1', { id: 'sess1', tenant: 'acme', subject: 'u1', branch: 'feature-x', known: true, exp: Date.now() + 60_000, index: 0, chain: { id: 'c', name: 'c', level: 3 }, steps: [], declared: 3, done: [], tries: 0 });
+  const cont = (branch?: string) => svc.authenticate({ tenant: 'acme', session: 'sess1', ...(branch ? { branch } : {}), answers: {} } as never);
+  assert.equal((await cont('feature-y'))?.outcome, 'deny', 'another branch is refused with the generic message');
+  await assert.rejects(() => cont('feature-x'), 'the bound branch passes the check and reaches the step verifier (stubbed here)');
 });

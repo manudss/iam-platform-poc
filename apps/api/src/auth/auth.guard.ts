@@ -66,3 +66,13 @@ export class AuthGuard implements CanActivate {
 export function assertNotBranchTest(req: { user?: { branch?: string } }) {
   if (req.user?.branch) throw new ForbiddenException('not available while testing a data branch');
 }
+
+/** Signup stays public, but when a caller presents a branch-test token the route must still refuse it. */
+@Injectable()
+export class OptionalAuthGuard extends AuthGuard {
+  override async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    const req = ctx.switchToHttp().getRequest();
+    if (!req.headers?.['authorization']) return true;
+    return super.canActivate(ctx);
+  }
+}

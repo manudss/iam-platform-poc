@@ -185,6 +185,7 @@ export class AuthnService implements OnApplicationBootstrap {
   private async answer(b: GateRequest): Promise<GateResponse> {
     const s = this.sessions.get(String(b.session));
     if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired', message: 'Your sign-in session expired. Start again.' }; }
+    if (s.branch && typeof b.branch === 'string' && b.branch && b.branch !== s.branch) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };   // a running sign-in stays bound to its branch
     if (!b.answers || typeof b.answers !== 'object') return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     return this.check(s, b.answers);
   }
