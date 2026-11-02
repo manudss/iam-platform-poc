@@ -163,11 +163,17 @@ try {
   const row = page.locator('tr[data-plugin=auth-password-lockout]');
   await row.getByRole('button', { name: 'Manage' }).click();
   await page.waitForFunction(() => location.pathname === '/plugins/auth-password-lockout');
-  await page.locator('input[name=gi]').check(); await page.click('#plugin-install');
+  // Every action re-opens the plugin afterwards and rebuilds the form from the server, so wait for that re-open (the GET of
+  // the form that follows the action) before typing or asserting: filling earlier races the rebuild and the save would send defaults.
+  await page.locator('input[name=gi]').check();
+  const formGet = () => page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/form') && r.status() === 200);
+  await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/install')), page.click('#plugin-install')]);
   await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
-  await page.waitForSelector('#plugin-form');
-  await page.locator('label[data-field=maxFailures] input').fill('3'); await page.click('#plugin-save');
+  await formGet(); await page.waitForSelector('#plugin-form');
+  await page.locator('label[data-field=maxFailures] input').fill('3');
+  await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/settings') && r.request().method() === 'PUT'), page.click('#plugin-save')]);
   await page.waitForFunction(() => /saved|Saved|configured/i.test(document.querySelector('#plugin-note')?.textContent ?? ''));
+  await formGet();
   assert.equal(await page.locator('label[data-field=maxFailures] input').inputValue(), '3', 'the saved value comes back from the API');
   await page.locator('[data-hook="auth.authenticate"]').check(); await page.click('#plugin-enable');
   await page.waitForSelector('#plugin-disable');
@@ -190,19 +196,23 @@ try {
   const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
   await nav('/database/branches'); await page.waitForSelector('text=protected'); await shot('8-explorer-1-branches');
   await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
+  await page.getByRole('button', { name: 'Refresh branches' }).click(); // the explorer created ui-demo behind the shell's back: reload the branch list before selecting it
+  await page.selectOption('select[name=globalBranch]', 'ui-demo'); await status('Working on ui-demo'); // explorer edits and SQL writes must run on the selected working branch
   await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
-  await btn('Add a row').click();
-  await page.fill('textarea[name=ej]', JSON.stringify({ id: 'auditor', label: 'Auditor', is_sensitive: 0 }));
+  await btn('Add a row').click(); await page.waitForSelector('.explorer .panel textarea');
+  await page.fill('label[data-edit-field=id] textarea', 'auditor');
+  for (const f of ['label', 'is_sensitive']) await page.locator(`label[data-edit-field=${f}] input[type=checkbox]`).uncheck(); // nullable columns start as NULL (field disabled)
+  await page.fill('label[data-edit-field=label] textarea', 'Auditor'); await page.fill('label[data-edit-field=is_sensitive] textarea', '0');
   await page.fill('input[name=em]', 'add auditor role'); await btn('Commit change').click();
   await page.waitForSelector('td:has-text("Auditor")'); await shot('8-explorer-2-data-edit');
-  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('text=read only');
+  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('.explorer .chip.lock:text("read only")');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
   await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
   await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
   await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
   await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
-  await page.waitForSelector('.explorer .msg:has-text("protected")');
+  await page.waitForSelector('.explorer .msg:has-text("selected working branch")'); // workspace mode: SQL writes only on the selected working branch
   await page.selectOption('select[name=sr]', 'ui-demo'); await page.fill('textarea[name=sq]', "update roles set label = 'Internal auditor' where id = 'auditor'"); await btn('Preview changes').click();
   await page.waitForSelector('text=Preview only'); await shot('8-explorer-4-sql-preview');
   await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
@@ -213,15 +223,18 @@ try {
   assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
   assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
   await shot('8-explorer-5-pull-request');
-  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
+  // Workspace mode: a pull request review works, but merging it into main is refused - only the global Apply publishes to main.
+  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Use the global Apply")');
+  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
+  await page.click('#workspace-apply'); await status('Applied');
   await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
-  assert.match(await page.locator('.explorer ol.log').innerText(), /Merge pull request #1: Add auditor role/);
+  assert.match(await page.locator('.explorer ol.log').innerText(), /Apply workspace ui-demo/);
   await noBanner('explorer end');
   // an internal jump changes the address too: branches -> compare with main
   await nav('/database/branches'); await page.waitForSelector('text=protected');
-  // the IAM pages still work after the explorer merged a PR into Dolt main (a PR merge changes data only; publishing stays with Apply)
-  await nav('/activation'); await page.waitForSelector('td:text-is("#1")');
-  await noBanner('activation after PR merge');
+  // the IAM pages still work after the explorer branch was applied to Dolt main
+  await nav('/activation'); await page.waitForSelector('td:text-is("#2")'); // ui-demo published as activation #2
+  await noBanner('activation after explorer apply');
 
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
   await page.setViewportSize({ width: 390, height: 800 });
