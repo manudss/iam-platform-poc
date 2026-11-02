@@ -10,7 +10,7 @@ export function scrub(r: any) {
   for (const [k, v] of Object.entries(r?.payload ?? {})) payload[k] = DENY.test(k) && k !== 'effectKey' ? '[masked]' : String(v).replace(EMAIL, '$1***@$2***$3').slice(0, 120);
   const s = (v: unknown, n = 80) => (v == null ? v : String(v).slice(0, n));
   return {
-    seq: Number(r.seq), at_ms: Number(r.at_ms), envelope_id: s(r.envelope_id), kind: s(r.kind), mode: s(r.mode), tenant: s(r.tenant), effect_key: s(r.effect_key),
+    seq: Number(r.seq), at_ms: Number(r.at_ms), envelope_id: s(r.envelope_id), kind: s(r.kind), mode: s(r.mode), tenant: s(r.tenant), effect_key: s(r.effect_key), source: s(r.source),
     payload, elapsed_ms: Number(r.elapsed_ms), verdict: s(r.verdict),
     expected: (r.expected ?? []).map((e: any) => ({ id: s(e.id), mandatory: !!e.mandatory })),
     outcomes: (r.outcomes ?? []).map((o: any) => ({ id: s(o.id), mandatory: !!o.mandatory, status: s(o.status), verdict: s(o.verdict), detail: s(o.detail), data_keys: Array.isArray(o.data_keys) ? o.data_keys.map((x: unknown) => s(x)) : null })),
