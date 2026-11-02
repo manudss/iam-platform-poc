@@ -91,10 +91,10 @@ export class WorkflowDemoSeed implements OnApplicationBootstrap {
     const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
     for (const s of SEEDS) {
       try {
-        if (await this.store.getDefinition(tenant, s.id)) continue;
+        if (await this.store.getDefinition(tenant, s.id, this.store.liveRef)) continue;
         const { graph } = validateGraph({ nodes: s.nodes, edges: s.edges });
         const def: DefinitionRow = { id: s.id, tenant, name: s.name, description: s.description, graph, trigger: s.trigger, created_by: 'demo-seed', created_at: now(), updated_at: now() };
-        await this.store.putDefinition(def);
+        await this.store.putDefinition(def, this.store.liveRef);
         this.log.log(`seeded triggered workflow "${s.name}" (${s.trigger.event})`);
       } catch (e) { this.log.warn(`seed ${s.id} skipped: ${(e as Error).message}`); }
     }
