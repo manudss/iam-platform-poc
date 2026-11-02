@@ -31,6 +31,9 @@ export interface ToolCtx {
 
 type Kind = 'read' | 'write' | 'lifecycle';
 
+/** A refusal by the MCP confinement itself (not by the policy engine): traced as a DENIAL. */
+export class ConfinementError extends Error {}
+
 /** Tables/columns an AI never reads or writes through MCP: simulated mail codes (2FA), credential references, secrets. */
 const SENSITIVE = /\b(outbox|credential[a-z0-9_]*|[a-z0-9_]*secret[a-z0-9_]*|[a-z0-9_]*token[a-z0-9_]*|[a-z0-9_]*password[a-z0-9_]*)\b/i;
 
@@ -45,14 +48,14 @@ export function checkMcpSql(sql: string, mode: 'read' | 'write'): { tables: stri
   const skeletons = skeletonsOf(sql, mode, ['information_schema', meta]);
   for (const s of skeletons) {
     const hit = s.match(SENSITIVE);
-    if (hit) throw new Error(`"${hit[1]}" is not ${mode === 'read' ? 'readable' : 'writable'} through MCP`);
+    if (hit) throw new ConfinementError(`"${hit[1]}" is not ${mode === 'read' ? 'readable' : 'writable'} through MCP`);
   }
   return { tables: tablesOf(skeletons) };
 }
 
 /** checkSql validates; scanSql gives the skeletons (literals emptied, comments stripped) for the MCP patterns. */
 function skeletonsOf(sql: string, mode: 'read' | 'write', extraBlocked: string[]): string[] {
-  checkSql(sql, mode, extraBlocked);
+  try { checkSql(sql, mode, extraBlocked); } catch (e) { throw new ConfinementError((e as Error).message); } // every MCP-level refusal is a denial in the trace
   return scanSql(sql).skeletons;
 }
 
@@ -111,6 +114,7 @@ async function guarded(ctx: ToolCtx, tool: string, run: Run) {
     return { content: [{ type: 'text' as const, text: JSON.stringify(r.result, null, 2) }] };
   } catch (e) {
     const msg = (e as Error).message ?? 'error';
+    if (e instanceof ConfinementError) { await rec(false, [msg], '', [], null, 'denied'); return { content: [{ type: 'text' as const, text: `denied: ${msg}` }], isError: true }; }
     await rec(true, [], '', [], null, msg);
     return { content: [{ type: 'text' as const, text: `error: ${msg}` }], isError: true };
   }
@@ -146,7 +150,7 @@ export function registerTools(server: McpServer, ctx: ToolCtx): void {
     inputSchema: { table: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), limit: z.number().int().min(1).max(200).optional(), offset: z.number().int().min(0).optional() },
   },
     ({ table, limit, offset }) => guarded(ctx, 'read_table', async () => {
-      const hit = table.match(SENSITIVE); if (hit) throw new Error(`"${hit[1]}" is not readable through MCP`);
+      const hit = table.match(SENSITIVE); if (hit) throw new ConfinementError(`"${hit[1]}" is not readable through MCP`);
       const r = await ctx.v.tableRows(b, table, limit ?? 50, offset ?? 0);
       return { result: r, detail: `read table ${table}`, targets: [table.toLowerCase()], rowCount: (r as { rows?: unknown[] }).rows?.length ?? null };
     }));
@@ -202,7 +206,7 @@ export function registerTools(server: McpServer, ctx: ToolCtx): void {
     (input) => guarded(ctx, 'upsert_user', async () => {
       const { id, ...fields } = input;
       const exists = (await onBranch(ctx, () => ctx.users.list())).some((u) => u.id === id);
-      const body: Record<string, unknown> = exists ? fields : { ...fields, login_enabled: fields.login_enabled ?? false, password: 'mcp-no-login-' + Math.random().toString(36).slice(2, 14) };
+      const body: Record<string, unknown> = exists ? fields : { id, ...fields, login_enabled: fields.login_enabled ?? false, password: 'mcp-no-login-' + Math.random().toString(36).slice(2, 14) };
       const saved = await onBranch(ctx, () => ctx.users.save(id, body, !exists, undefined, ctx.tenant));
       const safe = saved ? { id: saved.id, display_name: saved.display_name, department: saved.department, manager_id: saved.manager_id, email: saved.email, login_enabled: saved.login_enabled } : null;
       return { result: { created: !exists, user: safe, branch: b }, detail: `${exists ? 'update' : 'create'} user ${id}`, targets: ['identities'], rowCount: 1 };
@@ -237,6 +241,8 @@ export function registerTools(server: McpServer, ctx: ToolCtx): void {
 
   server.registerTool('rebase_on_main', { description: 'Merge main into the working branch so the work is up to date. Conflicts are reported, never force-resolved.' },
     () => guarded(ctx, 'rebase_on_main', async () => {
+      const diff = await ctx.v.diffSummary(ctx.v.defaultBranch, b, true);
+      if (!diff.tables.length) return { result: { mergeable: true, upToDate: true, note: 'main has nothing the working branch lacks' }, detail: `rebase ${b} on main (up to date)` };
       const r = await ctx.v.mergeInto(ctx.v.defaultBranch, b, `mcp: rebase ${b} on main`, ctx.session.owner);
       return { result: r, detail: `rebase ${b} on main` };
     }));

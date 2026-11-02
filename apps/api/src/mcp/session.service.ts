@@ -6,7 +6,7 @@ import { VersioningService } from '../versioning/versioning.service.js';
 /** Public view of an MCP session. The secret itself is NEVER stored in clear and NEVER returned after creation. */
 export interface McpSession {
   id: string; tenant: string; owner: string; label: string; branch: string; seq: number;
-  createdAt: string; expiresAt: string; revoked: boolean; submitted: boolean; calls: number;
+  createdAt: string; expiresAt: string; expiresMs: number; revoked: boolean; submitted: boolean; calls: number;
 }
 export interface ActivityEntry {
   id: number; at: string; tenant: string; sessionId: string; owner: string; branch: string;
@@ -42,7 +42,7 @@ export class McpSessionService {
           await m.query(`CREATE TABLE IF NOT EXISTS mcp_sessions (
             id VARCHAR(40) PRIMARY KEY, tenant VARCHAR(32) NOT NULL, owner_sub VARCHAR(64) NOT NULL, label VARCHAR(120) NOT NULL,
             branch VARCHAR(63) NOT NULL, seq INT NOT NULL DEFAULT 1, secret_hash CHAR(64) NOT NULL,
-            created_at DATETIME(3) NOT NULL, expires_at DATETIME(3) NOT NULL,
+            created_at DATETIME(3) NOT NULL, expires_ms BIGINT NOT NULL,
             revoked BOOLEAN NOT NULL DEFAULT FALSE, submitted BOOLEAN NOT NULL DEFAULT FALSE, calls INT NOT NULL DEFAULT 0)`);
           await m.query(`CREATE TABLE IF NOT EXISTS mcp_activity (
             id BIGINT AUTO_INCREMENT PRIMARY KEY, at DATETIME(3) NOT NULL DEFAULT NOW(3),
@@ -65,7 +65,7 @@ export class McpSessionService {
   private shape(r: Row): McpSession {
     return {
       id: String(r.id), tenant: String(r.tenant), owner: String(r.owner_sub), label: String(r.label), branch: String(r.branch), seq: Number(r.seq),
-      createdAt: String(r.created_at), expiresAt: String(r.expires_at), revoked: !!r.revoked, submitted: !!r.submitted, calls: Number(r.calls),
+      createdAt: String(r.created_at), expiresAt: new Date(Number(r.expires_ms)).toISOString(), expiresMs: Number(r.expires_ms), revoked: !!r.revoked, submitted: !!r.submitted, calls: Number(r.calls),
     };
   }
 
@@ -80,10 +80,10 @@ export class McpSessionService {
     const now = new Date(), exp = new Date(now.getTime() + ttl * 1000);
     const m = await this.meta();
     try {
-      await m.query('INSERT INTO mcp_sessions (id, tenant, owner_sub, label, branch, seq, secret_hash, created_at, expires_at) VALUES (?,?,?,?,?,1,?,?,?)',
-        [id, tenant, owner.slice(0, 64), name, id, hashSecret(secret), now.toISOString().slice(0, 23), exp.toISOString().slice(0, 23)]);
+      await m.query('INSERT INTO mcp_sessions (id, tenant, owner_sub, label, branch, seq, secret_hash, created_at, expires_ms) VALUES (?,?,?,?,?,1,?,?,?)',
+        [id, tenant, owner.slice(0, 64), name, id, hashSecret(secret), now.toISOString().slice(0, 23), exp.getTime()]);
     } finally { await m.end(); }
-    return { secret, session: { id, tenant, owner, label: name, branch: id, seq: 1, createdAt: now.toISOString(), expiresAt: exp.toISOString(), revoked: false, submitted: false, calls: 0 } };
+    return { secret, session: { id, tenant, owner, label: name, branch: id, seq: 1, createdAt: now.toISOString(), expiresAt: exp.toISOString(), expiresMs: exp.getTime(), revoked: false, submitted: false, calls: 0 } };
   }
 
   /** Resolves a bearer secret to a live session, or null (unknown, wrong tenant, revoked, expired). */
@@ -95,7 +95,7 @@ export class McpSessionService {
       const row = (r as Row[])[0];
       if (!row) return null;
       const s = this.shape(row);
-      if (s.revoked || new Date(s.expiresAt).getTime() <= Date.now()) return null;
+      if (s.revoked || s.expiresMs <= Date.now()) return null;
       return s;
     } finally { await m.end(); }
   }
