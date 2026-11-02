@@ -19,3 +19,5 @@ When an administrator opens the console, a personal **Dolt data branch** is alre
 | `POST /api/tenants/:tenant/workspace/personal/release` | Delete the branch only if empty and unused (called at sign-out). |
 
 Limit: when the admin capability token is typed by hand (local runs without the hosted edge), the branch opens after the token is entered and **Refresh branches** is pressed.
+
+Related: [testing the sign-in on a data branch](branch-test.md) — an administrator can open a branch's login experience in a test session before merging it. Test sessions never touch enrollments, the outbox, personal branches or Apply.
