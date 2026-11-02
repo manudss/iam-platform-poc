@@ -372,4 +372,30 @@ mod tests {
         let (st, h, _) = send(&c, with("mail", "pw")).await; assert_eq!(st, StatusCode::UNAUTHORIZED); assert!(h.get(header::LOCATION).is_none(), "another chain id is refused by the control plane");
         let (st, h, _) = send(&c, post_login(&login_body("demo-alice", "pw"))).await; assert_eq!(st, StatusCode::UNAUTHORIZED); assert!(h.get(header::LOCATION).is_none(), "no chain picked: no sign-in");
     }
+
+    #[tokio::test]
+    async fn branch_test_params_are_validated_carried_and_bound_into_the_token() {
+        let c = core();
+        // main and malformed branches never reach a form; a ticket without a branch is refused
+        for extra in ["&branch=main", "&branch=Bad_Branch", "&branch=a..b", "&ticket=someticket123"] {
+            let (st, h, _) = send(&c, get(&q(extra))).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST, "{extra}"); assert!(h.get(header::LOCATION).is_none());
+        }
+        // a well-formed pair renders the classic form (no gate configured here) and keeps both in the hidden fields
+        let (st, _, body) = send(&c, get(&q("&branch=feature-x&ticket=ticket-1234567890"))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(body.contains("name=\"branch\" value=\"feature-x\"") && body.contains("name=\"ticket\" value=\"ticket-1234567890\""));
+        // sign-in on that form issues a token whose branch claim is set by the core itself
+        let (st, h, _) = send(&c, post_login(&format!("{}&branch=feature-x&ticket=ticket-1234567890", login_body("demo-alice", "demo-only-not-a-secret")))).await;
+        assert_eq!(st, StatusCode::FOUND);
+        let code = h[header::LOCATION].to_str().unwrap().split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
+        let t = Request::builder().method("POST").uri("/token").header("content-type", "application/json")
+            .body(Body::from(format!("{{\"code\":\"{code}\",\"code_verifier\":\"{VER}\",\"redirect_uri\":\"{CB}\",\"client_id\":\"demo-web\"}}"))).unwrap();
+        let (st, _, body) = send(&c, t).await;
+        assert_eq!(st, StatusCode::OK);
+        let tok: Value = serde_json::from_str(&body).unwrap();
+        let claims = iam_idp::verify(tok["id_token"].as_str().unwrap(), &c.idp.jwks(), "http://idp.test").unwrap();
+        // no gate in this test core: without the control plane that checks the ticket, no branch is ever bound
+        assert!(claims.get("branch").is_none());
+    }
 }

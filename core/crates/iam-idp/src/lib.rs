@@ -239,6 +239,20 @@ mod tests {
         let j = Idp::demo("http://idp.test");
         assert!(verify(&tok, &j.jwks(), "http://idp.test").is_none());
     }
+    #[test]
+    fn branch_claim_is_core_set_and_never_comes_from_the_control_plane_extra() {
+        let i = Idp::demo("http://idp.test"); let (v, ch) = pkce();
+        // the gate's extra cannot plant a branch
+        let code = i.authorize_verified_with("demo-web", REDIR, &ch, "demo-alice", &json!({"branch": "evil"})).unwrap();
+        let tok = i.token(&code, &v, REDIR, "demo-web").unwrap();
+        let claims = verify(tok["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap();
+        assert!(claims.get("branch").is_none());
+        // the core's own parameter becomes the claim
+        let (v2, ch2) = pkce();
+        let code = i.authorize_verified_on("demo-web", REDIR, &ch2, "demo-alice", &Value::Null, Some("feature-x")).unwrap();
+        let tok = i.token(&code, &v2, REDIR, "demo-web").unwrap();
+        assert_eq!(verify(tok["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap()["branch"], "feature-x");
+    }
 }
 
 /// Detached Ed25519 signatures and SHA-256 helpers, reused by plugin package verification (same primitives as the IdP).
@@ -253,4 +267,5 @@ pub mod detached {
         let Some(sig) = B64.decode(sig_b64).ok().and_then(|b| <[u8; 64]>::try_from(b).ok()) else { return false };
         vk.verify(msg, &Signature::from_bytes(&sig)).is_ok()
     }
+
 }
