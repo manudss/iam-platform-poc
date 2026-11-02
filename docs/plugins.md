@@ -164,3 +164,9 @@ Covered by `plugins-dolt.e2e.spec.ts` (real Dolt, skipped without `DOLT_BIN`). N
 ## 11. Not done
 
 component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
+
+## Manifest v2 fields (step 2)
+
+`subscribes` and `emits` (optional) declare the plugin's own event kinds, always inside the `plg.<id>.*` namespace:
+the first for events the plugin answers on the core bus, the second for events it may emit (the core checks the
+grant). Platform hooks keep being declared in `hooks`. Delivery, grants and limits: `docs/plugin-contract-v2.md`.
