@@ -13,11 +13,15 @@ pub struct Envelope {
     pub effect_key: Option<String>,
     #[serde(default)]
     pub payload: Value,
+    /// Who sent the event: stamped by the core when it accepts an external emission (`api` or `plugin:<id>`).
+    /// Absent for events the core emits itself. Never trusted from the caller: the core overwrites it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl Envelope {
     pub fn new(id: impl Into<String>, kind: impl Into<String>, payload: Value) -> Self {
-        Envelope { id: id.into(), kind: kind.into(), tenant: None, effect_key: None, payload }
+        Envelope { id: id.into(), kind: kind.into(), tenant: None, effect_key: None, payload, source: None }
     }
     pub fn with_effect_key(mut self, k: impl Into<String>) -> Self { self.effect_key = Some(k.into()); self }
 }

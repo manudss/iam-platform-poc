@@ -27,7 +27,7 @@ else
   echo "core bus: nats-server not installed, the core runs without the bus (behaviour unchanged)"
 fi
 (cd core && ${CORE_NATS:+IAM_CORE_NATS_URL=127.0.0.1:4222 IAM_CORE_NATS_PASSWORD=core-dev} IAM_POLICY_FILE=../policies/demo.cedar IAM_CORE_STATE_DIR=/tmp/iam-core-state IAM_CORE_ADMIN_TOKEN="$TOKEN" IAM_IDP_EXTRA_REDIRECT_URIS="$IAM_IDP_EXTRA_REDIRECT_URIS" ./target/debug/iam-core > /tmp/iam-core.log 2>&1 &)
-(cd apps/api && IAM_CORE_URL=http://127.0.0.1:8081 IAM_CORE_ADMIN_TOKEN="$TOKEN" IAM_API_ADMIN_TOKEN="$TOKEN" DOLT_HOST=127.0.0.1 DOLT_PORT=3307 DOLT_USER=root DOLT_PASSWORD= DOLT_DATABASE=iam node dist/main.js > /tmp/iam-api.log 2>&1 &)
+(cd apps/api && ${CORE_NATS:+IAM_BUS_NATS_URL=127.0.0.1:4222 IAM_BUS_NATS_USER=api-host IAM_BUS_NATS_PASSWORD=api-host-dev} IAM_CORE_URL=http://127.0.0.1:8081 IAM_CORE_ADMIN_TOKEN="$TOKEN" IAM_API_ADMIN_TOKEN="$TOKEN" DOLT_HOST=127.0.0.1 DOLT_PORT=3307 DOLT_USER=root DOLT_PASSWORD= DOLT_DATABASE=iam node dist/main.js > /tmp/iam-api.log 2>&1 &)
 echo "admin capability token for simulation / plugin admin (type it in the console field): $TOKEN"
 echo "core: http://127.0.0.1:8081  api: http://127.0.0.1:3000  console: http://localhost:4200"
 cd apps/web && npx ng serve
