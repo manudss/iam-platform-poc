@@ -27,14 +27,18 @@ fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response
 fn error_page(status: StatusCode, msg: &str) -> Response { page(status, format!("<!doctype html><title>Sign-in error</title><p>{}</p>", esc(msg)), None) }
 
 fn hidden(p: &HashMap<String, String>) -> String {
-    ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain"].iter()
+    ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain", "branch", "ticket"].iter()
         .map(|k| format!("<input type=\"hidden\" name=\"{k}\" value=\"{}\">", esc(p.get(*k).map(String::as_str).unwrap_or("")))).collect::<String>()
 }
 /// Back to the list of methods: only on pages of a chosen chain. It abandons the running attempt (its session id is not carried) and the sign-in page starts a new one with a fresh state and PKCE verifier.
 fn back_link(p: &HashMap<String, String>) -> String {
     let o = origin_of(p);
     if p.get("chain").map(|c| c.is_empty()).unwrap_or(true) || o.is_empty() { return String::new(); }
-    format!("<p class=\"back\"><a id=\"back-to-methods\" href=\"{}/login\">&larr; Choose another sign-in method</a></p>", esc(&o))
+    let test = match (p.get("branch"), p.get("ticket")) {
+        (Some(b), Some(t)) if !b.is_empty() && !t.is_empty() => format!("?branch={}&ticket={}", pct(b), pct(t)),
+        _ => String::new(),
+    };
+    format!("<p class=\"back\"><a id=\"back-to-methods\" href=\"{}/login{}\">&larr; Choose another sign-in method</a></p>", esc(&o), test)
 }
 fn origin_of(p: &HashMap<String, String>) -> String {
     let ru = p.get("redirect_uri").map(String::as_str).unwrap_or("");
@@ -90,7 +94,7 @@ fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value
 
 /// The chains the live configuration offers: one link each (plain HTML, no script). The link only adds `chain=<id>`; the control plane re-checks the id at every step.
 fn choice_page(p: &HashMap<String, String>, chains: &[Value]) -> Response {
-    let base = ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method"].iter()
+    let base = ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "branch", "ticket"].iter()
         .filter_map(|k| p.get(*k).map(|v| format!("{k}={}", pct(v)))).collect::<Vec<_>>().join("&");
     let items = chains.iter().filter_map(|c| {
         let id = c["id"].as_str().filter(|i| !i.is_empty() && i.len() <= 40 && i.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))?;
@@ -127,14 +131,25 @@ fn validate(c: &Core, p: &HashMap<String, String>) -> Result<(), Response> {
     if g("code_challenge_method") != "S256" { return Err(error_page(StatusCode::BAD_REQUEST, "code_challenge_method must be S256")); }
     if g("code_challenge").len() < 43 || g("code_challenge").len() > 128 { return Err(error_page(StatusCode::BAD_REQUEST, "invalid code_challenge")); }
     if g("state").is_empty() || g("state").len() > 256 { return Err(error_page(StatusCode::BAD_REQUEST, "state is required (max 256 chars)")); }
+    // Branch test (docs/branch-test.md): a non-main Dolt data branch plus the short-lived ticket the console issued to an administrator.
+    let (b, t) = (g("branch"), g("ticket"));
+    if !b.is_empty() {
+        let ok = b.len() <= 32 && b.bytes().all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'-');
+        if !ok || b == "main" { return Err(error_page(StatusCode::BAD_REQUEST, "invalid data branch")); }
+        if t.len() < 10 || t.len() > 64 || !t.bytes().all(|x| x.is_ascii_alphanumeric() || x == b'-' || x == b'_') { return Err(error_page(StatusCode::BAD_REQUEST, "a branch test needs the ticket of the test link")); }
+    } else if !t.is_empty() {
+        return Err(error_page(StatusCode::BAD_REQUEST, "a branch-test ticket without a branch"));
+    }
     Ok(())
 }
 
 pub async fn authorize_form(State(c): State<Arc<Core>>, Query(p): Query<HashMap<String, String>>) -> Response {
     if let Err(r) = validate(&c, &p) { return r; }
     let Some((addr, tok)) = &c.gate else { return form(&p, None, None) };
-    match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str)).await {
+    let (b, t) = (p.get("branch").map(String::as_str), p.get("ticket").map(String::as_str));
+    match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str), b, t).await {
         None => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable"),
+        Some(v) if v["mode"] == "error" => error_page(StatusCode::BAD_REQUEST, v["message"].as_str().unwrap_or("this sign-in link is not valid")),
         Some(v) if v["mode"] == "choice" => choice_page(&p, v["chains"].as_array().map(Vec::as_slice).unwrap_or(&[])),
         Some(v) if v["mode"] == "chain" => form(&p, None, Some(v["fields"].as_array().map(Vec::as_slice).unwrap_or(&[]))),
         Some(_) => form(&p, None, None),
@@ -152,10 +167,10 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
         for (k, v) in &p { if let Some(n) = k.strip_prefix("a_").filter(|n| !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())) { answers.insert(n.to_string(), json!(v)); } }
         let session = g("session");
         let mut body = json!({"tenant": "acme-demo"});
-        if !session.is_empty() { body["session"] = json!(session); } else { body["subject"] = json!(g("username")); if !g("password").is_empty() { body["password"] = json!(g("password")); } if !g("chain").is_empty() { body["chain"] = json!(g("chain")); } }
+        if !session.is_empty() { body["session"] = json!(session); } else { body["subject"] = json!(g("username")); if !g("password").is_empty() { body["password"] = json!(g("password")); } if !g("chain").is_empty() { body["chain"] = json!(g("chain")); } if !g("branch").is_empty() { body["branch"] = json!(g("branch")); body["ticket"] = json!(g("ticket")); } }
         if !answers.is_empty() { body["answers"] = Value::Object(answers); }
         // A step page has no first-page inputs: after a failed first page, show the first page again.
-        let first_page = || async { match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str)).await { Some(v) if v["mode"] == "chain" => Some(v["fields"].as_array().cloned().unwrap_or_default()), _ => None } };
+        let first_page = || async { match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str), p.get("branch").map(String::as_str), p.get("ticket").map(String::as_str)).await { Some(v) if v["mode"] == "chain" => Some(v["fields"].as_array().cloned().unwrap_or_default()), _ => None } };
         match crate::gate::step(addr, tok, body).await {
             crate::gate::Step::Allow { subject, claims } => {
                 if !session.is_empty() { match subject { Some(s) => who = s, None => return form(&p, Some("Sign-in failed. Check your details and try again."), None) } } else if let Some(s) = subject { who = s; }
@@ -170,7 +185,8 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
             crate::gate::Step::Unavailable => return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable"),
         }
     }
-    match if c.gate.is_some() { c.idp.authorize_verified_with(g("client_id"), g("redirect_uri"), g("code_challenge"), &who, &extra) } else { c.idp.authorize(g("client_id"), g("redirect_uri"), g("code_challenge"), g("username"), g("password")) } {
+    let test_branch = if g("branch").is_empty() { None } else { Some(g("branch")) };
+    match if c.gate.is_some() { c.idp.authorize_verified_on(g("client_id"), g("redirect_uri"), g("code_challenge"), &who, &extra, test_branch) } else { c.idp.authorize(g("client_id"), g("redirect_uri"), g("code_challenge"), g("username"), g("password")) } {
         Ok(code) => {
             c.bus_emit("signin.succeeded", serde_json::json!({"subject": if c.gate.is_some() { who.clone() } else { g("username").to_string() }, "client_id": g("client_id")}), None);
             let sep = if g("redirect_uri").contains('?') { '&' } else { '?' };

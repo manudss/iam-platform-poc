@@ -12,7 +12,7 @@ use std::{collections::HashMap, sync::Mutex, time::{SystemTime, UNIX_EPOCH}};
 #[derive(Debug, PartialEq, Eq)]
 pub enum IdpError { InvalidClient, InvalidCredentials, InvalidGrant, InvalidRequest(&'static str) }
 
-struct Code { user: String, challenge: String, redirect_uri: String, client_id: String, exp: u64, extra: serde_json::Map<String, Value> }
+struct Code { user: String, challenge: String, redirect_uri: String, client_id: String, exp: u64, extra: serde_json::Map<String, Value>, branch: Option<String> }
 
 pub struct Idp {
     key: SigningKey,
@@ -106,12 +106,20 @@ impl Idp {
     /// Like `authorize_verified`, plus the sign-in facts the control plane reported (methods used, configured level...). Only the keys and shapes listed in
     /// `safe_auth_claims` are ever copied into the id_token: an extra can never set iss, sub, aud, exp or any other claim.
     pub fn authorize_verified_with(&self, client_id: &str, redirect_uri: &str, code_challenge: &str, username: &str, extra: &Value) -> Result<String, IdpError> {
+        self.authorize_verified_on(client_id, redirect_uri, code_challenge, username, extra, None)
+    }
+
+    /// Like `authorize_verified_with`, plus the Dolt data branch this sign-in tested (see docs/branch-test.md). The branch comes from the
+    /// authorization request parameters the core itself validated, NEVER from the control plane's extra: the `branch` claim it produces
+    /// binds the issued token to that branch (the API refuses any other branch context with it).
+    pub fn authorize_verified_on(&self, client_id: &str, redirect_uri: &str, code_challenge: &str, username: &str, extra: &Value, branch: Option<&str>) -> Result<String, IdpError> {
         if !self.check_client(client_id, redirect_uri) { return Err(IdpError::InvalidClient); }
         if code_challenge.len() < 43 { return Err(IdpError::InvalidRequest("code_challenge")); }
+        let branch = branch.map(str::to_string);
         let code = rand_token();
         self.codes.lock().unwrap().insert(code.clone(), Code {
             user: username.into(), challenge: code_challenge.into(), redirect_uri: redirect_uri.into(),
-            client_id: client_id.into(), exp: now() + 60, extra: safe_auth_claims(extra) });
+            client_id: client_id.into(), exp: now() + 60, extra: safe_auth_claims(extra), branch });
         Ok(code)
     }
 
@@ -123,6 +131,7 @@ impl Idp {
         let t = now();
         let mut claims = json!({"iss": self.issuer, "sub": c.user, "aud": c.client_id, "iat": t, "exp": t + self.ttl, "tenant": "acme-demo"});
         for (k, v) in c.extra { claims[k] = v; } // only keys that safe_auth_claims kept, none of which is a registered claim
+        if let Some(b) = c.branch { claims["branch"] = json!(b); } // core-set, after the merge: the control plane can never plant it
         Ok(json!({"id_token": self.sign(&claims), "token_type": "Bearer", "expires_in": self.ttl}))
     }
 
