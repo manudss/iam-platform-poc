@@ -64,7 +64,7 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     const act = await post(`${CORE}/v1/activate`, { tenant: 'acme-demo', seq: 1, commit: 'seed', snapshot: { assignments: [{ identity_id: 'demo-alice', role_id: 'mcp-operator' }, { identity_id: 'demo-bob', role_id: 'payment-creator' }], sod_rules: [{ role_a: 'payment-creator', role_b: 'payment-approver' }] } }, { 'x-core-admin-token': ADMIN });
     assert.equal(act.status, 200);
     delete process.env.IAM_PG_URL; delete process.env.IAM_CORE_GRPC_ADDR;
-    Object.assign(process.env, { DOLT_PORT: String(DOLT_PORT), DOLT_DATABASE: 'iam', IAM_WORKSPACE_MODE: '1', IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_API_ADMIN_TOKEN: ADMIN, IAM_CREDENTIAL_FILE: join(dir, 'creds.json') });
+    Object.assign(process.env, { DOLT_PORT: String(DOLT_PORT), DOLT_DATABASE: 'iam', IAM_WORKSPACE_MODE: '1', IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_API_ADMIN_TOKEN: ADMIN, IAM_CORE_ADMIN_TOKEN: ADMIN, IAM_CREDENTIAL_FILE: join(dir, 'creds.json') });
     app = await NestFactory.create(AppModule, { logger: false }); await app.listen(13171);
     adminToken = await login('demo-alice'); bobToken = await login('demo-bob');
   });
@@ -96,8 +96,12 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.equal(init.result?.serverInfo?.name, 'iam-platform-poc');
     const list = await rpc(secret, 'tools/list');
     const names = (list.result?.tools ?? []).map((t: { name: string }) => t.name);
-    for (const t of ['list_users', 'query', 'read_table', 'execute_write', 'upsert_user', 'assign_role', 'request_new_branch', 'rebase_on_main', 'submit_pull_request', 'diff_vs_main', 'list_branches', 'list_pull_requests', 'session_status']) assert.ok(names.includes(t), t);
+    for (const t of ['list_users', 'query', 'read_table', 'execute_write', 'upsert_user', 'assign_role', 'request_new_branch', 'rebase_on_main', 'submit_pull_request', 'diff_vs_main', 'list_branches', 'list_pull_requests', 'session_status',
+      'unassign_role', 'save_role', 'delete_role', 'add_sod_rule', 'remove_sod_rule', 'save_profile_config', 'create_organization', 'update_organization', 'delete_organization', 'assign_organizations',
+      'install_plugin', 'configure_plugin', 'set_plugin_enabled', 'list_roles', 'list_organizations', 'list_plugins', 'list_event_records',
+      'list_workflows', 'get_workflow', 'list_workflow_runs', 'save_workflow', 'delete_workflow', 'get_authn_config', 'save_authn_config']) assert.ok(names.includes(t), t);
     for (const t of names) assert.ok(!/approve|merge|close|apply|checkout/i.test(t), t);
+    for (const t of names) assert.ok(!/start|cancel|publish|enroll|provision/i.test(t), t); // runs, publications and credentials stay human
   });
 
   it('reads: users without credential fields, arbitrary business data via read-only SQL', async () => {
@@ -159,6 +163,109 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.equal(r.mergeable, true);
   });
 
+
+  it('roles + SoD: full editing on the branch, main untouched, removals gated', async () => {
+    const c = await callTool(secret, 'save_role', { id: 'auditor', label: 'Auditor', is_sensitive: false });
+    assert.notEqual(c.result?.isError, true, textOf(c));
+    const roles = JSON.parse(textOf(await callTool(secret, 'list_roles'))) as { roles: { id: string; label: string }[]; sodRules: unknown[] };
+    assert.ok(roles.roles.some((r) => r.id === 'auditor'));
+    await callTool(secret, 'save_role', { id: 'auditor', label: 'Auditor (read only)', is_sensitive: true });
+    const onMain = await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: "select count(*) n from roles where id='auditor'" }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
+    assert.equal(Number(((await onMain.json()) as { rows: { n: number }[] }).rows[0].n), 0); // main untouched
+    await callTool(secret, 'add_sod_rule', { role_a: 'auditor', role_b: 'payment-approver' });
+    assert.equal((await callTool(secret, 'delete_role', { id: 'auditor' })).result?.isError, true); // still named in a rule
+    const noConfirm = await callTool(secret, 'remove_sod_rule', { role_a: 'auditor', role_b: 'payment-approver' });
+    assert.ok(noConfirm.error || noConfirm.result?.isError, 'confirm=true is required'); // loosening a control needs confirmation
+    await callTool(secret, 'remove_sod_rule', { role_a: 'auditor', role_b: 'payment-approver', confirm: true });
+    assert.notEqual((await callTool(secret, 'delete_role', { id: 'auditor' })).result?.isError, true);
+    await callTool(secret, 'assign_role', { identity: 'demo-bob', role: 'accountant' });
+    const u = await callTool(secret, 'unassign_role', { identity: 'demo-bob', role: 'accountant' });
+    assert.notEqual(u.result?.isError, true, textOf(u));
+    const chk = JSON.parse(textOf(await callTool(secret, 'query', { sql: "select count(*) n from assignments where identity_id='demo-bob' and role_id='accountant'" }))) as { rows: { n: number }[] };
+    assert.equal(Number(chk.rows[0].n), 0);
+  });
+
+  it('plugins + organizations: install/enable/configure on the branch only, unknown plugins and settings refused', async () => {
+    assert.equal((await callTool(secret, 'install_plugin', { id: 'no-such-plugin' })).result?.isError, true);
+    const inst = await callTool(secret, 'install_plugin', { id: 'organizations' });
+    assert.notEqual(inst.result?.isError, true, textOf(inst));
+    assert.notEqual((await callTool(secret, 'set_plugin_enabled', { id: 'organizations', enabled: true })).result?.isError, true);
+    assert.equal((await callTool(secret, 'configure_plugin', { id: 'organizations', settings: { nope: 1 } })).result?.isError, true); // manifest has no such setting
+    const onMain = await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: "select count(*) n from plugin_config where plugin='organizations'" }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
+    assert.equal(Number(((await onMain.json()) as { rows: { n: number }[] }).rows[0].n), 0); // main untouched
+    const plugs = JSON.parse(textOf(await callTool(secret, 'list_plugins'))) as { plugins: { id: string; enabled?: boolean; active?: boolean }[] };
+    assert.ok(plugs.plugins.some((x) => x.id === 'organizations' && (x.enabled ?? x.active)));
+    // organizations CRUD (plugin now enabled on the branch)
+    const badId = await callTool(secret, 'create_organization', { id: 'BAD', name: 'x' });
+    assert.ok(badId.error || badId.result?.isError, 'invalid org id refused');
+    await callTool(secret, 'create_organization', { id: 'engineering', name: 'Engineering' });
+    await callTool(secret, 'create_organization', { id: 'platform', name: 'Platform', parent_id: 'engineering' });
+    await callTool(secret, 'update_organization', { id: 'platform', name: 'Platform team' });
+    const orgs = JSON.parse(textOf(await callTool(secret, 'list_organizations'))) as { orgs: { id: string; name: string }[] };
+    assert.deepEqual(orgs.orgs.map((o) => o.id).sort(), ['engineering', 'platform']);
+    assert.equal(orgs.orgs.find((o) => o.id === 'platform')?.name, 'Platform team');
+    await callTool(secret, 'assign_organizations', { subject: 'demo-bob', org_ids: ['platform'] });
+    assert.equal((await callTool(secret, 'delete_organization', { id: 'engineering' })).result?.isError, true); // has a child
+    assert.equal((await callTool(secret, 'delete_organization', { id: 'platform' })).result?.isError, true); // has a member
+    await callTool(secret, 'assign_organizations', { subject: 'demo-bob', org_ids: [] });
+    assert.notEqual((await callTool(secret, 'delete_organization', { id: 'platform' })).result?.isError, true);
+    // live (main): no organization rows there at all
+    const orgsMain = (await (await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: "select count(*) n from organizations where tenant='acme-demo'" }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN })).json()) as { rows?: { n: number }[] };
+    assert.equal(Number(orgsMain.rows?.[0]?.n ?? 0), 0); // on main the table is empty or does not even exist yet
+  });
+
+  it('profile fields configuration: validated replace on the branch, unknown fields refused', async () => {
+    assert.equal((await callTool(secret, 'save_profile_config', { config: { fields: { 'no.such-field': { enabled: true } } } })).result?.isError, true);
+    const r = await callTool(secret, 'save_profile_config', { config: { fields: { 'base.department': { enabled: true, selfView: true, selfEdit: false, adminEdit: true } }, selfEditPolicy: 'review' } });
+    assert.notEqual(r.result?.isError, true, textOf(r));
+    const saved = JSON.parse(textOf(r)) as { fields: Record<string, unknown>; selfEditPolicy?: string };
+    assert.equal(saved.selfEditPolicy, 'review');
+    const onMain = await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: "select count(*) n from plugin_config where plugin='core-profile-fields'" }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
+    assert.equal(Number(((await onMain.json()) as { rows: { n: number }[] }).rows[0].n), 0); // main untouched
+  });
+
+  it('sign-in configuration: read + replace on the branch, live sign-in unchanged, unknown methods refused', async () => {
+    const beforeCfg = JSON.parse(textOf(await callTool(secret, 'get_authn_config'))) as { methods: unknown[] };
+    assert.ok(Array.isArray(beforeCfg.methods));
+    const cfg = { methods: [{ id: 'pin-keypad', type: 'digit-code', name: 'PIN keypad', enabled: true, level: 3, config: { length: 6 } }], chains: [{ id: 'pin-only', name: 'PIN only', enabled: true, steps: ['pin-keypad'], level: 3 }], defaultChain: 'pin-only' };
+    const r = await callTool(secret, 'save_authn_config', { config: cfg });
+    assert.notEqual(r.result?.isError, true, textOf(r));
+    const afterCfg = JSON.parse(textOf(await callTool(secret, 'get_authn_config'))) as { methods: { id: string }[] };
+    assert.equal(afterCfg.methods[0]?.id, 'pin-keypad');
+    const onMain = await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: "select count(*) n from plugin_config where plugin='core-authn'" }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
+    assert.equal(Number(((await onMain.json()) as { rows: { n: number }[] }).rows[0].n), 0); // nothing written to main
+    assert.equal((await callTool(secret, 'save_authn_config', { config: { methods: [{ id: 'x', type: 'magic', name: 'x', enabled: true, level: 1, config: {} }], chains: [], defaultChain: null } })).result?.isError, true);
+  });
+
+  it('workflows: definitions are versioned - prepared on the branch, invisible live, runs not startable; feature gate applies', async () => {
+    // feature gate: the workflows plugin is off on this fresh branch
+    assert.equal((await callTool(secret, 'list_workflows')).result?.isError, true);
+    await callTool(secret, 'install_plugin', { id: 'workflows-iga' });
+    assert.notEqual((await callTool(secret, 'set_plugin_enabled', { id: 'workflows-iga', enabled: true })).result?.isError, true);
+    const g = { nodes: [{ id: 'tell', type: 'notify', name: 'Inform', config: { recipient: 'ops', message: 'hello' } }], edges: [] };
+    const c = await callTool(secret, 'save_workflow', { name: 'Notify ops', graph: g, trigger: null });
+    assert.notEqual(c.result?.isError, true, textOf(c));
+    const id = (JSON.parse(textOf(c)) as { definition: { id: string } }).definition.id;
+    const got = JSON.parse(textOf(await callTool(secret, 'get_workflow', { id }))) as { definition: { id: string } };
+    assert.equal(got.definition.id, id);
+    assert.equal((await callTool(secret, 'save_workflow', { name: 'broken', graph: { nodes: [], edges: [{ from: 'x', to: 'y' }] } })).result?.isError, true); // invalid graph
+    // main has no such definition, and the live console does not show it
+    const onMain = await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: `select count(*) n from workflow_definitions where id='${id}'` }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
+    assert.equal(Number(((await onMain.json()) as { rows: { n: number }[] }).rows[0].n), 0);
+    await callTool(secret, 'save_workflow', { id, name: 'Notify ops v2', graph: g });
+    assert.notEqual((await callTool(secret, 'delete_workflow', { id })).result?.isError, true);
+    assert.notEqual((await callTool(secret, 'list_workflows')).result?.isError, true);
+    assert.notEqual((await callTool(secret, 'list_workflow_runs', {})).result?.isError, true);
+  });
+
+  it('event bus: read-only scrubbed observability', async () => {
+    const r = await callTool(secret, 'list_event_records', {});
+    assert.notEqual(r.result?.isError, true, textOf(r));
+    const b = JSON.parse(textOf(r)) as { records: unknown[]; enabled: boolean };
+    assert.ok(Array.isArray(b.records));
+    assert.ok(!JSON.stringify(b.records).match(/password|secret/i));
+  });
+
   it('submit_pull_request opens a human-reviewed PR; the session then refuses more writes', async () => {
     await callTool(secret, 'execute_write', { sql: "insert into roles values ('auditor','Auditor',false)", message: 'add auditor role' });
     const r = JSON.parse(textOf(await callTool(secret, 'submit_pull_request', { title: 'AI: auditor role', body: 'prepared by MCP session' }))) as { pullRequest: { id: number; source: string; target: string; status: string } };
@@ -184,7 +291,7 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     const res = await fetch(`${API}/tenants/acme-demo/mcp-sessions/${sessionId}/activity?limit=100`, { headers: { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN } });
     const entries = ((await res.json()) as { entries: { tool: string; kind: string; targets: string[]; allow: boolean }[] }).entries;
     const tools = entries.map((e) => e.tool);
-    for (const t of ['list_users', 'query', 'execute_write', 'submit_pull_request']) assert.ok(tools.includes(t), t);
+    for (const t of ['list_users', 'query', 'execute_write', 'submit_pull_request', 'save_role', 'create_organization', 'save_workflow', 'save_authn_config', 'install_plugin', 'list_event_records']) assert.ok(tools.includes(t), t);
     assert.ok(entries.some((e) => e.tool === 'query' && e.targets.includes('roles')));
     assert.ok(entries.every((e) => ['read', 'write', 'lifecycle'].includes(e.kind)));
     const denied = entries.filter((e) => !e.allow);

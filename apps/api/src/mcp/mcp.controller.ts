@@ -10,6 +10,12 @@ import { UsersService } from '../users/users.service.js';
 import { AuditService } from '../access/audit.service.js';
 import { McpSessionService } from './session.service.js';
 import { registerTools } from './tools.js';
+import { ProfileService } from '../profile/profile.service.js';
+import { OrgService } from '../profile/orgs.js';
+import { RolesService } from '../profile/roles.js';
+import { WorkflowsService } from '../workflows/workflows.service.js';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { AuthnService } from '../authn/flow.service.js';
 import { workspaceMode } from '../workspace/context.js';
 
 /**
@@ -25,6 +31,8 @@ export class McpController {
   constructor(
     private readonly sessions: McpSessionService, private readonly v: VersioningService,
     private readonly prs: PullRequestService, private readonly users: UsersService, private readonly audit: AuditService,
+    private readonly profile: ProfileService, private readonly orgs: OrgService, private readonly roles: RolesService,
+    private readonly wf: WorkflowsService, private readonly branches: BranchRegistries, private readonly authn: AuthnService,
   ) {}
   private get core() { return process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081'; }
 
@@ -65,7 +73,7 @@ export class McpController {
 
     // Stateless streamable HTTP: one server + transport per request, JSON responses, no SSE session state.
     const server = new McpServer({ name: 'iam-platform-poc', version: '0.1.0' });
-    registerTools(server, { session, tenant, v: this.v, prs: this.prs, users: this.users, sessions: this.sessions, audit: this.audit, core: this.core });
+    registerTools(server, { session, tenant, v: this.v, prs: this.prs, users: this.users, sessions: this.sessions, audit: this.audit, core: this.core, profile: this.profile, orgs: this.orgs, roles: this.roles, wf: this.wf, branches: this.branches, authn: this.authn });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);
