@@ -36,7 +36,15 @@ export class WorkspaceController {
   const latest=await this.activation.current(tenant);
   const retry=this.pending.get(branch)??(latest?.state==='failed'&&latest.requestId===`workspace-${latest.commit}`&&latest.commit===(await this.v.branches()).branches.find(x=>x.name==='main')?.commit&&(await this.v.diffSummary('main',branch,false)).tables.length===0?{source:info.commit,commit:latest.commit}:undefined);
   if(!this.activation.applyEnabled)throw new BadRequestException('Apply requires a configured live permission engine');
-  const r=retry&&retry.source===info.commit?{mergeable:true,commit:retry.commit,reasons:[],violations:[]}:await applyContext.run(true,()=>this.v.mergeInto(branch,'main',`Apply workspace ${branch}`,req.user.sub,b.expectedHead));
+  let r=retry&&retry.source===info.commit?{mergeable:true,commit:retry.commit,reasons:[],violations:[]}:await applyContext.run(true,()=>this.v.mergeInto(branch,'main',`Apply workspace ${branch}`,req.user.sub,b.expectedHead));
+  // Fresh seeded workspaces still need a first live permissions snapshot. Keep the normal
+  // merge checks (including SoD/constraints); only the exact no-op result can bootstrap main.
+  if(!r.mergeable && r.reasons.length===1 && r.reasons[0]==='nothing to merge: the target already contains the source'){
+   const main=(await this.v.branches()).branches.find(x=>x.name==='main');
+   if(main && !(latest?.state==='applied' && latest.commit===main.commit)){
+    r={...r,mergeable:true,commit:main.commit,reasons:[]};
+   }
+  }
   if(!r.mergeable||!r.commit)throw new ConflictException({message:`Apply refused: ${r.reasons.join('; ')}`,reasons:r.reasons,violations:r.violations});
   this.pending.set(branch,{source:info.commit,commit:r.commit});
   this.registries.drop('main');await this.registries.get('main');

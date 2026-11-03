@@ -10,6 +10,8 @@ import { join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module.js';
+import { branchContext } from '../workspace/context.js';
+import type { Request, Response, NextFunction } from 'express';
 
 const root = resolve(process.cwd(), '../..');
 const coreBin = resolve(root, 'core/target/debug/iam-core');
@@ -60,15 +62,37 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     for (let i = 0; i < 100; i++) { if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', String(DOLT_PORT), '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break; await sleep(150); }
     core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18171', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
     for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
-    // tenant data as on main after the demo seed: alice is the MCP operator, bob is not
-    const act = await post(`${CORE}/v1/activate`, { tenant: 'acme-demo', seq: 1, commit: 'seed', snapshot: { assignments: [{ identity_id: 'demo-alice', role_id: 'mcp-operator' }, { identity_id: 'demo-bob', role_id: 'payment-creator' }], sod_rules: [{ role_a: 'payment-creator', role_b: 'payment-approver' }] } }, { 'x-core-admin-token': ADMIN });
-    assert.equal(act.status, 200);
     delete process.env.IAM_PG_URL; delete process.env.IAM_CORE_GRPC_ADDR;
     Object.assign(process.env, { DOLT_PORT: String(DOLT_PORT), DOLT_DATABASE: 'iam', IAM_WORKSPACE_MODE: '1', IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_API_ADMIN_TOKEN: ADMIN, IAM_CORE_ADMIN_TOKEN: ADMIN, IAM_CREDENTIAL_FILE: join(dir, 'creds.json') });
-    app = await NestFactory.create(AppModule, { logger: false }); await app.listen(13171);
+    app = await NestFactory.create(AppModule, { logger: false });
+    // Match main.ts: administration routes resolve the selected working branch from the header.
+    app.use((req: Request, _res: Response, next: NextFunction) => branchContext.run({ branch: typeof req.headers['x-iam-branch'] === 'string' ? req.headers['x-iam-branch'] : undefined }, next));
+    await app.listen(13171);
     adminToken = await login('demo-alice'); bobToken = await login('demo-bob');
   });
   after(async () => { await app?.close(); core?.kill(); dolt?.kill(); await sleep(800); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
+
+  it('first human Apply activates seeded main without a fake data change (real core + Dolt)', async () => {
+    const headers = { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN, 'x-iam-branch': 'bootstrap-main' };
+    const branchesUrl = `${API}/tenants/acme-demo/versioning/branches`;
+    const branches = async () => (await (await fetch(branchesUrl, { headers })).json()) as { branches: { name: string; commit: string }[] };
+    const mainBefore = (await branches()).branches.find(b => b.name === 'main')!.commit;
+    assert.equal((await fetch(`${CORE}/v1/version?tenant=acme-demo`)).status, 404, 'no version active initially');
+    assert.equal((await post(branchesUrl, { name: 'bootstrap-main', from: 'main' }, headers)).status, 201);
+    const apply = `${API}/tenants/acme-demo/workspace/apply`;
+    assert.equal((await post(apply, {}, headers)).status, 400, 'human confirmation is still required');
+    assert.equal((await post(apply, { confirm: true, expectedHead: 'changed-head' }, headers)).status, 409, 'stale review rejected');
+    const response = await post(apply, { confirm: true, expectedHead: mainBefore }, headers);
+    const result = await response.json() as { applied: boolean; commit: string; activation: { state: string } };
+    assert.equal(response.status, 201, JSON.stringify(result));
+    assert.equal(result.applied, true, JSON.stringify(result));
+    assert.equal(result.activation.state, 'applied');
+    assert.equal(result.commit, mainBefore, 'activation reuses main, no manufactured commit');
+    assert.equal((await branches()).branches.find(b => b.name === 'main')!.commit, mainBefore, 'main did not move');
+    const live = await (await fetch(`${CORE}/v1/version?tenant=acme-demo`)).json() as { commit: string };
+    assert.equal(live.commit, mainBefore, 'real core loaded seeded main');
+    assert.equal((await post(apply, { confirm: true }, headers)).status, 409, 'already active no-op is not re-published');
+  });
 
   it('the MCP endpoint requires a session bearer token, with RFC 9728 discovery on 401', async () => {
     const noAuth = await rpc(undefined, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '0' } }, 401);
