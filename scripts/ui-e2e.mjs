@@ -220,20 +220,20 @@ try {
   await nav('/database/pulls'); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
   await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();
   await page.waitForSelector('text=Can be merged');
-  assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
+  assert.equal(await btn('Approve').isDisabled(), false); // author approval allowed by default
+  await btn('Approve').click(); await page.waitForSelector('text=approved');
   assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
   await shot('8-explorer-5-pull-request');
-  // Workspace mode: a pull request review works, but merging it into main is refused - only the global Apply publishes to main.
-  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Use the global Apply")');
-  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
-  await page.click('#workspace-apply'); await status('Applied');
+  // Human Merge now uses the same checked publication path as Review & Apply.
+  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
+  assert.equal(await page.locator('.explorer .msg:has-text("Use the global Apply")').count(), 0);
   await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
   assert.match(await page.locator('.explorer ol.log').innerText(), /Apply workspace ui-demo/);
   await noBanner('explorer end');
   // an internal jump changes the address too: branches -> compare with main
   await nav('/database/branches'); await page.waitForSelector('text=protected');
   // the IAM pages still work after the explorer branch was applied to Dolt main
-  await nav('/activation'); await page.waitForSelector('td:text-is("#2")'); // ui-demo published as activation #2
+  await nav('/activation'); await page.waitForSelector('td:text-is("#3")'); // startup #1, earlier Apply #2, human PR merge #3
   await noBanner('activation after explorer apply');
 
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
