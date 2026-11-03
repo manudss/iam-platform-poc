@@ -79,3 +79,11 @@ then tests a real 12-second idle expiry, a return to `/plugins/org-manager`, exp
 and a core-only restart with old-key rejection/new-key login while the API keeps its JWKS cache.
 The suspended-tab case pauses only the client clock; the server clock and rejection are real.
 Run with the same DOLT_BIN, CHROME_BIN and NODE_PATH prerequisites as `scripts/ui-e2e.mjs`.
+
+### Author approval
+
+`IAM_PR_PREVENT_SELF_APPROVAL=0` is the default: a human author may approve their
+own Dolt PR, useful when an MCP session submits on their behalf. Set it to `1` to
+require a different reviewer. `IAM_PR_APPROVALS` independently sets the required
+count (default 0). The server enforces the option and tells the UI whether to
+disable author approval. Neither setting gives MCP an approve/merge tool.

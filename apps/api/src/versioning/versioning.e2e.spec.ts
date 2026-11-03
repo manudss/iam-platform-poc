@@ -265,11 +265,15 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await call('GET', '/pulls/abc')).status, 400);
       assert.equal((await call('GET', `/pulls/${pr1}`, undefined, { tenant: 'other', token: 'other:demo-alice' })).status, 404, 'a pull request is invisible to another tenant');
     });
-    it('comments; an author cannot approve their own pull request', async () => {
+    it('comments; self-approval is allowed by default and can be prohibited', async () => {
       await ok('POST', `/pulls/${pr1}/comments`, { body: 'looks fine' });
-      assert.equal((await call('POST', `/pulls/${pr1}/comments`, { kind: 'approve' })).status, 409);
+      assert.equal((await call('POST', `/pulls/${pr1}/comments`, { kind: 'approve' })).status, 201);
+      assert.equal((await ok('GET', `/pulls/${pr1}`)).preventSelfApproval, false);
+      process.env.IAM_PR_PREVENT_SELF_APPROVAL = '1';
+      try { assert.equal((await call('POST', `/pulls/${pr1}/comments`, { kind: 'approve' })).status, 409); }
+      finally { delete process.env.IAM_PR_PREVENT_SELF_APPROVAL; }
       assert.equal((await call('POST', `/pulls/${pr1}/comments`, { body: '' })).status, 400);
-      assert.equal((await ok('GET', `/pulls/${pr1}`)).comments.length, 1);
+      assert.equal((await ok('GET', `/pulls/${pr1}`)).comments.length, 2);
     });
     it('merges with a real merge commit; the data reaches main; a second merge is refused', async () => {
       const m = await ok('POST', `/pulls/${pr1}/merge`, {});
@@ -309,14 +313,14 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await sql('main', 'select * from dolt_conflicts')).rows.length, 0);
     });
     it('can require approvals from someone other than the author', async () => {
-      process.env.IAM_PR_APPROVALS = '1';
+      process.env.IAM_PR_APPROVALS = '1'; process.env.IAM_PR_PREVENT_SELF_APPROVAL = '1';
       try {
         await branchOf('appr'); await ok('POST', '/tables/roles/edit', { branch: 'appr', ops: [{ op: 'insert', values: { id: 'auditor', label: 'Auditor', is_sensitive: false } }] });
         const pr = await ok('POST', '/pulls', { title: 'auditor role', source: 'appr', target: 'main' });
         const refused = await call('POST', `/pulls/${pr.id}/merge`, {}); assert.equal(refused.status, 409); assert.equal(refused.body.code, 'approvals-required');
         await ok('POST', `/pulls/${pr.id}/comments`, { kind: 'approve' }, { token: `${T}:demo-bob` });
         assert.equal((await ok('POST', `/pulls/${pr.id}/merge`, {})).pullRequest.status, 'merged');
-      } finally { delete process.env.IAM_PR_APPROVALS; }
+      } finally { delete process.env.IAM_PR_APPROVALS; delete process.env.IAM_PR_PREVENT_SELF_APPROVAL; }
     });
   });
 
