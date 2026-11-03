@@ -108,3 +108,9 @@ checks report only "nothing to merge", Apply activates the existing main commit
 without creating a fake data change. SoD, constraint, administrator and review
 checks still apply. An already active main is not published again by a no-op Apply.
 This is an explicit first activation, not automatic activation on startup.
+
+The all-in-one hosted demo also bootstraps main at startup by default
+(`IAM_DEMO_AUTO_ACTIVATE=1`; set `0` to disable). It loads only the existing main
+snapshot when the core reports no active version, never merges a working branch,
+and leaves an already active version alone. A bootstrap failure stops startup.
+This option belongs only to the demo launcher, not to ordinary API deployments.
