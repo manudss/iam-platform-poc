@@ -39,7 +39,7 @@ COPY --from=apibuild /src/apps/api/dist /app/api/dist
 COPY --from=apibuild /src/apps/api/node_modules /app/api/node_modules
 COPY --from=apibuild /src/apps/api/package.json /app/api/package.json
 COPY --from=webbuild /src/apps/web/dist /app/web/dist
-COPY demo/server.mjs demo/start.sh demo/activate-main.mjs /app/demo/
+COPY demo/server.mjs demo/start.sh /app/demo/
 ENV IAM_DEMO_HOME=/data PORT=8080
 EXPOSE 8080
 CMD ["sh", "/app/demo/start.sh"]

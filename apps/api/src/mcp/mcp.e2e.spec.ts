@@ -94,6 +94,21 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.equal((await post(apply, { confirm: true }, headers)).status, 409, 'already active no-op is not re-published');
   });
 
+  it('human merge of an MCP-authored PR publishes through Apply, never through MCP', async () => {
+    const headers = { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN, 'x-iam-branch': 'human-pr' };
+    const url = `${API}/tenants/acme-demo/versioning`;
+    assert.equal((await post(`${url}/branches`, { name: 'human-pr', from: 'main' }, headers)).status, 201);
+    assert.equal((await post(`${API}/tenants/acme-demo/workspace/assignment`, { identity: 'demo-alice', role: 'accountant' }, headers)).status, 201);
+    const created = await post(`${url}/pulls`, { source: 'human-pr', target: 'main', title: 'Human-reviewed change' }, headers);
+    const pr = await created.json() as { id: number };
+    assert.equal(created.status, 201, JSON.stringify(pr));
+    const merged = await post(`${url}/pulls/${pr.id}/merge`, {}, headers);
+    const result = await merged.json() as { commit: string };
+    assert.equal(merged.status, 201, JSON.stringify(result));
+    const live = await (await fetch(`${CORE}/v1/version?tenant=acme-demo`)).json() as { commit: string };
+    assert.equal(live.commit, result.commit, 'human PR merge activates the resulting main commit');
+  });
+
   it('the MCP endpoint requires a session bearer token, with RFC 9728 discovery on 401', async () => {
     const noAuth = await rpc(undefined, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '0' } }, 401);
     assert.match(String(noAuth.authenticate), /resource_metadata=.*\.well-known\/oauth-protected-resource/);

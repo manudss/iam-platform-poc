@@ -64,10 +64,5 @@ for i in $(seq 1 60); do
   if node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then break; fi
   sleep 2
 done
-# Demo only: load the seeded main snapshot before admitting traffic. No working branch is merged.
-# Existing core state is kept; failures stop startup rather than exposing a half-ready demo.
-if [ "${IAM_DEMO_AUTO_ACTIVATE:-1}" = "1" ]; then
-  node /app/demo/activate-main.mjs
-fi
 echo '[demo] starting edge server on 0.0.0.0:'"${PORT:-8080}"'(public origin '"$PUBLIC_ORIGIN"')'
 exec node /app/demo/server.mjs

@@ -18,6 +18,8 @@ type Row = Record<string, unknown>;
 @Injectable()
 export class PullRequestService {
   private ready?: Promise<void>;
+  mainPublisher?: (tenant: string, source: string, sub: unknown) => Promise<{ commit: string }>;
+
   constructor(private readonly v: VersioningService) {}
 
   private get metaDb() { return `${this.v.dbName}_meta`; }
@@ -151,7 +153,12 @@ export class PullRequestService {
         if (Number((a as { n: number }[])[0].n) < need) throw new ConflictException({ code: 'approvals-required', message: `${need} approval(s) from someone other than the author are required before merging` });
       }
       let res;
-      try { res = await this.v.mergeInto(pr.source, pr.target, commitMessage(`Merge pull request #${id}: ${pr.title}`, ''), sub); } catch (e) { throw mapSqlError(e); }
+      try {
+        if (pr.target === 'main' && process.env.IAM_AUTO_ACTIVATE_MAIN !== '0' && this.mainPublisher) {
+          const published = await this.mainPublisher(tenant, pr.source, sub);
+          res = { mergeable: true, commit: published.commit, reasons: [], violations: [] };
+        } else res = await this.v.mergeInto(pr.source, pr.target, commitMessage(`Merge pull request #${id}: ${pr.title}`, ''), sub);
+      } catch (e) { throw mapSqlError(e); }
       if (!res.mergeable || !res.commit) throw new ConflictException({ code: 'merge-refused', message: `merge refused: ${res.reasons.join('; ')}`, reasons: res.reasons, violations: res.violations });
       await m.query("update pull_requests set status = 'merged', merged_at = now(3), updated_at = now(3), merge_commit = ? where id = ?", [res.commit, id]);
       return { pullRequest: await this.row(m, tenant, id), commit: res.commit };
