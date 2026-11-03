@@ -22,6 +22,7 @@ export class PullRequestService {
 
   constructor(private readonly v: VersioningService) {}
 
+  private get preventSelfApproval() { return process.env.IAM_PR_PREVENT_SELF_APPROVAL === '1'; }
   private get metaDb() { return `${this.v.dbName}_meta`; }
   private get requiredApprovals() { const n = Number(process.env.IAM_PR_APPROVALS ?? 0); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0; }
 
@@ -103,7 +104,7 @@ export class PullRequestService {
       const [c] = await m.query('select id, author, kind, body, created_at from pr_comments where pr_id = ? order by id', [id]);
       comments = c as Row[];
     } finally { await m.end(); }
-    const approvals = new Set(comments.filter((x) => x.kind === 'approve' && x.author !== pr.author).map((x) => x.author));
+    const approvals = new Set(comments.filter((x) => x.kind === 'approve' && (!this.preventSelfApproval || x.author !== pr.author)).map((x) => x.author));
     let commits: unknown = [], summary: unknown = null, checks: unknown = null;
     if (pr.status === 'open') {
       try {
@@ -113,7 +114,7 @@ export class PullRequestService {
         checks = await this.v.trialMerge(pr.source, pr.target);
       } catch (e) { checks = { mergeable: false, reasons: [`cannot be evaluated: ${(e as Error).message}`], conflicts: 0, violations: [] }; }
     }
-    return { viewer: sub === undefined ? undefined : String(sub).replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64), pullRequest: pr, comments: comments.map((x) => ({ id: Number(x.id), author: x.author, kind: x.kind, body: x.body, createdAt: String(x.created_at) })), approvals: [...approvals], requiredApprovals: this.requiredApprovals, commits, diff: summary, checks };
+    return { preventSelfApproval: this.preventSelfApproval, viewer: sub === undefined ? undefined : String(sub).replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64), pullRequest: pr, comments: comments.map((x) => ({ id: Number(x.id), author: x.author, kind: x.kind, body: x.body, createdAt: String(x.created_at) })), approvals: [...approvals], requiredApprovals: this.requiredApprovals, commits, diff: summary, checks };
   }
 
   async comment(tenant: string, id: number, input: { body?: unknown; kind?: unknown }, sub: unknown) {
@@ -125,7 +126,7 @@ export class PullRequestService {
     try {
       const pr = await this.row(m, tenant, id);
       if (pr.status !== 'open') throw new ConflictException(`pull request #${id} is ${pr.status}`);
-      if (kind === 'approve' && author === pr.author) throw new ConflictException('the author cannot approve their own pull request');
+      if (kind === 'approve' && this.preventSelfApproval && author === pr.author) throw new ConflictException('the author cannot approve their own pull request');
       await m.query('insert into pr_comments (pr_id, author, kind, body, created_at) values (?,?,?,?,now(3))', [id, author, kind, body || 'approved']);
       return { ok: true };
     } finally { await m.end(); }
@@ -149,8 +150,8 @@ export class PullRequestService {
       if (pr.status !== 'open') throw new ConflictException(`pull request #${id} is already ${pr.status}`);
       const need = this.requiredApprovals;
       if (need > 0) {
-        const [a] = await m.query("select count(distinct author) n from pr_comments where pr_id = ? and kind = 'approve' and author <> ?", [id, pr.author]);
-        if (Number((a as { n: number }[])[0].n) < need) throw new ConflictException({ code: 'approvals-required', message: `${need} approval(s) from someone other than the author are required before merging` });
+        const [a] = await m.query(`select count(distinct author) n from pr_comments where pr_id = ? and kind = 'approve'${this.preventSelfApproval ? ' and author <> ?' : ''}`, this.preventSelfApproval ? [id, pr.author] : [id]);
+        if (Number((a as { n: number }[])[0].n) < need) throw new ConflictException({ code: 'approvals-required', message: `${need} approval(s)${this.preventSelfApproval ? ' from someone other than the author' : ''} are required before merging` });
       }
       let res;
       try {
