@@ -6,6 +6,7 @@ import { UsersModule } from '../../users/users.module.js';
 import { UsersService } from '../../users/users.service.js';
 import { Module } from '@nestjs/common';
 import { PluginRegistry } from './registry.js';
+import { BusHost } from './bus-host.js';
 import pg from 'pg';
 import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from './memory-stores.js';
 import { PgPluginStore } from './pg-stores.js';
@@ -56,6 +57,9 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
         r.register(p);
       }
       await r.load();
+      // Step 2: serve the plugins over the core bus when it is configured (no-op otherwise).
+      const host = await BusHost.startIfConfigured(async () => r);
+      if (host) r.setBus(host.bridge());
       return r;
     },
   }],

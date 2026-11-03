@@ -206,3 +206,81 @@ describe('plugin registry v1', () => {
     await assert.rejects(reg.disable(T, 'org-manager'), (e: PluginError) => e.code === 'in-use');
   });
 });
+
+describe('manifest v2: subscribes and emits (step 2)', () => {
+  const base = () => structuredClone(notifyLog.manifest);
+  it('accepts custom kinds in the plugin namespace and refuses others', () => {
+    const m = base() as any;
+    m.subscribes = [{ name: 'plg.notify-log.digest', mode: 'async' }];
+    m.emits = ['plg.notify-log.sent'];
+    assert.deepEqual(validateManifest(m, HOOKS), []);
+    m.subscribes = [{ name: 'other.thing', mode: 'async' }];
+    m.emits = ['notify.send'];
+    const errs = validateManifest(m, HOOKS);
+    assert.ok(errs.some((e) => e.includes("subscribes: other.thing")), errs.join());
+    assert.ok(errs.some((e) => e.includes('emits: notify.send')), errs.join());
+  });
+  it('enforces mode rules and handler presence', () => {
+    const m = base() as any;
+    m.subscribes = [{ name: 'plg.notify-log.check', mode: 'async', mandatory: true }];
+    assert.ok(validateManifest(m, HOOKS).some((e) => e.includes('mandatory')));
+    m.subscribes = [{ name: 'plg.notify-log.check', mode: 'blocking', group: 'g' }];
+    assert.ok(validateManifest(m, HOOKS).some((e) => e.includes('group')));
+    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    m.subscribes = [{ name: 'plg.notify-log.check', mode: 'blocking', mandatory: true }];
+    assert.throws(() => reg2.register({ manifest: m, handlers: notifyLog.handlers }), /check declared but no handler/);
+  });
+});
+
+describe('bus facade (step 2)', () => {
+  let reg: PluginRegistry;
+  beforeEach(() => {
+    reg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    reg.register(authPassword); reg.register(notifyLog);
+  });
+  const stub = (impl: Partial<import('./registry.js').BusBridge>) => impl as import('./registry.js').BusBridge;
+
+  it('emit routes through the bus when the kind is routed, and dedupes by effectKey', async () => {
+    const calls: any[] = [];
+    reg.setBus(stub({ routed: (k) => k === 'notify.send', emit: async (t, k, p, ek) => { calls.push({ t, k, ek }); return [{ plugin: 'notify-log', result: { delivered: true } }]; } }));
+    const out = await reg.emit(T, 'notify.send', { effectKey: 'k1', to: 'x', template: 'y', tenant: T, data: {} } as any);
+    assert.deepEqual(out, [{ plugin: 'notify-log', result: { delivered: true } }]);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(await reg.emit(T, 'notify.send', { effectKey: 'k1', to: 'x', template: 'y', tenant: T, data: {} } as any), [], 'same effectKey is not re-sent');
+    assert.equal(calls.length, 1);
+  });
+
+  it('a bus failure raises without any in-process fallback (no double effects, D16)', async () => {
+    let ranInProcess = false;
+    const spy = { manifest: notifyLog.manifest, handlers: { 'notify.send': () => { ranInProcess = true; return {}; } } };
+    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    reg2.register(spy);
+    reg2.setBus(stub({ routed: () => true, emit: async () => { throw new Error('core unreachable'); } }));
+    await assert.rejects(reg2.emit(T, 'notify.send', { effectKey: 'k2', to: 'x', template: 'y', tenant: T, data: {} } as any), /bus|core unreachable/);
+    assert.equal(ranInProcess, false);
+  });
+
+  it('emit stays in process for kinds the bus does not route', async () => {
+    reg.setBus(stub({ routed: () => false }));
+    const out = await reg.emit(T, 'notify.send', { effectKey: 'k3', to: 'a@b.c', template: 't', tenant: T, data: {} } as any);
+    assert.equal(out.length, 1); assert.equal(out[0].plugin, 'notify-log');
+  });
+
+  it('callSlot has a generic bus path (dormant for blocking kinds today)', async () => {
+    reg.setBus(stub({ routed: () => true, call: async () => ({ verdict: 'allow', result: { outcome: 'allow', subject: 's', methods: ['pwd'] } }) }));
+    const r = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
+    assert.equal(r.servedBy, 'bus'); assert.equal(r.result.outcome, 'allow');
+    reg.setBus(stub({ routed: () => true, call: async () => ({ verdict: 'deny', reason: "mandatory 'ghost' unusable: timeout", result: undefined }) }));
+    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed');
+  });
+
+  it('the activity listener fires on enable and disable (the bus host re-pushes)', async () => {
+    let fired = 0;
+    reg.onActivityChange(() => fired++);
+    reg.register(orgManager);
+    await reg.install(T, 'org-manager', { install: true });
+    await reg.enable(T, 'org-manager', {});
+    await reg.disable(T, 'org-manager');
+    assert.equal(fired, 2);
+  });
+});

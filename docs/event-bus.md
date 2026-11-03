@@ -1,13 +1,15 @@
-# Core event bus (plan step 1)
+# Core event bus (plan steps 1 and 2)
 
-Status: step 1 of the event plan. The bus lives in the Rust core (`core/crates/iam-bus`). It is tested alone and over a real
-NATS server. It is **not** wired to any real emitter yet: no existing behaviour (decisions, activation, IdP, gRPC, API) changes.
+Status: steps 1 and 2 of the event plan. The bus lives in the Rust core (`core/crates/iam-bus`). Step 1 is the bus itself,
+tested alone and over a real NATS server. Step 2 (see `docs/plugin-contract-v2.md`) adds the plugin host protocol:
+the API serves its plugins over the bus (`POST /v1/bus/plugins/register`, `POST /v1/bus/emit`, source stamped by the core).
+Authorization decisions, activation, IdP and gRPC do not depend on the bus.
 
 ## What exists (implemented and tested)
 
 | Piece | Where | Notes |
 |---|---|---|
-| Envelope | `envelope.rs` | id, kind, `tenant` (reserved, carried and never interpreted: D11), `effect_key`, JSON payload |
+| Envelope | `envelope.rs` | id, kind, `tenant` (reserved, carried and never interpreted: D11), `effect_key`, JSON payload, `source` (stamped by the core, step 2) |
 | Catalogue | `catalogue.rs` | each kind is `Notify`, `Control` (allow/deny) or `Query` (data merged by the core); unknown kind or wrong mode is refused |
 | Subscription registry | `registry.rs` | `mandatory` (Control/Query only), one-of `group` (Notify only), subscriber id restricted to `[A-Za-z0-9_-]` (it becomes a NATS subject token) |
 | Dispatcher | `dispatcher.rs` | broadcast; one of a group (round robin); blocking call with timeout; Query merge (shallow union, first subscriber by id wins, conflicts reported); each subscriber has its own request, timeout and error |
@@ -26,8 +28,15 @@ the core restarts or an observer drops them; only exchanges that go through this
 
 ## What is prepared, NOT built (later steps)
 
-Plugin host / contract v2, API protocol, JetStream consumers for durable delivery, journal plugin (D6), absorbing AppEvents of PR #7
-(not merged), a durable effect ledger, real emitters calling the bus, local in-process duplicate for latency (D16 evaluation: not done).
+JetStream consumers for durable delivery, journal plugin (D6), absorbing AppEvents of PR #7
+(not merged), a durable effect ledger, routing blocking hooks (auth step), local in-process duplicate for latency (D16 evaluation: not done).
+
+## Step 2 endpoints (plugin host protocol)
+
+All behind the admin token. `POST /v1/bus/plugins/register` pushes a plugin's subscriptions, emission grants and
+kind declarations (idempotent, replaces the set); `POST /v1/bus/plugins/unregister` removes them; `GET /v1/bus/plugins`
+lists them; `POST /v1/bus/emit` emits one event after checking the grant and stamping `source`. The API host serves
+its plugins as the restricted `api-host` NATS user (see `conf/nats-local.conf`). Details: `docs/plugin-contract-v2.md`.
 
 ## Limits to keep in mind
 

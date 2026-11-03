@@ -3,7 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 
 export interface BusOutcome { id: string; mandatory: boolean; status: string; verdict?: string | null; detail?: string | null; data_keys?: string[] | null }
-export interface BusRec { seq: number; at_ms: number; envelope_id: string; kind: string; mode: string; tenant?: string | null; effect_key?: string | null; payload: Record<string, string>; elapsed_ms: number; verdict?: string | null; expected: { id: string; mandatory: boolean }[]; outcomes: BusOutcome[] }
+export interface BusRec { seq: number; at_ms: number; envelope_id: string; kind: string; mode: string; tenant?: string | null; effect_key?: string | null; source?: string | null; payload: Record<string, string>; elapsed_ms: number; verdict?: string | null; expected: { id: string; mandatory: boolean }[]; outcomes: BusOutcome[] }
 export type Result = 'ok' | 'refused' | 'error' | 'no-consumer' | 'silent-optional';
 
 /** What the exchange amounted to, read from the real record. A silent MANDATORY subscriber is a refusal (D3); a silent optional one is ignored. */
@@ -59,12 +59,12 @@ export function stepTo(rs: BusRec[], cursor: number, dir: 1 | -1): number | unde
       Expected: @for (x of c.expected; track x.id) { <span class="chip">{{x.id}}@if (x.mandatory) { (mandatory) }</span> } @empty { nobody subscribed }
       <br>Answered: @for (x of ans(c); track x) { <span class="chip ok">{{x}}</span> } @empty { <span class="chip warn">nobody</span> }
       @for (s of mute(c); track s) { <span class="chip mute">silent: {{s}}</span> }
-      <br><small>Correlation: {{c.envelope_id}}@if (c.effect_key) { - effectKey {{c.effect_key}} }</small>
+      <br><small>Correlation: {{c.envelope_id}}@if (c.effect_key) { - effectKey {{c.effect_key}} } - Source: {{c.source ?? 'core'}}</small>
       <br><small>Data (masked): {{payloadText(c)}}</small></div> }
   </section>
   <section class="card"><div class="scroll"><table id="bo-table"><thead><tr><th>Time</th><th>Event</th><th>Expected</th><th>Answered</th><th>Result</th><th>Delay</th></tr></thead><tbody>
   @for (e of seen(); track e.seq) { <tr [class.bo-now]="e === current()">
-    <td>{{time(e)}}</td><td>{{e.kind}}<br><small>{{e.mode}} - {{e.envelope_id}}</small></td>
+    <td>{{time(e)}}</td><td>{{e.kind}}<br><small>{{e.mode}} - {{e.source ?? 'core'}} - {{e.envelope_id}}</small></td>
     <td>@for (x of e.expected; track x.id) { <span class="chip">{{x.id}}</span> } @empty { - }</td>
     <td>@for (a of ans(e); track a) { <span class="chip ok">{{a}}</span> } @empty { <span class="chip warn">nobody</span> }@for (s of mute(e); track s) { <span class="chip mute" title="expected, did not answer">silent: {{s}}</span> }</td>
     <td>{{label(e)}}</td><td>{{e.elapsed_ms}} ms</td></tr> }

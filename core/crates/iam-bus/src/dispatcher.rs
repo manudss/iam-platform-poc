@@ -37,6 +37,8 @@ pub struct BusRecord {
     pub mode: Mode,
     pub tenant: Option<String>,
     pub effect_key: Option<String>,
+    /// Who emitted the event (`api`, `plugin:<id>`), absent for core-internal events.
+    pub source: Option<String>,
     pub payload_bytes: usize,
     pub payload: std::collections::BTreeMap<String, String>,
     /// Unix milliseconds when the exchange finished.
@@ -63,13 +65,14 @@ impl Dispatcher {
         Dispatcher { observers: Default::default(), catalogue, registry: Registry::new(), transport, default_timeout, rr: Mutex::new(HashMap::new()) }
     }
     pub fn subscribe(&self, s: Subscription) -> Result<(), BusError> { self.registry.add(&self.catalogue, s) }
+    pub fn catalogue(&self) -> &Catalogue { &self.catalogue }
     /// Observers see every exchange, including refused ones and silent subscribers. Registering one changes no delivery behaviour.
     pub fn observe(&self, o: Arc<dyn Observer>) { self.observers.write().unwrap().push(o) }
     fn emit(&self, env: &Envelope, mode: Mode, t: std::time::Instant, outcomes: &[SubOutcome], verdict: Option<Verdict>) {
         let obs = self.observers.read().unwrap();
         if obs.is_empty() { return }
         let r = BusRecord { envelope_id: env.id.clone(), kind: env.kind.clone(), mode, tenant: env.tenant.clone(), effect_key: env.effect_key.clone(),
-            payload_bytes: env.payload.to_string().len(), payload: crate::mask::mask_payload(&env.payload),
+            source: env.source.clone(), payload_bytes: env.payload.to_string().len(), payload: crate::mask::mask_payload(&env.payload),
             at_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0), elapsed_ms: t.elapsed().as_millis() as u64, outcomes: outcomes.to_vec(), verdict };
         for o in obs.iter() { o.record(&r) }
     }

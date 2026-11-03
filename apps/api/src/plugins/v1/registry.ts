@@ -44,6 +44,15 @@ export class PluginError extends Error {
   constructor(public code: string, message: string) { super(message); }
 }
 
+/** Step 2: the bridge to the core's event bus, provided by the plugin host (bus-host.ts) when it is enabled.
+ * `routed` is false for every kind when the bus is off: behaviour is then exactly the in-process one. */
+export interface BusBridge {
+  /** True when this kind is delivered through the bus. Only pure-async hooks route in step 2; blocking hooks stay in process. */
+  routed(kind: string): boolean;
+  emit(tenant: string, kind: string, payload: unknown, effectKey?: string): Promise<{ plugin: string; result: unknown }[]>;
+  call(tenant: string, kind: string, payload: unknown, timeoutMs?: number): Promise<{ verdict: string; reason?: string; result: unknown }>;
+}
+
 export class PluginRegistry {
   private impls = new Map<string, PluginImpl>();
   private state = new Map<string, State>(); // key: tenant/plugin
@@ -52,7 +61,20 @@ export class PluginRegistry {
   /** Replacements that failed at runtime (key tenant/plugin). A faulted replacement keeps its slot but answers every call with a refusal until an admin acts. */
   private faulted = new Set<string>();
 
+  private bus?: BusBridge;
+  private activityListeners: (() => void)[] = [];
   constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}, private states?: StateStore) {}
+
+  /** Attaches the bus bridge (step 2). Routing activates per kind, never globally. */
+  setBus(b: BusBridge | undefined) { this.bus = b; }
+  /** The bus host listens here to re-push registrations when enablement changes. */
+  onActivityChange(fn: () => void) { this.activityListeners.push(fn); }
+  private activity() { for (const f of this.activityListeners) { try { f(); } catch { /* a listener error never changes plugin state */ } } }
+  /** Read access for the bus host (delivery path). */
+  impl(id: string): PluginImpl | undefined { return this.impls.get(id); }
+  /** Tenants that have any plugin state: the bus host syncs registrations for each of them. */
+  tenants(): string[] { return [...new Set([...this.state.keys()].map((k) => k.split('/')[0]))]; }
+  async settingsFor(tenant: string, id: string): Promise<Record<string, unknown> | undefined> { return this.settings.get(tenant, id); }
 
   /** Reload durable state after a restart. Call once after registering the plugins. Replacements that were enabled take their slots again; faults stay faults. */
   async load() {
@@ -85,7 +107,9 @@ export class PluginRegistry {
     const m = impl.manifest;
     const errs = validateManifest(m, HOOKS);
     for (const h of m.hooks) if (!impl.handlers[h.name]) errs.push(`hook ${h.name} declared but no handler`);
-    for (const h of Object.keys(impl.handlers)) if (!m.hooks.some((d) => d.name === h)) errs.push(`handler for undeclared hook ${h}`);
+    for (const s of m.subscribes ?? []) if (!impl.handlers[s.name]) errs.push(`subscribes: ${s.name} declared but no handler`);
+    const declared = new Set([...m.hooks.map((d) => d.name), ...(m.subscribes ?? []).map((s) => s.name)]);
+    for (const h of Object.keys(impl.handlers)) if (!declared.has(h)) errs.push(`handler for undeclared hook ${h}`);
     if (this.impls.has(m.id)) errs.push(`plugin ${m.id} already registered`);
     if (m.extends) {
       const base = this.impls.get(m.extends);
@@ -189,6 +213,7 @@ export class PluginRegistry {
     this.faulted.delete(this.k(tenant, id));
     await this.persist(tenant, id);
     this.audit({ tenant, action: 'plugin.enable', plugin: id });
+    this.activity();
   }
 
   /** Current configuration in the form versioned in Dolt: enablement plus NON-SECRET settings (secret fields are never exported). */
@@ -232,6 +257,7 @@ export class PluginRegistry {
     await this.persist(tenant, id);
     // The replacement's own state (failure counters, lockouts) is not carried to the base: say so in the audit trail.
     this.audit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
+    this.activity();
   }
 
   isActive(tenant: string, id: string) {
@@ -261,6 +287,13 @@ export class PluginRegistry {
    * - The way out of a fault is an explicit admin action: `disable` (return to a valid base configuration, audited) or `enable` again.
    */
   async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
+    if (this.bus?.routed(hook)) {
+      // Generic bus path. Dormant in step 2 (no blocking kind is routed yet): the auth migration step enables it.
+      // Fail closed is preserved by the core itself: a silent mandatory subscriber denies the call (D3).
+      const r = await this.bus.call(tenant, hook, payload, timeoutMs);
+      if (r.verdict !== 'allow') throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? 'denied'}`);
+      return { result: r.result as R, servedBy: 'bus', fellBack: false };
+    }
     const primary = this.resolve(tenant, slot);
     const run = async (p: PluginImpl) => {
       const h = p.handlers[hook];
@@ -285,9 +318,19 @@ export class PluginRegistry {
     }
   }
 
-  /** Async hook fan-out: every active plugin that declared the hook, deduplicated by effectKey. */
+  /** Async hook fan-out: every active plugin that declared the hook, deduplicated by effectKey.
+   * Step 2: when the bus routes this kind, the emission goes through the core (plugins answer over NATS).
+   * A bus failure raises `bus-unavailable` WITHOUT an in-process fallback: the delivery may have happened, so
+   * falling back would risk a double effect (D16). The caller retries the same effectKey; the host ledger dedupes. */
   private done = new Set<string>();
   async emit(tenant: string, hook: string, payload: { effectKey: string }) {
+    if (this.bus?.routed(hook)) {
+      const key = `${tenant}:bus:${hook}:${payload.effectKey}`;
+      if (this.done.has(key)) return [];
+      const out = await this.bus.emit(tenant, hook, payload, payload.effectKey);
+      this.done.add(key);
+      return out;
+    }
     const out: { plugin: string; result: unknown }[] = [];
     for (const p of this.impls.values()) {
       if (!this.isActive(tenant, p.manifest.id)) continue;
