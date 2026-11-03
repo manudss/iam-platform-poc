@@ -35,11 +35,14 @@ export class ApiClient {
   logout() { this.token = ''; }
 
   /** Recommended sign-in: browser code+PKCE flow. Keeps a fresh state + verifier in sessionStorage and leaves for the core's login form. */
-  async startBrowserLogin(storage: Pick<Storage, 'setItem'>, go: (url: string) => void, chain?: string) {
+  async startBrowserLogin(storage: Pick<Storage, 'setItem'>, go: (url: string) => void, chain?: string, branchTest?: { branch: string; ticket: string }) {
     const { verifier, challenge } = await newPkce();
     const state = (await newPkce()).verifier;
     storage.setItem('iam.pkce.verifier', verifier); storage.setItem('iam.pkce.state', state);
-    const q = new URLSearchParams({ response_type: 'code', client_id: 'demo-web', redirect_uri: REDIRECT, state, code_challenge: challenge, code_challenge_method: 'S256', ...(chain && /^[a-z0-9-]{1,40}$/.test(chain) ? { chain } : {}) });
+    const params: Record<string, string> = { response_type: 'code', client_id: 'demo-web', redirect_uri: REDIRECT, state, code_challenge: challenge, code_challenge_method: 'S256' };
+    if (chain && /^[a-z0-9-]{1,40}$/.test(chain)) params['chain'] = chain;
+    if (branchTest && /^[a-z0-9-]{1,32}$/.test(branchTest.branch) && branchTest.branch !== 'main' && branchTest.ticket) { params['branch'] = branchTest.branch; params['ticket'] = branchTest.ticket; }
+    const q = new URLSearchParams(params);
     go(`${CORE_PUBLIC}/authorize?${q}`);
   }
 
@@ -55,10 +58,12 @@ export class ApiClient {
     this.token = ((await t.json()) as { id_token: string }).id_token;
   }
 
-  /** Public list of the sign-in methods (chains) the live configuration offers. Names and declared levels only. */
-  async signinOptions(): Promise<SigninOptions> {
-    const r = await this.f(`/api/tenants/${encodeURIComponent(this.tenant)}/signin/options`);
-    if (!r.ok) throw new Error('cannot load the sign-in methods');
+  /** Public list of the sign-in methods (chains) the live configuration offers. Names and declared levels only.
+   *  A branch test passes the branch and its admin-issued ticket (docs/branch-test.md). */
+  async signinOptions(branchTest?: { branch: string; ticket: string }): Promise<SigninOptions> {
+    const q = branchTest ? `?branch=${encodeURIComponent(branchTest.branch)}&ticket=${encodeURIComponent(branchTest.ticket)}` : '';
+    const r = await this.f(`/api/tenants/${encodeURIComponent(this.tenant)}/signin/options${q}`);
+    if (!r.ok) { const m = ((await r.json().catch(() => ({}))) as { message?: string }).message; throw new Error(m ?? 'cannot load the sign-in methods'); }
     return (await r.json()) as SigninOptions;
   }
 

@@ -1,6 +1,7 @@
 <main class="login">
   <section class="card hero">
     <div class="brand"><span class="logo" aria-hidden="true">IAM</span><div><h1>IAM platform POC</h1><p>Administration console</p></div></div>
+    @if (test(); as t) { <p class="msg test" id="branch-test-banner" role="status">Branch test: you are trying the sign-in of data branch <b>{{ t.branch }}</b>. Its unpublished configuration applies here; main is unchanged. <a href="/login">Back to the normal sign-in</a></p> }
     @if (s.expired()) { <p class="msg error" role="status">Session expired or invalid. Sign in again to continue. Your action was not retried; check its current state before trying again.</p> }
     @if (s.message()) { <p class="msg" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
     @if (state() === 'loading') { <p class="lead" id="signin-loading">Loading the sign-in methods...</p> }
@@ -9,7 +10,7 @@
       <button type="button" class="secondary" (click)="load()">Try again</button>
     }
     @else if (options().mode === 'choice') {
-      <p class="lead">Choose how to sign in. These are the methods configured and enabled for this demo (fictional accounts only). Levels are declared by an administrator (10 = strongest), not measured.</p>
+      <p class="lead">Choose how to sign in. These are the methods configured and enabled {{ test() ? 'on the tested branch' : 'for this demo' }} (fictional accounts only). Levels are declared by an administrator (10 = strongest), not measured.</p>
       <ul id="signin-methods" class="methods">
         @for (c of options().chains; track c.id) {
           <li>

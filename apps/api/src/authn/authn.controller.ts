@@ -1,7 +1,7 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Put, Post, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Put, Post, Req, UseGuards } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { AdminGuard } from '../auth/admin.guard.js';
-import { AuthGuard } from '../auth/auth.guard.js';
+import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
 import { methodType } from './methods.js';
 import { SEED_CONFIG, isEmptyConfig, validateConfig } from './config.js';
@@ -43,7 +43,8 @@ export class AuthnAdminController {
    * DEMO provisioning by an administrator. The secret or PIN is returned once and never again. A real product enrolls from the user's own session.
    * Body: { email } for e-mail codes; { pin } or { length } for digit codes (a PIN typed here goes to the server over this request only).
    */
-  @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number }) {
+  @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number }, @Req() req: { user?: { branch?: string } }) {
+    assertNotBranchTest(req); // enrollments are shared, unversioned secrets: never written from a branch-test session
     this.user(u); const { m, type } = await this.instance(t, inst);
     if (type.id === 'totp') {
       const secret = newTotpSecret(); await this.authn.enroll.setTotp(t, u, inst, secret);
@@ -62,9 +63,13 @@ export class AuthnAdminController {
     }
     throw new BadRequestException(`${type.id} needs no enrollment`);
   }
-  @UseGuards(AdminGuard) @Delete('enrollments/:user/:instance') async unenroll(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string) { await this.authn.enroll.remove(t, this.user(u), inst); return { removed: true }; }
+  @UseGuards(AdminGuard) @Delete('enrollments/:user/:instance') async unenroll(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Req() req: { user?: { branch?: string } }) {
+    assertNotBranchTest(req); await this.authn.enroll.remove(t, this.user(u), inst); return { removed: true }; }
 
   /** Demo outbox: what the simulated e-mail delivery wrote. Administrators only; contains one-time codes in clear. */
-  @UseGuards(AdminGuard) @Get('outbox') outbox(@Param('tenant') t: string) { return { adapter: 'demo-outbox', simulated: true, messages: this.authn.outbox.list(t) }; }
-  @UseGuards(AdminGuard) @Delete('outbox') clear(@Param('tenant') t: string) { this.authn.outbox.clear(t); return { cleared: true }; }
+  @UseGuards(AdminGuard) @Get('outbox') outbox(@Param('tenant') t: string, @Req() req: { user?: { branch?: string } }) {
+    // Codes of the shared demo outbox are read from the normal console, not from a test session.
+    assertNotBranchTest(req); return { adapter: 'demo-outbox', simulated: true, messages: this.authn.outbox.list(t) }; }
+  @UseGuards(AdminGuard) @Delete('outbox') clear(@Param('tenant') t: string, @Req() req: { user?: { branch?: string } }) {
+    assertNotBranchTest(req); this.authn.outbox.clear(t); return { cleared: true }; }
 }

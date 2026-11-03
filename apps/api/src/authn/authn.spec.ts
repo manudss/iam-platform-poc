@@ -118,6 +118,15 @@ describe('authentication methods and chains', () => {
       assert.equal((await gate({ tenant: T, subject: 'demo-alice', password: PW }).expect(200)).body.outcome, 'allow');
       assert.equal((await gate({ tenant: T, subject: 'demo-alice', password: 'nope' }).expect(200)).body.outcome, 'deny');
     });
+    it('a branch sign-in needs its valid ticket: without one the refusal is generic and nothing leaks', async () => {
+      for (const b of [{ tenant: T, subject: 'demo-alice', password: PW, branch: 'feature-x' }, { tenant: T, subject: 'demo-alice', password: PW, branch: 'feature-x', ticket: 'forged-ticket-value' }, { tenant: T, subject: 'demo-alice', password: PW, branch: 'main', ticket: 'whatever-here' }]) {
+        const r = (await gate(b).expect(200)).body;
+        assert.equal(r.outcome, 'deny'); assert.equal(r.reason, 'branch-test');
+        assert.ok(!JSON.stringify(r).includes('feature-x'), 'the refusal does not echo the branch');
+      }
+      const e = await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, branch: 'feature-x' }).expect(200);
+      assert.equal(e.body.mode, 'error');
+    });
 
     it('chains enabled live: the entry lists them (choice), a picked chain opens, a forged id never falls back to a laxer path', async () => {
       await put(cfg([m('pw', 'password', 3), m('tp', 'totp', 7)], [{ id: 'pw-only', name: 'Password only', steps: ['pw'], level: 3 }, { id: 'mfa', name: 'Password + TOTP', steps: ['pw', 'tp'], level: 8 }], 'mfa')).expect(200);

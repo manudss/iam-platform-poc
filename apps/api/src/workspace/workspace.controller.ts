@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Post, Req, UseGuards, BadRequestException, ConflictException } from '@nestjs/common';
-import { AuthGuard } from '../auth/auth.guard.js';
+import { Body, Controller, Delete, Get, Post, Req, UseGuards, BadRequestException, ConflictException } from '@nestjs/common';
+import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -8,19 +8,25 @@ import { ActivationService } from '../activation/activation.service.js';
 import { Param } from '@nestjs/common';
 import { SOD_SQL } from '../dolt/dolt.service.js';
 import { PersonalBranchService } from './personal-branch.service.js';
+import { BranchTestService } from './branch-test.js';
 @UseGuards(AuthGuard,AdminGuard)
 @Controller('tenants/:tenant/workspace')
 export class WorkspaceController {
  private chain:Promise<unknown>=Promise.resolve();
  private pending=new Map<string,{source:string;commit:string}>();
- constructor(private readonly v:VersioningService,private readonly registries:BranchRegistries,private readonly activation:ActivationService,private readonly personal:PersonalBranchService){}
- @Post('personal') ensurePersonal(@Param('tenant')tenant:string,@Req()req:{user:{sub:string}}){return this.personal.ensure(tenant,req.user?.sub);}
- @Post('personal/rename') renamePersonal(@Param('tenant')tenant:string,@Body()b:{name?:string},@Req()req:{user:{sub:string}}){return this.personal.rename(tenant,req.user?.sub,b?.name);}
- @Post('personal/release') releasePersonal(@Param('tenant')tenant:string,@Req()req:{user:{sub:string}}){return this.personal.release(tenant,req.user?.sub);}
+ constructor(private readonly v:VersioningService,private readonly registries:BranchRegistries,private readonly activation:ActivationService,private readonly personal:PersonalBranchService,private readonly branchTest:BranchTestService){}
+ @Post('personal') ensurePersonal(@Param('tenant')tenant:string,@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);return this.personal.ensure(tenant,req.user?.sub);}
+ @Post('personal/rename') renamePersonal(@Param('tenant')tenant:string,@Body()b:{name?:string},@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);return this.personal.rename(tenant,req.user?.sub,b?.name);}
+ @Post('personal/release') releasePersonal(@Param('tenant')tenant:string,@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);return this.personal.release(tenant,req.user?.sub);}
  @Get() async status(){const branch=currentBranch();return {branch,main:'main',readOnly:branch==='main',diff:branch==='main'?null:await this.v.diffSummary('main',branch,true)};}
- @Post('apply') apply(@Body() b:{confirm?:boolean;expectedHead?:string},@Req()req:{user:{sub:string}},@Param('tenant')tenant:string){
+ @Post('apply') apply(@Body() b:{confirm?:boolean;expectedHead?:string},@Req()req:{user:{sub:string;branch?:string}},@Param('tenant')tenant:string){
+ assertNotBranchTest(req);
  const run=this.chain.then(()=>this.applyOnce(b,req,tenant));this.chain=run.catch(()=>undefined);return run;
  }
+ /** Issues the short-lived ticket that opens a sign-in test of one data branch (docs/branch-test.md). Administrators only. */
+ @Post('branch-test') createBranchTest(@Param('tenant')tenant:string,@Body()b:{branch?:string;stable?:boolean;label?:string},@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.create(req.user?.sub,String(b?.branch??''),{stable:b?.stable===true,label:typeof b?.label==='string'?b.label:''});}
+ @Get('branch-test') listBranchTests(@Param('tenant')tenant:string,@Req()req:{user?:{branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.list();}
+ @Delete('branch-test/:id') revokeBranchTest(@Param('tenant')tenant:string,@Param('id')id:string,@Req()req:{user?:{branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.revoke(id);}
  private async applyOnce(b:{confirm?:boolean;expectedHead?:string},req:{user:{sub:string}},tenant:string){
   const branch=currentBranch(true);if(!workspaceMode()||b?.confirm!==true)throw new BadRequestException('Explicit Apply confirmation required');
   const info=(await this.v.branches()).branches.find(x=>x.name===branch);if(!info)throw new BadRequestException('unknown branch');

@@ -239,7 +239,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     const updView = (await ok('GET', `/workflow-runs/${upd.id}`)) as { steps: { node_id: string; log: string[] }[] };
     assert.ok(updView.steps[0].log.some((l) => l.includes('demo-alice edited jane-doe: hr-attributes.employee_grade')), 'actor, subject and keys resolved');
     // The validation workflow: a validator accepts the pending edit of someone else, the run grants the role on its branch.
-    await store.putPending(T, 'jane-doe', { 'hr-attributes.phone': '+33 1 00 00 00 00' });
+    await store.putPending(T, 'jane-doe', { 'hr-attributes.phone': '+33 1 00 00 00 00' }, 'jane-doe');
     await svc.resolveReview(T, 'jane-doe', true, 'demo-boss');
     const rev = await waitForRun(onReview, 1);
     assert.equal(rev.status, 'completed', JSON.stringify(rev));
@@ -247,7 +247,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     const grant = sql(`select role_id from iam.assignments as of '${rev.branch}' where identity_id='jane-doe'`);
     assert.ok(grant.includes('employee'), `validation run branch grants the role: ${grant}`);
     // A refusal does not match the filter.
-    await store.putPending(T, 'jane-doe', { 'hr-attributes.phone': '+33 1 00 00 00 01' });
+    await store.putPending(T, 'jane-doe', { 'hr-attributes.phone': '+33 1 00 00 00 01' }, 'jane-doe');
     await svc.resolveReview(T, 'jane-doe', false, 'demo-boss');
     await new Promise((r) => setTimeout(r, 2000));
     assert.equal((await runsOf(onReview)).length, 1, 'a refused review starts nothing');

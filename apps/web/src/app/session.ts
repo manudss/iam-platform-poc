@@ -21,6 +21,10 @@ export class Session implements OnDestroy {
   readonly user = signal('');
   readonly branch = signal('');
   readonly branchEpoch = signal(0);
+  /** Data branch under test (docs/branch-test.md): set from the sign-in callback of a test link, cleared at sign-out. */
+  readonly testBranch = signal('');
+  /** Enters the branch-test mode after a test sign-in: every API call carries the branch and the shell shows the test banner. */
+  enterBranchTest(branch: string) { this.testBranch.set(branch); this.selectBranch(branch); }
   selectBranch(branch:string){this.api.branch=branch;this.branch.set(branch);this.branchEpoch.update(x=>x+1);this.change.set(null);this.assignments.set([]);this.activations.set([]);}
 
   readonly message = signal('');
@@ -76,7 +80,7 @@ export class Session implements OnDestroy {
 
   signOut() {
     this.expired.set(false); clearTimeout(this.expiryTimer);
-    this.api.logout();this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
+    this.api.logout();this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.testBranch.set(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
     this.assignments.set([]); this.activations.set([]); this.adminToken.set(''); this.say('Signed out.');
   }
 
