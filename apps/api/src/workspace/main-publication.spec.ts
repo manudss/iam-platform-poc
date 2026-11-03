@@ -20,4 +20,4 @@ it('startup skips an already live main',async()=>{const t=setup({current:HEAD});
 it('startup option can be disabled',async()=>{const t=setup();try{process.env.IAM_AUTO_ACTIVATE_MAIN='0';await t.service.start();assert.deepEqual(t.calls,[]);}finally{t.restore();}});
 for(const k of ['sod','constraints'])it(`startup fails closed on ${k}`,async()=>{const t=setup({[k]:true});try{await assert.rejects(t.service.start(),/refused/);assert.deepEqual(t.calls,[]);}finally{t.restore();}});
 it('startup activation failure stops readiness',async()=>{const t=setup({state:'failed'});try{await assert.rejects(t.service.start(),/activation failed/);}finally{t.restore();}});
-it('human PR publication delegates to Apply',async()=>{const t=setup();try{t.service.onModuleInit();assert.deepEqual(await t.prs.mainPublisher!('acme-demo','work','demo-alice'),{commit:HEAD});}finally{t.restore();}});
+it('human PR publication delegates to Apply',async()=>{const t=setup();try{process.env.IAM_WORKSPACE_MODE='1';t.service.onModuleInit();assert.deepEqual(await t.prs.mainPublisher!('acme-demo','work','demo-alice'),{commit:HEAD});}finally{t.restore();}});
