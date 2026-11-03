@@ -98,3 +98,13 @@ The console MCP page shows the journal per session. Sessions are revocable at an
 - The demo's free hosting loses data on restart: sessions and their trace disappear with it.
 - The lexical confinement is defense in depth on top of the console's SQL guards, not a formal proof; the real
   boundary is that the MCP identity structurally cannot reach publishing routes.
+
+### First activation on a freshly seeded workspace
+
+If every tool returns `denied: no-active-version`, the MCP session can authenticate,
+but the tenant has no live role/SoD snapshot yet. A human administrator can select
+an unchanged working branch and confirm **Review & Apply**. When the normal merge
+checks report only "nothing to merge", Apply activates the existing main commit
+without creating a fake data change. SoD, constraint, administrator and review
+checks still apply. An already active main is not published again by a no-op Apply.
+This is an explicit first activation, not automatic activation on startup.
