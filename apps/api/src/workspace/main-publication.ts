@@ -5,7 +5,7 @@ import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { ActivationService } from '../activation/activation.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkspaceController } from './workspace.controller.js';
-import { branchContext } from './context.js';
+import { branchContext, workspaceMode } from './context.js';
 import { SOD_SQL } from '../dolt/dolt.service.js';
 
 /** Human PR merges use exactly the same serialized, checked publication path as Apply. */
@@ -16,6 +16,15 @@ export class MainPublication implements OnModuleInit {
     private readonly modules: ModuleRef) {}
   onModuleInit() {
     this.prs.mainPublisher = async (tenant, source, sub) => {
+      if (!workspaceMode()) {
+        this.registries.drop(source); await this.registries.get(source);
+        const merged = await this.v.mergeInto(source, 'main', `Publish reviewed branch ${source}`, sub);
+        if (!merged.mergeable || !merged.commit) throw new Error(`Merge refused: ${merged.reasons.join('; ')}`);
+        this.registries.drop('main'); await this.registries.get('main');
+        const activation = await this.activation.activate(tenant, merged.commit);
+        if (activation.state !== 'applied') throw new Error('Data merged but permission activation failed; reconcile before retrying.');
+        return { commit: merged.commit };
+      }
       const head = (await this.v.branches()).branches.find(b => b.name === source)?.commit;
       const result = await branchContext.run({ branch: source }, () => this.modules.get(WorkspaceController, { strict: false }).apply(
         { confirm: true, expectedHead: head }, { user: { sub: String(sub) } }, tenant));
