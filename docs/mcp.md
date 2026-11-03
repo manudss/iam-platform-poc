@@ -109,8 +109,12 @@ without creating a fake data change. SoD, constraint, administrator and review
 checks still apply. An already active main is not published again by a no-op Apply.
 This is an explicit first activation, not automatic activation on startup.
 
-The all-in-one hosted demo also bootstraps main at startup by default
-(`IAM_DEMO_AUTO_ACTIVATE=1`; set `0` to disable). It loads only the existing main
-snapshot when the core reports no active version, never merges a working branch,
-and leaves an already active version alone. A bootstrap failure stops startup.
-This option belongs only to the demo launcher, not to ordinary API deployments.
+Automatic activation is enabled by default (`IAM_AUTO_ACTIVATE_MAIN=1`, set `0`
+to disable). The API launcher validates main's SoD/constraints and plugin registry,
+then activates its existing head before listening. A failed validation or activation
+stops startup. `IAM_TENANT` selects the startup tenant (default `acme-demo`).
+Human PR merges into main use the same serialized merge-and-activation path as
+Review & Apply. Working branches remain inactive; MCP cannot approve or merge.
+There is no raw database-head watcher. Out-of-band changes bypassing the API are
+not a supported publication route. The core and API admin-token configuration is
+still required; no security check is bypassed if it is absent.
