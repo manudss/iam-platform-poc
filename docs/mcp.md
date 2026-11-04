@@ -60,6 +60,12 @@ Explicitly **not** covered by the MCP surface: starting or cancelling workflow r
 publishing/applying anything to main, user credential enrollments and the outbox, and the Cedar policies
 themselves (they live in git, not in Dolt: changing them is a code review, not a data pull request).
 
+## Relayed external MCP servers (gateway)
+
+External MCP servers registered by an administrator (Jira, etc.) are relayed into every session as
+`<name>__<tool>`, with the upstream token kept server-side and each call authorized (`mcp:proxy`) and traced
+(kind `proxy`). See [docs/mcp-gateway.md](mcp-gateway.md).
+
 ## What the AI can never do
 
 - **Write to main.** A branch is created automatically when the session opens; writes outside it are impossible
@@ -71,7 +77,9 @@ themselves (they live in git, not in Dolt: changing them is a code review, not a
   per-call decisions are computed by the core from the **active version** (main), so the grant only counts after
   a human merges it and Apply activates it. (Covered by an end-to-end test.)
 - **Read secrets.** The outbox (simulated 2FA mail codes), credential references, any table/column whose name
-  contains `secret`/`token`/`password`, the meta database (sessions, PRs) and `information_schema` are refused.
+  contains `secret`/`token`/`password`, the meta database (sessions, PRs, upstreams) and `information_schema` are refused.
+  The upstream registry routes are admin-only: an MCP secret gets 401 there, so an AI can never reach an
+  arbitrary URL through the gateway nor read an upstream token.
   The check runs on the SQL *skeleton* (literals emptied, comments stripped), so aliases, CTEs, subqueries and
   pre-made views cannot smuggle a sensitive name past it; adversarial shapes are covered by tests.
 - **Execute effects.** `save_workflow` only prepares a definition; no tool starts or cancels a run, so no
