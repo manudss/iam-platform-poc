@@ -31,6 +31,7 @@ const text = (v) => ({ content: [{ type: 'text', text: JSON.stringify(v, null, 2
 function call(name, args = {}) {
   if (name === 'searchIssues') {
     const q = String(args.query ?? '').toLowerCase();
+    if (q.includes('__boom__')) { const e = new Error('upstream search backend exploded'); e.rpc = -32603; throw e; }
     const hits = Object.values(ISSUES).filter((i) => i.summary.toLowerCase().includes(q)).slice(0, Number(args.maxResults) || 10);
     return text({ issues: hits, total: hits.length });
   }

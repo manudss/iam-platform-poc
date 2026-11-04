@@ -45,7 +45,7 @@ export class McpGrantsService {
     const grants = await this.v.at(this.v.defaultBranch, async (c) => {
       try {
         const [r] = await c.query(
-          `select identity_id, upstream, tool, expires_at, granted_by from delegation_grants as of '${commit}' where tenant = ? order by 1,2,3 limit 5000`, [tenant]);
+          `select identity_id, upstream, tool, cast(expires_at as char) expires_at, granted_by from delegation_grants as of '${commit}' where tenant = ? order by 1,2,3 limit 5000`, [tenant]);
         return (r as Row[]).map((x) => ({
           tenant, identity: String(x.identity_id), upstream: String(x.upstream), tool: String(x.tool),
           expiresAt: x.expires_at === null ? null : new Date(`${String(x.expires_at).replace(' ', 'T')}Z`).toISOString(),

@@ -71,7 +71,7 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     await app.listen(13173);
     adminToken = await login('demo-alice'); bobToken = await login('demo-bob');
   });
-  after(async () => { await app?.close(); core?.kill(); dolt?.kill(); upstream?.kill(); await sleep(800); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
+  after(async () => { await app?.close(); core?.kill(); dolt?.kill(); upstream?.kill(); await sleep(800); if (dir && !process.env.KEEP_E2E_DIR) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
   it('activation: a human Apply publishes seeded main (needed for per-call decisions)', async () => {
     const headers = { ...adminH(), 'x-iam-branch': 'bootstrap-main' };
@@ -120,13 +120,18 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     assert.ok(!JSON.stringify(body).includes(UP_TOKEN));
   });
 
-  it('relay: upstream tools appear as <name>__<tool> in tools/list, with real schemas', async () => {
+  const toolNames = async () => ((await rpc(secret, 'tools/list')).result?.tools ?? []) as { name: string }[];
+  const listNames = async () => (await toolNames()).map((t) => t.name);
+
+  it('relay (P2): tools/list only shows tools covered by an ACTIVE grant of the session owner', async () => {
     const init = await rpc(secret, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'e2e', version: '0' } });
     assert.equal(init.result?.serverInfo?.name, 'iam-platform-poc');
     const list = await rpc(secret, 'tools/list');
     const tools = (list.result?.tools ?? []) as { name: string; description: string; inputSchema?: { properties?: Record<string, unknown>; required?: string[] } }[];
     const names = tools.map((t) => t.name);
-    for (const t of ['fake__searchIssues', 'fake__getIssue', 'fake__createIssue']) assert.ok(names.includes(t), `${t} in ${names.join(',')}`);
+    // The seed grants demo-alice searchIssues + getIssue on fake, never createIssue.
+    for (const t of ['fake__searchIssues', 'fake__getIssue']) assert.ok(names.includes(t), `${t} in ${names.join(',')}`);
+    assert.ok(!names.includes('fake__createIssue'), 'no grant: the write tool is not even listed');
     const get = tools.find((t) => t.name === 'fake__getIssue')!;
     assert.match(get.description, /^\[relay -> fake\]/, 'relayed descriptions are marked as untrusted upstream content');
     assert.ok(get.inputSchema?.properties?.key, 'upstream schema is served to the agent');
@@ -134,31 +139,70 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     assert.ok(!JSON.stringify(list).includes(UP_TOKEN), 'tools/list leaks the upstream token');
   });
 
-  it('relay: a proxied call returns upstream data and is traced with kind proxy (args hashed)', async () => {
+  it('relay: a granted proxied call returns upstream data and is traced with kind proxy (args hashed)', async () => {
     const r = await callTool(secret, 'fake__getIssue', { key: 'FAKE-101' });
     assert.notEqual(r.result?.isError, true, textOf(r));
     assert.match(textOf(r), /Migrate off the legacy IdP/);
-    const w = await callTool(secret, 'fake__createIssue', { summary: 'Provision access for pilot', description: 'created by the AI through the gateway' });
-    assert.notEqual(w.result?.isError, true, textOf(w));
-    assert.match(textOf(r) + textOf(w), /FAKE-20/);
     const activity = await (await fetch(`${API}/tenants/acme-demo/mcp-sessions/${sessionId}/activity?limit=50`, { headers: adminH() })).json() as { entries: Record<string, unknown>[] };
     const proxied = activity.entries.filter((e) => e.kind === 'proxy');
-    assert.ok(proxied.length >= 2, JSON.stringify(activity.entries.map((e) => e.kind)));
+    assert.ok(proxied.length >= 1, JSON.stringify(activity.entries.map((e) => e.kind)));
     assert.ok(proxied.every((e) => e.allow === true));
     assert.ok(proxied.some((e) => String(e.tool) === 'fake__getIssue' && String(e.detail).includes('args sha256:')));
     assert.ok(String(proxied[0].targets).includes(`127.0.0.1:${UP_PORT}`));
     const whole = JSON.stringify(activity);
     assert.ok(!whole.includes(UP_TOKEN), 'activity trace leaks the upstream token');
-    assert.ok(!whole.includes('created by the AI through the gateway'), 'arguments are never traced in clear');
+  });
+
+  it('P2: an ungranted tool is not callable, and a grant the AI writes on its OWN branch changes nothing', async () => {
+    assert.ok(!(await listNames()).includes('fake__createIssue'));
+    const denied = await callTool(secret, 'fake__createIssue', { summary: 'x' });
+    assert.ok(denied.error || denied.result?.isError, 'unlisted tool call fails');
+    const before = await (await fetch(`${API}/tenants/acme-demo/mcp-grants`, { headers: adminH() })).json() as { activeCommit: string | null; grants: { tool: string }[] };
+    assert.ok(before.activeCommit, 'an active version exists');
+    assert.ok(!before.grants.some((g) => g.tool === 'createIssue'));
+    // The AI proposes the grant itself, on its session branch: versioned data, zero live effect before a human merge.
+    const w = await callTool(secret, 'execute_write', { sql: "insert into delegation_grants values ('acme-demo','demo-alice','fake','createIssue',NULL,'ai-self-grant')", message: 'AI proposes: grant fake createIssue to demo-alice' });
+    assert.notEqual(w.result?.isError, true, textOf(w));
+    assert.ok(!(await listNames()).includes('fake__createIssue'), 'branch-local grant is not active');
+    const still = await callTool(secret, 'fake__createIssue', { summary: 'x' });
+    assert.ok(still.error || still.result?.isError, 'still not callable before the human merge');
+  });
+
+  it('P2: after a HUMAN merges and activates the proposed grant, the tool appears and works', async () => {
+    const pr = JSON.parse(textOf(await callTool(secret, 'submit_pull_request', { title: 'AI: grant fake createIssue to demo-alice', body: 'proposed by the MCP session' }))) as { pullRequest: { id: number; status: string } };
+    assert.equal(pr.pullRequest.status, 'open');
+    const merged = await post(`${API}/tenants/acme-demo/versioning/pulls/${pr.pullRequest.id}/merge`, {}, adminH());
+    assert.equal(merged.status, 201, JSON.stringify(await merged.clone().json().catch(() => ({}))));
+    assert.ok((await listNames()).includes('fake__createIssue'), 'grant active: the tool is listed now');
+    const w = await callTool(secret, 'fake__createIssue', { summary: 'Provision access for pilot', description: 'created by the AI through the gateway' });
+    assert.notEqual(w.result?.isError, true, textOf(w));
+    assert.match(textOf(w), /FAKE-20/);
+    const grants = await (await fetch(`${API}/tenants/acme-demo/mcp-grants`, { headers: adminH() })).json() as { grants: { tool: string; grantedBy: string }[] };
+    assert.ok(grants.grants.some((g) => g.tool === 'createIssue' && g.grantedBy === 'ai-self-grant'));
+  });
+
+  it('P2: an expired grant loses effect through the same versioned flow', async () => {
+    // New work cycle (the session went read-only after its PR): expire the getIssue grant.
+    await callTool(secret, 'request_new_branch', { reason: 'expire getIssue grant' });
+    const w = await callTool(secret, 'execute_write', { sql: "update delegation_grants set expires_at = '2020-01-01 00:00:00' where tenant = 'acme-demo' and identity_id = 'demo-alice' and upstream = 'fake' and tool = 'getIssue'", message: 'AI proposes: expire fake getIssue' });
+    assert.notEqual(w.result?.isError, true, textOf(w));
+    assert.ok((await listNames()).includes('fake__getIssue'), 'still active before the merge');
+    const pr = JSON.parse(textOf(await callTool(secret, 'submit_pull_request', { title: 'AI: expire fake getIssue' }))) as { pullRequest: { id: number } };
+    assert.equal((await post(`${API}/tenants/acme-demo/versioning/pulls/${pr.pullRequest.id}/merge`, {}, adminH())).status, 201);
+    const namesAfter = await listNames();
+    const grantsAfter = await (await fetch(`${API}/tenants/acme-demo/mcp-grants`, { headers: adminH() })).json();
+    assert.ok(!namesAfter.includes('fake__getIssue'), 'expired grant: the tool disappears');
+    assert.ok(namesAfter.includes('fake__createIssue'), 'the other grant is unaffected');
   });
 
   it('relay: an upstream error comes back as a tool error, traced, without the token', async () => {
-    const r = await callTool(secret, 'fake__getIssue', { key: 'NOPE-1' });
+    const r = await callTool(secret, 'fake__searchIssues', { query: '__boom__' });
     assert.equal(r.result?.isError, true);
-    assert.match(textOf(r), /unknown issue key/);
+    assert.match(textOf(r), /upstream search backend exploded/);
     assert.ok(!textOf(r).includes(UP_TOKEN));
   });
 
+  // demo-bob HAS a getIssue grant (seed) but no mcp-operator role: the tool is listed, Cedar still denies the call.
   it('policy: a session without mcp-operator is denied on a proxied tool too (mcp:proxy)', async () => {
     const s = await post(`${API}/tenants/acme-demo/mcp-sessions`, { label: 'bob gateway' }, { authorization: `Bearer ${bobToken}`, 'x-api-admin-token': ADMIN });
     const bobSecret = ((await s.json()) as { secret: string }).secret;
@@ -176,7 +220,7 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     const list = await rpc(secret, 'tools/list');
     const names = ((list.result?.tools ?? []) as { name: string }[]).map((x) => x.name);
     assert.ok(!names.some((n) => n.startsWith('bad__')), 'unreachable upstream tools stay absent');
-    assert.ok(names.includes('fake__getIssue'), 'other upstreams are unaffected');
+    assert.ok(names.includes('fake__createIssue'), 'other upstreams are unaffected');
     await fetch(`${upstreamsUrl}/${badId}`, { method: 'DELETE', headers: adminH() });
   });
 

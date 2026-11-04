@@ -18,6 +18,8 @@ INSERT IGNORE INTO assignments VALUES ('demo-bob','payment-creator');
 INSERT IGNORE INTO assignments VALUES ('demo-alice','mcp-operator');
 INSERT IGNORE INTO sod_rules VALUES ('payment-creator','payment-approver');
 -- Demo: demo-alice's AI sessions may READ the sandbox "fake" upstream (search/get), never write it (createIssue is not granted).
-INSERT IGNORE INTO delegation_grants VALUES ('acme-demo','demo-alice','fake','searchIssues',NULL,'demo-seed'),('acme-demo','demo-alice','fake','getIssue',NULL,'demo-seed');
+INSERT IGNORE INTO delegation_grants VALUES ('acme-demo','demo-alice','fake','searchIssues',NULL,'demo-seed'),('acme-demo','demo-alice','fake','getIssue',NULL,'demo-seed'),
+-- demo-bob can SEE fake getIssue (grant) but has no mcp-operator role: proves Cedar is the last word, not the allowlist.
+('acme-demo','demo-bob','fake','getIssue',NULL,'demo-seed');
 CALL DOLT_ADD('-A');
 CALL DOLT_COMMIT('-m','demo seed');
