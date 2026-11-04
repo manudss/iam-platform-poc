@@ -9,5 +9,5 @@ forbid(principal, action == Action::"approve", resource) when { context.sod_conf
 // MCP sessions (AI access): the AI acts only inside its own data branch, authorized per call by this same
 // engine, as the session owner. Requires the mcp-operator role from the ACTIVE version (main): a role the AI
 // grants itself on its own branch has no effect until a human merges and activates it.
-permit(principal, action in [Action::"mcp:read", Action::"mcp:write", Action::"mcp:lifecycle"], resource)
+permit(principal, action in [Action::"mcp:read", Action::"mcp:write", Action::"mcp:lifecycle", Action::"mcp:proxy"], resource)
   when { context has roles && context.roles.contains("mcp-operator") };
