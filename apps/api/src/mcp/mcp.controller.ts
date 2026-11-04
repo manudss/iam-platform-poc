@@ -9,7 +9,9 @@ import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { UsersService } from '../users/users.service.js';
 import { AuditService } from '../access/audit.service.js';
 import { McpSessionService } from './session.service.js';
+import { McpUpstreamService } from './upstream.service.js';
 import { registerTools } from './tools.js';
+import { registerProxyTools } from './proxy.js';
 import { ProfileService } from '../profile/profile.service.js';
 import { OrgService } from '../profile/orgs.js';
 import { RolesService } from '../profile/roles.js';
@@ -33,6 +35,7 @@ export class McpController {
     private readonly prs: PullRequestService, private readonly users: UsersService, private readonly audit: AuditService,
     private readonly profile: ProfileService, private readonly orgs: OrgService, private readonly roles: RolesService,
     private readonly wf: WorkflowsService, private readonly branches: BranchRegistries, private readonly authn: AuthnService,
+    private readonly upstreams: McpUpstreamService,
   ) {}
   private get core() { return process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081'; }
 
@@ -74,6 +77,7 @@ export class McpController {
     // Stateless streamable HTTP: one server + transport per request, JSON responses, no SSE session state.
     const server = new McpServer({ name: 'iam-platform-poc', version: '0.1.0' });
     registerTools(server, { session, tenant, v: this.v, prs: this.prs, users: this.users, sessions: this.sessions, audit: this.audit, core: this.core, profile: this.profile, orgs: this.orgs, roles: this.roles, wf: this.wf, branches: this.branches, authn: this.authn });
+    await registerProxyTools(server, { session, tenant, v: this.v, prs: this.prs, users: this.users, sessions: this.sessions, audit: this.audit, core: this.core, profile: this.profile, orgs: this.orgs, roles: this.roles, wf: this.wf, branches: this.branches, authn: this.authn }, this.upstreams);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);
@@ -107,4 +111,28 @@ export class McpSessionsController {
     if (!s) throw new NotFoundException(`session ${id} not found`);
     return s;
   }
+}
+
+/**
+ * Console administration of external MCP servers relayed by the platform ("MCP gateway", P1).
+ * The upstream token is write-only: it is stored encrypted, never returned, never logged. The AI agent
+ * authenticates to the platform with its own session secret and never sees this token (no passthrough).
+ */
+@UseGuards(AuthGuard, AdminGuard)
+@Controller('tenants/:tenant/mcp-upstreams')
+export class McpUpstreamsController {
+  constructor(private readonly upstreams: McpUpstreamService) {}
+
+  @Post()
+  async create(@Param('tenant') tenant: string, @Body() b: { name?: string; url?: string; token?: string; enabled?: boolean }, @Req() req: { user: { sub: string } }) {
+    if (!workspaceMode()) throw new BadRequestException('workspace mode is disabled');
+    const up = await this.upstreams.create(tenant, req.user.sub, b ?? {});
+    return { ...up, note: 'The upstream token is stored encrypted and is never shown again. Relayed tools appear as <name>__<tool> in MCP sessions.' };
+  }
+
+  @Get() list(@Param('tenant') tenant: string) { return this.upstreams.list(tenant).then((upstreams) => ({ upstreams })); }
+
+  @Delete(':id') remove(@Param('tenant') tenant: string, @Param('id') id: string) { return this.upstreams.remove(tenant, id); }
+
+  @Post(':id/test') test(@Param('tenant') tenant: string, @Param('id') id: string) { return this.upstreams.test(tenant, id); }
 }

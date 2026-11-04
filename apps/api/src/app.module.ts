@@ -15,8 +15,9 @@ import { PluginsModule } from './plugins/plugins.module.js';
 import { VersioningModule } from './versioning/versioning.module.js';
 import { PluginsV1Module } from './plugins/v1/plugins-v1.module.js';
 import { EventsModule } from './events/events.module.js';
-import { McpController, McpSessionsController } from './mcp/mcp.controller.js';
+import { McpController, McpSessionsController, McpUpstreamsController } from './mcp/mcp.controller.js';
+import { McpUpstreamService } from './mcp/upstream.service.js';
 import { McpSessionService } from './mcp/session.service.js';
 
-@Module({ imports: [BusModule, EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController, McpController, McpSessionsController], providers: [AuditService, McpSessionService] })
+@Module({ imports: [BusModule, EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController, McpController, McpSessionsController, McpUpstreamsController], providers: [AuditService, McpSessionService, McpUpstreamService] })
 export class AppModule {}
