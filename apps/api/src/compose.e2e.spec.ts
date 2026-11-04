@@ -21,7 +21,7 @@ describe('docker-compose stack (real containers)', { skip: !on && 'COMPOSE_STACK
     Object.assign(process.env, { DOLT_PORT: '3307', DOLT_PASSWORD: PW, DOLT_DATABASE: 'iam' });
     const d = new DoltService();
     assert.ok((await d.head()).length >= 8);
-    assert.deepEqual(await d.assignments(), [{ identity_id: 'demo-bob', role_id: 'payment-creator' }]);
+    assert.deepEqual(await d.assignments(), [{ identity_id: 'demo-alice', role_id: 'mcp-operator' }, { identity_id: 'demo-bob', role_id: 'payment-creator' }]); // seed: bob + alice as MCP operator
   });
   it('runtime PostgreSQL container: activation journal is durable', async () => {
     process.env.IAM_PG_URL = `postgres://postgres:${PW}@127.0.0.1:5433/runtime`;

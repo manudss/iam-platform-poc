@@ -12,6 +12,7 @@ import { ApplicationsPage } from './applications';
 import { RolesAdminPage } from './roles-admin';
 import { ProfileReviewsPage } from './profile-reviews';
 import { BusObserverPage } from './bus-observer';
+import { McpPage } from './mcp';
 import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard } from './workflows';
 import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
@@ -40,6 +41,7 @@ export const routes: Routes = [
       { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
       { path: 'event-bus', canActivate: [accessGuard], component: BusObserverPage, title: 'Event bus' },
+      { path: 'mcp', canActivate: [accessGuard], component: McpPage, title: 'MCP (AI access)' },
       { path: 'workflows', component: WorkflowsPage, title: 'Workflows', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [workflowsEnabledGuard] },

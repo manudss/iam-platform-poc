@@ -197,17 +197,17 @@
             <p [class]="k.mergeable ? 'ok' : 'ko'"><b>{{ k.mergeable ? 'Can be merged' : 'Cannot be merged' }}</b>@for (r of k.reasons; track r) { <br />{{ r }} }</p>
             @for (v of k.violations; track v.roleA + v.roleB + v.identity) { <p class="ko">SoD: {{ v.identity }} would have {{ v.roleA }} and {{ v.roleB }}</p> }
           }
-          @if (d.requiredApprovals) { <p class="hint">Approvals from others: {{ d.approvals.length }} of {{ d.requiredApprovals }} required.</p> }
+          @if (d.requiredApprovals) { <p class="hint">Approvals: {{ d.approvals.length }} of {{ d.requiredApprovals }} required.</p> }
           @if (d.commits.length) { <h5>Commits</h5><ul>@for (c of d.commits; track c.commit) { <li><code>{{ short(c.commit) }}</code> {{ c.message }} <span class="hint">{{ c.author }}</span></li> }</ul> }
           @if (d.diff; as df) { <h5>Changes</h5><ul>@for (t of df.tables; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b> @if (t.dataChange) { <button type="button" class="link" (click)="prDiff(t.table)">show rows</button> }</li> }</ul> }
           <ng-container *ngTemplateOutlet="rowdiff" />
           <h5>Discussion</h5>
           <ul>@for (c of d.comments; track c.id) { <li><b>{{ c.author }}</b>@if (c.kind === 'approve') { approved }: {{ c.body }}</li> }</ul>
           @if (d.pullRequest.status === 'open') {
-            @if (d.viewer && d.viewer === d.pullRequest.author) { <p class="hint">You opened this pull request, so someone else has to approve it.</p> }
+            @if (d.preventSelfApproval && d.viewer && d.viewer === d.pullRequest.author) { <p class="hint">You opened this pull request, so someone else has to approve it.</p> }
             <label>Comment <input name="pc" [(ngModel)]="prComment" autocomplete="off" /></label>
             <button type="button" [disabled]="!prComment" (click)="sendComment('comment')">Comment</button>
-            <button type="button" [disabled]="d.viewer === d.pullRequest.author" [title]="d.viewer === d.pullRequest.author ? 'The author cannot approve their own pull request' : ''" (click)="sendComment('approve')">Approve</button>
+            <button type="button" [disabled]="!!d.preventSelfApproval && d.viewer === d.pullRequest.author" [title]="d.preventSelfApproval && d.viewer === d.pullRequest.author ? 'The author cannot approve their own pull request' : ''" (click)="sendComment('approve')">Approve</button>
             <button type="button" class="danger" [disabled]="!d.checks?.mergeable" (click)="mergePull()">Merge</button>
             <button type="button" (click)="closePull()">Close</button>
           }
