@@ -42,7 +42,7 @@ export interface ToolCtx {
   authn: AuthnService;
 }
 
-type Kind = 'read' | 'write' | 'lifecycle';
+export type Kind = 'read' | 'write' | 'lifecycle' | 'proxy';
 
 /** A refusal by the MCP confinement itself (not by the policy engine): traced as a DENIAL. */
 export class ConfinementError extends Error {}
@@ -116,7 +116,11 @@ type Run = () => Promise<{ result: unknown; detail: string; targets?: string[]; 
 
 /** decide -> act -> trace. Denials and errors are traced too: the trace is the whole point. */
 async function guarded(ctx: ToolCtx, tool: string, run: Run) {
-  const kind = TOOL_KINDS[tool];
+  return guardedWithKind(ctx, tool, TOOL_KINDS[tool], run);
+}
+
+/** Same as guarded with an explicit kind: relayed (proxy) tools are registered dynamically, outside TOOL_KINDS. */
+export async function guardedWithKind(ctx: ToolCtx, tool: string, kind: Kind, run: Run) {
   const rec = (allow: boolean, reasons: string[], detail: string, targets: string[], rowCount: number | null, error: string | null) =>
     ctx.sessions.record({ tenant: ctx.tenant, sessionId: ctx.session.id, owner: ctx.session.owner, branch: ctx.session.branch, tool, kind, detail, targets, allow, reasons, rowCount, error });
   const deny = async (reasons: string[]) => {

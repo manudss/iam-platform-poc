@@ -5,6 +5,7 @@ import { Session } from './session';
 
 interface McpSession { id: string; owner: string; label: string; branch: string; createdAt: string; expiresAt: string; revoked: boolean; submitted: boolean; calls: number }
 interface Activity { id: number; at: string; tool: string; kind: string; detail: string; targets: string[]; allow: boolean; reasons: string[]; rowCount: number | null; error: string | null }
+interface Upstream { id: string; name: string; url: string; enabled: boolean; lastStatus: string; lastTools: number | null }
 
 /**
  * MCP sessions: give an AI assistant branch-confined access to the platform. The session secret is shown ONCE
@@ -31,6 +32,19 @@ interface Activity { id: number; at: string; tool: string; kind: string; detail:
       </div> }
   </section>
 
+  <section class="card" id="mcp-upstreams"><h3>External MCP servers (gateway)</h3>
+    <p class="hint">An external MCP server (e.g. Jira) registered here is relayed to every AI session: its tools appear as <b>name__tool</b>. The token authenticates the platform towards that server: it is stored encrypted, never displayed again, never sent to the AI, and every relayed call is traced below (kind <b>proxy</b>). Remote servers require https; http is accepted only for a local server (127.0.0.1).</p>
+    <div class="row"><label>Name<input name="upname" [(ngModel)]="upName" maxlength="32" placeholder="e.g. jira" /></label>
+    <label>URL<input name="upurl" [(ngModel)]="upUrl" placeholder="https://mcp.atlassian.net/v1/sse" size="34" /></label>
+    <label>Token<input name="uptoken" type="password" [(ngModel)]="upToken" placeholder="stored encrypted, shown never" size="24" /></label>
+    <button id="up-create" (click)="createUpstream()" [disabled]="!upName.trim() || !upUrl.trim() || !upToken.trim()">Register</button></div>
+    <div class="scroll"><table id="up-table"><thead><tr><th>Name</th><th>URL</th><th>State</th><th>Last check</th><th>Tools</th><th></th></tr></thead><tbody>
+    @for (u of upstreams(); track u.id) { <tr><td>{{u.name}}</td><td>{{u.url}}</td><td>{{u.enabled ? 'enabled' : 'disabled'}}</td><td>{{u.lastStatus}}</td><td>{{u.lastTools ?? ''}}</td>
+      <td><button class="secondary" (click)="testUpstream(u)">Test</button><button class="secondary" (click)="removeUpstream(u)">Delete</button></td></tr> }
+    @empty { <tr><td colspan="6">No external MCP server registered.</td></tr> }</tbody></table></div>
+    @if (upTest(); as t) { <p class="hint" id="up-test-result">{{t}}</p> }
+  </section>
+
   <section class="card"><h3>Sessions</h3><div class="scroll"><table id="mcp-table"><thead><tr><th>Session</th><th>Label</th><th>Owner</th><th>Branch</th><th>Expires</th><th>Calls</th><th>State</th><th></th></tr></thead><tbody>
     @for (x of sessions(); track x.id) { <tr><td>{{x.id}}</td><td>{{x.label}}</td><td>{{x.owner}}</td><td>{{x.branch}}</td><td>{{x.expiresAt | date:'short'}}</td><td>{{x.calls}}</td>
       <td>{{x.revoked ? 'revoked' : (expired(x) ? 'expired' : (x.submitted ? 'PR submitted' : 'active'))}}</td>
@@ -47,6 +61,8 @@ interface Activity { id: number; at: string; tool: string; kind: string; detail:
 export class McpPage {
   protected readonly s = inject(Session);
   protected sessions = signal<McpSession[]>([]);
+  protected upstreams = signal<Upstream[]>([]);
+  protected upName = ''; protected upUrl = ''; protected upToken = ''; protected upTest = signal('');
   protected activity = signal<Activity[]>([]);
   protected activityFor = signal('');
   protected created = signal<(McpSession & { secret: string }) | null>(null);
@@ -67,7 +83,21 @@ export class McpPage {
       this.problem.set(''); return r.data ?? {};
     } catch (e) { this.problem.set((e as Error).message); return null; }
   }
-  protected async load() { const r = await this.call('GET', '/mcp-sessions'); if (r) this.sessions.set(r['sessions'] ?? []); }
+  protected async load() {
+    const r = await this.call('GET', '/mcp-sessions'); if (r) this.sessions.set(r['sessions'] ?? []);
+    const u = await this.call('GET', '/mcp-upstreams'); if (u) this.upstreams.set(u['upstreams'] ?? []);
+  }
+  protected async createUpstream() {
+    const r = await this.call('POST', '/mcp-upstreams', { name: this.upName.trim(), url: this.upUrl.trim(), token: this.upToken });
+    if (r) { this.upName = ''; this.upUrl = ''; this.upToken = ''; this.note.set('External MCP server registered: its tools are relayed to AI sessions.'); await this.load(); }
+  }
+  protected async testUpstream(u: Upstream) {
+    this.upTest.set(`Testing ${u.name}…`);
+    const r = await this.call('POST', `/mcp-upstreams/${encodeURIComponent(u.id)}/test`, {});
+    if (r) this.upTest.set(r['ok'] ? `${u.name}: ${ (r['tools'] ?? []).length } tools reachable (${(r['tools'] ?? []).join(', ')})` : `${u.name}: ${r['error'] ?? 'unreachable'}`);
+    await this.load();
+  }
+  protected async removeUpstream(u: Upstream) { if (!confirm(`Delete upstream ${u.name}? Its tools disappear from AI sessions immediately.`)) return; const r = await this.call('DELETE', `/mcp-upstreams/${encodeURIComponent(u.id)}`); if (r) { this.note.set('Upstream deleted.'); await this.load(); } }
   protected async create() {
     const r = await this.call('POST', '/mcp-sessions', { label: this.label, ttl_seconds: Math.round(this.ttlHours * 3600) });
     if (r) { this.created.set(r as McpSession & { secret: string }); this.note.set('Session created.'); await this.load(); }
