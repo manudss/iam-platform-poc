@@ -10,5 +10,5 @@ import { WorkflowsController } from './workflows.controller.js';
 import { WorkflowTriggersService } from './triggers.js';
 import { WorkflowDemoSeed } from './demo-seed.js';
 
-@Module({ imports: [EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowsController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed] })
+@Module({ imports: [EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowsController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed], exports: [WorkflowsService] })
 export class WorkflowsModule {}

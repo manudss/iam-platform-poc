@@ -4,6 +4,7 @@ import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { hasDataSteps, placeholderKeys, STEP_TYPES, substituteEventPayload, validateGraph, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { WorkflowEngine } from './engine.js';
 import { DefinitionRow, RunRow, StepRow, WorkflowStore } from './store.js';
+import { currentBranch } from '../workspace/context.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
@@ -22,12 +23,12 @@ export class WorkflowsService {
   }
 
   async list(tenant: string) {
-    const defs = await this.store.listDefinitions(tenant);
+    const defs = await this.store.listDefinitions(tenant, currentBranch());
     return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => STEP_TYPES[n.type].simulated).length, dataSteps: d.graph.nodes.filter((n) => !STEP_TYPES[n.type].simulated).length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
   }
 
   async get(tenant: string, id: unknown) {
-    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'));
+    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), currentBranch());
     if (!d) throw new NotFoundException('unknown workflow');
     return { definition: { ...d, order: validateGraph(d.graph).order } };
   }
@@ -47,10 +48,11 @@ export class WorkflowsService {
         if (!WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event].payload.join(', ')})`);
       }
     }
-    const existing = create ? null : await this.store.getDefinition(tenant, wid);
+    const ref = currentBranch(true);
+    const existing = create ? null : await this.store.getDefinition(tenant, wid, ref);
     if (!create && !existing) throw new NotFoundException('unknown workflow');
     const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
-    await this.store.putDefinition(def);
+    await this.store.putDefinition(def, ref);
     return { definition: def };
   }
 
@@ -58,12 +60,38 @@ export class WorkflowsService {
     const wid = this.checkId(id, 'workflow id');
     const running = (await this.store.listRuns(tenant, wid, 100)).some((r) => r.status === 'queued' || r.status === 'running');
     if (running) throw new ConflictException('a run of this workflow is still active: cancel it first');
-    if (!(await this.store.deleteDefinition(tenant, wid))) throw new NotFoundException('unknown workflow');
+    if (!(await this.store.deleteDefinition(tenant, wid, currentBranch(true)))) throw new NotFoundException('unknown workflow');
     return { deleted: wid };
   }
 
+  /**
+   * Test a definition ON THE CURRENT REF without executing anything: validates the graph, walks it in order,
+   * substitutes the sample event payload, and describes what every step WOULD do. No run row, no run branch,
+   * no write on any branch, no notification: the only record of the test is the caller's own trace.
+   */
+  async dryRun(tenant: string, id: unknown, payload?: Record<string, unknown>) {
+    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), currentBranch());
+    if (!d) throw new NotFoundException('unknown workflow');
+    const { order } = validateGraph(d.graph);
+    const eventPayload: Record<string, string> = {};
+    for (const [k, v] of Object.entries(payload ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) eventPayload[k] = String(v).slice(0, 200);
+    const autoFilled: string[] = [];
+    if (d.trigger) for (const key of WF_EVENTS[d.trigger.event]?.payload ?? []) if (!(key in eventPayload)) { eventPayload[key] = `<${key}>`; autoFilled.push(key); }
+    const resolved = substituteEventPayload(d.graph, eventPayload);
+    const steps = order.map((nodeId) => {
+      const n = resolved.nodes.find((x) => x.id === nodeId)!;
+      const simulated = STEP_TYPES[n.type].simulated;
+      return {
+        step: n.id, type: n.type, name: n.name, simulated, config: n.config,
+        would: simulated ? 'write a log line only (a simulated step never has an external effect)' : 'a REAL data write on the run branch - NOT executed in this test',
+      };
+    });
+    return { definition: d.id, name: d.name, trigger: d.trigger, autoFilledEventKeys: autoFilled, steps, dataSteps: steps.filter((x) => !x.simulated).length, executed: false, note: 'test only: nothing was executed, written, sent or stored' };
+  }
+
   async start(tenant: string, id: unknown, sub: unknown, event?: { branch: string; payload: Record<string, string> }) {
-    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'));
+    // A run executes effects now, so it always uses the LIVE (main) definition, never an unreviewed branch edit.
+    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), this.store.liveRef);
     if (!d) throw new NotFoundException('unknown workflow');
     const active = (await this.store.listRuns(tenant, d.id, 100)).filter((r) => r.status === 'queued' || r.status === 'running');
     if (active.length >= 3) throw new ConflictException('3 runs of this workflow are already active: wait for one to finish (demo guard)');

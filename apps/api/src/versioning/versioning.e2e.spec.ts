@@ -110,9 +110,9 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       const log = await ok('GET', '/log?ref=feat-a&limit=5');
       assert.equal(log.commits[0].message, 'give alice accountant'); assert.equal(log.commits[0].author, 'demo-alice'); assert.equal(log.commits[0].parents.length, 1);
       assert.ok(log.commits[0].refs.includes('feat-a'));
-      assert.equal(await count('feat-a', 'assignments'), 2); assert.equal(await count('main', 'assignments'), 1);
+      assert.equal(await count('feat-a', 'assignments'), 3); assert.equal(await count('main', 'assignments'), 2); // seed holds 2 assignments since the MCP operator role
       const direct = await call('POST', '/tables/assignments/edit', { branch: 'main', ops: [{ op: 'delete', key: { identity_id: 'demo-bob', role_id: 'payment-creator' } }] });
-      assert.equal(direct.status, 403); assert.equal(await count('main', 'assignments'), 1);
+      assert.equal(direct.status, 403); assert.equal(await count('main', 'assignments'), 2);
     });
     it('validates edits and leaves no half change behind', async () => {
       const bad = (ops: object[]) => call('POST', '/tables/assignments/edit', { branch: 'feat-a', ops });
@@ -123,7 +123,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await bad([{ op: 'frob' }])).status, 400);
       assert.equal((await call('POST', '/tables/dolt_log/edit', { branch: 'feat-a', ops: [{ op: 'insert', values: { x: 1 } }] })).status, 404);
       assert.equal((await call('POST', '/tables/x%3Bdrop/edit', { branch: 'feat-a', ops: [] })).status, 400);
-      assert.equal(await count('feat-a', 'assignments'), 2);
+      assert.equal(await count('feat-a', 'assignments'), 3);
       const st = await sql('feat-a', 'select * from dolt_status'); assert.equal(st.rows.length, 0, 'working set must be clean after failures');
       // and the next edit still works
       await ok('POST', '/tables/identities/edit', { branch: 'feat-a', ops: [{ op: 'update', key: { id: 'demo-bob' }, values: { department: 'treasury' } }] });
@@ -155,9 +155,9 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
     it('reads tables at a branch, a commit and a tag (read only), with paging', async () => {
       const log = await ok('GET', '/log?ref=feat-a&limit=10');
       const before = log.commits[2].commit; // main's head at branch time
-      assert.equal(await count(before, 'assignments'), 1);
+      assert.equal(await count(before, 'assignments'), 2);
       await ok('POST', '/tags', { name: 'v-seed', commit: before });
-      assert.equal(await count('v-seed', 'assignments'), 1);
+      assert.equal(await count('v-seed', 'assignments'), 2);
       const t = await ok('GET', '/tags'); assert.ok(t.tags.find((x: any) => x.name === 'v-seed'));
       assert.equal((await call('POST', '/tags', { name: 'act-x-1', commit: before })).status, 400);
       const page = await ok('GET', '/tables/assignments?ref=feat-a&limit=1&offset=0'); assert.equal(page.rows.length, 1); assert.equal(page.hasMore, true);
@@ -169,17 +169,17 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
     });
     it('branch reads are isolated from each other, also when concurrent', async () => {
       const [a, b, c] = await Promise.all([count('feat-a', 'assignments'), count('main', 'assignments'), count('feat-a', 'assignments')]);
-      assert.deepEqual([a, b, c], [2, 1, 2]);
+      assert.deepEqual([a, b, c], [3, 2, 3]);
     });
   });
 
   describe('SQL console', () => {
     it('reads on any ref, caps nothing silly, and refuses version-control and write statements', async () => {
-      const r = await sql('feat-a', 'select identity_id, role_id from assignments order by 1,2'); assert.deepEqual(r.columns, ['identity_id', 'role_id']); assert.equal(r.rows.length, 2);
+      const r = await sql('feat-a', 'select identity_id, role_id from assignments order by 1,2'); assert.deepEqual(r.columns, ['identity_id', 'role_id']); assert.equal(r.rows.length, 3);
       assert.equal((await sql('main', 'select * from dolt_branches')).rows.length >= 2, true);
       assert.equal((await sql('main', 'show tables')).rows.length >= 5, true);
       for (const q of ["call dolt_commit('-am','x')", "select dolt_commit('-am','x')", "select dolt_merge('feat-a')", "insert into assignments values ('q','q')", 'drop table roles', 'select 1; select 2', 'select sleep(3)']) assert.equal((await call('POST', '/sql', { ref: 'main', sql: q })).status, 400, q);
-      assert.equal(await count('main', 'assignments'), 1);
+      assert.equal(await count('main', 'assignments'), 2);
       assert.equal((await call('POST', '/sql', { ref: 'nope', sql: 'select 1' })).status, 404);
       assert.equal((await call('POST', '/sql', { ref: 'main', sql: 'selec 1' })).status, 400);
       assert.equal((await call('POST', '/sql', { ref: 'main', sql: 'select * from nope' })).status, 400);
@@ -265,16 +265,20 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await call('GET', '/pulls/abc')).status, 400);
       assert.equal((await call('GET', `/pulls/${pr1}`, undefined, { tenant: 'other', token: 'other:demo-alice' })).status, 404, 'a pull request is invisible to another tenant');
     });
-    it('comments; an author cannot approve their own pull request', async () => {
+    it('comments; self-approval is allowed by default and can be prohibited', async () => {
       await ok('POST', `/pulls/${pr1}/comments`, { body: 'looks fine' });
-      assert.equal((await call('POST', `/pulls/${pr1}/comments`, { kind: 'approve' })).status, 409);
+      assert.equal((await call('POST', `/pulls/${pr1}/comments`, { kind: 'approve' })).status, 201);
+      assert.equal((await ok('GET', `/pulls/${pr1}`)).preventSelfApproval, false);
+      process.env.IAM_PR_PREVENT_SELF_APPROVAL = '1';
+      try { assert.equal((await call('POST', `/pulls/${pr1}/comments`, { kind: 'approve' })).status, 409); }
+      finally { delete process.env.IAM_PR_PREVENT_SELF_APPROVAL; }
       assert.equal((await call('POST', `/pulls/${pr1}/comments`, { body: '' })).status, 400);
-      assert.equal((await ok('GET', `/pulls/${pr1}`)).comments.length, 1);
+      assert.equal((await ok('GET', `/pulls/${pr1}`)).comments.length, 2);
     });
     it('merges with a real merge commit; the data reaches main; a second merge is refused', async () => {
       const m = await ok('POST', `/pulls/${pr1}/merge`, {});
       assert.match(m.commit, /^[0-9a-v]{32}$/); assert.equal(m.pullRequest.status, 'merged');
-      assert.equal(await count('main', 'assignments'), 2);
+      assert.equal(await count('main', 'assignments'), 3);
       const log = await ok('GET', '/log?ref=main&limit=3');
       assert.equal(log.commits[0].merge, true); assert.match(log.commits[0].message, /Merge pull request #\d+: Alice becomes accountant/);
       assert.equal((await call('POST', `/pulls/${pr1}/merge`, {})).status, 409);
@@ -309,14 +313,14 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await sql('main', 'select * from dolt_conflicts')).rows.length, 0);
     });
     it('can require approvals from someone other than the author', async () => {
-      process.env.IAM_PR_APPROVALS = '1';
+      process.env.IAM_PR_APPROVALS = '1'; process.env.IAM_PR_PREVENT_SELF_APPROVAL = '1';
       try {
         await branchOf('appr'); await ok('POST', '/tables/roles/edit', { branch: 'appr', ops: [{ op: 'insert', values: { id: 'auditor', label: 'Auditor', is_sensitive: false } }] });
         const pr = await ok('POST', '/pulls', { title: 'auditor role', source: 'appr', target: 'main' });
         const refused = await call('POST', `/pulls/${pr.id}/merge`, {}); assert.equal(refused.status, 409); assert.equal(refused.body.code, 'approvals-required');
         await ok('POST', `/pulls/${pr.id}/comments`, { kind: 'approve' }, { token: `${T}:demo-bob` });
         assert.equal((await ok('POST', `/pulls/${pr.id}/merge`, {})).pullRequest.status, 'merged');
-      } finally { delete process.env.IAM_PR_APPROVALS; }
+      } finally { delete process.env.IAM_PR_APPROVALS; delete process.env.IAM_PR_PREVENT_SELF_APPROVAL; }
     });
   });
 
@@ -328,7 +332,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       const before = log.commits[0].commit;
       const r = await ok('POST', `/commits/${target}/revert`, { newBranch: 'revert-alice', message: 'undo: alice accountant' });
       assert.equal(r.createdBranch, true);
-      assert.equal(await count('revert-alice', 'assignments'), 1); assert.equal(await count('main', 'assignments'), 2);
+      assert.equal(await count('revert-alice', 'assignments'), 2); assert.equal(await count('main', 'assignments'), 3);
       assert.equal((await ok('GET', '/log?ref=main&limit=1')).commits[0].commit, before);
       assert.equal((await ok('GET', '/log?ref=revert-alice&limit=1')).commits[0].message, 'undo: alice accountant');
       assert.equal((await call('POST', `/commits/${target}/revert`, {})).status, 400);
@@ -341,7 +345,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await call('POST', '/branches/main/restore', { commit: oldest, confirm: true })).status, 403);
       assert.equal((await call('POST', '/branches/feat-a/restore', { commit: 'zz', confirm: true })).status, 404);
       const r = await ok('POST', '/branches/feat-a/restore', { commit: oldest, confirm: true });
-      assert.equal(r.was, head); assert.equal(await count('feat-a', 'assignments'), 1);
+      assert.equal(r.was, head); assert.equal(await count('feat-a', 'assignments'), 2);
       assert.equal((await ok('GET', '/log?ref=feat-a&limit=1')).commits[0].commit, oldest);
       assert.ok((await ok('GET', `/commits/${head}`)).message, 'the dropped commit still exists by hash');
     });

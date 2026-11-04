@@ -80,6 +80,15 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     const merge = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Merge') as HTMLButtonElement;
     expect(merge.disabled).toBe(true);
   });
+  it('allows author approval by default and follows the configured protection', async () => {
+    const detail = { viewer: 'demo-alice', preventSelfApproval: false, pullRequest: { id: 9, author: 'demo-alice', status: 'open', source: 'work', target: 'main' }, comments: [], approvals: [], requiredApprovals: 0, commits: [], diff: null, checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] } };
+    const { f, el, c } = await mount(routes({ 'GET /versioning/pulls/9': () => ({ data: detail }) }));
+    await c['showPull'](9); c['tab'].set('pulls'); f.detectChanges();
+    const approve = () => [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Approve') as HTMLButtonElement;
+    expect(approve().disabled).toBe(false);
+    detail.preventSelfApproval = true; await c['showPull'](9); f.detectChanges();
+    expect(approve().disabled).toBe(true); expect(el.textContent).toContain('someone else has to approve');
+  });
   it('shows server errors in the status line instead of failing silently', async () => {
     const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ status: 403, data: { message: 'branch main is protected: open a pull request instead' } }) }));
     c['sqlMode'] = 'write'; c['sqlRef'] = 'main'; c['sqlText'] = "insert into roles values ('x','x',false)"; await c['runSql'](false); f.detectChanges();

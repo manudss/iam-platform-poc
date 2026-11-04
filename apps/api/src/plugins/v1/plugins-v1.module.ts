@@ -63,6 +63,6 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
       return r;
     },
   }],
-  exports: [PluginRegistry, BranchRegistries, AuthnService],
+  exports: [PluginRegistry, BranchRegistries, AuthnService, ProfileService, OrgService, RolesService],
 })
 export class PluginsV1Module {}
