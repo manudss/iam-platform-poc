@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { DoltProfileStore } from './store.js';
 import { DoltOrgStore } from './orgs.js';
+import { DoltAppConnectorStore } from '../connectors/app-connector.js';
 import { RolesService } from './roles.js';
 import { DemoDataService } from './demo-data.service.js';
 import { UsersService } from '../users/users.service.js';
@@ -118,6 +119,20 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     assert.equal((await st.list(T, 'work')).orgs.length, 1);
   });
 
+  it('application connectors: written on the branch, absent from main until the merge, then live; config round-trips', async () => {
+    const v = new VersioningService(); const branch = 'work-apps';
+    await v.lock(() => v.at('main', async (c) => { await c.query('call dolt_branch(?)', [branch]); }));
+    const st = new DoltAppConnectorStore(v, () => branch);
+    const app = { id: 'wiki', name: 'Wiki', description: 'd', protocol: 'oidc' as const, enabled: true, redirect_uris: ['https://wiki.example.invalid/cb'], entity_id: null, acs_url: null, attribute_mapping: { sub: 'id' }, allowed_roles: ['employee'], secret_ref: 'apps/wiki/client-secret' };
+    await st.write(T, 'admin', (x) => { x.apps.push(app); });
+    assert.deepEqual(await st.list(T, 'live'), { apps: [] });
+    assert.deepEqual((await st.list(T, 'work')).apps, [app]);
+    const r = await v.mergeInto(branch, 'main', 'Apply work-apps', 'admin'); assert.equal(r.mergeable, true, JSON.stringify(r));
+    assert.deepEqual((await st.list(T, 'live')).apps, [app]);
+    await st.write(T, 'admin', (x) => { x.apps[0].enabled = false; x.apps[0].allowed_roles = []; });
+    assert.equal((await st.list(T, 'work')).apps[0].enabled, false); assert.equal((await st.list(T, 'live')).apps[0].enabled, true);
+  });
+
   it('claims safety: a user edit touches only profile_field_values; identities, roles and assignments are byte-identical', async () => {
     const v = new VersioningService(); const st = new DoltProfileStore(v, () => 'main');
     const snap = () => v.at('main', async (c) => { const out: Record<string, unknown> = {}; for (const t of ['identities', 'roles', 'assignments']) { const [r] = await c.query(`select * from ${t} order by 1,2`); out[t] = r; } return JSON.stringify(out); });
@@ -160,6 +175,7 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
       assert.equal(reg.isActive(ST, 'organizations'), true); assert.equal(reg.isActive(ST, 'hr-attributes'), true);
       const list = await users.list('main'); assert.ok(list.length >= 10 && list.filter((u) => u.hasCredential && u.login_enabled).length >= 10);
       const orgs = await new DoltOrgStore(v, () => 'main').list(ST, 'live'); assert.ok(orgs.orgs.length >= 6 && orgs.members.length >= 10);
+      const apps = (await new DoltAppConnectorStore(v, () => 'main').list(ST, 'live')).apps; assert.deepEqual(apps.map((a) => a.id), ['crm', 'payroll', 'wiki']); assert.equal(reg.isActive(ST, 'app-connector'), true);
       assert.equal((await store.get(ST, 'camille-martin', 'live'))['hr-attributes.job_title'], 'Chief accountant');
       const cfg = await reg.coreSettings(ST, 'core-profile-fields') as { signup?: { open: boolean } }; assert.equal(cfg.signup?.open, true);
     } finally { delete process.env.IAM_WORKSPACE_MODE; delete process.env.IAM_CREDENTIAL_FILE; }
