@@ -1,0 +1,44 @@
+// Spike schema (draft of plan step 2): types the entities, actions and context
+// the POC policies already use. SymCC only works on schema-well-typed policies.
+entity User;
+entity Resource;
+entity UpstreamTool;
+
+action approve appliesTo {
+  principal: [User],
+  resource: [Resource],
+  context: {
+    tenant_mode?: String,
+    roles?: Set<String>,
+    sod_conflict: Bool
+  }
+};
+action read appliesTo {
+  principal: [User],
+  resource: [Resource],
+  context: {
+    tenant_mode?: String,
+    roles?: Set<String>,
+    sod_conflict: Bool
+  }
+};
+action "mcp:read" appliesTo {
+  principal: [User],
+  resource: [Resource],
+  context: { roles?: Set<String> }
+};
+action "mcp:write" appliesTo {
+  principal: [User],
+  resource: [Resource],
+  context: { roles?: Set<String> }
+};
+action "mcp:lifecycle" appliesTo {
+  principal: [User],
+  resource: [Resource],
+  context: { roles?: Set<String> }
+};
+action "mcp:proxy" appliesTo {
+  principal: [User],
+  resource: [UpstreamTool],
+  context: { roles?: Set<String>, mcp_grants?: Set<UpstreamTool> }
+};

@@ -1,0 +1,10 @@
+[package]
+name = "spike-cedar-symcc"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cedar-policy = "4.14.1"
+cedar-policy-symcc = "0.8.1"
+tokio = { version = "1", features = ["full"] }
