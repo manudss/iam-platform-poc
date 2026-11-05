@@ -6,6 +6,7 @@ import { Session } from './session';
 interface McpSession { id: string; owner: string; label: string; branch: string; createdAt: string; expiresAt: string; revoked: boolean; submitted: boolean; calls: number }
 interface Activity { id: number; at: string; tool: string; kind: string; detail: string; targets: string[]; allow: boolean; reasons: string[]; rowCount: number | null; error: string | null }
 interface Upstream { id: string; name: string; url: string; enabled: boolean; lastStatus: string; lastTools: number | null }
+interface Grant { identity: string; upstream: string; tool: string; expiresAt: string | null; grantedBy: string }
 
 /**
  * MCP sessions: give an AI assistant branch-confined access to the platform. The session secret is shown ONCE
@@ -45,6 +46,13 @@ interface Upstream { id: string; name: string; url: string; enabled: boolean; la
     @if (upTest(); as t) { <p class="hint" id="up-test-result">{{t}}</p> }
   </section>
 
+  <section class="card" id="mcp-grants"><h3>Delegation grants (gateway)</h3>
+    <p class="hint">A relayed tool is visible to an AI session only while the session owner holds a grant here <b>and</b> the Cedar policy allows the call (role <b>mcp-operator</b>). Grants are versioned data: the AI can propose one on its branch, but it takes effect only after a human merges the pull request and the new version is activated. This view is read-only and always shows the ACTIVE version@if (grantCommit()) { (commit {{grantCommit()}})}.</p>
+    <div class="scroll"><table id="grants-table"><thead><tr><th>Identity</th><th>Upstream</th><th>Tool</th><th>Expires</th><th>Granted by</th></tr></thead><tbody>
+    @for (g of grants(); track g.identity + g.upstream + g.tool) { <tr [class.bad]="expiredGrant(g)"><td>{{g.identity}}</td><td>{{g.upstream}}</td><td>{{g.tool}}</td><td>{{g.expiresAt ? (g.expiresAt | date:'short') : 'never'}}{{expiredGrant(g) ? ' (expired)' : ''}}</td><td>{{g.grantedBy}}</td></tr> }
+    @empty { <tr><td colspan="5">No grant in the active version: no relayed tool is visible to any AI session.</td></tr> }</tbody></table></div>
+  </section>
+
   <section class="card"><h3>Sessions</h3><div class="scroll"><table id="mcp-table"><thead><tr><th>Session</th><th>Label</th><th>Owner</th><th>Branch</th><th>Expires</th><th>Calls</th><th>State</th><th></th></tr></thead><tbody>
     @for (x of sessions(); track x.id) { <tr><td>{{x.id}}</td><td>{{x.label}}</td><td>{{x.owner}}</td><td>{{x.branch}}</td><td>{{x.expiresAt | date:'short'}}</td><td>{{x.calls}}</td>
       <td>{{x.revoked ? 'revoked' : (expired(x) ? 'expired' : (x.submitted ? 'PR submitted' : 'active'))}}</td>
@@ -62,6 +70,8 @@ export class McpPage {
   protected readonly s = inject(Session);
   protected sessions = signal<McpSession[]>([]);
   protected upstreams = signal<Upstream[]>([]);
+  protected grants = signal<Grant[]>([]);
+  protected grantCommit = signal('');
   protected upName = ''; protected upUrl = ''; protected upToken = ''; protected upTest = signal('');
   protected activity = signal<Activity[]>([]);
   protected activityFor = signal('');
@@ -71,6 +81,7 @@ export class McpPage {
   constructor() { effect(() => { this.s.adminToken(); void this.load(); }); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   protected expired(x: McpSession) { return new Date(x.expiresAt).getTime() <= Date.now(); }
+  protected expiredGrant(g: Grant) { return g.expiresAt !== null && new Date(g.expiresAt).getTime() <= Date.now(); }
   protected configFor(c: McpSession & { secret: string }) {
     // Local dev (ng serve on :4200) hits the API directly; everywhere else the console origin proxies /api to it.
     const base = location.port === '4200' ? 'http://localhost:3000' : location.origin + '/api';
@@ -86,6 +97,8 @@ export class McpPage {
   protected async load() {
     const r = await this.call('GET', '/mcp-sessions'); if (r) this.sessions.set(r['sessions'] ?? []);
     const u = await this.call('GET', '/mcp-upstreams'); if (u) this.upstreams.set(u['upstreams'] ?? []);
+    const g = await this.call('GET', '/mcp-grants');
+    if (g) { this.grants.set(g['grants'] ?? []); this.grantCommit.set(String(g['activeCommit'] ?? '').slice(0, 12)); }
   }
   protected async createUpstream() {
     const r = await this.call('POST', '/mcp-upstreams', { name: this.upName.trim(), url: this.upUrl.trim(), token: this.upToken });
