@@ -66,6 +66,16 @@ const config = await oc.discovery(new URL(issuer), 'wiki', undefined, oc.None())
 const url = oc.buildAuthorizationUrl(config, { redirect_uri, scope: 'openid email', state, code_challenge, code_challenge_method: 'S256' });
 ```
 
+### Zero-install test client
+
+`demo/oidc-test-client.mjs` is a tiny local application (Node 18+, no dependency, no secret) that runs the whole flow against any issuer and prints the tokens and the userinfo answer:
+
+```sh
+node demo/oidc-test-client.mjs https://<host>/api/sso/acme-demo/oidc wiki
+```
+
+It listens on `http://localhost:4300/callback` (registered on the seeded `wiki` application, whose `allowed_roles` include `employee`, held by `demo-alice` and `demo-bob` in the seeded demo). Open the URL it prints in the browser where the console is signed in, answer Allow on the consent page, and the terminal shows the decoded ID token, the access token and the userinfo claims. On the free host the first call can wait a minute for the cold start; the client retries on its own.
+
 ## Tests
 
 - `apps/api/src/sso/oidc.spec.ts`: a local relying party (openid-client) runs the whole flow against the embedded provider: consent, code exchange, ID token, userinfo with mapped claims only, refresh rotation, `access_denied` for a user without role, decline, no PKCE, wrong `redirect_uri`, disabled or unknown application, wrong PKCE verifier, single-use code, the plugin off (404), and an edge that strips `/api`.

@@ -156,7 +156,7 @@ export class AppConnectorController {
 /** Fictional applications for the seeded demo (seed scripts only: the project installs empty). */
 export const DEMO_APP_CONNECTORS: AppConnector[] = [
   { id: 'wiki', name: 'Company wiki', description: 'Internal knowledge base (fictional). Signs in with OpenID Connect.', protocol: 'oidc', enabled: true,
-    redirect_uris: ['https://wiki.example.invalid/auth/callback'], entity_id: null, acs_url: null,
+    redirect_uris: ['https://wiki.example.invalid/auth/callback', 'http://localhost:4300/callback'], entity_id: null, acs_url: null,
     attribute_mapping: { sub: 'id', email: 'email', name: 'display_name' }, allowed_roles: ['employee'], secret_ref: 'apps/wiki/client-secret' },
   { id: 'payroll', name: 'Payroll', description: 'Payroll portal (fictional). Signs in with SAML 2.0.', protocol: 'saml', enabled: true,
     redirect_uris: [], entity_id: 'https://payroll.example.invalid/saml/metadata', acs_url: 'https://payroll.example.invalid/saml/acs',
