@@ -117,6 +117,13 @@ IS the P2 grant mechanism applied to a production upstream.
   be added later without any platform change - the grant still gates each tool).
 - The upstream tool list is **paginated** there: the relay follows `nextCursor` (bounded at 10 pages) so the
   complete catalog is visible to the grant filter.
+- **Sessionful transport**: the Rovo MCP implements the streamable HTTP transport *with sessions* - it
+  answers any non-`initialize` request that lacks a valid `mcp-session-id` header with HTTP 400
+  (`-32600: Request must be an initialize request if no session ID is provided.`). The relay runs the
+  handshake for you: `initialize` once per upstream, the `initialized` notification, then the session
+  header on every `tools/list` / `tools/call`. A stateless upstream (no `mcp-session-id` in its
+  `initialize` response) is still used one POST per call, unchanged. If the server expires the session
+  (HTTP 400/404 on a sessioned call), the relay re-initializes once and retries transparently.
 
 The demo seeds pre-grant `demo-alice` the read tools on an upstream named `jira`
 (`atlassianUserInfo`, `getAccessibleAtlassianResources`, `searchJiraIssuesUsingJql`, `getJiraIssue`,
