@@ -58,7 +58,7 @@ export class DemoDataService implements OnApplicationBootstrap {
       await c.query("call dolt_add('-A')"); await c.query("call dolt_commit('-m', 'demo seed: organizations, memberships, roles, assignments and applications (fictional)')");
     }));
     const reg = await this.branches!.get('main');
-    for (const id of ['organizations', 'hr-attributes', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
+    for (const id of ['organizations', 'hr-attributes', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
     await (await this.branches!.get('main')).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, { fields: { 'hr-attributes.job_title': { selfEdit: true, signup: 'optional' }, 'hr-attributes.phone': { selfEdit: true }, 'hr-attributes.language': { selfEdit: true, signup: 'optional' } }, signup: { open: true }, selfEditPolicy: 'immediate' });
     for (const a of ACCOUNTS) await this.store!.put(tenant, a.id, { 'hr-attributes.job_title': a.title, 'hr-attributes.phone': a.phone, 'hr-attributes.language': a.language, 'hr-attributes.employee_grade': a.grade }, 'live', 'demo-seed');
     await this.v.lock(() => this.v.at('main', async (c) => {

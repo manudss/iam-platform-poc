@@ -18,13 +18,15 @@
     "@temporalio/client": "^1.25.0",
     "@temporalio/worker": "^1.25.0",
     "@temporalio/workflow": "^1.25.0",
+    "@xmldom/xmldom": "0.9.12",
     "mysql2": "^3.24.6",
     "nats": "^2.29.3",
     "nodemailer": "^6.10.1",
     "oidc-provider": "9.13.3",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "samlify": "2.15.1"
   },
   "devDependencies": {
     "@nestjs/testing": "^12.3.2",
