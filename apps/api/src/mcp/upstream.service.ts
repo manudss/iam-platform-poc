@@ -93,6 +93,22 @@ export function openToken(sealed: string): string {
 /** Error text from an upstream may quote a request: the stored token is redacted before anything is logged or returned. */
 export const redact = (msg: string, token: string) => (token ? msg.split(token).join('[redacted]') : msg);
 
+/** HTTP-level failure from an upstream call: carries the status so the session lifecycle can spot a lost session. */
+export class UpstreamHttpError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
+interface RpcOptions {
+  /** mcp-session-id to attach (sessionful upstreams, e.g. the Atlassian Rovo MCP). */
+  sessionId?: string;
+  /** Out-param: set from the mcp-session-id response header when the upstream starts a session. */
+  captureSessionId?: { value?: string };
+  /** Notifications get HTTP 202 with an empty body: accept it as success. */
+  allowEmptyAccepted?: boolean;
+  /** JSON-RPC notification: no id member. */
+  notification?: boolean;
+}
+
 @Injectable()
 export class McpUpstreamService {
   private ready?: Promise<void>;
@@ -183,21 +199,42 @@ export class McpUpstreamService {
     const m = await this.meta();
     try { await m.query('DELETE FROM mcp_upstreams WHERE id = ?', [id]); } finally { await m.end(); }
     this.listCache.delete(id);
+    this.sessions.delete(id);
     return up;
   }
 
-  /** JSON-RPC over the stateless streamable HTTP transport (same style as the platform's own endpoint). */
-  private async rpc(url: string, authz: string, secrets: string[], method: string, params: unknown, timeoutMs = 10_000): Promise<unknown> {
+  /**
+   * One JSON-RPC call over the streamable HTTP transport (same style as the platform's own endpoint).
+   * Sessionful upstreams (the Atlassian Rovo MCP among them) answer any non-initialize request that
+   * lacks a valid mcp-session-id with HTTP 400, so the header rides along when we hold a session.
+   */
+  private async rpc(url: string, authz: string, secrets: string[], method: string, params: unknown, timeoutMs = 10_000, opts: RpcOptions = {}): Promise<unknown> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: authz },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: authz,
+          ...(opts.sessionId ? { 'mcp-session-id': opts.sessionId } : {}),
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', ...(opts.notification ? {} : { id: 1 }), method, ...(params === undefined ? {} : { params }) }),
         signal: ctrl.signal,
       });
-      if (!res.ok) throw new Error(`upstream answered HTTP ${res.status}`);
+      if (!res.ok) {
+        // A short body snippet helps the console admin (e.g. Atlassian's "-32600: initialize required"):
+        // the stored credential is redacted from it below like anywhere else.
+        let detail = '';
+        try { detail = (await res.text()).replace(/\s+/g, ' ').trim().slice(0, 200); } catch { /* no body */ }
+        throw new UpstreamHttpError(`upstream answered HTTP ${res.status}${detail ? `: ${detail}` : ''}`, res.status);
+      }
+      if (opts.captureSessionId) {
+        const sid = res.headers.get('mcp-session-id');
+        if (sid) opts.captureSessionId.value = sid;
+      }
+      if (res.status === 202 && opts.allowEmptyAccepted) return undefined;
       const type = res.headers.get('content-type') ?? '';
       let msg: { result?: unknown; error?: { code?: number; message?: string } } | undefined;
       if (type.includes('text/event-stream')) {
@@ -210,10 +247,61 @@ export class McpUpstreamService {
       if (msg.error) throw new Error(`upstream error ${msg.error.code ?? ''}: ${String(msg.error.message ?? 'unknown').slice(0, 300)}`);
       return msg.result;
     } catch (e) {
+      const status = e instanceof UpstreamHttpError ? e.status : undefined;
       let raw = e instanceof Error && e.name === 'AbortError' ? `upstream timeout after ${timeoutMs}ms` : (e as Error).message;
       for (const secret of secrets) raw = redact(raw, secret);
-      throw new Error(String(raw).slice(0, 500));
+      throw new UpstreamHttpError(String(raw).slice(0, 500), status ?? 0);
     } finally { clearTimeout(timer); }
+  }
+
+  /** Session cache: one MCP session per upstream (null = the upstream is stateless and wants no session). */
+  private sessions = new Map<string, Promise<string | null>>();
+
+  private ensureSession(up: McpUpstream, authz: string, secrets: string[]): Promise<string | null> {
+    let p = this.sessions.get(up.id);
+    if (!p) {
+      p = this.initSession(up, authz, secrets).catch((e) => { this.sessions.delete(up.id); throw e; });
+      this.sessions.set(up.id, p);
+    }
+    return p;
+  }
+
+  /**
+   * MCP streamable-HTTP handshake: initialize, then the initialized notification when the server issued
+   * a session id. Stateless servers (the original fake, simple relays) answer initialize without a
+   * mcp-session-id header: they keep being used one POST per call, exactly as before.
+   */
+  private async initSession(up: McpUpstream, authz: string, secrets: string[]): Promise<string | null> {
+    const capture: { value?: string } = {};
+    await this.rpc(up.url, authz, secrets, 'initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'iam-mcp-gateway', version: '0.3.0' },
+    }, 10_000, { captureSessionId: capture });
+    if (!capture.value) return null;
+    await this.rpc(up.url, authz, secrets, 'notifications/initialized', undefined, 10_000, { sessionId: capture.value, allowEmptyAccepted: true, notification: true });
+    return capture.value;
+  }
+
+  /**
+   * Run upstream work inside the session lifecycle: handshake once per upstream, then transparently
+   * re-initialize and retry once when the server dropped the session (the MCP spec lets a server expire
+   * a session at any time; the Atlassian Rovo MCP answers HTTP 400/404 to a stale mcp-session-id).
+   */
+  private async withUpstream<T>(up: McpUpstream, token: string, fn: (authz: string, secrets: string[], sessionId: string | null) => Promise<T>): Promise<T> {
+    const authz = authHeader(up.authType, up.authUser, token);
+    const secrets = secretValues(up.authType, up.authUser, token);
+    const sid = await this.ensureSession(up, authz, secrets);
+    try {
+      return await fn(authz, secrets, sid);
+    } catch (e) {
+      if (sid && e instanceof UpstreamHttpError && (e.status === 400 || e.status === 404)) {
+        this.sessions.delete(up.id);
+        const sid2 = await this.ensureSession(up, authz, secrets);
+        return fn(authz, secrets, sid2);
+      }
+      throw e;
+    }
   }
 
   /**
@@ -226,16 +314,17 @@ export class McpUpstreamService {
     const { up, token } = await this.rowWithToken(tenant, id);
     const hit = this.listCache.get(id);
     if (!force && hit && Date.now() - hit.at < LIST_CACHE_MS) return hit.tools;
-    const authz = authHeader(up.authType, up.authUser, token);
-    const secrets = secretValues(up.authType, up.authUser, token);
-    const tools: UpstreamTool[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 10; page++) {
-      const r = (await this.rpc(up.url, authz, secrets, 'tools/list', cursor ? { cursor } : {})) as { tools?: UpstreamTool[]; nextCursor?: unknown };
-      if (Array.isArray(r?.tools)) tools.push(...r.tools);
-      cursor = typeof r?.nextCursor === 'string' && r.nextCursor ? r.nextCursor : undefined;
-      if (!cursor) break;
-    }
+    const tools = await this.withUpstream(up, token, async (authz, secrets, sid) => {
+      const acc: UpstreamTool[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page++) {
+        const r = (await this.rpc(up.url, authz, secrets, 'tools/list', cursor ? { cursor } : {}, 10_000, { sessionId: sid ?? undefined })) as { tools?: UpstreamTool[]; nextCursor?: unknown };
+        if (Array.isArray(r?.tools)) acc.push(...r.tools);
+        cursor = typeof r?.nextCursor === 'string' && r.nextCursor ? r.nextCursor : undefined;
+        if (!cursor) break;
+      }
+      return acc;
+    });
     this.listCache.set(id, { at: Date.now(), tools });
     return tools;
   }
@@ -243,7 +332,8 @@ export class McpUpstreamService {
   /** tools/call relay: arguments go through untouched, the upstream credential is attached server-side. */
   async callTool(tenant: string, id: string, tool: string, args: unknown): Promise<unknown> {
     const { up, token } = await this.rowWithToken(tenant, id);
-    return this.rpc(up.url, authHeader(up.authType, up.authUser, token), secretValues(up.authType, up.authUser, token), 'tools/call', { name: tool, arguments: args ?? {} }, 30_000);
+    return this.withUpstream(up, token, (authz, secrets, sid) =>
+      this.rpc(up.url, authz, secrets, 'tools/call', { name: tool, arguments: args ?? {} }, 30_000, { sessionId: sid ?? undefined }));
   }
 
   /** Console "Test" button: refreshes the tool list and records the outcome on the registry row. */
