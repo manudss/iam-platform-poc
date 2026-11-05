@@ -4,6 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as oc from 'openid-client';
+import http from 'node:http';
 import { EventsModule } from '../events/events.module.js';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
@@ -150,6 +151,22 @@ describe('OIDC provider: a local relying party signs in (code + PKCE) through th
     const done = await (await api(`/sso/${T}/interaction/${s.uid}/complete`, 'demo-alice', { decision: 'allow' })).json() as any;
     const cb = await finish(done.redirectTo);
     await assert.rejects(oc.authorizationCodeGrant(config, cb, { pkceCodeVerifier: oc.randomPKCECodeVerifier(), expectedState: 'st5' }));
+  });
+
+  it('behind an edge that strips /api (hosted demo), every advertised endpoint keeps the public prefix', async () => {
+    const edge = http.createServer((q, r) => { const u = http.request({ host: 'localhost', port: PORT, path: (q.url ?? '').replace(/^\/api/, '') || '/', method: q.method, headers: { ...q.headers, host: `localhost:${PORT}`, 'x-forwarded-host': 'localhost:13582', 'x-forwarded-proto': 'http' } }, (x) => { r.writeHead(x.statusCode ?? 502, x.headers); x.pipe(r); }); q.pipe(u); });
+    await new Promise<void>((ok) => edge.listen(13582, ok));
+    const before = process.env.IAM_SSO_BASE_URL; process.env.IAM_SSO_BASE_URL = 'http://localhost:13582/api';
+    try {
+      const d = await (await fetch('http://localhost:13582/api/sso/acme-demo/oidc/.well-known/openid-configuration')).json() as any;
+      const pub = 'http://localhost:13582/api/sso/acme-demo/oidc';
+      assert.equal(d.issuer, pub);
+      for (const k of ['authorization_endpoint', 'token_endpoint', 'jwks_uri', 'userinfo_endpoint']) assert.ok(String(d[k]).startsWith(pub + '/'), `${k} = ${d[k]}`);
+      const r = await fetch(`${pub}/auth?client_id=wiki&redirect_uri=${encodeURIComponent(CB)}&response_type=code&scope=openid&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256`, { redirect: 'manual' });
+      assert.equal(r.status, 303); assert.match(r.headers.get('location')!, /^\/sso-interaction\/[\w-]+\?tenant=acme-demo$/);
+      const resume = r.headers.getSetCookie().find((c) => c.startsWith('_interaction_resume='));
+      assert.ok(resume?.includes('path=/api/sso/acme-demo/oidc/auth/'), 'the resume cookie is scoped to the public path: ' + resume);
+    } finally { process.env.IAM_SSO_BASE_URL = before; edge.close(); }
   });
 
   it('closes again when the plugin is switched off', async () => {

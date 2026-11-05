@@ -102,7 +102,8 @@ export class OidcProviderService implements OnModuleInit {
   onModuleInit() {
     const app = this.host?.httpAdapter?.getInstance?.(); if (!app?.use) return;
     app.use('/sso/:tenant/oidc', (req: any, res: any, next: (e?: unknown) => void) => {
-      this.forTenant(req.params.tenant, req).then((p) => { if (!p) { res.statusCode = 404; res.setHeader('content-type', 'application/json'); res.end('{"error":"not_found","message":"the oidc-provider plugin is not enabled"}'); return; } p.callback(req, res); }, next);
+      this.forTenant(req.params.tenant, req).then((p) => { if (!p) { res.statusCode = 404; res.setHeader('content-type', 'application/json'); res.end('{"error":"not_found","message":"the oidc-provider plugin is not enabled"}'); return; } // The library builds its endpoint URLs from the path it is served under: tell it the PUBLIC path (the edge strips a prefix such as /api).
+        req.originalUrl = new URL(p.issuer).pathname.replace(/\/$/, '') + req.url; p.callback(req, res); }, next);
     });
   }
 
