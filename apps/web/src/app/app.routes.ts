@@ -8,6 +8,7 @@ import { ProfileFieldsPage } from './profile-fields';
 import { MyProfilePage } from './my-profile';
 import { SignupPage } from './signup-page';
 import { OrganizationsPage } from './organizations';
+import { SsoInteractionPage } from './sso-interaction';
 import { ApplicationsPage } from './applications';
 import { PoliciesPage } from './policies';
 import { RolesAdminPage } from './roles-admin';
@@ -24,6 +25,7 @@ export const pluginsMatcher: UrlMatcher = (segs: UrlSegment[]) =>
 
 export const routes: Routes = [
   { path: 'callback', component: CallbackPage },
+  { path: 'sso-interaction/:uid', component: SsoInteractionPage, canActivate: [authGuard], title: 'Sign in to an application' },
   { path: 'signup', component: SignupPage, title: 'Request an account' },
   { path: 'login', component: LoginPage, title: 'Sign in' },
   {

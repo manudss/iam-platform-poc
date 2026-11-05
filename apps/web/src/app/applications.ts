@@ -23,7 +23,7 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   selector: 'app-applications', imports: [FormsModule], styleUrl: './pages.css',
   template: `
   <p class="lead">Applications (plugin). Register the third-party applications that sign in through this platform, in OpenID Connect or SAML.</p>
-  <p class="hint">Configuration only for now: the OIDC and SAML endpoints arrive in the next steps. Secrets are never typed here, only the name of the secret in the secret store. An application is closed until you choose which roles may open it. Fictional demo only.</p>
+  <p class="hint">OpenID Connect applications sign in through the OIDC provider plugin; SAML arrives in the next step. Secrets are never typed here, only the name of the secret in the secret store. An application is closed until you choose which roles may open it. Fictional demo only.</p>
   @if (note()) { <p role="status" class="msg" id="app-note">{{note()}}</p> }
   @if (problem()) { <p role="alert" class="msg bad" id="app-problem">{{problem()}}</p> }
   @if (off()) { <p class="hint" id="app-off">The Application connectors plugin is not enabled on this branch. Enable it in Plugins first.</p> } @else {

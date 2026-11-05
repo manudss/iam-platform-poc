@@ -31,6 +31,8 @@ export IAM_POLICY_FILE=/app/policies/demo.cedar
 export IAM_CORE_STATE_DIR="$HOME_DIR/core-state"
 export IAM_IDP_EXTRA_REDIRECT_URIS="${PUBLIC_ORIGIN}/callback,http://localhost:4200/callback"
 export IAM_ISSUER="${PUBLIC_ORIGIN}/core"
+# SSO (oidc-provider plugin): applications reach the API through the edge under /api
+export IAM_SSO_BASE_URL="${PUBLIC_ORIGIN}/api"
 GATE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export IAM_AUTH_GATE_TOKEN="$GATE_TOKEN" IAM_AUTH_GATE_ADDR=127.0.0.1:3000
 export IAM_WORKSPACE_MODE=1

@@ -9,6 +9,7 @@ export const CORE_PUBLIC = `${ORIGIN}/core`;
 
 export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
 export interface SigninOptions { mode: 'choice' | 'legacy'; chains: SigninChain[]; note?: string }
+export interface SsoRequest { app: { id: string; name: string; description: string }; scopes: string[]; user: { sub: string; name: string }; allowed: boolean }
 export interface Violation { identity: string; roleA: string; roleB: string }
 export interface Change { branch: string; commit: string; violations: Violation[]; mergeable: boolean }
 
@@ -92,7 +93,8 @@ export class ApiClient {
   private async call<T>(method: string, path: string, body?: object, extra: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
     const sentToken = this.token, sentBranch=this.branch;
-    const r = await this.f(`/api/tenants/${this.tenant}${path}`, {
+    // '@/sso/{t}/...' addresses an API route outside /tenants (SSO sign-in requests); {t} is this tenant.
+    const r = await this.f(path.startsWith('@') ? `/api${path.slice(1).replace('{t}', encodeURIComponent(this.tenant))}` : `/api/tenants/${this.tenant}${path}`, {
       method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...(this.branch ? {'x-iam-branch':this.branch} : {}), ...extra }, body: body ? JSON.stringify(body) : undefined,
     });
     const data = (await r.json().catch(() => ({}))) as T;
@@ -102,6 +104,10 @@ export class ApiClient {
     if (!r.ok && r.status !== 409) throw new Error((data as { message?: string }).message ?? `HTTP ${r.status}`);
     return { status: r.status, data };
   }
+
+  /** SSO: what an application asks for after the user signed in, and the user's answer. The API returns where the browser goes next. */
+  async ssoRequest(uid: string) { return (await this.call<SsoRequest>('GET', `@/sso/{t}/interaction/${encodeURIComponent(uid)}`)).data; }
+  async ssoAnswer(uid: string, decision: 'allow' | 'deny') { return (await this.call<{ redirectTo: string }>('POST', `@/sso/{t}/interaction/${encodeURIComponent(uid)}/complete`, { decision })).data; }
 
   async assignments() { return (await this.call<{ identity_id: string; role_id: string }[]>('GET', '/assignments')).data; }
   async simulate(identity: string, role: string) { return (await this.call<Change>('POST', '/changes', { identity, role })).data; }
