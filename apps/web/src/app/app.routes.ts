@@ -8,6 +8,7 @@ import { ProfileFieldsPage } from './profile-fields';
 import { MyProfilePage } from './my-profile';
 import { SignupPage } from './signup-page';
 import { OrganizationsPage } from './organizations';
+import { ApplicationsPage } from './applications';
 import { RolesAdminPage } from './roles-admin';
 import { ProfileReviewsPage } from './profile-reviews';
 import { BusObserverPage } from './bus-observer';
@@ -31,6 +32,7 @@ export const routes: Routes = [
       { path: 'users', component: UsersPage, title: 'Users', canActivate: [accessGuard] },
       { path: 'profile-fields', canActivate: [accessGuard], component: ProfileFieldsPage, title: 'Profile fields' },
       { path: 'organizations', component: OrganizationsPage, title: 'Organizations', canActivate: [accessGuard, pluginGuard('organizations')] },
+      { path: 'applications', component: ApplicationsPage, title: 'Applications', canActivate: [accessGuard, pluginGuard('app-connector')] },
       { path: 'profile-reviews', component: ProfileReviewsPage, title: 'Profile reviews', canActivate: [accessGuard] },
       { path: 'roles', canActivate: [accessGuard], component: RolesAdminPage, title: 'Roles' },
       { path: 'my-profile', component: MyProfilePage, title: 'My profile' },
