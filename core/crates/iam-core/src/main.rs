@@ -32,11 +32,17 @@ pub struct Core {
 pub struct Snapshot {
     pub assignments: Vec<Assignment>,
     pub sod_rules: Vec<SodRule>,
+    /// MCP gateway (P2): delegation grants versioned with the rest of the data. Older snapshots lack the field.
+    #[serde(default)]
+    pub mcp_grants: Vec<McpGrant>,
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Assignment { pub identity_id: String, pub role_id: String }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SodRule { pub role_a: String, pub role_b: String }
+/// One delegation grant: identity may invoke `upstream__tool` on the relayed MCP, until `expires_ms` (None = no expiry).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct McpGrant { pub identity_id: String, pub upstream: String, pub tool: String, pub expires_ms: Option<i64> }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Active { pub seq: u64, pub commit: String, pub snapshot: Snapshot }
 
@@ -171,11 +177,19 @@ fn tenant_context(c: &Core, tenant: &str, principal: &str, ctx: &mut Value) -> R
     let identity = principal.split('"').nth(1).unwrap_or("");
     let roles: Vec<&str> = a.snapshot.assignments.iter().filter(|x| x.identity_id == identity).map(|x| x.role_id.as_str()).collect();
     let sod = a.snapshot.sod_rules.iter().any(|r| roles.contains(&r.role_a.as_str()) && roles.contains(&r.role_b.as_str()));
+    // MCP gateway (P2): the live grants of THIS identity, as Cedar entities (UpstreamTool::"<upstream>__<tool>").
+    // Expired grants never reach the context; the policy requires role mcp-operator AND the grant (see demo.cedar).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let grants: Vec<Value> = a.snapshot.mcp_grants.iter()
+        .filter(|g| g.identity_id == identity && g.expires_ms.map(|x| x > now).unwrap_or(true))
+        .map(|g| json!({"__entity": {"type": "UpstreamTool", "id": format!("{}__{}", g.upstream, g.tool)}}))
+        .collect();
     if !ctx.is_object() { *ctx = json!({}); }
     let o = ctx.as_object_mut().unwrap();
     o.insert("tenant_mode".into(), json!(true));
     o.insert("roles".into(), json!(roles));
     o.insert("sod_conflict".into(), json!(sod));
+    o.insert("mcp_grants".into(), json!(grants));
     Ok((a.seq, a.commit.clone()))
 }
 
@@ -377,6 +391,39 @@ mod activation_tests {
         assert_eq!((st, v["seq"].as_u64()), (StatusCode::OK, Some(5)));
         assert_eq!(send(&c, "GET", "/v1/version?tenant=nope", None, Value::Null).await.0, StatusCode::NOT_FOUND);
         assert_eq!(send(&c, "POST", "/v1/activate", Some(TOKEN), act(6, "bad commit!", json!([]))).await.0, StatusCode::BAD_REQUEST);
+    }
+
+    fn act_grants(seq: u64, commit: &str, roles: Value, grants: Value) -> Value {
+        json!({"tenant":"t1","seq":seq,"commit":commit,"snapshot":{"assignments":roles,"sod_rules":[],"mcp_grants":grants}})
+    }
+    fn dec_proxy(identity: &str, tool: &str) -> Value {
+        json!({"tenant":"t1","principal":format!("User::\"{identity}\""),"action":"Action::\"mcp:proxy\"","resource":format!("UpstreamTool::\"{tool}\""),"context":{}})
+    }
+
+    #[tokio::test]
+    async fn mcp_proxy_requires_a_live_grant_from_the_active_version() {
+        let c = core();
+        let operator = json!([{"identity_id":"demo-alice","role_id":"mcp-operator"}]);
+        let future = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 + 3_600_000;
+        // v1: role but NO grant -> every relayed call is denied, even with the role.
+        send(&c, "POST", "/v1/activate", Some(TOKEN), act_grants(1, "g1", operator.clone(), json!([]))).await;
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-alice", "fake__getIssue")).await.1["allow"], false, "role without grant");
+        // v2: grant fake__getIssue (no expiry) -> allowed, and only that exact tool.
+        send(&c, "POST", "/v1/activate", Some(TOKEN), act_grants(2, "g2", operator.clone(),
+            json!([{"identity_id":"demo-alice","upstream":"fake","tool":"getIssue","expires_ms":null},
+                   {"identity_id":"demo-bob","upstream":"fake","tool":"searchIssues","expires_ms":null},
+                   {"identity_id":"demo-alice","upstream":"fake","tool":"searchIssues","expires_ms":future},
+                   {"identity_id":"demo-alice","upstream":"fake","tool":"createIssue","expires_ms":1}]))).await;
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-alice", "fake__getIssue")).await.1["allow"], true, "granted tool");
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-alice", "fake__searchIssues")).await.1["allow"], true, "unexpired timed grant");
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-alice", "fake__createIssue")).await.1["allow"], false, "expired grant (expires_ms=1)");
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-alice", "fake__deleteIssue")).await.1["allow"], false, "tool not granted");
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-alice", "other__getIssue")).await.1["allow"], false, "another upstream");
+        // bob has the grant but NOT the mcp-operator role -> denied.
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-bob", "fake__searchIssues")).await.1["allow"], false, "grant without role");
+        // v3: grants revoked by a new active version -> denied again (versioning decides, not the caller).
+        send(&c, "POST", "/v1/activate", Some(TOKEN), act_grants(3, "g3", operator.clone(), json!([]))).await;
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec_proxy("demo-alice", "fake__getIssue")).await.1["allow"], false, "grant revoked by activation");
     }
 
     #[tokio::test]

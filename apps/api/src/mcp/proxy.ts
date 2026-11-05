@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { McpUpstreamService, McpUpstream } from './upstream.service.js';
+import { McpGrantsService } from './grants.service.js';
 import { ToolCtx, guardedWithKind } from './tools.js';
 
 /**
@@ -13,7 +14,10 @@ import { ToolCtx, guardedWithKind } from './tools.js';
  *  - every call is authorized by the same Cedar engine (Action::"mcp:proxy", role mcp-operator on the ACTIVE
  *    version) and traced in mcp_activity with the arguments HASHED (sha256 prefix), never in clear;
  *  - upstream descriptions are served prefixed with `[relay -> <name>]`: they are UNTRUSTED content (tool
- *    description injection is the top MCP risk; pinning/rewriting is a later increment).
+ *    description injection is the top MCP risk; pinning/rewriting is a later increment);
+ *  - P2 (delegation grants): tools/list only shows tools the session owner's ACTIVE grants cover, and every
+ *    call is re-authorized against `UpstreamTool::"<name>__<tool>"` - Cedar requires the mcp-operator role AND
+ *    an unexpired versioned grant for that exact tool. A grant written on an unmerged branch changes nothing.
  */
 
 /** MCP tool names: [a-zA-Z0-9_-]{1,64}. Upstream names are slugs; the upstream tool part is sanitized. */
@@ -53,14 +57,17 @@ export function jsonSchemaToZodShape(schema: unknown): Record<string, z.ZodTypeA
 const argsHash = (args: unknown) => createHash('sha256').update(JSON.stringify(args ?? {})).digest('hex').slice(0, 12);
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
-export async function registerProxyTools(server: McpServer, ctx: ToolCtx, upstreams: McpUpstreamService): Promise<void> {
+export async function registerProxyTools(server: McpServer, ctx: ToolCtx, upstreams: McpUpstreamService, grants: McpGrantsService): Promise<void> {
   let enabled: McpUpstream[] = [];
   try { enabled = await upstreams.enabled(ctx.tenant); } catch { return; } // registry down: local tools still served
+  // P2: the allowlist comes from the ACTIVE version only (same source the Cedar check enforces).
+  const allowed = await grants.allowedTools(ctx.tenant, ctx.session.owner).catch(() => new Set<string>());
   const taken = new Set<string>();
   for (const up of enabled) {
     let tools: { name: string; description?: string; inputSchema?: Record<string, unknown> }[] = [];
     try { tools = await upstreams.listTools(ctx.tenant, up.id); } catch { continue; } // unreachable upstream: its tools simply do not appear
     for (const tool of tools) {
+      if (!allowed.has(`${up.name}__${tool.name}`)) continue; // no active grant: the tool is not even listed
       const exposed = relayedName(up.name, tool.name, taken);
       if (!exposed) continue;
       const inputSchema = jsonSchemaToZodShape(tool.inputSchema);
@@ -71,7 +78,7 @@ export async function registerProxyTools(server: McpServer, ctx: ToolCtx, upstre
           const result = await upstreams.callTool(ctx.tenant, up.id, tool.name, args);
           const detail = `relay ${up.name}.${tool.name} -> ok in ${Date.now() - started}ms (args sha256:${argsHash(args)})`;
           return { result: result ?? null, detail, targets: [hostOf(up.url)] };
-        }));
+        }, `UpstreamTool::"${exposed}"`));
     }
   }
 }

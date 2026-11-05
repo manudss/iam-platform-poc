@@ -58,8 +58,35 @@ kind `proxy`.
 - **Untrusted content is marked.** Relayed descriptions are prefixed `[relay -> <name>]`: tool descriptions
   and results from an external server are untrusted input for the model (description injection is the top
   MCP risk). Pinning/rewriting descriptions and filtering arguments/responses are later increments (P4/P5).
-- **All tools of an enabled upstream are relayed.** Per-agent allowlists and per-tool Cedar resources
-  (grants, tool filtering in `tools/list`) are the next increment (P2).
+- **Relayed tools are filtered by per-identity grants (P2).** See the next section.
 - **Proxied calls are external side effects**, not branch writes: they stay possible after the session
   submitted its pull request (the read-only-after-submit rule covers the session's own branch only).
 - The upstream tool list is cached 60 s per upstream; the console *Test* button forces a refresh.
+
+## P2 - per-tool delegation grants
+
+A relayed tool is usable only when **both** hold for the session owner:
+
+1. a row of `delegation_grants` covers it in the **active version** (identity + upstream + tool, optional
+   `expires_at`), and
+2. the Cedar policy allows the call (`mcp:proxy` requires the `mcp-operator` role and the grant in context).
+
+Enforcement is server-side at two levels, always from the active version, never from a branch:
+
+- `tools/list` only shows the relayed tools the caller's active grants cover - an ungranted tool is
+  invisible, not just refused;
+- every relayed `tools/call` is re-authorized by Cedar with the active grants injected as
+  `UpstreamTool::"<upstream>__<tool>"` entities in `context.mcp_grants`.
+
+The table is **versioned data** in the business Dolt database (seeded for the demo, DDL in
+`data/demo/01-schema.sql`). So a grant changes exactly like a role: anyone (human or AI) writes it on a
+working branch, opens a pull request, a human merges, the new version is activated. An AI session can
+therefore *propose* a grant for itself (`execute_write` + `submit_pull_request`) with zero effect until a
+human publishes it - the same SoD story as the rest of the platform. There is deliberately **no direct-write
+route**: the console's *Delegation grants* section is read-only (`GET /tenants/:tenant/mcp-grants`, admin)
+and always shows the active version with its commit.
+
+An expired grant (`expires_at` in the past) stops filtering in at both levels; the row stays in the
+version history for audit. The demo seeds show the two boundary cases: `demo-alice` has read tools on the
+fake upstream but not `createIssue`, and `demo-bob` has a `getIssue` grant without the `mcp-operator` role -
+the tool is listed for him, yet Cedar still denies the call. The allowlist is never the last word.

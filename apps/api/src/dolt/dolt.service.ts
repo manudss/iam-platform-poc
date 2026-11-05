@@ -43,13 +43,22 @@ export class DoltService {
   }
 
   /** Data of ONE commit (AS OF), used to build the snapshot the core applies. */
-  async snapshotAt(commit: string): Promise<{ assignments: { identity_id: string; role_id: string }[]; sod_rules: { role_a: string; role_b: string }[] }> {
+  async snapshotAt(commit: string, tenant?: string): Promise<{ assignments: { identity_id: string; role_id: string }[]; sod_rules: { role_a: string; role_b: string }[]; mcp_grants: { identity_id: string; upstream: string; tool: string; expires_ms: number | null }[] }> {
     if (!/^[0-9a-v]{8,64}$/.test(commit)) throw new BadRequestException('invalid commit hash');
     const c = await this.conn();
     try {
       const [a] = await c.query(`select identity_id, role_id from assignments as of '${commit}' order by 1,2`);
       const [r] = await c.query(`select role_a, role_b from sod_rules as of '${commit}' order by 1,2`);
-      return { assignments: a as never, sod_rules: r as never };
+      // MCP gateway (P2): delegation grants are versioned too. A database created before P2 has no table: no grants.
+      let mcp_grants: { identity_id: string; upstream: string; tool: string; expires_ms: number | null }[] = [];
+      try {
+        const [g] = tenant
+          ? await c.query(`select identity_id, upstream, tool, expires_at from delegation_grants as of '${commit}' where tenant = ? order by 1,2,3`, [tenant])
+          : await c.query(`select identity_id, upstream, tool, expires_at from delegation_grants as of '${commit}' order by 1,2,3`);
+        mcp_grants = (g as { identity_id: string; upstream: string; tool: string; expires_at: string | null }[])
+          .map((x) => ({ identity_id: x.identity_id, upstream: x.upstream, tool: x.tool, expires_ms: x.expires_at ? Date.parse(`${String(x.expires_at).replace(' ', 'T')}Z`) : null }));
+      } catch { /* no delegation_grants table on this database */ }
+      return { assignments: a as never, sod_rules: r as never, mcp_grants };
     } finally { await c.end(); }
   }
 
