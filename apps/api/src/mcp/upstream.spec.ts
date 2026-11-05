@@ -1,7 +1,7 @@
 // Unit tests for the MCP gateway registry helpers: no database, no network.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateUpstreamUrl, validUpstreamName, sealToken, openToken, redact } from './upstream.service.js';
+import { validateUpstreamUrl, validUpstreamName, sealToken, openToken, redact, authHeader } from './upstream.service.js';
 import { relayedName, jsonSchemaToZodShape } from './proxy.js';
 
 describe('upstream URL validation (SSRF protection: only the admin registers a target)', () => {
@@ -37,6 +37,28 @@ describe('upstream names and token sealing', () => {
   });
   it('redact removes the token from any text before logging', () => {
     assert.equal(redact('call failed with token abc123 in header', 'abc123'), 'call failed with token [redacted] in header');
+  });
+});
+
+describe('upstream auth schemes (P3: bearer and Atlassian-style basic)', () => {
+  it('bearer sends the raw token', () => {
+    assert.equal(authHeader('bearer', null, 'tok-123'), 'Bearer tok-123');
+    assert.equal(authHeader('bearer', 'ignored@example.com', 'tok-123'), 'Bearer tok-123');
+  });
+  it('basic sends base64(user:token), like an Atlassian API token', () => {
+    const h = authHeader('basic', 'alice@example.com', 'ATATT-token');
+    assert.equal(h, `Basic ${Buffer.from('alice@example.com:ATATT-token', 'utf8').toString('base64')}`);
+    assert.ok(h.startsWith('Basic '));
+    assert.ok(!h.includes('ATATT-token'), 'the raw token is not in clear in the header');
+  });
+  it('basic without a user is refused', () => {
+    assert.throws(() => authHeader('basic', null, 'x'), /auth user/);
+    assert.throws(() => authHeader('basic', '', 'x'), /auth user/);
+  });
+  it('redact covers the derived basic credential too, not only the raw token', () => {
+    const basic = authHeader('basic', 'alice@example.com', 'ATATT-token');
+    const b64 = Buffer.from('alice@example.com:ATATT-token', 'utf8').toString('base64');
+    for (const leak of ['ATATT-token', b64, basic]) assert.equal(redact(`upstream answered with ${leak} inside`, leak), 'upstream answered with [redacted] inside');
   });
 });
 
