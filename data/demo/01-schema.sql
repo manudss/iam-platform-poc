@@ -21,5 +21,16 @@ INSERT IGNORE INTO sod_rules VALUES ('payment-creator','payment-approver');
 INSERT IGNORE INTO delegation_grants VALUES ('acme-demo','demo-alice','fake','searchIssues',NULL,'demo-seed'),('acme-demo','demo-alice','fake','getIssue',NULL,'demo-seed'),
 -- demo-bob can SEE fake getIssue (grant) but has no mcp-operator role: proves Cedar is the last word, not the allowlist.
 ('acme-demo','demo-bob','fake','getIssue',NULL,'demo-seed');
+-- P3 (real Jira): when the Atlassian Rovo MCP is registered as upstream "jira", demo-alice's AI sessions may READ it
+-- (search/get/list + the account introspection tools). Write tools (createJiraIssue, ...) stay ungranted until a human
+-- merges a grant - "read-only first, write behind approval". The discover/execute* meta-tools are NEVER seeded:
+-- they would let the agent reach the whole catalog around the per-tool allowlist.
+INSERT IGNORE INTO delegation_grants VALUES
+('acme-demo','demo-alice','jira','atlassianUserInfo',NULL,'demo-seed'),
+('acme-demo','demo-alice','jira','getAccessibleAtlassianResources',NULL,'demo-seed'),
+('acme-demo','demo-alice','jira','searchJiraIssuesUsingJql',NULL,'demo-seed'),
+('acme-demo','demo-alice','jira','getJiraIssue',NULL,'demo-seed'),
+('acme-demo','demo-alice','jira','listJiraProjects',NULL,'demo-seed'),
+('acme-demo','demo-alice','jira','listJiraIssueComments',NULL,'demo-seed');
 CALL DOLT_ADD('-A');
 CALL DOLT_COMMIT('-m','demo seed');
