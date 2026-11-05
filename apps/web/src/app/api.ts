@@ -10,6 +10,8 @@ export const CORE_PUBLIC = `${ORIGIN}/core`;
 export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
 export interface SigninOptions { mode: 'choice' | 'legacy'; chains: SigninChain[]; note?: string }
 export interface SsoRequest { app: { id: string; name: string; description: string }; scopes: string[]; user: { sub: string; name: string }; allowed: boolean }
+export interface SamlRequest { app: { id: string; name: string; description: string }; attributes: string[]; user: { sub: string; name: string }; allowed: boolean }
+export interface SamlAnswer { acsUrl: string; samlResponse: string; relayState?: string }
 export interface Violation { identity: string; roleA: string; roleB: string }
 export interface Change { branch: string; commit: string; violations: Violation[]; mergeable: boolean }
 
@@ -108,6 +110,8 @@ export class ApiClient {
   /** SSO: what an application asks for after the user signed in, and the user's answer. The API returns where the browser goes next. */
   async ssoRequest(uid: string) { return (await this.call<SsoRequest>('GET', `@/sso/{t}/interaction/${encodeURIComponent(uid)}`)).data; }
   async ssoAnswer(uid: string, decision: 'allow' | 'deny') { return (await this.call<{ redirectTo: string }>('POST', `@/sso/{t}/interaction/${encodeURIComponent(uid)}/complete`, { decision })).data; }
+  async samlRequest(rid: string) { return (await this.call<SamlRequest>('GET', `@/sso/{t}/saml-interaction/${encodeURIComponent(rid)}`)).data; }
+  async samlAnswer(rid: string, decision: 'allow' | 'deny') { return (await this.call<SamlAnswer>('POST', `@/sso/{t}/saml-interaction/${encodeURIComponent(rid)}/complete`, { decision })).data; }
 
   async assignments() { return (await this.call<{ identity_id: string; role_id: string }[]>('GET', '/assignments')).data; }
   async simulate(identity: string, role: string) { return (await this.call<Change>('POST', '/changes', { identity, role })).data; }
