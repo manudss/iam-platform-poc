@@ -46,7 +46,7 @@ export class Shell {
     // Branch test shows the ordinary experience only: administration stays in the normal console.
     if (this.s.testBranch()) return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/overview' || i.path === '/my-profile') })).filter((g: NavGroup) => g.items.length);
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
-    const plugin: Record<string, string> = { '/organizations': 'organizations', '/applications': 'app-connector' };
+    const plugin: Record<string, string> = { '/organizations': 'organizations', '/applications': 'app-connector', '/policies': 'policy-studio' };
     return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-profile' || (adminOk && (!plugin[i.path] || !a || a.plugins?.[plugin[i.path]]))) })).filter((g: NavGroup) => g.items.length);
   }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
@@ -60,6 +60,7 @@ export class Shell {
       { path: '/organizations', label: 'Organizations', icon: '⌂' },
       { path: '/roles', label: 'Roles', icon: '⚖' },
       { path: '/applications', label: 'Applications', icon: '⇲' },
+      { path: '/policies', label: 'Policies', icon: '§' },
       { path: '/profile-reviews', label: 'Profile reviews', icon: '✓' },
       { path: '/my-profile', label: 'My profile', icon: '☺' },
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
