@@ -169,3 +169,20 @@ export const policyStudio: PluginImpl = {
   },
   handlers: {},
 };
+
+/**
+ * OpenID Connect provider (step 2 of the SSO plan): the platform acts as the OpenID Provider for the applications of `app-connector`
+ * (discovery, authorize with PKCE, token, userinfo, JWKS, refresh, logout) through the embedded library node-oidc-provider. Turning the plugin
+ * off removes every /sso/:tenant/oidc endpoint (404) without touching the application registry.
+ */
+export const oidcProvider: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'oidc-provider', version: '0.1.0', name: 'OpenID Connect provider (SSO)', publisher: 'iam-platform',
+    kinds: ['connector'],
+    description: 'Lets the registered applications sign in with OpenID Connect (authorization code + PKCE). Access follows the application allowed roles; the user signs in with the normal authentication chain and consents.',
+    requires: ['app-connector'],
+    hooks: [],
+    settings: [],
+  },
+  handlers: {},
+};

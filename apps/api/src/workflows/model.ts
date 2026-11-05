@@ -37,6 +37,10 @@ export const WF_EVENTS: Record<string, { label: string; payload: string[] }> = {
   'organization.member-added': { label: 'A user joins an organization', payload: ['subject', 'organization', 'actor'] },
   'app.registered': { label: 'An application is registered for SSO', payload: ['app', 'protocol', 'actor'] },
   'app.updated': { label: "An application's SSO configuration changes", payload: ['app', 'protocol', 'actor'] },
+  'sso.login.succeeded': { label: 'A user signed in to an application (SSO)', payload: ['app', 'subject'] },
+  'sso.login.denied': { label: 'A user was refused access to an application (SSO)', payload: ['app', 'subject', 'reason'] },
+  'sso.login.failed': { label: 'An SSO authorization request failed', payload: ['app', 'subject', 'reason'] },
+  'sso.token.issued': { label: 'Tokens were issued to an application (SSO)', payload: ['app', 'subject', 'scope'] },
   'app.removed': { label: 'An application is removed from SSO', payload: ['app', 'protocol', 'actor'] },
 };
 

@@ -3,6 +3,7 @@ import { WorkflowsModule } from './workflows/workflows.module.js';
 import { UsersModule } from './users/users.module.js';
 import { BusModule } from './bus/bus.module.js';
 import { Module } from '@nestjs/common';
+import { AppEvents } from './events/app-events.service.js';
 import { HealthController } from './health.controller.js';
 import { ActivationModule } from './activation/activation.module.js';
 import { AccessController } from './access/access.controller.js';
@@ -22,4 +23,12 @@ import { McpSessionService } from './mcp/session.service.js';
 import { CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService } from './policies/policy-studio.js';
 
 @Module({ imports: [BusModule, EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController, McpController, McpSessionsController, McpUpstreamsController, McpGrantsController, PolicyStudioController], providers: [AuditService, McpSessionService, McpUpstreamService, McpGrantsService, PolicyStudioService, { provide: POLICY_SOURCE, useClass: CorePolicySource }] })
-export class AppModule {}
+export class AppModule {
+  /** SSO events (sign-in allowed, refused, tokens issued) go to the decision audit: who, which application, when. No claim values, no tokens. */
+  constructor(events: AppEvents, audit: AuditService) {
+    events.on((e) => {
+      if (!e.type.startsWith('sso.')) return;
+      return audit.record({ tenant: e.tenant, subject: e.payload.subject ?? '', principal: e.payload.subject ?? '', action: e.type, resource: `app:${e.payload.app ?? ''}`, allow: e.type === 'sso.login.succeeded' || e.type === 'sso.token.issued', reasons: e.payload.reason ? [e.payload.reason] : [], activation_seq: null, commit: null, source: 'http' });
+    });
+  }
+}

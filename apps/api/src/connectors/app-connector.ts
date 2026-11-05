@@ -117,6 +117,8 @@ export class AppConnectorService {
   private async need(t: string) { if (!(await this.profile.pluginActive(t, APP_CONNECTOR_PLUGIN, 'work'))) throw new NotFoundException('the app-connector plugin is not enabled'); }
   private emit(type: string, t: string, a: AppConnector, actor: string) { this.events?.emit({ type, tenant: t, branch: currentBranch(), at: new Date().toISOString(), payload: { app: a.id, protocol: a.protocol, actor } }); }
   async list(t: string) { await this.need(t); return this.store.list(t, 'work'); }
+  /** Applications as they are LIVE (Dolt main): what the protocol plugins serve. Empty while the plugin is off. */
+  async liveApps(t: string): Promise<AppConnector[]> { if (!(await this.profile.pluginActive(t, APP_CONNECTOR_PLUGIN, 'live'))) return []; return (await this.store.list(t, 'live')).apps; }
   async get(t: string, id: string) { await this.need(t); const a = (await this.store.list(t, 'work')).apps.find((x) => x.id === id); if (!a) throw new NotFoundException('unknown application'); return a; }
   async create(t: string, actor: string, b: Record<string, unknown>) {
     await this.need(t);
