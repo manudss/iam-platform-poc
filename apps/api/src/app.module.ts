@@ -19,6 +19,7 @@ import { McpController, McpSessionsController, McpUpstreamsController, McpGrants
 import { McpUpstreamService } from './mcp/upstream.service.js';
 import { McpGrantsService } from './mcp/grants.service.js';
 import { McpSessionService } from './mcp/session.service.js';
+import { CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService } from './policies/policy-studio.js';
 
-@Module({ imports: [BusModule, EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController, McpController, McpSessionsController, McpUpstreamsController, McpGrantsController], providers: [AuditService, McpSessionService, McpUpstreamService, McpGrantsService] })
+@Module({ imports: [BusModule, EventsModule, WorkspaceModule, WorkflowsModule, UsersModule, DoltModule, VersioningModule, ActivationModule, PluginsModule, PluginsV1Module, TemporalModule], controllers: [HealthController, AccessController, AuditController, AgentController, McpController, McpSessionsController, McpUpstreamsController, McpGrantsController, PolicyStudioController], providers: [AuditService, McpSessionService, McpUpstreamService, McpGrantsService, PolicyStudioService, { provide: POLICY_SOURCE, useClass: CorePolicySource }] })
 export class AppModule {}
