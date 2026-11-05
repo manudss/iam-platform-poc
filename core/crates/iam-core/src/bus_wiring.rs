@@ -120,7 +120,7 @@ fn uuid_like() -> String {
     format!("{t:x}-{:x}", N.fetch_add(1, Ordering::Relaxed))
 }
 
-fn is_admin(c: &crate::Core, headers: &HeaderMap) -> bool {
+pub(crate) fn is_admin(c: &crate::Core, headers: &HeaderMap) -> bool {
     match (&c.admin_token, headers.get("x-core-admin-token").and_then(|v| v.to_str().ok())) {
         (Some(want), Some(got)) => want.len() == got.len() && want.bytes().zip(got.bytes()).fold(0u8, |a, (x, y)| a | (x ^ y)) == 0,
         _ => false,

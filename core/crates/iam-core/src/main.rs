@@ -2,6 +2,7 @@ mod bus_wiring;
 mod package;
 mod grpc;
 mod authz;
+mod policies;
 pub mod gate;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}};
 use iam_idp::{Idp, IdpError};
@@ -81,6 +82,7 @@ pub fn app(engine: Arc<Core>) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok","service":"iam-core"})) }))
         .route("/v1/decide", post(decide))
+        .route("/v1/policies", get(policies::list))
         .route("/v1/activate", post(activate))
         .route("/v1/version", get(version))
         .route("/v1/bus", get(bus_wiring::status))
@@ -233,8 +235,7 @@ pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, V
 async fn main() {
     tracing_subscriber::fmt::init();
     let path = std::env::var("IAM_POLICY_FILE").unwrap_or_else(|_| "../policies/demo.cedar".into());
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
-    let engine = Engine::new(&text).expect("invalid policies");
+    let engine = policies::load_engine(std::path::Path::new(&path)).unwrap_or_else(|e| panic!("invalid policies ({path}): {e}"));
     if std::env::var("IAM_PLUGIN_PACKAGE").is_ok() && std::env::var("IAM_PLUGIN_WAT").is_ok() { panic!("set only one of IAM_PLUGIN_PACKAGE (signed) and IAM_PLUGIN_WAT (unsigned dev)"); }
     let signed = std::env::var("IAM_PLUGIN_PACKAGE").ok().map(|dir| {
         let rd = |f: &str| std::fs::read(format!("{dir}/{f}")).unwrap_or_else(|e| panic!("cannot read {dir}/{f}: {e}"));
