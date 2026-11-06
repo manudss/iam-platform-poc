@@ -74,7 +74,7 @@ jobs:
           (cd apps/web && npm ci)
           mkdir /tmp/pw && (cd /tmp/pw && npm init -y >/dev/null && npm i playwright-core >/dev/null)
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/ui-e2e.mjs /tmp/ui-shots
-      - name: Session timer end-to-end (headless Chrome, real core, 20 s token: bar, warning, Stay signed in)
+      - name: Session timer end-to-end (headless Chrome, real core, 20 s token)
         env:
           NG_CLI_ANALYTICS: "false"
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/session-extend-e2e.mjs /tmp/session-shots
