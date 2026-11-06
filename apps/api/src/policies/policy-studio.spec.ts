@@ -12,7 +12,7 @@ import { CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioSe
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const rule = (id: string, effect: 'permit' | 'forbid', pillar: string) => ({ id, set: 'default', name: id, kind: 'policy' as const, effect, description: `${id} description`, pillar, summary: 'Permits any principal to do any action on any resource.', conditions: 0, annotations: { id }, text: `${effect}(principal, action, resource);` });
-const CATALOG: CoreCatalog = { engine: { rules: 2, sets: 1 }, sets: [{ name: 'default', rules: 2 }], rules: [rule('sod-blocks-approve', 'forbid', 'sod'), rule('approve-needs-payment-approver', 'permit', 'human')] };
+const CATALOG: CoreCatalog = { engine: { rules: 2, sets: 1, schema: true }, sets: [{ name: 'default', rules: 2 }], rules: [rule('sod-blocks-approve', 'forbid', 'sod'), rule('approve-needs-payment-approver', 'permit', 'human')] };
 
 describe('usageByRule', () => {
   it('counts the decisions whose reasons name a rule, once per decision, ignoring other reasons', () => {
@@ -56,6 +56,7 @@ describe('policy-studio API', () => {
     assert.equal(r.body.usage['approve-needs-payment-approver'].allow, 1);
     assert.equal(r.body.usage_window.decisions, 2);
     assert.equal(r.body.engine.rules, 2);
+    assert.equal(r.body.engine.schema, true); // the schema-validation flag of the core is relayed as is
   });
   it('disabling the plugin hides the catalogue again', async () => {
     await reg.disable(T, 'policy-studio');

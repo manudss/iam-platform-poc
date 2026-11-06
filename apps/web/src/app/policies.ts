@@ -19,6 +19,10 @@ export function filterRules(rules: Rule[], f: RuleFilter): Rule[] {
     && (!t || [r.id, r.description ?? '', r.summary, r.text].some((x) => x.toLowerCase().includes(t))));
 }
 export const usageText = (u: Usage | undefined) => !u ? 'not used recently' : `${u.allow} allowed, ${u.deny} denied`;
+/** Whether the core validated the rules against its Cedar schema at load (policy-studio step 2). */
+export const schemaText = (v: boolean | undefined) => v
+  ? 'Every rule was validated against the Cedar schema when the core loaded them.'
+  : 'No Cedar schema: the rules were loaded without validation.';
 
 /** Policies plugin screen (policy-studio, step 1): READ-ONLY list of the Cedar rules the core decides with. Nothing here edits a rule. */
 @Component({
@@ -33,6 +37,7 @@ export const usageText = (u: Usage | undefined) => !u ? 'not used recently' : `$
     <label>Effect<select name="peffect" [(ngModel)]="f.effect"><option value="">All</option><option value="permit">permit</option><option value="forbid">forbid</option></select></label>
     <label>Search<input name="ptext" [(ngModel)]="f.text" placeholder="name, description or Cedar text" /></label></div>
   <p class="hint" id="pol-count">{{shown().length}} of {{rules().length}} rules in {{sets()}} {{sets() === 1 ? 'set' : 'sets'}}. Usage counts the last {{window()}} audited decisions at most.</p>
+  <p class="hint" id="pol-schema">{{schemaLine()}}</p>
   <div class="scroll"><table id="pol-table"><thead><tr><th>Rule</th><th>Effect</th><th>Group</th><th>What it says</th><th>Recent use</th><th></th></tr></thead><tbody>
   @for (r of shown(); track r.id) { <tr><td><b>{{r.id}}</b>@if (r.kind === 'template') { <br><small>template (linked per person, role or resource)</small> }<br><small>set {{r.set}}</small></td>
     <td>{{r.effect}}</td><td>{{r.pillar ?? 'other'}}</td><td>{{r.description ?? r.summary}}@if (r.description) { <br><small>{{r.summary}}</small> }</td>
@@ -43,7 +48,7 @@ export const usageText = (u: Usage | undefined) => !u ? 'not used recently' : `$
 export class PoliciesPage {
   protected readonly s = inject(Session);
   protected rules = signal<Rule[]>([]); protected usage = signal<Record<string, Usage>>({}); protected problem = signal(''); protected off = signal(false);
-  protected open = signal(''); protected nsets = signal(0); protected win = signal(0);
+  protected open = signal(''); protected nsets = signal(0); protected win = signal(0); protected validated = signal<boolean | undefined>(undefined);
   protected f: RuleFilter = { pillar: '', effect: '', text: '' };
   constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
   protected groups() { return pillars(this.rules()); }
@@ -51,6 +56,7 @@ export class PoliciesPage {
   protected sets() { return this.nsets(); }
   protected window() { return this.win(); }
   protected use(id: string) { return usageText(this.usage()[id]); }
+  protected schemaLine() { return schemaText(this.validated()); }
   protected toggle(id: string) { this.open.set(this.open() === id ? '' : id); }
   protected async load() {
     try {
@@ -58,7 +64,7 @@ export class PoliciesPage {
       const r = await this.s.api.raw<any>('GET', '/policies', undefined, h);
       if (r.status === 404) { this.off.set(true); this.problem.set(''); return; }
       if (r.status >= 400) { this.problem.set(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused'); return; }
-      this.off.set(false); this.rules.set(r.data.rules); this.usage.set(r.data.usage ?? {}); this.nsets.set(r.data.engine?.sets ?? 0); this.win.set(r.data.usage_window?.max ?? 0); this.problem.set('');
+      this.off.set(false); this.rules.set(r.data.rules); this.usage.set(r.data.usage ?? {}); this.nsets.set(r.data.engine?.sets ?? 0); this.validated.set(r.data.engine?.schema); this.win.set(r.data.usage_window?.max ?? 0); this.problem.set('');
     } catch (e) { this.problem.set((e as Error).message); }
   }
 }

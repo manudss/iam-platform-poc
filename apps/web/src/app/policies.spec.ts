@@ -1,4 +1,4 @@
-import { Rule, filterRules, pillars, usageText } from './policies';
+import { Rule, filterRules, pillars, schemaText, usageText } from './policies';
 
 const mk = (id: string, effect: 'permit' | 'forbid', pillar: string | null, text = ''): Rule => ({ id, set: 'default', name: id, kind: 'policy', effect, description: `${id} desc`, pillar, summary: 'Permits any principal.', conditions: 0, text });
 const rules = [mk('sod-blocks-approve', 'forbid', 'sod', 'context.sod_conflict == true'), mk('approve-needs-role', 'permit', 'human'), mk('mcp-read', 'permit', 'mcp'), mk('loose', 'permit', null)];
@@ -12,6 +12,11 @@ describe('policy catalogue helpers', () => {
     expect(filterRules(rules, { ...none, effect: 'forbid' }).map((r) => r.id)).toEqual(['sod-blocks-approve']);
     expect(filterRules(rules, { ...none, text: ' SOD_CONFLICT ' }).map((r) => r.id)).toEqual(['sod-blocks-approve']);
     expect(filterRules(rules, { pillar: 'mcp', effect: 'forbid', text: '' })).toEqual([]);
+  });
+  it('words the schema validation state', () => {
+    expect(schemaText(true)).toContain('validated against the Cedar schema');
+    expect(schemaText(undefined)).toContain('without validation');
+    expect(schemaText(false)).toContain('without validation');
   });
   it('words the recent use', () => {
     expect(usageText(undefined)).toBe('not used recently');
