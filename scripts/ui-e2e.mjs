@@ -10,6 +10,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { openManage } from './branch-ui.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core'); // honours NODE_PATH
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -141,7 +142,7 @@ try {
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
   await page.click('#workspace-apply'); await status('Apply refused');
   // The refused change stays on its branch. A clean change goes from a fresh branch to main and is journaled as an activation.
-  await page.fill('input[name=workspaceNewBranch]', 'ui-clean'); await page.getByRole('button', { name: 'Create & select' }).click();
+  await openManage(page); await page.fill('input[name=workspaceNewBranch]', 'ui-clean'); await page.getByRole('button', { name: 'Create & select' }).click();
   await status('Working on ui-clean');
   await page.fill('input[name=identity]', 'demo-alice'); await page.fill('input[name=role]', 'accountant');
   await page.getByRole('button', { name: 'Stage assignment' }).click(); await status('Simulation OK');

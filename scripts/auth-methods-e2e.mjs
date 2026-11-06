@@ -12,6 +12,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { openManage } from './branch-ui.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const { totpAt } = await import(join(root, 'apps/api/dist/authn/totp.js'));
@@ -69,7 +70,7 @@ try {
     await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]');
     await page.locator('details.token').evaluate((e) => (e.open = true)); await page.fill('[name=admintoken]', ADMIN_TOKEN);
   };
-  const createBranch = async (name) => { await page.fill('[name=workspaceNewBranch]', name); await page.getByRole('button', { name: 'Create & select', exact: true }).click(); await page.waitForFunction((n) => document.querySelector('[name=globalBranch]')?.value === n, name); await page.waitForTimeout(200); };
+  const createBranch = async (name) => { await openManage(page); await page.fill('[name=workspaceNewBranch]', name); await page.getByRole('button', { name: 'Create & select', exact: true }).click(); await page.waitForFunction((n) => document.querySelector('[name=globalBranch]')?.value === n, name); await page.waitForTimeout(200); };
 
   // ---- 1. classic sign-in (no chain yet), a working branch, the console page
   await login1(); await createBranch('authn-work');

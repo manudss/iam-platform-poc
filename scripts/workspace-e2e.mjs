@@ -10,6 +10,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { openManage } from './branch-ui.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core'); // honours NODE_PATH
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,7 +58,7 @@ try {
  const BASE='http://localhost:4200';
  const login=async(id='demo-alice',pw='demo-only-not-a-secret',success=true)=>{await page.goto(BASE+'/login');await page.click('#signin-browser');await page.fill('[name=username]',id);await page.fill('[name=password]',pw);await page.click('button[type=submit]');if(success){await page.waitForSelector('[name=globalBranch]');await page.locator('details.token').evaluate(e=>e.open=true);await page.fill('[name=admintoken]',ADMIN_TOKEN);await page.getByRole('button',{name:'Refresh branches',exact:true}).click();}else await page.getByText('Wrong user or password.').waitFor();};
  const nav=async(path)=>{if(await page.locator('.burger').isVisible())await page.locator('.burger').click();await page.locator(`nav a[data-nav="${path}"]`).click();};
- const createBranch=async(name)=>{await page.fill('[name=workspaceNewBranch]',name);await page.getByRole('button',{name:'Create & select',exact:true}).click();await page.waitForFunction(n=>document.querySelector('[name=globalBranch]')?.value===n,name);await page.waitForTimeout(150);};
+ const createBranch=async(name)=>{await openManage(page); await page.fill('[name=workspaceNewBranch]',name);await page.getByRole('button',{name:'Create & select',exact:true}).click();await page.waitForFunction(n=>document.querySelector('[name=globalBranch]')?.value===n,name);await page.waitForTimeout(150);};
  const verifier='dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
  const auth=await(await fetch(BASE+'/core/authorize',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({client_id:'demo-web',redirect_uri:BASE+'/callback',code_challenge:'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',username:'demo-alice',password:'demo-only-not-a-secret'})})).json();
  const tok=await(await fetch(BASE+'/core/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:auth.code,code_verifier:verifier,client_id:'demo-web',redirect_uri:BASE+'/callback'})})).json();
@@ -105,7 +106,7 @@ try {
  const newTok=await(await fetch(BASE+'/core/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:newAuth.code,code_verifier:verifier,client_id:'demo-web',redirect_uri:BASE+'/callback'})})).json();tok.id_token=newTok.id_token;
  const retried=await(await call('POST','/workspace/apply',{confirm:true},'retry-work')).json();assert.equal(retried.applied,true,JSON.stringify(retried));assert.equal(retried.commit,partial.commit,'retry reuses merged commit');assert.equal(retried.activation.state,'applied');
 
- await login();await page.waitForFunction(()=>document.querySelector('[name=globalBranch]')?.value==='demo-alice');assert.equal(await page.inputValue('[name=personalBranchName]'),'demo-alice');await page.fill('[name=personalBranchName]','work-alpha');await page.click('#rename-personal');await page.waitForFunction(()=>document.querySelector('[name=globalBranch]')?.value==='work-alpha');await nav('/users');await page.waitForSelector('#users-table');
+ await login();await page.waitForFunction(()=>document.querySelector('[name=globalBranch]')?.value==='demo-alice');await openManage(page);assert.equal(await page.inputValue('[name=personalBranchName]'),'demo-alice');await openManage(page); await page.fill('[name=personalBranchName]','work-alpha');await page.click('#rename-personal');await page.waitForFunction(()=>document.querySelector('[name=globalBranch]')?.value==='work-alpha');await nav('/users');await page.waitForSelector('#users-table');
  await page.getByRole('button',{name:'Create user',exact:true}).click();await page.fill('[name=uid]','demo-charlie');await page.fill('[name=displayName]','Charlie Staged');await page.fill('[name=userPassword]','fictional-charlie-only');await page.click('#user-save');await page.waitForFunction(()=>document.querySelector('#users-table')?.textContent.includes('demo-charlie'));
  await page.selectOption('[name=globalBranch]','main');await page.waitForSelector('#users-table');assert.doesNotMatch(await page.textContent('#users-table'),/demo-charlie/);
  await page.selectOption('[name=globalBranch]','work-alpha');await nav('/plugins');await page.locator('[data-plugin="org-manager"] button').click();await page.waitForSelector('#plugin-form');await page.check('[name=gi]');await page.click('#plugin-install');await page.waitForSelector('#plugin-enable');await page.click('#plugin-enable');await page.waitForSelector('#plugin-disable');

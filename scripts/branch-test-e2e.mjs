@@ -11,6 +11,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { openManage, openMenu } from './branch-ui.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core'); // honours NODE_PATH
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -69,8 +70,11 @@ try {
   await page.waitForSelector('header .who');
   await page.evaluate(() => { document.querySelector('details.token').open = true; });
   await page.fill('input[name=admintoken]', ADMIN_TOKEN);
+  await openManage(page);
   await page.getByRole('button', { name: 'Refresh branches' }).click();
   await page.waitForFunction(() => document.body.innerText.includes('personal branch'));
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await openMenu(page);
   await page.waitForSelector('#test-signin');
   await page.waitForFunction(() => /demo-alice/.test(document.querySelector('select[name=globalBranch]')?.value ?? ''), undefined, { timeout: 10000 });
   assert.match(await page.locator('select[name=globalBranch]').inputValue(), /demo-alice/, 'the personal branch is selected');
@@ -114,6 +118,7 @@ try {
   await shot(popup, '5-exit-normal-login');
 
   // ---- stable link from the console: created, shown, persisted as a hash, authorizes the gate, revocable ----
+  await openMenu(page);
   await page.click('#stable-link');
   await page.waitForSelector('#stable-url');
   const su = await page.locator('#stable-url').inputValue();

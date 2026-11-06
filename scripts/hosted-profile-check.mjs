@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { openManage } from './branch-ui.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core');
 const BASE = (process.argv[2] ?? '').replace(/\/$/, ''); if (!BASE) { console.log('usage: hosted-profile-check.mjs <url> [outDir]'); process.exit(1); }
 const out = resolve(process.argv[3] ?? join(tmpdir(), 'iam-hosted-profile-shots')); mkdirSync(out, { recursive: true });
@@ -96,7 +97,7 @@ try {
   await page.goto(`${BASE}/login`); await page.waitForSelector('#signin-browser'); await Promise.all([page.waitForURL(/\/core\/authorize/), page.click('#signin-browser')]);
   await page.waitForSelector('input[name=username]'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await page.click('button[type=submit]');
   await page.waitForSelector('[name=globalBranch]');
-  const b5 = 'pf5-' + RUN; await page.fill('[name=workspaceNewBranch]', b5); await page.getByRole('button', { name: 'Create & select', exact: true }).click(); await page.waitForFunction((n) => document.body.innerText.includes(n), b5);
+  const b5 = 'pf5-' + RUN; await openManage(page); await page.fill('[name=workspaceNewBranch]', b5); await page.getByRole('button', { name: 'Create & select', exact: true }).click(); await page.waitForFunction((n) => document.body.innerText.includes(n), b5);
   for (const [nav, sel, name] of [['/profile-fields', '#pf-table', '2-profile-fields'], ['/organizations', '#org-table', '3-organizations'], ['/roles', '#role-table', '4-roles'], ['/my-profile', '#mp-form', '5-my-profile'], ['/users', '#users-table', '6-users']]) {
     await page.setViewportSize({ width: 1280, height: 900 }); await page.locator(`nav a[data-nav="${nav}"]`).click(); await page.waitForSelector(sel); await page.waitForLoadState('networkidle'); await page.waitForFunction(() => !document.querySelector('main').innerText.includes('Loading...')); await sleep(2500);
     assert.equal(await page.locator('[role=alert]').count(), 0, nav + ': no alert (' + (await page.locator('[role=alert]').allInnerTexts()).join('|') + ')');
