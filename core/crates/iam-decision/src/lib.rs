@@ -114,6 +114,9 @@ pub struct RuleInfo {
     /// For a `link`: the catalogue id of the template it instantiates. Absent on rules and templates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
+    /// For a `link`: its slot values (`principal` and/or `resource`, entity uid text) - the beneficiary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<BTreeMap<String, String>>,
 }
 
 pub struct Engine {
@@ -221,7 +224,7 @@ impl Engine {
                     description: renamed.annotation("description").map(str::to_string), pillar: renamed.annotation("pillar").map(str::to_string),
                     summary: summarize(renamed.effect(), &json, n), conditions: n,
                     annotations: renamed.annotations().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-                    text: renamed.to_cedar().unwrap_or_default(), template: None,
+                    text: renamed.to_cedar().unwrap_or_default(), template: None, values: None,
                 });
                 merged.add(renamed).map_err(|e| DecisionError::Policy(format!("rule id {id} is used twice: {e}")))?;
             }
@@ -236,7 +239,7 @@ impl Engine {
                     description: renamed.annotation("description").map(str::to_string), pillar: renamed.annotation("pillar").map(str::to_string),
                     summary: summarize(renamed.effect(), &json, n), conditions: n,
                     annotations: renamed.annotations().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-                    text: renamed.to_cedar(), template: None,
+                    text: renamed.to_cedar(), template: None, values: None,
                 });
                 templates.insert(id.clone(), renamed.id().clone());
                 merged.add_template(renamed).map_err(|e| DecisionError::Policy(format!("rule id {id} is used twice: {e}")))?;
@@ -271,7 +274,7 @@ impl Engine {
                 description: linked.annotation("description").map(str::to_string), pillar: linked.annotation("pillar").map(str::to_string),
                 summary: summarize(linked.effect(), &json, n), conditions: n,
                 annotations: linked.annotations().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-                text, template: Some(l.template.clone()),
+                text, template: Some(l.template.clone()), values: Some(l.values.clone()),
             });
         }
         catalog.sort_by(|a, b| (&a.set, &a.id).cmp(&(&b.set, &b.id)));
@@ -796,6 +799,7 @@ permit(principal == ?principal, action == Action::"read", resource == ?resource)
         // The catalogue lists the link, its template and the template's annotations.
         let entry = e.catalog().iter().find(|r| r.id == "delegate:alice:r1").unwrap();
         assert_eq!((entry.kind, entry.template.as_deref(), entry.description.as_deref()), ("link", Some("sso/delegated-read"), Some("Read granted to one beneficiary")));
+        assert_eq!(entry.values.as_ref().map(|v| v.get("principal").cloned()), Some(Some("User::\"alice\"".to_string())));
         // A forbid still wins over a per-person grant.
         let e3 = Engine::from_sets_and_links(&[
             src("sso", r#"@id("delegated-read") permit(principal == ?principal, action == Action::"read", resource == ?resource);"#),
