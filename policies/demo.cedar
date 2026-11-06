@@ -32,6 +32,9 @@ permit(principal, action in [Action::"mcp:read", Action::"mcp:write", Action::"m
 // the core injects the identity's unexpired grants as context.mcp_grants (UpstreamTool::"<upstream>__<tool>"),
 // and the exact relayed tool must be one of them. A grant the AI writes on its own branch is not active
 // until a human merges and activates it - same rule as roles.
+@id("mcp-proxy-needs-delegation-grant")
+@description("Relaying a tool through the MCP gateway requires the mcp-operator role and an active delegation grant on that exact tool.")
+@pillar("mcp")
 permit(principal, action == Action::"mcp:proxy", resource)
   when { context has roles && context.roles.contains("mcp-operator")
       && context has mcp_grants && context.mcp_grants.contains(resource) };
