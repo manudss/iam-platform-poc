@@ -34,6 +34,8 @@ Verified on 2026-10-29 in a real browser (headless Chrome):
 
 ### What the live demo is (and is not)
 
+- A public privacy policy page (French + English summary) is served at `/privacy`, no sign-in required; the e-mail sending configuration needs a reachable privacy URL.
+
 - One free Render web service (Docker, plan Free, 0.1 CPU / 512 MB) running a
   single container built from `demo/Dockerfile`: Dolt (seeded fictional
   data), the Rust core, the NestJS API, and the Angular console, all behind

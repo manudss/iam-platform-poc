@@ -93,6 +93,17 @@ try {
   await status('state mismatch');
   assert.equal(path(), '/login'); assert.equal(new URL(page.url()).search, ''); // the code left the address bar
   assert.equal(await page.locator('nav').count(), 0, 'no administration layout without a token');
+
+  // ---- public privacy page: no sign-in, reachable at /privacy (required by the e-mail sending configuration) ----
+  await page.goto(`${BASE}/privacy`);
+  await page.waitForSelector('#privacy-page');
+  const privacy = (await page.textContent('#privacy-page')) ?? '';
+  assert.match(privacy, /Politique de confidentialité/);
+  assert.match(privacy, /Mailjet/);
+  assert.match(privacy, /iam@dss\.name/);
+  assert.equal(await page.locator('nav').count(), 0, 'privacy page shows no administration layout');
+  await shot('1a-privacy');
+
   await page.goto(`${BASE}/database/pulls`);
   await page.waitForSelector('#signin-browser'); assert.equal(path(), '/login'); await shot('1-signin');
   await coreLogin(true);
