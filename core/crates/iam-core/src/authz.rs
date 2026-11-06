@@ -125,9 +125,9 @@ fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
     // No scripts (keypad flows stay scriptless on purpose). Images: the same-origin brand assets and the
-    // picsum background (it redirects to i.picsum.photos, so both hosts are allowed).
+    // picsum background (it redirects to fastly.picsum.photos, so both hosts are allowed).
     // Browsers also apply form-action to the redirect that follows the POST: the (already validated, registered) redirect origin must be allowed.
-    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://i.picsum.photos; style-src 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
+    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
     if let Ok(v) = HeaderValue::from_str(&csp) { h.insert(header::CONTENT_SECURITY_POLICY, v); }
     r
 }
@@ -568,7 +568,7 @@ mod tests {
         assert!(body.contains("lyam-logo-horizontal-light.svg") && body.contains("lyam-logo-horizontal-dark.svg"));
         assert!(!body.contains("<script"), "framed pages stay scriptless");
         let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
-        assert!(csp.contains("img-src 'self' https://picsum.photos https://i.picsum.photos") && !csp.contains("script-src"), "{csp}");
+        assert!(csp.contains("img-src 'self' https://picsum.photos https://fastly.picsum.photos") && !csp.contains("script-src"), "{csp}");
         // the error page is framed too
         let (_, _, body) = send(&c, get(&q("").replace("localhost%3A4200", "evil.example"))).await;
         assert!(body.contains("https://picsum.photos/1920/1080") && body.contains("IAM next generation") && body.contains("Sign-in error"));
