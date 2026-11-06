@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import type { Connection } from 'mysql2/promise';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ProfileService } from './profile.service.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { currentBranch } from '../workspace/context.js';
 import { Body, Controller, Delete, Param, Patch, Post, Put, Get, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -60,7 +60,7 @@ export class DoltOrgStore implements OrgStore {
 const ID = /^[a-z0-9-]{1,32}$/;
 @Injectable()
 export class OrgService {
-  constructor(private readonly profile: ProfileService, @Inject(ORG_STORE) private readonly store: OrgStore, @Optional() private readonly events?: AppEvents) {}
+  constructor(private readonly profile: ProfileService, @Inject(ORG_STORE) private readonly store: OrgStore, @Optional() private readonly events?: ApplicationBus) {}
   private async need(t: string, ref: 'live' | 'work') { if (!(await this.profile.pluginActive(t, 'organizations', ref))) throw new NotFoundException('the organizations plugin is not enabled'); }
   async list(t: string) { await this.need(t, 'work'); return this.store.list(t, 'work'); }
   async create(t: string, actor: string, b: { id?: unknown; name?: unknown; parent_id?: unknown }) {

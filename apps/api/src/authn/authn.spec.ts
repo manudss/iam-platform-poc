@@ -12,6 +12,12 @@ import { AuthGuard } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
 import { analyzeChain, validateConfig, parseStored, SEED_CONFIG, isEmptyConfig } from './config.js';
 import { totpAt, base32Decode, hotp, base32Encode } from './totp.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20), GATE = 'gate-token-1234', T = 'acme-demo', PW = 'demo-only-not-a-secret';
 const m = (id: string, type: string, level: number, config: Record<string, unknown> = {}) => ({ id, type, name: id, enabled: true, level, config });

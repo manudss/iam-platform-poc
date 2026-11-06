@@ -3,7 +3,7 @@
 # unless a budget with "stop usage" is set. Each job is capped with timeout-minutes. Standard runners only.
 # The api job downloads the real service binaries and runs the real-service suites (see the job comment and docs/e2e.md).
 # The core binary IS built, so the Rust-core end-to-end suite runs. The compose job starts the real docker-compose stack on the
-# runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts (container checks) and compose-app.e2e.spec.ts (application path: Dolt -> activation -> core over gRPC -> outbox -> NATS -> consumer on the containers).
+# runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts (container checks) and compose-app.e2e.spec.ts (application path: Dolt -> activation -> core over gRPC -> durable bus -> consumer on the containers).
 name: ci
 on: workflow_dispatch
 permissions:

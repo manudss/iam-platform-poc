@@ -1,6 +1,8 @@
 import { BadRequestException, Body, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Post, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
+import { Optional } from '@nestjs/common';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { AuditService } from '../access/audit.service.js';
 import { ProfileService } from '../profile/profile.service.js';
 import { PolicyAdminGuard } from '../auth/admin.guard.js';
@@ -122,7 +124,7 @@ export function checkLinkProposal(b: unknown): PolicyChange {
 
 @Injectable()
 export class PolicyStudioService {
-  constructor(private readonly profile: ProfileService, @Inject(POLICY_SOURCE) private readonly source: PolicySource, private readonly audit: AuditService, private readonly dolt: DoltService) {}
+  constructor(private readonly profile: ProfileService, @Inject(POLICY_SOURCE) private readonly source: PolicySource, private readonly audit: AuditService, private readonly dolt: DoltService, @Optional() private readonly events?: ApplicationBus) {}
   private async need(t: string) { if (!(await this.profile.pluginActive(t, POLICY_STUDIO_PLUGIN, 'work'))) throw new NotFoundException('the policy-studio plugin is not enabled'); }
   async catalog(t: string) {
     await this.need(t);
@@ -140,6 +142,7 @@ export class PolicyStudioService {
     await this.need(t);
     let validation: PolicyValidation | undefined;
     const { branch, commit } = await this.dolt.proposePolicyChange(change, async (cand) => { validation = await this.source.validate(cand); });
+    this.events?.emit({ type: 'policy.changed', tenant: t, branch, at: new Date().toISOString(), payload: { commit, operation: change.kind } });
     return { branch, commit, valid: validation?.valid ?? true, schema: validation?.schema, engine: validation?.engine, catalogue: validation?.rules };
   }
   async proposeRule(t: string, body: unknown) { return this.propose(t, checkRuleProposal(body)); }

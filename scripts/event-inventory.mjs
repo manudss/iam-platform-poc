@@ -29,18 +29,27 @@ function* walk(dir, ext) {
 // tests is still a circuit, but it is listed apart so the production table stays readable.
 const RULES = [
   { id: 'bus.emit (API -> core bus)', files: 'api', re: /(?:bus|host)\.(?:emit|call)\(\s*(?:tenant,?\s*)?'([a-z0-9._-]+)'/gi, kind: 'emitter' },
-  { id: 'AppEvents.emit', files: 'api', re: /events\?*\.emit\(\{\s*type:\s*'([a-z0-9._-]+)'/gi, kind: 'emitter' },
-  { id: 'AppEvents local emit helper', files: 'api', re: /this\.emit\('([a-z0-9._-]+)'/gi, kind: 'emitter' },
+  { id: 'ApplicationBus.emit', files: 'api', re: /events\?*\.emit\(\{\s*type:\s*'([a-z0-9._-]+)'/gi, kind: 'emitter' },
+  { id: 'ApplicationBus local emit helper', files: 'api', re: /this\.emit\('([a-z0-9._-]+)'/gi, kind: 'emitter' },
   { id: 'plugins.emit (async hook)', files: 'api', re: /plugins!?\.emit\(\s*\w+,\s*'([a-z0-9._-]+)'/gi, kind: 'emitter' },
   { id: 'registry.emit (async hook)', files: 'api', re: /\.emit\(\s*\w+,\s*'(notify\.send|identity\.changed|workflow\.step|connector\.[a-z]+|audit\.event)'/gi, kind: 'emitter' },
   { id: 'callSlot (blocking hook)', files: 'api', re: /callSlot(?:<[^>]*>)?\(\s*\w+,\s*'([a-z0-9._-]+)'/gi, kind: 'caller' },
   { id: 'registry.control/queryHook (blocking hook, step 3)', files: 'api', re: /\.(?:control|queryHook)(?:<[^>]*>)?\(\s*\w+,\s*'([a-z0-9._-]+)'/gi, kind: 'caller' },
-  { id: 'AppEvents.on (in-process listener)', files: 'api', re: /events\.on\(/gi, kind: 'listener' },
+  { id: 'ApplicationBus.on (in-process listener)', files: 'api', re: /events\.on\(/gi, kind: 'listener' },
   { id: 'NatsService (IAM_EVENTS circuit)', files: 'api', re: /NatsService/g, kind: 'circuit' },
   { id: 'core bus emit (Rust)', files: 'core', re: /\.(?:emit|notify|call|query)\(&e(?:nv)?\b/g, kind: 'emitter' },
   { id: 'core bus wiring event', files: 'core', re: /bus\.emit\(\s*"([a-z0-9._-]+)"/g, kind: 'emitter' },
   { id: 'oidc provider event hook', files: 'api', re: /provider\.on\(ev/g, kind: 'listener' },
 ];
+
+// Architecture guard: the registry may invoke handlers only through the bus host, never through a local fallback.
+const registrySource = readFileSync(join(ROOT, 'apps/api/src/plugins/v1/registry.ts'), 'utf8');
+if (/handlers\[hook\]\s*\(/.test(registrySource) || registrySource.includes('if (this.bus?.routed')) throw new Error('local registry handler path is forbidden');
+for (const file of walk(join(ROOT, 'apps/api/src'), ['.ts'])) {
+  if (/\.spec\.ts$/.test(file)) continue;
+  const text = readFileSync(file, 'utf8');
+  if (/\bAppEvents\b|\bNatsService\b|\bActivationConsumer\b/.test(text)) throw new Error(`retired event circuit: ${relative(ROOT, file)}`);
+}
 
 function scan() {
   const rows = [];

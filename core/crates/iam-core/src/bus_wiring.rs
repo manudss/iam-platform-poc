@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 const RING: usize = 500;
-const NOTIFY_KINDS: [&str; 4] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided"];
+const NOTIFY_KINDS: [&str; 5] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided", "policy.admin"];
 
 /// Bounded in-memory record, numbered. The HTTP feed reads this fast ring; the same records are also persisted
 /// to the IAM_BUS_JOURNAL JetStream stream (step 3), which a later step re-reads after a restart.
@@ -219,9 +219,9 @@ pub async fn records(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Quer
 /// Kinds owned by the core itself: an external emitter never sends nor declares them (they report core-internal facts).
 /// Step 3: external subscribers MAY subscribe to the core-emitted ones (the activation effects and the audit
 /// trail live outside the core); `core.selftest` stays fully private.
-const CORE_KINDS: [&str; 5] = ["core.selftest", "activation.applied", "signin.succeeded", "signin.refused", "access.decided"];
+const CORE_KINDS: [&str; 6] = ["core.selftest", "activation.applied", "signin.succeeded", "signin.refused", "access.decided", "policy.admin"];
 /// Core-owned kinds an external plugin may subscribe to (never emit, never declare).
-const CORE_EMITTED_SUBSCRIBABLE: [&str; 4] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided"];
+const CORE_EMITTED_SUBSCRIBABLE: [&str; 5] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided", "policy.admin"];
 /// Subscriber ids hosted inside the core: an external plugin never takes one (its answers would be trusted as the core's).
 const INTERNAL_IDS: [&str; 3] = ["core-selftest", "audit-log", "mail-notifier"];
 

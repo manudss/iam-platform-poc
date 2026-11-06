@@ -6,6 +6,7 @@ import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } fro
 import { validateManifest } from './manifest.js';
 import { HOOKS } from './hooks.js';
 import { toFormModel } from './settings.js';
+import { fakeBusBridge } from '../../testing/fake-bus.js';
 
 const T = 't1';
 const good = { subject: 'demo-user-1', credential: { password: 'demo-pass-1' } };
@@ -17,6 +18,7 @@ describe('plugin registry v1', () => {
     mig = new MemoryMigrationStore(); audit = [];
     reg = new PluginRegistry(mig, new MemorySettingsStore(), (e) => audit.push(`${e.action}:${e.plugin}`));
     reg.register(authPassword); reg.register(notifyLog);
+    reg.setBus(fakeBusBridge(reg)); // registry is bus-only (step 3 cleanup): unit specs attach the in-process fake
   });
 
   it('base plugins serve their slot and cannot be disabled', async () => {
@@ -99,13 +101,16 @@ describe('plugin registry v1', () => {
     assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good)).result.reason, 'locked');
   });
 
-  it('non-sensitive hooks (notifications) may fall back to the base when a replacement fails', async () => {
+  it('a failing replacement is faulted and refused (no fallback: redelivery replaced it), until an admin disables it', async () => {
     const m = structuredClone(notifyLog.manifest); m.id = 'notify-bad'; m.base = false; m.extends = 'notify-log'; m.provides = ['notify.default'];
     reg.register({ manifest: m, handlers: { 'notify.send': () => { throw new Error('smtp down'); } } });
     await reg.install(T, 'notify-bad', {}); await reg.configure(T, 'notify-bad', {}); await reg.enable(T, 'notify-bad');
+    await assert.rejects(reg.callSlot(T, 'notify.default', 'notify.send', { to: 'x', template: 't' }), (e: PluginError) => e.code === 'plugin-failed');
+    assert.ok(audit.includes('plugin.fault.closed:notify-bad'));
+    assert.equal(reg.list(T).find((p) => p.id === 'notify-bad')!.faulted, true);
+    await reg.disable(T, 'notify-bad'); // explicit admin action: the base serves its slot again
     const r = await reg.callSlot<any>(T, 'notify.default', 'notify.send', { to: 'x', template: 't' });
-    assert.equal(r.fellBack, true); assert.equal(r.servedBy, 'notify-log');
-    assert.ok(audit.includes('plugin.fault.fallback:notify-bad'));
+    assert.equal(r.fellBack, false); assert.equal(r.servedBy, 'notify-log');
   });
 
   it('disable is refused when the base has no valid configuration of its own', async () => {
@@ -260,10 +265,13 @@ describe('bus facade (step 2)', () => {
     assert.equal(ranInProcess, false);
   });
 
-  it('emit stays in process for kinds the bus does not route', async () => {
+  it('no in-process path remains: an unrouted kind or a missing bridge refuses (bus-unavailable)', async () => {
     reg.setBus(stub({ routed: () => false }));
-    const out = await reg.emit(T, 'notify.send', { effectKey: 'k3', to: 'a@b.c', template: 't', tenant: T, data: {} } as any);
-    assert.equal(out.length, 1); assert.equal(out[0].plugin, 'notify-log');
+    await assert.rejects(reg.emit(T, 'notify.send', { effectKey: 'k3', to: 'a@b.c', template: 't', tenant: T, data: {} } as any), (e: PluginError) => e.code === 'bus-unavailable');
+    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'bus-unavailable');
+    const bare = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    bare.register(notifyLog);
+    await assert.rejects(bare.emit(T, 'notify.send', { effectKey: 'k4', to: 'a@b.c', template: 't', tenant: T, data: {} } as any), (e: PluginError) => e.code === 'bus-unavailable');
   });
 
   it('callSlot has a generic bus path (active for the routed blocking kinds, step 3)', async () => {
@@ -279,7 +287,7 @@ describe('bus facade (step 2)', () => {
 
   it('the activity listener fires on enable and disable (the bus host re-pushes)', async () => {
     let fired = 0;
-    reg.onActivityChange(() => fired++);
+    reg.onActivityChange(() => { fired++; });
     reg.register(orgManager);
     await reg.install(T, 'org-manager', { install: true });
     await reg.enable(T, 'org-manager', {});

@@ -55,7 +55,7 @@ describe('working branches on the same bus (decision 7)', () => {
     if (!bus) return t.skip('no nats-server or core binary');
     assert.equal((await main.callSlot<any>(T, 'auth.password', 'auth.authenticate', good)).result.outcome, 'allow');
     const r = await branch.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
-    assert.equal(r.servedBy, 'bus'); assert.equal(r.result.outcome, 'allow');
+    assert.equal(r.servedBy, 'auth-password-lockout'); assert.equal(r.result.outcome, 'allow');
     const recs: any = await (await fetch(`http://127.0.0.1:${CORE_PORT}/v1/bus/records?limit=100`, { headers: { 'x-core-admin-token': TOKEN } })).json();
     const last = recs.records.at(-1);
     assert.equal(last.branch, BRANCH, 'the branch rode in the envelope');

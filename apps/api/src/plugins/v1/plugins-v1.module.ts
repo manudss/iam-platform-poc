@@ -7,7 +7,7 @@ import { UsersService } from '../../users/users.service.js';
 import { Module } from '@nestjs/common';
 import { PluginRegistry } from './registry.js';
 import { BusHost, BusHostRef } from './bus-host.js';
-import { AppEvents } from '../../events/app-events.service.js';
+import { ApplicationBus } from '../../events/application-bus.service.js';
 import { EventsModule } from '../../events/events.module.js';
 import pg from 'pg';
 import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from './memory-stores.js';
@@ -58,8 +58,8 @@ import { SessionAdminController } from '../../authn/session.controller.js';
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltProfileStore(v, (w) => currentBranch(w)) : new MemoryProfileStore(),
   }, {
     provide: PluginRegistry,
-    inject: [VersioningService, UsersService, BranchRegistries, AppEvents, BusHostRef],
-    useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries, events: AppEvents, busRef: BusHostRef) => {
+    inject: [VersioningService, UsersService, BranchRegistries, ApplicationBus, BusHostRef],
+    useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries, events: ApplicationBus, busRef: BusHostRef) => {
       if (process.env.IAM_WORKSPACE_MODE === '1') return branches.get('main');
       const audit = (e: unknown) => console.log(`[plugins] ${JSON.stringify(e)}`);
       const url = process.env.IAM_PG_URL;
@@ -73,8 +73,10 @@ import { SessionAdminController } from '../../authn/session.controller.js';
       }
       await r.load();
       // Step 2: serve the plugins over the core bus when it is configured (no-op otherwise).
+      // Decision 6: the bus is MANDATORY on the API - no host, no startup (specs use testing/test-bus.ts).
       const host = await BusHost.startIfConfigured(async () => r);
-      if (host) { r.setBus(host.bridge()); host.attachEvents(events); busRef.host = host; }
+      if (!host) throw new Error('event bus required (step 3, decision 6): set IAM_BUS_NATS_URL, IAM_BUS_NATS_PASSWORD and IAM_CORE_ADMIN_TOKEN, with a reachable nats-server and core');
+      r.setBus(host.bridge()); host.attachEvents(events); busRef.host = host;
       return r;
     },
   }],

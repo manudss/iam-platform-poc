@@ -12,6 +12,12 @@ import { AppModule } from './app.module.js';
 import { AuthGuard } from './auth/auth.guard.js';
 import { TemporalService } from './temporal/temporal.service.js';
 import { DoltService } from './dolt/dolt.service.js';
+import { startTestBus, TestBus } from './testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const root = resolve(process.cwd(), '../..');
 const tBin = process.env.TEMPORAL_BIN, dBin = process.env.DOLT_BIN;

@@ -38,7 +38,7 @@ describe('risk.score (control) and profile.enrich (query) over the bus', () => {
     await reg.enable(T, 'risk-geo', { hooks: ['risk.score'], uiComponents: true });
     await bus.host.sync();
     const r = await reg.control<{ score: number }>(T, 'risk.score', { tenant: T, subject: 'demo-alice', context: {} });
-    assert.equal(r.servedBy, 'bus');
+    assert.equal(r.servedBy, 'risk-geo');
     assert.equal(r.result.score, 10);
     await reg.disable(T, 'risk-geo');
     await bus.host.sync();
@@ -66,15 +66,10 @@ describe('risk.score (control) and profile.enrich (query) over the bus', () => {
     assert.equal(one.data.org, 'root');
   });
 
-  it('without a bus the same callers run in process (bus not configured)', async () => {
+  it('without a bus both controls and queries refuse rather than running locally', async () => {
     const local = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
-    local.register(riskGeo); local.register(orgManager); local.register(profileDept);
-    await local.install(T, 'risk-geo', {});
-    await local.enable(T, 'risk-geo', { hooks: ['risk.score'], uiComponents: true });
-    assert.equal((await local.control<{ score: number }>(T, 'risk.score', { tenant: T, subject: 's', context: {} })).result.score, 10);
-    await local.install(T, 'org-manager', { install: true });
-    await local.enable(T, 'org-manager', {});
-    const q = await local.queryHook<Record<string, unknown>>(T, 'profile.enrich', { tenant: T, subject: 's', profile: { a: 1 } });
-    assert.equal(q.data.org, 'root'); assert.equal(q.data.a, 1); assert.deepEqual(q.answeredBy, ['org-manager']);
+    local.register(riskGeo); local.register(orgManager);
+    await assert.rejects(local.control(T, 'risk.score', {}), (e: PluginError) => e.code === 'bus-unavailable');
+    await assert.rejects(local.queryHook(T, 'profile.enrich', {}), (e: PluginError) => e.code === 'bus-unavailable');
   });
 });

@@ -317,6 +317,7 @@ fn emit_decision(c: &Core, tenant: Option<&str>, req: &DecisionRequest, allow: b
     if let Some(a) = audit_meta {
         for k in ["source", "note", "subject"] { if let Some(v) = a.get(k) { p[k] = v.clone(); } }
     }
+    if tenant.is_none() { if let Some(t) = audit_meta.and_then(|a| a.get("tenant")) { p["tenant"] = t.clone(); } }
     c.bus_emit("access.decided", p, None);
 }
 

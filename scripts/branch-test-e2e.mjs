@@ -43,10 +43,14 @@ const stopAll = async () => {
   }
 };
 run(dolt, ['sql-server', '--host', '127.0.0.1', '--port', '3307', '--data-dir', data], { cwd: data, env });
+const NATS = process.env.NATS_SERVER_BIN ?? process.env.NATS_BIN;
+assert.ok(NATS, 'NATS_SERVER_BIN is required');
+run(NATS, ['-c', join(root, 'conf/nats-local.conf')]);
+await new Promise(r => setTimeout(r, 1000));
 const GATE = { IAM_AUTH_GATE_ADDR: '127.0.0.1:3000', IAM_AUTH_GATE_TOKEN: 'local-gate-token-demo' };
 const ADMIN_TOKEN = 'local-demo-plugin-admin-token', CORE_TOKEN = 'local-core-admin-token-demo';
-run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE, IAM_CORE_ADMIN_TOKEN: CORE_TOKEN } });
-run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_WORKSPACE_MODE: '1', IAM_PLUGIN_STORE: 'dolt', IAM_DIRECTORY_AUTH: '1', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } });
+run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE, IAM_CORE_NATS_URL: '127.0.0.1:4222', IAM_CORE_NATS_PASSWORD: 'core-dev', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN } });
+run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_BUS_NATS_URL: '127.0.0.1:4222', IAM_BUS_NATS_USER: 'api-host', IAM_BUS_NATS_PASSWORD: 'api-host-dev', IAM_WORKSPACE_MODE: '1', IAM_PLUGIN_STORE: 'dolt', IAM_DIRECTORY_AUTH: '1', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } });
 run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
 let browser;
 try {

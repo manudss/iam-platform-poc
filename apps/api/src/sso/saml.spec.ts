@@ -8,10 +8,21 @@ import { EventsModule } from '../events/events.module.js';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { AppConnectorService } from '../connectors/app-connector.js';
 import { SSO_DIRECTORY, MemorySsoDirectory } from './oidc.js';
 import { samlAttributesFor, fillResponseTemplate, decodeIssuer } from './saml.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
+
+async function eventually(check: () => boolean) {
+  for (let i = 0; i < 60; i++) { if (check()) return; await new Promise(r => setTimeout(r, 50)); }
+  assert.ok(check(), 'expected durable SSO event was not delivered');
+}
 
 const T = 'acme-demo', PORT = 13583, BASE = `http://localhost:${PORT}`, ISS = `${BASE}/sso/${T}/saml`;
 const PAYROLL_ENTITY = 'https://payroll.example.invalid/saml/metadata', PAYROLL_ACS = 'https://payroll.example.invalid/saml/acs';
@@ -51,7 +62,7 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     app = mod.createNestApplication(); await app.init(); await app.listen(PORT);
     reg = app.get(PluginRegistry); apps = app.get(AppConnectorService);
     (app.get(SSO_DIRECTORY) as MemorySsoDirectory).users.push(yanis, alice);
-    app.get(AppEvents).on((e) => { events.push({ type: e.type, payload: e.payload }); });
+    app.get(ApplicationBus).consumeOnBus('sso-test', ['sso.login.succeeded', 'sso.login.denied', 'sso.login.failed', 'sso.token.issued', 'sso.assertion.issued'], (e) => { events.push({ type: e.type, payload: e.payload }); });
     await reg.install(T, 'app-connector', {}); await reg.enable(T, 'app-connector', {});
     await apps.create(T, 'admin', { id: 'payroll', name: 'Payroll', protocol: 'saml', entity_id: PAYROLL_ENTITY, acs_url: PAYROLL_ACS, enabled: true, allowed_roles: ['hr-partner'], attribute_mapping: MAPPING });
     await apps.create(T, 'admin', { id: 'off', name: 'Off', protocol: 'saml', entity_id: 'https://off.example.invalid/saml', acs_url: 'https://off.example.invalid/acs', enabled: false, allowed_roles: ['hr-partner'], attribute_mapping: {} });
@@ -112,8 +123,8 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     assert.deepEqual([].concat(attrs.roles as any), ['hr-partner']);
     assert.deepEqual([].concat(attrs.givenName as any), ['Yanis Leroy']);
     assert.deepEqual([].concat(attrs.department as any), ['People Ops']);
-    assert.ok(events.some((e) => e.type === 'sso.assertion.issued' && e.payload.app === 'payroll' && e.payload.subject === 'yanis-leroy'));
-    assert.ok(events.some((e) => e.type === 'sso.login.succeeded' && e.payload.app === 'payroll'));
+    await eventually(() => events.some((e) => e.type === 'sso.assertion.issued' && e.payload.app === 'payroll' && e.payload.subject === 'yanis-leroy'));
+    await eventually(() => events.some((e) => e.type === 'sso.login.succeeded' && e.payload.app === 'payroll'));
   });
 
   it('passes RelayState back unchanged', async () => {
@@ -130,7 +141,7 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     assert.ok(xml.includes('urn:oasis:names:tc:SAML:2.0:status:RequestDenied'));
     assert.ok(xml.includes('SignatureValue'), 'still signed, so the application can trust the refusal');
     assert.ok(!xml.includes('AttributeStatement'));
-    assert.ok(events.some((e) => e.type === 'sso.login.denied' && e.payload.reason === 'user-declined'));
+    await eventually(() => events.some((e) => e.type === 'sso.login.denied' && e.payload.reason === 'user-declined'));
   });
 
   it('refuses a user without an allowed role, with the same signed RequestDenied answer', async () => {
@@ -139,7 +150,7 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     assert.equal(det.allowed, false);
     const done = await (await api(`/sso/${T}/saml-interaction/${rid}/complete`, 'demo-alice', { decision: 'allow' })).json() as any;
     assert.ok(Buffer.from(done.samlResponse, 'base64').toString('utf8').includes('RequestDenied'));
-    assert.ok(events.some((e) => e.type === 'sso.login.denied' && e.payload.subject === 'demo-alice' && e.payload.reason === 'not-allowed'));
+    await eventually(() => events.some((e) => e.type === 'sso.login.denied' && e.payload.subject === 'demo-alice' && e.payload.reason === 'not-allowed'));
   });
 
   it('negative tests: unknown service provider, ACS mismatch, disabled application, bad decision, single use', async () => {
@@ -149,7 +160,7 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     const bad = stranger.createLoginRequest(idp, 'redirect', {});
     let r = await fetch(String(typeof bad === 'string' ? bad : bad.context), { redirect: 'manual' });
     assert.equal(r.status, 400); assert.match(await r.text(), /unknown service provider/);
-    assert.ok(events.some((e) => e.type === 'sso.login.failed' && e.payload.reason === 'unknown-service-provider'));
+    await eventually(() => events.some((e) => e.type === 'sso.login.failed' && e.payload.reason === 'unknown-service-provider'));
     // ACS mismatch: the payroll entity but a different consumer URL
     const moved = makeSp(PAYROLL_ENTITY, 'https://payroll.example.invalid/other-acs');
     const m = moved.createLoginRequest(idp, 'redirect', {});
@@ -160,7 +171,7 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     const o = off.createLoginRequest(idp, 'redirect', {});
     r = await fetch(String(typeof o === 'string' ? o : o.context), { redirect: 'manual' });
     assert.equal(r.status, 400); assert.match(await r.text(), /disabled/);
-    assert.ok(events.some((e) => e.type === 'sso.login.denied' && e.payload.reason === 'application-disabled'));
+    await eventually(() => events.some((e) => e.type === 'sso.login.denied' && e.payload.reason === 'application-disabled'));
     // bad decision + single use of a request
     const { rid } = await begin('yanis-leroy');
     assert.equal((await api(`/sso/${T}/saml-interaction/${rid}/complete`, 'yanis-leroy', { decision: 'maybe' })).status, 400);

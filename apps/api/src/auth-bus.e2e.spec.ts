@@ -33,10 +33,10 @@ describe('authentication over the bus (mandatory controls)', () => {
   it('a good password is allowed through the bus; a bad one is refused', async (t) => {
     if (!bus) return t.skip('no nats-server or core binary');
     const r = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
-    assert.equal(r.servedBy, 'bus');
+    assert.equal(r.servedBy, 'auth-password');
     assert.equal(r.result.outcome, 'allow');
     assert.equal(r.result.subject, 'demo-alice');
-    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', bad), (e: PluginError) => e.code === 'plugin-failed');
+    assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', bad)).result.outcome, 'deny');
     // The core saw the exchange as a control with a single real responder (the base plugin).
     const recs: any = await (await fetch(`http://127.0.0.1:${CORE_PORT}/v1/bus/records?limit=100`, { headers: { 'x-core-admin-token': TOKEN } })).json();
     const last = recs.records.at(-1);
@@ -54,7 +54,7 @@ describe('authentication over the bus (mandatory controls)', () => {
     await reg.configure(T, 'auth-password-lockout', { maxFailures: 2 });
     await bus.host.sync();
     const r = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
-    assert.equal(r.servedBy, 'bus', `routed=${(reg as any).bus?.routed('auth.authenticate')}`);
+    assert.equal(r.servedBy, 'auth-password-lockout', `routed=${(reg as any).bus?.routed('auth.authenticate')}`);
     assert.equal(r.result.outcome, 'allow');
     const recs: any = await (await fetch(`http://127.0.0.1:${CORE_PORT}/v1/bus/records?limit=100`, { headers: { 'x-core-admin-token': TOKEN } })).json();
     const last = recs.records.at(-1);
@@ -65,11 +65,12 @@ describe('authentication over the bus (mandatory controls)', () => {
 
   it('the replacement lockout applies over the bus (fail closed, never the base)', async (t) => {
     if (!bus) return t.skip('no nats-server or core binary');
-    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', bad)); // failure 1
-    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', bad)); // failure 2 -> locked
-    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good),
-      (e: PluginError) => e.code === 'plugin-failed' && /auth-password-lockout/.test(e.message),
-      'locked: even the good password is refused, by the replacement');
+    assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', bad)).result.outcome, 'deny');
+    assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', bad)).result.outcome, 'deny');
+    const locked = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
+    assert.equal(locked.servedBy, 'auth-password-lockout');
+    assert.equal(locked.result.outcome, 'deny');
+    assert.equal(locked.result.reason, 'locked');
   });
 
   it('bus down = sign-in refused; bus back = sign-in works again', async (t) => {

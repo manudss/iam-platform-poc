@@ -9,9 +9,20 @@ import { EventsModule } from '../events/events.module.js';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { AppConnectorService } from '../connectors/app-connector.js';
 import { SSO_DIRECTORY, MemorySsoDirectory, claimsFor, mayOpen, SUPPORTED_CLAIMS } from './oidc.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
+
+async function eventually(check: () => boolean) {
+  for (let i = 0; i < 60; i++) { if (check()) return; await new Promise(r => setTimeout(r, 50)); }
+  assert.ok(check(), 'expected durable SSO event was not delivered');
+}
 
 const T = 'acme-demo', PORT = 13581, BASE = `http://localhost:${PORT}`, ISS = `${BASE}/sso/${T}/oidc`, CB = 'http://localhost:4300/cb';
 const alice = { id: 'demo-alice', display_name: 'Alice Martin', email: 'alice@example.invalid', department: 'Finance', roles: ['employee'] };
@@ -44,7 +55,7 @@ describe('OIDC provider: a local relying party signs in (code + PKCE) through th
     app = mod.createNestApplication(); await app.init(); await app.listen(PORT);
     reg = app.get(PluginRegistry); apps = app.get(AppConnectorService);
     (app.get(SSO_DIRECTORY) as MemorySsoDirectory).users.push(alice, bob);
-    app.get(AppEvents).on((e) => { events.push({ type: e.type, payload: e.payload }); });
+    app.get(ApplicationBus).consumeOnBus('sso-test', ['sso.login.succeeded', 'sso.login.denied', 'sso.login.failed', 'sso.token.issued', 'sso.assertion.issued'], (e) => { events.push({ type: e.type, payload: e.payload }); });
     await reg.install(T, 'app-connector', {}); await reg.enable(T, 'app-connector', {});
     await apps.create(T, 'admin', { id: 'wiki', name: 'Company wiki', protocol: 'oidc', redirect_uris: [CB], enabled: true, allowed_roles: ['employee'], attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', groups: 'roles' } });
     await apps.update(T, 'admin', 'wiki', { enabled: true, allowed_roles: ['employee'] });
@@ -98,8 +109,8 @@ describe('OIDC provider: a local relying party signs in (code + PKCE) through th
     assert.equal(tokens.refresh_token, undefined, 'no refresh token without offline_access');
     // the authorization code is single use
     await assert.rejects(oc.authorizationCodeGrant(config, cb, { pkceCodeVerifier: v, expectedState: 'st1' }));
-    assert.ok(events.some((e) => e.type === 'sso.login.succeeded' && e.payload.app === 'wiki' && e.payload.subject === 'demo-alice'));
-    assert.ok(events.some((e) => e.type === 'sso.token.issued'));
+    await eventually(() => events.some((e) => e.type === 'sso.login.succeeded' && e.payload.app === 'wiki' && e.payload.subject === 'demo-alice'));
+    await eventually(() => events.some((e) => e.type === 'sso.token.issued'));
   });
 
   it('issues and rotates a refresh token with offline_access', async () => {
@@ -119,7 +130,7 @@ describe('OIDC provider: a local relying party signs in (code + PKCE) through th
     const done = await (await api(`/sso/${T}/interaction/${s.uid}/complete`, 'demo-bob', { decision: 'allow' })).json() as any;
     const cb = await finish(done.redirectTo);
     assert.equal(cb.searchParams.get('error'), 'access_denied'); assert.equal(cb.searchParams.get('code'), null);
-    assert.ok(events.some((e) => e.type === 'sso.login.denied' && e.payload.subject === 'demo-bob' && e.payload.reason === 'not-allowed'));
+    await eventually(() => events.some((e) => e.type === 'sso.login.denied' && e.payload.subject === 'demo-bob' && e.payload.reason === 'not-allowed'));
   });
 
   it('honours a user who declines at the consent screen', async () => {

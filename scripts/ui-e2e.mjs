@@ -48,11 +48,12 @@ run(dolt, ['sql-server', '--host', '127.0.0.1', '--port', '3307', '--data-dir', 
 const GATE = { IAM_AUTH_GATE_ADDR: '127.0.0.1:3000', IAM_AUTH_GATE_TOKEN: 'local-gate-token-demo' }; // sign-in goes through the plugin gate (API on :3000)
 const ADMIN_TOKEN = 'local-demo-plugin-admin-token';
 const CORE_TOKEN = 'local-core-admin-token-demo';
-// Optional event bus: with NATS_BIN set, a local nats-server is started and the core connects to it (the "Event bus" page is then checked).
-const NATS = process.env.NATS_BIN;
+// Step 3: the API requires the real event bus; CI provides NATS_SERVER_BIN.
+const NATS = process.env.NATS_SERVER_BIN ?? process.env.NATS_BIN;
+assert.ok(NATS, 'NATS_SERVER_BIN is required');
 if (NATS) { run(NATS, ['-c', join(root, 'conf/nats-local.conf')]); await sleep(1000); }
 run(join(root, 'core/target/debug/iam-core'), [], { cwd: join(root, 'core'), env: { ...process.env, ...GATE, IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, ...(NATS ? { IAM_CORE_NATS_URL: '127.0.0.1:4222', IAM_CORE_NATS_PASSWORD: 'core-dev' } : {}) } });
-run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_WORKSPACE_MODE: '1', IAM_PLUGIN_STORE: 'dolt', IAM_DIRECTORY_AUTH: '1', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } }); // the console is built for workspace mode (personal branch + Review & Apply), like demo/start.sh and scripts/workspace-e2e.mjs
+run('node', ['dist/main.js'], { cwd: join(root, 'apps/api'), env: { ...process.env, IAM_BUS_NATS_URL: '127.0.0.1:4222', IAM_BUS_NATS_USER: 'api-host', IAM_BUS_NATS_PASSWORD: 'api-host-dev', IAM_WORKSPACE_MODE: '1', IAM_PLUGIN_STORE: 'dolt', IAM_DIRECTORY_AUTH: '1', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_CORE_URL: 'http://127.0.0.1:8081', IAM_CORE_ADMIN_TOKEN: CORE_TOKEN, IAM_ISSUER: 'http://127.0.0.1:8081', IAM_AUTH_GATE_TOKEN: GATE.IAM_AUTH_GATE_TOKEN, IAM_API_ADMIN_TOKEN: ADMIN_TOKEN } }); // the console is built for workspace mode (personal branch + Review & Apply), like demo/start.sh and scripts/workspace-e2e.mjs
 if (!process.env.WEB_ALREADY_SERVED) run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join(root, 'apps/web') });
 let browser;
 try {

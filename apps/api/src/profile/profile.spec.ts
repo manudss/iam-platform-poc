@@ -11,6 +11,12 @@ import { validateManifest } from '../plugins/v1/manifest.js';
 import { HOOKS } from '../plugins/v1/hooks.js';
 import { hrAttributes } from '../plugins/v1/builtin/index.js';
 import { BASE_FIELDS, checkValue, effectiveSchema, toCatalog, validateFieldDecls, validateProfileConfig } from './fields.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const CAT = [...BASE_FIELDS, ...toCatalog('hr-attributes', hrAttributes.manifest.profileFields!)];

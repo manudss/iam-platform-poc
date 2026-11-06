@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { hasDataSteps, placeholderKeys, STEP_TYPES, substituteEventPayload, validateGraph, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { WorkflowEngine } from './engine.js';
@@ -89,17 +89,19 @@ export class WorkflowsService {
     return { definition: d.id, name: d.name, trigger: d.trigger, autoFilledEventKeys: autoFilled, steps, dataSteps: steps.filter((x) => !x.simulated).length, executed: false, note: 'test only: nothing was executed, written, sent or stored' };
   }
 
-  async start(tenant: string, id: unknown, sub: unknown, event?: { branch: string; payload: Record<string, string> }) {
+  async start(tenant: string, id: unknown, sub: unknown, event?: { branch: string; payload: Record<string, string>; eventId?: string }) {
     // A run executes effects now, so it always uses the LIVE (main) definition, never an unreviewed branch edit.
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), this.store.liveRef);
     if (!d) throw new NotFoundException('unknown workflow');
+    const runId = event?.eventId ? `run-${createHash('sha256').update(JSON.stringify([tenant, d.id, event.branch, event.eventId])).digest('hex').slice(0, 32)}` : `run-${randomBytes(6).toString('hex')}`;
+    if (event?.eventId && await this.store.getRun(tenant, runId)) return this.runView(tenant, runId);
     const active = (await this.store.listRuns(tenant, d.id, 100)).filter((r) => r.status === 'queued' || r.status === 'running');
     if (active.length >= 3) throw new ConflictException('3 runs of this workflow are already active: wait for one to finish (demo guard)');
     // Resolve {{event.<key>}} placeholders from the triggering event (a manual start keeps the graph as saved,
     // so a definition that still needs placeholders cannot start manually: the error says which key is missing).
     const resolved = event ? substituteEventPayload(d.graph, event.payload) : substituteEventPayload(d.graph, {});
     const { order, graph } = validateGraph(resolved);
-    const run: RunRow = { id: `run-${randomBytes(6).toString('hex')}`, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: event?.branch ?? null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null };
+    const run: RunRow = { id: runId, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: event?.branch ?? null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null };
     const steps: StepRow[] = order.map((nodeId) => {
       const n = graph.nodes.find((x) => x.id === nodeId)!;
       return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], started_at: null, finished_at: null };

@@ -1,3 +1,4 @@
+import { startTestBus, TestBus } from '../testing/test-bus.js';
 // End-to-end of workflow START TRIGGERS with a REAL Dolt SQL server (no Docker, no core): an application
 // event (user created / department changed / account disabled) starts matching workflow runs by itself.
 // Same fake-auth contract as workflows.e2e.spec.ts; skipped if the dolt binary is missing (DOLT_BIN).
@@ -10,13 +11,14 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { CanActivate, ExecutionContext, ForbiddenException, INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsModule } from './workflows.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { UsersService } from '../users/users.service.js';
 import { EventsModule } from '../events/events.module.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { SignupService } from '../profile/signup.service.js';
 import { ProfileService } from '../profile/profile.service.js';
 import { MemoryProfileStore } from '../profile/store.js';
@@ -70,7 +72,7 @@ const sql = (q: string) => {
 };
 
 describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary missing' }, () => {
-  let dolt: ChildProcess, app: INestApplication, dir: string, home = '', users: UsersService, events: AppEvents;
+  let dolt: ChildProcess, app: INestApplication, dir: string, home = '', users: UsersService, events: ApplicationBus;
   let joiner = '', mover = '', leaver = '';
 
   before(async () => {
@@ -89,7 +91,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [EventsModule, WorkflowsModule, VersioningModule, UsersModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13436);
-    users = m.get(UsersService); events = m.get(AppEvents);
+    users = m.get(UsersService); events = m.get(ApplicationBus);
     await ok('POST', '/plugins/workflows-iga/install', {});
     await ok('POST', '/plugins/workflows-iga/enable', {});
   });
@@ -276,6 +278,20 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     assert.equal((await runsOf(fin)).length, 1, 'no new membership, no new run');
   });
 
+  it('replaying the same bus event reuses its workflow run; another branch is independent', async () => {
+    const def = ((await ok('POST', '/workflows', { name: 'Replay guard', description: '', graph: { nodes: [
+      { id: 'tell', type: 'notify', name: 'Log', config: { recipient: 'audit', message: 'replay' } },
+    ], edges: [] } })) as { definition: { id: string } }).definition.id;
+    const wf = app.get(WorkflowsService);
+    const event = { eventId: 'same-durable-envelope', branch: 'main', payload: {} };
+    const one = await wf.start(T, def, 'event:test', event);
+    const replay = await wf.start(T, def, 'event:test', event);
+    assert.equal(replay.run.id, one.run.id);
+    assert.equal((await runsOf(def)).length, 1);
+    const branch = await wf.start(T, def, 'event:test', { ...event, branch: 'work-other' });
+    assert.notEqual(branch.run.id, one.run.id);
+  });
+
   it('while the workflows-iga plugin is disabled, events start nothing (and the API itself 403s)', async () => {
     const before = (await runsOf(joiner)).length;
     await ok('POST', '/plugins/workflows-iga/disable', {});
@@ -289,3 +305,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     assert.equal(run.status, 'completed');
   });
 });
+
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });

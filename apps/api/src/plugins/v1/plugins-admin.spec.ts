@@ -6,6 +6,12 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginsV1Module } from './plugins-v1.module.js';
 import { AuthGuard } from '../../auth/auth.guard.js';
+import { startTestBus, TestBus } from '../../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20);
 describe('plugin admin API', () => {

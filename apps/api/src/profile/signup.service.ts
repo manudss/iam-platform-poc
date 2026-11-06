@@ -3,7 +3,7 @@ import { randomBytes, scryptSync, createHash } from 'node:crypto';
 import { UsersService } from '../users/users.service.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { ProfileService } from './profile.service.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { currentBranch } from '../workspace/context.js';
 
 interface Pending { id: string; display_name: string; email: string; values: Record<string, string | number | boolean | null>; salt: string; hash: string; tokenHash: string; confirmed: boolean; at: number }
@@ -21,7 +21,7 @@ export class SignupService {
   private pending = new Map<string, Pending>();
   private hits = new Map<string, number[]>();
   static MAX_PENDING = 50; static PER_IP_HOUR = 5; static TTL_MS = 24 * 3600 * 1000;
-  constructor(private readonly profile: ProfileService, @Optional() private readonly users?: UsersService, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: AppEvents) {}
+  constructor(private readonly profile: ProfileService, @Optional() private readonly users?: UsersService, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus) {}
 
   private limit(ip: string) {
     const now = Date.now(), h = (this.hits.get(ip) ?? []).filter((t) => now - t < 3600_000);

@@ -1,18 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-/**
- * In-process application events ("hooks") of the IAM demo: something real happened in the application
- * (a user was created, a department changed, an account was disabled, a sign-up was approved).
- * Emitted AFTER the write that caused them, never before; listeners are asynchronous and their failures
- * are logged, never propagated: an event listener (e.g. a workflow trigger) can never break the action
- * that produced the event.
- *
- * Step 3: when the core bus is up, the plugins-v1 bus host calls attachBus below and the events travel on
- * the bus as notify kinds declared by `api` (durable JetStream deliveries, at-least-once). The listeners
- * (workflow triggers, SSO audit trail) then consume their own durable delivery address via consumeOnBus.
- * Without the bus, the historical in-process fan-out applies, unchanged.
- */
+/** Bus-only facade for application events. Writes emit after commit; each service consumes a durable address.
+ * No local fan-out, feature flag or no-bus fallback exists. NATS and the core are required at API startup. */
 export interface AppEvent {
+  id?: string;
   /** Event type, see WF_EVENTS in the workflows model (e.g. 'user.created'). */
   type: string;
   tenant: string;
@@ -25,6 +16,7 @@ export interface AppEvent {
 
 /** Every application event kind of the platform: the canonical list mirrors WF_EVENTS (workflows/model.ts). */
 export const APP_EVENT_KINDS = [
+  'policy.changed',
   'user.created', 'user.department-changed', 'user.disabled',
   'signup.requested', 'signup.approved',
   'profile.updated', 'profile.review-resolved',
@@ -34,7 +26,7 @@ export const APP_EVENT_KINDS = [
 ] as const;
 
 /** Bus shape of an emitted application event (what the core delivers to the consumers). */
-export interface AppEventEnvelope { kind: string; tenant?: string; branch?: string; payload: unknown }
+export interface AppEventEnvelope { id?: string; kind: string; tenant?: string; branch?: string; payload: unknown }
 
 /** Rebuilds the AppEvent the emitter sent, from the delivered bus envelope (`at` rides inside the payload). */
 export function envelopeToAppEvent(env: AppEventEnvelope): AppEvent {
@@ -42,26 +34,23 @@ export function envelopeToAppEvent(env: AppEventEnvelope): AppEvent {
   const { at, ...rest } = raw;
   const payload: Record<string, string> = {};
   for (const [k, v] of Object.entries(rest)) payload[k] = String(v);
-  return { type: env.kind, tenant: env.tenant ?? '', branch: env.branch ?? 'main', payload, at: typeof at === 'string' ? at : '' };
+  return { id: env.id, type: env.kind, tenant: env.tenant ?? '', branch: env.branch ?? 'main', payload, at: typeof at === 'string' ? at : '' };
 }
 
 type Listener = (e: AppEvent) => void | Promise<void>;
-type BusServe = (address: string, kinds: string[], handler: (env: AppEventEnvelope) => Promise<void>) => void;
+type BusServe = (address: string, kinds: string[], handler: (env: AppEventEnvelope) => Promise<void>) => void | Promise<void>;
 
 @Injectable()
-export class AppEvents {
+export class ApplicationBus {
   private readonly log = new Logger('app-events');
-  private listeners: Listener[] = [];
   private consumers: { address: string; kinds: string[]; handler: Listener }[] = [];
   private sink?: (e: AppEvent) => void;
   private busServe?: BusServe;
-
-  /** In-process listener: the fallback fan-out, used only while the bus is NOT attached. */
-  on(l: Listener) { this.listeners.push(l); }
+  private registrations: Promise<void>[] = [];
+  async ready() { await Promise.all(this.registrations); }
 
   /** A service of the API process consumes the events on its own durable bus address. Served immediately when
-   * the bus is already attached, otherwise replayed by attachBus. Keep an `on` listener too when a no-bus
-   * fallback is wanted: only one of the two paths ever fires for a given event. */
+   * the bus is already attached, otherwise registered by attachBus. */
   consumeOnBus(address: string, kinds: readonly string[], handler: Listener) {
     const c = { address, kinds: [...kinds], handler };
     this.consumers.push(c);
@@ -79,7 +68,7 @@ export class AppEvents {
   get routedToBus() { return !!this.sink; }
 
   private serveConsumer(c: { address: string; kinds: string[]; handler: Listener }) {
-    this.busServe!(c.address, c.kinds, async (env) => { await c.handler(envelopeToAppEvent(env)); });
+    this.registrations.push(Promise.resolve(this.busServe!(c.address, c.kinds, async (env) => { await c.handler(envelopeToAppEvent(env)); })));
   }
 
   /** Fire-and-forget by design: the caller's action is already committed; listener and bus errors are only logged. */
@@ -88,6 +77,6 @@ export class AppEvents {
       try { this.sink(e); } catch (err) { this.log.warn(`bus emit failed for ${e.type}: ${(err as Error).message}`); }
       return;
     }
-    for (const l of this.listeners) Promise.resolve().then(() => l(e)).catch((err) => this.log.warn(`listener failed for ${e.type}: ${(err as Error).message}`));
+    throw new Error('event bus required: no emission sink attached');
   }
 }

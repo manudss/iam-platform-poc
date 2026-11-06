@@ -34,7 +34,7 @@ export class AccessController {
   private readonly core = process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081';
   private grpc?: CoreGrpc;
 
-  private async run(req: { tenant?: string; principal: string; action: string; resource: string; context: Record<string, unknown> }, rec: (o: Out, s: 'http' | 'grpc' | 'simulate', n?: string, answered?: boolean) => Promise<void>, simulate: boolean, meta?: { source: string; note?: string; subject: string }): Promise<Out> {
+  private async run(req: { tenant?: string; principal: string; action: string; resource: string; context: Record<string, unknown> }, rec: (o: Out, s: 'http' | 'grpc' | 'simulate', n?: string, answered?: boolean) => Promise<void>, simulate: boolean, meta?: { source: string; note?: string; subject: string; tenant?: string }): Promise<Out> {
     const g = process.env.IAM_CORE_GRPC_ADDR;
     if (g && !simulate) {
       try { const out = await (this.grpc ??= new CoreGrpc(g)).decide(req); await rec(out, 'grpc'); return out; } // grpc carries no audit meta: the core emits access.decided without it (row source 'core')
@@ -80,6 +80,6 @@ export class AccessController {
     const rec = (out: Out, source: 'http' | 'grpc' | 'simulate', note?: string, answered?: boolean) =>
       this.audit.recordDecision({ tenant, subject: req.user.sub, principal, action: String(body.action), resource: String(body.resource), allow: out.allow === true,
         reasons: [...(out.reasons ?? []), ...(out.errors ?? [])], activation_seq: out.version?.seq ?? null, commit: out.version?.commit ?? null, source, note: note ?? 'simulation (admin capability)' }, answered);
-    return this.run({ ...(body.tenant !== undefined ? { tenant } : {}), principal, action: String(body.action), resource: String(body.resource), context: body.context ?? {} }, rec, true, { source: 'simulate', subject: req.user.sub, note: 'simulation (admin capability)' });
+    return this.run({ ...(body.tenant !== undefined ? { tenant } : {}), principal, action: String(body.action), resource: String(body.resource), context: body.context ?? {} }, rec, true, { source: 'simulate', subject: req.user.sub, tenant, note: 'simulation (admin capability)' });
   }
 }

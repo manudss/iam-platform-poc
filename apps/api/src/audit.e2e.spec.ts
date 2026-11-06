@@ -11,6 +11,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { AuditService } from './access/audit.service.js';
+import { startTestBus, TestBus } from './testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const root = resolve(process.cwd(), '../..');
 const bin = resolve(root, 'core/target/debug/iam-core');
@@ -29,18 +35,27 @@ type Entry = { id: number; tenant: string; subject: string; principal: string; a
 describe('decision audit (real core + API)', { skip: !existsSync(bin) && 'core binary not built' }, () => {
   let core: ChildProcess, app: Awaited<ReturnType<typeof NestFactory.create>>;
   const start = async () => {
-    core = spawn(bin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18101', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
+    core = spawn(bin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18101', IAM_CORE_NATS_URL: `127.0.0.1:${testBus!.natsPort}`, IAM_CORE_NATS_PASSWORD: 'core-dev', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
     for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
   };
   before(async () => {
     delete process.env.IAM_PG_URL; delete process.env.IAM_CORE_GRPC_ADDR;
     await start();
-    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE });
+    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN });
     app = await NestFactory.create(AppModule, { logger: false }); await app.listen(13101);
   });
   after(async () => { await app?.close(); core?.kill(); });
   const check = (token: string | undefined, body: object) => post(`${API}/access/check`, { action: 'Action::"approve"', resource: 'Request::"r1"', ...body }, token);
   const audit = async (token: string | undefined, tenant = 'acme-demo') => fetch(`${API}/tenants/${tenant}/audit`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  // Step 3: the trail is fed by the bus (at-least-once, asynchronous) - poll until the expected rows are there.
+  const auditUntil = async (token: string | undefined, n: number): Promise<Entry[]> => {
+    for (let i = 0; i < 100; i++) {
+      const { entries } = (await (await audit(token)).json()) as { entries: Entry[] };
+      if (entries.length >= n) return entries;
+      await sleep(150);
+    }
+    throw new Error(`audit trail never reached ${n} rows`);
+  };
 
   it('an allow and a deny are both recorded, with caller (token subject), tenant and the activation version from server data', async () => {
     const t = await login(), tb = await login('demo-bob');
@@ -48,8 +63,7 @@ describe('decision audit (real core + API)', { skip: !existsSync(bin) && 'core b
     assert.equal(((await (await check(t, { principal: 'User::"demo-alice"', context: { roles: [], sod_conflict: true } })).json()) as { allow: boolean }).allow, true); // hostile context ignored: roles come from the active version
     assert.equal(((await (await check(tb, { tenant: 'acme-demo', context: { roles: ['payment-approver'] } })).json()) as { allow: boolean }).allow, false); // bob has no role in the data
     assert.equal(((await (await check(t, {})).json()) as { allow: boolean }).allow, true);
-    const r = await audit(t); assert.equal(r.status, 200);
-    const { entries } = (await r.json()) as { entries: Entry[] };
+    const entries = await auditUntil(t, 3);
     assert.deepEqual(entries.map((e) => e.allow), [true, false, true]); // newest first
     assert.deepEqual(entries.map((e) => e.subject), ['demo-alice', 'demo-bob', 'demo-alice']);
     assert.ok(entries.every((e) => e.tenant === 'acme-demo' && e.source === 'http' && e.activation_seq === 1 && e.commit === 'abcdef12'));
@@ -94,7 +108,8 @@ describe('decision audit on real PostgreSQL', { skip: !(pgBin && existsSync(join
   it('rows survive a service restart and are isolated per tenant', async () => {
     const a = new AuditService();
     const base = { subject: 'demo-alice', principal: 'User::"demo-alice"', action: 'Action::"approve"', resource: 'Request::"r1"', source: 'http' as const };
-    await a.record({ ...base, tenant: 't-a', allow: true, reasons: [], activation_seq: 3, commit: 'c0ffee00' });
+    await a.record({ ...base, event_id: 'replayed-event', tenant: 't-a', allow: true, reasons: [], activation_seq: 3, commit: 'c0ffee00' });
+    await a.record({ ...base, event_id: 'replayed-event', tenant: 't-a', allow: true, reasons: [], activation_seq: 3, commit: 'c0ffee00' });
     await a.record({ ...base, tenant: 't-b', allow: false, reasons: ['sod'], activation_seq: null, commit: null });
     await a.onModuleDestroy();
     const b = new AuditService(); // "restart"

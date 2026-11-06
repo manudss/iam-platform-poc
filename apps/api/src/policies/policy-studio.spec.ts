@@ -10,6 +10,12 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { AuditService } from '../access/audit.service.js';
 import { checkLinkProposal, checkRuleProposal, checkSimulationRequest, CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService, usageByRule, type CoreCatalog, type SimulationResult } from './policy-studio.js';
 import { DoltService } from '../dolt/dolt.service.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const rule = (id: string, effect: 'permit' | 'forbid', pillar: string) => ({ id, set: 'default', name: id, kind: 'policy' as const, effect, description: `${id} description`, pillar, summary: 'Permits any principal to do any action on any resource.', conditions: 0, annotations: { id }, text: `${effect}(principal, action, resource);` });

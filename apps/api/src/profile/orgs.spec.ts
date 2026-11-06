@@ -7,6 +7,12 @@ import assert from 'node:assert/strict';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 describe('organizations plugin: CRUD and assignments by an administrator, read-only on the profile', () => {

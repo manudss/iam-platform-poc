@@ -23,7 +23,7 @@ const root = resolve(process.cwd(), '../..');
 const coreBin = resolve(root, 'core/target/debug/iam-core');
 const natsBin = process.env.NATS_SERVER_BIN;
 const present = !!natsBin && existsSync(natsBin!) && existsSync(coreBin);
-const NATS = 14229, CORE = 'http://127.0.0.1:18102', API = 'http://127.0.0.1:13102', REDIRECT = 'http://localhost:4200/callback', ADMIN = 'audit-bus-admin-token';
+const NATS = 14230, CORE = 'http://127.0.0.1:18103', API = 'http://127.0.0.1:13103', REDIRECT = 'http://localhost:4200/callback', ADMIN = 'audit-bus-admin-token';
 const PW = 'demo-only-not-a-secret'; // fictional local demo password
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const post = (url: string, body: object, token?: string, h: Record<string, string> = {}) =>
@@ -37,11 +37,11 @@ type Entry = { id: number; tenant: string; subject: string; principal: string; a
 
 describe('audit via the bus (step 3)', { skip: !present && 'nats-server or core binary missing' }, () => {
   let nats: ChildProcess, core: ChildProcess, app: Awaited<ReturnType<typeof NestFactory.create>>;
-  const dir = join(tmpdir(), 'iam-audit-bus-14229');
+  const dir = join(tmpdir(), 'iam-audit-bus-14230');
   const spawnCore = () => {
     core = spawn(coreBin, [], { cwd: resolve(root, 'core'), stdio: 'ignore', env: { ...process.env,
       IAM_CORE_NATS_URL: `127.0.0.1:${NATS}`, IAM_CORE_NATS_PASSWORD: 'core-dev',
-      IAM_CORE_ADDR: '127.0.0.1:18102', IAM_ISSUER: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN,
+      IAM_CORE_ADDR: '127.0.0.1:18103', IAM_ISSUER: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN,
       IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar') } });
     core.unref();
   };
@@ -56,7 +56,7 @@ describe('audit via the bus (step 3)', { skip: !present && 'nats-server or core 
     spawnCore(); await waitCore();
     Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN,
       IAM_BUS_NATS_URL: `127.0.0.1:${NATS}`, IAM_BUS_NATS_USER: 'api-host', IAM_BUS_NATS_PASSWORD: 'api-host-dev' });
-    app = await NestFactory.create(AppModule, { logger: false }); await app.listen(13102);
+    app = await NestFactory.create(AppModule, { logger: false }); await app.listen(13103);
     // The bus host connects asynchronously in the plugins-v1 factory; wait for it before deciding.
     const ref = app.get(BusHostRef);
     for (let i = 0; i < 100 && !ref.host; i++) await sleep(100);
@@ -102,6 +102,19 @@ describe('audit via the bus (step 3)', { skip: !present && 'nats-server or core 
     const row = await untilRow(t, (e) => e.source === 'plugin' && e.action === 'core.settings.changed', 'audit.event');
     assert.equal(row.resource, 'Plugin::"audit.test"');
     assert.equal(row.tenant, 'acme-demo');
+  });
+
+  it('direct Cedar administration is audited without exposing candidate content', async () => {
+    const headers = { 'x-core-admin-token': ADMIN };
+    await post(`${CORE}/v1/policies/validate`, { sets: [] }, undefined, headers);
+    await post(`${CORE}/v1/policies/simulate`, { principal: 'User::"demo-alice"', action: 'Action::"approve"', resource: 'Request::"admin-test"', context: { secret: 'must-not-be-journaled' } }, undefined, headers);
+    for (let i = 0; i < 50; i++) {
+      const r = await (await fetch(`${CORE}/v1/bus/records?limit=500`, { headers })).json() as { records: { kind: string; payload: unknown }[] };
+      const audits = r.records.filter(x => x.kind === 'policy.admin');
+      if (audits.length >= 2) { assert.ok(!JSON.stringify(audits).includes('must-not-be-journaled')); return; }
+      await sleep(100);
+    }
+    assert.fail('missing policy administration audit');
   });
 
   it('the bus journal survives a core restart: pre-restart records are still served', async () => {

@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { PluginRegistry, PluginError } from './registry.js';
+import { fakeBusBridge } from '../../testing/fake-bus.js';
 import { PgPluginStore } from './pg-stores.js';
 import { authPassword, authPasswordLockout, notifyLog, orgManager } from './builtin/index.js';
 
@@ -23,6 +24,7 @@ describe('plugin registry on real PostgreSQL', { skip: !have && 'PG_BIN not set 
     const r = new PluginRegistry(s, s, () => {}, s);
     for (const p of [authPassword, notifyLog, authPasswordLockout(), orgManager]) r.register(p);
     await r.load();
+    r.setBus(fakeBusBridge(r)); // bus-only registry (step 3 cleanup): in-process fake for this store e2e
     return r;
   };
   before(async () => {
@@ -58,7 +60,7 @@ describe('plugin registry on real PostgreSQL', { skip: !have && 'PG_BIN not set 
     assert.equal((await r.callSlot<any>('t2', 'auth.password', 'auth.authenticate', good)).servedBy, 'auth-password'); // other tenant untouched
     // a technical fault is persisted: after a restart the slot still refuses, the base is not asked
     const broken = authPasswordLockout(); broken.handlers['auth.authenticate'] = () => { throw new Error('boom'); };
-    const s = new PgPluginStore(pool); const r2 = new PluginRegistry(s, s, () => {}, s);
+    const s = new PgPluginStore(pool); const r2 = new PluginRegistry(s, s, () => {}, s); r2.setBus(fakeBusBridge(r2));
     for (const p of [authPassword, notifyLog, broken, orgManager]) r2.register(p);
     await r2.load();
     await assert.rejects(r2.callSlot('t1', 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed');

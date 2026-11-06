@@ -1,6 +1,6 @@
 /**
  * Plugin host over the core's event bus (step 3, bus host v2). Enabled when IAM_BUS_NATS_URL + IAM_BUS_NATS_PASSWORD
- * and IAM_CORE_ADMIN_TOKEN are set; otherwise the API serves plugins in process (step 1 behaviour, unchanged).
+ * and IAM_CORE_ADMIN_TOKEN are set; the API refuses startup when the bus is absent.
  *
  * v2 changes:
  * - Deliveries are resolved against the registry of the envelope's BRANCH (decision 7: branch events travel on
@@ -16,12 +16,12 @@
  * - Enable/disable changes trigger a re-push (registry activity listener); a 60 s timer re-pushes everything:
  *   the core holds registrations in memory only, so a core restart is healed automatically.
  * - Each delivery checks the plugin is still active for the tenant and dedupes on the effect key (ledger in
- *   memory; a durable ledger belongs to the later effects step). A redelivered effect gets a `deduped` reply
+ *   durable JetStream KV). A redelivered effect gets a `deduped` reply
  *   instead of a second run.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { connect, AckPolicy, ConsumerMessages, JsMsg, JSONCodec, KV, Msg, NatsConnection, Subscription, JetStreamClient, nanos } from 'nats';
-import { AppEvent, AppEvents, APP_EVENT_KINDS } from '../../events/app-events.service.js';
+import { AppEvent, ApplicationBus, APP_EVENT_KINDS } from '../../events/application-bus.service.js';
 import { HOOKS, PluginContext } from './hooks.js';
 import { BusBridge, PluginRegistry } from './registry.js';
 import { validateSettings } from './settings.js';
@@ -46,10 +46,9 @@ export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge',
  * fields it owns, the core merges the objects; a silent or disabled plugin simply does not appear. */
 export const BUS_QUERY_KINDS = new Set(['profile.enrich']);
 
-/** KV keys accept [A-Za-z0-9_./=-]: the composite key uses '/' and every part is sanitized. */
+/** Hash the full tuple: KV-safe, bounded, and no collisions from punctuation or truncated IDs. */
 function ledgerKey(tenant: string, id: string, kind: string, effectKey: string): string {
-  const clean = (x: string) => x.replace(/[^A-Za-z0-9_.=-]/g, '_').slice(0, 80);
-  return `${clean(tenant)}/${clean(id)}/${clean(kind)}/${clean(effectKey)}`;
+  return createHash('sha256').update(JSON.stringify([tenant, id, kind, effectKey])).digest('hex');
 }
 
 export class BusHost {
@@ -77,8 +76,7 @@ export class BusHost {
     private allRegistries: () => Promise<[string, PluginRegistry][]> = async () => [['main', await registry()]],
   ) {}
 
-  /** Connects and starts the host, or returns undefined when the bus is not configured. Startup failure throws:
-   * the process then keeps the in-process path (the bus bridge is never attached, so no kind is routed). */
+  /** Connects and starts the host, or returns undefined when the bus is not configured. The caller must refuse startup when no host is returned. */
   static async startIfConfigured(
     registry: () => Promise<PluginRegistry>,
     log: (e: Record<string, unknown>) => void = (e) => console.log(`[bus-host] ${JSON.stringify(e)}`),
@@ -89,11 +87,12 @@ export class BusHost {
     const pass = process.env.IAM_BUS_NATS_PASSWORD;
     const token = process.env.IAM_CORE_ADMIN_TOKEN;
     if (!url && !pass) return undefined;
-    if (!url || !pass || !token) { log({ warn: 'bus host disabled: IAM_BUS_NATS_URL, IAM_BUS_NATS_PASSWORD and IAM_CORE_ADMIN_TOKEN are all required' }); return undefined; }
+    if (!url || !pass || !token || !process.env.IAM_CORE_URL) { log({ warn: 'bus host disabled: IAM_BUS_NATS_URL, IAM_BUS_NATS_PASSWORD, IAM_CORE_URL and IAM_CORE_ADMIN_TOKEN are all required' }); return undefined; }
     const user = process.env.IAM_BUS_NATS_USER ?? 'api-host';
     const coreUrl = (process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081').replace(/\/$/, '');
+    let nc: NatsConnection | undefined;
     try {
-      const nc = await connect({ servers: url, user, pass, inboxPrefix: '_INBOX.api-host', timeout: 5000 });
+      nc = await connect({ servers: url, user, pass, inboxPrefix: '_INBOX.api-host', timeout: 5000 });
       const js = nc.jetstream();
       const kv = await js.views.kv(EFFECTS_BUCKET, { bindOnly: true }); // created by the core; bindOnly: api-host cannot create streams
       const host = new BusHost(nc, js, kv, coreUrl, token, registry, log, registryFor, allRegistries);
@@ -107,7 +106,8 @@ export class BusHost {
       log({ info: 'plugin host connected to the core bus', url, user });
       return host;
     } catch (e) {
-      log({ warn: 'bus host disabled: startup failed, plugins stay in process', error: String(e) });
+      await nc?.close();
+      log({ warn: 'bus host disabled: startup failed: API must refuse startup', error: String(e) });
       return undefined;
     }
   }
@@ -138,14 +138,14 @@ export class BusHost {
    * already committed; a bus failure is logged, never propagated) and carry a deterministic effect key: a bus
    * redelivery replays the SAME event (same key, the consumers' handlers absorb the duplicate), while two
    * genuinely distinct events always differ in at least one field. Consumers get their own durable address. */
-  attachEvents(events: AppEvents) {
+  attachEvents(events: ApplicationBus) {
     events.attachBus(
       (e: AppEvent) => {
         const effectKey = createHash('sha256').update(JSON.stringify([e.type, e.tenant, e.branch, e.at, Object.keys(e.payload).sort().map((k) => [k, e.payload[k]])])).digest('hex').slice(0, 48);
-        this.post('/v1/bus/emit', { source: 'api', kind: e.type, tenant: e.tenant, branch: e.branch, payload: { ...e.payload, at: e.at }, effect_key: effectKey })
+        events.ready().then(() => this.post('/v1/bus/emit', { source: 'api', kind: e.type, tenant: e.tenant, branch: e.branch, payload: { ...e.payload, at: e.at }, effect_key: effectKey }))
           .catch((err) => this.log({ warn: 'application event not emitted', kind: e.type, error: String(err) }));
       },
-      (address, kinds, handler) => { this.serveService(address, kinds, handler).catch((err) => this.log({ warn: 'service not served', address, error: String(err) })); },
+      (address, kinds, handler) => this.serveService(address, kinds, handler),
     );
   }
 
@@ -157,7 +157,7 @@ export class BusHost {
       for (const [branch, r] of regs) {
         if (this.listeningOn.has(r)) continue;
         this.listeningOn.add(r);
-        r.onActivityChange(() => { this.sync().catch((e) => this.log({ warn: 'bus resync failed', error: String(e) })); });
+        r.onActivityChange(() => this.sync());
         r.onAudit((e) => {
           this.post('/v1/bus/emit', { source: 'api', kind: AUDIT_EVENT_KIND, tenant: e.tenant, branch: branch === 'main' ? undefined : branch, effect_key: `audit-event:${randomUUID()}`, payload: { action: e.action, plugin: e.plugin, detail: e.detail } })
             .catch((err) => this.log({ warn: 'audit event not emitted', action: e.action, plugin: e.plugin, error: String(err) }));
@@ -238,6 +238,7 @@ export class BusHost {
     this.services.set(address, { kinds, handler });
     await this.post('/v1/bus/plugins/register', { plugin: address, subscriptions: kinds.map((kind) => ({ kind })), emits: [], declare_kinds: [] });
     this.serveEvents(address, handler);
+
   }
 
   private serve(id: string) {
@@ -278,6 +279,9 @@ export class BusHost {
   private async deliverEvent(id: string, m: JsMsg, service?: (env: BusEnvelope) => Promise<void>): Promise<void> {
     const env = jc.decode(m.data) as BusEnvelope;
     const tenant = env.tenant ?? DEFAULT_TENANT;
+    const effectId = env.effect_key ?? env.id;
+    const durableKey = ledgerKey(JSON.stringify([tenant, env.branch ?? 'main']), id, env.kind, effectId);
+    if (await this.kv.get(durableKey)) { m.ack(); return; }
     let run: () => Promise<void>;
     if (service) {
       run = () => service(env);
@@ -297,9 +301,8 @@ export class BusHost {
     // Effect first, ledger second, ack last (decision 4): a crash before the ack redelivers and the effect may
     // run twice, which effect keys and idempotent handlers absorb; the reverse order could lose the effect.
     await run();
-    if (env.effect_key) {
-      const key = ledgerKey(tenant, id, env.kind, env.effect_key);
-      try { await this.kv.create(key, JSON.stringify({ at: new Date().toISOString(), kind: env.kind })); }
+    {
+      try { await this.kv.create(durableKey, JSON.stringify({ at: new Date().toISOString(), kind: env.kind })); }
       catch { /* already recorded by a parallel or earlier delivery: keep the ack below, the effect is deduped by handlers */ }
     }
     m.ack();
@@ -331,7 +334,7 @@ export class BusHost {
       // answer nor a silence). A faulted replacement refuses: the base is never asked in its place (callSlot rule).
       const role = registry.blockingResponder(tenant, id, env.kind);
       if (role === 'not-concerned') { msg.respond(jc.encode({ from: id, id: env.id, not_concerned: true })); return; }
-      if (role === 'refuse') { reply({ outcome: 'deny', reason: 'plugin-faulted' }, 'deny'); return; }
+      if (role === 'refuse') { reply(undefined, 'deny'); return; } // fault: a deny WITHOUT payload - the caller reads it as an infrastructure refusal, not a plugin denial
     }
     const impl = registry.impl(id);
     if (!impl || !registry.isActive(tenant, id)) return; // disabled between registration and delivery: stay silent
@@ -339,7 +342,15 @@ export class BusHost {
     if (!handler) return;
     const settings = validateSettings(impl.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
     const ctx: PluginContext = { tenant, settings };
-    const result = await handler(env.payload, ctx);
+    let result: any;
+    try {
+      result = await handlerDeadline(Promise.resolve().then(() => handler(env.payload, ctx)), 1500);
+    } catch (e) {
+      // Step 3 cleanup: record the fault (persisted, audited, blockingResponder refuses) and stay silent so a
+      // mandatory control denies - the base is never asked in its place, no in-process fallback.
+      await registry.markFaulted(tenant, id, String((e as Error).message ?? e));
+      return;
+    }
     // 'challenge' is a way forward, not a refusal: only an explicit deny carries the deny verdict; the result
     // data (allow with methods, or the challenge to draw) always rides along.
     const verdict = result?.outcome === 'deny' ? 'deny' as const : 'allow' as const;
@@ -369,7 +380,9 @@ export class BusHost {
       call: async (tenant, kind, payload, timeoutMs, branch) => {
         const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, timeout_ms: timeoutMs, branch });
         const replied = (r.outcomes ?? []).filter((o: any) => o.status === 'replied');
-        return { verdict: r.verdict, reason: r.reason, result: replied[replied.length - 1]?.data, answered: replied.length > 0 };
+        const businessDenial = r.verdict === 'deny' && replied.some((o: any) => o.verdict === 'deny' && o.data?.outcome === 'deny') && !(r.outcomes ?? []).some((o: any) => o.mandatory && (!['replied', 'not-concerned'].includes(o.status) || (o.status === 'replied' && o.verdict === 'deny' && o.data?.outcome !== 'deny')));
+        const answer = businessDenial ? replied.find((o: any) => o.verdict === 'deny' && o.data?.outcome === 'deny') : replied[replied.length - 1];
+        return { verdict: r.verdict, reason: r.reason, result: answer?.data, answered: replied.length > 0, answeredBy: answer?.id, businessDenial };
       },
       query: async (tenant, kind, payload, timeoutMs, branch) => {
         const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, timeout_ms: timeoutMs, branch });
@@ -384,4 +397,12 @@ export class BusHost {
  * it without a circular module dependency. Set by whoever created the host (plugins-v1 factory or BranchRegistries). */
 export class BusHostRef {
   host?: BusHost;
+  async onModuleDestroy() { await this.host?.close(); }
+}
+
+function handlerDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('blocking handler timed out')), ms);
+    work.then(v => { clearTimeout(timer); resolve(v); }, e => { clearTimeout(timer); reject(e); });
+  });
 }

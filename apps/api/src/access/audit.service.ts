@@ -3,7 +3,7 @@ import pg from 'pg';
 import { BusHostRef } from '../plugins/v1/bus-host.js';
 
 export interface AuditEntry {
-  id?: number; at?: string; tenant: string; subject: string; principal: string; action: string; resource: string;
+  id?: number; at?: string; event_id?: string; tenant: string; subject: string; principal: string; action: string; resource: string;
   allow: boolean; reasons: string[]; activation_seq: number | null; commit: string | null; source: 'http' | 'grpc' | 'agent' | 'simulate' | 'core' | 'plugin'; note?: string;
 }
 
@@ -11,7 +11,7 @@ export interface AuditEntry {
  * Persistent decision audit: one row per allow/deny answered through the API (reasons, tenant, activation seq/commit, caller).
  * PostgreSQL table `decision_audit` when IAM_PG_URL is set, in-memory fallback otherwise (lost on restart: NOT durable).
  * Context values are NOT stored (they may carry personal data); only the decision inputs that identify the request.
- * Scope: decisions that go through this API. Decisions sent straight to the core are not audited.
+ * Scope: API and direct core decisions consumed from access.decided. Event IDs deduplicate redelivery.
  */
 @Injectable()
 export class AuditService implements OnModuleDestroy, OnModuleInit {
@@ -19,21 +19,11 @@ export class AuditService implements OnModuleDestroy, OnModuleInit {
   private pool?: pg.Pool;
   private ready?: Promise<void>;
   private consuming?: Promise<void>;
-  private consumerTimer?: NodeJS.Timeout;
   constructor(@Optional() private readonly busRef?: BusHostRef) {}
   private get url() { return process.env.IAM_PG_URL; }
 
-  /** The consumer must exist BEFORE the first decision: the core routes access.decided only to subscriptions
-   * registered at emit time, so a lazy registration would lose every early decision. The host connects
-   * asynchronously in the plugins-v1 factory: poll for it (gives up when there is no bus). */
-  onModuleInit() {
-    let tries = 0;
-    this.consumerTimer = setInterval(() => {
-      if (++tries > 600 || !this.busRef?.host) { if (tries > 600) clearInterval(this.consumerTimer); return; }
-      this.ensureConsumer()?.then(() => clearInterval(this.consumerTimer)).catch(() => undefined);
-    }, 200);
-    this.consumerTimer.unref?.();
-  }
+  /** Register before Nest starts accepting requests. The async plugins provider has already set BusHostRef. */
+  async onModuleInit() { await this.ensureConsumer(); }
 
   /**
    * Step 3: with the bus up, the trail is fed by the bus instead of the call sites. The core emits access.decided
@@ -50,7 +40,7 @@ export class AuditService implements OnModuleDestroy, OnModuleInit {
       const p = (env.payload ?? {}) as Record<string, unknown>;
       if (env.kind === 'access.decided') {
         await this.record({
-          tenant: String(env.tenant ?? p.tenant ?? '-'), subject: String(p.subject ?? 'core'),
+          event_id: env.id, tenant: String(env.tenant ?? p.tenant ?? '-'), subject: String(p.subject ?? 'core'),
           principal: String(p.principal ?? '-'), action: String(p.action ?? '-'), resource: String(p.resource ?? '-'),
           allow: p.allow === true, reasons: Array.isArray(p.reasons) ? p.reasons.map(String) : [],
           activation_seq: typeof p.seq === 'number' ? p.seq : null, commit: typeof p.commit === 'string' ? p.commit : null,
@@ -59,7 +49,7 @@ export class AuditService implements OnModuleDestroy, OnModuleInit {
         });
       } else if (env.kind === 'audit.event') {
         await this.record({
-          tenant: String(env.tenant ?? p.tenant ?? '-'), subject: String(p.plugin ?? '-'),
+          event_id: env.id, tenant: String(env.tenant ?? p.tenant ?? '-'), subject: String(p.plugin ?? '-'),
           principal: 'plugin', action: String(p.action ?? '-'), resource: `Plugin::"${String(p.plugin ?? '-')}"`,
           allow: true, reasons: [], activation_seq: null, commit: null,
           source: 'plugin', note: typeof p.detail === 'string' ? p.detail : undefined,
@@ -84,14 +74,16 @@ export class AuditService implements OnModuleDestroy, OnModuleInit {
       id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(), tenant text NOT NULL, subject text NOT NULL, principal text NOT NULL,
       action text NOT NULL, resource text NOT NULL, allow boolean NOT NULL, reasons jsonb NOT NULL, activation_seq integer, commit text,
       source text NOT NULL, note text);
+      ALTER TABLE decision_audit ADD COLUMN IF NOT EXISTS event_id text;
+      CREATE UNIQUE INDEX IF NOT EXISTS decision_audit_event_id ON decision_audit(event_id);
       CREATE INDEX IF NOT EXISTS decision_audit_tenant ON decision_audit (tenant, id)`).then(() => undefined));
   }
 
   async record(e: AuditEntry): Promise<void> {
-    if (!this.url) { this.mem.push({ ...e, id: this.mem.length + 1, at: new Date().toISOString() }); return; }
+    if (!this.url) { if (e.event_id && this.mem.some(x => x.event_id === e.event_id)) return; this.mem.push({ ...e, id: this.mem.length + 1, at: new Date().toISOString() }); return; }
     await this.init();
-    await this.pool!.query('INSERT INTO decision_audit (tenant, subject, principal, action, resource, allow, reasons, activation_seq, commit, source, note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-      [e.tenant, e.subject, e.principal, e.action, e.resource, e.allow, JSON.stringify(e.reasons), e.activation_seq, e.commit, e.source, e.note ?? null]);
+    await this.pool!.query('INSERT INTO decision_audit (tenant, subject, principal, action, resource, allow, reasons, activation_seq, commit, source, note, event_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (event_id) DO NOTHING',
+      [e.tenant, e.subject, e.principal, e.action, e.resource, e.allow, JSON.stringify(e.reasons), e.activation_seq, e.commit, e.source, e.note ?? null, e.event_id ?? null]);
   }
 
   /** Newest first, only the given tenant, limit clamped to 1..500. */
@@ -103,5 +95,5 @@ export class AuditService implements OnModuleDestroy, OnModuleInit {
     return r.rows.map((x) => ({ ...x, id: Number(x.id), at: new Date(x.at).toISOString() }));
   }
 
-  async onModuleDestroy() { clearInterval(this.consumerTimer); await this.pool?.end().catch(() => undefined); }
+  async onModuleDestroy() { await this.pool?.end().catch(() => undefined); }
 }

@@ -10,6 +10,12 @@ import { join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
+import { startTestBus, TestBus } from './testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const root = resolve(process.cwd(), '../..');
 const coreBin = resolve(root, 'core/target/debug/iam-core');
@@ -41,12 +47,12 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
     const seed = spawnSync(doltBin, ['sql'], { cwd: data, env, input: readFileSync(resolve(root, 'data/demo/01-schema.sql')) });
     assert.equal(seed.status, 0, 'seed failed: ' + seed.stderr);
     dolt = spawn(doltBin, ['sql-server', '--host', '127.0.0.1', '--port', '13307', '--data-dir', data], { cwd: data, env, stdio: 'ignore' });
-    core = spawn(coreBin, [], { env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18091', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar') }, stdio: 'ignore' });
+    core = spawn(coreBin, [], { env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18091', IAM_CORE_NATS_URL: `127.0.0.1:${testBus!.natsPort}`, IAM_CORE_NATS_PASSWORD: 'core-dev', IAM_CORE_ADMIN_TOKEN: 'dolt-e2e-admin', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar') }, stdio: 'ignore' });
     for (let i = 0; i < 100; i++) { // wait for both
       try { if ((await fetch(`${CORE}/health`)).ok && spawnSync(doltBin, ['--host', '127.0.0.1', '--port', '13307', '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break; } catch { /* retry */ }
       await new Promise((r) => setTimeout(r, 150));
     }
-    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE, DOLT_PORT: '13307', DOLT_DATABASE: 'iam' });
+    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_CORE_ADMIN_TOKEN: 'dolt-e2e-admin', DOLT_PORT: '13307', DOLT_DATABASE: 'iam' });
     app = await NestFactory.create(AppModule, { logger: false });
     await app.listen(13010);
   });

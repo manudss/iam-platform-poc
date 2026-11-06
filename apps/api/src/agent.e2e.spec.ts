@@ -8,11 +8,17 @@ import { resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
+import { startTestBus, TestBus } from './testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const root = resolve(process.cwd(), '../..');
 const bin = resolve(root, 'core/target/debug/iam-core');
 const ADMIN = 'local-demo-admin-token';
-const CORE = 'http://127.0.0.1:18102', API = 'http://127.0.0.1:13102', REDIRECT = 'http://localhost:4200/callback';
+const CORE = 'http://127.0.0.1:18104', API = 'http://127.0.0.1:13104', REDIRECT = 'http://localhost:4200/callback';
 const PW = 'demo-only-not-a-secret'; // fictional local demo password
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const post = (url: string, body: object, h: Record<string, string> = {}) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(body) });
@@ -27,12 +33,12 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
   let core: ChildProcess, app: Awaited<ReturnType<typeof NestFactory.create>>;
   before(async () => {
     delete process.env.IAM_PG_URL; delete process.env.IAM_CORE_GRPC_ADDR;
-    core = spawn(bin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18102', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
+    core = spawn(bin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18104', IAM_CORE_NATS_URL: `127.0.0.1:${testBus!.natsPort}`, IAM_CORE_NATS_PASSWORD: 'core-dev', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
     for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
     // server-side data: alice is an approver; bob holds creator+approver (separation-of-duties conflict). Attributes come from here, never from callers.
     assert.equal((await post(`${CORE}/v1/activate`, { tenant: 'acme-demo', seq: 1, commit: 'abcdef12', snapshot: { assignments: [{ identity_id: 'demo-alice', role_id: 'payment-approver' }, { identity_id: 'demo-bob', role_id: 'payment-creator' }, { identity_id: 'demo-bob', role_id: 'payment-approver' }], sod_rules: [{ role_a: 'payment-creator', role_b: 'payment-approver' }] } }, { 'x-core-admin-token': ADMIN })).status, 200);
-    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE });
-    app = await NestFactory.create(AppModule, { logger: false }); await app.listen(13102);
+    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN });
+    app = await NestFactory.create(AppModule, { logger: false }); await app.listen(13104);
   });
   after(async () => { await app?.close(); core?.kill(); });
   const AL = 'User::"demo-alice"';
@@ -84,6 +90,7 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
       assert.equal((await sim({})).status, 403);
       assert.equal((await sim({ 'x-api-admin-token': 'wrong-admin-token-xxxx' })).status, 403);
       assert.equal((await sim({ 'x-api-admin-token': 'simulation-admin-token-1' })).status, 201);
+      for (let i = 0; i < 100 && (await audit(ta))[0]?.source !== 'simulate'; i++) await sleep(30);
       assert.equal(((await audit(ta))[0]).source, 'simulate');
       assert.equal((await fetch(`${API}/agent/tools/call`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-admin-token': 'simulation-admin-token-1' }, body: JSON.stringify({ tool: 'approve-payment' }) })).status, 401);
     } finally { if (prev === undefined) delete process.env.IAM_API_ADMIN_TOKEN; else process.env.IAM_API_ADMIN_TOKEN = prev; }
