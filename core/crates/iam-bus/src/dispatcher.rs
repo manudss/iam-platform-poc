@@ -7,6 +7,9 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq)]
 pub enum SubStatus {
     Replied(Reply),
+    /// The subscriber answered "not concerned" (disabled on the envelope's branch): neither an answer nor
+    /// silence. Never counts as a refusal, never contributes a verdict or data.
+    NotConcerned,
     /// No usable answer in time (timeout, no responder, transport error).
     Silent(String),
     /// An answer arrived but failed the identity/correlation/shape check: treated like silence.
@@ -36,6 +39,7 @@ pub struct BusRecord {
     pub kind: String,
     pub mode: Mode,
     pub tenant: Option<String>,
+    pub branch: Option<String>,
     pub effect_key: Option<String>,
     /// Who emitted the event (`api`, `plugin:<id>`), absent for core-internal events.
     pub source: Option<String>,
@@ -71,7 +75,7 @@ impl Dispatcher {
     fn emit(&self, env: &Envelope, mode: Mode, t: std::time::Instant, outcomes: &[SubOutcome], verdict: Option<Verdict>) {
         let obs = self.observers.read().unwrap();
         if obs.is_empty() { return }
-        let r = BusRecord { envelope_id: env.id.clone(), kind: env.kind.clone(), mode, tenant: env.tenant.clone(), effect_key: env.effect_key.clone(),
+        let r = BusRecord { envelope_id: env.id.clone(), kind: env.kind.clone(), mode, tenant: env.tenant.clone(), branch: env.branch.clone(), effect_key: env.effect_key.clone(),
             source: env.source.clone(), payload_bytes: env.payload.to_string().len(), payload: crate::mask::mask_payload(&env.payload),
             at_ms: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0), elapsed_ms: t.elapsed().as_millis() as u64, outcomes: outcomes.to_vec(), verdict };
         for o in obs.iter() { o.record(&r) }
@@ -91,6 +95,7 @@ impl Dispatcher {
                     Ok(bytes) => match serde_json::from_slice::<Reply>(&bytes) {
                         Ok(r) if r.from != s.subscriber => SubStatus::Invalid(format!("reply claims to be from '{}'", r.from)),
                         Ok(r) if r.id != id => SubStatus::Invalid("reply does not match the envelope id".into()),
+                        Ok(r) if r.not_concerned => SubStatus::NotConcerned,
                         Ok(r) => SubStatus::Replied(r),
                         Err(e) => SubStatus::Invalid(format!("unreadable reply: {e}")),
                     },

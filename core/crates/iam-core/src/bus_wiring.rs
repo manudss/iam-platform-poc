@@ -36,12 +36,13 @@ impl Ring {
 fn view(seq: u64, r: &BusRecord) -> Value {
     json!({
         "seq": seq, "at_ms": r.at_ms, "envelope_id": r.envelope_id, "kind": r.kind,
-        "mode": format!("{:?}", r.mode).to_lowercase(), "tenant": r.tenant, "effect_key": r.effect_key, "source": r.source,
+        "mode": format!("{:?}", r.mode).to_lowercase(), "tenant": r.tenant, "branch": r.branch, "effect_key": r.effect_key, "source": r.source,
         "payload": r.payload, "elapsed_ms": r.elapsed_ms, "verdict": r.verdict,
         // who was expected to answer, and what each one did
         "expected": r.outcomes.iter().map(|o| json!({"id": o.subscriber, "mandatory": o.mandatory})).collect::<Vec<_>>(),
         "outcomes": r.outcomes.iter().map(|o| match &o.status {
             SubStatus::Replied(rep) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "replied", "verdict": rep.verdict, "data_keys": rep.data.as_ref().and_then(|d| d.as_object()).map(|m| m.keys().cloned().collect::<Vec<_>>())}),
+            SubStatus::NotConcerned => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "not-concerned", "detail": "disabled on the envelope's branch (or not concerned): neither an answer nor silence"}),
             SubStatus::Silent(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "silent", "detail": why}),
             SubStatus::Invalid(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "invalid", "detail": why.chars().take(80).collect::<String>()}),
         }).collect::<Vec<_>>(),
@@ -160,8 +161,12 @@ pub async fn records(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Quer
 //   POST /v1/bus/emit               emit one event; the core checks the emission grant and stamps `source` itself
 // Plugins receive their deliveries over NATS (`plugin.<id>.call`) and answer like any step-1 subscriber.
 
-/// Kinds owned by the core itself: an external emitter never sends them (they report core-internal facts).
+/// Kinds owned by the core itself: an external emitter never sends nor declares them (they report core-internal facts).
+/// Step 3: external subscribers MAY subscribe to the core-emitted ones (the activation effects and the audit
+/// trail live outside the core); `core.selftest` stays fully private.
 const CORE_KINDS: [&str; 4] = ["core.selftest", "activation.applied", "signin.succeeded", "signin.refused"];
+/// Core-owned kinds an external plugin may subscribe to (never emit, never declare).
+const CORE_EMITTED_SUBSCRIBABLE: [&str; 3] = ["activation.applied", "signin.succeeded", "signin.refused"];
 /// Subscriber ids hosted inside the core: an external plugin never takes one (its answers would be trusted as the core's).
 const INTERNAL_IDS: [&str; 3] = ["core-selftest", "audit-log", "mail-notifier"];
 
@@ -201,7 +206,9 @@ fn validate_register(cat: &Catalogue, plugin: &str, subs: &[SubDecl], emits: &[S
     let mode_of = |k: &str| cat.mode(k).ok().or_else(|| declares.iter().find(|d| d.name == k).and_then(|d| parse_mode(&d.mode).ok()));
     for s in subs {
         if !known(&s.kind) { return Err(format!("unknown kind '{}'", s.kind)); }
-        if CORE_KINDS.contains(&s.kind.as_str()) { return Err(format!("kind '{}' is core-internal", s.kind)); }
+        if CORE_KINDS.contains(&s.kind.as_str()) && !CORE_EMITTED_SUBSCRIBABLE.contains(&s.kind.as_str()) {
+            return Err(format!("kind '{}' is core-internal", s.kind));
+        }
         match mode_of(&s.kind) {
             Some(Mode::Notify) => if s.mandatory { return Err(format!("mandatory does not apply to notify kind '{}'", s.kind)); },
             Some(_) => if s.group.is_some() { return Err(format!("one-of groups only apply to notify kinds ('{}')", s.kind)); },
@@ -273,6 +280,8 @@ pub struct EmitReq {
     kind: String,
     #[serde(default)] payload: Value,
     #[serde(default)] tenant: Option<String>,
+    /// Working branch the event belongs to (step 3): carried, never interpreted (like the tenant).
+    #[serde(default)] branch: Option<String>,
     #[serde(default)] effect_key: Option<String>,
     #[serde(default)] timeout_ms: Option<u64>,
 }
@@ -280,6 +289,7 @@ pub struct EmitReq {
 fn outcomes_json(outcomes: &[iam_bus::SubOutcome]) -> Value {
     outcomes.iter().map(|o| match &o.status {
         SubStatus::Replied(r) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "replied", "verdict": r.verdict, "data": r.data}),
+        SubStatus::NotConcerned => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "not-concerned"}),
         SubStatus::Silent(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "silent", "detail": why}),
         SubStatus::Invalid(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "invalid", "detail": why}),
     }).collect()
@@ -300,7 +310,7 @@ pub async fn emit_http(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Js
     if CORE_KINDS.contains(&r.kind.as_str()) { return (StatusCode::FORBIDDEN, Json(json!({"error": format!("kind '{}' is owned by the core", r.kind)}))); }
     let mode = match b.dispatcher.catalogue().mode(&r.kind) { Ok(m) => m, Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("unknown kind '{}'", r.kind)}))) };
     let mut env = Envelope::new(format!("http-{}", uuid_like()), &r.kind, r.payload);
-    env.tenant = r.tenant; env.effect_key = r.effect_key; env.source = Some(r.source.clone());
+    env.tenant = r.tenant; env.branch = r.branch; env.effect_key = r.effect_key; env.source = Some(r.source.clone());
     match mode {
         Mode::Notify => match b.dispatcher.notify(&env).await {
             Ok(o) => (StatusCode::OK, Json(json!({"mode": "notify", "outcomes": outcomes_json(&o)}))),
@@ -330,7 +340,7 @@ mod step2_validation_tests {
         assert!(validate_register(&c, "core-x", &[], &[], &[]).is_err());
         assert!(validate_register(&c, "audit-log", &[], &[], &[]).is_err());
         assert!(validate_register(&c, "bad id!", &[], &[], &[]).is_err());
-        assert!(validate_register(&c, "notify-log", &[sub("activation.applied", false, None)], &[], &[]).is_err(), "core-internal subscribe");
+        assert!(validate_register(&c, "notify-log", &[sub("core.selftest", false, None)], &[], &[]).is_err(), "core-internal subscribe");
         assert!(validate_register(&c, "notify-log", &[], &["signin.succeeded".into()], &[]).is_err(), "core-owned emit");
         assert!(validate_register(&c, "notify-log", &[], &[], &[decl("signin.refused", "notify")]).is_err(), "core-owned declare");
     }

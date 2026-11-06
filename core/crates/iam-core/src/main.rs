@@ -330,10 +330,15 @@ async fn main() {
     if let Ok(url) = std::env::var("IAM_CORE_NATS_URL") {
         let user = std::env::var("IAM_CORE_NATS_USER").unwrap_or_else(|_| "core".into());
         let pass = std::env::var("IAM_CORE_NATS_PASSWORD").unwrap_or_default();
+        // Step 3 (decision: NATS is a base process, always up): a configured bus that cannot connect is a FATAL
+        // error, not a degraded mode. The core exits; the start scripts bring NATS up first and restart the core.
+        // Without IAM_CORE_NATS_URL the core still starts (pure decision tests); a warning says the bus is off.
         match bus_wiring::BusLink::connect(&url, &user, &pass).await {
             Ok(b) => { tracing::info!("core bus connected to NATS {url}"); core.bus = Some(b); }
-            Err(e) => tracing::warn!("core bus disabled: {e} (the core keeps running without it)"),
+            Err(e) => panic!("NATS is a base process and must be running before the core starts: {e}. Start nats-server first (scripts/demo-start.sh), then restart the core."),
         }
+    } else {
+        tracing::warn!("IAM_CORE_NATS_URL is not set: the event bus is OFF (decisions and the IdP still work; nothing is audited on the bus and no plugin is served)");
     }
     let engine = Arc::new(core);
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());
