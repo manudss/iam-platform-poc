@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 const RING: usize = 500;
-const NOTIFY_KINDS: [&str; 3] = ["activation.applied", "signin.succeeded", "signin.refused"];
+const NOTIFY_KINDS: [&str; 4] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided"];
 
 /// Bounded in-memory record, numbered. The HTTP feed reads this fast ring; the same records are also persisted
 /// to the IAM_BUS_JOURNAL JetStream stream (step 3), which a later step re-reads after a restart.
@@ -39,6 +39,14 @@ impl Observer for Journal {
 }
 
 impl Ring {
+    /// Replay from the durable journal after a restart: records keep their order, get fresh ring seqs.
+    fn load(&self, r: BusRecord) {
+        let mut n = self.next.lock().unwrap();
+        *n += 1;
+        let mut b = self.buf.lock().unwrap();
+        b.push_back((*n, r));
+        if b.len() > RING { b.pop_front(); }
+    }
     fn since(&self, after: u64, limit: usize) -> (Vec<Value>, u64, u64) {
         let b = self.buf.lock().unwrap();
         let first = b.front().map(|x| x.0).unwrap_or(0);
@@ -108,6 +116,32 @@ impl BusLink {
         for k in NOTIFY_KINDS { d.subscribe(sub("audit-log", k, false)).map_err(|e| e.to_string())?; }
         // activation.applied also has a subscriber that is never started: the observer must show "expected, silent".
         d.subscribe(sub("mail-notifier", "activation.applied", false)).map_err(|e| e.to_string())?;
+        // Restart-proof observer (step 3): the IAM_BUS_JOURNAL stream survives the core; replay its last RING
+        // records into the ring so the HTTP feed keeps its history across a restart. Records are renumbered in
+        // replay order; the feed's first_seq makes the new numbering explicit. Best effort: a replay failure
+        // never blocks the bus (the ring simply starts empty, as before).
+        {
+            let js = async_nats::jetstream::new(client.clone());
+            if let Ok(mut stream) = js.get_stream(nats::JOURNAL_STREAM).await {
+                let (first, last) = stream.info().await.map(|i| (i.state.first_sequence, i.state.last_sequence)).unwrap_or((1, 0));
+                if last >= first {
+                    let start = std::cmp::max(first, last.saturating_sub(RING as u64 - 1));
+                    let cfg = async_nats::jetstream::consumer::pull::Config {
+                        deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::ByStartSequence { start_sequence: start },
+                        ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
+                        ..Default::default()
+                    };
+                    if let Ok(cons) = stream.create_consumer(cfg).await {
+                        if let Ok(mut batch) = cons.fetch().max_messages(RING).messages().await {
+                            use tokio_stream::StreamExt;
+                            while let Some(Ok(m)) = batch.next().await {
+                                if let Ok(r) = serde_json::from_slice::<BusRecord>(&m.message.payload) { ring.load(r); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(BusLink { dispatcher: Arc::new(d), ring, errors, url: url.to_string(), cache: Mutex::new(None), hosts: RwLock::new(HashMap::new()) })
     }
     /// Fire and forget: the caller never waits for the bus and never sees its errors.
@@ -171,7 +205,7 @@ pub async fn records(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Quer
     let after = q.get("after").and_then(|v| v.parse().ok()).unwrap_or(0u64);
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200usize).clamp(1, 500);
     let (records, first, last) = b.ring.since(after, limit);
-    (StatusCode::OK, Json(json!({"enabled": true, "records": records, "first_seq": first, "last_seq": last, "capacity": RING, "note": "in memory, lost on core restart; payloads are masked"})))
+    (StatusCode::OK, Json(json!({"enabled": true, "records": records, "first_seq": first, "last_seq": last, "capacity": RING, "note": "ring in memory, refilled from the durable journal on restart; payloads are masked"})))
 }
 
 // ---------- Step 2: plugin host protocol ----------
@@ -185,9 +219,9 @@ pub async fn records(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Quer
 /// Kinds owned by the core itself: an external emitter never sends nor declares them (they report core-internal facts).
 /// Step 3: external subscribers MAY subscribe to the core-emitted ones (the activation effects and the audit
 /// trail live outside the core); `core.selftest` stays fully private.
-const CORE_KINDS: [&str; 4] = ["core.selftest", "activation.applied", "signin.succeeded", "signin.refused"];
+const CORE_KINDS: [&str; 5] = ["core.selftest", "activation.applied", "signin.succeeded", "signin.refused", "access.decided"];
 /// Core-owned kinds an external plugin may subscribe to (never emit, never declare).
-const CORE_EMITTED_SUBSCRIBABLE: [&str; 3] = ["activation.applied", "signin.succeeded", "signin.refused"];
+const CORE_EMITTED_SUBSCRIBABLE: [&str; 4] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided"];
 /// Subscriber ids hosted inside the core: an external plugin never takes one (its answers would be trusted as the core's).
 const INTERNAL_IDS: [&str; 3] = ["core-selftest", "audit-log", "mail-notifier"];
 

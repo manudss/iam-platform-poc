@@ -22,6 +22,9 @@ fn start_nats() -> Option<Proc> {
         .replace("127.0.0.1:4222", &format!("127.0.0.1:{NATS_PORT}"))
         .replace("/tmp/iam-nats-js", &format!("/tmp/iam-nats-js-{NATS_PORT}"));
     let tmp = format!("/tmp/iam-core-step2-{NATS_PORT}.conf");
+    // The JetStream store survives a test run; the journal replay (step 3) would refill the ring with stale
+    // records. Start each run from an empty store.
+    let _ = std::fs::remove_dir_all(format!("/tmp/iam-nats-js-{NATS_PORT}"));
     std::fs::write(&tmp, text).unwrap();
     let child = match Command::new(&bin).args(["-c", &tmp]).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         Ok(c) => c,

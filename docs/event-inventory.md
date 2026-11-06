@@ -35,10 +35,10 @@ Production code: 31 points. Test code: 74 points.
 | AppEvents.on (in-process listener) | listener | - | apps/api/src/app.module.ts:33 |
 | AppEvents.on (in-process listener) | listener | - | apps/api/src/workflows/triggers.ts:31 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/authn/flow.service.ts:110 |
-| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:121 |
-| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:337 |
-| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:341 |
-| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:345 |
+| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
+| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
+| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:375 |
+| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:379 |
 | oidc provider event hook | listener | - | apps/api/src/sso/oidc.ts:165 |
 | plugins.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:29 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:29 |

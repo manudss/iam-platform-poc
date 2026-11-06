@@ -17,6 +17,8 @@ fn start(port: u16) -> Option<Server> {
     let conf = format!("{}/../../../conf/nats-local.conf", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&conf).unwrap().replace("127.0.0.1:4222", &format!("127.0.0.1:{port}")).replace("/tmp/iam-nats-js", &format!("/tmp/iam-nats-js-{port}"));
     let tmp = format!("/tmp/iam-bus-test-{port}.conf");
+    // Empty JetStream store per run: durable-consumer state survives nats-server and breaks at-least-once assertions.
+    let _ = std::fs::remove_dir_all(format!("/tmp/iam-nats-js-{port}"));
     std::fs::write(&tmp, text).unwrap();
     let child = Command::new(&bin).args(["-c", &tmp]).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
     let child = match child { Ok(c) => c, Err(e) => { assert!(std::env::var("IAM_REQUIRE_NATS").is_err(), "nats-server required: {e}"); eprintln!("SKIPPED: no nats-server ({e})"); return None } };

@@ -72,6 +72,14 @@ is a merged QUERY (registry.queryHook): every active plugin answers with the fie
 the objects, and only the plugins that answered appear - a disabled or unreachable plugin disappears from the
 merge instead of refusing the call.
 
+### Audit via the bus (step 3)
+
+- The core emits `access.decided` (notify) for EVERY decision, allow or deny, HTTP and gRPC (they share `decide_value`). The payload identifies the request (tenant, principal, action, resource, allow, reasons, activation seq/commit) and NEVER carries the context (it may hold personal data), same rule as the trail table. It is a core-owned kind: the API can subscribe but never declare (400) or emit (403) it.
+- The caller's audit meta (`audit: {source, note, subject}` in the `/v1/decide` body) rides on the event, so a trail row written from the bus keeps who asked and why. The meta is never trusted for the decision itself; unknown body fields are ignored by the core parser. gRPC calls carry no meta: their trail rows fall back to source `core`.
+- The API's AuditService serves `decision-audit` (kinds `access.decided` + `audit.event`): trail rows come from the bus, at-least-once, instead of a local write after the HTTP answer. With the bus up, the call sites skip their local record (`recordDecision`) so a decision lands exactly once; a failure the core never saw (unreachable, HTTP error) is still recorded locally, and without a bus everything behaves as before.
+- Plugin administration events (`plugin.install`, `plugin.enable`, `core.settings.changed`, ...) previously only logged now travel as `audit.event` (one-shot effect key `audit-event:<uuid>`) and land in the same trail with source `plugin`.
+- The core's journal observer (IAM_BUS_JOURNAL stream) is restart-proof: at startup the ring is refilled from the journal (last 500 records, renumbered, `first_seq` says so), so `GET /v1/bus/records` keeps the pre-restart history.
+
 ### Documented exceptions (decision 8)
 
 Two blocking kinds stay OFF the bus, by decision, and this section is their record (decision 1: an exception
@@ -141,6 +149,7 @@ Note: `ci.yml` runs only when started by hand (`workflow_dispatch`), so these te
 ## Observer (read only) - implemented
 - **Core**: every exchange through the bus is recorded in a ring of the last 500 (in memory, lost on core restart; `first_seq` tells a reader when older ones were dropped). `GET /v1/bus/records?after=<seq>` needs the core admin token. It only reads: it never emits, replays or answers.
 - **What is recorded**: envelope id (correlation), kind, mode, effectKey, masked payload, who was **expected** (with mandatory flag), who **answered** and with what verdict, who stayed **silent**, invalid answers, delay (ms), verdict. Masking (core `iam-bus::mask`, then again in the API): credential-like keys replaced by `[masked]`, e-mails partly hidden, scalars only, values cut at 120 chars.
-- **Real events** now sent to the bus (notifications only, no decision depends on them): `activation.applied` (effectKey `activation:<tenant>:<seq>`), `signin.succeeded`, `signin.refused`. Core-hosted subscribers: `audit-log` (answers through NATS) and `mail-notifier` (declared, never started: shows as "expected, silent").
+- **Real events** now sent to the bus (notifications only, no decision depends on them): `activation.applied` (effectKey `activation:<tenant>:<seq>`), `signin.succeeded`, `signin.refused`, `access.decided`. Core-hosted subscribers: `audit-log` (answers through NATS) and `mail-notifier` (declared, never started: shows as "expected, silent").
 - **API**: `GET /tenants/:tenant/bus/records` (sign-in + admin capability, read only, scrubs again, core token never leaves the server). **Console**: page "Event bus" (player: play, speed, position, previous/next, detail card with expected/answered/silent, correlation id, masked data).
-- **Not done / limits**: no persistence (ring in memory), no timeline over days, a mandatory silent subscriber is shown as "refused" from the record but no mandatory control exists yet in production flows, no signal for NATS reconnects in the page, single core instance only. Time-outs appear as `silent` with the dispatcher's detail.
+- The ring is refilled from the durable journal (IAM_BUS_JOURNAL) on restart; history older than the 500-record replay window is only in JetStream itself.
+- **Not done / limits**: no timeline over days, a mandatory silent subscriber is shown as "refused" from the record but no mandatory control exists yet in production flows, no signal for NATS reconnects in the page, single core instance only. Time-outs appear as `silent` with the dispatcher's detail.

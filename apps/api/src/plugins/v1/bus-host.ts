@@ -19,7 +19,7 @@
  *   memory; a durable ledger belongs to the later effects step). A redelivered effect gets a `deduped` reply
  *   instead of a second run.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { connect, AckPolicy, ConsumerMessages, JsMsg, JSONCodec, KV, Msg, NatsConnection, Subscription, JetStreamClient, nanos } from 'nats';
 import { AppEvent, AppEvents, APP_EVENT_KINDS } from '../../events/app-events.service.js';
 import { HOOKS, PluginContext } from './hooks.js';
@@ -32,6 +32,10 @@ const DEFAULT_TENANT = 'acme-demo';
 interface BusEnvelope { id: string; kind: string; tenant?: string; branch?: string; effect_key?: string; payload: unknown; source?: string }
 
 const EVENTS_STREAM = 'IAM_BUS_EVENTS'; // owned by the core (step 3)
+
+/** Registry audit events ride the bus as audit.event (step 3): the trail consumer (address decision-audit)
+ * turns them into trail rows with source 'plugin'. One-shot effect key: two identical admin actions are two events. */
+export const AUDIT_EVENT_KIND = 'audit.event';
 const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (decision 3)
 
 /** Blocking kinds that travel on the bus as mandatory controls (step 3, auth migration): the serving plugin
@@ -121,10 +125,10 @@ export class BusHost {
   private async declarePlatformKinds() {
     const kinds = [...HOOKS.entries()].filter(([, modes]) => modes.length === 1 && modes[0] === 'async').map(([name]) => ({ name, mode: 'notify' as const }));
     // The platform's application events (user.created, sso.login.*, ...) are notify kinds declared by `api` too.
-    const appKinds = APP_EVENT_KINDS.map((name) => ({ name, mode: 'notify' as const }));
+    const appKinds = [...APP_EVENT_KINDS, AUDIT_EVENT_KIND].map((name) => ({ name, mode: 'notify' as const }));
     const controlKinds = [...BUS_CONTROL_KINDS].map((name) => ({ name, mode: 'control' as const }));
     const queryKinds = [...BUS_QUERY_KINDS].map((name) => ({ name, mode: 'query' as const }));
-    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [...APP_EVENT_KINDS], declare_kinds: [...kinds, ...appKinds, ...controlKinds, ...queryKinds] });
+    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [...APP_EVENT_KINDS, AUDIT_EVENT_KIND], declare_kinds: [...kinds, ...appKinds, ...controlKinds, ...queryKinds] });
     for (const k of kinds) this.routedKinds.add(k.name);
     for (const k of BUS_CONTROL_KINDS) this.routedKinds.add(k);
     for (const k of BUS_QUERY_KINDS) this.routedKinds.add(k);
@@ -150,10 +154,14 @@ export class BusHost {
    * must not wait for the 60 s timer to get its bus registration (decision 7: the branch test sign-in is live). */
   private attachActivity() {
     this.allRegistries().then((regs) => {
-      for (const [, r] of regs) {
+      for (const [branch, r] of regs) {
         if (this.listeningOn.has(r)) continue;
         this.listeningOn.add(r);
         r.onActivityChange(() => { this.sync().catch((e) => this.log({ warn: 'bus resync failed', error: String(e) })); });
+        r.onAudit((e) => {
+          this.post('/v1/bus/emit', { source: 'api', kind: AUDIT_EVENT_KIND, tenant: e.tenant, branch: branch === 'main' ? undefined : branch, effect_key: `audit-event:${randomUUID()}`, payload: { action: e.action, plugin: e.plugin, detail: e.detail } })
+            .catch((err) => this.log({ warn: 'audit event not emitted', action: e.action, plugin: e.plugin, error: String(err) }));
+        });
       }
     }).catch(() => {});
   }

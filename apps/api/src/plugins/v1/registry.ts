@@ -72,6 +72,11 @@ export class PluginRegistry {
   private activityListeners: (() => void)[] = [];
   constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}, private states?: StateStore) {}
 
+  private readonly auditListeners: RegistryAudit[] = [];
+  /** Step 3: extra audit sinks (the bus host turns them into audit.event). The constructor callback stays the primary sink. */
+  onAudit(l: RegistryAudit): void { this.auditListeners.push(l); }
+  private emitAudit(e: Parameters<RegistryAudit>[0]): void { this.audit(e); for (const l of this.auditListeners) l(e); }
+
   /** Attaches the bus bridge (step 2). Routing activates per kind, never globally. */
   setBus(b: BusBridge | undefined, branch?: string) { this.bus = b; this.branchRef = branch; }
   /** The bus host listens here to re-push registrations when enablement changes. */
@@ -96,7 +101,7 @@ export class PluginRegistry {
   }
   /** Platform-core settings that are not a plugin (for example the authentication methods and chains). They live in the same versioned store as plugin settings, so a working branch holds them until Apply. */
   coreSettings(tenant: string, key: string) { return this.settings.get(tenant, key); }
-  async putCoreSettings(tenant: string, key: string, values: Record<string, unknown>) { await this.settings.put(tenant, key, values); this.audit({ tenant, action: 'core.settings.changed', plugin: key }); }
+  async putCoreSettings(tenant: string, key: string, values: Record<string, unknown>) { await this.settings.put(tenant, key, values); this.emitAudit({ tenant, action: 'core.settings.changed', plugin: key }); }
   private async persist(tenant: string, id: string) {
     const st = this.state.get(this.k(tenant, id));
     if (this.states && st) await this.states.save({ tenant, plugin: id, installed: st.installed, enabled: st.enabled, faulted: this.faulted.has(this.k(tenant, id)), grants: st.grants });
@@ -178,7 +183,7 @@ export class PluginRegistry {
     st.installed = true; st.grants = { ...st.grants, ...grants };
     this.state.set(this.k(tenant, id), st);
     await this.persist(tenant, id);
-    this.audit({ tenant, action: 'plugin.install', plugin: id });
+    this.emitAudit({ tenant, action: 'plugin.install', plugin: id });
   }
 
   async configure(tenant: string, id: string, input: Record<string, unknown>) {
@@ -190,7 +195,7 @@ export class PluginRegistry {
     const r = validateSettings(p.manifest.settings, merged);
     if (!r.ok) throw new PluginError('invalid-settings', r.errors.join('; '));
     await this.settings.put(tenant, id, r.values);
-    this.audit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
+    this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
   }
 
   async form(tenant: string, id: string): Promise<FormModel> {
@@ -219,7 +224,7 @@ export class PluginRegistry {
     if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
     this.faulted.delete(this.k(tenant, id));
     await this.persist(tenant, id);
-    this.audit({ tenant, action: 'plugin.enable', plugin: id });
+    this.emitAudit({ tenant, action: 'plugin.enable', plugin: id });
     this.activity();
   }
 
@@ -242,7 +247,7 @@ export class PluginRegistry {
     if (p.manifest.base) return;
     if (cfg.enabled) await this.enable(tenant, id, {});
     else await this.disable(tenant, id);
-    this.audit({ tenant, action: 'plugin.config.applied', plugin: id, detail: 'from a merged Dolt version; grants unchanged' });
+    this.emitAudit({ tenant, action: 'plugin.config.applied', plugin: id, detail: 'from a merged Dolt version; grants unchanged' });
   }
 
   /** Disable: slots fall back to the base plugin with the base's own stored configuration. Data is never dropped. */
@@ -263,7 +268,7 @@ export class PluginRegistry {
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
     await this.persist(tenant, id);
     // The replacement's own state (failure counters, lockouts) is not carried to the base: say so in the audit trail.
-    this.audit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
+    this.emitAudit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
     this.activity();
   }
 
@@ -374,7 +379,7 @@ export class PluginRegistry {
       if (!primary.manifest.extends) throw e; // the base itself failed: nothing to fall back to
       this.faulted.add(fk);
       await this.persist(tenant, primary.manifest.id);
-      this.audit({ tenant, action: sensitive ? 'plugin.fault.closed' : 'plugin.fault.fallback', plugin: primary.manifest.id, detail: String((e as Error).message) });
+      this.emitAudit({ tenant, action: sensitive ? 'plugin.fault.closed' : 'plugin.fault.fallback', plugin: primary.manifest.id, detail: String((e as Error).message) });
       if (sensitive) throw new PluginError('plugin-failed', `${primary.manifest.id} failed (${(e as Error).message}); refused, no fallback for ${hook}`);
       const base = [...this.impls.values()].find((i) => i.manifest.base && i.manifest.provides?.includes(slot))!;
       return { result: (await run(base)) as R, servedBy: base.manifest.id, fellBack: true };

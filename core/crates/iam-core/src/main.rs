@@ -270,12 +270,18 @@ async fn decide(State(c): State<Arc<Core>>, Json(raw): Json<Value>)
 pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, Value)> {
     let bad = |m: String| (StatusCode::BAD_REQUEST, json!({"error": m}));
     let tenant = raw.get("tenant").and_then(|v| v.as_str()).map(str::to_string);
+    // Optional caller audit meta (step 3): the API stamps who asked (source, note, subject); it rides in the
+    // access.decided bus event so the trail keeps the caller context. Never trusted for the decision itself.
+    let audit_meta = raw.get("audit").cloned();
     let mut req: DecisionRequest = serde_json::from_value(raw).map_err(|e| bad(e.to_string()))?;
     let mut version = None;
     if let Some(t) = &tenant {
         match tenant_context(c, t, &req.principal, &mut req.context) {
             Ok(v) => version = Some(v),
-            Err(()) => return Ok(json!({"allow": false, "reasons": ["no-active-version"], "errors": []})),
+            Err(()) => {
+                emit_decision(c, tenant.as_deref(), &req, false, &["no-active-version".to_string()], None, audit_meta.as_ref());
+                return Ok(json!({"allow": false, "reasons": ["no-active-version"], "errors": []}));
+            }
         }
     }
     let tenant_engine = tenant.as_ref().and_then(|t| c.engines.read().unwrap().get(t).cloned());
@@ -295,8 +301,23 @@ pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, V
         }
     }
     let mut out = serde_json::to_value(&resp).unwrap();
-    if let Some((seq, commit)) = version { out["version"] = json!({"seq": seq, "commit": commit}); }
+    if let Some((seq, commit)) = &version { out["version"] = json!({"seq": seq, "commit": commit}); }
+    emit_decision(c, tenant.as_deref(), &req, resp.allow, &resp.reasons, version.as_ref(), audit_meta.as_ref());
     Ok(out)
+}
+
+/// Step 3: every decision (allow or deny, HTTP or gRPC) is emitted on the bus as access.decided, durable and
+/// at-least-once. The payload never carries the request context (it may hold personal data) - only the inputs
+/// that identify the request, mirroring the API's decision_audit rule.
+fn emit_decision(c: &Core, tenant: Option<&str>, req: &DecisionRequest, allow: bool, reasons: &[String], version: Option<&(u64, String)>, audit_meta: Option<&Value>) {
+    if c.bus.is_none() { return; }
+    let mut p = json!({"principal": req.principal, "action": req.action, "resource": req.resource, "allow": allow, "reasons": reasons});
+    if let Some(t) = tenant { p["tenant"] = json!(t); }
+    if let Some((seq, commit)) = version { p["seq"] = json!(seq); p["commit"] = json!(commit); }
+    if let Some(a) = audit_meta {
+        for k in ["source", "note", "subject"] { if let Some(v) = a.get(k) { p[k] = v.clone(); } }
+    }
+    c.bus_emit("access.decided", p, None);
 }
 
 #[tokio::main]

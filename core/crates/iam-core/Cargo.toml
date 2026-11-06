@@ -18,12 +18,12 @@ iam-plugin-runtime = { path = "../iam-plugin-runtime" }
 iam-bus = { path = "../iam-bus" }
 async-nats = "0.51"
 async-trait = "0.1"
+tokio-stream = { version = "0.1", features = ["net"] }
 
 [dependencies.wat]
 version = "1"
 
 [dev-dependencies]
-tokio-stream = { version = "0.1", features = ["net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 
