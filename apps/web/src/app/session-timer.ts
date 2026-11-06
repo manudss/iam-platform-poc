@@ -44,7 +44,7 @@ export function clock(ms: number): string {
     .dlg { background: #fff; border-radius: .7rem; padding: 1.2rem 1.4rem; width: min(26rem, calc(100vw - 2rem)); box-shadow: 0 20px 50px #0f172a66; }
     .dlg h3 { margin: 0 0 .5rem; } .dlg p { margin: 0 0 .8rem; } .bad { color: #b91c1c; }
     .act { display: flex; gap: .6rem; flex-wrap: wrap; }
-    @media (max-width: 600px) { .sess { width: 3.2rem; } .lbl { font-size: .65rem; } }
+    @media (max-width: 600px) { :host { flex: 0 1 auto; min-width: 0; overflow: hidden; } .sess { width: 2.6rem; } .lbl { font-size: .65rem; } }
   `],
 })
 export class SessionTimer {
