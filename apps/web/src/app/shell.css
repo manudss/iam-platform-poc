@@ -48,19 +48,21 @@ nav a.active { background: #312e81; color: #fff; box-shadow: inset 3px 0 0 #818c
 .test-bar button{margin-left:auto;white-space:nowrap}
 
 /* Compact bar (docs/toolbar.md): branch pill with a colour dot, discreet Review & Apply icon with a badge of changed rows, menu. */
-.pillwrap { display: inline-flex; align-items: center; gap: .4rem; background: #f1f5f9; border-radius: 999px; padding: 0 .3rem 0 .7rem; }
+.pillwrap { display: inline-flex; align-items: center; gap: .4rem; background: var(--code-bg); border-radius: 999px; padding: 0 .3rem 0 .7rem; }
 .dot { width: .6rem; height: .6rem; border-radius: 50%; background: #94a3b8; flex: none; } .dot.green { background: #16a34a; } .dot.orange { background: #ea580c; }
 .pill { border: 0; background: transparent; font-weight: 600; font-size: .85rem; padding: .3rem .2rem; max-width: 12rem; text-overflow: ellipsis; }
-.icon { position: relative; background: transparent; color: #475569; border: 1px solid transparent; padding: .25rem .55rem; font-size: 1rem; line-height: 1; }
-.icon:hover:not(:disabled) { background: #eef2ff; } .icon:disabled { opacity: .45; }
+.icon { position: relative; background: transparent; color: var(--th-ink); border: 1px solid transparent; padding: .25rem .55rem; font-size: 1rem; line-height: 1; }
+.icon:hover:not(:disabled) { background: var(--accent-soft); } .icon:disabled { opacity: .45; }
 .badge { position: absolute; top: -.35rem; right: -.35rem; min-width: 1.1rem; height: 1.1rem; padding: 0 .25rem; border-radius: 999px; background: #4f46e5; color: #fff; font-size: .68rem; font-weight: 700; display: grid; place-items: center; }
-.pop { position: absolute; right: 1rem; top: 3.4rem; z-index: 8; background: #fff; border: 1px solid var(--line, #e2e8f0); border-radius: .6rem; box-shadow: 0 12px 30px #0f172a33; padding: .8rem; max-width: min(34rem, calc(100vw - 2rem)); max-height: 75vh; overflow: auto; }
+.pop { position: absolute; right: 1rem; top: 3.4rem; z-index: 8; background: var(--card); border: 1px solid var(--line, #e2e8f0); border-radius: .6rem; box-shadow: 0 12px 30px #0f172a33; padding: .8rem; max-width: min(34rem, calc(100vw - 2rem)); max-height: 75vh; overflow: auto; }
 .pop.menu { display: flex; flex-direction: column; gap: .4rem; min-width: 14rem; }
 .pop .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; margin-bottom: .5rem; } .pop input { max-width: 12rem; }
 .pop .chip { display: inline-flex; gap: .3rem; align-items: center; margin-right: .4rem; }
-.pop .help summary { cursor: help; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: #e2e8f0; text-align: center; list-style: none; }
-.pop .hint { font-size: .8rem; color: #475569; }
+.pop .help summary { cursor: help; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--line); text-align: center; list-style: none; }
+.pop .hint { font-size: .8rem; color: var(--th-ink); }
 @media (max-width: 900px) { .pill { max-width: 6.5rem; } .pop { right: .5rem; left: .5rem; max-width: none; } }
 @media (max-width: 600px) { .top { flex-wrap: wrap; row-gap: .4rem; } .spacer { display: none; } .top h1 { flex: 1 1 4rem; } }
 .pop.inline { position: static; max-width: none; box-shadow: none; border-radius: 0; border-width: 0 0 1px; margin: 0; padding: .7rem 1.5rem; }
 @media (max-width: 900px) { .pop.inline { padding: .7rem 1rem; } }
+/* DOM order keeps the identity first (scripts and screen readers find it first); flex order puts it after the branch controls. */
+.who { order: 1; } .top > .secondary:last-child { order: 2; } .top > .pillwrap, .top > .icon { order: 0; }

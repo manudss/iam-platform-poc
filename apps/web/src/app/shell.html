@@ -25,6 +25,7 @@
       <!-- Session timer: self-contained, keep it in the top bar wherever the bar is rearranged. -->
       <app-session-timer />
       <app-theme-switch class="top-theme" />
+      <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
       @if (isAdmin() && !s.testBranch()) {
       <span class="pillwrap" title="The data branch you are working on. Main is read only. Your own branch is green, other branches are orange."><span class="dot" [class]="dot()"></span>
         <select class="pill" name="globalBranch" aria-label="Data branch" [(ngModel)]="working" (ngModelChange)="select()"><option value="">Choose a branch</option>@for(b of branches();track b.name){<option [value]="b.name">{{b.name}}{{b.name==='main'?' (read only)':''}}{{b.name===personal()?' (yours)':''}}</option>}</select></span>
@@ -32,7 +33,6 @@
         title="Review &amp; Apply: see what you changed on this branch, compared with main, then publish it to main. Disabled on main, which is read only.">⇄@if(changes();as n){<span class="badge" id="changes-badge" [attr.aria-label]="n+' changed rows'">{{n}}</span>}</button>
       <button type="button" class="icon" id="more-menu" (click)="more.set(!more())" [attr.aria-expanded]="more()" aria-label="More branch actions" title="Test sign-in, stable test link, manage branches">⋯</button>
       }
-      <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
       <button type="button" class="secondary" (click)="signOut()">Sign out</button>
     </header>
     @if (isAdmin() && !s.testBranch()) {
