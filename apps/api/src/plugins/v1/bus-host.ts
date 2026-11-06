@@ -37,7 +37,10 @@ const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (
 /** Blocking kinds that travel on the bus as mandatory controls (step 3, auth migration): the serving plugin
  * answers `plugin.<id>.call`, the core merges the verdict, a silent mandatory subscriber denies (fail closed)
  * and the caller refuses when nobody answered at all. ui.screens and access.decide stay in process (decision 8). */
-export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge']);
+export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score']);
+/** Blocking kinds that travel on the bus as merged QUERIES (step 3): every active plugin answers with the
+ * fields it owns, the core merges the objects; a silent or disabled plugin simply does not appear. */
+export const BUS_QUERY_KINDS = new Set(['profile.enrich']);
 
 /** KV keys accept [A-Za-z0-9_./=-]: the composite key uses '/' and every part is sanitized. */
 function ledgerKey(tenant: string, id: string, kind: string, effectKey: string): string {
@@ -120,9 +123,11 @@ export class BusHost {
     // The platform's application events (user.created, sso.login.*, ...) are notify kinds declared by `api` too.
     const appKinds = APP_EVENT_KINDS.map((name) => ({ name, mode: 'notify' as const }));
     const controlKinds = [...BUS_CONTROL_KINDS].map((name) => ({ name, mode: 'control' as const }));
-    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [...APP_EVENT_KINDS], declare_kinds: [...kinds, ...appKinds, ...controlKinds] });
+    const queryKinds = [...BUS_QUERY_KINDS].map((name) => ({ name, mode: 'query' as const }));
+    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [...APP_EVENT_KINDS], declare_kinds: [...kinds, ...appKinds, ...controlKinds, ...queryKinds] });
     for (const k of kinds) this.routedKinds.add(k.name);
     for (const k of BUS_CONTROL_KINDS) this.routedKinds.add(k);
+    for (const k of BUS_QUERY_KINDS) this.routedKinds.add(k);
   }
 
   /** Step 3: the application events travel on the bus. Emissions stay fire-and-forget (the producing write is
@@ -184,7 +189,9 @@ export class BusHost {
           // Blocking auth hooks: a MANDATORY control subscription, so the core denies the call when the serving
           // plugin is unreachable (fail closed). The delivery answers not-concerned unless this plugin is the
           // one chosen for the slot (single responder).
-          if (h.mode === 'blocking' && this.routedKinds.has(h.name)) e.subscriptions.set(h.name, { kind: h.name, mandatory: true });
+          if (h.mode === 'blocking' && BUS_CONTROL_KINDS.has(h.name)) e.subscriptions.set(h.name, { kind: h.name, mandatory: true });
+          // Merged queries: an OPTIONAL subscription - a disabled or unreachable plugin simply does not appear.
+          if (h.mode === 'blocking' && BUS_QUERY_KINDS.has(h.name)) e.subscriptions.set(h.name, { kind: h.name });
         }
         for (const s of m.subscribes ?? []) {
           e.subscriptions.set(s.name + (s.group ? `/${s.group}` : ''), s.mode === 'async' ? { kind: s.name, group: s.group } : { kind: s.name, mandatory: !!s.mandatory });
@@ -298,6 +305,15 @@ export class BusHost {
     }
     const registry = await this.registryFor(env.branch ?? 'main').catch(() => undefined);
     if (!registry) return; // unknown branch: stay silent (a mandatory control then denies, fail closed)
+    if (BUS_QUERY_KINDS.has(env.kind)) {
+      // Merged query: every concerned plugin answers with its fields, no verdict; the core merges.
+      if (registry.blockingResponder(tenant, id, env.kind) !== 'answer') { msg.respond(jc.encode({ from: id, id: env.id, not_concerned: true })); return; }
+      const impl = registry.impl(id)!;
+      const settings = validateSettings(impl.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
+      const result = await impl.handlers[env.kind](env.payload, { tenant, settings } as PluginContext);
+      msg.respond(jc.encode({ from: id, id: env.id, data: result ?? null }));
+      return;
+    }
     if (BUS_CONTROL_KINDS.has(env.kind)) {
       // Single responder: only the plugin chosen for the slot answers; the others say not-concerned (neither an
       // answer nor a silence). A faulted replacement refuses: the base is never asked in its place (callSlot rule).
@@ -342,6 +358,11 @@ export class BusHost {
         const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, timeout_ms: timeoutMs, branch });
         const replied = (r.outcomes ?? []).filter((o: any) => o.status === 'replied');
         return { verdict: r.verdict, reason: r.reason, result: replied[replied.length - 1]?.data, answered: replied.length > 0 };
+      },
+      query: async (tenant, kind, payload, timeoutMs, branch) => {
+        const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, timeout_ms: timeoutMs, branch });
+        const replied = (r.outcomes ?? []).filter((o: any) => o.status === 'replied');
+        return { data: r.data ?? {}, conflicts: r.conflicts ?? [], answeredBy: replied.map((o: any) => o.id as string) };
       },
     };
   }

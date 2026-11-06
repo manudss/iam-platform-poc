@@ -64,6 +64,26 @@ ledger) absorb duplicates - and replays the applied activations of the journal a
 keeps no copy for an address nobody registered). Core-owned kinds can be subscribed to but never declared or
 emitted by the API (403/400).
 
+### Other blocking kinds (step 3)
+
+risk.score is a mandatory CONTROL too (registry.control): only an active plugin answers, and a deny or no
+answer at all refuses - the hook is sensitive, so it fails closed exactly like authentication. profile.enrich
+is a merged QUERY (registry.queryHook): every active plugin answers with the fields it owns, the core merges
+the objects, and only the plugins that answered appear - a disabled or unreachable plugin disappears from the
+merge instead of refusing the call.
+
+### Documented exceptions (decision 8)
+
+Two blocking kinds stay OFF the bus, by decision, and this section is their record (decision 1: an exception
+exists only for a security or performance reason, is managed by the platform, and always keeps an audit trail):
+
+- ui.screens: the answer is static, read from the manifest (registry.screens) - there is no decision to take,
+  so there is nothing a bus round trip could add, and nothing to audit beyond the plugin enable/disable trail.
+- access.decide: the hook runs in the CORE (WASM), on the request path where a bus round trip would add a
+  network hop to every authorization check (performance), and the core must answer even to serve the bus
+  itself. Every decision through the API is already written to the decision_audit table; the bus-level audit
+  feed (audit.event) lands with the audit commit.
+
 ### Authentication over the bus (step 3)
 
 auth.authenticate and auth.challenge are declared to the core as CONTROL kinds and routed through the bus

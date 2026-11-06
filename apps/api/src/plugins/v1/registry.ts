@@ -53,6 +53,9 @@ export interface BusBridge {
   /** `answered` is false when NO subscriber gave a usable reply (all silent or not-concerned): for a blocking
    * hook that is a refusal too ("no response = deny", plan step 3), even if the merged verdict says allow. */
   call(tenant: string, kind: string, payload: unknown, timeoutMs?: number, branch?: string): Promise<{ verdict: string; reason?: string; result: unknown; answered: boolean }>;
+  /** Merged query (step 3: profile.enrich): the shallow union of the responders' objects, fields from the
+   * responders only; `conflicts` lists the keys several plugins answered differently. */
+  query(tenant: string, kind: string, payload: unknown, timeoutMs?: number, branch?: string): Promise<{ data: Record<string, unknown>; conflicts: string[]; answeredBy: string[] }>;
 }
 
 export class PluginRegistry {
@@ -296,10 +299,53 @@ export class PluginRegistry {
   blockingResponder(tenant: string, id: string, kind: string): 'answer' | 'not-concerned' | 'refuse' {
     const impl = this.impls.get(id);
     if (!impl || !impl.handlers[kind] || !this.isActive(tenant, id)) return 'not-concerned';
-    const chosen = (impl.manifest.provides ?? []).some((s) => { try { return this.resolve(tenant, s).manifest.id === id; } catch { return false; } });
-    if (!chosen) return 'not-concerned';
+    // A plugin WITHOUT a slot (risk signal, profile enrichment) answers whenever it is active; a slotted plugin
+    // answers only when it is the one chosen for the slot (single responder: base or replacement).
+    const slots = impl.manifest.provides ?? [];
+    if (slots.length && !slots.some((s) => { try { return this.resolve(tenant, s).manifest.id === id; } catch { return false; } })) return 'not-concerned';
     if (impl.manifest.extends && this.faulted.has(this.k(tenant, id))) return 'refuse';
     return 'answer';
+  }
+
+  /** Generic blocking control (step 3: risk.score). On the bus: one control call - a deny verdict or no usable
+   * answer refuses (fail closed, sensitive hook). In process: every active plugin with the handler answers; a
+   * deny or an error refuses; the last answer is the result (mirrors the bus contract). */
+  async control<R>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string }> {
+    if (this.bus?.routed(hook)) {
+      const r = await this.bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
+      if (r.verdict !== 'allow' || !r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? (r.answered ? 'denied' : 'no responder')}`);
+      return { result: r.result as R, servedBy: 'bus' };
+    }
+    let last: unknown; const answered: string[] = [];
+    for (const p of this.impls.values()) {
+      if (!this.isActive(tenant, p.manifest.id) || !p.handlers[hook]) continue;
+      const settings = validateSettings(p.manifest.settings, (await this.settings.get(tenant, p.manifest.id)) ?? {}).values;
+      const res = await withTimeout(Promise.resolve(p.handlers[hook](payload, { tenant, settings })), timeoutMs);
+      if (res?.outcome === 'deny') throw new PluginError('plugin-failed', `${hook} denied by ${p.manifest.id}: ${res.reason ?? 'denied'}`);
+      last = res; answered.push(p.manifest.id);
+    }
+    if (!answered.length) throw new PluginError('plugin-failed', `${hook}: no active plugin answers`);
+    return { result: last as R, servedBy: answered.join('+') };
+  }
+
+  /** Merged query (step 3: profile.enrich): the union of the responders' fields - only the plugins that
+   * answered appear; a key several plugins answer differently is reported as a conflict (first answer kept). */
+  async queryHook<R extends Record<string, unknown>>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ data: R; conflicts: string[]; answeredBy: string[] }> {
+    if (this.bus?.routed(hook)) {
+      const r = await this.bus.query(tenant, hook, payload, timeoutMs, this.branchRef);
+      return { data: r.data as R, conflicts: r.conflicts, answeredBy: r.answeredBy };
+    }
+    const data: Record<string, unknown> = {}; const conflicts: string[] = []; const answeredBy: string[] = [];
+    for (const p of this.impls.values()) {
+      if (!this.isActive(tenant, p.manifest.id) || !p.handlers[hook]) continue;
+      const settings = validateSettings(p.manifest.settings, (await this.settings.get(tenant, p.manifest.id)) ?? {}).values;
+      const res = (await withTimeout(Promise.resolve(p.handlers[hook](payload, { tenant, settings })), timeoutMs)) as Record<string, unknown> | undefined;
+      for (const [k, v] of Object.entries(res ?? {})) {
+        if (k in data && data[k] !== v) { if (!conflicts.includes(k)) conflicts.push(k); } else data[k] = v;
+      }
+      answeredBy.push(p.manifest.id);
+    }
+    return { data: data as R, conflicts, answeredBy };
   }
 
   async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {

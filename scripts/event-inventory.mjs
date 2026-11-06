@@ -34,6 +34,7 @@ const RULES = [
   { id: 'plugins.emit (async hook)', files: 'api', re: /plugins!?\.emit\(\s*\w+,\s*'([a-z0-9._-]+)'/gi, kind: 'emitter' },
   { id: 'registry.emit (async hook)', files: 'api', re: /\.emit\(\s*\w+,\s*'(notify\.send|identity\.changed|workflow\.step|connector\.[a-z]+|audit\.event)'/gi, kind: 'emitter' },
   { id: 'callSlot (blocking hook)', files: 'api', re: /callSlot(?:<[^>]*>)?\(\s*\w+,\s*'([a-z0-9._-]+)'/gi, kind: 'caller' },
+  { id: 'registry.control/queryHook (blocking hook, step 3)', files: 'api', re: /\.(?:control|queryHook)(?:<[^>]*>)?\(\s*\w+,\s*'([a-z0-9._-]+)'/gi, kind: 'caller' },
   { id: 'AppEvents.on (in-process listener)', files: 'api', re: /events\.on\(/gi, kind: 'listener' },
   { id: 'NatsService (IAM_EVENTS circuit)', files: 'api', re: /NatsService/g, kind: 'circuit' },
   { id: 'core bus emit (Rust)', files: 'core', re: /\.(?:emit|notify|call|query)\(&e(?:nv)?\b/g, kind: 'emitter' },
