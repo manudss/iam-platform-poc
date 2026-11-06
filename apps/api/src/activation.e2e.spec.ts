@@ -153,7 +153,7 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     await assert.rejects(dolt.proposePolicyChange({ kind: 'upsert-rule', set: 'default', id: 'nope', cedar: 'permit(' }, validate), /core refused the candidate/);
     assert.deepEqual(await branches(), before);
     // A valid rule: committed on its branch, merged, activated - and it decides.
-    const { branch } = await dolt.proposePolicyChange({ kind: 'upsert-rule', set: 'default', id: 'dave-approves', cedar: '@id("dave-approves")\\npermit(principal == User::"dave", action == Action::"approve", resource);' }, validate);
+    const { branch } = await dolt.proposePolicyChange({ kind: 'upsert-rule', set: 'default', id: 'dave-approves', cedar: '@id("dave-approves")\npermit(principal == User::"dave", action == Action::"approve", resource);' }, validate);
     const merged = await dolt.merge(branch);
     const a = await svc.activate(T, merged.commit);
     assert.equal(a.state, 'applied');
