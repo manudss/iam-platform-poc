@@ -28,6 +28,24 @@ describe('policy-studio with the real core', { skip: !have && 'the core binary i
     assert.equal(c.rules.find((r) => r.id === 'sod-blocks-approve')!.effect, 'forbid');
     assert.equal((await fetch(`${CORE}/v1/policies`)).status, 401);
   });
+  it('simulates a request and explains why it is denied, without deciding anything', async () => {
+    const sim = (body: unknown, token?: string) => fetch(`${CORE}/v1/policies/simulate`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { 'x-core-admin-token': token } : {}) }, body: JSON.stringify(body) });
+    assert.equal((await sim({ principal: 'User::"carol"', action: 'Action::"approve"', resource: 'Request::"r1"' })).status, 401);
+    // carol, no role, SoD conflict: the forbid decides, no permit matched - the answer says so and names the rules.
+    const res = await sim({ principal: 'User::"carol"', action: 'Action::"approve"', resource: 'Request::"r1"', context: { roles: ['viewer'], sod_conflict: true } }, ADMIN);
+    assert.equal(res.status, 200);
+    const out = await res.json() as { allow: boolean; reasons: string[]; matched_permits: string[]; matched_forbids: string[]; explanation: string };
+    assert.equal(out.allow, false);
+    assert.deepEqual(out.reasons, ['sod-blocks-approve']);
+    assert.deepEqual(out.matched_permits, []);
+    assert.deepEqual(out.matched_forbids, ['sod-blocks-approve']);
+    assert.match(out.explanation, /forbid sod-blocks-approve applies/);
+    // alice, no tenant data: the static demo rule allows her.
+    const ok = await (await sim({ principal: 'User::"alice"', action: 'Action::"approve"', resource: 'Request::"r1"' }, ADMIN)).json() as { allow: boolean; matched_permits: string[] };
+    assert.equal(ok.allow, true);
+    assert.deepEqual(ok.matched_permits, ['demo-alice-approves']);
+  });
+
   it('a denied decision names the forbid rule, and the audit stores that name', async () => {
     const res = await fetch(`${CORE}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ principal: 'User::"alice"', action: 'Action::"approve"', resource: 'Request::"r1"', context: { sod_conflict: true } }) });
     const out = await res.json() as { allow: boolean; reasons: string[] };

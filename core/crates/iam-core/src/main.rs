@@ -83,6 +83,7 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/health", get(|| async { Json(json!({"status":"ok","service":"iam-core"})) }))
         .route("/v1/decide", post(decide))
         .route("/v1/policies", get(policies::list))
+        .route("/v1/policies/simulate", post(policies::simulate))
         .route("/v1/activate", post(activate))
         .route("/v1/version", get(version))
         .route("/v1/bus", get(bus_wiring::status))

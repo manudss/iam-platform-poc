@@ -1,12 +1,14 @@
-import { Controller, Get, Inject, Injectable, NotFoundException, Param, ServiceUnavailableException, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Inject, Injectable, NotFoundException, Param, Post, ServiceUnavailableException, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuditService } from '../access/audit.service.js';
 import { ProfileService } from '../profile/profile.service.js';
 
 /**
- * Policy studio (plugin `policy-studio`), step 1: a READ-ONLY catalogue of the Cedar rules the core decides with, and how often
- * recent decisions in the audit named each rule. Nothing here changes a rule or a decision. The rules live in the Rust core (policies/*.cedar
+ * Policy studio (plugin `policy-studio`). Step 1: a READ-ONLY catalogue of the Cedar rules the core decides with, and how often
+ * recent decisions in the audit named each rule. Step 3: the simulator POST .../policies/simulate answers "why refused?" for a request
+ * the administrator types (person, action, resource, context) - the core evaluates it against the loaded rules and explains the outcome.
+ * Nothing here changes a rule or a decision. The rules live in the Rust core (policies/*.cedar
  * loaded at startup); the core serves the list on GET /v1/policies with its admin token, this service only relays it.
  * While the plugin is disabled on the branch, every /policies endpoint answers 404 and the Policies menu is hidden.
  */
@@ -21,7 +23,13 @@ export interface RuleInfo {
 export interface CoreCatalog { engine: { rules: number; sets: number; schema?: boolean }; sets: { name: string; rules: number }[]; rules: RuleInfo[] }
 export interface RuleUsage { allow: number; deny: number; last_at: string | null }
 
-export interface PolicySource { catalog(): Promise<CoreCatalog> }
+export interface SimulationRequest { principal: string; action: string; resource: string; context?: Record<string, unknown>; entities?: unknown[] }
+export interface SimulationResult {
+  allow: boolean; reasons: string[]; errors: string[]; matched_permits: string[]; matched_forbids: string[];
+  errored_rules: { id: string; error: string }[]; templates: string[]; explanation: string;
+}
+
+export interface PolicySource { catalog(): Promise<CoreCatalog>; simulate(body: SimulationRequest): Promise<SimulationResult> }
 export const POLICY_SOURCE = Symbol('POLICY_SOURCE');
 
 /** The real source: the core over HTTP, with the core admin token. Not configured or not reachable = 503 (the screen says so; never an empty list). */
@@ -38,6 +46,28 @@ export class CorePolicySource implements PolicySource {
     if (!Array.isArray(c?.rules)) throw new ServiceUnavailableException('the core answered an unexpected catalogue');
     return c;
   }
+  async simulate(body: SimulationRequest): Promise<SimulationResult> {
+    const url = process.env.IAM_CORE_URL, token = process.env.IAM_CORE_ADMIN_TOKEN;
+    if (!url || !token) throw new ServiceUnavailableException('the simulator needs IAM_CORE_URL and IAM_CORE_ADMIN_TOKEN');
+    let res: Response;
+    try {
+      res = await fetch(`${url.replace(/\/$/, '')}/v1/policies/simulate`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-core-admin-token': token }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+    } catch { throw new ServiceUnavailableException('the core is not reachable'); }
+    if (res.status === 400) { const e = (await res.json().catch(() => ({}))) as { error?: string }; throw new BadRequestException(e.error ?? 'the core refused this simulation request'); }
+    if (!res.ok) throw new ServiceUnavailableException(`the core refused the simulation (${res.status})`);
+    return (await res.json()) as SimulationResult;
+  }
+}
+
+/** A simulation request is exactly what the core's decide takes: three entity ids and a free context. Never tenant data:
+ *  exploring a context the tenant did not apply is the point of the simulator. */
+export function checkSimulationRequest(b: unknown): SimulationRequest {
+  const r = b as Partial<SimulationRequest>;
+  const ok = (x: unknown) => typeof x === 'string' && x.trim().length > 0 && x.length <= 200;
+  if (!r || !ok(r.principal) || !ok(r.action) || !ok(r.resource)) throw new BadRequestException('principal, action and resource are required (e.g. User::"alice", Action::"approve", Request::"r1")');
+  if (r.context !== undefined && (typeof r.context !== 'object' || r.context === null || Array.isArray(r.context))) throw new BadRequestException('context must be a JSON object');
+  if (r.entities !== undefined && !Array.isArray(r.entities)) throw new BadRequestException('entities must be a JSON array');
+  return { principal: r.principal!.trim(), action: r.action!.trim(), resource: r.resource!.trim(), context: r.context, entities: r.entities };
 }
 
 /** Count, per rule id, the audited decisions whose reasons name it. Reasons that are not rule ids (core-unreachable, no-active-version...) simply match nothing. */
@@ -64,6 +94,10 @@ export class PolicyStudioService {
     const entries = await this.audit.list(t, USAGE_WINDOW);
     return { ...c, usage: usageByRule(entries, new Set(c.rules.map((r) => r.id))), usage_window: { decisions: entries.length, max: USAGE_WINDOW } };
   }
+  async simulate(t: string, body: unknown) {
+    await this.need(t);
+    return this.source.simulate(checkSimulationRequest(body));
+  }
 }
 
 @UseGuards(AuthGuard, AdminGuard)
@@ -71,4 +105,5 @@ export class PolicyStudioService {
 export class PolicyStudioController {
   constructor(private readonly s: PolicyStudioService) {}
   @Get() list(@Param('tenant') t: string) { return this.s.catalog(t); }
+  @Post('simulate') @HttpCode(200) simulate(@Param('tenant') t: string, @Body() body: unknown) { return this.s.simulate(t, body); } // a query, not a creation
 }

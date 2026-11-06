@@ -45,6 +45,34 @@ pub struct DecisionResponse {
     pub errors: Vec<String>,
 }
 
+/// A rule that errored during a simulated evaluation (Cedar skips an errored rule; the engine fails closed on it).
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct SimError {
+    pub id: String,
+    pub error: String,
+}
+
+/// The answer of a simulated request (policy-studio step 3): the same decision the engine would give, plus WHY -
+/// every permit and forbid that matched (not only the ones that decided), the rules that errored, the templates
+/// (never applicable until linked), and a plain-language explanation. Read-only: nothing here changes a decision.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct Simulation {
+    pub allow: bool,
+    /// The deciding rules (same as a real decision): the satisfied permits on an allow, the satisfied forbids on a deny.
+    pub reasons: Vec<String>,
+    pub errors: Vec<String>,
+    /// Every static permit the request satisfies (even the ones a forbid overruled).
+    pub matched_permits: Vec<String>,
+    /// Every static forbid the request satisfies (any one of them decides a deny).
+    pub matched_forbids: Vec<String>,
+    /// Rules skipped because they errored on this request.
+    pub errored_rules: Vec<SimError>,
+    /// Templates in the set: they never apply until linked (per person, role or resource - step 4 stores the links).
+    pub templates: Vec<String>,
+    /// One sentence: why the request is allowed or denied.
+    pub explanation: String,
+}
+
 /// One named set of Cedar rules (one file, later one Dolt row group). The name "default" is not shown in rule ids.
 #[derive(Debug, Clone)]
 pub struct PolicySource {
@@ -209,21 +237,7 @@ impl Engine {
     pub fn validated(&self) -> bool { self.validated }
 
     pub fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, DecisionError> {
-        let uid = |s: &str| EntityUid::from_str(s).map_err(|e| DecisionError::Input(e.to_string()));
-        let ctx = if req.context.is_null() {
-            Context::empty()
-        } else {
-            Context::from_json_value(req.context.clone(), None)
-                .map_err(|e| DecisionError::Input(e.to_string()))?
-        };
-        let ents = if req.entities.is_null() {
-            Entities::empty()
-        } else {
-            Entities::from_json_value(req.entities.clone(), None)
-                .map_err(|e| DecisionError::Input(e.to_string()))?
-        };
-        let request = Request::new(uid(&req.principal)?, uid(&req.action)?, uid(&req.resource)?, ctx, None)
-            .map_err(|e| DecisionError::Input(e.to_string()))?;
+        let (request, ents) = cedar_parts(req)?;
         let resp = self.authorizer.is_authorized(&request, &self.policies, &ents);
         let errors: Vec<String> = resp.diagnostics().errors().map(|e| e.to_string()).collect();
         let reasons: Vec<String> = resp.diagnostics().reason().map(|p| p.to_string()).collect();
@@ -231,6 +245,86 @@ impl Engine {
         let allow = resp.decision() == Decision::Allow && errors.is_empty();
         Ok(DecisionResponse { allow, reasons, errors })
     }
+
+    /// Simulates a request against the loaded rules and explains the outcome (policy-studio step 3).
+    /// Cedar only names the DECIDING rules; to explain "why denied?" we also evaluate every rule alone:
+    /// a permit alone allows exactly when the request satisfies it, a forbid alone names itself in the reasons
+    /// exactly when the request satisfies it. Same request, same entities - only the rule under test changes.
+    pub fn simulate(&self, req: &DecisionRequest) -> Result<Simulation, DecisionError> {
+        let (request, ents) = cedar_parts(req)?;
+        let resp = self.authorizer.is_authorized(&request, &self.policies, &ents);
+        let errors: Vec<String> = resp.diagnostics().errors().map(|e| e.to_string()).collect();
+        let reasons: Vec<String> = resp.diagnostics().reason().map(|p| p.to_string()).collect();
+        let allow = resp.decision() == Decision::Allow && errors.is_empty();
+        let mut matched_permits = Vec::new();
+        let mut matched_forbids = Vec::new();
+        let mut errored_rules = Vec::new();
+        for p in self.policies.policies() {
+            let mut one = PolicySet::new();
+            // The merged set holds each rule exactly once with its readable id, so adding it to a fresh set cannot conflict.
+            one.add(p.clone()).map_err(|e| DecisionError::Policy(e.to_string()))?;
+            let r = self.authorizer.is_authorized(&request, &one, &ents);
+            let errs: Vec<String> = r.diagnostics().errors().map(|e| e.to_string()).collect();
+            let id = p.id().to_string();
+            if !errs.is_empty() {
+                errored_rules.push(SimError { id, error: errs.join("; ") });
+                continue;
+            }
+            match p.effect() {
+                Effect::Permit if r.decision() == Decision::Allow => matched_permits.push(id),
+                Effect::Forbid if r.diagnostics().reason().any(|x| x == p.id()) => matched_forbids.push(id),
+                _ => {}
+            }
+        }
+        let templates = self.policies.templates().map(|t| t.id().to_string()).collect::<Vec<_>>();
+        let explanation = explain(allow, &reasons, &matched_permits, &matched_forbids, &errored_rules, &templates);
+        Ok(Simulation { allow, reasons, errors, matched_permits, matched_forbids, errored_rules, templates, explanation })
+    }
+}
+
+/// Builds the Cedar request and entities of a decision or simulation request.
+fn cedar_parts(req: &DecisionRequest) -> Result<(Request, Entities), DecisionError> {
+    let uid = |s: &str| EntityUid::from_str(s).map_err(|e| DecisionError::Input(e.to_string()));
+    let ctx = if req.context.is_null() {
+        Context::empty()
+    } else {
+        Context::from_json_value(req.context.clone(), None)
+            .map_err(|e| DecisionError::Input(e.to_string()))?
+    };
+    let ents = if req.entities.is_null() {
+        Entities::empty()
+    } else {
+        Entities::from_json_value(req.entities.clone(), None)
+            .map_err(|e| DecisionError::Input(e.to_string()))?
+    };
+    let request = Request::new(uid(&req.principal)?, uid(&req.action)?, uid(&req.resource)?, ctx, None)
+        .map_err(|e| DecisionError::Input(e.to_string()))?;
+    Ok((request, ents))
+}
+
+fn join_ids(ids: &[String]) -> String { ids.join(", ") }
+
+/// The one-sentence "why" of a simulated request, from what matched.
+fn explain(allow: bool, reasons: &[String], permits: &[String], forbids: &[String], errored: &[SimError], templates: &[String]) -> String {
+    let mut why = if allow {
+        format!("ALLOWED by {}. No forbid applies.", join_ids(reasons))
+    } else if !forbids.is_empty() {
+        let base = format!("DENIED: the forbid {} applies - a forbid always wins over a permit.", join_ids(forbids));
+        if permits.is_empty() { format!("{base} No permit would have allowed the request anyway.") }
+        else { format!("{base} The permit {} matched too, but the forbid overrules it.", join_ids(permits)) }
+    } else if !errored.is_empty() && !permits.is_empty() {
+        format!("DENIED (fail closed): the permit {} would allow, but the rule {} errored and Cedar skips an errored rule, so the request is refused.",
+            join_ids(permits), join_ids(&errored.iter().map(|e| e.id.clone()).collect::<Vec<_>>()))
+    } else {
+        "DENIED: no rule permits this request.".to_string()
+    };
+    if !allow && !errored.is_empty() && (permits.is_empty() || !forbids.is_empty()) {
+        why.push_str(&format!(" Also, the rule {} errored and was skipped.", join_ids(&errored.iter().map(|e| e.id.clone()).collect::<Vec<_>>())));
+    }
+    if !templates.is_empty() {
+        why.push_str(&format!(" Templates never apply until linked per person, role or resource ({} not linked).", join_ids(templates)));
+    }
+    why
 }
 
 fn effect_name(e: Effect) -> String { if e == Effect::Permit { "permit".into() } else { "forbid".into() } }
@@ -372,6 +466,102 @@ permit(principal == User::"bob", action == Action::"read", resource);
         assert!(!who("carol").allow);
     }
 
+
+    // ---- Simulator: why allowed / why denied (policy-studio step 3) ----
+
+    fn sim(e: &Engine, principal: &str, action: &str, ctx: serde_json::Value) -> Simulation {
+        e.simulate(&dreq(principal, action, ctx, json!([]))).unwrap()
+    }
+
+    const SIM_RULES: &str = r#"
+@id("approvers-approve") permit(principal, action == Action::"approve", resource) when { context has roles && context.roles.contains("payment-approver") };
+@id("sod-blocks") forbid(principal, action == Action::"approve", resource) when { context has sod_conflict && context.sod_conflict == true };
+@id("everyone-reads") permit(principal, action == Action::"read", resource);
+"#;
+
+    #[test]
+    fn simulation_of_an_allow_names_the_matching_permit_and_no_forbid() {
+        let e = Engine::new(SIM_RULES).unwrap();
+        let r = sim(&e, r#"User::"alice""#, r#"Action::"read""#, json!({}));
+        assert!(r.allow);
+        assert_eq!(r.matched_permits, vec!["everyone-reads"]);
+        assert!(r.matched_forbids.is_empty() && r.errored_rules.is_empty());
+        assert_eq!(r.reasons, vec!["everyone-reads"]); // same as a real decision
+        assert!(r.explanation.contains("ALLOWED by everyone-reads"), "{}", r.explanation);
+    }
+
+    #[test]
+    fn simulation_explains_a_forbid_overruling_a_matching_permit() {
+        let e = Engine::new(SIM_RULES).unwrap();
+        let r = sim(&e, r#"User::"alice""#, r#"Action::"approve""#, json!({"roles": ["payment-approver"], "sod_conflict": true}));
+        assert!(!r.allow);
+        assert_eq!(r.matched_permits, vec!["approvers-approve"]);
+        assert_eq!(r.matched_forbids, vec!["sod-blocks"]);
+        assert_eq!(r.reasons, vec!["sod-blocks"]); // the deciding rule, as in the audit
+        assert!(r.explanation.contains("forbid sod-blocks applies"), "{}", r.explanation);
+        assert!(r.explanation.contains("approvers-approve matched too, but the forbid overrules it"), "{}", r.explanation);
+    }
+
+    #[test]
+    fn simulation_explains_a_deny_with_no_matching_permit() {
+        let e = Engine::new(SIM_RULES).unwrap();
+        // A person without the role, no SoD conflict: denied because NO permit matches.
+        let r = sim(&e, r#"User::"carol""#, r#"Action::"approve""#, json!({"roles": ["viewer"]}));
+        assert!(!r.allow);
+        assert!(r.matched_permits.is_empty() && r.matched_forbids.is_empty());
+        assert!(r.explanation.contains("no rule permits this request"), "{}", r.explanation);
+        // Same request with a SoD conflict: the forbid decides, and no permit would have allowed it anyway.
+        let r = sim(&e, r#"User::"carol""#, r#"Action::"approve""#, json!({"roles": ["viewer"], "sod_conflict": true}));
+        assert!(!r.allow);
+        assert_eq!(r.matched_forbids, vec!["sod-blocks"]);
+        assert!(r.explanation.contains("No permit would have allowed the request anyway"), "{}", r.explanation);
+    }
+
+    #[test]
+    fn simulation_reports_an_errored_rule_and_fails_closed() {
+        // A rule reading an unguarded attribute errors when the attribute is absent; Cedar skips it, the engine refuses.
+        let e = Engine::new(r#"
+@id("fragile") permit(principal, action == Action::"read", resource) when { context.level > 3 };
+@id("fallback") permit(principal, action == Action::"read", resource);
+"#).unwrap();
+        let r = sim(&e, r#"User::"alice""#, r#"Action::"read""#, json!({}));
+        assert!(!r.allow, "fail closed: fallback matched but fragile errored");
+        assert_eq!(r.matched_permits, vec!["fallback"]);
+        assert_eq!(r.errored_rules.len(), 1);
+        assert_eq!(r.errored_rules[0].id, "fragile");
+        assert!(r.explanation.contains("DENIED (fail closed)"), "{}", r.explanation);
+        assert!(r.explanation.contains("fragile"), "{}", r.explanation);
+        // With the attribute present the same rules allow cleanly.
+        let r = sim(&e, r#"User::"alice""#, r#"Action::"read""#, json!({"level": 1}));
+        assert!(r.allow);
+        assert!(r.errored_rules.is_empty());
+    }
+
+    #[test]
+    fn simulation_lists_templates_as_never_applicable_until_linked() {
+        let e = Engine::new(r#"
+@id("delegated-read") permit(principal == ?principal, action == Action::"read", resource);
+@id("everyone-reads") permit(principal, action == Action::"read", resource);
+"#).unwrap();
+        let r = sim(&e, r#"User::"alice""#, r#"Action::"read""#, json!({}));
+        assert!(r.allow);
+        assert_eq!(r.templates, vec!["delegated-read"]);
+        assert!(r.explanation.contains("never apply until linked"), "{}", r.explanation);
+    }
+
+    #[test]
+    fn simulation_works_across_sets_and_validates_the_same_inputs() {
+        let e = Engine::from_sets(&[
+            src("sso", r#"@id("wiki") permit(principal, action == Action::"open", resource);"#),
+            src("sod", r#"@id("freeze") forbid(principal, action == Action::"open", resource) when { context has frozen && context.frozen == true };"#),
+        ]).unwrap();
+        let r = sim(&e, r#"User::"alice""#, r#"Action::"open""#, json!({"frozen": true}));
+        assert!(!r.allow);
+        assert_eq!(r.matched_permits, vec!["sso/wiki"]);
+        assert_eq!(r.matched_forbids, vec!["sod/freeze"]);
+        // Bad input is refused exactly like a decision.
+        assert!(e.simulate(&dreq("not-an-entity", r#"Action::"open""#, json!({}), json!([]))).is_err());
+    }
 
     // ---- Schema validation (policy-studio step 2) ----
 

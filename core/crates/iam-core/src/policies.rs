@@ -1,5 +1,9 @@
-//! Read-only rule catalogue (policy-studio step 1) and the loader for one or several rule files.
-//!   GET /v1/policies  (admin token) -> { engine: {rules, sets, schema}, sets: [{name, rules}], rules: [RuleInfo...] }
+//! Read-only rule catalogue (policy-studio step 1), the simulator (step 3) and the loader for one or several rule files.
+//!   GET  /v1/policies          (admin token) -> { engine: {rules, sets, schema}, sets: [{name, rules}], rules: [RuleInfo...] }
+//!   POST /v1/policies/simulate (admin token) -> Simulation: the decision the request WOULD get, plus why (every matching
+//!        permit/forbid, errored rules, unlinked templates, one-sentence explanation). The simulator takes the request as given
+//!        (principal, action, resource, context, entities): it never reads a tenant's active version - exploring a context
+//!        the tenant did not apply is the point. Nothing is decided, recorded or changed.
 //! Nothing here changes a decision: the catalogue is a view of what the engine loaded at startup.
 //! Loading: IAM_POLICY_FILE is a file (one set named "default") or a directory (every `*.cedar` file is one set, named after the file).
 //! Schema (policy-studio step 2): the rules are validated against a Cedar schema at load, and the core REFUSES to start on a rule the
@@ -8,7 +12,7 @@
 //! inside it), else no validation.
 use crate::Core;
 use axum::{Json, extract::State, http::{HeaderMap, StatusCode}};
-use iam_decision::{Engine, PolicySource};
+use iam_decision::{DecisionRequest, Engine, PolicySource};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -82,6 +86,19 @@ pub async fn list(State(c): State<Arc<Core>>, headers: HeaderMap) -> (StatusCode
         "sets": sets.iter().map(|(n, k)| json!({"name": n, "rules": k})).collect::<Vec<_>>(),
         "rules": rules,
     })))
+}
+
+/// Simulates a request against the loaded rules: the decision it would get and why (policy-studio step 3). Admin token.
+pub async fn simulate(State(c): State<Arc<Core>>, headers: HeaderMap, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    if !crate::bus_wiring::is_admin(&c, &headers) { return (StatusCode::UNAUTHORIZED, Json(json!({"error": "admin token required"}))); }
+    let req: DecisionRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("invalid simulation request: {e}")}))),
+    };
+    match c.engine.simulate(&req) {
+        Ok(s) => (StatusCode::OK, Json(serde_json::to_value(s).unwrap_or(Value::Null))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))),
+    }
 }
 
 #[cfg(test)]
@@ -180,6 +197,51 @@ mod tests {
         let v: Value = serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(v["allow"], false);
         assert_eq!(v["reasons"], json!(["sod-blocks-approve"]));
+    }
+
+    // ---- Simulator endpoint (policy-studio step 3) ----
+
+    async fn sim(c: &Arc<Core>, tok: Option<&str>, body: Value) -> (StatusCode, Value) {
+        let mut r = Request::builder().method("POST").uri("/v1/policies/simulate").header("content-type", "application/json");
+        if let Some(t) = tok { r = r.header("x-core-admin-token", t); }
+        let resp = crate::app(c.clone()).oneshot(r.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+        let st = resp.status();
+        (st, serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn simulate_needs_the_admin_token_and_valid_input() {
+        let c = demo_core();
+        let body = json!({"principal":"User::\"alice\"","action":"Action::\"approve\"","resource":"Request::\"r1\"","context":{"roles":["payment-approver"]}});
+        assert_eq!(sim(&c, None, body.clone()).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(sim(&c, Some("wrong-token-xx"), body.clone()).await.0, StatusCode::UNAUTHORIZED);
+        // A malformed request is a 400, never a panic nor a fake answer.
+        assert_eq!(sim(&c, Some(TOKEN), json!({"principal": 42})).await.0, StatusCode::BAD_REQUEST);
+        let (st, v) = sim(&c, Some(TOKEN), json!({"principal":"User::\"alice\"","action":"Action::\"aprove\"","resource":"Request::\"r1\""})).await;
+        assert_eq!(st, StatusCode::OK, "an unknown action is a valid simulation input (the schema guards the rules, not the requests): {v}");
+    }
+
+    #[tokio::test]
+    async fn simulate_explains_why_a_request_is_denied() {
+        let c = demo_core();
+        // Carol has no role and a SoD conflict: the forbid decides and no permit matched.
+        let (st, v) = sim(&c, Some(TOKEN), json!({"principal":"User::\"carol\"","action":"Action::\"approve\"","resource":"Request::\"r1\"","context":{"roles":["viewer"],"sod_conflict":true}})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(v["allow"], false);
+        assert_eq!(v["reasons"], json!(["sod-blocks-approve"]));
+        assert_eq!(v["matched_forbids"], json!(["sod-blocks-approve"]));
+        assert_eq!(v["matched_permits"], json!([]));
+        assert!(v["explanation"].as_str().unwrap().contains("sod-blocks-approve"), "{v}");
+        // Alice with the role and no conflict: allowed by the role permit; the demo rules do not apply because tenant_mode is set.
+        let (st, v) = sim(&c, Some(TOKEN), json!({"principal":"User::\"alice\"","action":"Action::\"approve\"","resource":"Request::\"r1\"","context":{"tenant_mode":true,"roles":["payment-approver"],"sod_conflict":false}})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!((v["allow"].as_bool(), v["matched_permits"].as_array().unwrap().len()), (Some(true), 1));
+        assert_eq!(v["matched_permits"], json!(["approve-needs-payment-approver"]));
+        assert!(v["explanation"].as_str().unwrap().starts_with("ALLOWED by approve-needs-payment-approver"), "{v}");
+        // The same alice WITHOUT tenant data: the static demo rule allows her instead.
+        let (_, v) = sim(&c, Some(TOKEN), json!({"principal":"User::\"alice\"","action":"Action::\"approve\"","resource":"Request::\"r1\""})).await;
+        assert_eq!((v["allow"].as_bool(), v["matched_permits"].as_array().unwrap().len()), (Some(true), 1));
+        assert_eq!(v["matched_permits"], json!(["demo-alice-approves"]));
     }
 
     #[test]
