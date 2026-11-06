@@ -76,6 +76,7 @@ try {
   await page.click('#session-extend');
   await page.waitForSelector('#session-dialog', { state: 'detached' });
   assert.deepEqual(extended, [200]);
+  await sleep(1600); // the bar width eases over 1 s
   const w2 = await page.$eval('#session-fill', (e) => e.getBoundingClientRect().width / e.parentElement.getBoundingClientRect().width);
   assert.ok(w2 > 0.85, 'bar is full again after renewal, got ' + w2);
   // Past the ORIGINAL expiry (20s after sign-in) the person is still signed in.
