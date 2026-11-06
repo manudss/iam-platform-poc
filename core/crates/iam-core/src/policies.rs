@@ -75,9 +75,9 @@ mod tests {
     async fn catalogue_lists_every_demo_rule_with_a_readable_name() {
         let (st, v) = get(&demo_core(), Some(TOKEN)).await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(v["engine"], json!({"rules": 5, "sets": 1}));
+        assert_eq!(v["engine"], json!({"rules": 6, "sets": 1}));
         let rules = v["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 5);
+        assert_eq!(rules.len(), 6);
         for r in rules {
             assert!(!r["id"].as_str().unwrap().starts_with("policy"), "every demo rule is named: {r}");
             assert!(r["description"].is_string() && r["pillar"].is_string() && r["summary"].is_string(), "{r}");
