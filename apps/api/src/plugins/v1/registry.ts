@@ -49,7 +49,7 @@ export class PluginError extends Error {
 export interface BusBridge {
   /** True when this kind is delivered through the bus. Only pure-async hooks route in step 2; blocking hooks stay in process. */
   routed(kind: string): boolean;
-  emit(tenant: string, kind: string, payload: unknown, effectKey?: string): Promise<{ plugin: string; result: unknown }[]>;
+  emit(tenant: string, kind: string, payload: unknown, effectKey?: string, branch?: string): Promise<{ plugin: string; result: unknown }[]>;
   call(tenant: string, kind: string, payload: unknown, timeoutMs?: number): Promise<{ verdict: string; reason?: string; result: unknown }>;
 }
 
@@ -62,11 +62,13 @@ export class PluginRegistry {
   private faulted = new Set<string>();
 
   private bus?: BusBridge;
+  /** Working branch this registry serves (decision 7): stamped on every envelope emitted through the bus. */
+  private branchRef?: string;
   private activityListeners: (() => void)[] = [];
   constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}, private states?: StateStore) {}
 
   /** Attaches the bus bridge (step 2). Routing activates per kind, never globally. */
-  setBus(b: BusBridge | undefined) { this.bus = b; }
+  setBus(b: BusBridge | undefined, branch?: string) { this.bus = b; this.branchRef = branch; }
   /** The bus host listens here to re-push registrations when enablement changes. */
   onActivityChange(fn: () => void) { this.activityListeners.push(fn); }
   private activity() { for (const f of this.activityListeners) { try { f(); } catch { /* a listener error never changes plugin state */ } } }
@@ -327,7 +329,7 @@ export class PluginRegistry {
     if (this.bus?.routed(hook)) {
       const key = `${tenant}:bus:${hook}:${payload.effectKey}`;
       if (this.done.has(key)) return [];
-      const out = await this.bus.emit(tenant, hook, payload, payload.effectKey);
+      const out = await this.bus.emit(tenant, hook, payload, payload.effectKey, this.branchRef);
       this.done.add(key);
       return out;
     }

@@ -35,6 +35,9 @@ pub async fn connect(url: &str, user: &str, password: &str, inbox_prefix: Option
 /// JetStream streams owned by the bus (step 3). Names are fixed: hosts know them by contract.
 pub const EVENTS_STREAM: &str = "IAM_BUS_EVENTS";
 pub const JOURNAL_STREAM: &str = "IAM_BUS_JOURNAL";
+/// KV bucket of the effect ledger (decision 3): consumers record `tenant/plugin/kind/effect-key` after each
+/// effect; a redelivery finds the key and does not run the effect twice, even after a host restart.
+pub const EFFECTS_BUCKET: &str = "iam-effects";
 /// Subject of one delivery address inside EVENTS_STREAM.
 pub fn event_subject(address: &str) -> String { format!("bus.events.{address}") }
 pub const JOURNAL_SUBJECT: &str = "bus.journal";
@@ -63,7 +66,16 @@ pub async fn ensure_bus_streams(client: &Client) -> Result<(), String> {
         ..Default::default()
     };
     js.get_or_create_stream(journal).await.map_err(|e| format!("stream {JOURNAL_STREAM}: {e}"))?;
-    Ok(())
+    // The effect ledger (decision 3). Bind-or-create; the restricted hosts bind it afterwards.
+    match js.get_key_value(EFFECTS_BUCKET).await {
+        Ok(_) => Ok(()),
+        Err(_) => js.create_key_value(async_nats::jetstream::kv::Config {
+            bucket: EFFECTS_BUCKET.into(),
+            history: 1,
+            max_age: Duration::from_secs(90 * 24 * 3600),
+            ..Default::default()
+        }).await.map(|_| ()).map_err(|e| format!("kv bucket {EFFECTS_BUCKET}: {e}")),
+    }
 }
 
 pub struct NatsTransport { client: Client, js: async_nats::jetstream::Context }

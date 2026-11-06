@@ -102,7 +102,7 @@ describe('bus host e2e (step 2): plugins served by the core bus', { skip: false 
     reg.register(notifyLog); reg.register(orgManager); reg.register(spy);
     await reg.install(T, 'spy-log', { install: true });
     await reg.enable(T, 'spy-log', {});
-    host = await BusHost.startIfConfigured(async () => reg, () => {});
+    host = await BusHost.startIfConfigured(async () => reg, (e) => console.error('[bus-host]', JSON.stringify(e)));
     assert.ok(host, 'host starts');
     reg.setBus(host!.bridge());
     available = true;
@@ -155,5 +155,16 @@ describe('bus host e2e (step 2): plugins served by the core bus', { skip: false 
     const out2 = await reg.emit(T, 'identity.changed', { tenant: T, subject: 'demo-alice', change: 'leaver', effectKey: 'e2e-4' } as any);
     assert.deepEqual(out2, [{ plugin: 'spy-log', result: { queued: true } }], 'a disabled plugin no longer receives the event');
     await untilKind('identity.changed', (p) => p.effectKey === 'e2e-4');
+  });
+
+  it('a service of the API consumes its own durable address (no plugin manifest)', async (t) => {
+    if (!available) return t.skip('no nats-server or core binary');
+    const got: string[] = [];
+    await host!.serveService('workflow-triggers', ['identity.changed'], async (env) => { got.push(`${env.id}:${(env.payload as any).effectKey}`); });
+    const out = await reg.emit(T, 'identity.changed', { tenant: T, subject: 'demo-bob', change: 'mover', effectKey: 'e2e-5' } as any);
+    assert.deepEqual(out, [{ plugin: 'spy-log', result: { queued: true } }, { plugin: 'workflow-triggers', result: { queued: true } }]);
+    const t0 = Date.now();
+    while (!got.some((x) => x.endsWith(':e2e-5')) && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(got.filter((x) => x.endsWith(':e2e-5')).length, 1, 'the service received the event once');
   });
 });

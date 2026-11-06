@@ -1,6 +1,14 @@
 /**
- * Plugin host over the core's event bus (step 2). Enabled when IAM_BUS_NATS_URL + IAM_BUS_NATS_PASSWORD and
- * IAM_CORE_ADMIN_TOKEN are set; otherwise the API serves plugins in process (step 1 behaviour, unchanged).
+ * Plugin host over the core's event bus (step 3, bus host v2). Enabled when IAM_BUS_NATS_URL + IAM_BUS_NATS_PASSWORD
+ * and IAM_CORE_ADMIN_TOKEN are set; otherwise the API serves plugins in process (step 1 behaviour, unchanged).
+ *
+ * v2 changes:
+ * - Deliveries are resolved against the registry of the envelope's BRANCH (decision 7: branch events travel on
+ *   the same bus, the handlers always run): a plugin disabled on that branch consumes the delivery without effect.
+ * - The effect ledger is the JetStream KV bucket `iam-effects` (decision 3): it survives API restarts, so a
+ *   redelivery after a restart is still deduplicated. The bucket is created by the core; the host only binds it.
+ * - Services inside the API process (workflow triggers, audit trail, activation effects) can consume their own
+ *   durable delivery address via serveService, without a plugin manifest.
  *
  * - At startup the host declares the platform kinds (pure-async hooks as notify kinds) to the core, pushes each
  *   active plugin's deliveries and emission grants (POST /v1/bus/plugins/register: idempotent, replaces the set),
@@ -11,42 +19,58 @@
  *   memory; a durable ledger belongs to the later effects step). A redelivered effect gets a `deduped` reply
  *   instead of a second run.
  */
-import { connect, AckPolicy, ConsumerMessages, JsMsg, JSONCodec, Msg, NatsConnection, Subscription, JetStreamClient, nanos } from 'nats';
+import { connect, AckPolicy, ConsumerMessages, JsMsg, JSONCodec, KV, Msg, NatsConnection, Subscription, JetStreamClient, nanos } from 'nats';
 import { HOOKS, PluginContext } from './hooks.js';
 import { BusBridge, PluginRegistry } from './registry.js';
 import { validateSettings } from './settings.js';
 
 const jc = JSONCodec<unknown>();
 const DEFAULT_TENANT = 'acme-demo';
-const LEDGER_MAX = 10_000;
 
-interface BusEnvelope { id: string; kind: string; tenant?: string; effect_key?: string; payload: unknown; source?: string }
+interface BusEnvelope { id: string; kind: string; tenant?: string; branch?: string; effect_key?: string; payload: unknown; source?: string }
 
 const EVENTS_STREAM = 'IAM_BUS_EVENTS'; // owned by the core (step 3)
+const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (decision 3)
+
+/** KV keys accept [A-Za-z0-9_./=-]: the composite key uses '/' and every part is sanitized. */
+function ledgerKey(tenant: string, id: string, kind: string, effectKey: string): string {
+  const clean = (x: string) => x.replace(/[^A-Za-z0-9_.=-]/g, '_').slice(0, 80);
+  return `${clean(tenant)}/${clean(id)}/${clean(kind)}/${clean(effectKey)}`;
+}
 
 export class BusHost {
   private routedKinds = new Set<string>();
   private serving = new Map<string, Subscription>();
-  private events = new Map<string, Promise<void>>(); // plugin id -> running durable-consumer loop
-  private eventMsgs = new Map<string, ConsumerMessages>(); // plugin id -> live pull, stopped on close
-  private ledger = new Set<string>();
+  private events = new Map<string, Promise<void>>(); // delivery address -> running durable-consumer loop
+  private eventMsgs = new Map<string, ConsumerMessages>(); // delivery address -> live pull, stopped on close
+  private services = new Map<string, { kinds: string[]; handler: (env: BusEnvelope) => Promise<void> }>();
   private chain: Promise<void> = Promise.resolve();
   private timer?: NodeJS.Timeout;
 
   /** Resolves the CURRENT registry at every use: in workspace mode the main registry is rebuilt on each applied
-   * version, and this host must never be recreated (one NATS client, one set of subscriptions, no double serving). */
+   * version, and this host must never be recreated (one NATS client, one set of subscriptions, no double serving).
+   * `registryFor` resolves a working branch (decision 7); absent, every delivery uses the main registry.
+   * `allRegistries` lists every loaded branch registry so the pushed registrations cover all of them. */
   private constructor(
     private nc: NatsConnection,
     private js: JetStreamClient,
+    private kv: KV,
     private coreUrl: string,
     private token: string,
     private registry: () => Promise<PluginRegistry>,
     private log: (e: Record<string, unknown>) => void,
+    private registryFor: (branch: string) => Promise<PluginRegistry> = () => registry(),
+    private allRegistries: () => Promise<[string, PluginRegistry][]> = async () => [['main', await registry()]],
   ) {}
 
   /** Connects and starts the host, or returns undefined when the bus is not configured. Startup failure throws:
    * the process then keeps the in-process path (the bus bridge is never attached, so no kind is routed). */
-  static async startIfConfigured(registry: () => Promise<PluginRegistry>, log: (e: Record<string, unknown>) => void = (e) => console.log(`[bus-host] ${JSON.stringify(e)}`)): Promise<BusHost | undefined> {
+  static async startIfConfigured(
+    registry: () => Promise<PluginRegistry>,
+    log: (e: Record<string, unknown>) => void = (e) => console.log(`[bus-host] ${JSON.stringify(e)}`),
+    registryFor?: (branch: string) => Promise<PluginRegistry>,
+    allRegistries?: () => Promise<[string, PluginRegistry][]>,
+  ): Promise<BusHost | undefined> {
     const url = process.env.IAM_BUS_NATS_URL;
     const pass = process.env.IAM_BUS_NATS_PASSWORD;
     const token = process.env.IAM_CORE_ADMIN_TOKEN;
@@ -56,7 +80,9 @@ export class BusHost {
     const coreUrl = (process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081').replace(/\/$/, '');
     try {
       const nc = await connect({ servers: url, user, pass, inboxPrefix: '_INBOX.api-host', timeout: 5000 });
-      const host = new BusHost(nc, nc.jetstream(), coreUrl, token, registry, log);
+      const js = nc.jetstream();
+      const kv = await js.views.kv(EFFECTS_BUCKET, { bindOnly: true }); // created by the core; bindOnly: api-host cannot create streams
+      const host = new BusHost(nc, js, kv, coreUrl, token, registry, log, registryFor, allRegistries);
       await host.declarePlatformKinds();
       await host.sync();
       host.timer = setInterval(() => { host.sync().catch((e) => log({ warn: 'bus resync failed', error: String(e) })); }, 60_000);
@@ -107,30 +133,39 @@ export class BusHost {
 
   private async doSync(): Promise<void> {
     {
-      const registry = await this.registry();
       this.attachActivity();
-      const want = new Map<string, { subscriptions: unknown[]; emits: string[]; declare_kinds: unknown[] }>();
+      // Union over every loaded branch registry (decision 7: all branches share this bus): a plugin active on
+      // ANY branch/tenant gets its delivery address; each delivery is then resolved against its own branch.
+      const want = new Map<string, { subscriptions: Map<string, unknown>; emits: Set<string>; declare_kinds: Map<string, unknown> }>();
+      const entry = (id: string) => {
+        let e = want.get(id);
+        if (!e) { e = { subscriptions: new Map(), emits: new Set(), declare_kinds: new Map() }; want.set(id, e); }
+        return e;
+      };
+      for (const [, registry] of await this.allRegistries())
       for (const tenant of new Set([DEFAULT_TENANT, ...registry.tenants()]))
       for (const info of registry.list(tenant)) {
         if (!info.enabled) continue;
         const impl = registry.impl(info.id);
         if (!impl) continue;
         const m = impl.manifest;
-        const subscriptions: unknown[] = m.hooks
-          .filter((h) => h.mode === 'async' && this.routedKinds.has(h.name))
-          .map((h) => ({ kind: h.name }));
-        const declare_kinds: unknown[] = [];
+        const e = entry(m.id);
+        for (const h of m.hooks) if (h.mode === 'async' && this.routedKinds.has(h.name)) e.subscriptions.set(h.name, { kind: h.name });
         for (const s of m.subscribes ?? []) {
-          subscriptions.push(s.mode === 'async' ? { kind: s.name, group: s.group } : { kind: s.name, mandatory: !!s.mandatory });
-          declare_kinds.push({ name: s.name, mode: s.mode === 'async' ? 'notify' : 'control' });
+          e.subscriptions.set(s.name + (s.group ? `/${s.group}` : ''), s.mode === 'async' ? { kind: s.name, group: s.group } : { kind: s.name, mandatory: !!s.mandatory });
+          e.declare_kinds.set(s.name, { name: s.name, mode: s.mode === 'async' ? 'notify' : 'control' });
         }
-        for (const e of m.emits ?? []) declare_kinds.push({ name: e, mode: 'notify' });
-        if (!subscriptions.length && !declare_kinds.length && !(m.emits ?? []).length) continue;
-        want.set(m.id, { subscriptions, emits: m.emits ?? [], declare_kinds });
+        for (const k of m.emits ?? []) { e.emits.add(k); e.declare_kinds.set(k, { name: k, mode: 'notify' }); }
+        if (!e.subscriptions.size && !e.declare_kinds.size && !e.emits.size) want.delete(m.id);
       }
       for (const [id, reg] of want) {
-        await this.post('/v1/bus/plugins/register', { plugin: id, ...reg });
+        await this.post('/v1/bus/plugins/register', { plugin: id, subscriptions: [...reg.subscriptions.values()], emits: [...reg.emits], declare_kinds: [...reg.declare_kinds.values()] });
         this.serve(id);
+      }
+      // Internal services keep their own durable addresses; re-pushed here so a core restart heals them too.
+      for (const [address, svc] of this.services) {
+        await this.post('/v1/bus/plugins/register', { plugin: address, subscriptions: svc.kinds.map((kind) => ({ kind })), emits: [], declare_kinds: [] });
+        this.serveEvents(address, (env) => svc.handler(env));
       }
       for (const [id, sub] of [...this.serving]) {
         if (want.has(id)) continue;
@@ -140,6 +175,15 @@ export class BusHost {
         await this.post('/v1/bus/plugins/unregister', { plugin: id }).catch(() => {});
       }
     }
+  }
+
+  /** A service of the API process (not a plugin) consumes its own durable delivery address. The core must
+   * already know the kinds (platform kinds are declared at startup); registrations are re-pushed by every sync. */
+  async serveService(address: string, kinds: string[], handler: (env: BusEnvelope) => Promise<void>): Promise<void> {
+    if (!/^[A-Za-z0-9_-]+$/.test(address)) throw new Error(`invalid service address '${address}'`);
+    this.services.set(address, { kinds, handler });
+    await this.post('/v1/bus/plugins/register', { plugin: address, subscriptions: kinds.map((kind) => ({ kind })), emits: [], declare_kinds: [] });
+    this.serveEvents(address, handler);
   }
 
   private serve(id: string) {
@@ -156,7 +200,7 @@ export class BusHost {
    * stream (filter `bus.events.<id>`); the message is acked only AFTER the handler ran (at-least-once: a crash
    * or a nak means redelivery, the effect ledger dedupes). A plugin that is disabled or has no handler acks
    * without acting: the delivery is consumed, there is simply no effect (never a redelivery loop). */
-  private serveEvents(id: string) {
+  private serveEvents(id: string, service?: (env: BusEnvelope) => Promise<void>) {
     if (this.events.has(id)) return;
     this.events.set(id, (async () => {
       const jsm = await this.js.jetstreamManager(false); // false: no $JS.API.INFO ping (api-host has consumer rights only)
@@ -172,25 +216,37 @@ export class BusHost {
       this.eventMsgs.set(id, messages);
       for await (const m of messages) {
         if (!this.events.has(id)) { messages.stop(); break; }
-        await this.deliverEvent(id, m).catch((e) => { this.log({ warn: 'event delivery failed, redelivery scheduled', plugin: id, error: String(e) }); m.nak(nanos(5_000)); });
+        await this.deliverEvent(id, m, service).catch((e) => { this.log({ warn: 'event delivery failed, redelivery scheduled', plugin: id, error: String(e) }); m.nak(nanos(5_000)); });
       }
     })().catch((e) => { this.events.delete(id); this.log({ warn: 'event consumer stopped', plugin: id, error: String(e) }); }));
   }
 
-  private async deliverEvent(id: string, m: JsMsg): Promise<void> {
+  private async deliverEvent(id: string, m: JsMsg, service?: (env: BusEnvelope) => Promise<void>): Promise<void> {
     const env = jc.decode(m.data) as BusEnvelope;
     const tenant = env.tenant ?? DEFAULT_TENANT;
-    const registry = await this.registry();
-    const impl = registry.impl(id);
-    const handler = impl && registry.isActive(tenant, id) ? impl.handlers[env.kind] : undefined;
-    if (!handler) { m.ack(); return; } // consumed without effect (disabled or unknown kind): no redelivery loop
-    const key = env.effect_key ? `${tenant}:${id}:${env.kind}:${env.effect_key}` : undefined;
-    if (key && this.ledger.has(key)) { m.ack(); return; } // redelivery of an effect that already ran
-    const settings = validateSettings(impl!.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
-    await handler(env.payload, { tenant, settings } as PluginContext); // the effect; a throw means nak above
-    if (key) {
-      this.ledger.add(key);
-      if (this.ledger.size > LEDGER_MAX) this.ledger.delete(this.ledger.values().next().value!);
+    let run: () => Promise<void>;
+    if (service) {
+      run = () => service(env);
+    } else {
+      // Decision 7: the effect runs against the registry of the envelope's branch (never silently main's).
+      let registry: PluginRegistry;
+      try { registry = await this.registryFor(env.branch ?? 'main'); }
+      catch (e) { this.log({ warn: 'unknown branch, delivery consumed without effect', plugin: id, branch: env.branch, error: String(e) }); m.ack(); return; }
+      const impl = registry.impl(id);
+      const handler = impl && registry.isActive(tenant, id) ? impl.handlers[env.kind] : undefined;
+      if (!handler) { m.ack(); return; } // not concerned on this branch (disabled or unknown): consumed, no effect
+      run = async () => {
+        const settings = validateSettings(impl!.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
+        await handler(env.payload, { tenant, settings } as PluginContext);
+      };
+    }
+    // Effect first, ledger second, ack last (decision 4): a crash before the ack redelivers and the effect may
+    // run twice, which effect keys and idempotent handlers absorb; the reverse order could lose the effect.
+    await run();
+    if (env.effect_key) {
+      const key = ledgerKey(tenant, id, env.kind, env.effect_key);
+      try { await this.kv.create(key, JSON.stringify({ at: new Date().toISOString(), kind: env.kind })); }
+      catch { /* already recorded by a parallel or earlier delivery: keep the ack below, the effect is deduped by handlers */ }
     }
     m.ack();
   }
@@ -200,14 +256,14 @@ export class BusHost {
     const tenant = env.tenant ?? DEFAULT_TENANT;
     const reply = (data: unknown, verdict?: 'allow' | 'deny') => msg.respond(jc.encode({ from: id, id: env.id, verdict, data }));
     if (env.effect_key) {
-      const key = `${tenant}:${id}:${env.kind}:${env.effect_key}`;
-      if (this.ledger.has(key)) { reply({ deduped: true }); return; } // redelivery: the effect already ran, say so without running it twice
-      this.ledger.add(key);
-      if (this.ledger.size > LEDGER_MAX) this.ledger.delete(this.ledger.values().next().value!);
+      const key = ledgerKey(tenant, id, env.kind, env.effect_key);
+      try {
+        await this.kv.create(key, JSON.stringify({ at: new Date().toISOString(), kind: env.kind, pending: true }));
+      } catch { reply({ deduped: true }); return; } // redelivery: the effect already ran, say so without running it twice
     }
-    const registry = await this.registry();
-    const impl = registry.impl(id);
-    if (!impl || !registry.isActive(tenant, id)) return; // disabled between registration and delivery: stay silent
+    const registry = await this.registryFor(env.branch ?? 'main').catch(() => undefined);
+    const impl = registry && registry.impl(id);
+    if (!registry || !impl || !registry.isActive(tenant, id)) return; // disabled between registration and delivery: stay silent
     const handler = impl.handlers[env.kind];
     if (!handler) return;
     const settings = validateSettings(impl.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
@@ -233,8 +289,8 @@ export class BusHost {
       routed: (kind) => this.routedKinds.has(kind),
       // Step 3: a notify emission returns durable-queue receipts, not results. The effects themselves happen
       // asynchronously in the consumers (at-least-once, deduped by the effect key); callers must not await them.
-      emit: async (tenant, kind, payload, effectKey) => {
-        const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, effect_key: effectKey });
+      emit: async (tenant, kind, payload, effectKey, branch) => {
+        const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, effect_key: effectKey, branch });
         return (r.outcomes ?? []).filter((o: any) => o.status === 'queued').map((o: any) => ({ plugin: o.id, result: { queued: true } }));
       },
       call: async (tenant, kind, payload, timeoutMs) => {

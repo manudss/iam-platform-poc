@@ -26,10 +26,24 @@ reserved tenant, effect key, payload SIZE (never the content), duration, per-sub
 Silent and refused exchanges are visible. Limits: in process only, synchronous callback (an observer must queue and return), no persistence, so records are lost if
 the core restarts or an observer drops them; only exchanges that go through this core are seen. A durable, loss-free viewer needs a persisted record stream (later step).
 
+## Step 3: durable, at-least-once notify delivery
+
+A notify emission no longer waits for subscriber replies. The core writes one durable copy per delivery address
+into the JetStream stream `IAM_BUS_EVENTS` (subjects `bus.events.<id-or-group>`, work queue) and answers the
+emitter with per-address `queued` outcomes only after the publish ack. A missing ack refuses the whole emission
+(HTTP 502): no success without durable storage, and a retried emission can deliver twice, so consumers stay
+idempotent on the effect key (the API host records effects in the JetStream KV bucket `iam-effects`, which
+survives API restarts). Consumers ack only after their handler ran: a crash or a nak means redelivery
+(at-least-once, bounded at 10 deliveries for the API host). A group names ONE shared delivery address: its
+members pull the same durable consumer and NATS balances between them. Control and query kinds keep the
+synchronous request/reply path. Every observer record is also persisted to the `IAM_BUS_JOURNAL` stream
+(`bus.journal`); the HTTP feed still reads the fast in-memory ring. Envelopes carry `branch`: the API host
+resolves each delivery against the registry of that working branch (decision: all branches share the one bus).
+
 ## What is prepared, NOT built (later steps)
 
-JetStream consumers for durable delivery, journal plugin (D6), absorbing AppEvents of PR #7
-(not merged), a durable effect ledger, routing blocking hooks (auth step), local in-process duplicate for latency (D16 evaluation: not done).
+Absorbing AppEvents of PR #7 (not merged), routing blocking hooks (auth step),
+restart-proof reads of the journal stream, local in-process duplicate for latency (D16 evaluation: not done).
 
 ## Step 2 endpoints (plugin host protocol)
 
@@ -40,11 +54,10 @@ its plugins as the restricted `api-host` NATS user (see `conf/nats-local.conf`).
 
 ## Limits to keep in mind
 
-- `EffectLedger` is in memory: it does **not** survive a restart. Crash and resume were NOT tested. One process only; no multi-instance test.
-- Delivery is at most once (request/reply, no redelivery). The NATS `Nats-Msg-Id` dedup (measured in step 0, PR #13) covers publication only and is not used here.
-- Connection: the core retries for up to 20 s at startup (slow host), then runs without the bus and says so in its log. After a first connection async-nats reconnects by itself; while NATS is down the `/v1/bus` self-test returns `deny` (mandatory subscriber silent), checked by stopping and restarting nats-server.
-- Nothing in the existing flows depends on the bus. If NATS is down the core starts and runs without it (`/v1/bus` says `enabled: false`);
-  no existing authorization path falls back to "allow" because of the bus. A future flow that needs a mandatory control must treat a missing bus as refusal.
+- Notify delivery is at least once (JetStream, redelivery after crash/nak): an effect can run twice and must stay idempotent on its effect key. Control and query calls are still at most once (request/reply, no redelivery).
+- The API-side effect ledger is the `iam-effects` KV bucket (durable). The Rust-side `EffectLedger` used by core tests stays in memory on purpose.
+- NATS is a base process: a core configured with `IAM_CORE_NATS_URL` that cannot reach NATS, or cannot create its streams, REFUSES to start. The start scripts bring NATS up first and restart the core. After a first connection async-nats reconnects by itself; while NATS is down the `/v1/bus` self-test returns `deny` (mandatory subscriber silent), checked by stopping and restarting nats-server.
+- Nothing in the existing flows depends on the bus yet. A flow that needs a mandatory control treats a missing bus as refusal (fail closed, D3).
 - Resource numbers (measured locally, debug build): nats-server 13 MB RSS idle; core 23-25 MB. They say nothing about the 0.1 CPU free host.
 
 ## Run it locally
