@@ -135,3 +135,20 @@ export const workflowsIga: PluginImpl = {
   },
   handlers: {},
 };
+
+/**
+ * Declares third-party applications (service providers) that will sign in through this platform acting as the identity provider (OIDC or SAML).
+ * This plugin only holds the configuration, in Dolt, on a branch: the OIDC and SAML protocol plugins come in later steps and read this registry.
+ * While disabled, the Applications menu is hidden and every /app-connectors endpoint answers 404. Secrets are never stored: only a reference to the secret store.
+ */
+export const appConnector: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'app-connector', version: '0.1.0', name: 'Application connectors (SSO)', publisher: 'iam-platform',
+    kinds: ['connector', 'ui'],
+    description: 'Register the applications that sign in through this platform (OIDC or SAML): redirect URIs, attribute mapping, allowed roles. Configuration only for now; the protocols come as separate plugins.',
+    hooks: [],
+    settings: [],
+    screens: [{ id: 'applications', title: 'Applications', area: 'admin', render: 'schema' }],
+  },
+  handlers: {},
+};

@@ -10,7 +10,8 @@ import { BusHost } from './bus-host.js';
 import pg from 'pg';
 import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from './memory-stores.js';
 import { PgPluginStore } from './pg-stores.js';
-import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, workflowsIga } from './builtin/index.js';
+import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector } from './builtin/index.js';
+import { AppConnectorController, AppConnectorService, APP_CONNECTOR_STORE, DoltAppConnectorStore, MemoryAppConnectorStore } from '../../connectors/app-connector.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
 import { AuthGateController } from './auth-gate.controller.js';
 import { ProfileService, PROFILE_STORE, SIGNUP_ALLOWED, defaultSignupAllowed } from '../../profile/profile.service.js';
@@ -32,8 +33,12 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule],
-  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController, RolesController, SigninOptionsController],
-  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, RolesService, {
+  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController, AppConnectorController, RolesController, SigninOptionsController],
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, RolesService, {
+    provide: APP_CONNECTOR_STORE,
+    inject: [VersioningService],
+    useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltAppConnectorStore(v, (w) => currentBranch(w)) : new MemoryAppConnectorStore(),
+  }, {
     provide: ORG_STORE,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltOrgStore(v, (w) => currentBranch(w)) : new MemoryOrgStore(),
@@ -52,7 +57,7 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
       const ds = process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltPluginStore(v) : undefined;
       const r = ds ? new PluginRegistry(ds, ds, audit, ds) : pgs ? new PluginRegistry(pgs, pgs, audit, pgs) : new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), audit, new MemoryStateStore());
       const base = process.env.IAM_DIRECTORY_AUTH === '1' ? { ...authPassword, handlers: { 'auth.authenticate': async (p: any) => (await users.authenticate(p.tenant, p.subject, p.credential.password)) ? { outcome: 'allow', subject: p.subject, methods: ['pwd'] } : { outcome: 'deny', reason: 'bad-credentials' } } } : authPassword;
-      for (const p of [base, notifyLog, authPasswordLockout(new Map(), base), orgManager, riskGeo, hrAttributes, organizations, workflowsIga]) {
+      for (const p of [base, notifyLog, authPasswordLockout(new Map(), base), orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector]) {
         if (ds && p.manifest.settings.some(f => f.type === 'secret')) throw new Error('Dolt plugin store refuses secret settings; use a secret store');
         r.register(p);
       }
