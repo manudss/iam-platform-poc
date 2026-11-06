@@ -26,7 +26,8 @@ import { ThemeSwitch } from './theme-switch';
   <app-theme-switch class="auth-theme" />
   <main class="login">
     <article class="card doc" id="about-page">
-      <h1>About this demo</h1>
+      <div class="brand"><div class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>Administration console</span></div></div>
+      <h1 class="page-title">About this demo</h1>
       <p class="sub">iam.dss.name · Proof of concept</p>
 
       <p>This site is a proof of concept for a next-generation identity and access management (IAM) platform. It shows what sign-in, account management and access reviews look like when configuration and data are versioned, reviewed and applied like code.</p>

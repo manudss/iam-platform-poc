@@ -74,3 +74,9 @@ th, td { text-align: left; padding: .5rem .65rem; border-bottom: 1px solid var(-
 th { background: var(--th-bg); color: var(--th-ink); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 tbody tr:hover td { background: var(--row-hover); }
 table.grid th, table.grid td { border: 0; border-bottom: 1px solid var(--line); }
+
+/* Brand logo: swap the light/dark wordmark with the active theme.
+   Lives in the global sheet because component-scoped :root selectors never match. */
+.brandlogo .for-dark { display: none; }
+:root[data-theme='dark'] .brandlogo .for-light { display: none; }
+:root[data-theme='dark'] .brandlogo .for-dark { display: block; }

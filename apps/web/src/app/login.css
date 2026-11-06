@@ -13,10 +13,13 @@
 .hero { width: min(30rem, 100%); padding: 2rem; }
 .signup-card { width: min(34rem, 100%); }
 
-.brand { display: flex; gap: .9rem; align-items: center; margin-bottom: 1rem; }
-.brand h1 { margin: 0; font-size: 1.35rem; }
-.brand p { margin: 0; color: var(--brand-sub); font-size: .9rem; }
-.logo { display: grid; place-items: center; width: 2.8rem; height: 2.8rem; border-radius: .8rem; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; font-weight: 800; letter-spacing: .05em; font-size: .8rem; }
+.brand { margin-bottom: 1rem; }
+.brand-title { margin: 0; display: grid; gap: .2rem; justify-items: start; }
+.brandlogo { display: grid; } /* grid blockifies the img children, so no display rule fights the global theme swap */
+.brandlogo img { height: 2.6rem; width: auto; }
+.brand-title span { color: var(--brand-sub); font-size: .9rem; font-weight: 400; }
+.page-title { margin: 0 0 .4rem; font-size: 1.35rem; }
+.doc .page-title { font-size: 1.4rem; margin: 0 0 .2rem; }
 .lead { color: var(--muted); line-height: 1.5; }
 .back { display: inline-block; margin-bottom: .8rem; font-weight: 600; text-decoration: none; }
 .back:hover { text-decoration: underline; }

@@ -1,7 +1,8 @@
 :host { display: block; }
 .layout { display: grid; grid-template-columns: 16.5rem 1fr; min-height: 100vh; }
 .side { background: #0f172a; color: #cbd5e1; padding: 1rem .8rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; }
-.brand { display: flex; align-items: center; gap: .7rem; color: #fff; font-weight: 700; padding: .3rem .4rem 1rem; }
+.brand { display: grid; gap: .15rem; justify-items: start; padding: .3rem .4rem 1rem; }
+.brand .side-logo { display: block; height: 2.1rem; width: auto; }
 .brand small { display: block; font-weight: 400; color: #94a3b8; font-size: .75rem; }
 .logo { display: grid; place-items: center; width: 2.3rem; height: 2.3rem; border-radius: .65rem; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; font-size: .7rem; font-weight: 800; letter-spacing: .05em; }
 .group { margin: 1.1rem .5rem .3rem; font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: #64748b; }

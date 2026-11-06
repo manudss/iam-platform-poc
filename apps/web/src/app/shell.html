@@ -1,6 +1,6 @@
 <div class="layout" [class.open]="menu()">
   <aside class="side" aria-label="Main navigation">
-    <div class="brand"><span class="logo" aria-hidden="true">IAM</span><span>IAM platform<small>POC console</small></span></div>
+    <div class="brand"><img class="side-logo" src="/lyam-logo-horizontal-dark.svg" alt="lyam"><small>Administration console</small></div>
     <nav>
       @for (g of visibleNav(); track g.title) {        <p class="group">{{ g.title }}</p>
         @for (i of g.items; track i.path) {
