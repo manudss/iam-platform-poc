@@ -8,6 +8,7 @@
         }
       }
     </nav>
+    <app-theme-switch class="side-theme" />
     @if (isAdmin()) {<details class="token">
       <summary>Admin capability (local only)</summary>
       <label>Token (memory only; leave empty on the hosted demo, the server adds it)
@@ -23,7 +24,7 @@
       <span class="spacer"></span>
       <!-- Session timer: self-contained, keep it in the top bar wherever the bar is rearranged. -->
       <app-session-timer />
-      <app-theme-switch />
+      <app-theme-switch class="top-theme" />
       <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
       <button type="button" class="secondary" (click)="signOut()">Sign out</button>
     </header>
