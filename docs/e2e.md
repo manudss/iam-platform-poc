@@ -55,3 +55,4 @@ DOLT_BIN=/path/to/dolt CHROME_BIN=/path/to/chrome node scripts/admin-data-e2e.mj
 ```
 
 The harness runs an isolated real Dolt database, Rust gate, Nest API and Angular UI. It removes its processes, database and credential file after testing. Fictional account passwords are test fixtures only. Screenshots are saved for visual inspection, not a substitute for it.
+- `scripts/session-extend-e2e.mjs`: real Dolt, core, API and Chrome with a 20 s token. Checks the session bar goes down, the warning dialog, "Stay signed in" (a real 200 from `/core/session/extend`), still signed in after the first expiry, and expiry afterwards. See docs/session.md.

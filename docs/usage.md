@@ -115,3 +115,5 @@ Recommended path: the Angular console above (it IS the client of the browser flo
 Agent demo: `POST /agent/delegations` (user bearer; JSON `agent_id`, `tools` among `read-report`, `approve-payment` (both simulated), optional `ttl_seconds` <= 600, `max_calls` <= 20; the principal is the token subject, a body `principal`/`context`/`tenant_mode` is refused; activate a data version first, tenant mode denies without one) returns a `delegation` secret. The agent calls `POST /agent/tools/call` with header `x-agent-delegation: <secret>` and JSON `{"tool":"read-report"}`. Results are simulated. Audit rows have `source: agent` (`GET /tenants/:tenant/audit`).
 
 `POST /access/check` decides as the token subject in tenant mode (body principal/tenant other than yours = 403; roles/sod_conflict are ignored). What-if decisions as another identity: `POST /access/simulate` with `x-api-admin-token` (set `IAM_API_ADMIN_TOKEN`, 16+ chars, local only).
+
+See also [docs/session.md](session.md): configurable session length, timer bar and "Stay signed in".
