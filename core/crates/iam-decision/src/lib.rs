@@ -8,7 +8,8 @@
 //! id: its `@id("...")` annotation (prefixed by the set name unless the set is "default"), else Cedar's generated `policyN`. That id is what
 //! `reasons` and error messages carry, so the decision audit names the rule. `catalog()` lists the rules for the read-only console screen.
 use cedar_policy::{
-    Authorizer, Context, Decision, Effect, Entities, EntityUid, Policy, PolicyId, PolicySet, Request, Template,
+    Authorizer, Context, Decision, Effect, Entities, EntityUid, Policy, PolicyId, PolicySet, Request, Schema, Template,
+    ValidationMode, Validator,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -20,6 +21,10 @@ pub enum DecisionError {
     Input(String),
     #[error("policy parse error: {0}")]
     Policy(String),
+    #[error("invalid Cedar schema: {0}")]
+    Schema(String),
+    #[error("rules refused by the schema: {0}")]
+    Validation(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +76,8 @@ pub struct Engine {
     policies: PolicySet,
     authorizer: Authorizer,
     catalog: Vec<RuleInfo>,
+    /// Whether the rules were validated against a Cedar schema at load (policy-studio step 2).
+    validated: bool,
 }
 
 fn valid_set_name(s: &str) -> bool { !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_') }
@@ -114,9 +121,23 @@ impl Engine {
         Self::from_sets(&[PolicySource { set: "default".into(), text: policy_text.into() }])
     }
 
+    /// A single set, validated against the given Cedar schema (cedarschema syntax) before it can decide anything.
+    pub fn new_with_schema(policy_text: &str, schema: &str) -> Result<Self, DecisionError> {
+        Self::build(&[PolicySource { set: "default".into(), text: policy_text.into() }], Some(schema))
+    }
+
+    /// Several named sets, validated against the given Cedar schema.
+    pub fn from_sets_with_schema(sets: &[PolicySource], schema: &str) -> Result<Self, DecisionError> {
+        Self::build(sets, Some(schema))
+    }
+
     /// Several named sets merged into one Cedar set. A duplicate rule id (same set and name, or the same prefixed id) is refused: ids must be unique
     /// because the audit identifies a rule by it. An empty list of sets is refused (never an empty, permissive-looking engine).
     pub fn from_sets(sets: &[PolicySource]) -> Result<Self, DecisionError> {
+        Self::build(sets, None)
+    }
+
+    fn build(sets: &[PolicySource], schema: Option<&str>) -> Result<Self, DecisionError> {
         if sets.is_empty() { return Err(DecisionError::Policy("at least one policy set is required".into())); }
         let mut merged = PolicySet::new();
         let mut catalog = Vec::new();
@@ -165,11 +186,27 @@ impl Engine {
             }
         }
         catalog.sort_by(|a, b| (&a.set, &a.id).cmp(&(&b.set, &b.id)));
-        Ok(Self { policies: merged, authorizer: Authorizer::new(), catalog })
+        let validated = match schema {
+            None => false,
+            Some(src) => {
+                let (schema, _warnings) = Schema::from_cedarschema_str(src).map_err(|e| DecisionError::Schema(e.to_string()))?;
+                let result = Validator::new(schema).validate(&merged, ValidationMode::Strict);
+                if !result.validation_passed() {
+                    // The merged set holds the renamed rules, so each error names the readable rule id the audit also uses.
+                    let details = result.validation_errors().map(|e| format!("[{}] {e}", e.policy_id())).collect::<Vec<_>>().join("; ");
+                    return Err(DecisionError::Validation(details));
+                }
+                true
+            }
+        };
+        Ok(Self { policies: merged, authorizer: Authorizer::new(), catalog, validated })
     }
 
     /// Read-only list of the loaded rules, sorted by set then id.
     pub fn catalog(&self) -> &[RuleInfo] { &self.catalog }
+
+    /// True when the rules were validated against a Cedar schema at load.
+    pub fn validated(&self) -> bool { self.validated }
 
     pub fn decide(&self, req: &DecisionRequest) -> Result<DecisionResponse, DecisionError> {
         let uid = |s: &str| EntityUid::from_str(s).map_err(|e| DecisionError::Input(e.to_string()));
@@ -333,6 +370,98 @@ permit(principal == User::"bob", action == Action::"read", resource);
         assert_eq!((who("alice").allow, who("alice").reasons), (true, vec!["same-department-reads".to_string()]));
         assert_eq!((who("bob").allow, who("bob").reasons), (true, vec!["auditors-read-all".to_string()]));
         assert!(!who("carol").allow);
+    }
+
+
+    // ---- Schema validation (policy-studio step 2) ----
+
+    /// A small schema covering two actions, an optional and a required context attribute.
+    const SCHEMA: &str = r#"
+entity Role;
+entity User in [Role] = { department?: String };
+entity Resource = { department?: String };
+entity Request;
+action "read" appliesTo {
+  principal: [User],
+  resource: [Resource],
+  context: { after_hours?: Bool, roles?: Set<String> }
+};
+action "approve" appliesTo {
+  principal: [User],
+  resource: [Request],
+  context: { amount: Long, frozen?: Bool }
+};
+"#;
+
+    #[test]
+    fn schema_accepts_rules_that_match_it() {
+        let e = Engine::new_with_schema(r#"
+@id("alice-reads") permit(principal == User::"alice", action == Action::"read", resource) when { context has after_hours && context.after_hours == false };
+@id("small-approvals") permit(principal, action == Action::"approve", resource) when { context.amount < 1000 };
+"#,
+            SCHEMA).unwrap();
+        assert!(e.validated());
+        // Decisions still work exactly as without a schema.
+        let r = e.decide(&dreq(r#"User::"alice""#, r#"Action::"read""#, json!({"after_hours": false}), json!([]))).unwrap();
+        assert!(r.allow);
+        assert_eq!(r.reasons, vec!["alice-reads"]);
+    }
+
+    #[test]
+    fn schema_refuses_a_typo_action_and_names_the_rule() {
+        let err = Engine::new_with_schema(r#"@id("alice-approves") permit(principal, action == Action::"aprove", resource);"#, SCHEMA).err().unwrap();
+        let msg = err.to_string();
+        assert!(msg.contains("alice-approves"), "{msg}"); // the readable rule id, not policyN
+        assert!(msg.contains("aprove"), "{msg}");
+    }
+
+    #[test]
+    fn schema_refuses_an_unknown_entity_type_and_attribute() {
+        let err = Engine::new_with_schema(r#"permit(principal == Employee::"alice", action == Action::"read", resource);"#, SCHEMA).err().unwrap();
+        assert!(err.to_string().contains("Employee"), "{err}");
+        let err = Engine::new_with_schema(r#"permit(principal, action == Action::"read", resource) when { context.roles.contains(42) };"#, SCHEMA).err().unwrap();
+        assert!(err.to_string().contains("roles"), "{err}");
+    }
+
+    #[test]
+    fn schema_refuses_reading_an_optional_attribute_without_a_guard() {
+        // Strict validation: an optional context attribute must be guarded with `has` (an unguarded read
+        // would error at evaluation time and the rule would be silently skipped - exactly what the schema catches).
+        let err = Engine::new_with_schema(r#"@id("unguarded") permit(principal, action == Action::"read", resource) when { context.after_hours == true };"#, SCHEMA).err().unwrap();
+        assert!(err.to_string().contains("unguarded"), "{err}");
+        // The guarded form passes.
+        Engine::new_with_schema(r#"permit(principal, action == Action::"read", resource) when { context has after_hours && context.after_hours == true };"#, SCHEMA).unwrap();
+    }
+
+    #[test]
+    fn schema_refuses_a_condition_of_the_wrong_type() {
+        let err = Engine::new_with_schema(r#"permit(principal, action == Action::"approve", resource) when { context.amount == "a lot" };"#, SCHEMA).err().unwrap();
+        assert!(err.to_string().contains("not compatible"), "{err}");
+    }
+
+    #[test]
+    fn schema_validates_templates_and_across_sets() {
+        // A template with a slot of the wrong entity type is refused; valid sets still merge and validate together.
+        let ok = Engine::from_sets_with_schema(&[
+            src("sso", r#"@id("dept-read") permit(principal == ?principal, action == Action::"read", resource) when { principal has department && resource has department && principal.department == resource.department };"#),
+            src("sod", r#"@id("frozen") forbid(principal, action == Action::"approve", resource) when { context has frozen && context.frozen == true };"#),
+        ], SCHEMA).unwrap();
+        assert!(ok.validated());
+        assert_eq!(ok.catalog().iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["sod/frozen", "sso/dept-read"]);
+        let err = Engine::from_sets_with_schema(&[
+            src("sso", r#"permit(principal == ?principal, action == Action::"read", resource);"#),
+            src("bad", r#"@id("typo") permit(principal, action == Action::"reed", resource);"#),
+        ], SCHEMA).err().unwrap();
+        assert!(err.to_string().contains("bad/typo"), "{err}");
+    }
+
+    #[test]
+    fn an_invalid_schema_is_refused_and_no_schema_keeps_the_old_behaviour() {
+        assert!(Engine::new("permit(principal, action, resource);").unwrap().validated() == false);
+        let err = Engine::new_with_schema("permit(principal, action, resource);", "entity User in [").err().unwrap();
+        assert!(matches!(err, DecisionError::Schema(_)), "{err}");
+        // A rule the schema does not know still parses fine without a schema.
+        Engine::new(r#"permit(principal == Employee::"x", action == Action::"anything", resource);"#).unwrap();
     }
 
     #[test]
