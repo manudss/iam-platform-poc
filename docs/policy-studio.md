@@ -1,4 +1,4 @@
-# Policy studio (Cedar rules) - step 1: read-only catalogue; step 2: schema validation
+# Policy studio (Cedar rules) - step 1: read-only catalogue; step 2: schema validation; step 3: the "why refused?" simulator
 
 The platform decides every access with [Cedar](https://docs.cedarpolicy.com/) rules inside the Rust core. This plugin shows those rules.
 Step 1 changes nothing about a decision: it names the rules, lists them, and makes the decision audit say which rule decided.
@@ -53,13 +53,29 @@ One rule text changed for this: `sod-blocks-approve` now reads `context has sod_
 optional attribute without the guard errored at evaluation time (the rule was skipped and the decision denied); with the guard the
 forbid simply does not apply when the attribute is absent. In tenant mode the core always injects the attribute, so nothing changes there.
 
-## Limits of steps 1-2
+## The simulator: why refused? (step 3)
 
-Read-only. No editor, no simulator, no impact analysis. The schema covers the current actions; a rule set introducing a new action
+The Policies screen ends with a **simulator**: type a person, an action, a resource and a context, and the core answers what it
+WOULD decide and why. Cedar only names the deciding rule; the simulator also evaluates every rule alone, so the answer lists
+every permit and every forbid the request satisfies, the rules that errored (Cedar skips an errored rule, the engine refuses
+fail-closed), and the templates (never applicable until linked per person, role or resource). A one-sentence explanation sums
+it up: "DENIED: the forbid sod-blocks-approve applies - a forbid always wins over a permit. The permit ... matched too, but the
+forbid overrules it."
+
+- **Core**: `POST /v1/policies/simulate` (admin token), body exactly like `/v1/decide` (`principal`, `action`, `resource`, optional
+  `context`, `entities`). The simulator takes the request as given: it never reads a tenant's active version (in tenant mode a real
+  decision would overwrite `roles` / `sod_conflict` with the active data - here you explore the context you type, which is the point).
+- **API**: `POST /tenants/:tenant/policies/simulate` (administrator capability, plugin gate, 503 without the core, 400 on a malformed request).
+- **Console**: the simulator card under the catalogue (own components). The context field is free JSON, validated before sending.
+- Read-only like steps 1-2: a simulation decides nothing, writes nothing to the audit, changes nothing.
+
+## Limits of steps 1-3
+
+Read-only. No editor, no impact analysis. The simulator evaluates the request you type; it does not look up the tenant's active version (so `roles` and `sod_conflict` are yours to set, not read from Dolt), and it does not create template links (step 4). The schema covers the current actions; a rule set introducing a new action
 needs the schema extended first (on purpose: the schema is the contract of what a rule may name). Summaries are generated from the rule scope and the number of conditions; the conditions themselves are read in the Cedar text. Usage counts come from the audit window (last 500 decisions of the tenant at most; the in-memory audit is lost on restart).
 
 ## Tests
 
-- Rust: `cargo test` in `core` (rule names, sets, composition, templates, catalogue endpoint, directory loading).
-- API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit).
-- Web: `policies.spec.ts` (filters and wording).
+- Rust: `cargo test` in `core` (rule names, sets, composition, templates, catalogue endpoint, directory loading, simulator engine and endpoint).
+- API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers).
+- Web: `policies.spec.ts` (filters, wording, simulator context parsing).
