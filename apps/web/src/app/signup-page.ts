@@ -14,7 +14,7 @@ interface F { key: string; label: string; type: string; help?: string; options?:
   <app-theme-switch class="auth-theme" />
   <main class="login"><section class="card hero signup-card">
     <p style="margin:0"><a class="back" href="/login">&lsaquo; Back to sign in</a></p>
-    <div class="brand"><div class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>Administration console</span></div></div>
+    <div class="brand"><div class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>IAM next generation</span></div></div>
     <h1 class="page-title">Request an account</h1>
     <ng-container *ngTemplateOutlet="body" />
     <p class="foot">Fictional demo data only. Do not enter real data. <a href="/privacy">Politique de confidentialité / Privacy</a> · <a href="/about">About this demo</a></p>
