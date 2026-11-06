@@ -90,7 +90,19 @@ Two admin-token endpoints work on CANDIDATE rules ({sets, links}) without ever t
   (links included) instead of the loaded ones - "what would this branch's rules decide?" - and a candidate that does not build
   is a 400 naming the rule, never a fake simulation.
 
-Storage in Dolt, branch editing and the console editor come with the next step-4 PRs.
+## Rules carried by the activation snapshot (step 4, core)
+
+Until now the only rules were the boot file (`policies/*.cedar`, the fallback set). A version snapshot can now carry its own
+rules: `policies` (the same {sets, links} shape as the candidate endpoints) and `policy_links`. On **Apply**, the core builds
+the tenant's engine from those rules FIRST: a version whose rules do not parse or do not validate against the schema is
+refused with a 400 naming the rule, and the previous version keeps serving (fail closed - a broken push never decides).
+When the build passes, decisions, `GET /v1/policies?tenant=...` and the simulator (`tenant` field, answer carries
+`engine_of: "tenant" | "boot"`) all use the tenant's rules; `engine.source` in the catalogue says which engine a tenant is on.
+A version WITHOUT `policies` keeps the current behaviour: the tenant reverts to the boot set, which stays the fallback
+("jeu de secours"). `load_state` (core restart) applies the same rule: a stored version whose rules no longer build is
+skipped, so a restart never revives a broken rule set.
+
+Storage of the rule sets as Dolt rows, branch editing and the console editor come with the next step-4 PRs.
 
 ## Limits of steps 1-3
 
@@ -99,6 +111,6 @@ needs the schema extended first (on purpose: the schema is the contract of what 
 
 ## Tests
 
-- Rust: `cargo test` in `core` (rule names, sets, composition, templates and links, catalogue endpoint, directory loading, simulator engine and endpoint, candidate validation and simulation).
+- Rust: `cargo test` in `core` (rule names, sets, composition, templates and links, catalogue endpoint, directory loading, simulator engine and endpoint, candidate validation and simulation, snapshot-carried rules with fail-closed activation and per-tenant engine).
 - API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers).
 - Web: `policies.spec.ts` (filters, wording, simulator context parsing).

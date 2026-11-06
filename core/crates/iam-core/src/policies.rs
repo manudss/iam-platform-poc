@@ -91,13 +91,27 @@ fn build(sets: Vec<PolicySource>, schema: Option<String>) -> Result<Engine, Stri
     }
 }
 
-pub async fn list(State(c): State<Arc<Core>>, headers: HeaderMap) -> (StatusCode, Json<Value>) {
+/// The engine that DECIDES for a tenant: its own when the active version carries rules (step 4), else the boot one.
+enum EngineRef<'a> { Boot(&'a Engine), Tenant(Arc<Engine>) }
+impl std::ops::Deref for EngineRef<'_> {
+    type Target = Engine;
+    fn deref(&self) -> &Engine { match self { Self::Boot(e) => e, Self::Tenant(e) => e } }
+}
+fn engine_for<'a>(c: &'a Core, tenant: Option<&str>) -> (EngineRef<'a>, &'static str) {
+    if let Some(t) = tenant {
+        if let Some(e) = c.engines.read().unwrap().get(t).cloned() { return (EngineRef::Tenant(e), "tenant"); }
+    }
+    (EngineRef::Boot(&c.engine), "boot")
+}
+
+pub async fn list(State(c): State<Arc<Core>>, headers: HeaderMap, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>) -> (StatusCode, Json<Value>) {
     if !crate::bus_wiring::is_admin(&c, &headers) { return (StatusCode::UNAUTHORIZED, Json(json!({"error": "admin token required"}))); }
-    let rules = c.engine.catalog();
+    let (engine, source) = engine_for(&c, q.get("tenant").map(String::as_str));
+    let rules = engine.catalog();
     let mut sets: Vec<(String, usize)> = Vec::new();
     for r in rules { match sets.iter_mut().find(|(n, _)| *n == r.set) { Some(s) => s.1 += 1, None => sets.push((r.set.clone(), 1)) } }
     (StatusCode::OK, Json(json!({
-        "engine": {"rules": rules.len(), "sets": sets.len(), "schema": c.engine.validated()},
+        "engine": {"rules": rules.len(), "sets": sets.len(), "schema": engine.validated(), "source": source},
         "sets": sets.iter().map(|(n, k)| json!({"name": n, "rules": k})).collect::<Vec<_>>(),
         "rules": rules,
     })))
@@ -164,6 +178,8 @@ pub async fn simulate(State(c): State<Arc<Core>>, headers: HeaderMap, Json(body)
         #[serde(flatten)]
         req: DecisionRequest,
         policies: Option<CandidatePolicies>,
+        /// Step 4: simulate on the rules that DECIDE for this tenant (its applied version, else the boot set).
+        tenant: Option<String>,
     }
     let body: SimulateBody = match serde_json::from_value(body) {
         Ok(r) => r,
@@ -176,9 +192,14 @@ pub async fn simulate(State(c): State<Arc<Core>>, headers: HeaderMap, Json(body)
         },
         None => None,
     };
-    let engine = candidate.as_ref().unwrap_or(&c.engine);
+    let (tenant_engine, source) = engine_for(&c, body.tenant.as_deref());
+    let (engine, source) = match &candidate { Some(e) => (e, "candidate"), None => (&*tenant_engine, source) };
     match engine.simulate(&body.req) {
-        Ok(s) => (StatusCode::OK, Json(serde_json::to_value(s).unwrap_or(Value::Null))),
+        Ok(s) => {
+            let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
+            v["engine_of"] = json!(source); // which rules answered: candidate, the tenant's applied version, or the boot set
+            (StatusCode::OK, Json(v))
+        }
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))),
     }
 }
@@ -221,7 +242,7 @@ mod tests {
     async fn catalogue_lists_every_demo_rule_with_a_readable_name() {
         let (st, v) = get(&demo_core(), Some(TOKEN)).await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(v["engine"], json!({"rules": 6, "sets": 1, "schema": true}));
+        assert_eq!(v["engine"], json!({"rules": 6, "sets": 1, "schema": true, "source": "boot"}));
         let rules = v["rules"].as_array().unwrap();
         assert_eq!(rules.len(), 6);
         for r in rules {

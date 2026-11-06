@@ -74,7 +74,7 @@ pub struct Simulation {
 }
 
 /// One named set of Cedar rules (one file, later one Dolt row group). The name "default" is not shown in rule ids.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicySource {
     pub set: String,
     pub text: String,

@@ -6,7 +6,7 @@ mod policies;
 pub mod gate;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::{get, post}};
 use iam_idp::{Idp, IdpError};
-use iam_decision::{DecisionRequest, DecisionResponse, Engine};
+use iam_decision::{DecisionRequest, DecisionResponse, Engine, PolicyLink, PolicySource};
 use serde_json::{Value, json};
 use iam_plugin_runtime::{PluginRuntime, Verdict};
 use std::collections::HashMap;
@@ -30,6 +30,9 @@ pub struct Core {
     /// The Cedar schema the boot rules were validated with (policy-studio step 4): candidate rules sent to
     /// /v1/policies/validate (and candidate simulations) are checked against the SAME schema. None = parse only.
     pub policy_schema: Option<String>,
+    /// Per-tenant engines built from the active version's policies (step 4). A tenant without an entry here decides
+    /// with the boot engine (the file = the fallback set).
+    pub engines: RwLock<HashMap<String, Arc<Engine>>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -39,6 +42,14 @@ pub struct Snapshot {
     /// MCP gateway (P2): delegation grants versioned with the rest of the data. Older snapshots lack the field.
     #[serde(default)]
     pub mcp_grants: Vec<McpGrant>,
+    /// Policy-studio step 4: the tenant's Cedar rule sets, versioned in Dolt like the rest. Absent in older snapshots:
+    /// the tenant then decides with the boot rules (the file stays the fallback set). Present but unbuildable
+    /// (parse or schema error) = the activation is REFUSED and the previous version keeps serving.
+    #[serde(default)]
+    pub policies: Option<Vec<PolicySource>>,
+    /// Template links of the tenant (per person, role or organisation). Only meaningful with `policies`.
+    #[serde(default)]
+    pub policy_links: Vec<PolicyLink>,
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Assignment { pub identity_id: String, pub role_id: String }
@@ -51,6 +62,18 @@ pub struct McpGrant { pub identity_id: String, pub upstream: String, pub tool: S
 pub struct Active { pub seq: u64, pub commit: String, pub snapshot: Snapshot }
 
 impl Core {
+    /// Builds the tenant's engine from its snapshot policies (policy-studio step 4), validated with the boot schema.
+    /// None policies = no tenant engine (boot rules serve this tenant). An unbuildable set is an error naming the rule:
+    /// the caller refuses the activation and the previous version keeps serving (fail closed).
+    fn tenant_engine(&self, snapshot: &Snapshot) -> Result<Option<Engine>, String> {
+        let Some(sets) = &snapshot.policies else { return Ok(None) };
+        let e = match &self.policy_schema {
+            Some(schema) => Engine::from_sets_with_schema_and_links(sets, schema, &snapshot.policy_links).map_err(|e| e.to_string()),
+            None => Engine::from_sets_and_links(sets, &snapshot.policy_links).map_err(|e| e.to_string()),
+        }?;
+        Ok(Some(e))
+    }
+
     /// Loads persisted active versions. Files that are unreadable, malformed or whose tenant name does not match the file name are skipped (logged).
     pub fn load_state(&mut self, dir: &std::path::Path) {
         self.state_dir = Some(dir.to_path_buf());
@@ -62,6 +85,21 @@ impl Core {
             match std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Active>(&b).ok()) {
                 Some(a) if valid_name(&stem) => { map.insert(stem, a); }
                 _ => tracing::warn!("ignoring unreadable state file {}", path.display()),
+            }
+        }
+        drop(map);
+        // Rebuild the per-tenant engines (step 4). A version whose rules no longer build (e.g. the schema changed)
+        // is dropped entirely: the tenant answers no-active-version rather than silently deciding with other rules.
+        let tenants: Vec<String> = self.active.read().unwrap().keys().cloned().collect();
+        for t in tenants {
+            let snapshot = self.active.read().unwrap().get(&t).unwrap().snapshot.clone();
+            match self.tenant_engine(&snapshot) {
+                Ok(Some(e)) => { self.engines.write().unwrap().insert(t, Arc::new(e)); }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("active version of {t} dropped: its rules no longer build: {e}");
+                    self.active.write().unwrap().remove(&t);
+                }
             }
         }
     }
@@ -77,7 +115,7 @@ impl Core {
         if let Some(b) = &self.bus { b.emit(kind, payload, effect_key); }
     }
     pub fn new(engine: Engine, plugin: Option<(PluginRuntime, Vec<u8>)>, idp: Idp) -> Self {
-        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None, bus: None, policy_schema: None }
+        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None, bus: None, policy_schema: None, engines: RwLock::new(HashMap::new()) }
     }
 }
 
@@ -160,9 +198,19 @@ async fn activate(State(c): State<Arc<Core>>, headers: axum::http::HeaderMap, Js
         }
         if cur.seq > r.seq { return (StatusCode::CONFLICT, Json(json!({"error": "stale activation", "active_seq": cur.seq}))); }
     }
+    // Policy-studio step 4: rules travel with the version. Build the tenant engine FIRST: an unbuildable set refuses
+    // the activation (400 naming the rule) and the previous version keeps serving - a broken rules push never decides.
+    let engine = match c.tenant_engine(&r.snapshot) {
+        Ok(e) => e,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("policy rules refused: {e}")}))),
+    };
     let a = Active { seq: r.seq, commit: r.commit.clone(), snapshot: r.snapshot };
     if let Err(e) = c.persist(&r.tenant, &a) { // not persisted = not applied: the caller sees the failure and can retry
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("cannot persist active version: {e}")})));
+    }
+    match engine {
+        Some(e) => { c.engines.write().unwrap().insert(r.tenant.clone(), Arc::new(e)); }
+        None => { c.engines.write().unwrap().remove(&r.tenant); } // a version without rules reverts to the boot set
     }
     map.insert(r.tenant.clone(), a);
     c.bus_emit("activation.applied", json!({"tenant": r.tenant, "seq": r.seq, "commit": r.commit}), Some(format!("activation:{}:{}", r.tenant, r.seq)));
@@ -217,7 +265,9 @@ pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, V
             Err(()) => return Ok(json!({"allow": false, "reasons": ["no-active-version"], "errors": []})),
         }
     }
-    let mut resp = c.engine.decide(&req)
+    let tenant_engine = tenant.as_ref().and_then(|t| c.engines.read().unwrap().get(t).cloned());
+    let engine = tenant_engine.as_deref().unwrap_or(&c.engine);
+    let mut resp = engine.decide(&req)
         .map_err(|err| (StatusCode::BAD_REQUEST, json!({"error": err.to_string()})))?;
     // Blocking plugin hook runs only on a Cedar allow; a plugin deny or error always denies (fail closed).
     if resp.allow {
@@ -450,6 +500,95 @@ mod activation_tests {
         std::fs::write(dir.join("t1.json"), b"{not json").unwrap();
         let c3 = mk(true);
         assert_eq!(send(&c3, "POST", "/v1/decide", None, dec("demo-alice")).await.1["reasons"][0], "no-active-version");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Policy-studio step 4: rules travel with the active version ----
+
+    fn act_rules(seq: u64, commit: &str, policies: Value, links: Value) -> Value {
+        json!({"tenant":"t1","seq":seq,"commit":commit,"snapshot":{"assignments":[],"sod_rules":[],"policies":policies,"policy_links":links}})
+    }
+    const TENANT_RULES: &str = r#"@id("tenant-bob-approves") permit(principal == User::"demo-bob", action == Action::"approve", resource);"#;
+
+    #[tokio::test]
+    async fn a_version_can_carry_rules_and_a_broken_push_never_decides() {
+        let c = core();
+        // Version 1 carries its own rules: only demo-bob may approve (the boot demo rules no longer apply to t1).
+        let r = send(&c, "POST", "/v1/activate", Some(TOKEN), act_rules(1, "r1", json!([{"set":"default","text":TENANT_RULES}]), json!([]))).await;
+        assert_eq!((r.0, r.1["status"].as_str()), (StatusCode::OK, Some("applied")), "{:?}", r.1);
+        let (_, v) = send(&c, "POST", "/v1/decide", None, dec("demo-bob")).await;
+        assert_eq!((v["allow"].as_bool(), v["reasons"][0].as_str()), (Some(true), Some("tenant-bob-approves")));
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec("demo-alice")).await.1["allow"], false, "the boot rules no longer serve t1");
+        // The catalogue names the tenant's applied rules; without ?tenant it still shows the boot set.
+        let (_, v) = send(&c, "GET", "/v1/policies?tenant=t1", Some(TOKEN), Value::Null).await;
+        assert_eq!((v["engine"]["source"].as_str(), v["engine"]["rules"].as_u64()), (Some("tenant"), Some(1)));
+        let (_, v) = send(&c, "GET", "/v1/policies", Some(TOKEN), Value::Null).await;
+        assert_eq!(v["engine"]["source"].as_str(), Some("boot"));
+        // The simulator follows the tenant's rules too.
+        let (_, v) = send(&c, "POST", "/v1/policies/simulate", Some(TOKEN), json!({"tenant":"t1","principal":"User::\"demo-bob\"","action":"Action::\"approve\"","resource":"Request::\"r1\""})).await;
+        assert_eq!((v["allow"].as_bool(), v["engine_of"].as_str()), (Some(true), Some("tenant")));
+        // Version 2 with a BROKEN rule set: refused (400 naming the rule), version 1 keeps serving.
+        let r = send(&c, "POST", "/v1/activate", Some(TOKEN), act_rules(2, "r2", json!([{"set":"default","text":"permit("}]), json!([]))).await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST);
+        assert!(r.1["error"].as_str().unwrap().contains("policy rules refused"), "{:?}", r.1);
+        let (_, v) = send(&c, "POST", "/v1/decide", None, dec("demo-bob")).await;
+        assert_eq!((v["allow"].as_bool(), v["version"]["commit"].as_str()), (Some(true), Some("r1")), "the previous version keeps serving");
+        // Version 3 WITHOUT rules: the tenant reverts to the boot set (the tenant-mode demo rule decides again).
+        let r = send(&c, "POST", "/v1/activate", Some(TOKEN), act(3, "r3", json!([{"identity_id":"demo-alice","role_id":"payment-approver"}]))).await;
+        assert_eq!(r.1["status"], "applied");
+        let (_, v) = send(&c, "POST", "/v1/decide", None, dec("demo-alice")).await;
+        assert_eq!((v["allow"].as_bool(), v["reasons"][0].as_str()), (Some(true), Some("approve-needs-payment-approver")));
+        let (_, v) = send(&c, "GET", "/v1/policies?tenant=t1", Some(TOKEN), Value::Null).await;
+        assert_eq!(v["engine"]["source"].as_str(), Some("boot"));
+    }
+
+    #[tokio::test]
+    async fn version_rules_are_checked_against_the_boot_schema_and_links_work() {
+        let mut cc = Core::new(Engine::new_with_schema(include_str!("../../../../policies/demo.cedar"), include_str!("../../../../policies/demo.cedarschema")).unwrap(), None, Idp::demo("http://idp.test"));
+        cc.admin_token = Some(TOKEN.into());
+        cc.policy_schema = Some(include_str!("../../../../policies/demo.cedarschema").into());
+        let c = Arc::new(cc);
+        // A rule the schema refuses fails the activation and names the rule.
+        let r = send(&c, "POST", "/v1/activate", Some(TOKEN), act_rules(1, "r1", json!([{"set":"default","text":"@id(\"typo\") permit(principal, action == Action::\"aprove\", resource);"}]), json!([]))).await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST);
+        assert!(r.1["error"].as_str().unwrap().contains("typo"), "{:?}", r.1);
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec("demo-bob")).await.1["reasons"][0], "no-active-version");
+        // A template + a per-person link in the version: the grant decides and the audit names the link.
+        let rules = r#"@id("delegated-approve") permit(principal == ?principal, action == Action::"approve", resource);"#;
+        let links = json!([{"id":"delegate:demo-bob","template":"delegated-approve","values":{"principal":"User::\"demo-bob\""}}]);
+        let r = send(&c, "POST", "/v1/activate", Some(TOKEN), act_rules(1, "r1", json!([{"set":"default","text":rules}]), links)).await;
+        assert_eq!((r.0, r.1["status"].as_str()), (StatusCode::OK, Some("applied")), "{:?}", r.1);
+        let (_, v) = send(&c, "POST", "/v1/decide", None, dec("demo-bob")).await;
+        assert_eq!((v["allow"].as_bool(), v["reasons"][0].as_str()), (Some(true), Some("delegate:demo-bob")));
+        assert_eq!(send(&c, "POST", "/v1/decide", None, dec("demo-alice")).await.1["allow"], false);
+    }
+
+    #[tokio::test]
+    async fn tenant_rules_are_rebuilt_after_a_restart_and_dropped_if_they_no_longer_build() {
+        let dir = std::env::temp_dir().join(format!("iam-core-state-pol-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |load: bool, schema: bool| {
+            let mut c = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test"));
+            c.admin_token = Some(TOKEN.into());
+            if schema { c.policy_schema = Some(include_str!("../../../../policies/demo.cedarschema").into()); }
+            if load { c.load_state(&dir) } else { c.state_dir = Some(dir.clone()) }
+            Arc::new(c)
+        };
+        // Activate a version carrying rules (no schema configured at this point: parse-only), then "restart".
+        let c1 = mk(false, false);
+        send(&c1, "POST", "/v1/activate", Some(TOKEN), act_rules(9, "p9", json!([{"set":"default","text":TENANT_RULES}]), json!([]))).await;
+        assert_eq!(send(&c1, "POST", "/v1/decide", None, dec("demo-bob")).await.1["allow"], true);
+        drop(c1);
+        // After the restart the tenant rules still decide (rebuilt from the persisted version).
+        let c2 = mk(true, false);
+        let (_, v) = send(&c2, "POST", "/v1/decide", None, dec("demo-bob")).await;
+        assert_eq!((v["allow"].as_bool(), v["reasons"][0].as_str()), (Some(true), Some("tenant-bob-approves")));
+        drop(c2);
+        // If the rules can no longer be built at load (here: a schema appears and the persisted set does not match it),
+        // the version is dropped: fail closed with no-active-version, never a silent fallback to other rules.
+        std::fs::write(dir.join("t1.json"), serde_json::to_vec(&json!({"seq":9,"commit":"p9","snapshot":{"assignments":[],"sod_rules":[],"policies":[{"set":"default","text":"permit(principal, action == Action::\"nope\", resource);"}],"policy_links":[]}})).unwrap()).unwrap();
+        let c3 = mk(true, true);
+        assert_eq!(send(&c3, "POST", "/v1/decide", None, dec("demo-bob")).await.1["reasons"][0], "no-active-version");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
