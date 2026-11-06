@@ -35,7 +35,7 @@ export interface BusHarness {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export async function startBusHarness(opts: { natsPort: number; corePort?: number; token?: string; registry?: PluginRegistry }): Promise<BusHarness> {
+export async function startBusHarness(opts: { natsPort: number; corePort?: number; token?: string; registry?: PluginRegistry; registryFor?: (branch: string) => Promise<PluginRegistry>; allRegistries?: () => Promise<[string, PluginRegistry][]> }): Promise<BusHarness> {
   const token = opts.token ?? 'bus-harness-token';
   const dir = join(tmpdir(), `iam-bus-harness-${opts.natsPort}`);
   rmSync(dir, { recursive: true, force: true });
@@ -63,7 +63,7 @@ export async function startBusHarness(opts: { natsPort: number; corePort?: numbe
     ...(coreUrl ? { IAM_CORE_URL: coreUrl, IAM_CORE_ADMIN_TOKEN: token } : {}),
   });
   const registry = opts.registry ?? new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
-  const host = await BusHost.startIfConfigured(async () => registry);
+  const host = await BusHost.startIfConfigured(async () => registry, undefined, opts.registryFor, opts.allRegistries);
   if (!host) throw new Error('bus host did not start');
   const ref = new BusHostRef();
   ref.host = host;

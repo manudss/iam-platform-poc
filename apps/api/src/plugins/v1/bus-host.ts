@@ -145,12 +145,16 @@ export class BusHost {
     );
   }
 
-  private listeningOn?: PluginRegistry;
+  private readonly listeningOn = new Set<PluginRegistry>();
+  /** Every loaded registry (main + branches) re-pushes on enable/disable: a plugin enabled on a working branch
+   * must not wait for the 60 s timer to get its bus registration (decision 7: the branch test sign-in is live). */
   private attachActivity() {
-    this.registry().then((r) => {
-      if (this.listeningOn === r) return;
-      this.listeningOn = r;
-      r.onActivityChange(() => { this.sync().catch((e) => this.log({ warn: 'bus resync failed', error: String(e) })); });
+    this.allRegistries().then((regs) => {
+      for (const [, r] of regs) {
+        if (this.listeningOn.has(r)) continue;
+        this.listeningOn.add(r);
+        r.onActivityChange(() => { this.sync().catch((e) => this.log({ warn: 'bus resync failed', error: String(e) })); });
+      }
     }).catch(() => {});
   }
 

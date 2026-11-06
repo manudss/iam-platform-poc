@@ -13,7 +13,7 @@ import { MemoryMigrationStore, MemorySettingsStore } from './plugins/v1/memory-s
 import { startBusHarness, busBinsPresent, BusHarness } from './testing/bus-harness.js';
 
 const T = 'acme-demo';
-const NP = 14225, CORE_PORT = 18095;
+const NP = 14227, CORE_PORT = 18099; // own pair: fullstack already uses 14225/18095
 
 /** Second profile plugin: proves the merge picks every responder's fields. */
 const profileDept: PluginImpl = {
