@@ -266,12 +266,15 @@ describe('bus facade (step 2)', () => {
     assert.equal(out.length, 1); assert.equal(out[0].plugin, 'notify-log');
   });
 
-  it('callSlot has a generic bus path (dormant for blocking kinds today)', async () => {
-    reg.setBus(stub({ routed: () => true, call: async () => ({ verdict: 'allow', result: { outcome: 'allow', subject: 's', methods: ['pwd'] } }) }));
+  it('callSlot has a generic bus path (active for the routed blocking kinds, step 3)', async () => {
+    reg.setBus(stub({ routed: () => true, call: async () => ({ verdict: 'allow', answered: true, result: { outcome: 'allow', subject: 's', methods: ['pwd'] } }) }));
     const r = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
     assert.equal(r.servedBy, 'bus'); assert.equal(r.result.outcome, 'allow');
-    reg.setBus(stub({ routed: () => true, call: async () => ({ verdict: 'deny', reason: "mandatory 'ghost' unusable: timeout", result: undefined }) }));
+    reg.setBus(stub({ routed: () => true, call: async () => ({ verdict: 'deny', reason: "mandatory 'ghost' unusable: timeout", answered: false, result: undefined }) }));
     await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed');
+    // No usable answer at all (every subscriber silent or not-concerned) refuses too, even on an allow verdict.
+    reg.setBus(stub({ routed: () => true, call: async () => ({ verdict: 'allow', answered: false, result: undefined }) }));
+    await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed' && /no responder/.test(e.message));
   });
 
   it('the activity listener fires on enable and disable (the bus host re-pushes)', async () => {

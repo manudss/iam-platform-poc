@@ -3,7 +3,7 @@
 Status: steps 1 and 2 of the event plan. The bus lives in the Rust core (`core/crates/iam-bus`). Step 1 is the bus itself,
 tested alone and over a real NATS server. Step 2 (see `docs/plugin-contract-v2.md`) adds the plugin host protocol:
 the API serves its plugins over the bus (`POST /v1/bus/plugins/register`, `POST /v1/bus/emit`, source stamped by the core).
-Authorization decisions, activation, IdP and gRPC do not depend on the bus.
+Authorization decisions, activation, IdP and gRPC do not depend on the bus. Authentication DOES (step 3): when the bus host is configured, auth.authenticate and auth.challenge are mandatory controls on the bus - no bus, no answer, no sign-in (fail closed).
 
 ## What exists (implemented and tested)
 
@@ -64,9 +64,27 @@ ledger) absorb duplicates - and replays the applied activations of the journal a
 keeps no copy for an address nobody registered). Core-owned kinds can be subscribed to but never declared or
 emitted by the API (403/400).
 
+### Authentication over the bus (step 3)
+
+auth.authenticate and auth.challenge are declared to the core as CONTROL kinds and routed through the bus
+(PluginRegistry.callSlot's bus path): the caller posts the control emit, the core asks every registered
+subscriber on plugin.<id>.call and merges the verdict. Three fail-closed rules make it safe:
+
+- single responder: every active plugin with the handler gets a MANDATORY subscription, but only the plugin
+  chosen for the slot answers (registry.blockingResponder); the others reply not-concerned, which counts
+  neither as an answer nor as silence. A faulted replacement answers deny - the base is never asked instead.
+- no answer = refusal: a silent mandatory subscriber (plugin down, NATS down) makes the core deny, and the
+  caller also refuses when NO subscriber gave a usable reply at all (all silent or not-concerned).
+- a 'challenge' outcome is not a denial: only outcome 'deny' carries the deny verdict; the result data (allow
+  with methods, or the challenge to draw) always rides along, so MFA chains keep working.
+
+The envelope carries the caller registry's branch, so a sign-in test on a working branch is answered by that
+branch's registry (decision 7). ui.screens and access.decide stay in process (decision 8). NATS down therefore
+means sign-in refused until the bus is back; core and host reconnect by themselves.
+
 ## What is prepared, NOT built (later steps)
 
-Routing blocking hooks (auth step), restart-proof reads of the journal stream,
+risk.score and profile.enrich as control/query (auth done above), restart-proof reads of the journal stream,
 local in-process duplicate for latency (D16 evaluation: not done).
 
 ## Step 2 endpoints (plugin host protocol)

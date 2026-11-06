@@ -34,6 +34,11 @@ interface BusEnvelope { id: string; kind: string; tenant?: string; branch?: stri
 const EVENTS_STREAM = 'IAM_BUS_EVENTS'; // owned by the core (step 3)
 const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (decision 3)
 
+/** Blocking kinds that travel on the bus as mandatory controls (step 3, auth migration): the serving plugin
+ * answers `plugin.<id>.call`, the core merges the verdict, a silent mandatory subscriber denies (fail closed)
+ * and the caller refuses when nobody answered at all. ui.screens and access.decide stay in process (decision 8). */
+export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge']);
+
 /** KV keys accept [A-Za-z0-9_./=-]: the composite key uses '/' and every part is sanitized. */
 function ledgerKey(tenant: string, id: string, kind: string, effectKey: string): string {
   const clean = (x: string) => x.replace(/[^A-Za-z0-9_.=-]/g, '_').slice(0, 80);
@@ -107,13 +112,17 @@ export class BusHost {
     return j;
   }
 
-  /** Platform kinds = hooks whose only mode is async. Blocking hooks stay in process until the auth migration step. */
+  /** Platform kinds = hooks whose only mode is async (notify), plus the blocking auth hooks (control, step 3).
+   * Re-pushed by every sync: the core holds the catalogue in memory, so a core restart loses the declarations
+   * and the plugin subscriptions would fail validation without this heal. */
   private async declarePlatformKinds() {
     const kinds = [...HOOKS.entries()].filter(([, modes]) => modes.length === 1 && modes[0] === 'async').map(([name]) => ({ name, mode: 'notify' as const }));
     // The platform's application events (user.created, sso.login.*, ...) are notify kinds declared by `api` too.
     const appKinds = APP_EVENT_KINDS.map((name) => ({ name, mode: 'notify' as const }));
-    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [...APP_EVENT_KINDS], declare_kinds: [...kinds, ...appKinds] });
+    const controlKinds = [...BUS_CONTROL_KINDS].map((name) => ({ name, mode: 'control' as const }));
+    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [...APP_EVENT_KINDS], declare_kinds: [...kinds, ...appKinds, ...controlKinds] });
     for (const k of kinds) this.routedKinds.add(k.name);
+    for (const k of BUS_CONTROL_KINDS) this.routedKinds.add(k);
   }
 
   /** Step 3: the application events travel on the bus. Emissions stay fire-and-forget (the producing write is
@@ -152,6 +161,7 @@ export class BusHost {
 
   private async doSync(): Promise<void> {
     {
+      await this.declarePlatformKinds();
       this.attachActivity();
       // Union over every loaded branch registry (decision 7: all branches share this bus): a plugin active on
       // ANY branch/tenant gets its delivery address; each delivery is then resolved against its own branch.
@@ -169,7 +179,13 @@ export class BusHost {
         if (!impl) continue;
         const m = impl.manifest;
         const e = entry(m.id);
-        for (const h of m.hooks) if (h.mode === 'async' && this.routedKinds.has(h.name)) e.subscriptions.set(h.name, { kind: h.name });
+        for (const h of m.hooks) {
+          if (h.mode === 'async' && this.routedKinds.has(h.name)) e.subscriptions.set(h.name, { kind: h.name });
+          // Blocking auth hooks: a MANDATORY control subscription, so the core denies the call when the serving
+          // plugin is unreachable (fail closed). The delivery answers not-concerned unless this plugin is the
+          // one chosen for the slot (single responder).
+          if (h.mode === 'blocking' && this.routedKinds.has(h.name)) e.subscriptions.set(h.name, { kind: h.name, mandatory: true });
+        }
         for (const s of m.subscribes ?? []) {
           e.subscriptions.set(s.name + (s.group ? `/${s.group}` : ''), s.mode === 'async' ? { kind: s.name, group: s.group } : { kind: s.name, mandatory: !!s.mandatory });
           e.declare_kinds.set(s.name, { name: s.name, mode: s.mode === 'async' ? 'notify' : 'control' });
@@ -281,14 +297,24 @@ export class BusHost {
       } catch { reply({ deduped: true }); return; } // redelivery: the effect already ran, say so without running it twice
     }
     const registry = await this.registryFor(env.branch ?? 'main').catch(() => undefined);
-    const impl = registry && registry.impl(id);
-    if (!registry || !impl || !registry.isActive(tenant, id)) return; // disabled between registration and delivery: stay silent
+    if (!registry) return; // unknown branch: stay silent (a mandatory control then denies, fail closed)
+    if (BUS_CONTROL_KINDS.has(env.kind)) {
+      // Single responder: only the plugin chosen for the slot answers; the others say not-concerned (neither an
+      // answer nor a silence). A faulted replacement refuses: the base is never asked in its place (callSlot rule).
+      const role = registry.blockingResponder(tenant, id, env.kind);
+      if (role === 'not-concerned') { msg.respond(jc.encode({ from: id, id: env.id, not_concerned: true })); return; }
+      if (role === 'refuse') { reply({ outcome: 'deny', reason: 'plugin-faulted' }, 'deny'); return; }
+    }
+    const impl = registry.impl(id);
+    if (!impl || !registry.isActive(tenant, id)) return; // disabled between registration and delivery: stay silent
     const handler = impl.handlers[env.kind];
     if (!handler) return;
     const settings = validateSettings(impl.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
     const ctx: PluginContext = { tenant, settings };
     const result = await handler(env.payload, ctx);
-    const verdict = result?.outcome === 'allow' ? 'allow' as const : result?.outcome === 'deny' ? 'deny' as const : undefined;
+    // 'challenge' is a way forward, not a refusal: only an explicit deny carries the deny verdict; the result
+    // data (allow with methods, or the challenge to draw) always rides along.
+    const verdict = result?.outcome === 'deny' ? 'deny' as const : 'allow' as const;
     reply(result ?? null, verdict);
   }
 
@@ -312,10 +338,10 @@ export class BusHost {
         const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, effect_key: effectKey, branch });
         return (r.outcomes ?? []).filter((o: any) => o.status === 'queued').map((o: any) => ({ plugin: o.id, result: { queued: true } }));
       },
-      call: async (tenant, kind, payload, timeoutMs) => {
-        const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, timeout_ms: timeoutMs });
+      call: async (tenant, kind, payload, timeoutMs, branch) => {
+        const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, timeout_ms: timeoutMs, branch });
         const replied = (r.outcomes ?? []).filter((o: any) => o.status === 'replied');
-        return { verdict: r.verdict, reason: r.reason, result: replied[replied.length - 1]?.data };
+        return { verdict: r.verdict, reason: r.reason, result: replied[replied.length - 1]?.data, answered: replied.length > 0 };
       },
     };
   }

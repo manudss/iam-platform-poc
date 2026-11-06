@@ -50,7 +50,9 @@ export interface BusBridge {
   /** True when this kind is delivered through the bus. Only pure-async hooks route in step 2; blocking hooks stay in process. */
   routed(kind: string): boolean;
   emit(tenant: string, kind: string, payload: unknown, effectKey?: string, branch?: string): Promise<{ plugin: string; result: unknown }[]>;
-  call(tenant: string, kind: string, payload: unknown, timeoutMs?: number): Promise<{ verdict: string; reason?: string; result: unknown }>;
+  /** `answered` is false when NO subscriber gave a usable reply (all silent or not-concerned): for a blocking
+   * hook that is a refusal too ("no response = deny", plan step 3), even if the merged verdict says allow. */
+  call(tenant: string, kind: string, payload: unknown, timeoutMs?: number, branch?: string): Promise<{ verdict: string; reason?: string; result: unknown; answered: boolean }>;
 }
 
 export class PluginRegistry {
@@ -288,12 +290,25 @@ export class PluginRegistry {
    * - Non-sensitive hooks (for example notifications) may fall back to the base: a missed message is not an access decision.
    * - The way out of a fault is an explicit admin action: `disable` (return to a valid base configuration, audited) or `enable` again.
    */
+  /** Bus delivery of a blocking kind (step 3): only the plugin CHOSEN for the slot answers (single responder);
+   * every other plugin with a handler is explicitly not concerned. A faulted replacement refuses (fail closed,
+   * same rule as callSlot: the base is never asked in its place). */
+  blockingResponder(tenant: string, id: string, kind: string): 'answer' | 'not-concerned' | 'refuse' {
+    const impl = this.impls.get(id);
+    if (!impl || !impl.handlers[kind] || !this.isActive(tenant, id)) return 'not-concerned';
+    const chosen = (impl.manifest.provides ?? []).some((s) => { try { return this.resolve(tenant, s).manifest.id === id; } catch { return false; } });
+    if (!chosen) return 'not-concerned';
+    if (impl.manifest.extends && this.faulted.has(this.k(tenant, id))) return 'refuse';
+    return 'answer';
+  }
+
   async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
     if (this.bus?.routed(hook)) {
-      // Generic bus path. Dormant in step 2 (no blocking kind is routed yet): the auth migration step enables it.
-      // Fail closed is preserved by the core itself: a silent mandatory subscriber denies the call (D3).
-      const r = await this.bus.call(tenant, hook, payload, timeoutMs);
-      if (r.verdict !== 'allow') throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? 'denied'}`);
+      // Step 3 (auth migration): the call travels on the bus (envelope stamped with this registry's branch,
+      // decision 7) and the serving plugin answers over NATS. Fail closed both ways: a deny verdict, a silent
+      // mandatory subscriber (the core denies) or NO usable answer at all (bus down, nobody serving) refuse.
+      const r = await this.bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
+      if (r.verdict !== 'allow' || !r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? (r.answered ? 'denied' : 'no responder')}`);
       return { result: r.result as R, servedBy: 'bus', fellBack: false };
     }
     const primary = this.resolve(tenant, slot);

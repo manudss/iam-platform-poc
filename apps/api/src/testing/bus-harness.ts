@@ -5,6 +5,7 @@
  * is missing (busBinsPresent). Sets the IAM_BUS_* / IAM_CORE_* env vars; close() restores them.
  */
 import { spawn, ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -27,7 +28,7 @@ export interface BusHarness {
   natsPort: number;
   coreUrl: string;
   token: string;
-  stopNats(): void;
+  stopNats(): Promise<void>;
   startNats(): Promise<void>;
   close(): Promise<void>;
 }
@@ -69,7 +70,7 @@ export async function startBusHarness(opts: { natsPort: number; corePort?: numbe
   const waitNats = async () => { for (let i = 0; i < 50; i++) { try { (await connect({ servers: `127.0.0.1:${opts.natsPort}`, timeout: 500 })).close(); return; } catch { await sleep(100); } } };
   const harness: BusHarness = {
     host, ref, registry, core, dir, natsPort: opts.natsPort, coreUrl: coreUrl ?? '', token,
-    stopNats() { nats.kill(); },
+    async stopNats() { const exit = once(nats, 'exit'); nats.kill('SIGKILL'); await exit; }, // SIGKILL + await: SIGTERM leaves a graceful lame-duck window where calls still succeed
     async startNats() { nats = spawnNats(); await waitNats(); },
     async close() {
       await host.close(); harness.core?.kill(); nats.kill(); rmSync(dir, { recursive: true, force: true }); // harness.core: a spec may have respawned the core
