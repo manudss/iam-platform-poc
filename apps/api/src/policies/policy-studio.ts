@@ -19,8 +19,9 @@ export const POLICY_STUDIO_PLUGIN = 'policy-studio';
 export const USAGE_WINDOW = 500;
 
 export interface RuleInfo {
-  id: string; set: string; name: string; kind: 'policy' | 'template'; effect: 'permit' | 'forbid';
+  id: string; set: string; name: string; kind: 'policy' | 'template' | 'link'; effect: 'permit' | 'forbid';
   description: string | null; pillar: string | null; summary: string; conditions: number; annotations: Record<string, string>; text: string;
+  template?: string; values?: Record<string, string>; // a link: the template it instantiates and its slot values (the beneficiary)
 }
 export interface CoreCatalog { engine: { rules: number; sets: number; schema?: boolean }; sets: { name: string; rules: number }[]; rules: RuleInfo[] }
 export interface RuleUsage { allow: number; deny: number; last_at: string | null }

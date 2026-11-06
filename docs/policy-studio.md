@@ -125,7 +125,19 @@ then re-validates: a broken rule can never reach the engine twice-guarded. Write
 administrator capability plus, when `IAM_API_POLICY_ADMIN_SUBJECTS` is set, a caller subject in that list (unset: every
 administrator may write - the demo default). The second approver per policy is a later step.
 
-The console editor comes with the last step-4 PR.
+## The console editor (step 4, web)
+
+The Policies screen edits the rules: New rule / Edit / Delete on every rule and template, Link / Unlink on every template and
+link. Every action calls the propose endpoints above - one change per branch, validated by the core before the commit - and the
+answer card says where the change landed (branch, commit) and that nothing decides until the branch is merged and Applied
+(Workspace). The Link form picks the beneficiary from the people, roles and organisations that EXIST (datalist from /users,
+/roles, /organizations): the schema does not check a link's slot values, a mistyped beneficiary would be a dead grant. While the
+rule editor is open, the simulator runs on YOUR candidate rules - the catalogue rebuilt client-side with your edit
+(`buildCandidate`), sent as the `policies` field of the simulate call - so you see what the branch would decide before
+proposing anything. Writes need the policy-admin right; without it the propose call is refused and the card says so.
+
+That closes step 4: rules in Dolt, edited from the console, validated against the schema and testable in the simulator before
+they are applied. Still deferred on purpose: the second approver per policy and the AI-assisted authoring.
 
 ## Limits of steps 1-3
 
@@ -136,4 +148,4 @@ needs the schema extended first (on purpose: the schema is the contract of what 
 
 - Rust: `cargo test` in `core` (rule names, sets, composition, templates and links, catalogue endpoint, directory loading, simulator engine and endpoint, candidate validation and simulation, snapshot-carried rules with fail-closed activation and per-tenant engine).
 - API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers). `activation.e2e.spec.ts` (real Dolt + real core): the snapshot carries the Dolt rules (tenant engine), a new rule row decides after activation, a broken rule row fails the Apply and the previous version keeps serving.
-- Web: `policies.spec.ts` (filters, wording, simulator context parsing).
+- Web: `policies.spec.ts` (filters, wording, simulator context parsing, candidate rebuild from the catalogue, beneficiary suggestions).
