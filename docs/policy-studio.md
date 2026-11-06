@@ -1,4 +1,4 @@
-# Policy studio (Cedar rules) - step 1: read-only catalogue; step 2: schema validation; step 3: the "why refused?" simulator
+# Policy studio (Cedar rules) - step 1: read-only catalogue; step 2: schema validation; step 3: the "why refused?" simulator; step 4 (core part): template links and candidate validation
 
 The platform decides every access with [Cedar](https://docs.cedarpolicy.com/) rules inside the Rust core. This plugin shows those rules.
 Step 1 changes nothing about a decision: it names the rules, lists them, and makes the decision audit say which rule decided.
@@ -69,6 +69,29 @@ forbid overrules it."
 - **Console**: the simulator card under the catalogue (own components). The context field is free JSON, validated before sending.
 - Read-only like steps 1-2: a simulation decides nothing, writes nothing to the audit, changes nothing.
 
+## Template links and candidate validation (step 4, core)
+
+A **template link** instantiates a template (`principal == ?principal`, `resource == ?resource`) once per beneficiary - a person
+(`User::"demo-bob"`), a role (`Role::"auditor"`, applies through entity parents) or an organisation. A link is DATA, not rule text:
+the engine takes `{ id, template, values }`, Cedar checks the slots, and the link id (`delegate:demo-bob`) is what `reasons` and the
+audit carry when the grant decides. A link naming an unknown template (or a static rule), a duplicate id or a missing slot value
+refuses the whole build - never a partial rule set. A linked rule cannot be rendered back to Cedar text, so the catalogue shows it
+with `kind: "link"`, its `template` id and the template's text. Verified Cedar behaviour: the schema validates the rules and the
+templates, not a link's slot values - a mistyped value simply matches no request (a dead grant, not a hole), which is why the
+console picks link values from existing people, roles and organisations.
+
+Two admin-token endpoints work on CANDIDATE rules ({sets, links}) without ever touching the loaded engine:
+
+- **`POST /v1/policies/validate`** dry-builds the candidate against the SAME schema the core loaded (`schema: false` in the answer
+  means no schema is configured, so only parsing was checked). 200 returns the candidate's catalogue (readable ids, generated
+  summaries) so the console can preview before committing; 400 returns the error naming the rule. Limits: 1-32 sets, 256 KiB per
+  set, 512 links.
+- **`POST /v1/policies/simulate`** accepts an optional `policies` field: the simulation then runs on the candidate rules
+  (links included) instead of the loaded ones - "what would this branch's rules decide?" - and a candidate that does not build
+  is a 400 naming the rule, never a fake simulation.
+
+Storage in Dolt, branch editing and the console editor come with the next step-4 PRs.
+
 ## Limits of steps 1-3
 
 Read-only. No editor, no impact analysis. The simulator evaluates the request you type; it does not look up the tenant's active version (so `roles` and `sod_conflict` are yours to set, not read from Dolt), and it does not create template links (step 4). The schema covers the current actions; a rule set introducing a new action
@@ -76,6 +99,6 @@ needs the schema extended first (on purpose: the schema is the contract of what 
 
 ## Tests
 
-- Rust: `cargo test` in `core` (rule names, sets, composition, templates, catalogue endpoint, directory loading, simulator engine and endpoint).
+- Rust: `cargo test` in `core` (rule names, sets, composition, templates and links, catalogue endpoint, directory loading, simulator engine and endpoint, candidate validation and simulation).
 - API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers).
 - Web: `policies.spec.ts` (filters, wording, simulator context parsing).

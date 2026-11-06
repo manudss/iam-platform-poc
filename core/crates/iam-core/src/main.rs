@@ -27,6 +27,9 @@ pub struct Core {
     pub gate: Option<(String, String)>,
     /// Event bus over NATS (step 1). None unless IAM_CORE_NATS_URL is set: behaviour is then unchanged.
     pub bus: Option<bus_wiring::BusLink>,
+    /// The Cedar schema the boot rules were validated with (policy-studio step 4): candidate rules sent to
+    /// /v1/policies/validate (and candidate simulations) are checked against the SAME schema. None = parse only.
+    pub policy_schema: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -74,7 +77,7 @@ impl Core {
         if let Some(b) = &self.bus { b.emit(kind, payload, effect_key); }
     }
     pub fn new(engine: Engine, plugin: Option<(PluginRuntime, Vec<u8>)>, idp: Idp) -> Self {
-        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None, bus: None }
+        Core { engine, plugin, idp, active: RwLock::new(HashMap::new()), admin_token: None, state_dir: None, gate: None, bus: None, policy_schema: None }
     }
 }
 
@@ -84,6 +87,7 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/v1/decide", post(decide))
         .route("/v1/policies", get(policies::list))
         .route("/v1/policies/simulate", post(policies::simulate))
+        .route("/v1/policies/validate", post(policies::validate))
         .route("/v1/activate", post(activate))
         .route("/v1/version", get(version))
         .route("/v1/bus", get(bus_wiring::status))
@@ -236,7 +240,7 @@ pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, V
 async fn main() {
     tracing_subscriber::fmt::init();
     let path = std::env::var("IAM_POLICY_FILE").unwrap_or_else(|_| "../policies/demo.cedar".into());
-    let engine = policies::load_engine(std::path::Path::new(&path)).unwrap_or_else(|e| panic!("invalid policies ({path}): {e}"));
+    let (engine, policy_schema) = policies::load_engine_and_schema(std::path::Path::new(&path)).unwrap_or_else(|e| panic!("invalid policies ({path}): {e}"));
     if std::env::var("IAM_PLUGIN_PACKAGE").is_ok() && std::env::var("IAM_PLUGIN_WAT").is_ok() { panic!("set only one of IAM_PLUGIN_PACKAGE (signed) and IAM_PLUGIN_WAT (unsigned dev)"); }
     let signed = std::env::var("IAM_PLUGIN_PACKAGE").ok().map(|dir| {
         let rd = |f: &str| std::fs::read(format!("{dir}/{f}")).unwrap_or_else(|e| panic!("cannot read {dir}/{f}: {e}"));
@@ -252,6 +256,7 @@ async fn main() {
     }));
     let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
     let mut core = Core::new(engine, plugin, Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)));
+    core.policy_schema = policy_schema;
     if let Ok(g) = std::env::var("IAM_AUTH_GATE_ADDR") {
         let addr = gate::parse_addr(&g).expect("IAM_AUTH_GATE_ADDR must be a loopback host:port");
         let tok = std::env::var("IAM_AUTH_GATE_TOKEN").ok().filter(|t| t.len() >= 8).expect("IAM_AUTH_GATE_TOKEN (>= 8 chars) is required with a gate");
