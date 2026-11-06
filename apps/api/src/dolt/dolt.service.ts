@@ -43,7 +43,7 @@ export class DoltService {
   }
 
   /** Data of ONE commit (AS OF), used to build the snapshot the core applies. */
-  async snapshotAt(commit: string, tenant?: string): Promise<{ assignments: { identity_id: string; role_id: string }[]; sod_rules: { role_a: string; role_b: string }[]; mcp_grants: { identity_id: string; upstream: string; tool: string; expires_ms: number | null }[] }> {
+  async snapshotAt(commit: string, tenant?: string): Promise<{ assignments: { identity_id: string; role_id: string }[]; sod_rules: { role_a: string; role_b: string }[]; mcp_grants: { identity_id: string; upstream: string; tool: string; expires_ms: number | null }[]; policies?: { set: string; text: string }[]; policy_links?: { id: string; template: string; values: Record<string, string> }[] }> {
     if (!/^[0-9a-v]{8,64}$/.test(commit)) throw new BadRequestException('invalid commit hash');
     const c = await this.conn();
     try {
@@ -58,7 +58,25 @@ export class DoltService {
         mcp_grants = (g as { identity_id: string; upstream: string; tool: string; expires_at: string | null }[])
           .map((x) => ({ identity_id: x.identity_id, upstream: x.upstream, tool: x.tool, expires_ms: x.expires_at ? Date.parse(`${String(x.expires_at).replace(' ', 'T')}Z`) : null }));
       } catch { /* no delegation_grants table on this database */ }
-      return { assignments: a as never, sod_rules: r as never, mcp_grants };
+      // Policy studio (step 4): the Cedar rules are versioned rows too. The snapshot carries them as {set, text} sources
+      // (rules of a set concatenated in id order) plus the template links; the core builds the tenant engine from them and
+      // REFUSES the version when they do not build against the schema. EMPTY tables (or none) = no policies field:
+      // the tenant falls back to the core's boot file (jeu de secours).
+      let policies: { set: string; text: string }[] | undefined;
+      let policy_links: { id: string; template: string; values: Record<string, string> }[] | undefined;
+      try {
+        const [pr] = await c.query(`select set_name, id, cedar from policy_rules as of '${commit}' order by set_name, id`);
+        const rows = pr as { set_name: string; id: string; cedar: string }[];
+        if (rows.length) {
+          const bySet = new Map<string, string[]>();
+          for (const x of rows) { const t = bySet.get(x.set_name); if (t) t.push(x.cedar); else bySet.set(x.set_name, [x.cedar]); }
+          policies = [...bySet.entries()].map(([set, texts]) => ({ set, text: texts.join('\n\n') }));
+        }
+        const [lr] = await c.query(`select id, template_id, principal_value, resource_value from policy_template_links as of '${commit}' order by id`);
+        policy_links = (lr as { id: string; template_id: string; principal_value: string | null; resource_value: string | null }[])
+          .map((x) => ({ id: x.id, template: x.template_id, values: Object.fromEntries([['principal', x.principal_value], ['resource', x.resource_value]].filter((e): e is [string, string] => !!e[1])) }));
+      } catch { /* no policy tables on this database */ }
+      return { assignments: a as never, sod_rules: r as never, mcp_grants, policies, policy_links };
     } finally { await c.end(); }
   }
 

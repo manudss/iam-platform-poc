@@ -102,7 +102,18 @@ A version WITHOUT `policies` keeps the current behaviour: the tenant reverts to 
 ("jeu de secours"). `load_state` (core restart) applies the same rule: a stored version whose rules no longer build is
 skipped, so a restart never revives a broken rule set.
 
-Storage of the rule sets as Dolt rows, branch editing and the console editor come with the next step-4 PRs.
+## Rule storage in Dolt (step 4, API)
+
+The rules are business data, versioned in Dolt like roles: `policy_sets` (named sets), `policy_rules` (one row per rule - its
+Cedar text with its annotations), `policy_template_links` (one row per beneficiary: template id + slot values). The demo seed
+loads the six demo rules of `policies/demo.cedar` as rows of the set `default`, so a fresh demo behaves identically with or
+without activation. `snapshotAt` (the export an Apply sends to the core) reads those tables AS OF the activated commit:
+rules of a set are concatenated in id order into `{set, text}` sources, links become `{id, template, values}`. Empty (or
+missing) tables = no `policies` field in the snapshot: the tenant falls back to the boot file - the fallback set stays one
+merge away. Because the core refuses a version whose rules do not build, a broken rule row merged by mistake fails the Apply
+(journaled `failed`, the error names the rule) and the previous version keeps serving.
+
+Branch editing (rule and link CRUD with pre-commit validation) and the console editor come with the next step-4 PRs.
 
 ## Limits of steps 1-3
 
@@ -112,5 +123,5 @@ needs the schema extended first (on purpose: the schema is the contract of what 
 ## Tests
 
 - Rust: `cargo test` in `core` (rule names, sets, composition, templates and links, catalogue endpoint, directory loading, simulator engine and endpoint, candidate validation and simulation, snapshot-carried rules with fail-closed activation and per-tenant engine).
-- API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers).
+- API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers). `activation.e2e.spec.ts` (real Dolt + real core): the snapshot carries the Dolt rules (tenant engine), a new rule row decides after activation, a broken rule row fails the Apply and the previous version keeps serving.
 - Web: `policies.spec.ts` (filters, wording, simulator context parsing).
