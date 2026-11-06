@@ -29,6 +29,7 @@ import { DemoDataService } from '../../profile/demo-data.service.js';
 import { SigninOptionsController } from '../../authn/signin-options.controller.js';
 import { AuthnService } from '../../authn/flow.service.js';
 import { AuthnAdminController } from '../../authn/authn.controller.js';
+import { SessionAdminController } from '../../authn/session.controller.js';
 
 /**
  * Plugin registry v1. With IAM_PG_URL set, settings, enablement, grants, faults and the migration ledger live in PostgreSQL and survive a restart
@@ -36,7 +37,7 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule],
-  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
+  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
   providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
     provide: SSO_DIRECTORY,
     inject: [VersioningService],

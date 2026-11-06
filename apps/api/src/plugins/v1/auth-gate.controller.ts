@@ -4,6 +4,7 @@ import { BranchRegistries } from './branch-registries.js';
 import { workspaceMode } from '../../workspace/context.js';
 import { Body, Controller, Headers, HttpCode, HttpException, NotFoundException, Post } from '@nestjs/common';
 import { BranchTestService } from '../../workspace/branch-test.js';
+import { sessionClaims } from '../../authn/session-config.js';
 import { branchName } from '../../versioning/guards.js';
 import { timingSafeEqual } from 'node:crypto';
 import { PluginRegistry } from './registry.js';
@@ -68,7 +69,7 @@ export class AuthGateController {
     try {
       const registry = workspaceMode() ? await this.branches.get(typeof b.branch === 'string' && b.branch ? b.branch : 'main') : this.reg;
       const r = await registry.callSlot<AuthenticateResult>(b.tenant, 'auth.password', 'auth.authenticate', { tenant: b.tenant, subject: b.subject, credential: { password: b.password } });
-      return r.result.outcome === 'allow' ? { outcome: 'allow', servedBy: r.servedBy } : { outcome: 'deny', reason: r.result.outcome === 'deny' ? r.result.reason : 'challenge-unsupported', servedBy: r.servedBy };
+      return r.result.outcome === 'allow' ? { outcome: 'allow', servedBy: r.servedBy, ...(this.authn ? { claims: sessionClaims(await this.authn.signinSession(b.tenant, typeof b.branch === 'string' && b.branch ? b.branch : undefined)) } : {}) } : { outcome: 'deny', reason: r.result.outcome === 'deny' ? r.result.reason : 'challenge-unsupported', servedBy: r.servedBy };
     } catch (e) {
       throw new HttpException({ outcome: 'error', code: (e as { code?: string }).code ?? 'plugin-failed' }, 503);
     }

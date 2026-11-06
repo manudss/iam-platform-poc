@@ -6,6 +6,7 @@ import type { AuthenticateResult } from '../plugins/v1/hooks.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG, isEmptyConfig, analyzeChain, parseStored, validateConfig } from './config.js';
+import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
 import { SmtpMailAdapter } from './mail.js';
@@ -85,6 +86,15 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!have['pin-keypad-8']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad-8', DEMO_PIN8);
     if (!have['e-mail-code']) await this.enroll.setEmail(tenant, 'demo-alice', 'e-mail-code', 'alice@example.invalid');
     return true;
+  }
+  /** Session length settings (docs/session.md): sign-in reads them on Dolt main, or on the tested branch; the console edits them on the working branch. */
+  async signinSession(tenant: string, branch?: string): Promise<SessionConfig> { return parseSession(await (await this.signinRegistry(branch)).coreSettings(tenant, SESSION_SETTINGS_ID)); }
+  async liveSession(tenant: string): Promise<SessionConfig> { return parseSession(await (await this.registry('live')).coreSettings(tenant, SESSION_SETTINGS_ID)); }
+  async workingSession(tenant: string): Promise<SessionConfig> { return parseSession(await (await this.registry('work')).coreSettings(tenant, SESSION_SETTINGS_ID)); }
+  async saveSession(tenant: string, input: unknown): Promise<SessionConfig> {
+    const cfg = validateSession(input);
+    await (await this.registry('work', true)).putCoreSettings(tenant, SESSION_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+    return cfg;
   }
   async liveConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('live')).coreSettings(tenant, CORE_SETTINGS_ID)); }
   async workingConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('work')).coreSettings(tenant, CORE_SETTINGS_ID)); }
@@ -224,6 +234,7 @@ export class AuthnService implements OnApplicationBootstrap {
       auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',
       auth_mfa: factors.size >= 2, auth_chain: s.chain.id, auth_methods: s.done.map((d) => d.id),
       auth_simulated: s.done.filter((d) => !d.real).map((d) => d.id),
+      ...sessionClaims(await this.signinSession(s.tenant, s.branch)),
     };
     this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'allow', mfa: claims.auth_mfa, level: claims.auth_level });
     return { outcome: 'allow', subject: s.subject, chain: s.chain.id, claims };
