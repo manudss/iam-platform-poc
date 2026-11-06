@@ -35,7 +35,7 @@ services:
 
   nats:
     image: nats:latest
-    command: ["-c", "/etc/nats/nats-local.conf"]
+    command: ["-c", "/etc/nats/nats-local.conf", "--addr", "0.0.0.0"] # container interface; published host port stays loopback
     volumes: ["../conf/nats-local.conf:/etc/nats/nats-local.conf:ro", "nats-js:/tmp/iam-nats-js"]
     ports: ["127.0.0.1:4222:4222"]
 

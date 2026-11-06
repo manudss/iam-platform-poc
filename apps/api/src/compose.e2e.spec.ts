@@ -30,7 +30,7 @@ describe('docker-compose stack (real containers)', { skip: !on && 'COMPOSE_STACK
     assert.ok((await a.list('compose-test')).some((x) => x.commit === 'aaaaaaaa'));
   });
   it('NATS container: JetStream is up (the bus backbone of the stack)', async () => {
-    const nc = await connect({ servers: '127.0.0.1:4222' }); cleanup.push(() => nc.close());
+    const nc = await connect({ servers: '127.0.0.1:4222', user: 'core', pass: 'core-dev' }); cleanup.push(() => nc.close());
     const jsm = await nc.jetstreamManager();
     await jsm.streams.add({ name: 'COMPOSE_SMOKE', subjects: ['compose.smoke'] });
     await jsm.streams.delete('COMPOSE_SMOKE');
