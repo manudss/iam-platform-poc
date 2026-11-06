@@ -82,7 +82,7 @@ describe('Session timer state', () => {
   it('warns only inside the warning window and can be dismissed when it cannot be extended', async () => {
     const s = await signedIn(claims({ exp: now() + 600 })); expect(s.warning()).toBe(false); expect(s.canExtend()).toBe(true);
     s.signOut();
-    const t = await signedIn(claims({ exp: now() + 30, session_max: 30 }));
+    const t = await signedIn(claims({ iat: now() - 570, exp: now() + 30, session_max: 30 }));
     expect(t.warning()).toBe(true); expect(t.canExtend()).toBe(false); t.dismissed.set(true); expect(t.warning()).toBe(false); t.signOut();
   });
   it('the bar share goes down with the time left', async () => {
@@ -91,12 +91,12 @@ describe('Session timer state', () => {
   });
   it('extend() renews, clears the warning and reports the limit', async () => {
     let r = reply(200, { id_token: jwt(claims({ exp: now() + 600 })) });
-    const s = await signedIn(claims({ exp: now() + 30 }), () => r);
+    const s = await signedIn(claims({ iat: now() - 570, exp: now() + 30 }), () => r);
     expect(s.warning()).toBe(true); expect(await s.extend()).toBe(''); expect(s.warning()).toBe(false);
     r = reply(409); expect(await s.extend()).toContain('maximum session length'); s.signOut();
   });
   it('renders the progress bar and the dialog with the Stay signed in button', async () => {
-    const s = await signedIn(claims({ exp: now() + 30 }), () => reply(200, { id_token: jwt(claims({ exp: now() + 600 })) }));
+    const s = await signedIn(claims({ iat: now() - 570, exp: now() + 30 }), () => reply(200, { id_token: jwt(claims({ exp: now() + 600 })) }));
     const f = TestBed.createComponent(SessionTimer); f.detectChanges(); const el: HTMLElement = f.nativeElement;
     expect(el.querySelector('#session-timer')).toBeTruthy(); expect(el.querySelector('#session-fill')).toBeTruthy();
     expect(el.querySelector('#session-dialog')).toBeTruthy();

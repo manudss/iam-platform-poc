@@ -51,7 +51,8 @@ export class ApiClient {
     const c = this.claims(), num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
     const iat = num(c['iat']), exp = num(c['exp']); if (iat === null || exp === null) return null;
     const auth = num(c['auth_time']), max = num(c['session_max']), warn = num(c['session_warn']);
-    return { start: iat * 1000, end: exp * 1000, warnMs: (warn ?? 120) * 1000, limit: auth !== null && max !== null ? (auth + max) * 1000 : null };
+    return { start: iat * 1000, end: exp * 1000, warnMs: Math.min((warn ?? 120) * 1000, Math.floor((exp - iat) * 1000 / 3)), // never more than a third of the token life: a very short token must not sit in warning from the start
+       limit: auth !== null && max !== null ? (auth + max) * 1000 : null };
   }
   /**
    * Asks the core for a fresh token of the same sign-in (POST /core/session/extend, the current token is the credential).
