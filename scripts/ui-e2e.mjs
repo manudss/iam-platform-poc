@@ -162,7 +162,7 @@ try {
     await page.waitForSelector('#bo-table tbody tr td:text("activation.applied")');
     const row = page.locator('#bo-table tbody tr', { hasText: 'activation.applied' }).first();
     assert.ok((await row.textContent()).includes('audit-log'), 'who answered is shown');
-    assert.ok(await row.locator('.chip.mute:text("mail-notifier")').count(), 'the expected party that stayed silent is shown');
+    assert.ok(await row.locator('.chip:text("queued: mail-notifier")').count(), 'the durable queue receipt is shown, not mislabelled silent');
     const body = (await page.textContent('body')) ?? '';
     assert.ok(!/local-core-admin-token-demo|local-demo-plugin-admin-token|core-dev/.test(body), 'no secret on the page');
     assert.equal(await page.locator('#bo-player button:text-matches("send|emit|replay again|re-run", "i")').count(), 0, 'no write control');
