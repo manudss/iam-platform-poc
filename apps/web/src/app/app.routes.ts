@@ -8,6 +8,7 @@ import { ProfileFieldsPage } from './profile-fields';
 import { MyProfilePage } from './my-profile';
 import { SignupPage } from './signup-page';
 import { PrivacyPage } from './privacy-page';
+import { AboutPage } from './about-page';
 import { OrganizationsPage } from './organizations';
 import { SsoInteractionPage } from './sso-interaction';
 import { SsoSamlPage } from './sso-saml';
@@ -31,6 +32,7 @@ export const routes: Routes = [
   { path: 'sso-saml/:rid', component: SsoSamlPage, canActivate: [authGuard], title: 'Sign in to an application' },
   { path: 'signup', component: SignupPage, title: 'Request an account' },
   { path: 'privacy', component: PrivacyPage, title: 'Politique de confidentialité' },
+  { path: 'about', component: AboutPage, title: 'About this demo' },
   { path: 'login', component: LoginPage, title: 'Sign in' },
   {
     path: '', component: Shell, canActivate: [authGuard], children: [
