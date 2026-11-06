@@ -139,6 +139,7 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/authorize", post(authorize).get(authz::authorize_form))
         .route("/authorize/login", post(authz::login))
         .route("/token", post(token))
+        .route("/session/extend", post(session_extend))
         .with_state(engine)
 }
 
@@ -159,18 +160,30 @@ fn idp_err(e: IdpError) -> (StatusCode, Json<Value>) {
 
 // POC simplification: JSON bodies instead of the form/redirect dance of full OIDC.
 async fn authorize(State(c): State<Arc<Core>>, Json(r): Json<AuthorizeReq>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut extra = Value::Null;
     if let Some((addr, tok)) = &c.gate {
         match gate::check(addr, tok, "acme-demo", &r.username, &r.password).await {
-            gate::Gate::Allow => {}
+            gate::Gate::Allow(claims) => { extra = claims; }
             gate::Gate::Deny => return Err(idp_err(IdpError::InvalidCredentials)),
             gate::Gate::Unavailable => return Err((StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "temporarily_unavailable"})))),
         }
     }
-    (if c.gate.is_some() { c.idp.authorize_verified(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username) } else { c.idp.authorize(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username, &r.password) })
+    (if c.gate.is_some() { c.idp.authorize_verified_with(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username, &extra) } else { c.idp.authorize(&r.client_id, &r.redirect_uri, &r.code_challenge, &r.username, &r.password) })
         .map(|code| Json(json!({"code": code}))).map_err(idp_err)
 }
 async fn token(State(c): State<Arc<Core>>, Json(r): Json<TokenReq>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     c.idp.token(&r.code, &r.code_verifier, &r.redirect_uri, &r.client_id).map(Json).map_err(idp_err)
+}
+
+/// Session renewal (docs/session.md): the bearer token itself is the credential (signature, issuer and expiry are checked by the IdP).
+/// 401 when the token is missing, invalid or expired; 409 when the absolute session limit leaves no extra time.
+async fn session_extend(State(c): State<Arc<Core>>, headers: axum::http::HeaderMap) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let tok = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+    let who = iam_idp::verify(tok, &c.idp.jwks(), c.idp.issuer()).ok_or((StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid_token"}))))?;
+    match c.idp.extend(tok) {
+        Ok(v) => { c.bus_emit("session.extended", json!({"subject": who["sub"], "expires_in": v["expires_in"]}), None); Ok(Json(v)) }
+        Err(_) => Err((StatusCode::CONFLICT, Json(json!({"error": "session_limit_reached"})))),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -305,7 +318,7 @@ async fn main() {
         (PluginRuntime::new(100_000).unwrap(), wat::parse_str(wat).expect("invalid plugin"))
     }));
     let issuer = std::env::var("IAM_ISSUER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
-    let mut core = Core::new(engine, plugin, Idp::demo(&issuer).with_ttl(std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300)));
+    let mut core = Core::new(engine, plugin, match std::env::var("IAM_TOKEN_TTL_SECS").ok().and_then(|v| v.parse::<u64>().ok()) { Some(t) => Idp::demo(&issuer).with_ttl(t).with_ttl_cap(t), None => Idp::demo(&issuer) });
     core.policy_schema = policy_schema;
     if let Ok(g) = std::env::var("IAM_AUTH_GATE_ADDR") {
         let addr = gate::parse_addr(&g).expect("IAM_AUTH_GATE_ADDR must be a loopback host:port");
@@ -404,6 +417,23 @@ mod activation_tests {
     }
     fn dec(identity: &str) -> Value {
         json!({"tenant":"t1","principal":format!("User::\"{identity}\""),"action":"Action::\"approve\"","resource":"Request::\"r1\"","context":{"sod_conflict":false,"roles":["payment-approver"]}})
+    }
+
+    #[tokio::test]
+    async fn session_extend_needs_a_valid_token_and_a_session_limit() {
+        let idp = Idp::demo("http://idp.test");
+        let sign_in = |extra: Value| { let (v, ch) = ("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"); // RFC 7636 example pair
+            let code = idp.authorize_verified_with("demo-web", "http://localhost:4200/callback", ch, "demo-alice", &extra).unwrap();
+            idp.token(&code, v, "http://localhost:4200/callback", "demo-web").unwrap()["id_token"].as_str().unwrap().to_string() };
+        let unlimited = sign_in(Value::Null);
+        let c = Arc::new(Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, idp));
+        let call = |bearer: Option<&str>| { let c = c.clone(); let b = bearer.map(|b| format!("Bearer {b}")); async move {
+            let mut r = Request::builder().method("POST").uri("/session/extend");
+            if let Some(b) = b { r = r.header("authorization", b); }
+            app(c).oneshot(r.body(Body::empty()).unwrap()).await.unwrap().status() } };
+        assert_eq!(call(None).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(Some("not.a.token")).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(Some(&unlimited)).await, StatusCode::CONFLICT); // issued without a session limit: nothing to extend
     }
 
     #[tokio::test]
