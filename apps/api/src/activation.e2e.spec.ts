@@ -135,7 +135,7 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     const d = await decide('carol');
     assert.equal(d.allow, true); assert.deepEqual(d.reasons, ['carol-approves']);
     // A BROKEN rule row refuses the activation (journaled failed, core said why): the previous version keeps deciding.
-    await sql("insert into policy_rules values ('default','broken','permit('");
+    await sql("insert into policy_rules values ('default','broken','this is not cedar')");
     const f = await svc.activate(T, await new DoltService().head());
     assert.equal(f.state, 'failed'); assert.match(f.error ?? '', /policy rules refused/);
     assert.equal((await decide('carol')).allow, true);
