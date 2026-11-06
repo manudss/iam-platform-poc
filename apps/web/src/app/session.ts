@@ -1,5 +1,6 @@
 import { Injectable, OnDestroy, inject, signal } from '@angular/core';
 import { ApiClient, Change } from './api';
+import { computed } from '@angular/core';
 import type { Access } from './access';
 import { Router } from '@angular/router';
 
@@ -16,6 +17,38 @@ export class Session implements OnDestroy {
   private readonly router = inject(Router);
   readonly expired = signal(false);
   private expiryTimer?: ReturnType<typeof setTimeout>;
+  private tick?: ReturnType<typeof setInterval>;
+  /** Clock of the session timer (updated every second while signed in). */
+  readonly now = signal(Date.now());
+  /** Timing of the current token (docs/session.md); null without a token or when the token carries no times. */
+  readonly timing = signal<{ start: number; end: number; warnMs: number; limit: number | null } | null>(null);
+  readonly remainingMs = computed(() => { const t = this.timing(); return t ? Math.max(0, t.end - this.now()) : 0; });
+  /** Share of this token's lifetime that is left (1 = just issued, 0 = over): drives the inverted progress bar. */
+  readonly remainingShare = computed(() => { const t = this.timing(); return t && t.end > t.start ? Math.min(1, this.remainingMs() / (t.end - t.start)) : 0; });
+  /** Renewal is possible while the absolute limit is later than the end of this token. */
+  readonly canExtend = computed(() => { const t = this.timing(); return !!t && t.limit !== null && t.limit > t.end; });
+  readonly dismissed = signal(false);
+  readonly extending = signal(false);
+  /** True in the last `warnMs` before the end of the token: the console shows the warning dialog. */
+  readonly warning = computed(() => { const t = this.timing(); return !!this.loggedIn() && !!t && this.remainingMs() > 0 && this.remainingMs() <= t.warnMs && !this.dismissed(); });
+  /** Renews the session token. Returns a message for the person when it could not be done. */
+  async extend(): Promise<string> {
+    if (this.extending()) return '';
+    this.extending.set(true);
+    try {
+      const r = await this.api.extendSession();
+      if (r === 'extended') { this.refreshTiming(); this.dismissed.set(false); this.scheduleExpiry(); this.say('Session extended.'); return ''; }
+      if (r === 'limit') { this.refreshTiming(); return 'The maximum session length is reached: it cannot be extended. Sign in again after it ends.'; }
+      this.expire(); return '';
+    } catch { return 'The session could not be extended. Try again.'; }
+    finally { this.extending.set(false); }
+  }
+  private refreshTiming() { this.timing.set(this.api.sessionInfo); this.now.set(Date.now()); }
+  private scheduleExpiry() {
+    clearTimeout(this.expiryTimer);
+    const expires = this.api.expiresAt;
+    if (expires !== null) this.expiryTimer = setTimeout(() => this.expire(), Math.max(0, expires - Date.now()));
+  }
   readonly api = new ApiClient('acme-demo', (...args) => fetch(...args), () => this.expire());
   readonly loggedIn = signal(false);
   readonly user = signal('');
@@ -55,16 +88,15 @@ export class Session implements OnDestroy {
     return this.accessLoad ??= this.api.raw<Access>('GET', '/me/access', undefined, this.adminToken() ? { 'x-api-admin-token': this.adminToken() } : {}).then((r) => (r.status < 400 ? r.data : { subject: '', admin: false, restricted: true, plugins: {} })).catch(() => ({ subject: '', admin: false, restricted: true, plugins: {} } as Access)).then((a) => { const n = { ...a, plugins: a.plugins ?? {} }; this.access.set(n); return n; });
   }
   refreshAccess() { this.accessLoad = undefined; return this.loadAccess(); }
-  ngOnDestroy() { clearTimeout(this.expiryTimer); }
+  ngOnDestroy() { clearTimeout(this.expiryTimer); clearInterval(this.tick); }
 
   say(text: string, tone: Tone = 'info') { this.message.set(text); this.tone.set(tone); }
 
   /** Marks the session signed in after a successful token exchange (browser or legacy flow). */
   signedIn(fallbackName = '') {
     this.expired.set(false); this.loggedIn.set(true); this.user.set(this.api.identity || fallbackName);
-    clearTimeout(this.expiryTimer);
-    const expires = this.api.expiresAt;
-    if (expires !== null) this.expiryTimer = setTimeout(() => this.expire(), Math.max(0, expires - Date.now()));
+    this.dismissed.set(false); this.refreshTiming(); this.scheduleExpiry();
+    clearInterval(this.tick); if (this.timing()) this.tick = setInterval(() => this.now.set(Date.now()), 1000);
   }
 
   /** No request is queued or replayed. Returning to a page requires a fresh, explicit action. */
@@ -79,7 +111,7 @@ export class Session implements OnDestroy {
   }
 
   signOut() {
-    this.expired.set(false); clearTimeout(this.expiryTimer);
+    this.expired.set(false); clearTimeout(this.expiryTimer); clearInterval(this.tick); this.timing.set(null); this.dismissed.set(false);
     this.api.logout();this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.testBranch.set(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
     this.assignments.set([]); this.activations.set([]); this.adminToken.set(''); this.say('Signed out.');
   }
