@@ -152,3 +152,20 @@ export const appConnector: PluginImpl = {
   },
   handlers: {},
 };
+
+/**
+ * Policy studio: see the Cedar rules the core decides with. Step 1 is read-only: a catalogue (name, effect, grouping, plain-language reading,
+ * Cedar text, how often recent decisions used it). Editing, validation, simulation and impact analysis come in later steps; the plugin never changes
+ * a rule or a decision. While disabled, the Policies menu is hidden and every /policies endpoint answers 404.
+ */
+export const policyStudio: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'policy-studio', version: '0.1.0', name: 'Policy studio (Cedar rules)', publisher: 'iam-platform',
+    kinds: ['ui'],
+    description: 'View the access rules (Cedar) the core decides with: names, effect, plain-language reading, and how often recent decisions used each. Read-only for now.',
+    hooks: [],
+    settings: [],
+    screens: [{ id: 'policies', title: 'Policies', area: 'admin', render: 'schema' }],
+  },
+  handlers: {},
+};
