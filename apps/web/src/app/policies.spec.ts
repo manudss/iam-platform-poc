@@ -1,4 +1,4 @@
-import { Rule, filterRules, pillars, schemaText, usageText } from './policies';
+import { Rule, filterRules, parseSimContext, pillars, schemaText, usageText } from './policies';
 
 const mk = (id: string, effect: 'permit' | 'forbid', pillar: string | null, text = ''): Rule => ({ id, set: 'default', name: id, kind: 'policy', effect, description: `${id} desc`, pillar, summary: 'Permits any principal.', conditions: 0, text });
 const rules = [mk('sod-blocks-approve', 'forbid', 'sod', 'context.sod_conflict == true'), mk('approve-needs-role', 'permit', 'human'), mk('mcp-read', 'permit', 'mcp'), mk('loose', 'permit', null)];
@@ -17,6 +17,14 @@ describe('policy catalogue helpers', () => {
     expect(schemaText(true)).toContain('validated against the Cedar schema');
     expect(schemaText(undefined)).toContain('without validation');
     expect(schemaText(false)).toContain('without validation');
+  });
+  it('parses the simulator context: empty means none, an object passes, the rest is refused', () => {
+    expect(parseSimContext('')).toEqual({});
+    expect(parseSimContext('   ')).toEqual({});
+    expect(parseSimContext('{"roles": ["payment-approver"], "sod_conflict": true}')).toEqual({ context: { roles: ['payment-approver'], sod_conflict: true } });
+    expect(parseSimContext('[').error).toContain('not valid JSON');
+    expect(parseSimContext('["viewer"]').error).toContain('JSON object');
+    expect(parseSimContext('"roles"').error).toContain('JSON object');
   });
   it('words the recent use', () => {
     expect(usageText(undefined)).toBe('not used recently');
