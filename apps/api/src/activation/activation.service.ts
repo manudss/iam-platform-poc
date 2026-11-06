@@ -124,7 +124,7 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
 
   private async apply(a: Activation): Promise<Activation> {
     try {
-      const snapshot = await this.dolt.snapshotAt(a.commit);
+      const snapshot = await this.dolt.snapshotAt(a.commit, a.tenant);
       const res = await fetch(`${process.env.IAM_CORE_URL}/v1/activate`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-core-admin-token': process.env.IAM_CORE_ADMIN_TOKEN! },

@@ -42,7 +42,7 @@ export interface ToolCtx {
   authn: AuthnService;
 }
 
-type Kind = 'read' | 'write' | 'lifecycle';
+export type Kind = 'read' | 'write' | 'lifecycle' | 'proxy';
 
 /** A refusal by the MCP confinement itself (not by the policy engine): traced as a DENIAL. */
 export class ConfinementError extends Error {}
@@ -96,8 +96,8 @@ export const TOOL_KINDS: Record<string, Kind> = {
 type DecideOut = { allow: boolean; reasons?: string[]; errors?: string[]; version?: { seq: number; commit: string } };
 
 /** Every tool call is authorized by the SAME policy engine as humans, in tenant mode, as the session owner. */
-async function decide(ctx: ToolCtx, tool: string, kind: Kind): Promise<DecideOut> {
-  const action = `Action::"mcp:${kind}"`, resource = `Branch::"${ctx.session.branch}"`;
+async function decide(ctx: ToolCtx, tool: string, kind: Kind, resourceOverride?: string): Promise<DecideOut> {
+  const action = `Action::"mcp:${kind}"`, resource = resourceOverride ?? `Branch::"${ctx.session.branch}"`;
   const principal = `User::"${ctx.session.owner}"`;
   let out: DecideOut;
   try {
@@ -116,14 +116,18 @@ type Run = () => Promise<{ result: unknown; detail: string; targets?: string[]; 
 
 /** decide -> act -> trace. Denials and errors are traced too: the trace is the whole point. */
 async function guarded(ctx: ToolCtx, tool: string, run: Run) {
-  const kind = TOOL_KINDS[tool];
+  return guardedWithKind(ctx, tool, TOOL_KINDS[tool], run);
+}
+
+/** Same as guarded with an explicit kind: relayed (proxy) tools are registered dynamically, outside TOOL_KINDS. */
+export async function guardedWithKind(ctx: ToolCtx, tool: string, kind: Kind, run: Run, resourceOverride?: string) {
   const rec = (allow: boolean, reasons: string[], detail: string, targets: string[], rowCount: number | null, error: string | null) =>
     ctx.sessions.record({ tenant: ctx.tenant, sessionId: ctx.session.id, owner: ctx.session.owner, branch: ctx.session.branch, tool, kind, detail, targets, allow, reasons, rowCount, error });
   const deny = async (reasons: string[]) => {
     await rec(false, reasons, '', [], null, 'denied');
     return { content: [{ type: 'text' as const, text: `denied: ${reasons.join('; ')}` }], isError: true };
   };
-  const d = await decide(ctx, tool, kind);
+  const d = await decide(ctx, tool, kind, resourceOverride);
   if (!d.allow) return deny(d.reasons?.length ? d.reasons : ['denied by policy']);
   if ((kind === 'write' || tool === 'submit_pull_request') && ctx.session.submitted && tool !== 'request_new_branch')
     return deny(['session already submitted its pull request; ask for request_new_branch to start a new work cycle']);

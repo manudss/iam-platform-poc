@@ -1,6 +1,6 @@
 # End-to-end tests: how to run them and what they prove
 
-All commands run from `apps/api` unless stated. `npm test` compiles TypeScript, then runs the suites with `node --test`.
+All commands run from `apps/api` unless stated. `npm test` compiles TypeScript, then runs the suites with `node --test`. The suite list is discovered automatically (`node --test "dist/**/*.spec.js"`): a new `*.spec.ts` is picked up as-is, never add file names to the `test` script.
 
 ## Environment variables that switch the real-service suites on
 | Variable | Points to | Suite |

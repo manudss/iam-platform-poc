@@ -5,6 +5,8 @@ import { Session } from './session';
 
 interface McpSession { id: string; owner: string; label: string; branch: string; createdAt: string; expiresAt: string; revoked: boolean; submitted: boolean; calls: number }
 interface Activity { id: number; at: string; tool: string; kind: string; detail: string; targets: string[]; allow: boolean; reasons: string[]; rowCount: number | null; error: string | null }
+interface Upstream { id: string; name: string; url: string; enabled: boolean; authType: string; authUser: string | null; lastStatus: string; lastTools: number | null }
+interface Grant { identity: string; upstream: string; tool: string; expiresAt: string | null; grantedBy: string }
 
 /**
  * MCP sessions: give an AI assistant branch-confined access to the platform. The session secret is shown ONCE
@@ -31,6 +33,29 @@ interface Activity { id: number; at: string; tool: string; kind: string; detail:
       </div> }
   </section>
 
+  <section class="card" id="mcp-upstreams"><h3>External MCP servers (gateway)</h3>
+    <p class="hint">An external MCP server (e.g. Jira) registered here is relayed to every AI session: its tools appear as <b>name__tool</b>. The token authenticates the platform towards that server: it is stored encrypted, never displayed again, never sent to the AI, and every relayed call is traced below (kind <b>proxy</b>). Remote servers require https; http is accepted only for a local server (127.0.0.1).</p>
+    <div class="row"><label>Name<input name="upname" [(ngModel)]="upName" maxlength="32" placeholder="e.g. jira" /></label>
+    <label>URL<input name="upurl" [(ngModel)]="upUrl" placeholder="https://mcp.atlassian.com/v2/mcp?tools=all" size="34" /></label>
+    <label>Auth<select name="upauth" [(ngModel)]="upAuth"><option value="bearer">Bearer token</option><option value="basic">Basic (email:token, Atlassian)</option></select></label>
+    @if (upAuth === 'basic') { <label>Account email<input name="upauthuser" [(ngModel)]="upAuthUser" placeholder="you@example.com" size="22" /></label> }
+    <label>Token<input name="uptoken" type="password" [(ngModel)]="upToken" placeholder="stored encrypted, shown never" size="24" /></label>
+    <button id="up-create" (click)="createUpstream()" [disabled]="!upName.trim() || !upUrl.trim() || !upToken.trim() || (upAuth === 'basic' && !upAuthUser.trim())">Register</button></div>
+    <p class="hint">Real Jira (P3): register the Atlassian Rovo MCP with URL <b>https://mcp.atlassian.com/v2/mcp?tools=all</b> (the <b>?tools=all</b> flat list, so each Jira tool is grantable on its own), auth <b>Basic</b>, the Atlassian account email and a scoped API token. Never grant the meta-tools <b>discover</b>/<b>executeRead</b>/<b>executeWrite</b>/<b>executeDestructive</b>: they would bypass the per-tool allowlist.</p>
+    <div class="scroll"><table id="up-table"><thead><tr><th>Name</th><th>URL</th><th>Auth</th><th>State</th><th>Last check</th><th>Tools</th><th></th></tr></thead><tbody>
+    @for (u of upstreams(); track u.id) { <tr><td>{{u.name}}</td><td>{{u.url}}</td><td>{{u.authType === 'basic' ? 'basic (' + u.authUser + ')' : 'bearer'}}</td><td>{{u.enabled ? 'enabled' : 'disabled'}}</td><td>{{u.lastStatus}}</td><td>{{u.lastTools ?? ''}}</td>
+      <td><button class="secondary" (click)="testUpstream(u)">Test</button><button class="secondary" (click)="removeUpstream(u)">Delete</button></td></tr> }
+    @empty { <tr><td colspan="7">No external MCP server registered.</td></tr> }</tbody></table></div>
+    @if (upTest(); as t) { <p class="hint" id="up-test-result">{{t}}</p> }
+  </section>
+
+  <section class="card" id="mcp-grants"><h3>Delegation grants (gateway)</h3>
+    <p class="hint">A relayed tool is visible to an AI session only while the session owner holds a grant here <b>and</b> the Cedar policy allows the call (role <b>mcp-operator</b>). Grants are versioned data: the AI can propose one on its branch, but it takes effect only after a human merges the pull request and the new version is activated. This view is read-only and always shows the ACTIVE version@if (grantCommit()) { (commit {{grantCommit()}})}.</p>
+    <div class="scroll"><table id="grants-table"><thead><tr><th>Identity</th><th>Upstream</th><th>Tool</th><th>Expires</th><th>Granted by</th></tr></thead><tbody>
+    @for (g of grants(); track g.identity + g.upstream + g.tool) { <tr [class.bad]="expiredGrant(g)"><td>{{g.identity}}</td><td>{{g.upstream}}</td><td>{{g.tool}}</td><td>{{g.expiresAt ? (g.expiresAt | date:'short') : 'never'}}{{expiredGrant(g) ? ' (expired)' : ''}}</td><td>{{g.grantedBy}}</td></tr> }
+    @empty { <tr><td colspan="5">No grant in the active version: no relayed tool is visible to any AI session.</td></tr> }</tbody></table></div>
+  </section>
+
   <section class="card"><h3>Sessions</h3><div class="scroll"><table id="mcp-table"><thead><tr><th>Session</th><th>Label</th><th>Owner</th><th>Branch</th><th>Expires</th><th>Calls</th><th>State</th><th></th></tr></thead><tbody>
     @for (x of sessions(); track x.id) { <tr><td>{{x.id}}</td><td>{{x.label}}</td><td>{{x.owner}}</td><td>{{x.branch}}</td><td>{{x.expiresAt | date:'short'}}</td><td>{{x.calls}}</td>
       <td>{{x.revoked ? 'revoked' : (expired(x) ? 'expired' : (x.submitted ? 'PR submitted' : 'active'))}}</td>
@@ -47,6 +72,10 @@ interface Activity { id: number; at: string; tool: string; kind: string; detail:
 export class McpPage {
   protected readonly s = inject(Session);
   protected sessions = signal<McpSession[]>([]);
+  protected upstreams = signal<Upstream[]>([]);
+  protected grants = signal<Grant[]>([]);
+  protected grantCommit = signal('');
+  protected upName = ''; protected upUrl = ''; protected upToken = ''; protected upAuth = 'bearer'; protected upAuthUser = ''; protected upTest = signal('');
   protected activity = signal<Activity[]>([]);
   protected activityFor = signal('');
   protected created = signal<(McpSession & { secret: string }) | null>(null);
@@ -55,6 +84,7 @@ export class McpPage {
   constructor() { effect(() => { this.s.adminToken(); void this.load(); }); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   protected expired(x: McpSession) { return new Date(x.expiresAt).getTime() <= Date.now(); }
+  protected expiredGrant(g: Grant) { return g.expiresAt !== null && new Date(g.expiresAt).getTime() <= Date.now(); }
   protected configFor(c: McpSession & { secret: string }) {
     // Local dev (ng serve on :4200) hits the API directly; everywhere else the console origin proxies /api to it.
     const base = location.port === '4200' ? 'http://localhost:3000' : location.origin + '/api';
@@ -67,7 +97,23 @@ export class McpPage {
       this.problem.set(''); return r.data ?? {};
     } catch (e) { this.problem.set((e as Error).message); return null; }
   }
-  protected async load() { const r = await this.call('GET', '/mcp-sessions'); if (r) this.sessions.set(r['sessions'] ?? []); }
+  protected async load() {
+    const r = await this.call('GET', '/mcp-sessions'); if (r) this.sessions.set(r['sessions'] ?? []);
+    const u = await this.call('GET', '/mcp-upstreams'); if (u) this.upstreams.set(u['upstreams'] ?? []);
+    const g = await this.call('GET', '/mcp-grants');
+    if (g) { this.grants.set(g['grants'] ?? []); this.grantCommit.set(String(g['activeCommit'] ?? '').slice(0, 12)); }
+  }
+  protected async createUpstream() {
+    const r = await this.call('POST', '/mcp-upstreams', { name: this.upName.trim(), url: this.upUrl.trim(), token: this.upToken, authType: this.upAuth, ...(this.upAuth === 'basic' ? { authUser: this.upAuthUser.trim() } : {}) });
+    if (r) { this.upName = ''; this.upUrl = ''; this.upToken = ''; this.upAuthUser = ''; this.note.set('External MCP server registered: its tools are relayed to AI sessions.'); await this.load(); }
+  }
+  protected async testUpstream(u: Upstream) {
+    this.upTest.set(`Testing ${u.name}…`);
+    const r = await this.call('POST', `/mcp-upstreams/${encodeURIComponent(u.id)}/test`, {});
+    if (r) this.upTest.set(r['ok'] ? `${u.name}: ${ (r['tools'] ?? []).length } tools reachable (${(r['tools'] ?? []).join(', ')})` : `${u.name}: ${r['error'] ?? 'unreachable'}`);
+    await this.load();
+  }
+  protected async removeUpstream(u: Upstream) { if (!confirm(`Delete upstream ${u.name}? Its tools disappear from AI sessions immediately.`)) return; const r = await this.call('DELETE', `/mcp-upstreams/${encodeURIComponent(u.id)}`); if (r) { this.note.set('Upstream deleted.'); await this.load(); } }
   protected async create() {
     const r = await this.call('POST', '/mcp-sessions', { label: this.label, ttl_seconds: Math.round(this.ttlHours * 3600) });
     if (r) { this.created.set(r as McpSession & { secret: string }); this.note.set('Session created.'); await this.load(); }

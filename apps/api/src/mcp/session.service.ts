@@ -10,7 +10,7 @@ export interface McpSession {
 }
 export interface ActivityEntry {
   id: number; at: string; tenant: string; sessionId: string; owner: string; branch: string;
-  tool: string; kind: 'read' | 'write' | 'lifecycle'; detail: string; targets: string[];
+  tool: string; kind: 'read' | 'write' | 'lifecycle' | 'proxy'; detail: string; targets: string[];
   allow: boolean; reasons: string[]; rowCount: number | null; error: string | null;
 }
 type Row = Record<string, unknown>;

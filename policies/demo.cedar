@@ -11,3 +11,11 @@ forbid(principal, action == Action::"approve", resource) when { context.sod_conf
 // grants itself on its own branch has no effect until a human merges and activates it.
 permit(principal, action in [Action::"mcp:read", Action::"mcp:write", Action::"mcp:lifecycle"], resource)
   when { context has roles && context.roles.contains("mcp-operator") };
+
+// Relayed (proxy) tools additionally need a DELEGATION GRANT from the ACTIVE version (MCP gateway P2):
+// the core injects the identity's unexpired grants as context.mcp_grants (UpstreamTool::"<upstream>__<tool>"),
+// and the exact relayed tool must be one of them. A grant the AI writes on its own branch is not active
+// until a human merges and activates it - same rule as roles.
+permit(principal, action == Action::"mcp:proxy", resource)
+  when { context has roles && context.roles.contains("mcp-operator")
+      && context has mcp_grants && context.mcp_grants.contains(resource) };
