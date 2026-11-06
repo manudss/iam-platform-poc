@@ -130,7 +130,7 @@ try {
   // ---- 5. a new branch from main (now holding the chains): make chain 2 the default (e-mail code -> PIN digits), Apply it
   await page.waitForSelector('[name=globalBranch]');
   await page.locator('details.token').evaluate((e) => (e.open = true)); await page.fill('[name=admintoken]', ADMIN_TOKEN);
-  await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('authn-work2');
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('authn-work2');
   await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="e-mail-then-pin-keypad"]');
   await page.locator('.chain[data-chain="e-mail-then-pin-keypad"] input[type=radio]').check();
   await page.click('#authn-save'); await page.waitForSelector('#authn-note');

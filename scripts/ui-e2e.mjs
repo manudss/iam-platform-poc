@@ -123,7 +123,7 @@ try {
     await shot('diag-token-gate').catch(() => undefined); throw e;
   }
   await setToken();
-  await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
 
   // ---- IAM pages: assignments, SoD staging, refused then successful Review & Apply, activation journal ----
@@ -198,7 +198,7 @@ try {
   await coreLogin();
   await page.waitForFunction(() => document.body.innerText.includes('admin capability')); // the automatic open is refused first (no token in memory after a reload)
   await setToken();
-  await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
   await page.waitForSelector('#plugins table'); assert.equal(path(), '/plugins/auth-password-lockout');
   await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
@@ -208,7 +208,7 @@ try {
   const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
   await nav('/database/branches'); await page.waitForSelector('text=protected'); await shot('8-explorer-1-branches');
   await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
-  await page.getByRole('button', { name: 'Refresh branches' }).click(); // the explorer created ui-demo behind the shell's back: reload the branch list before selecting it
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); // the explorer created ui-demo behind the shell's back: reload the branch list before selecting it
   await page.selectOption('select[name=globalBranch]', 'ui-demo'); await status('Working on ui-demo'); // explorer edits and SQL writes must run on the selected working branch
   await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
@@ -253,7 +253,7 @@ try {
   for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
     await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
-    if (path() === '/login') { await coreLogin(); await page.waitForFunction(() => document.body.innerText.includes('admin capability')); await setToken(); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
+    if (path() === '/login') { await coreLogin(); await page.waitForFunction(() => document.body.innerText.includes('admin capability')); await setToken(); await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
     await page.waitForFunction((x) => location.pathname.startsWith(x), p);
     await page.waitForSelector('main.content section, main.content .stats');
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

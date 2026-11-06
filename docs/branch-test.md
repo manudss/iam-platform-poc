@@ -4,7 +4,7 @@ An administrator can try the **full login experience as a visitor would see it o
 
 ## Flow
 
-1. In the console's data-branch bar, select a branch and press **Test sign-in on this branch**.
+1. In the console top bar, select a branch in the branch pill, open the **⋯** menu and press **Test sign-in on this branch**.
 2. The server issues a **short-lived test ticket** (10 minutes, in memory) and a test link `/login?branch=<name>&ticket=<ticket>` opens in a new tab. For a long-lived pre-production branch the admin can instead create a **stable link** (no expiry, revocable — see below).
 3. The login page loads the branch's sign-in configuration (`GET /api/tenants/:tenant/signin/options?branch=&ticket=`): the chains, methods and branding of that branch, not `main`. The sign-up link is hidden in test mode.
 4. Signing in runs the core IdP through the API gate with the branch parameters. The core sets a `branch` claim in the issued token (the claim is core-set only; the gate can never plant it, because `safe_auth_claims` does not whitelist it).

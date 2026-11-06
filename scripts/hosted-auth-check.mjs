@@ -104,7 +104,7 @@ try {
   // ---- 5. a new branch from main (now holding the chains): make chain 2 the default (e-mail code -> PIN digits), Apply it
   await page.waitForSelector('[name=globalBranch]');
   
-  await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('aw2-' + RUN);
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('aw2-' + RUN);
   await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="e-mail-then-pin-keypad"]');
   await page.locator('.chain[data-chain="e-mail-then-pin-keypad"] input[type=radio]').check();
   await page.click('#authn-save'); await page.waitForSelector('#authn-note');
@@ -138,7 +138,7 @@ try {
   assert.equal(k2.auth_mfa, false); assert.ok(!k2.amr.includes('email'), 'simulated e-mail is not claimed as verified'); assert.ok(k2.auth_simulated.length > 0);
   // leave the shared preview as we found it: classic password sign-in again (a restart does not reset the stored configuration)
   await page.waitForSelector('[name=globalBranch]');
-  await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('aw3-' + RUN);
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('aw3-' + RUN);
   await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="password-only"]');
   await page.locator('.chain[data-chain="password-only"] input[type=radio]').check(); await page.click('#authn-save'); await page.waitForSelector('#authn-note');
   const ap3 = await (await call('POST', '/workspace/apply', { confirm: true }, 'aw3-' + RUN)).json(); assert.equal(ap3.applied, true, JSON.stringify(ap3));
