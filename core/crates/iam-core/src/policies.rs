@@ -166,7 +166,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../policies");
         let e = load_engine_with_schema(&root.join("demo.cedar"), Some(&root.join("demo.cedarschema"))).unwrap();
         assert!(e.validated());
-        assert_eq!(e.catalog().len(), 5);
+        assert_eq!(e.catalog().len(), 6);
         // And the convention finds the sibling schema by itself.
         assert!(default_schema_path(&root.join("demo.cedar")).exists());
     }
