@@ -17,7 +17,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.
 
 function proxy(req, res, target, strip) {
   const path = strip ? req.url.replace(/^\/(core|api)/, '') || '/' : req.url;
-  const upstream = http.request({ host: target.host, port: target.port, path, method: req.method, headers: { ...req.headers, host: `${target.host}:${target.port}` }, timeout: 15000 }, (u) => {
+  const upstream = http.request({ host: target.host, port: target.port, path, method: req.method, headers: { ...req.headers, host: `${target.host}:${target.port}`, 'x-forwarded-host': req.headers['x-forwarded-host'] ?? req.headers.host, 'x-forwarded-proto': req.headers['x-forwarded-proto'] ?? 'http' }, timeout: 15000 }, (u) => {
     res.writeHead(u.statusCode ?? 502, u.headers);
     u.pipe(res);
   });

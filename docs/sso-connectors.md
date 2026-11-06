@@ -1,6 +1,6 @@
 # SSO: applications that sign in through the platform (plugin `app-connector`)
 
-Status: step 1 of the SSO plan. **Configuration only**: you can register and configure applications, but no OIDC or SAML endpoint exists yet (next steps). Fictional data. Not production.
+Status: step 1 of the SSO plan: the registry of applications. The OpenID Connect endpoints are served by the separate `oidc-provider` plugin (`docs/sso-oidc.md`); SAML is still to come. Fictional data. Not production.
 
 ## Direction and decisions
 
@@ -54,4 +54,4 @@ After a successful write the plugin emits `app.registered`, `app.updated` and `a
 
 ## Not done yet
 
-OIDC and SAML endpoints, signing keys, the access decision "may this user open this application" in the core, audit of issued tokens, import/export of metadata, and the MCP tools. See the SSO plan.
+SAML endpoints, the access decision "may this user open this application" in the core, audit of issued tokens, import/export of metadata, and the MCP tools. See the SSO plan.

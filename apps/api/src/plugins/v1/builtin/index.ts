@@ -169,3 +169,37 @@ export const policyStudio: PluginImpl = {
   },
   handlers: {},
 };
+
+/**
+ * OpenID Connect provider (step 2 of the SSO plan): the platform acts as the OpenID Provider for the applications of `app-connector`
+ * (discovery, authorize with PKCE, token, userinfo, JWKS, refresh, logout) through the embedded library node-oidc-provider. Turning the plugin
+ * off removes every /sso/:tenant/oidc endpoint (404) without touching the application registry.
+ */
+export const oidcProvider: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'oidc-provider', version: '0.1.0', name: 'OpenID Connect provider (SSO)', publisher: 'iam-platform',
+    kinds: ['connector'],
+    description: 'Lets the registered applications sign in with OpenID Connect (authorization code + PKCE). Access follows the application allowed roles; the user signs in with the normal authentication chain and consents.',
+    requires: ['app-connector'],
+    hooks: [],
+    settings: [],
+  },
+  handlers: {},
+};
+
+/**
+ * SAML 2.0 identity provider (step 3 of the SSO plan): the platform acts as the IdP for the SAML applications of `app-connector`
+ * (metadata, single sign-on with signed assertions in POST binding) through the embedded library samlify. Turning the plugin
+ * off removes every /sso/:tenant/saml endpoint (404) without touching the application registry. Demonstration grade, see docs/sso-saml.md.
+ */
+export const samlIdp: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'saml-idp', version: '0.1.0', name: 'SAML 2.0 identity provider (SSO)', publisher: 'iam-platform',
+    kinds: ['connector'],
+    description: 'Lets the registered applications sign in with SAML 2.0 Web SSO (signed assertions, POST binding). Access follows the application allowed roles; the user signs in with the normal authentication chain and consents.',
+    requires: ['app-connector'],
+    hooks: [],
+    settings: [],
+  },
+  handlers: {},
+};

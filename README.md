@@ -4,7 +4,7 @@ Private proof of concept for a new IAM/IGA platform. Design choices come from th
 (stack: Angular, NestJS, Rust core, Dolt for versioned business data). No license has been granted for
 redistribution.
 
-Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md), [workflows](docs/workflows.md), [SSO applications](docs/sso-connectors.md), [policy studio (Cedar rules)](docs/policy-studio.md), [event bus](docs/event-bus.md), [plugin contract v2 (plugins served by the bus)](docs/plugin-contract-v2.md).
+Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md), [workflows](docs/workflows.md), [SSO: applications, OIDC provider, decision](docs/sso-connectors.md), [policy studio (Cedar rules)](docs/policy-studio.md), [event bus](docs/event-bus.md), [plugin contract v2 (plugins served by the bus)](docs/plugin-contract-v2.md).
 
 ## Hosted demo (free tier)
 

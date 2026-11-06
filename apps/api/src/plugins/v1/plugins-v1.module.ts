@@ -10,7 +10,10 @@ import { BusHost } from './bus-host.js';
 import pg from 'pg';
 import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from './memory-stores.js';
 import { PgPluginStore } from './pg-stores.js';
-import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector, policyStudio } from './builtin/index.js';
+import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector, policyStudio, oidcProvider, samlIdp } from './builtin/index.js';
+import { OidcProviderService, SsoInteractionController, SSO_DIRECTORY, DoltSsoDirectory, MemorySsoDirectory } from '../../sso/oidc.js';
+import { SamlIdpService, SamlInteractionController } from '../../sso/saml.js';
+import { SecretsService } from '../../integrations/secrets.service.js';
 import { AppConnectorController, AppConnectorService, APP_CONNECTOR_STORE, DoltAppConnectorStore, MemoryAppConnectorStore } from '../../connectors/app-connector.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
 import { AuthGateController } from './auth-gate.controller.js';
@@ -33,8 +36,12 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule],
-  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController, AppConnectorController, RolesController, SigninOptionsController],
-  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, RolesService, {
+  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
+    provide: SSO_DIRECTORY,
+    inject: [VersioningService],
+    useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltSsoDirectory(v) : new MemorySsoDirectory(),
+  }, RolesService, {
     provide: APP_CONNECTOR_STORE,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltAppConnectorStore(v, (w) => currentBranch(w)) : new MemoryAppConnectorStore(),
@@ -57,7 +64,7 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
       const ds = process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltPluginStore(v) : undefined;
       const r = ds ? new PluginRegistry(ds, ds, audit, ds) : pgs ? new PluginRegistry(pgs, pgs, audit, pgs) : new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), audit, new MemoryStateStore());
       const base = process.env.IAM_DIRECTORY_AUTH === '1' ? { ...authPassword, handlers: { 'auth.authenticate': async (p: any) => (await users.authenticate(p.tenant, p.subject, p.credential.password)) ? { outcome: 'allow', subject: p.subject, methods: ['pwd'] } : { outcome: 'deny', reason: 'bad-credentials' } } } : authPassword;
-      for (const p of [base, notifyLog, authPasswordLockout(new Map(), base), orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector, policyStudio]) {
+      for (const p of [base, notifyLog, authPasswordLockout(new Map(), base), orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector, policyStudio, oidcProvider, samlIdp]) {
         if (ds && p.manifest.settings.some(f => f.type === 'secret')) throw new Error('Dolt plugin store refuses secret settings; use a secret store');
         r.register(p);
       }
@@ -68,6 +75,6 @@ import { AuthnAdminController } from '../../authn/authn.controller.js';
       return r;
     },
   }],
-  exports: [PluginRegistry, BranchRegistries, AuthnService, ProfileService, OrgService, RolesService],
+  exports: [AppConnectorService, OidcProviderService, SamlIdpService, PluginRegistry, BranchRegistries, AuthnService, ProfileService, OrgService, RolesService],
 })
 export class PluginsV1Module {}

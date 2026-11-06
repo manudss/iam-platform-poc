@@ -52,13 +52,13 @@ export class DemoDataService implements OnApplicationBootstrap {
       for (const [s, o] of [['demo-alice', 'root'], ['demo-bob', 'finance'], ...ACCOUNTS.flatMap((a) => a.orgs.map((o) => [a.id, o]))]) await c.query('insert ignore into org_memberships values (?,?,?)', [tenant, s, o]);
       for (const [id, label, sens] of [['employee', 'Employee (baseline)', false], ['hr-partner', 'HR partner', false], ['security-analyst', 'Security analyst', true], ['sales-rep', 'Sales representative', false]] as const) await c.query('insert ignore into roles values (?,?,?)', [id, label, sens]);
       for (const a of ACCOUNTS) for (const r of a.roles) await c.query('insert ignore into assignments values (?,?)', [a.id, r]);
-      await c.query('insert ignore into assignments values (?,?),(?,?),(?,?)', ['yanis-leroy', 'hr-partner', 'ines-roux', 'security-analyst', 'sarah-fontaine', 'sales-rep']);
+      await c.query('insert ignore into assignments values (?,?),(?,?),(?,?),(?,?),(?,?)', ['yanis-leroy', 'hr-partner', 'ines-roux', 'security-analyst', 'sarah-fontaine', 'sales-rep', 'demo-alice', 'employee', 'demo-bob', 'employee']);
       await c.query(APP_CONNECTOR_DDL);
       for (const a of DEMO_APP_CONNECTORS) await c.query('insert ignore into app_connectors values (?,?,?,?,?,?,?)', [tenant, a.id, a.name, a.description, a.protocol, a.enabled ? 1 : 0, appConnectorConfig(a)]);
       await c.query("call dolt_add('-A')"); await c.query("call dolt_commit('-m', 'demo seed: organizations, memberships, roles, assignments and applications (fictional)')");
     }));
     const reg = await this.branches!.get('main');
-    for (const id of ['organizations', 'hr-attributes', 'workflows-iga', 'app-connector', 'policy-studio']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
+    for (const id of ['organizations', 'hr-attributes', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
     await (await this.branches!.get('main')).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, { fields: { 'hr-attributes.job_title': { selfEdit: true, signup: 'optional' }, 'hr-attributes.phone': { selfEdit: true }, 'hr-attributes.language': { selfEdit: true, signup: 'optional' } }, signup: { open: true }, selfEditPolicy: 'immediate' });
     for (const a of ACCOUNTS) await this.store!.put(tenant, a.id, { 'hr-attributes.job_title': a.title, 'hr-attributes.phone': a.phone, 'hr-attributes.language': a.language, 'hr-attributes.employee_grade': a.grade }, 'live', 'demo-seed');
     await this.v.lock(() => this.v.at('main', async (c) => {
