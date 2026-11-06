@@ -5,6 +5,14 @@
   <title>Web</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    // Applies the color theme before first paint (same rule as theme.ts): a remembered choice wins, else the system preference.
+    try {
+      var m = localStorage.getItem('iam.theme');
+      if (m !== 'light' && m !== 'dark') m = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = m;
+    } catch (e) { /* storage blocked: the light default in styles.css applies */ }
+  </script>
 </head>
 <body>
   <app-root></app-root>

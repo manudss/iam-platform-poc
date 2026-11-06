@@ -23,6 +23,7 @@
       <span class="spacer"></span>
       <!-- Session timer: self-contained, keep it in the top bar wherever the bar is rearranged. -->
       <app-session-timer />
+      <app-theme-switch />
       <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
       <button type="button" class="secondary" (click)="signOut()">Sign out</button>
     </header>

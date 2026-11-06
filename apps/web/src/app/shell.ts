@@ -5,12 +5,13 @@ import { filter } from 'rxjs';
 import { VersioningClient, BranchInfo } from './api';
 import { Session } from './session';
 import { SessionTimer } from './session-timer';
+import { ThemeSwitch } from './theme-switch';
 
 interface NavItem { path: string; label: string; icon: string }
 interface NavGroup { title: string; items: NavItem[] }
 
 /** Administration layout: grouped sidebar, top bar with the signed-in identity, status bar and the page outlet. */
-@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer], templateUrl: './shell.html', styleUrl: './shell.css' })
+@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer, ThemeSwitch], templateUrl: './shell.html', styleUrl: './shell.css' })
 export class Shell {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
