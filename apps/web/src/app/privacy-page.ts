@@ -1,8 +1,10 @@
 import { Component } from '@angular/core';
+import { ThemeSwitch } from './theme-switch';
 
 /** Public privacy policy (no sign-in), required by the e-mail sending configuration. French first, English summary below. */
 @Component({
   selector: 'app-privacy',
+  imports: [ThemeSwitch],
   styleUrl: './login.css',
   styles: [`
     .doc { width: min(46rem, 100%); padding: 2rem; }

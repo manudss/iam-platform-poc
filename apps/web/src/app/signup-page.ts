@@ -1,18 +1,27 @@
-import { Component, input, signal } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ThemeSwitch } from './theme-switch';
 
 interface F { key: string; label: string; type: string; help?: string; options?: { value: string; label: string }[]; required: boolean }
 
-/** Public form (no sign-in). Closed unless an administrator opened and applied it. It only sends a request. */
+/** Public account-request form on its own /signup page (no sign-in). Closed unless an administrator opened and applied it. It only sends a request. */
 @Component({
-  selector: 'app-signup', imports: [FormsModule, NgTemplateOutlet], styleUrl: './login.css',
+  selector: 'app-signup', imports: [FormsModule, NgTemplateOutlet, ThemeSwitch], styleUrl: './login.css',
   template: `
-  @if (embedded()) { <section class="signup-embedded" id="signup-embedded"><h2>New here? Create an account</h2><ng-container *ngTemplateOutlet="body" /></section> }
-  @else { <main class="login"><section class="card hero"><h1>Request an account</h1><ng-container *ngTemplateOutlet="body" /></section></main> }
+  <div class="auth-bg" aria-hidden="true"><img src="https://picsum.photos/1920/1080" alt="" loading="eager"></div>
+  <div class="auth-veil" aria-hidden="true"></div>
+  <app-theme-switch class="auth-theme" />
+  <main class="login"><section class="card hero signup-card">
+    <p style="margin:0"><a class="back" href="/login">&lsaquo; Back to sign in</a></p>
+    <div class="brand"><div class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>Administration console</span></div></div>
+    <h1 class="page-title">Request an account</h1>
+    <ng-container *ngTemplateOutlet="body" />
+    <p class="foot">Fictional demo data only. Do not enter real data. <a href="/privacy">Politique de confidentialité / Privacy</a> · <a href="/about">About this demo</a></p>
+  </section></main>
   <ng-template #body>
   @if (state()==='loading') { <p>Loading...</p> }
-  @else if (state()==='closed') { @if (!embedded()) { <p id="su-closed" role="status">Sign-up is closed.</p> } }
+  @else if (state()==='closed') { <p id="su-closed" role="status">Sign-up is closed.</p> }
   @else if (state()==='sent') { <p id="su-sent" role="status">{{msg()}}</p>
     <form (ngSubmit)="confirm()"><label>Confirmation code<input name="code" [(ngModel)]="code" autocomplete="off" /></label><button id="su-confirm">Confirm</button></form>
     @if (confirmed()) { <p role="status">{{confirmed()}}</p> } }
@@ -30,7 +39,6 @@ interface F { key: string; label: string; type: string; help?: string; options?:
   </ng-template>`,
 })
 export class SignupPage {
-  readonly embedded = input(false);
   protected state = signal<'loading' | 'closed' | 'form' | 'sent'>('loading'); protected fields = signal<F[]>([]); protected err = signal(''); protected msg = signal(''); protected confirmed = signal('');
   protected id = ''; protected dn = ''; protected em = ''; protected pw = ''; protected code = ''; protected vals: Record<string, string> = {};
   private base = '/api/tenants/acme-demo/signup';

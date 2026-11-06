@@ -1,24 +1,46 @@
-/* Administration theme: tokens, base elements and shared components. Component styles only add layout. */
+/* Administration theme: tokens, base elements and shared components. Component styles only add layout.
+   Light and dark themes: [data-theme] on <html> picks a variable set (see theme.ts; default follows the system). */
 :root {
+  color-scheme: light;
   --bg: #f1f5f9; --card: #fff; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0;
-  --accent: #4f46e5; --accent-dark: #3730a3; --accent-soft: #eef2ff;
-  --ok: #15803d; --ok-soft: #dcfce7; --bad: #b91c1c; --bad-soft: #fee2e2; --warn-soft: #fef3c7;
+  --accent: #4f46e5; --accent-dark: #3730a3; --accent-soft: #eef2ff; --link: #4f46e5;
+  --ok: #15803d; --ok-soft: #dcfce7; --bad: #b91c1c; --bad-soft: #fee2e2; --bad-ink: #7f1d1d;
+  --warn-soft: #fef3c7; --warn-line: #fcd34d; --warn-ink: #92400e;
+  --label: #334155; --field-bg: #fff; --field-line: #cbd5e1;
+  --th-bg: #f8fafc; --th-ink: #475569; --row-hover: #fafbff; --panel: #f8fafc; --code-bg: #f1f5f9;
+  /* Auth pages (sign-in, sign-up, privacy, about): photo background under a tinted veil, frosted card. */
+  --veil: rgba(246, 248, 252, .45); --card-auth: rgba(255, 255, 255, .78);
+  --auth-field: rgba(255, 255, 255, .88); --bar-off: #dbe2ee;
+  --chip-bg: #eef2ff; --chip-ink: #4f46e5; --brand-sub: #64748b;
   --radius: .75rem; --shadow: 0 1px 2px #0f172a0d, 0 4px 14px #0f172a0a;
   font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: var(--ink);
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b1220; --card: #101a2e; --ink: #e6ecf7; --muted: #94a3b8; --line: #27334e;
+  --accent: #4f46e5; --accent-dark: #6366f1; --accent-soft: rgba(129, 140, 248, .16); --link: #a5b4fc;
+  --ok: #4ade80; --ok-soft: rgba(74, 222, 128, .14); --bad: #f87171; --bad-soft: rgba(248, 113, 113, .15); --bad-ink: #fca5a5;
+  --warn-soft: rgba(251, 191, 36, .12); --warn-line: #92600e; --warn-ink: #fbbf24;
+  --label: #cbd5e1; --field-bg: #0f1930; --field-line: #33415c;
+  --th-bg: #16203a; --th-ink: #94a3b8; --row-hover: #16203a; --panel: #0f1930; --code-bg: #16203a;
+  --veil: rgba(2, 6, 23, .60); --card-auth: rgba(13, 20, 38, .70);
+  --auth-field: rgba(2, 6, 23, .45); --bar-off: #384662;
+  --chip-bg: rgba(129, 140, 248, .18); --chip-ink: #a5b4fc; --brand-sub: #94a3b8;
+  --shadow: 0 1px 2px #00000060, 0 4px 14px #00000050;
 }
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-size: 15px; line-height: 1.45; }
 h1, h2, h3, h4 { line-height: 1.25; }
 h3 { font-size: 1rem; margin: 0 0 .6rem; } h4 { font-size: .92rem; margin: 1rem 0 .4rem; }
-a { color: var(--accent); }
-code { background: #f1f5f9; padding: .05rem .35rem; border-radius: .3rem; font-size: .85em; }
+a { color: var(--link); }
+code { background: var(--code-bg); padding: .05rem .35rem; border-radius: .3rem; font-size: .85em; }
 pre { background: #0f172a; color: #e2e8f0; padding: .8rem; border-radius: .5rem; overflow-x: auto; font-size: .8rem; }
 ul { padding-left: 1.2rem; }
 small, .hint { color: var(--muted); } .hint { font-size: .84rem; }
 
-label { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; font-weight: 600; color: #334155; margin: .35rem .75rem .35rem 0; }
+label { display: flex; flex-direction: column; gap: .25rem; font-size: .82rem; font-weight: 600; color: var(--label); margin: .35rem .75rem .35rem 0; }
 label.row, label.inline { flex-direction: row; align-items: center; gap: .45rem; font-weight: 400; }
-input, select, textarea { font: inherit; font-size: .92rem; padding: .45rem .6rem; border: 1px solid #cbd5e1; border-radius: .5rem; background: #fff; color: var(--ink); max-width: 100%; }
+input, select, textarea { font: inherit; font-size: .92rem; padding: .45rem .6rem; border: 1px solid var(--field-line); border-radius: .5rem; background: var(--field-bg); color: var(--ink); max-width: 100%; }
 input:focus, select:focus, textarea:focus { outline: 2px solid #a5b4fc; border-color: var(--accent); }
 input[type=checkbox] { padding: 0; width: 1rem; height: 1rem; accent-color: var(--accent); }
 textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
@@ -29,26 +51,32 @@ button { font: inherit; font-size: .9rem; font-weight: 600; padding: .45rem .9re
 button:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
 button:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-button.secondary { background: #fff; color: #334155; border-color: #cbd5e1; margin: 0; }
-button.secondary:hover:not(:disabled) { background: #f1f5f9; border-color: #94a3b8; }
+button.secondary { background: var(--card); color: var(--label); border-color: var(--field-line); margin: 0; }
+button.secondary:hover:not(:disabled) { background: var(--bg); border-color: var(--muted); }
 button.danger { background: var(--bad); border-color: var(--bad); }
 button.danger:hover:not(:disabled) { background: #991b1b; border-color: #991b1b; }
-button.link { background: none; border: 0; color: var(--accent); font-weight: 500; text-decoration: underline; padding: 0; margin: 0 .3rem; }
+button.link { background: none; border: 0; color: var(--link); font-weight: 500; text-decoration: underline; padding: 0; margin: 0 .3rem; }
 button.link:hover:not(:disabled) { background: none; color: var(--accent-dark); }
 
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.25rem; margin: 0 0 1.1rem; }
-.panel { border: 1px solid var(--line); border-radius: .6rem; padding: .7rem .9rem; margin: .8rem 0; background: #f8fafc; }
+.panel { border: 1px solid var(--line); border-radius: .6rem; padding: .7rem .9rem; margin: .8rem 0; background: var(--panel); }
 .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; }
 .scroll { overflow-x: auto; }
 .msg { background: var(--accent-soft); border-left: 4px solid var(--accent); padding: .55rem .8rem; border-radius: .4rem; margin: .6rem 0; }
-.msg.error { background: var(--bad-soft); border-left-color: var(--bad); color: #7f1d1d; }
-.chip { display: inline-block; font-size: .72rem; font-weight: 600; border: 1px solid #cbd5e1; border-radius: 999px; padding: 0 .55rem; margin-left: .35rem; background: #fff; color: #475569; }
+.msg.error { background: var(--bad-soft); border-left-color: var(--bad); color: var(--bad-ink); }
+.chip { display: inline-block; font-size: .72rem; font-weight: 600; border: 1px solid var(--field-line); border-radius: 999px; padding: 0 .55rem; margin-left: .35rem; background: var(--card); color: var(--muted); }
 .chip.ok { background: var(--ok-soft); border-color: #86efac; color: var(--ok); } .chip.ko, .chip.lock { background: var(--bad-soft); border-color: #fca5a5; color: var(--bad); }
 .ok { color: var(--ok); } .ko { color: var(--bad); }
 .empty { color: var(--muted); text-align: center; padding: 1rem; }
 
 table { border-collapse: collapse; width: 100%; font-size: .88rem; }
 th, td { text-align: left; padding: .5rem .65rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { background: #f8fafc; color: #475569; font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
-tbody tr:hover td { background: #fafbff; }
+th { background: var(--th-bg); color: var(--th-ink); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+tbody tr:hover td { background: var(--row-hover); }
 table.grid th, table.grid td { border: 0; border-bottom: 1px solid var(--line); }
+
+/* Brand logo: swap the light/dark wordmark with the active theme.
+   Lives in the global sheet because component-scoped :root selectors never match. */
+.brandlogo .for-dark { display: none; }
+:root[data-theme='dark'] .brandlogo .for-light { display: none; }
+:root[data-theme='dark'] .brandlogo .for-dark { display: block; }

@@ -155,7 +155,7 @@ describe('routing and sign-in guard', () => {
       expect(TestBed.inject(Router).url).toBe('/login');
       expect(sessionStorage.getItem(RETURN_KEY)).toBe('/database/pulls');
       const el = h.routeNativeElement as HTMLElement;
-      expect(el.textContent).toContain('IAM platform POC');
+      expect(el.querySelector('.brandlogo img')?.getAttribute('alt')).toBe('lyam'); // the lyam logo replaced the IAM tile + name
       const buttons = Array.from(el.querySelectorAll('#signin-methods button'));
       expect(buttons.map((b) => b.getAttribute('data-chain'))).toEqual(['pw-only', 'pw-totp', 'mail']);
       expect(el.textContent).toContain('recommended');

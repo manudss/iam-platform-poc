@@ -3,7 +3,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
 import { SigninChain, SigninOptions } from './api';
 import { Session } from './session';
-import { SignupPage } from './signup-page';
+import { ThemeSwitch } from './theme-switch';
 
 /** Sign-in page: lists the methods (chains) configured and enabled live, the person picks one, then the browser code+PKCE flow runs that chain. No JSON login in the UI. */
 const TEST_KEY = 'iam.branch.test';
@@ -14,7 +14,7 @@ function testParams(q: URLSearchParams): { branch: string; ticket: string } | nu
   return /^[a-z0-9-]{1,32}$/.test(branch) && branch !== 'main' && ticket.length >= 10 ? { branch, ticket } : null;
 }
 
-@Component({ selector: 'app-login', imports: [SignupPage], templateUrl: './login.html', styleUrl: './login.css' })
+@Component({ selector: 'app-login', imports: [ThemeSwitch], templateUrl: './login.html', styleUrl: './login.css' })
 export class LoginPage {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
@@ -45,6 +45,15 @@ export class LoginPage {
     catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
   }
   protected stepNames(c: SigninChain) { return c.steps.map((x) => x.name).join(' \u2192 '); }
+
+  /** Leading icon of a chain from its step types: authenticator app, e-mail code, PIN keypad, else a plain password key. */
+  protected icon(c: SigninChain): 'shield' | 'mail' | 'pin' | 'key' {
+    const t = c.steps.map((x) => x.type);
+    if (t.some((x) => /totp|authenticator/i.test(x))) return 'shield';
+    if (t.some((x) => /mail/i.test(x))) return 'mail';
+    if (t.some((x) => /pin/i.test(x))) return 'pin';
+    return 'key';
+  }
 
   protected async signIn(chain?: string) {
     this.busy.set(true);

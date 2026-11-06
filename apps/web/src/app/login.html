@@ -1,6 +1,9 @@
+<div class="auth-bg" aria-hidden="true"><img src="https://picsum.photos/1920/1080" alt="" loading="eager"></div>
+<div class="auth-veil" aria-hidden="true"></div>
+<app-theme-switch class="auth-theme" />
 <main class="login">
   <section class="card hero">
-    <div class="brand"><span class="logo" aria-hidden="true">IAM</span><div><h1>IAM platform POC</h1><p>Administration console</p></div></div>
+    <div class="brand"><h1 class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>Administration console</span></h1></div>
     @if (test(); as t) { <p class="msg test" id="branch-test-banner" role="status">Branch test: you are trying the sign-in of data branch <b>{{ t.branch }}</b>. Its unpublished configuration applies here; main is unchanged. <a href="/login">Back to the normal sign-in</a></p> }
     @if (s.expired()) { <p class="msg error" role="status">Session expired or invalid. Sign in again to continue. Your action was not retried; check its current state before trying again.</p> }
     @if (s.message()) { <p class="msg" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
@@ -10,14 +13,26 @@
       <button type="button" class="secondary" (click)="load()">Try again</button>
     }
     @else if (options().mode === 'choice') {
-      <p class="lead">Choose how to sign in. These are the methods configured and enabled {{ test() ? 'on the tested branch' : 'for this demo' }} (fictional accounts only). Levels are declared by an administrator (10 = strongest), not measured.</p>
+      <p class="lead">Choose how to sign in. Levels are declared by an administrator (10 = strongest), not measured.</p>
       <ul id="signin-methods" class="methods">
         @for (c of options().chains; track c.id) {
           <li>
-            <button type="button" class="primary method" [attr.data-chain]="c.id" [disabled]="busy()" (click)="signIn(c.id)">
-              {{ c.name }}@if (c.recommended) { <span class="tag">recommended</span> }
+            <button type="button" class="m" [class.rec]="c.recommended" [attr.data-chain]="c.id" [disabled]="busy()" (click)="signIn(c.id)">
+              <span class="ic" aria-hidden="true">
+                @switch (icon(c)) {
+                  @case ('shield') { <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3.5v5c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11v-5L12 2z"/><path d="M9 12l2 2 4-4.5"/></svg> }
+                  @case ('mail') { <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 7l10 6L22 7"/></svg> }
+                  @case ('pin') { <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> }
+                  @default { <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.8 12.2L21 2m-4 2l3 3"/></svg> }
+                }
+              </span>
+              <span class="tx">
+                <b>{{ c.name }}@if (c.recommended) { <span class="tag">recommended</span> }</b>
+                <span class="sub">{{ stepNames(c) }} · declared level {{ c.effectiveLevel }} of 10@if (c.simulated) { · <b class="sim">includes a simulated step (no real e-mail is sent)</b> }</span>
+                <span class="dots" aria-hidden="true">@for (i of [0,1,2,3,4,5,6,7,8,9]; track i) { <i [class.on]="i < c.effectiveLevel"></i> }</span>
+              </span>
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
             </button>
-            <small>{{ stepNames(c) }} · declared level {{ c.effectiveLevel }} of 10@if (c.simulated) { · <b class="sim">includes a simulated step (no real e-mail is sent)</b> }</small>
           </li>
         }
       </ul>
@@ -26,7 +41,10 @@
       <p class="lead">Sign in with a fictional local user. You leave for the identity provider's login form and come back with a code; this app checks the state and the PKCE verifier.</p>
       <button type="button" id="signin-browser" class="primary" [disabled]="busy()" (click)="signIn()">Sign in</button>
     }
-    @if (signupOpen()) { <app-signup [embedded]="true" /> }
-    <p class="foot">Fictional demo data only. Do not enter real data. <a href="/privacy">Politique de confidentialité / Privacy</a></p>
+    @if (signupOpen()) {
+      <div class="newhere"><span>New to the demo?</span></div>
+      <a class="create" href="/signup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/><path d="M19 8v6M16 11h6"/></svg>Create an account</a>
+    }
+    <p class="foot">Fictional demo data only. Do not enter real data. <a href="/privacy">Politique de confidentialité / Privacy</a> · <a href="/about">About this demo</a></p>
   </section>
 </main>
