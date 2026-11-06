@@ -196,8 +196,9 @@ export function formValues(model: FormModel, edited: Record<string, unknown>): R
 // ---- Database explorer (Dolt branches, history, diffs, data, SQL console, pull requests; see docs/explorer.md) ----
 export interface BranchInfo { name: string; commit: string; committer: string; date: string; message: string; protected: boolean; default: boolean; aheadOfDefault: number; behindDefault: number }
 export interface CommitInfo { commit: string; author: string; date: string; message: string; parents: string[]; refs: string[]; merge: boolean }
-export interface TableSummary { table: string; from: string | null; kind: string; dataChange: boolean; schemaChange: boolean }
-export interface DiffSummary { from: string; to: string; three: boolean; tables: TableSummary[]; schema: { table: string; from: string | null; to: string | null }[] }
+export interface RowCounts { added: number; modified: number; removed: number }
+export interface TableSummary { table: string; from: string | null; kind: string; dataChange: boolean; schemaChange: boolean; rows?: RowCounts | null }
+export interface DiffSummary { from: string; to: string; three: boolean; rows?: RowCounts & { total: number }; tables: TableSummary[]; schema: { table: string; from: string | null; to: string | null }[] }
 export interface RowDiff { type: string; from: Record<string, unknown> | null; to: Record<string, unknown> | null }
 export interface ColumnInfo { name: string; type: string; nullable: boolean; key: string }
 export interface TableData { ref: string; kind: string; table: string; columns: ColumnInfo[]; primaryKey: string[]; total: number; offset: number; hasMore: boolean; rows: Record<string, unknown>[]; createStatement: string }
