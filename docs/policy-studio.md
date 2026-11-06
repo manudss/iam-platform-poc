@@ -113,7 +113,19 @@ missing) tables = no `policies` field in the snapshot: the tenant falls back to 
 merge away. Because the core refuses a version whose rules do not build, a broken rule row merged by mistake fails the Apply
 (journaled `failed`, the error names the rule) and the previous version keeps serving.
 
-Branch editing (rule and link CRUD with pre-commit validation) and the console editor come with the next step-4 PRs.
+## Editing rules on a branch (step 4, API)
+
+Two endpoints change the rules - never main directly. `POST .../policies/rules/propose` ({op: upsert|delete, set, id, cedar?})
+and `POST .../policies/links/propose` ({op, id, template?, values?}) apply ONE change on a NEW Dolt branch, then read the
+branch's WHOLE rule set from the working rows and dry-build it through the core's `/v1/policies/validate` - the pre-commit
+validation against the very schema the core loaded. Only a candidate that builds is committed ({branch, commit} plus the
+validated catalogue preview); a refused one is a 400 with the core's error naming the rule, and Dolt is left exactly as it
+was (no commit, no branch). Merging the branch stays the explicit, existing act (workspace Apply / PR merge), and the Apply
+then re-validates: a broken rule can never reach the engine twice-guarded. Writes require the **policy-admin right**: the
+administrator capability plus, when `IAM_API_POLICY_ADMIN_SUBJECTS` is set, a caller subject in that list (unset: every
+administrator may write - the demo default). The second approver per policy is a later step.
+
+The console editor comes with the last step-4 PR.
 
 ## Limits of steps 1-3
 

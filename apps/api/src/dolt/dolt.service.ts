@@ -8,6 +8,15 @@ export const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.r
   join sod_rules r on r.role_a = a.role_id and r.role_b = b.role_id`;
 const NAME = /^[a-z0-9-]{1,32}$/;
 
+export interface PolicyCandidate { sets: { set: string; text: string }[]; links: { id: string; template: string; values: Record<string, string> }[] }
+export type PolicyChange =
+  | { kind: 'upsert-rule'; set: string; id: string; cedar: string }
+  | { kind: 'delete-rule'; set: string; id: string }
+  | { kind: 'upsert-link'; id: string; template: string; values: Record<string, string> }
+  | { kind: 'delete-link'; id: string };
+const POLICY_SET = /^[a-z0-9-]{1,32}$/, POLICY_ID = /^[A-Za-z0-9][A-Za-z0-9_:.\/-]{0,79}$/;
+
+
 /**
  * Talks to a real Dolt SQL server. Business data lives in Dolt; NestJS is its only writer.
  * Each operation uses its own connection, so branch checkouts never leak between requests.
@@ -138,6 +147,54 @@ export class DoltService {
       const commit = await this.hash(c, branch);
       await c.query('CALL DOLT_CHECKOUT(\'main\')');
       return { branch, commit, rows: rows.length, violations, mergeable: violations.length === 0 };
+    } finally { await c.end(); }
+  }
+
+
+  /**
+   * Policy studio (step 4): applies ONE rule or link change on a NEW branch, validates the branch's WHOLE rule set
+   * (working rows, before the commit) through the caller's validator - the core's dry-run build against the schema -
+   * and commits only when it passes. A refused candidate leaves nothing behind (branch dropped, main untouched).
+   */
+  async proposePolicyChange(change: PolicyChange, validate: (candidate: PolicyCandidate) => Promise<void>): Promise<{ branch: string; commit: string; candidate: PolicyCandidate }> {
+    if ('set' in change && !POLICY_SET.test(change.set)) throw new BadRequestException('invalid set name');
+    if (!POLICY_ID.test(change.id)) throw new BadRequestException('invalid rule or link id');
+    if (change.kind === 'upsert-rule' && (typeof change.cedar !== 'string' || !change.cedar.trim() || change.cedar.length > 64 * 1024)) throw new BadRequestException('the Cedar text of the rule is required (64 KiB max)');
+    if (change.kind === 'upsert-link') {
+      if (!POLICY_ID.test(change.template)) throw new BadRequestException('invalid template id');
+      const vals = Object.entries(change.values ?? {});
+      if (!vals.length || vals.some(([k, v]) => !['principal', 'resource'].includes(k) || typeof v !== 'string' || !v.trim() || v.length > 80)) throw new BadRequestException('a link needs principal and/or resource values (entity uids)');
+    }
+    const c = await this.conn();
+    try {
+      const branch = `change-${randomBytes(4).toString('hex')}`;
+      await c.query("CALL DOLT_CHECKOUT('-b', ?)", [branch]);
+      try {
+        if (change.kind === 'upsert-rule') await c.query('INSERT INTO policy_rules (set_name, id, cedar) VALUES (?,?,?) ON DUPLICATE KEY UPDATE cedar=VALUES(cedar)', [change.set, change.id, change.cedar]);
+        if (change.kind === 'delete-rule') { const [r] = await c.query('DELETE FROM policy_rules WHERE set_name=? AND id=?', [change.set, change.id]); if (!(r as { affectedRows?: number }).affectedRows) throw new BadRequestException('unknown rule'); }
+        if (change.kind === 'upsert-link') await c.query('INSERT INTO policy_template_links (id, template_id, principal_value, resource_value) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE template_id=VALUES(template_id), principal_value=VALUES(principal_value), resource_value=VALUES(resource_value)', [change.id, change.template, change.values.principal ?? null, change.values.resource ?? null]);
+        if (change.kind === 'delete-link') { const [r] = await c.query('DELETE FROM policy_template_links WHERE id=?', [change.id]); if (!(r as { affectedRows?: number }).affectedRows) throw new BadRequestException('unknown link'); }
+        // Pre-commit validation: the branch's whole rule set, read from the working rows.
+        const [pr] = await c.query('select set_name, id, cedar from policy_rules order by set_name, id');
+        const bySet = new Map<string, string[]>();
+        for (const x of pr as { set_name: string; cedar: string }[]) { const t = bySet.get(x.set_name); if (t) t.push(x.cedar); else bySet.set(x.set_name, [x.cedar]); }
+        const [lr] = await c.query('select id, template_id, principal_value, resource_value from policy_template_links order by id');
+        const candidate: PolicyCandidate = {
+          sets: [...bySet.entries()].map(([set, texts]) => ({ set, text: texts.join('\n\n') })),
+          links: (lr as { id: string; template_id: string; principal_value: string | null; resource_value: string | null }[]).map((x) => ({ id: x.id, template: x.template_id, values: Object.fromEntries([['principal', x.principal_value], ['resource', x.resource_value]].filter((e): e is [string, string] => !!e[1])) })),
+        };
+        await validate(candidate); // throws (BadRequest, the core's error naming the rule) when the candidate does not build
+        const msg = change.kind === 'upsert-rule' ? `policy rule: ${change.set}/${change.id}` : change.kind === 'delete-rule' ? `policy rule deleted: ${change.set}/${change.id}` : change.kind === 'upsert-link' ? `policy link: ${change.id}` : `policy link deleted: ${change.id}`;
+        await c.query("CALL DOLT_COMMIT('-A', '-m', ?)", [msg]);
+        const commit = await this.hash(c, branch);
+        await c.query("CALL DOLT_CHECKOUT('main')");
+        return { branch, commit, candidate };
+      } catch (e) { // drop the working changes, leave the branch: a refused change keeps Dolt exactly as it was
+        await c.query("CALL DOLT_RESET('--hard')").catch(() => undefined);
+        await c.query("CALL DOLT_CHECKOUT('main')").catch(() => undefined);
+        await c.query("CALL DOLT_BRANCH('-D', ?)", [branch]).catch(() => undefined);
+        throw e;
+      }
     } finally { await c.end(); }
   }
 

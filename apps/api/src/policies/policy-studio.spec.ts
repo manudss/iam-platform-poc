@@ -8,7 +8,8 @@ import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { AuditService } from '../access/audit.service.js';
-import { checkSimulationRequest, CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService, usageByRule, type CoreCatalog, type SimulationResult } from './policy-studio.js';
+import { checkLinkProposal, checkRuleProposal, checkSimulationRequest, CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService, usageByRule, type CoreCatalog, type SimulationResult } from './policy-studio.js';
+import { DoltService } from '../dolt/dolt.service.js';
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const rule = (id: string, effect: 'permit' | 'forbid', pillar: string) => ({ id, set: 'default', name: id, kind: 'policy' as const, effect, description: `${id} description`, pillar, summary: 'Permits any principal to do any action on any resource.', conditions: 0, annotations: { id }, text: `${effect}(principal, action, resource);` });
@@ -32,7 +33,7 @@ describe('policy-studio API', () => {
     process.env.IAM_API_ADMIN_TOKEN = ADMIN; delete process.env.IAM_PG_URL;
     const guard = { canActivate: (c: any) => { c.switchToHttp().getRequest().user = { sub: 'demo-alice' }; return true; } };
     audit = new AuditService();
-    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: audit }, { provide: POLICY_SOURCE, useValue: { catalog: async () => CATALOG, simulate: async () => SIM } }] })
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: audit }, { provide: POLICY_SOURCE, useValue: { catalog: async () => CATALOG, simulate: async () => SIM, validate: async () => ({ valid: true }) } }, { provide: DoltService, useValue: {} }] })
       .overrideGuard(AuthGuard).useValue(guard).compile();
     app = mod.createNestApplication(); await app.init(); reg = app.get(PluginRegistry);
   });
@@ -84,7 +85,7 @@ describe('policy-studio simulator API', () => {
   before(async () => {
     process.env.IAM_API_ADMIN_TOKEN = ADMIN; delete process.env.IAM_PG_URL;
     const guard = { canActivate: (c: any) => { c.switchToHttp().getRequest().user = { sub: 'demo-alice' }; return true; } };
-    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: new AuditService() }, { provide: POLICY_SOURCE, useValue: { catalog: async () => CATALOG, simulate: async () => SIM } }] })
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: new AuditService() }, { provide: POLICY_SOURCE, useValue: { catalog: async () => CATALOG, simulate: async () => SIM, validate: async () => ({ valid: true }) } }, { provide: DoltService, useValue: {} }] })
       .overrideGuard(AuthGuard).useValue(guard).compile();
     app = mod.createNestApplication(); await app.init(); reg = app.get(PluginRegistry);
   });
@@ -110,12 +111,73 @@ describe('policy-studio simulator API', () => {
   });
 });
 
+
+describe('rule and link proposals (step 4)', () => {
+  const CAND = { sets: [{ set: 'default', text: 'permit(principal, action, resource);' }], links: [] };
+  let app: INestApplication, reg: PluginRegistry, failValidation: string | undefined;
+  const env = { a: process.env.IAM_API_ADMIN_TOKEN, p: process.env.IAM_PG_URL, pa: process.env.IAM_API_POLICY_ADMIN_SUBJECTS };
+  before(async () => {
+    process.env.IAM_API_ADMIN_TOKEN = ADMIN; delete process.env.IAM_PG_URL; delete process.env.IAM_API_POLICY_ADMIN_SUBJECTS;
+    const guard = { canActivate: (c: any) => { c.switchToHttp().getRequest().user = { sub: 'demo-alice' }; return true; } };
+    const source = {
+      catalog: async () => CATALOG, simulate: async () => SIM,
+      validate: async () => { if (failValidation) { const { BadRequestException } = await import('@nestjs/common'); throw new BadRequestException(failValidation); } return { valid: true, schema: true, engine: { rules: 7, sets: 1 }, rules: [rule('carol-approves', 'permit', 'human')] }; },
+    };
+    const dolt = { proposePolicyChange: async (change: unknown, validate: (c: unknown) => Promise<void>) => { await validate(CAND); return { branch: 'change-abcdef01', commit: 'c0ffee01', candidate: CAND }; } };
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: new AuditService() }, { provide: POLICY_SOURCE, useValue: source }, { provide: DoltService, useValue: dolt }] })
+      .overrideGuard(AuthGuard).useValue(guard).compile();
+    app = mod.createNestApplication(); await app.init(); reg = app.get(PluginRegistry);
+    await reg.install(T, 'policy-studio', {}); await reg.enable(T, 'policy-studio', {});
+  });
+  after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; if (env.p) process.env.IAM_PG_URL = env.p; if (env.pa) process.env.IAM_API_POLICY_ADMIN_SUBJECTS = env.pa; await app.close(); });
+  const api = () => request(app.getHttpServer()), adm = { 'x-api-admin-token': ADMIN };
+  const carol = { op: 'upsert', set: 'default', id: 'carol-approves', cedar: 'permit(principal == User::"carol", action == Action::"approve", resource);' };
+
+  it('proposes a rule on a new branch, validated before the commit, and previews the catalogue', async () => {
+    const r = await api().post(`/tenants/${T}/policies/rules/propose`).set(adm).send(carol);
+    assert.equal(r.status, 201);
+    assert.equal(r.body.branch, 'change-abcdef01'); assert.equal(r.body.commit, 'c0ffee01');
+    assert.equal(r.body.valid, true); assert.equal(r.body.engine.rules, 7);
+    assert.equal(r.body.catalogue[0].id, 'carol-approves');
+  });
+  it('a candidate the core refuses is a 400 naming the rule - nothing is committed', async () => {
+    failValidation = 'policy rules refused: carol-approves: unknown action';
+    const r = await api().post(`/tenants/${T}/policies/rules/propose`).set(adm).send(carol);
+    assert.equal(r.status, 400); assert.match(r.body.message, /carol-approves/);
+    failValidation = undefined;
+  });
+  it('writes need the policy-admin right: not any administrator, when the list is set', async () => {
+    process.env.IAM_API_POLICY_ADMIN_SUBJECTS = 'demo-carol';
+    assert.equal((await api().post(`/tenants/${T}/policies/rules/propose`).set(adm).send(carol)).status, 403);
+    process.env.IAM_API_POLICY_ADMIN_SUBJECTS = 'demo-alice';
+    assert.equal((await api().post(`/tenants/${T}/policies/rules/propose`).set(adm).send(carol)).status, 201);
+    delete process.env.IAM_API_POLICY_ADMIN_SUBJECTS;
+  });
+  it('a link proposal and a delete go through the same branch+validation path; bad shapes are 400', async () => {
+    const link = await api().post(`/tenants/${T}/policies/links/propose`).set(adm).send({ op: 'upsert', id: 'delegate:demo-bob', template: 'delegate-read', values: { principal: 'User::"demo-bob"' } });
+    assert.equal(link.status, 201);
+    assert.equal((await api().post(`/tenants/${T}/policies/rules/propose`).set(adm).send({ op: 'delete', set: 'default', id: 'carol-approves' })).status, 201);
+    assert.equal((await api().post(`/tenants/${T}/policies/rules/propose`).set(adm).send({ op: 'upsert', set: 'default' })).status, 400);
+    assert.equal((await api().post(`/tenants/${T}/policies/links/propose`).set(adm).send({ op: 'upsert', id: 'x' })).status, 400);
+  });
+});
+
+describe('proposal request checks', () => {
+  it('checkRuleProposal and checkLinkProposal accept the two ops and refuse the rest', () => {
+    assert.deepEqual(checkRuleProposal({ op: 'delete', set: 's', id: 'i' }), { kind: 'delete-rule', set: 's', id: 'i' });
+    assert.deepEqual(checkLinkProposal({ op: 'upsert', id: 'l', template: 't', values: { principal: 'User::"a"' } }), { kind: 'upsert-link', id: 'l', template: 't', values: { principal: 'User::"a"' } });
+    assert.throws(() => checkRuleProposal({ op: 'move', set: 's', id: 'i' }), /upsert or delete/);
+    assert.throws(() => checkLinkProposal({ op: 'delete' }), /id is required/);
+  });
+});
+
 describe('CorePolicySource without a core', () => {
   it('answers 503 (never an empty list) when the core is not configured', async () => {
     const e = { u: process.env.IAM_CORE_URL, t: process.env.IAM_CORE_ADMIN_TOKEN }; delete process.env.IAM_CORE_URL; delete process.env.IAM_CORE_ADMIN_TOKEN;
     try {
       await assert.rejects(new CorePolicySource().catalog(), /IAM_CORE_URL/);
       await assert.rejects(new CorePolicySource().simulate({ principal: 'User::"a"', action: 'Action::"read"', resource: 'R::"1"' }), /IAM_CORE_URL/);
+      await assert.rejects(new CorePolicySource().validate({ sets: [], links: [] }), /IAM_CORE_URL/);
     } finally { if (e.u) process.env.IAM_CORE_URL = e.u; if (e.t) process.env.IAM_CORE_ADMIN_TOKEN = e.t; }
   });
 });
