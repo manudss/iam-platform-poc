@@ -33,7 +33,7 @@ Production code: 30 points. Test code: 76 points.
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:91 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:93 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:94 |
-| callSlot (blocking hook) | caller | auth.password | apps/api/src/authn/flow.service.ts:110 |
+| callSlot (blocking hook) | caller | auth.password | apps/api/src/authn/flow.service.ts:120 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:375 |
