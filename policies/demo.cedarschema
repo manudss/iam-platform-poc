@@ -1,0 +1,62 @@
+// Cedar schema of the POC (policy-studio step 2). Every rule set is validated against it when the core loads
+// (a rule naming an unknown action, entity type or attribute, or reading a value of the wrong type, is REFUSED:
+// the core never starts on unchecked rules) and in CI. Keep it in sync with the rules and the context the core injects.
+
+// People and what groups them. A department is optional: not every person has one.
+entity Role;
+entity User in [Role] = {
+  department?: String,
+};
+
+// What a decision can name as a resource. Resource/Request/Report serve the human demo actions,
+// Branch is the data branch an MCP session works on, UpstreamTool one relayed external tool (gateway).
+entity Resource = {
+  department?: String,
+};
+entity Request;
+entity Report;
+entity Branch;
+entity UpstreamTool;
+
+// approve and read carry the tenant context the core computes from the ACTIVE data version (never from the
+// caller): tenant_mode marks a tenant request, roles and sod_conflict are derived from it. All optional:
+// a request without tenant data carries none of them, so rules must guard with `has`.
+action "approve" appliesTo {
+  principal: [User],
+  resource: [Request, Resource],
+  context: {
+    tenant_mode?: Bool,
+    roles?: Set<String>,
+    sod_conflict?: Bool,
+  }
+};
+
+action "read" appliesTo {
+  principal: [User],
+  resource: [Resource, Report, Request],
+  context: {
+    tenant_mode?: Bool,
+    roles?: Set<String>,
+    sod_conflict?: Bool,
+  }
+};
+
+// MCP sessions: the AI acts as the session owner, inside its own data branch.
+action "mcp:read", "mcp:write", "mcp:lifecycle" appliesTo {
+  principal: [User],
+  resource: [Branch],
+  context: {
+    roles?: Set<String>,
+  }
+};
+
+// Gateway (merged with feature/mcp-server): a relayed tool needs a delegation grant from the ACTIVE version;
+// the core injects the identity's active grants as context.mcp_grants and the relayed tool must be one of them.
+action "mcp:proxy" appliesTo {
+  principal: [User],
+  resource: [UpstreamTool],
+  context: {
+    roles?: Set<String>,
+    mcp_grants?: Set<UpstreamTool>,
+  }
+};

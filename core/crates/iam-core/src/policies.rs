@@ -1,15 +1,52 @@
 //! Read-only rule catalogue (policy-studio step 1) and the loader for one or several rule files.
-//!   GET /v1/policies  (admin token) -> { engine: {rules, sets}, sets: [{name, rules}], rules: [RuleInfo...] }
+//!   GET /v1/policies  (admin token) -> { engine: {rules, sets, schema}, sets: [{name, rules}], rules: [RuleInfo...] }
 //! Nothing here changes a decision: the catalogue is a view of what the engine loaded at startup.
 //! Loading: IAM_POLICY_FILE is a file (one set named "default") or a directory (every `*.cedar` file is one set, named after the file).
+//! Schema (policy-studio step 2): the rules are validated against a Cedar schema at load, and the core REFUSES to start on a rule the
+//! schema rejects. The schema is `IAM_POLICY_SCHEMA` when set (a set but unreadable/invalid schema refuses the start too - never silently
+//! skip a demanded check), else the sibling of the rules when it exists (`x.cedar` -> `x.cedarschema`, a directory -> `schema.cedarschema`
+//! inside it), else no validation.
 use crate::Core;
 use axum::{Json, extract::State, http::{HeaderMap, StatusCode}};
 use iam_decision::{Engine, PolicySource};
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-/// A file gives one "default" set; a directory gives one set per `*.cedar` file (sorted by name, so the order never depends on the disk).
+/// The schema that pairs with a rules path by convention: next to `demo.cedar` sits `demo.cedarschema`;
+/// in a directory of sets it is `schema.cedarschema`.
+pub fn default_schema_path(path: &Path) -> PathBuf {
+    if path.extension().is_some_and(|x| x == "cedar") { path.with_extension("cedarschema") } else { path.join("schema.cedarschema") }
+}
+
+/// Load the rules and, when a schema applies, validate them before the engine can decide anything.
 pub fn load_engine(path: &Path) -> Result<Engine, String> {
+    let schema = match std::env::var("IAM_POLICY_SCHEMA") {
+        Ok(p) => Some(PathBuf::from(p)),
+        Err(_) => {
+            let d = default_schema_path(path);
+            if d.exists() { Some(d) } else { None }
+        }
+    };
+    load_engine_with_schema(path, schema.as_deref())
+}
+
+
+/// `schema` None = no validation (legacy); Some(path) = validate, and an unreadable or invalid schema is an error.
+pub fn load_engine_with_schema(path: &Path, schema: Option<&Path>) -> Result<Engine, String> {
+    let schema_text = schema
+        .map(|p| std::fs::read_to_string(p).map_err(|e| format!("cannot read schema {}: {e}", p.display())))
+        .transpose()?;
+    load_engine_from(path, schema_text)
+}
+
+fn load_engine_from(path: &Path, schema: Option<String>) -> Result<Engine, String> {
+    load_sets(path).and_then(|sets| build(sets, schema))
+}
+
+fn load_sets(path: &Path) -> Result<Vec<PolicySource>, String> {
     if path.is_dir() {
         let mut files: Vec<_> = std::fs::read_dir(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?
             .filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "cedar")).collect();
@@ -21,10 +58,17 @@ pub fn load_engine(path: &Path) -> Result<Engine, String> {
             sets.push(PolicySource { set: stem, text });
         }
         if sets.is_empty() { return Err(format!("no *.cedar file in {}", path.display())); }
-        Engine::from_sets(&sets).map_err(|e| e.to_string())
+        Ok(sets)
     } else {
         let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        Engine::new(&text).map_err(|e| e.to_string())
+        Ok(vec![PolicySource { set: "default".into(), text }])
+    }
+}
+
+fn build(sets: Vec<PolicySource>, schema: Option<String>) -> Result<Engine, String> {
+    match schema {
+        Some(s) => Engine::from_sets_with_schema(&sets, &s).map_err(|e| e.to_string()),
+        None => Engine::from_sets(&sets).map_err(|e| e.to_string()),
     }
 }
 
@@ -34,7 +78,7 @@ pub async fn list(State(c): State<Arc<Core>>, headers: HeaderMap) -> (StatusCode
     let mut sets: Vec<(String, usize)> = Vec::new();
     for r in rules { match sets.iter_mut().find(|(n, _)| *n == r.set) { Some(s) => s.1 += 1, None => sets.push((r.set.clone(), 1)) } }
     (StatusCode::OK, Json(json!({
-        "engine": {"rules": rules.len(), "sets": sets.len()},
+        "engine": {"rules": rules.len(), "sets": sets.len(), "schema": c.engine.validated()},
         "sets": sets.iter().map(|(n, k)| json!({"name": n, "rules": k})).collect::<Vec<_>>(),
         "rules": rules,
     })))
@@ -49,8 +93,10 @@ mod tests {
     use tower::ServiceExt;
 
     const TOKEN: &str = "test-admin-token";
+    const DEMO: &str = include_str!("../../../../policies/demo.cedar");
+    const DEMO_SCHEMA: &str = include_str!("../../../../policies/demo.cedarschema");
     fn demo_core() -> Arc<Core> {
-        let mut c = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test"));
+        let mut c = Core::new(Engine::new_with_schema(DEMO, DEMO_SCHEMA).unwrap(), None, Idp::demo("http://idp.test"));
         c.admin_token = Some(TOKEN.into());
         Arc::new(c)
     }
@@ -75,7 +121,7 @@ mod tests {
     async fn catalogue_lists_every_demo_rule_with_a_readable_name() {
         let (st, v) = get(&demo_core(), Some(TOKEN)).await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(v["engine"], json!({"rules": 6, "sets": 1}));
+        assert_eq!(v["engine"], json!({"rules": 6, "sets": 1, "schema": true}));
         let rules = v["rules"].as_array().unwrap();
         assert_eq!(rules.len(), 6);
         for r in rules {
@@ -85,6 +131,45 @@ mod tests {
         let sod = rules.iter().find(|r| r["id"] == "sod-blocks-approve").unwrap();
         assert_eq!((sod["effect"].as_str(), sod["pillar"].as_str(), sod["kind"].as_str()), (Some("forbid"), Some("sod"), Some("policy")));
         assert!(sod["text"].as_str().unwrap().contains("context.sod_conflict == true"));
+    }
+
+
+    // ---- Schema at load (policy-studio step 2) ----
+
+    #[test]
+    fn default_schema_path_pairs_with_the_rules() {
+        assert_eq!(default_schema_path(Path::new("/x/demo.cedar")), Path::new("/x/demo.cedarschema"));
+        assert_eq!(default_schema_path(Path::new("/x/sets")), Path::new("/x/sets/schema.cedarschema"));
+        assert_eq!(default_schema_path(Path::new("/x/sets/")), Path::new("/x/sets/schema.cedarschema"));
+    }
+
+    #[test]
+    fn demo_policies_validate_against_their_schema() {
+        // The shipped demo rules pass the shipped schema, through the same loader the core starts with.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../policies");
+        let e = load_engine_with_schema(&root.join("demo.cedar"), Some(&root.join("demo.cedarschema"))).unwrap();
+        assert!(e.validated());
+        assert_eq!(e.catalog().len(), 5);
+        // And the convention finds the sibling schema by itself.
+        assert!(default_schema_path(&root.join("demo.cedar")).exists());
+    }
+
+    #[test]
+    fn a_rule_the_schema_refuses_prevents_loading_and_names_the_rule() {
+        let dir = std::env::temp_dir().join(format!("iam-schema-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("demo.cedar"), "@id(\"typo-rule\") permit(principal, action == Action::\"aprove\", resource);").unwrap();
+        std::fs::write(dir.join("demo.cedarschema"), r#"entity User; entity Request; action "approve" appliesTo { principal: [User], resource: [Request] };"#).unwrap();
+        let err = load_engine(&dir.join("demo.cedar")).err().unwrap();
+        assert!(err.contains("typo-rule"), "{err}"); // the sibling schema applied by convention, error names the rule
+        // An explicit schema path that does not exist refuses the start too (a demanded check is never skipped).
+        assert!(load_engine_with_schema(&dir.join("demo.cedar"), Some(Path::new("/no/such/schema.cedarschema"))).is_err());
+        // Pointing IAM_POLICY_FILE at rules with no schema anywhere keeps working without validation.
+        std::fs::remove_file(dir.join("demo.cedarschema")).unwrap();
+        let e = load_engine_with_schema(&dir.join("demo.cedar"), None).unwrap();
+        assert!(!e.validated());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
