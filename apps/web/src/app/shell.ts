@@ -30,7 +30,7 @@ export class Shell {
     await this.s.loadAccess();
     // Branch test: no personal branch, no workspace bar, no admin init; the app simply runs on the tested branch.
     if(this.s.testBranch()){if(!this.router.url.startsWith('/my-profile')&&!this.router.url.startsWith('/overview'))void this.router.navigateByUrl('/my-profile');return;}
-    if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();await this.s.refreshWorkflowsEnabled();}else if(!this.router.url.startsWith('/my-profile'))void this.router.navigateByUrl('/my-profile');
+    if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();void this.loadChanges();await this.s.refreshWorkflowsEnabled();}else if(!this.router.url.startsWith('/my-profile'))void this.router.navigateByUrl('/my-profile');
   }
   /** Opens a sign-in test of the selected data branch in a new tab (docs/branch-test.md). The API issues the short-lived ticket. */
   protected testing=signal(false);
