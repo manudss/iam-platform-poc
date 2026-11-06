@@ -5,7 +5,7 @@ import { Session } from './session';
 
 interface McpSession { id: string; owner: string; label: string; branch: string; createdAt: string; expiresAt: string; revoked: boolean; submitted: boolean; calls: number }
 interface Activity { id: number; at: string; tool: string; kind: string; detail: string; targets: string[]; allow: boolean; reasons: string[]; rowCount: number | null; error: string | null }
-interface Upstream { id: string; name: string; url: string; enabled: boolean; lastStatus: string; lastTools: number | null }
+interface Upstream { id: string; name: string; url: string; enabled: boolean; authType: string; authUser: string | null; lastStatus: string; lastTools: number | null }
 interface Grant { identity: string; upstream: string; tool: string; expiresAt: string | null; grantedBy: string }
 
 /**
@@ -36,13 +36,16 @@ interface Grant { identity: string; upstream: string; tool: string; expiresAt: s
   <section class="card" id="mcp-upstreams"><h3>External MCP servers (gateway)</h3>
     <p class="hint">An external MCP server (e.g. Jira) registered here is relayed to every AI session: its tools appear as <b>name__tool</b>. The token authenticates the platform towards that server: it is stored encrypted, never displayed again, never sent to the AI, and every relayed call is traced below (kind <b>proxy</b>). Remote servers require https; http is accepted only for a local server (127.0.0.1).</p>
     <div class="row"><label>Name<input name="upname" [(ngModel)]="upName" maxlength="32" placeholder="e.g. jira" /></label>
-    <label>URL<input name="upurl" [(ngModel)]="upUrl" placeholder="https://mcp.atlassian.net/v1/sse" size="34" /></label>
+    <label>URL<input name="upurl" [(ngModel)]="upUrl" placeholder="https://mcp.atlassian.com/v2/mcp?tools=all" size="34" /></label>
+    <label>Auth<select name="upauth" [(ngModel)]="upAuth"><option value="bearer">Bearer token</option><option value="basic">Basic (email:token, Atlassian)</option></select></label>
+    @if (upAuth === 'basic') { <label>Account email<input name="upauthuser" [(ngModel)]="upAuthUser" placeholder="you@example.com" size="22" /></label> }
     <label>Token<input name="uptoken" type="password" [(ngModel)]="upToken" placeholder="stored encrypted, shown never" size="24" /></label>
-    <button id="up-create" (click)="createUpstream()" [disabled]="!upName.trim() || !upUrl.trim() || !upToken.trim()">Register</button></div>
-    <div class="scroll"><table id="up-table"><thead><tr><th>Name</th><th>URL</th><th>State</th><th>Last check</th><th>Tools</th><th></th></tr></thead><tbody>
-    @for (u of upstreams(); track u.id) { <tr><td>{{u.name}}</td><td>{{u.url}}</td><td>{{u.enabled ? 'enabled' : 'disabled'}}</td><td>{{u.lastStatus}}</td><td>{{u.lastTools ?? ''}}</td>
+    <button id="up-create" (click)="createUpstream()" [disabled]="!upName.trim() || !upUrl.trim() || !upToken.trim() || (upAuth === 'basic' && !upAuthUser.trim())">Register</button></div>
+    <p class="hint">Real Jira (P3): register the Atlassian Rovo MCP with URL <b>https://mcp.atlassian.com/v2/mcp?tools=all</b> (the <b>?tools=all</b> flat list, so each Jira tool is grantable on its own), auth <b>Basic</b>, the Atlassian account email and a scoped API token. Never grant the meta-tools <b>discover</b>/<b>executeRead</b>/<b>executeWrite</b>/<b>executeDestructive</b>: they would bypass the per-tool allowlist.</p>
+    <div class="scroll"><table id="up-table"><thead><tr><th>Name</th><th>URL</th><th>Auth</th><th>State</th><th>Last check</th><th>Tools</th><th></th></tr></thead><tbody>
+    @for (u of upstreams(); track u.id) { <tr><td>{{u.name}}</td><td>{{u.url}}</td><td>{{u.authType === 'basic' ? 'basic (' + u.authUser + ')' : 'bearer'}}</td><td>{{u.enabled ? 'enabled' : 'disabled'}}</td><td>{{u.lastStatus}}</td><td>{{u.lastTools ?? ''}}</td>
       <td><button class="secondary" (click)="testUpstream(u)">Test</button><button class="secondary" (click)="removeUpstream(u)">Delete</button></td></tr> }
-    @empty { <tr><td colspan="6">No external MCP server registered.</td></tr> }</tbody></table></div>
+    @empty { <tr><td colspan="7">No external MCP server registered.</td></tr> }</tbody></table></div>
     @if (upTest(); as t) { <p class="hint" id="up-test-result">{{t}}</p> }
   </section>
 
@@ -72,7 +75,7 @@ export class McpPage {
   protected upstreams = signal<Upstream[]>([]);
   protected grants = signal<Grant[]>([]);
   protected grantCommit = signal('');
-  protected upName = ''; protected upUrl = ''; protected upToken = ''; protected upTest = signal('');
+  protected upName = ''; protected upUrl = ''; protected upToken = ''; protected upAuth = 'bearer'; protected upAuthUser = ''; protected upTest = signal('');
   protected activity = signal<Activity[]>([]);
   protected activityFor = signal('');
   protected created = signal<(McpSession & { secret: string }) | null>(null);
@@ -101,8 +104,8 @@ export class McpPage {
     if (g) { this.grants.set(g['grants'] ?? []); this.grantCommit.set(String(g['activeCommit'] ?? '').slice(0, 12)); }
   }
   protected async createUpstream() {
-    const r = await this.call('POST', '/mcp-upstreams', { name: this.upName.trim(), url: this.upUrl.trim(), token: this.upToken });
-    if (r) { this.upName = ''; this.upUrl = ''; this.upToken = ''; this.note.set('External MCP server registered: its tools are relayed to AI sessions.'); await this.load(); }
+    const r = await this.call('POST', '/mcp-upstreams', { name: this.upName.trim(), url: this.upUrl.trim(), token: this.upToken, authType: this.upAuth, ...(this.upAuth === 'basic' ? { authUser: this.upAuthUser.trim() } : {}) });
+    if (r) { this.upName = ''; this.upUrl = ''; this.upToken = ''; this.upAuthUser = ''; this.note.set('External MCP server registered: its tools are relayed to AI sessions.'); await this.load(); }
   }
   protected async testUpstream(u: Upstream) {
     this.upTest.set(`Testing ${u.name}…`);

@@ -125,7 +125,7 @@ export class McpUpstreamsController {
   constructor(private readonly upstreams: McpUpstreamService) {}
 
   @Post()
-  async create(@Param('tenant') tenant: string, @Body() b: { name?: string; url?: string; token?: string; enabled?: boolean }, @Req() req: { user: { sub: string } }) {
+  async create(@Param('tenant') tenant: string, @Body() b: { name?: string; url?: string; token?: string; enabled?: boolean; authType?: string; authUser?: string }, @Req() req: { user: { sub: string } }) {
     if (!workspaceMode()) throw new BadRequestException('workspace mode is disabled');
     const up = await this.upstreams.create(tenant, req.user.sub, b ?? {});
     return { ...up, note: 'The upstream token is stored encrypted and is never shown again. Relayed tools appear as <name>__<tool> in MCP sessions.' };

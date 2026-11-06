@@ -18,8 +18,9 @@ const coreBin = resolve(root, 'core/target/debug/iam-core');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
 const doltBin = process.env.DOLT_BIN ?? (which || '/tmp/dolt-linux-amd64/bin/dolt');
 const have = existsSync(doltBin) && existsSync(coreBin);
-const DOLT_PORT = 13473, CORE = 'http://127.0.0.1:18173', API = 'http://127.0.0.1:13173', UP_PORT = 14103;
+const DOLT_PORT = 13473, CORE = 'http://127.0.0.1:18173', API = 'http://127.0.0.1:13173', UP_PORT = 14103, UP_PORT_BASIC = 14104, UP_PORT_SESS = 14105;
 const UP_TOKEN = 'e2e-upstream-secret-token-DO-NOT-LEAK';
+const UP_BASIC_USER = 'e2e-alice@example.invalid', UP_BASIC_TOKEN = 'e2e-basic-api-token-DO-NOT-LEAK';
 const ADMIN = 'local-demo-admin-token', PW = 'demo-only-not-a-secret', REDIRECT = 'http://localhost:4200/callback';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const post = (url: string, body: object, h: Record<string, string> = {}) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...h }, body: JSON.stringify(body) });
@@ -47,8 +48,8 @@ const callTool = (secret: string | undefined, name: string, args: object = {}) =
 const textOf = (r: { result?: { content?: { text: string }[] } }) => r.result?.content?.[0]?.text ?? '';
 
 describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, trace', { skip: !have && 'dolt or core binary missing' }, () => {
-  let dolt: ChildProcess, core: ChildProcess, upstream: ChildProcess, app: Awaited<ReturnType<typeof NestFactory.create>>, dir: string;
-  let adminToken: string, bobToken: string, secret = '', sessionId = '', upstreamId = '';
+  let dolt: ChildProcess, core: ChildProcess, upstream: ChildProcess, upstreamBasic: ChildProcess, upstreamSess: ChildProcess, app: Awaited<ReturnType<typeof NestFactory.create>>, dir: string;
+  let adminToken: string, bobToken: string, secret = '', sessionId = '', upstreamId = '', basicUpstreamId = '';
   const adminH = () => ({ authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
   const upstreamsUrl = `${API}/tenants/acme-demo/mcp-upstreams`;
 
@@ -64,6 +65,10 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
     upstream = spawn(process.execPath, [resolve(root, 'scripts/fake-upstream-mcp.mjs'), '--port', String(UP_PORT), '--token', UP_TOKEN], { stdio: 'ignore' });
     for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${UP_PORT}/health`)).ok) break; } catch { await sleep(100); } }
+    upstreamBasic = spawn(process.execPath, [resolve(root, 'scripts/fake-upstream-mcp.mjs'), '--port', String(UP_PORT_BASIC), '--basic', `${UP_BASIC_USER}:${UP_BASIC_TOKEN}`, '--page-size', '1'], { stdio: 'ignore' });
+    for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${UP_PORT_BASIC}/health`)).ok) break; } catch { await sleep(100); } }
+    upstreamSess = spawn(process.execPath, [resolve(root, 'scripts/fake-upstream-mcp.mjs'), '--port', String(UP_PORT_SESS), '--basic', `${UP_BASIC_USER}:${UP_BASIC_TOKEN}`, '--require-session'], { stdio: 'ignore' });
+    for (let i = 0; i < 50; i++) { try { if ((await fetch(`http://127.0.0.1:${UP_PORT_SESS}/health`)).ok) break; } catch { await sleep(100); } }
     delete process.env.IAM_PG_URL; delete process.env.IAM_CORE_GRPC_ADDR;
     Object.assign(process.env, { DOLT_PORT: String(DOLT_PORT), DOLT_DATABASE: 'iam', IAM_WORKSPACE_MODE: '1', IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_API_ADMIN_TOKEN: ADMIN, IAM_CORE_ADMIN_TOKEN: ADMIN, IAM_CREDENTIAL_FILE: join(dir, 'creds.json') });
     app = await NestFactory.create(AppModule, { logger: false });
@@ -71,7 +76,7 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     await app.listen(13173);
     adminToken = await login('demo-alice'); bobToken = await login('demo-bob');
   });
-  after(async () => { await app?.close(); core?.kill(); dolt?.kill(); upstream?.kill(); await sleep(800); if (dir && !process.env.KEEP_E2E_DIR) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
+  after(async () => { await app?.close(); core?.kill(); dolt?.kill(); upstream?.kill(); upstreamBasic?.kill(); upstreamSess?.kill(); await sleep(800); if (dir && !process.env.KEEP_E2E_DIR) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
   it('activation: a human Apply publishes seeded main (needed for per-call decisions)', async () => {
     const headers = { ...adminH(), 'x-iam-branch': 'bootstrap-main' };
@@ -211,6 +216,53 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     assert.match(textOf(r), /denied/);
   });
 
+  it('P3: a Basic-auth upstream (Atlassian API token style) is validated at registration', async () => {
+    assert.equal((await post(upstreamsUrl, { name: 'noauth', url: `http://127.0.0.1:${UP_PORT_BASIC}`, token: 'x'.repeat(8), authType: 'basic' }, adminH())).status, 400, 'basic without authUser');
+    assert.equal((await post(upstreamsUrl, { name: 'noauth', url: `http://127.0.0.1:${UP_PORT_BASIC}`, token: 'x'.repeat(8), authType: 'basic', authUser: 'has space@x.y' }, adminH())).status, 400, 'authUser with a space');
+    assert.equal((await post(upstreamsUrl, { name: 'noauth', url: `http://127.0.0.1:${UP_PORT_BASIC}`, token: 'x'.repeat(8), authType: 'basic', authUser: 'colon:bad' }, adminH())).status, 400, 'authUser with a colon');
+    assert.equal((await post(upstreamsUrl, { name: 'noauth', url: `http://127.0.0.1:${UP_PORT_BASIC}`, token: 'x'.repeat(8), authType: 'digest' }, adminH())).status, 400, 'unknown authType');
+  });
+
+  it('P3: Basic auth + paginated tools/list - the full catalog is relayed and each tool stays grant-gated', async () => {
+    // The fake upstream requires Basic base64(user:token) and serves its 3 tools one page at a time
+    // (like the Atlassian Rovo MCP flat list at /v2/mcp?tools=all).
+    const created = await post(upstreamsUrl, { name: 'fakebasic', url: `http://127.0.0.1:${UP_PORT_BASIC}`, token: UP_BASIC_TOKEN, authType: 'basic', authUser: UP_BASIC_USER }, adminH());
+    assert.equal(created.status, 201, JSON.stringify(await created.clone().json().catch(() => ({}))));
+    const body = (await created.json()) as { id: string; authType: string; authUser: string };
+    basicUpstreamId = body.id;
+    assert.equal(body.authType, 'basic'); assert.equal(body.authUser, UP_BASIC_USER);
+    assert.ok(!JSON.stringify(body).includes(UP_BASIC_TOKEN), 'creation response leaks the basic token');
+    const t = (await (await post(`${upstreamsUrl}/${basicUpstreamId}/test`, {}, adminH())).json()) as { ok: boolean; tools: string[]; error: string | null };
+    assert.equal(t.ok, true, t.error ?? '');
+    assert.deepEqual(t.tools.sort(), ['createIssue', 'getIssue', 'searchIssues'], 'pagination accumulated: all 3 pages merged');
+    assert.ok(!JSON.stringify(t).includes(UP_BASIC_TOKEN) && !JSON.stringify(t).includes(Buffer.from(`${UP_BASIC_USER}:${UP_BASIC_TOKEN}`).toString('base64')), 'test outcome leaks the credential');
+    // No grant for fakebasic yet: none of its tools is listed, Basic auth success alone is not enough.
+    assert.ok(!(await listNames()).some((n) => n.startsWith('fakebasic__')), 'no grant: basic upstream tools stay hidden');
+    // Versioned grant flow: the AI proposes, a human merges, then the tool works over Basic auth.
+    await callTool(secret, 'request_new_branch', { reason: 'grant fakebasic getIssue' });
+    const w = await callTool(secret, 'execute_write', { sql: "insert into delegation_grants values ('acme-demo','demo-alice','fakebasic','getIssue',NULL,'ai-proposal')", message: 'AI proposes: grant fakebasic getIssue to demo-alice' });
+    assert.notEqual(w.result?.isError, true, textOf(w));
+    assert.ok(!(await listNames()).includes('fakebasic__getIssue'), 'branch-local grant has no effect');
+    const pr = JSON.parse(textOf(await callTool(secret, 'submit_pull_request', { title: 'AI: grant fakebasic getIssue to demo-alice' }))) as { pullRequest: { id: number } };
+    assert.equal((await post(`${API}/tenants/acme-demo/versioning/pulls/${pr.pullRequest.id}/merge`, {}, adminH())).status, 201);
+    assert.ok((await listNames()).includes('fakebasic__getIssue'), 'merged grant: the tool appears');
+    const r = await callTool(secret, 'fakebasic__getIssue', { key: 'FAKE-102' });
+    assert.notEqual(r.result?.isError, true, textOf(r));
+    assert.match(textOf(r), /Audit trail gaps/);
+    const activity = JSON.stringify(await (await fetch(`${API}/tenants/acme-demo/mcp-sessions/${sessionId}/activity?limit=100`, { headers: adminH() })).json());
+    assert.ok(!activity.includes(UP_BASIC_TOKEN) && !activity.includes(Buffer.from(`${UP_BASIC_USER}:${UP_BASIC_TOKEN}`).toString('base64')), 'activity trace leaks the basic credential');
+  });
+
+  it('P3: a wrong basic token reports ok:false without leaking the credential', async () => {
+    const bad = await post(upstreamsUrl, { name: 'badbasic', url: `http://127.0.0.1:${UP_PORT_BASIC}`, token: 'wrong-basic-token-entirely', authType: 'basic', authUser: UP_BASIC_USER }, adminH());
+    const badId = ((await bad.json()) as { id: string }).id;
+    const t = (await (await post(`${upstreamsUrl}/${badId}/test`, {}, adminH())).json()) as { ok: boolean; error: string | null };
+    assert.equal(t.ok, false); assert.match(String(t.error), /HTTP 401/);
+    assert.ok(!String(t.error).includes('wrong-basic-token-entirely'));
+    assert.ok(!String(t.error).includes(Buffer.from(`${UP_BASIC_USER}:wrong-basic-token-entirely`).toString('base64')), 'error leaks the derived basic credential');
+    await fetch(`${upstreamsUrl}/${badId}`, { method: 'DELETE', headers: adminH() });
+  });
+
   it('a bad-token upstream reports ok:false on test and its tools never appear', async () => {
     const bad = await post(upstreamsUrl, { name: 'bad', url: `http://127.0.0.1:${UP_PORT}`, token: 'wrong-token-entirely' }, adminH());
     const badId = ((await bad.json()) as { id: string }).id;
@@ -222,6 +274,45 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     assert.ok(!names.some((n) => n.startsWith('bad__')), 'unreachable upstream tools stay absent');
     assert.ok(names.includes('fake__createIssue'), 'other upstreams are unaffected');
     await fetch(`${upstreamsUrl}/${badId}`, { method: 'DELETE', headers: adminH() });
+  });
+
+  it('P3: a sessionful upstream (Atlassian Rovo MCP style) gets initialize + mcp-session-id, reused across calls', async () => {
+    // Without the handshake this exact setup answered HTTP 400 -32600 to every tools/list (the live bug).
+    const created = await post(upstreamsUrl, { name: 'sess', url: `http://127.0.0.1:${UP_PORT_SESS}`, token: UP_BASIC_TOKEN, authType: 'basic', authUser: UP_BASIC_USER }, adminH());
+    assert.equal(created.status, 201, JSON.stringify(await created.clone().json().catch(() => ({}))));
+    const sessId = ((await created.json()) as { id: string }).id;
+    const t = (await (await post(`${upstreamsUrl}/${sessId}/test`, {}, adminH())).json()) as { ok: boolean; tools: string[]; error: string | null };
+    assert.equal(t.ok, true, t.error ?? '');
+    assert.deepEqual(t.tools.sort(), ['createIssue', 'getIssue', 'searchIssues']);
+    const stats = () => fetch(`http://127.0.0.1:${UP_PORT_SESS}/stats`).then((r) => r.json()) as Promise<{ initializeCount: number }>;
+    const after1 = await stats();
+    assert.equal(after1.initializeCount, 1, 'one handshake for the first use');
+    // Grant demo-alice sess/getIssue through the versioned flow, then call it twice: no new handshake.
+    await callTool(secret, 'request_new_branch', { reason: 'grant sess getIssue' });
+    const w = await callTool(secret, 'execute_write', { sql: "insert into delegation_grants values ('acme-demo','demo-alice','sess','getIssue',NULL,'ai-proposal')", message: 'AI proposes: grant sess getIssue to demo-alice' });
+    assert.notEqual(w.result?.isError, true, textOf(w));
+    const pr = JSON.parse(textOf(await callTool(secret, 'submit_pull_request', { title: 'AI: grant sess getIssue to demo-alice' }))) as { pullRequest: { id: number } };
+    assert.equal((await post(`${API}/tenants/acme-demo/versioning/pulls/${pr.pullRequest.id}/merge`, {}, adminH())).status, 201);
+    assert.ok((await listNames()).includes('sess__getIssue'), 'merged grant: the sessioned tool appears');
+    for (let i = 0; i < 2; i++) {
+      const r = await callTool(secret, 'sess__getIssue', { key: 'FAKE-103' });
+      assert.notEqual(r.result?.isError, true, textOf(r));
+      assert.match(textOf(r), /Pilot customer onboarding/);
+    }
+    const after2 = await stats();
+    assert.equal(after2.initializeCount, 1, 'the session is reused across test, list and calls');
+  });
+
+  it('P3: when the upstream expires the session, the relay re-initializes and the call still succeeds', async () => {
+    const expired = await post(`http://127.0.0.1:${UP_PORT_SESS}/__expire-sessions`, {}, {});
+    assert.equal(expired.status, 200);
+    const r = await callTool(secret, 'sess__getIssue', { key: 'FAKE-101' });
+    assert.notEqual(r.result?.isError, true, `stale session must be retried transparently: ${textOf(r)}`);
+    assert.match(textOf(r), /Migrate off the legacy IdP/);
+    const stats = (await (await fetch(`http://127.0.0.1:${UP_PORT_SESS}/stats`)).json()) as { initializeCount: number };
+    assert.equal(stats.initializeCount, 2, 'exactly one transparent re-initialize');
+    const activity = JSON.stringify(await (await fetch(`${API}/tenants/acme-demo/mcp-sessions/${sessionId}/activity?limit=100`, { headers: adminH() })).json());
+    assert.ok(!activity.includes(UP_BASIC_TOKEN), 'no credential in the trace after the session retry');
   });
 
   it('deleting the upstream removes its tools from the next tools/list', async () => {

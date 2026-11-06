@@ -59,6 +59,7 @@ kind `proxy`.
   and results from an external server are untrusted input for the model (description injection is the top
   MCP risk). Pinning/rewriting descriptions and filtering arguments/responses are later increments (P4/P5).
 - **Relayed tools are filtered by per-identity grants (P2).** See the next section.
+- **Real Jira works (P3).** See the P3 section: Atlassian Rovo MCP, API-token (Basic) auth, paginated catalog.
 - **Proxied calls are external side effects**, not branch writes: they stay possible after the session
   submitted its pull request (the read-only-after-submit rule covers the session's own branch only).
 - The upstream tool list is cached 60 s per upstream; the console *Test* button forces a refresh.
@@ -90,3 +91,49 @@ An expired grant (`expires_at` in the past) stops filtering in at both levels; t
 version history for audit. The demo seeds show the two boundary cases: `demo-alice` has read tools on the
 fake upstream but not `createIssue`, and `demo-bob` has a `getIssue` grant without the `mcp-operator` role -
 the tool is listed for him, yet Cedar still denies the call. The allowlist is never the last word.
+
+## P3 - real Jira (Atlassian Rovo MCP)
+
+The gateway now connects to the **real Atlassian Rovo MCP** on a sandbox Jira site. Read-only first: the demo
+grants cover only read tools; a write tool (e.g. `createJiraIssue`) requires the same versioned flow as P2 -
+the AI proposes the grant on its branch, a human merges, the new version is activated. "Write behind approval"
+IS the P2 grant mechanism applied to a production upstream.
+
+### Registering the Rovo MCP
+
+- **URL**: `https://mcp.atlassian.com/v2/mcp?tools=all`. The `?tools=all` flat list matters: by default the
+  Rovo MCP advertises only a few primary tools and routes everything else through the `discover` +
+  `executeRead` / `executeWrite` / `executeDestructive` meta-tools. A per-tool allowlist cannot see through
+  those - granting `executeWrite` would silently open every deferred write tool. With the flat list, each
+  Jira tool is listed, granted and traced individually.
+- **Auth**: `basic` - the Atlassian API-token scheme for machine-to-machine access. The console asks for the
+  Atlassian **account email** (stored in clear, shown in the list) and the **API token** (stored encrypted,
+  never shown again); the relay sends `Authorization: Basic base64(email:token)`. OAuth 2.1 remains the
+  Atlassian-recommended interactive scheme and is the target montage (consent carried by the IAM grant);
+  the API token is the simple, revocable demo montage.
+- **Prerequisites on the Atlassian side** (org admin): a sandbox Jira Cloud site (the free tier is enough),
+  API-token authentication enabled for the Rovo MCP in the organization settings, and a scoped API token
+  (`read:jira:agent-interface`, `search:jira:agent-interface` for the read-only demo; the `write:` scope can
+  be added later without any platform change - the grant still gates each tool).
+- The upstream tool list is **paginated** there: the relay follows `nextCursor` (bounded at 10 pages) so the
+  complete catalog is visible to the grant filter.
+- **Sessionful transport**: the Rovo MCP implements the streamable HTTP transport *with sessions* - it
+  answers any non-`initialize` request that lacks a valid `mcp-session-id` header with HTTP 400
+  (`-32600: Request must be an initialize request if no session ID is provided.`). The relay runs the
+  handshake for you: `initialize` once per upstream, the `initialized` notification, then the session
+  header on every `tools/list` / `tools/call`. A stateless upstream (no `mcp-session-id` in its
+  `initialize` response) is still used one POST per call, unchanged. If the server expires the session
+  (HTTP 400/404 on a sessioned call), the relay re-initializes once and retries transparently.
+
+The demo seeds pre-grant `demo-alice` the read tools on an upstream named `jira`
+(`atlassianUserInfo`, `getAccessibleAtlassianResources`, `searchJiraIssuesUsingJql`, `getJiraIssue`,
+`listJiraProjects`, `listJiraIssueComments`) - register the Rovo MCP under that name and the story works out
+of the box: Jira read tools appear in her AI sessions, `jira__createJiraIssue` stays invisible, and the
+`discover`/`execute*` meta-tools are deliberately never seeded (they would bypass the per-tool allowlist).
+
+### Auth schemes on the registry (API)
+
+`POST /tenants/<tenant>/mcp-upstreams` accepts `authType: "bearer" (default) | "basic"` and, for `basic`,
+`authUser` (the upstream account email or id). The derived credential is redacted from errors and traces
+exactly like the raw token. Existing registries migrate automatically (the two columns are added on first
+use; nothing to run by hand).

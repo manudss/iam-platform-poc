@@ -5,14 +5,28 @@
  *
  *   node scripts/fake-upstream-mcp.mjs --port 4100 --token demo-upstream-token
  *
+ * Options (P3): --basic user:pass requires `Authorization: Basic base64(user:pass)` instead of Bearer
+ * (Atlassian API-token style); --page-size N paginates tools/list with nextCursor, N tools per page;
+ * --require-session behaves like the Atlassian Rovo MCP: any non-initialize call without a valid
+ * mcp-session-id gets HTTP 400 ("Request must be an initialize request if no session ID is provided."),
+ * initialize issues the header, and POST /__expire-sessions drops every session (test-only, to make
+ * the relay prove it re-initializes). GET /stats reports {initializeCount, sessions} for assertions.
+ *
  * Register it in the IAM console (MCP page > External MCP servers) with URL http://127.0.0.1:4100
  * and the same token; its tools then appear in every MCP session as fake__searchIssues etc.
  */
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 
 const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : (process.env[name.toUpperCase().replace(/-/g, '_')] ?? dflt); };
 const PORT = Number(arg('port', 4100));
 const TOKEN = String(arg('token', 'demo-upstream-token'));
+const BASIC = arg('basic', ''); // "user:pass" -> require Basic auth (Atlassian API-token style)
+const PAGE_SIZE = Number(arg('page-size', 0)); // >0 -> paginate tools/list with nextCursor
+const REQUIRE_SESSION = process.argv.includes('--require-session'); // Atlassian Rovo MCP style session gating
+const sessions = new Set();
+let initializeCount = 0;
+const EXPECTED = BASIC ? `Basic ${Buffer.from(BASIC, 'utf8').toString('base64')}` : `Bearer ${TOKEN}`;
 
 const ISSUES = {
   'FAKE-101': { key: 'FAKE-101', summary: 'Migrate off the legacy IdP', status: 'In Progress', assignee: 'a.martin', priority: 'High' },
@@ -51,24 +65,46 @@ function call(name, args = {}) {
 
 const server = createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}'); return; }
+  if (req.method === 'GET' && req.url === '/stats') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ initializeCount, sessions: sessions.size })); return; }
+  if (req.method === 'POST' && req.url === '/__expire-sessions') { sessions.clear(); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"expired":true}'); return; }
   if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
   const reply = (status, obj) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
-  if (req.headers.authorization !== `Bearer ${TOKEN}`) return reply(401, { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'missing or bad bearer token' } });
+  if (req.headers.authorization !== EXPECTED) return reply(401, { jsonrpc: '2.0', id: null, error: { code: -32001, message: BASIC ? 'missing or bad basic credential' : 'missing or bad bearer token' } });
   let body = '';
   req.on('data', (c) => { body += c; });
   req.on('end', () => {
     let msg;
     try { msg = JSON.parse(body); } catch { return reply(400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); }
     const { id, method, params } = msg;
+    if (REQUIRE_SESSION && method !== 'initialize') {
+      const sid = req.headers['mcp-session-id'];
+      if (typeof sid !== 'string' || !sessions.has(sid)) {
+        // Exactly the Atlassian Rovo MCP answer the gateway used to trip over (HTTP 400, -32600).
+        return reply(400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Request must be an initialize request if no session ID is provided.' } });
+      }
+    }
     try {
       let result;
-      if (method === 'initialize') result = { protocolVersion: params?.protocolVersion ?? '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'fake-jira-sandbox', version: '0.1.0' } };
+      if (method === 'initialize') {
+        result = { protocolVersion: params?.protocolVersion ?? '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'fake-jira-sandbox', version: '0.1.0' } };
+        if (REQUIRE_SESSION) {
+          const sid = `fake-${randomUUID()}`;
+          sessions.add(sid); initializeCount++;
+          res.setHeader('mcp-session-id', sid);
+        }
+      }
       else if (method === 'notifications/initialized') { res.writeHead(202); res.end(); return; }
-      else if (method === 'tools/list') result = { tools: TOOLS };
+      else if (method === 'tools/list') {
+        if (PAGE_SIZE > 0) { // paginated flat list, like the Atlassian Rovo MCP ?tools=all mode
+          const start = Number(params?.cursor ?? 0);
+          const page = TOOLS.slice(start, start + PAGE_SIZE);
+          result = start + PAGE_SIZE < TOOLS.length ? { tools: page, nextCursor: String(start + PAGE_SIZE) } : { tools: page };
+        } else result = { tools: TOOLS };
+      }
       else if (method === 'tools/call') result = call(params?.name, params?.arguments);
       else { const e = new Error(`unknown method: ${method}`); e.rpc = -32601; throw e; }
       reply(200, { jsonrpc: '2.0', id, result });
     } catch (e) { reply(200, { jsonrpc: '2.0', id, error: { code: e.rpc ?? -32000, message: e.message } }); }
   });
 });
-server.listen(PORT, '127.0.0.1', () => console.log(`fake-upstream-mcp (sandbox Jira) on http://127.0.0.1:${PORT} (Bearer ${TOKEN.length}-char token)`));
+server.listen(PORT, '127.0.0.1', () => console.log(`fake-upstream-mcp (sandbox Jira) on http://127.0.0.1:${PORT} (${BASIC ? 'Basic auth' : `Bearer ${TOKEN.length}-char token`}${PAGE_SIZE ? `, pages of ${PAGE_SIZE}` : ''})`));
