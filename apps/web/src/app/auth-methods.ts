@@ -1,6 +1,7 @@
 import { Component, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Session } from './session';
+import { SessionSettings } from './session-settings';
 
 export interface MethodInstance { id: string; type: string; name: string; enabled: boolean; level: number; config: Record<string, any> }
 export interface Chain { id: string; name: string; enabled: boolean; steps: string[]; level: number; note?: string }
@@ -18,7 +19,7 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
  * Everything is saved on the selected working branch and becomes the live sign-in only after Apply. Levels are configured, not measured.
  */
 @Component({
-  selector: 'app-auth-methods', imports: [FormsModule], styleUrl: './auth-methods.css',
+  selector: 'app-auth-methods', imports: [FormsModule, SessionSettings], styleUrl: './auth-methods.css',
   template: `
   <p class="lead">Choose how people prove who they are. Each <b>method</b> is a plugin type with its own settings; a type can be added several times with different settings. A <b>chain</b> runs several methods one after the other: sign-in succeeds only if every step succeeds.</p>
   <p class="hint"><b>Security level 1 to 10, 10 = strongest.</b> Levels are set by you: they are declared, not measured, and are never added up. They are meant to be used later to decide which services need which level. Fictional demo only.</p>
@@ -102,7 +103,8 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
 
   <section class="card"><h3>Catalogue</h3><div class="scroll"><table><thead><tr><th>Type</th><th>Factor</th><th>Suggested level</th><th>Status</th><th>What it does</th></tr></thead><tbody>
     @for (t of catalogue(); track t.id) { <tr><td>{{t.name}}</td><td>{{t.factor}}</td><td>{{t.suggestedLevel}}</td><td>@if (t.maturity==='implemented') { <span class="pill ok">implemented</span> @if (t.simulatedByDefault) { <span class="pill warn">simulated delivery</span> } } @else { <span class="pill">not built</span> }</td><td>{{t.description}}</td></tr> }
-  </tbody></table></div></section>`,
+  </tbody></table></div></section>
+  <app-session-settings />`,
 })
 export class AuthMethodsPage {
   protected readonly s = inject(Session);
