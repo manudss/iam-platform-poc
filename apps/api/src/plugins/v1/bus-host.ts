@@ -11,7 +11,7 @@
  *   memory; a durable ledger belongs to the later effects step). A redelivered effect gets a `deduped` reply
  *   instead of a second run.
  */
-import { connect, Msg, NatsConnection, Subscription, JSONCodec } from 'nats';
+import { connect, AckPolicy, ConsumerMessages, JsMsg, JSONCodec, Msg, NatsConnection, Subscription, JetStreamClient, nanos } from 'nats';
 import { HOOKS, PluginContext } from './hooks.js';
 import { BusBridge, PluginRegistry } from './registry.js';
 import { validateSettings } from './settings.js';
@@ -22,9 +22,13 @@ const LEDGER_MAX = 10_000;
 
 interface BusEnvelope { id: string; kind: string; tenant?: string; effect_key?: string; payload: unknown; source?: string }
 
+const EVENTS_STREAM = 'IAM_BUS_EVENTS'; // owned by the core (step 3)
+
 export class BusHost {
   private routedKinds = new Set<string>();
   private serving = new Map<string, Subscription>();
+  private events = new Map<string, Promise<void>>(); // plugin id -> running durable-consumer loop
+  private eventMsgs = new Map<string, ConsumerMessages>(); // plugin id -> live pull, stopped on close
   private ledger = new Set<string>();
   private chain: Promise<void> = Promise.resolve();
   private timer?: NodeJS.Timeout;
@@ -33,6 +37,7 @@ export class BusHost {
    * version, and this host must never be recreated (one NATS client, one set of subscriptions, no double serving). */
   private constructor(
     private nc: NatsConnection,
+    private js: JetStreamClient,
     private coreUrl: string,
     private token: string,
     private registry: () => Promise<PluginRegistry>,
@@ -51,7 +56,7 @@ export class BusHost {
     const coreUrl = (process.env.IAM_CORE_URL ?? 'http://127.0.0.1:8081').replace(/\/$/, '');
     try {
       const nc = await connect({ servers: url, user, pass, inboxPrefix: '_INBOX.api-host', timeout: 5000 });
-      const host = new BusHost(nc, coreUrl, token, registry, log);
+      const host = new BusHost(nc, nc.jetstream(), coreUrl, token, registry, log);
       await host.declarePlatformKinds();
       await host.sync();
       host.timer = setInterval(() => { host.sync().catch((e) => log({ warn: 'bus resync failed', error: String(e) })); }, 60_000);
@@ -131,6 +136,7 @@ export class BusHost {
         if (want.has(id)) continue;
         sub.unsubscribe();
         this.serving.delete(id);
+        this.events.delete(id); // the loop stops at the next message; the durable consumer stays (deliveries wait)
         await this.post('/v1/bus/plugins/unregister', { plugin: id }).catch(() => {});
       }
     }
@@ -143,6 +149,50 @@ export class BusHost {
     (async () => {
       for await (const msg of sub) await this.deliver(id, msg).catch(() => {}); // a failing delivery stays silent (fail closed)
     })().catch(() => {});
+    this.serveEvents(id);
+  }
+
+  /** Step 3: durable event deliveries. One durable pull consumer per plugin on the core's IAM_BUS_EVENTS
+   * stream (filter `bus.events.<id>`); the message is acked only AFTER the handler ran (at-least-once: a crash
+   * or a nak means redelivery, the effect ledger dedupes). A plugin that is disabled or has no handler acks
+   * without acting: the delivery is consumed, there is simply no effect (never a redelivery loop). */
+  private serveEvents(id: string) {
+    if (this.events.has(id)) return;
+    this.events.set(id, (async () => {
+      const jsm = await this.js.jetstreamManager(false); // false: no $JS.API.INFO ping (api-host has consumer rights only)
+      try { await jsm.consumers.info(EVENTS_STREAM, id); }
+      catch {
+        await jsm.consumers.add(EVENTS_STREAM, {
+          durable_name: id, filter_subject: `bus.events.${id}`,
+          ack_policy: AckPolicy.Explicit, max_deliver: 10, ack_wait: nanos(30_000),
+        });
+      }
+      const consumer = await this.js.consumers.get(EVENTS_STREAM, id);
+      const messages = await consumer.consume();
+      this.eventMsgs.set(id, messages);
+      for await (const m of messages) {
+        if (!this.events.has(id)) { messages.stop(); break; }
+        await this.deliverEvent(id, m).catch((e) => { this.log({ warn: 'event delivery failed, redelivery scheduled', plugin: id, error: String(e) }); m.nak(nanos(5_000)); });
+      }
+    })().catch((e) => { this.events.delete(id); this.log({ warn: 'event consumer stopped', plugin: id, error: String(e) }); }));
+  }
+
+  private async deliverEvent(id: string, m: JsMsg): Promise<void> {
+    const env = jc.decode(m.data) as BusEnvelope;
+    const tenant = env.tenant ?? DEFAULT_TENANT;
+    const registry = await this.registry();
+    const impl = registry.impl(id);
+    const handler = impl && registry.isActive(tenant, id) ? impl.handlers[env.kind] : undefined;
+    if (!handler) { m.ack(); return; } // consumed without effect (disabled or unknown kind): no redelivery loop
+    const key = env.effect_key ? `${tenant}:${id}:${env.kind}:${env.effect_key}` : undefined;
+    if (key && this.ledger.has(key)) { m.ack(); return; } // redelivery of an effect that already ran
+    const settings = validateSettings(impl!.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
+    await handler(env.payload, { tenant, settings } as PluginContext); // the effect; a throw means nak above
+    if (key) {
+      this.ledger.add(key);
+      if (this.ledger.size > LEDGER_MAX) this.ledger.delete(this.ledger.values().next().value!);
+    }
+    m.ack();
   }
 
   private async deliver(id: string, msg: Msg) {
@@ -168,15 +218,24 @@ export class BusHost {
   }
 
   /** Stops the host (tests and shutdown): no more deliveries, no more re-pushes. */
-  async close() { if (this.timer) clearInterval(this.timer); for (const s of this.serving.values()) s.unsubscribe(); await this.nc.close(); }
+  async close() {
+    if (this.timer) clearInterval(this.timer);
+    for (const s of this.serving.values()) s.unsubscribe();
+    for (const m of this.eventMsgs.values()) m.stop();
+    this.events.clear();
+    this.eventMsgs.clear();
+    await this.nc.close();
+  }
 
   /** The registry's bridge: routes only the platform async kinds this host declared. */
   bridge(): BusBridge {
     return {
       routed: (kind) => this.routedKinds.has(kind),
+      // Step 3: a notify emission returns durable-queue receipts, not results. The effects themselves happen
+      // asynchronously in the consumers (at-least-once, deduped by the effect key); callers must not await them.
       emit: async (tenant, kind, payload, effectKey) => {
         const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, effect_key: effectKey });
-        return (r.outcomes ?? []).filter((o: any) => o.status === 'replied').map((o: any) => ({ plugin: o.id, result: o.data }));
+        return (r.outcomes ?? []).filter((o: any) => o.status === 'queued').map((o: any) => ({ plugin: o.id, result: { queued: true } }));
       },
       call: async (tenant, kind, payload, timeoutMs) => {
         const r = await this.post('/v1/bus/emit', { source: 'api', kind, tenant, payload, timeout_ms: timeoutMs });

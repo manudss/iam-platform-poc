@@ -70,11 +70,13 @@ fn emit(source: &str, kind: &str, payload: Value) -> (u16, Value) {
     http(CORE_PORT, "POST", "/v1/bus/emit", Some(TOKEN), Some(json!({"source": source, "kind": kind, "tenant": "acme-demo", "payload": payload})))
 }
 
-/// Fake plugin: answers every delivery with allow + a data echo of what it saw.
-struct Echo;
+/// Fake plugin: records every envelope it sees and answers allow + a data echo (control/query calls).
+#[derive(Default)]
+struct Echo { seen: std::sync::Mutex<Vec<Envelope>> }
 #[async_trait::async_trait]
 impl Handler for Echo {
     async fn handle(&self, env: &Envelope) -> Option<HandlerResult> {
+        self.seen.lock().unwrap().push(env.clone());
         Some(HandlerResult { verdict: Some(Verdict::Allow), data: Some(json!({"saw_source": env.source, "saw_kind": env.kind})) })
     }
 }
@@ -94,15 +96,23 @@ async fn plugin_host_protocol_end_to_end() {
     assert_eq!(register("api", json!([]), json!([]), json!([{"name":"notify.send","mode":"notify"}])).0, 200);
     assert_eq!(register("notify-log", json!([{"kind":"notify.send"}]), json!([]), json!([])).0, 200);
 
-    // a fake plugin answers over NATS as the restricted api-host user
+    // a fake plugin answers control calls AND pulls its durable event deliveries, as the restricted api-host user
     let (client, _errs) = nats::connect(&format!("127.0.0.1:{NATS_PORT}"), "api-host", "api-host-dev", Some("_INBOX.api-host")).await.unwrap();
-    let _serve = nats::serve(client, "notify-log", Arc::new(Echo)).await.unwrap();
+    let echo = std::sync::Arc::new(Echo::default());
+    let _serve = nats::serve(client.clone(), "notify-log", echo.clone()).await.unwrap();
+    let _events = nats::serve_events(client, "notify-log", echo.clone()).await.unwrap();
 
     let (st, r) = emit("api", "notify.send", json!({"to": "alice@example.com", "template": "hi"}));
     assert_eq!((st, r["mode"].as_str()), (200, Some("notify")), "{r}");
     let out = &r["outcomes"][0];
-    assert_eq!((out["id"].as_str(), out["status"].as_str()), (Some("notify-log"), Some("replied")), "{r}");
-    assert_eq!(out["data"]["saw_source"], "api", "the core stamps the source");
+    assert_eq!((out["id"].as_str(), out["status"].as_str()), (Some("notify-log"), Some("queued")), "{r}");
+    // the delivery itself is asynchronous (at-least-once): the plugin receives the stored event shortly after
+    let mut saw = None;
+    for _ in 0..50 {
+        if let Some(e) = echo.seen.lock().unwrap().iter().find(|e| e.kind == "notify.send") { saw = Some(e.clone()); break }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(saw.expect("the queued event is delivered").source.as_deref(), Some("api"), "the core stamps the source");
 
     // the observer records the exchange with its source
     let (st, recs) = http(CORE_PORT, "GET", "/v1/bus/records?limit=5", Some(TOKEN), None);

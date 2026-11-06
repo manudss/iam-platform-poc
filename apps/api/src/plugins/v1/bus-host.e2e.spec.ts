@@ -1,7 +1,8 @@
 /**
- * Step 2 host e2e: a REAL nats-server and the REAL iam-core binary; the API serves its plugins over the bus.
- * Needs: nats-server (NATS_SERVER_BIN or PATH) and the core binary (IAM_CORE_BIN or core/target/debug/iam-core).
- * Skipped (loudly) when absent unless IAM_REQUIRE_NATS=1, which CI-like runs must set.
+ * Step 3 host e2e: a REAL nats-server and the REAL iam-core binary; the API serves its plugins over the bus.
+ * Notify deliveries are durable (JetStream, at-least-once): an emission returns queue receipts, the effects
+ * happen asynchronously in the consumers. Needs: nats-server (NATS_SERVER_BIN or PATH) and the core binary
+ * (IAM_CORE_BIN or core/target/debug/iam-core). Skipped (loudly) when absent unless IAM_REQUIRE_NATS=1.
  */
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +12,31 @@ import { PluginRegistry } from './registry.js';
 import { BusHost } from './bus-host.js';
 import { MemoryMigrationStore, MemorySettingsStore } from './memory-stores.js';
 import { notifyLog, orgManager } from './builtin/index.js';
+import type { PluginImpl } from './registry.js';
+
+/** Test plugin: records every payload it receives, so the tests can see the asynchronous effects. */
+const received: { kind: string; payload: any }[] = [];
+const spy: PluginImpl = {
+  manifest: {
+    apiVersion: 'plugin/v1', id: 'spy-log', version: '1.0.0', name: 'Spy (test)', publisher: 'iam-platform-tests',
+    kinds: ['notifier'],
+    hooks: [{ name: 'notify.send', mode: 'async' }, { name: 'identity.changed', mode: 'async' }],
+    settings: [],
+  },
+  handlers: {
+    'notify.send': (payload: any) => { received.push({ kind: 'notify.send', payload }); return { seen: true }; },
+    'identity.changed': (payload: any) => { received.push({ kind: 'identity.changed', payload }); return { seen: true }; },
+  },
+};
+async function untilKind(kind: string, pred: (p: any) => boolean, ms = 6000): Promise<any> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const hit = received.find((r) => r.kind === kind && pred(r.payload));
+    if (hit) return hit.payload;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.fail(`no ${kind} delivery within ${ms} ms`);
+}
 
 const NATS_PORT = 14551;
 const CORE_PORT = 18551;
@@ -73,7 +99,9 @@ describe('bus host e2e (step 2): plugins served by the core bus', { skip: false 
     process.env.IAM_CORE_URL = `http://127.0.0.1:${CORE_PORT}`;
     process.env.IAM_CORE_ADMIN_TOKEN = TOKEN;
     reg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
-    reg.register(notifyLog); reg.register(orgManager);
+    reg.register(notifyLog); reg.register(orgManager); reg.register(spy);
+    await reg.install(T, 'spy-log', { install: true });
+    await reg.enable(T, 'spy-log', {});
     host = await BusHost.startIfConfigured(async () => reg, () => {});
     assert.ok(host, 'host starts');
     reg.setBus(host!.bridge());
@@ -85,22 +113,33 @@ describe('bus host e2e (step 2): plugins served by the core bus', { skip: false 
     delete process.env.IAM_BUS_NATS_URL; delete process.env.IAM_BUS_NATS_USER; delete process.env.IAM_BUS_NATS_PASSWORD;
   });
 
-  it('notify.send is answered by notify-log THROUGH the bus, with the same result shape as in process', async (t) => {
+  it('notify.send is queued THROUGH the bus, then delivered to the active plugins', async (t) => {
     if (!available) return t.skip('no nats-server or core binary');
     const out = await reg.emit(T, 'notify.send', { tenant: T, to: 'a@b.c', template: 'hello', data: {}, effectKey: 'e2e-1' } as any);
-    assert.deepEqual(out, [{ plugin: 'notify-log', result: { delivered: false, line: 'notify: hello -> a@b.c' } }]);
-    // the observer saw it, with the source stamped by the core
+    // receipts, not results: every active plugin with the hook got a durable copy (at-least-once)
+    assert.deepEqual(out, [
+      { plugin: 'notify-log', result: { queued: true } },
+      { plugin: 'spy-log', result: { queued: true } },
+    ]);
+    // the effect itself is asynchronous: the spy sees the exact payload shortly after
+    const got = await untilKind('notify.send', (p) => p.effectKey === 'e2e-1');
+    assert.equal(got.template, 'hello'); assert.equal(got.to, 'a@b.c');
+    // the observer saw the emission, with the source stamped by the core
     const r = await fetch(`http://127.0.0.1:${CORE_PORT}/v1/bus/records?limit=5`, { headers: { 'x-core-admin-token': TOKEN } });
     const recs: any = await r.json();
     const last = recs.records.at(-1);
     assert.equal(last.kind, 'notify.send'); assert.equal(last.source, 'api');
+    assert.ok(last.outcomes.every((o: any) => o.status === 'queued'), `queued outcomes: ${JSON.stringify(last.outcomes)}`);
   });
 
   it('dedupes on the effect key (no double effect)', async (t) => {
     if (!available) return t.skip('no nats-server or core binary');
     const first = await reg.emit(T, 'notify.send', { tenant: T, to: 'a@b.c', template: 'once', data: {}, effectKey: 'e2e-2' } as any);
-    assert.equal(first.length, 1);
-    assert.deepEqual(await reg.emit(T, 'notify.send', { tenant: T, to: 'a@b.c', template: 'once', data: {}, effectKey: 'e2e-2' } as any), []);
+    assert.equal(first.length, 2);
+    assert.deepEqual(await reg.emit(T, 'notify.send', { tenant: T, to: 'a@b.c', template: 'once', data: {}, effectKey: 'e2e-2' } as any), [], 'same effect key: nothing re-emitted');
+    await untilKind('notify.send', (p) => p.effectKey === 'e2e-2');
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(received.filter((r) => r.kind === 'notify.send' && r.payload.effectKey === 'e2e-2').length, 1, 'one effect only');
   });
 
   it('enable pushes the registration, disable cuts the delivery', async (t) => {
@@ -109,10 +148,12 @@ describe('bus host e2e (step 2): plugins served by the core bus', { skip: false 
     await reg.enable(T, 'org-manager', {});
     await host!.sync();
     const out = await reg.emit(T, 'identity.changed', { tenant: T, subject: 'demo-alice', change: 'joiner', effectKey: 'e2e-3' } as any);
-    assert.deepEqual(out, [{ plugin: 'org-manager', result: { queued: 'e2e-3' } }]);
+    assert.deepEqual(out, [{ plugin: 'org-manager', result: { queued: true } }, { plugin: 'spy-log', result: { queued: true } }]);
+    await untilKind('identity.changed', (p) => p.effectKey === 'e2e-3');
     await reg.disable(T, 'org-manager');
     await host!.sync();
     const out2 = await reg.emit(T, 'identity.changed', { tenant: T, subject: 'demo-alice', change: 'leaver', effectKey: 'e2e-4' } as any);
-    assert.deepEqual(out2, [], 'a disabled plugin no longer receives the event');
+    assert.deepEqual(out2, [{ plugin: 'spy-log', result: { queued: true } }], 'a disabled plugin no longer receives the event');
+    await untilKind('identity.changed', (p) => p.effectKey === 'e2e-4');
   });
 });

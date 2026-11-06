@@ -16,6 +16,7 @@ iam-idp = { path = "../iam-idp" }
 iam-decision = { path = "../iam-decision" }
 iam-plugin-runtime = { path = "../iam-plugin-runtime" }
 iam-bus = { path = "../iam-bus" }
+async-nats = "0.51"
 async-trait = "0.1"
 
 [dependencies.wat]

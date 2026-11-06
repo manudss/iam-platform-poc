@@ -1,6 +1,8 @@
 //! Optional wiring of the event bus. Off unless IAM_CORE_NATS_URL is set. When on, the core connects to NATS, tells the bus
 //! about real events (activation applied, sign-in succeeded/refused: notifications only, no decision depends on them) and keeps
 //! a bounded, MASKED record of every exchange for the read-only observer (`GET /v1/bus/records`, admin token).
+//! Step 3: Notify deliveries are durably queued in JetStream (stream IAM_BUS_EVENTS, at-least-once) and every observer
+//! record is also persisted to the IAM_BUS_JOURNAL stream (survives the core; the HTTP feed still reads the fast ring).
 //! `GET /v1/bus` runs a LIVE self-test through NATS. Existing behaviour (decisions, activation, IdP, gRPC) is unchanged.
 use axum::{Json, extract::{Query, State}, http::{HeaderMap, StatusCode}};
 use iam_bus::{BusRecord, Catalogue, Dispatcher, Envelope, Handler, HandlerResult, Mode, Observer, SubStatus, Subscription, Verdict, nats};
@@ -12,7 +14,8 @@ use std::time::Duration;
 const RING: usize = 500;
 const NOTIFY_KINDS: [&str; 3] = ["activation.applied", "signin.succeeded", "signin.refused"];
 
-/// Bounded in-memory record, numbered. In memory only: lost on restart (stated in docs/event-bus.md).
+/// Bounded in-memory record, numbered. The HTTP feed reads this fast ring; the same records are also persisted
+/// to the IAM_BUS_JOURNAL JetStream stream (step 3), which a later step re-reads after a restart.
 #[derive(Default)]
 pub struct Ring { buf: Mutex<VecDeque<(u64, BusRecord)>>, next: Mutex<u64> }
 impl Observer for Ring {
@@ -24,6 +27,17 @@ impl Observer for Ring {
         if b.len() > RING { b.pop_front(); }
     }
 }
+/// Persists every record to the journal stream (fire and forget: observation must never slow the bus down).
+struct Journal { js: async_nats::jetstream::Context }
+impl Observer for Journal {
+    fn record(&self, r: &BusRecord) {
+        if let Ok(body) = serde_json::to_vec(r) {
+            let js = self.js.clone();
+            tokio::spawn(async move { let _ = js.publish(nats::JOURNAL_SUBJECT, body.into()).await; });
+        }
+    }
+}
+
 impl Ring {
     fn since(&self, after: u64, limit: usize) -> (Vec<Value>, u64, u64) {
         let b = self.buf.lock().unwrap();
@@ -42,6 +56,7 @@ fn view(seq: u64, r: &BusRecord) -> Value {
         "expected": r.outcomes.iter().map(|o| json!({"id": o.subscriber, "mandatory": o.mandatory})).collect::<Vec<_>>(),
         "outcomes": r.outcomes.iter().map(|o| match &o.status {
             SubStatus::Replied(rep) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "replied", "verdict": rep.verdict, "data_keys": rep.data.as_ref().and_then(|d| d.as_object()).map(|m| m.keys().cloned().collect::<Vec<_>>())}),
+            SubStatus::Queued => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "queued", "detail": "stored in JetStream; delivery is at-least-once, the consumer acks after processing"}),
             SubStatus::NotConcerned => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "not-concerned", "detail": "disabled on the envelope's branch (or not concerned): neither an answer nor silence"}),
             SubStatus::Silent(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "silent", "detail": why}),
             SubStatus::Invalid(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "invalid", "detail": why.chars().take(80).collect::<String>()}),
@@ -74,14 +89,19 @@ impl BusLink {
                 Err(e) => return Err(e),
             }
         };
-        // Subscribers hosted by the core itself are still reached through NATS (D16).
+        // Durable bus storage first: without it there is no at-least-once delivery, so the core refuses to start
+        // (same rule as NATS down: the bus is a base process, not a degraded mode).
+        nats::ensure_bus_streams(&client).await?;
+        // Control/query subscribers hosted by the core are reached through request/reply (D16).
         nats::serve(client.clone(), "core-selftest", Arc::new(Ack)).await?;
-        nats::serve(client.clone(), "audit-log", Arc::new(Ack)).await?;
+        // Notify subscribers hosted by the core pull their durable deliveries from JetStream.
+        nats::serve_events(client.clone(), "audit-log", Arc::new(Ack)).await?;
         let mut cat = Catalogue::new().declare("core.selftest", Mode::Control);
         for k in NOTIFY_KINDS { cat = cat.declare(k, Mode::Notify); }
-        let d = Dispatcher::new(cat, Arc::new(nats::NatsTransport::new(client)), Duration::from_millis(500));
+        let d = Dispatcher::new(cat, Arc::new(nats::NatsTransport::new(client.clone())), Duration::from_millis(500));
         let ring = Arc::new(Ring::default());
         d.observe(ring.clone());
+        d.observe(Arc::new(Journal { js: async_nats::jetstream::new(client.clone()) }));
         let sub = |id: &str, kind: &str, mandatory: bool| Subscription { subscriber: id.into(), kind: kind.into(), mandatory, group: None };
         d.subscribe(sub("core-selftest", "core.selftest", true)).map_err(|e| e.to_string())?;
         d.subscribe(sub("core-absent", "core.selftest", false)).map_err(|e| e.to_string())?;
@@ -97,7 +117,8 @@ impl BusLink {
         tokio::spawn(async move {
             let mut e = Envelope::new(id, kind, payload);
             e.effect_key = effect_key;
-            let _ = d.notify(&e).await;
+            // Fire and forget for the caller, but never silent: a queueing failure breaks at-least-once, so log it loud.
+            if let Err(e) = d.notify(&e).await { tracing::warn!("bus emit of kind '{kind}' was not durably queued: {e}"); }
         });
     }
     async fn selftest(&self) -> Value {
@@ -289,6 +310,7 @@ pub struct EmitReq {
 fn outcomes_json(outcomes: &[iam_bus::SubOutcome]) -> Value {
     outcomes.iter().map(|o| match &o.status {
         SubStatus::Replied(r) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "replied", "verdict": r.verdict, "data": r.data}),
+        SubStatus::Queued => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "queued"}),
         SubStatus::NotConcerned => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "not-concerned"}),
         SubStatus::Silent(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "silent", "detail": why}),
         SubStatus::Invalid(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "invalid", "detail": why}),

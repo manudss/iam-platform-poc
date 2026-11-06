@@ -23,6 +23,10 @@ pub enum BusError {
     UnknownKind(String),
     WrongMode { kind: String, expected: Mode },
     InvalidSubscription(String),
+    /// Notify only: at least one delivery could not be durably queued (JetStream publish ack missing).
+    /// The emit is refused so the caller knows the at-least-once guarantee does NOT hold for this event.
+    /// Some subscribers may still have received a copy: consumers must stay idempotent (effect keys).
+    DeliveryFailed(String),
 }
 impl std::fmt::Display for BusError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{self:?}") }

@@ -1,12 +1,14 @@
 use crate::{BusError, Catalogue, Envelope, Mode, Registry, Reply, Subscription, Transport, TransportError, Verdict};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SubStatus {
     Replied(Reply),
+    /// Notify only (step 3): the event is durably stored in JetStream for this delivery address.
+    /// Delivery is at-least-once: the consumer acks after processing, redelivery otherwise.
+    Queued,
     /// The subscriber answered "not concerned" (disabled on the envelope's branch): neither an answer nor
     /// silence. Never counts as a refusal, never contributes a verdict or data.
     NotConcerned,
@@ -15,7 +17,7 @@ pub enum SubStatus {
     /// An answer arrived but failed the identity/correlation/shape check: treated like silence.
     Invalid(String),
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SubOutcome { pub subscriber: String, pub mandatory: bool, pub status: SubStatus }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,7 +35,7 @@ pub struct MergedData {
 
 /// One exchange seen by the core, handed to observers after the fact (step 1 prepares the later bus-observation milestone).
 /// The payload is included only MASKED (see `mask.rs`: credential-like keys replaced, e-mails partly hidden, scalars only, cut at 120 chars).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BusRecord {
     pub envelope_id: String,
     pub kind: String,
@@ -61,12 +63,11 @@ pub struct Dispatcher {
     registry: Registry,
     transport: Arc<dyn Transport>,
     default_timeout: Duration,
-    rr: Mutex<HashMap<(String, String), usize>>,
 }
 
 impl Dispatcher {
     pub fn new(catalogue: Catalogue, transport: Arc<dyn Transport>, default_timeout: Duration) -> Self {
-        Dispatcher { observers: Default::default(), catalogue, registry: Registry::new(), transport, default_timeout, rr: Mutex::new(HashMap::new()) }
+        Dispatcher { observers: Default::default(), catalogue, registry: Registry::new(), transport, default_timeout }
     }
     pub fn subscribe(&self, s: Subscription) -> Result<(), BusError> { self.registry.add(&self.catalogue, s) }
     pub fn catalogue(&self) -> &Catalogue { &self.catalogue }
@@ -109,27 +110,45 @@ impl Dispatcher {
         futures::future::join_all(futs).await
     }
 
-    /// Notify: broadcast to every subscriber without a group; one subscriber (round robin) per group.
-    /// At-most-once, errors are reported per subscriber and never raised.
+    /// Notify: broadcast to every subscriber without a group; ONE delivery per group ("one of").
+    /// Step 3: delivery is at-least-once through JetStream. The delivery address is the subscriber id, or the
+    /// group name for a group (its members share one durable consumer: any one of them processes each event).
+    /// A delivery whose publish ack fails counts as a queue failure: every address is still tried, the exchange
+    /// is recorded, then the whole notify is REFUSED (BusError::DeliveryFailed) - an emitter never gets a
+    /// success without durable storage. A redelivered event can reach a consumer twice: consumers dedupe on
+    /// the effect key (idempotent effects).
     pub async fn notify(&self, env: &Envelope) -> Result<Vec<SubOutcome>, BusError> {
         self.catalogue.expect(&env.kind, Mode::Notify)?;
         let all = self.registry.matching(&env.kind);
-        let mut chosen = vec![];
-        let mut groups: HashMap<String, Vec<Subscription>> = HashMap::new();
-        for s in all { match s.group.clone() { None => chosen.push(s), Some(g) => groups.entry(g).or_default().push(s) } }
-        let mut names: Vec<_> = groups.keys().cloned().collect();
-        names.sort();
-        for g in names {
-            let members = &groups[&g];
-            let mut rr = self.rr.lock().unwrap();
-            let n = rr.entry((env.kind.clone(), g)).or_insert(0);
-            chosen.push(members[*n % members.len()].clone());
-            *n += 1;
+        let mut targets: Vec<String> = vec![];
+        let mut groups: std::collections::HashSet<String> = Default::default();
+        for s in all {
+            match s.group {
+                None => targets.push(s.subscriber),
+                Some(g) => { if groups.insert(g.clone()) { targets.push(g); } }
+            }
         }
+        targets.sort();
         let t = std::time::Instant::now();
-        let out = self.ask(env, chosen, self.default_timeout).await;
+        let body = serde_json::to_vec(env).expect("envelope serializes");
+        let timeout = self.default_timeout;
+        let futs = targets.into_iter().map(|target| {
+            let body = body.clone();
+            let tr = self.transport.clone();
+            async move {
+                let status = match tr.queue(&target, body, timeout).await {
+                    Ok(()) => SubStatus::Queued,
+                    Err(TransportError::Timeout) => SubStatus::Silent("queue failed: timeout".into()),
+                    Err(TransportError::NoResponder) => SubStatus::Silent("queue failed: no responder".into()),
+                    Err(TransportError::Other(e)) => SubStatus::Silent(format!("queue failed: {e}")),
+                };
+                SubOutcome { subscriber: target, mandatory: false, status }
+            }
+        });
+        let out = futures::future::join_all(futs).await;
         self.emit(env, Mode::Notify, t, &out, None);
-        Ok(out)
+        let failed: Vec<&str> = out.iter().filter(|o| !matches!(o.status, SubStatus::Queued)).map(|o| o.subscriber.as_str()).collect();
+        if failed.is_empty() { Ok(out) } else { Err(BusError::DeliveryFailed(format!("not durably queued for: {}", failed.join(", ")))) }
     }
 
     /// Blocking control with a timeout. Any valid deny = deny. A mandatory subscriber without a usable answer = deny
