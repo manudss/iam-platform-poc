@@ -11,6 +11,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { openManage } from './branch-ui.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core'); // honours NODE_PATH
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -65,8 +66,8 @@ try {
     await page.click('#signin-browser'); await page.waitForSelector('input[name=password]');
     await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
     await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]');
-    await page.locator('details.token').evaluate(e=>e.open=true);await page.fill('input[name=admintoken]',ADMIN_TOKEN);await page.getByRole('button',{name:'Refresh branches',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[name=globalBranch]')?.textContent.includes('main'));
-    if(!(await page.locator('[name=globalBranch] option').allTextContents()).includes('expiry-work')){await page.fill('[name=workspaceNewBranch]','expiry-work');await page.getByRole('button',{name:'Create & select',exact:true}).click();}else await page.selectOption('[name=globalBranch]','expiry-work');
+    await page.locator('details.token').evaluate(e=>e.open=true);await page.fill('input[name=admintoken]',ADMIN_TOKEN);await openManage(page); await page.getByRole('button',{name:'Refresh branches',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[name=globalBranch]')?.textContent.includes('main'));
+    if(!(await page.locator('[name=globalBranch] option').allTextContents()).includes('expiry-work')){await openManage(page); await page.fill('[name=workspaceNewBranch]','expiry-work');await page.getByRole('button',{name:'Create & select',exact:true}).click();}else await page.selectOption('[name=globalBranch]','expiry-work');
     await page.waitForSelector('#plugin-install',{timeout:6000}).catch(async e=>{console.log(await page.textContent('body'));throw e});
   };
   const token = async () => { await page.locator('details.token').evaluate(e=>e.open=true); await page.fill('input[name=admintoken]', ADMIN_TOKEN); };
@@ -101,7 +102,7 @@ try {
   assert.equal(installs, 2); await shot('restart-login');
   await page.click('#signin-browser'); await page.waitForSelector('input[name=password]');
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
-  await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]');await page.locator('details.token').evaluate(e=>e.open=true);await page.fill('[name=admintoken]',ADMIN_TOKEN);await page.getByRole('button',{name:'Refresh branches',exact:true}).click();await page.selectOption('[name=globalBranch]','expiry-work'); await page.waitForSelector('nav a.active[data-nav="/assignments"]');
+  await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]');await page.locator('details.token').evaluate(e=>e.open=true);await page.fill('[name=admintoken]',ADMIN_TOKEN);await openManage(page); await page.getByRole('button',{name:'Refresh branches',exact:true}).click();await page.selectOption('[name=globalBranch]','expiry-work'); await page.waitForSelector('nav a.active[data-nav="/assignments"]');
   await page.waitForSelector('#assignments td'); assert.equal(installs,2);
   // New key accepted after restart. The old key still fails closed, no admin capability in browser persisted storage.
   const stored = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })); assert.ok(!stored.includes(ADMIN_TOKEN));

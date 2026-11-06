@@ -252,7 +252,10 @@ export class VersioningService {
       const f = await this.resolve(c, from), t = await this.resolve(c, to);
       const [s] = await c.query(three ? 'select * from dolt_diff_summary(?)' : 'select * from dolt_diff_summary(?, ?)', three ? [`${f.name}...${t.name}`] : [f.name, t.name]);
       const [sc] = await c.query(three ? 'select * from dolt_schema_diff(?)' : 'select * from dolt_schema_diff(?, ?)', three ? [`${f.name}...${t.name}`] : [f.name, t.name]);
-      return { from: f.name, to: t.name, three, tables: (s as Row[]).map(summaryRow), schema: (sc as Row[]).filter((x) => x.from_create_statement !== x.to_create_statement).map((x) => ({ table: x.to_table_name ?? x.from_table_name, from: x.from_create_statement ?? null, to: x.to_create_statement ?? null })) };
+      let stat: Row[] = [];
+      try { [stat] = (await c.query(three ? 'select * from dolt_diff_stat(?)' : 'select * from dolt_diff_stat(?, ?)', three ? [`${f.name}...${t.name}`] : [f.name, t.name])) as unknown as [Row[]]; } catch { /* older Dolt: counts stay absent, the table list still works */ }
+      const counts = rowCounts(stat);
+      return { from: f.name, to: t.name, three, rows: sumRows(counts), tables: (s as Row[]).map((x) => { const r = summaryRow(x); return { ...r, rows: counts.get(String(r.table)) ?? null }; }), schema: (sc as Row[]).filter((x) => x.from_create_statement !== x.to_create_statement).map((x) => ({ table: x.to_table_name ?? x.from_table_name, from: x.from_create_statement ?? null, to: x.to_create_statement ?? null })) };
     } finally { await c.end(); }
   }
 
@@ -509,4 +512,17 @@ export function mapSqlError(e: unknown): Error {
   if (/conflict/i.test(msg)) return new ConflictException(msg);
   if (err.code === 'ECONNREFUSED' || err.code === 'PROTOCOL_CONNECTION_LOST') return new HttpException('database unavailable', 503);
   return new BadRequestException(msg);
+}
+
+export interface RowCounts { added: number; modified: number; removed: number }
+/** Rows changed per table, from dolt_diff_stat (rows_added / rows_modified / rows_deleted). The badge in the console counts these ROWS. */
+export function rowCounts(stat: Row[]): Map<string, RowCounts> {
+  const m = new Map<string, RowCounts>();
+  for (const x of stat) m.set(String(x.table_name), { added: Number(x.rows_added ?? 0), modified: Number(x.rows_modified ?? 0), removed: Number(x.rows_deleted ?? 0) });
+  return m;
+}
+export function sumRows(m: Map<string, RowCounts>): RowCounts & { total: number } {
+  let added = 0, modified = 0, removed = 0;
+  for (const r of m.values()) { added += r.added; modified += r.modified; removed += r.removed; }
+  return { added, modified, removed, total: added + modified + removed };
 }

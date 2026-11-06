@@ -21,6 +21,7 @@ import { McpPage } from './mcp';
 import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard } from './workflows';
 import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
+import { ReviewPage } from './review';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
 export const pluginsMatcher: UrlMatcher = (segs: UrlSegment[]) =>
@@ -56,6 +57,7 @@ export const routes: Routes = [
       { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [workflowsEnabledGuard] },
       { path: 'database', pathMatch: 'full', redirectTo: 'database/branches' },
+      { path: 'review', canActivate: [accessGuard], component: ReviewPage, title: 'Review changes' },
       { path: 'database/:tab', canActivate: [accessGuard], component: ExplorerPage, title: 'Database (Dolt)' },
     ],
   },
