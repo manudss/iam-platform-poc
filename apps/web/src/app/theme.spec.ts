@@ -5,7 +5,8 @@ import { routes } from './app.routes';
 import { Theme } from './theme';
 
 describe('color theme', () => {
-  beforeEach(() => { localStorage.clear(); delete document.documentElement.dataset['theme']; });
+  const clearCookie = () => { document.cookie = 'iam_theme=; Path=/; Max-Age=0'; };
+  beforeEach(() => { localStorage.clear(); clearCookie(); delete document.documentElement.dataset['theme']; });
 
   it('defaults to auto, applies a theme on <html>, and a manual choice is remembered', async () => {
     await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents();
@@ -17,10 +18,21 @@ describe('color theme', () => {
     TestBed.tick();
     expect(document.documentElement.dataset['theme']).toBe('dark');
     expect(localStorage.getItem('iam.theme')).toBe('dark');
+    expect(document.cookie).toContain('iam_theme=dark'); // mirrored for the core sign-in pages
     t.set('light');
     TestBed.tick();
     expect(document.documentElement.dataset['theme']).toBe('light');
     expect(localStorage.getItem('iam.theme')).toBe('light');
+    expect(document.cookie).toContain('iam_theme=light');
+  });
+
+  it('remembers a choice made on a core sign-in page (cookie) when localStorage is empty', async () => {
+    document.cookie = 'iam_theme=dark; Path=/';
+    await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents();
+    const t = TestBed.inject(Theme);
+    expect(t.mode()).toBe('dark');
+    TestBed.tick();
+    expect(document.documentElement.dataset['theme']).toBe('dark');
   });
 
   it('the sign-in page shows the segmented selector and the footer links (privacy + about)', async () => {
