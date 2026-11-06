@@ -52,6 +52,18 @@ deterministic effect key (hash of the whole event), so a bus redelivery replays 
 absorb the duplicate; a bus failure is logged, never propagated - an event listener can still never break the
 action that produced it. Without the bus (unit tests, bus disabled) the historical in-process fan-out applies.
 
+### One activation circuit
+
+The core owns the activation.applied fact: it emits it on the bus (durable, at-least-once, effect key
+activation:<tenant>:<seq>) when /v1/activate applies a version. The API no longer publishes anything about
+activations: NatsService, the IAM_EVENTS stream, the PostgreSQL outbox relay and IAM_NATS_URL are gone.
+The API's ActivationService journals and pushes (its event field just says 'core' when the core applied, or
+'disabled'); the opt-in EffectsService (IAM_EFFECTS=1) is a durable subscriber on its own delivery address
+'activation-effects' - a handler failure is nakked and redelivered, per-effect idempotency keys (PostgreSQL
+ledger) absorb duplicates - and replays the applied activations of the journal at startup (catch-up: the bus
+keeps no copy for an address nobody registered). Core-owned kinds can be subscribed to but never declared or
+emitted by the API (403/400).
+
 ## What is prepared, NOT built (later steps)
 
 Routing blocking hooks (auth step), restart-proof reads of the journal stream,
@@ -81,7 +93,6 @@ curl http://127.0.0.1:8081/v1/bus            # live self-test through NATS
 ```
 `scripts/demo-start.sh` starts nats-server when the binary is installed. `GET /v1/bus` public view shows only enabled, verdict
 and latency; the admin token (`x-core-admin-token`) adds the details. The self-test only reaches the core's own `core-selftest` subscriber and is cached for 5 s.
-The API's own `IAM_NATS_URL` (JetStream stream `IAM_EVENTS`, subjects `iam.>`) is separate and unchanged. That client does not authenticate, so it cannot connect to `conf/nats-local.conf` (auth required); use a plain `nats-server -js` for it, as before.
 
 ## Tests
 

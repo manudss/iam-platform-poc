@@ -235,7 +235,7 @@ export class BusHost {
       this.eventMsgs.set(id, messages);
       for await (const m of messages) {
         if (!this.events.has(id)) { messages.stop(); break; }
-        await this.deliverEvent(id, m, service).catch((e) => { this.log({ warn: 'event delivery failed, redelivery scheduled', plugin: id, error: String(e) }); m.nak(nanos(5_000)); });
+        await this.deliverEvent(id, m, service).catch((e) => { this.log({ warn: 'event delivery failed, redelivery scheduled', plugin: id, error: String(e) }); m.nak(5_000); }); // nats.js nak() takes milliseconds
       }
     })().catch((e) => { this.events.delete(id); this.log({ warn: 'event consumer stopped', plugin: id, error: String(e) }); }));
   }
@@ -319,4 +319,10 @@ export class BusHost {
       },
     };
   }
+}
+
+/** Holds the one bus host of the process so services outside the plugins module (activation, effects) can reach
+ * it without a circular module dependency. Set by whoever created the host (plugins-v1 factory or BranchRegistries). */
+export class BusHostRef {
+  host?: BusHost;
 }

@@ -36,7 +36,6 @@ const RULES = [
   { id: 'callSlot (blocking hook)', files: 'api', re: /callSlot(?:<[^>]*>)?\(\s*\w+,\s*'([a-z0-9._-]+)'/gi, kind: 'caller' },
   { id: 'AppEvents.on (in-process listener)', files: 'api', re: /events\.on\(/gi, kind: 'listener' },
   { id: 'NatsService (IAM_EVENTS circuit)', files: 'api', re: /NatsService/g, kind: 'circuit' },
-  { id: 'IAM_NATS_URL (IAM_EVENTS circuit)', files: 'api', re: /IAM_NATS_URL/g, kind: 'circuit' },
   { id: 'core bus emit (Rust)', files: 'core', re: /\.(?:emit|notify|call|query)\(&e(?:nv)?\b/g, kind: 'emitter' },
   { id: 'core bus wiring event', files: 'core', re: /bus\.emit\(\s*"([a-z0-9._-]+)"/g, kind: 'emitter' },
   { id: 'oidc provider event hook', files: 'api', re: /provider\.on\(ev/g, kind: 'listener' },

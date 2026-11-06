@@ -31,7 +31,7 @@ describe('Temporal activation workflow (real Temporal dev server + real Dolt)', 
     for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:18234/api/v1/namespaces')).ok) break; } catch { /* retry */ } await sleep(300); }
     await sleep(1000);
     Object.assign(process.env, { IAM_TEMPORAL_ADDR: '127.0.0.1:17234', DOLT_PORT: '13308', DOLT_DATABASE: 'iam' });
-    delete process.env.IAM_PG_URL; delete process.env.IAM_NATS_URL;
+    delete process.env.IAM_PG_URL;
     mod = await Test.createTestingModule({ imports: [AppModule] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile(); // guard covered elsewhere
     await mod.init();
   });

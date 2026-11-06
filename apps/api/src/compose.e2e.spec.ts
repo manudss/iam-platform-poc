@@ -3,11 +3,10 @@
 import 'reflect-metadata';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { connect, JSONCodec } from 'nats';
+import { connect } from 'nats';
 import { Connection } from '@temporalio/client';
 import { DoltService } from './dolt/dolt.service.js';
 import { ActivationService } from './activation/activation.service.js';
-import { NatsService } from './integrations/nats.service.js';
 import { SecretsService } from './integrations/secrets.service.js';
 
 const on = process.env.COMPOSE_STACK === '1';
@@ -30,13 +29,11 @@ describe('docker-compose stack (real containers)', { skip: !on && 'COMPOSE_STACK
     assert.ok(r.seq >= 1);
     assert.ok((await a.list('compose-test')).some((x) => x.commit === 'aaaaaaaa'));
   });
-  it('NATS container: JetStream publish is acknowledged', async () => {
-    process.env.IAM_NATS_URL = '127.0.0.1:4222';
-    const n = new NatsService(); cleanup.push(() => n.onModuleDestroy());
-    assert.equal(await n.publish('iam.activation.compose-test', { ok: true }), true);
+  it('NATS container: JetStream is up (the bus backbone of the stack)', async () => {
     const nc = await connect({ servers: '127.0.0.1:4222' }); cleanup.push(() => nc.close());
-    const m = await (await nc.jetstream().consumers.get('IAM_EVENTS')).next({ expires: 3000 });
-    assert.ok(m && JSONCodec().decode(m.data));
+    const jsm = await nc.jetstreamManager();
+    await jsm.streams.add({ name: 'COMPOSE_SMOKE', subjects: ['compose.smoke'] });
+    await jsm.streams.delete('COMPOSE_SMOKE');
   });
   it('OpenBao container (dev mode): KV v2 write then read', async () => {
     const token = process.env.COMPOSE_BAO_TOKEN ?? PW;

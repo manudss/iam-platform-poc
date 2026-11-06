@@ -3,7 +3,7 @@ import { AppEvents } from '../../events/app-events.service.js';
 import { VersioningService } from '../../versioning/versioning.service.js';
 import { UsersService } from '../../users/users.service.js';
 import { PluginRegistry } from './registry.js';
-import { BusHost } from './bus-host.js';
+import { BusHost, BusHostRef } from './bus-host.js';
 import { DoltPluginStore } from './dolt-stores.js';
 import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector, policyStudio, oidcProvider } from './builtin/index.js';
 /** Separate registries per branch. Authentication always asks for main, never request's working branch. */
@@ -17,7 +17,7 @@ export class BranchRegistries {
   /** One bus host per process, created once: recreating it would double-serve plugin.*.call (round-robin, incoherent dedupe). */
   private host?: Promise<BusHost | undefined>;
   private heads=new Map<string,string>();
-  constructor(private readonly v: VersioningService, private readonly users: UsersService, @Optional() private readonly events?: AppEvents) {}
+  constructor(private readonly v: VersioningService, private readonly users: UsersService, @Optional() private readonly events?: AppEvents, @Optional() private readonly busRef?: BusHostRef) {}
   drop(ref: string) { this.registries.delete(ref);this.resolved.delete(ref);this.heads.delete(ref); }
   async get(ref: string) {
     const head=await this.v.at(ref,async c=>{const [r]=await c.query("select hashof('HEAD') h");return String((r as {h:string}[])[0].h);});
@@ -45,7 +45,7 @@ export class BranchRegistries {
         async()=>[...this.resolved.entries()],
       );
       const host=await this.host;
-      if(host){for(const [b,reg]of this.resolved)reg.setBus(host.bridge(),b);if(this.events)host.attachEvents(this.events);}
+      if(host){for(const [b,reg]of this.resolved)reg.setBus(host.bridge(),b);if(this.events)host.attachEvents(this.events);if(this.busRef)this.busRef.host=host;}
     } else {
       const host=await this.host;
       if(host)r.setBus(host.bridge(),ref);

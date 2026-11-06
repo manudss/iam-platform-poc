@@ -35,7 +35,8 @@ services:
 
   nats:
     image: nats:latest
-    command: ["-js"]
+    command: ["-c", "/etc/nats/nats-local.conf"]
+    volumes: ["../conf/nats-local.conf:/etc/nats/nats-local.conf:ro", "nats-js:/tmp/iam-nats-js"]
     ports: ["127.0.0.1:4222:4222"]
 
   openbao:              # dev mode: in-memory, for local experiments only
@@ -44,4 +45,4 @@ services:
     ports: ["127.0.0.1:8200:8200"]
     cap_add: [IPC_LOCK]
 
-volumes: { dolt-data: {}, runtime-pg: {}, temporal-pg: {} }
+volumes: { dolt-data: {}, runtime-pg: {}, temporal-pg: {}, nats-js: {} }

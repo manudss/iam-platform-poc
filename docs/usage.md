@@ -65,14 +65,13 @@ In the console: click "Sign in (browser flow, recommended)": you go to the core 
 | `IAM_PLUGIN_PACKAGE` / `IAM_PLUGIN_TRUSTED_KEYS` | core | signed WASM plugin package dir and trusted publisher public keys (core refuses to start on any verification failure) |
 | `IAM_CORE_STATE_DIR` | core | directory where each tenant's active version is persisted and reloaded at start |
 | `IAM_RECONCILE_INTERVAL_MS` | API | >= 200: periodic outbox relay + reconcile of every tenant (PostgreSQL journal only) |
-| `IAM_NATS_URL` | API | NATS JetStream: publish `iam.activation.<tenant>` after activation |
 | `IAM_BAO_ADDR`, `IAM_BAO_TOKEN` | API | OpenBao KV v2; `secret/iam/pg` field `url` supplies the PostgreSQL URL when `IAM_PG_URL` is unset |
 | `IAM_TEMPORAL_ADDR` | API | Temporal frontend: enables `POST .../activation-workflows` |
 | `IAM_API_ADMIN_TOKEN` | API | 16+ chars, local only: enables `POST /access/simulate` (header `x-api-admin-token`) |
 | `IAM_EFFECTS`, `IAM_NOTIFY_SINK_URL`, `IAM_PROVISION_TARGET_URL` | API | notification/provisioning effects to loopback demo targets (see below) |
 
 With the compose stack (`.env` from `.env.example`): `DOLT_PASSWORD` = `DOLT_ROOT_PASSWORD`,
-`IAM_PG_URL=postgres://postgres:<RUNTIME_PG_PASSWORD>@127.0.0.1:5433/runtime`, `IAM_NATS_URL=127.0.0.1:4222`,
+`IAM_PG_URL=postgres://postgres:<RUNTIME_PG_PASSWORD>@127.0.0.1:5433/runtime`, the core bus (`IAM_BUS_NATS_URL` + `IAM_BUS_NATS_PASSWORD` + `IAM_CORE_URL` + `IAM_CORE_ADMIN_TOKEN`),
 `IAM_TEMPORAL_ADDR=127.0.0.1:7233`, `IAM_BAO_ADDR=http://127.0.0.1:8200` + `IAM_BAO_TOKEN` = `BAO_DEV_ROOT_TOKEN`.
 
 ## 4. HTTP API (all business routes need `Authorization: Bearer <id_token>`)
@@ -108,7 +107,7 @@ See README sections "Written but NOT run" and "Not implemented".
 `POST /access/check` (bearer token) records every answer. Read it: `curl -H "authorization: Bearer $TOKEN" http://127.0.0.1:3000/tenants/acme-demo/audit?limit=50` (newest first, only your token's tenant). Set `IAM_PG_URL` for the durable PostgreSQL table `decision_audit`; without it the audit lives in memory only.
 
 ## Notification manager and provisioning (local demo targets)
-Start any two local HTTP receivers (the tests show a minimal one), then run the API with `IAM_EFFECTS=1 IAM_PG_URL=... IAM_NATS_URL=... IAM_NOTIFY_SINK_URL=http://127.0.0.1:<port> IAM_PROVISION_TARGET_URL=http://127.0.0.1:<port>`. Each activation of a Dolt commit then sends one notification per changed role (to a fictional manager address, nothing is delivered to a person) and one PUT/DELETE per granted/revoked role. Non-loopback URLs are refused. Status per effect: table `effects` in PostgreSQL.
+Start any two local HTTP receivers (the tests show a minimal one), then run the API with `IAM_EFFECTS=1 IAM_PG_URL=...` plus the core bus variables and `IAM_NOTIFY_SINK_URL=http://127.0.0.1:<port> IAM_PROVISION_TARGET_URL=http://127.0.0.1:<port>`. Each activation of a Dolt commit then sends one notification per changed role (to a fictional manager address, nothing is delivered to a person) and one PUT/DELETE per granted/revoked role. Non-loopback URLs are refused. Status per effect: table `effects` in PostgreSQL.
 
 ## Browser sign-in (IdP prototype) and agent demo
 Recommended path: the Angular console above (it IS the client of the browser flow, validated by `scripts/ui-e2e.mjs`). Diagnostic alternative without Angular: `cd core && cargo run -p iam-core`, then `node scripts/demo-client.mjs` and open `http://localhost:4200/start` (same port 4200: do not run it together with `ng serve`); it prints `SIGNED IN (token exchange ok)` without showing the token. Wrong redirect_uri, `plain`, missing `state` give a 400 page and never a redirect. The JSON `/authorize` + `/token` endpoints still exist (legacy, used by the API test suites).

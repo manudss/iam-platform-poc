@@ -6,7 +6,7 @@ import { UsersModule } from '../../users/users.module.js';
 import { UsersService } from '../../users/users.service.js';
 import { Module } from '@nestjs/common';
 import { PluginRegistry } from './registry.js';
-import { BusHost } from './bus-host.js';
+import { BusHost, BusHostRef } from './bus-host.js';
 import { AppEvents } from '../../events/app-events.service.js';
 import { EventsModule } from '../../events/events.module.js';
 import pg from 'pg';
@@ -40,7 +40,7 @@ import { SessionAdminController } from '../../authn/session.controller.js';
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
   controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
-  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
     provide: SSO_DIRECTORY,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltSsoDirectory(v) : new MemorySsoDirectory(),
@@ -58,8 +58,8 @@ import { SessionAdminController } from '../../authn/session.controller.js';
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltProfileStore(v, (w) => currentBranch(w)) : new MemoryProfileStore(),
   }, {
     provide: PluginRegistry,
-    inject: [VersioningService, UsersService, BranchRegistries, AppEvents],
-    useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries, events: AppEvents) => {
+    inject: [VersioningService, UsersService, BranchRegistries, AppEvents, BusHostRef],
+    useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries, events: AppEvents, busRef: BusHostRef) => {
       if (process.env.IAM_WORKSPACE_MODE === '1') return branches.get('main');
       const audit = (e: unknown) => console.log(`[plugins] ${JSON.stringify(e)}`);
       const url = process.env.IAM_PG_URL;
@@ -74,10 +74,10 @@ import { SessionAdminController } from '../../authn/session.controller.js';
       await r.load();
       // Step 2: serve the plugins over the core bus when it is configured (no-op otherwise).
       const host = await BusHost.startIfConfigured(async () => r);
-      if (host) { r.setBus(host.bridge()); host.attachEvents(events); }
+      if (host) { r.setBus(host.bridge()); host.attachEvents(events); busRef.host = host; }
       return r;
     },
   }],
-  exports: [AppConnectorService, OidcProviderService, SamlIdpService, PluginRegistry, BranchRegistries, AuthnService, ProfileService, OrgService, RolesService],
+  exports: [AppConnectorService, OidcProviderService, SamlIdpService, PluginRegistry, BranchRegistries, BusHostRef, AuthnService, ProfileService, OrgService, RolesService],
 })
 export class PluginsV1Module {}

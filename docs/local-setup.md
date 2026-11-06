@@ -86,7 +86,6 @@ $env:IAM_CORE_ADMIN_TOKEN = "local-demo-admin-token"    # same as the core
 $env:DOLT_PASSWORD        = "dev-only-change-me"        # = DOLT_ROOT_PASSWORD (Dolt host/port/user/db default to 127.0.0.1:3307 root iam)
 $env:IAM_PG_URL           = "postgres://postgres:dev-only-change-me@127.0.0.1:5433/runtime"   # durable journal + audit
 # optional integrations (all served by compose):
-$env:IAM_NATS_URL         = "127.0.0.1:4222"
 $env:IAM_TEMPORAL_ADDR    = "127.0.0.1:7233"
 $env:IAM_BAO_ADDR         = "http://127.0.0.1:8200"; $env:IAM_BAO_TOKEN = "dev-only-change-me"
 node dist/main.js                                       # listens on 3000 (takes a few seconds to start)
@@ -96,7 +95,7 @@ bash:
 cd apps/api
 IAM_CORE_URL=http://127.0.0.1:8081 IAM_ISSUER=http://127.0.0.1:8081 IAM_CORE_ADMIN_TOKEN=local-demo-admin-token \
 DOLT_PASSWORD=dev-only-change-me IAM_PG_URL=postgres://postgres:dev-only-change-me@127.0.0.1:5433/runtime \
-IAM_NATS_URL=127.0.0.1:4222 IAM_TEMPORAL_ADDR=127.0.0.1:7233 node dist/main.js
+IAM_TEMPORAL_ADDR=127.0.0.1:7233 node dist/main.js
 ```
 Without `IAM_PG_URL` the journal and audit are in memory. Without `IAM_CORE_ADMIN_TOKEN` activations are only journaled
 (`state: recorded`) and decisions in tenant mode stay deny. Full list of variables: `docs/usage.md` section 3.
