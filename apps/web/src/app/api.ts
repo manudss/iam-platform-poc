@@ -21,6 +21,8 @@ export interface Change { branch: string; commit: string; violations: Violation[
  */
 export class ApiClient {
   private token = '';
+  /** Counts sign-ins and sign-outs. A renewal (docs/session.md) replaces the token but keeps the same sign-in, so it does not change this. */
+  private epoch = 0;
   branch = '';
 
   constructor(private readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a), private readonly onUnauthorized: () => void = () => {}) {}
@@ -35,7 +37,39 @@ export class ApiClient {
   get identity(): string {
     try { const b = this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return (JSON.parse(atob(b)) as { sub?: string }).sub ?? ''; } catch { return ''; }
   }
-  logout() { this.token = ''; }
+  logout() { this.token = ''; this.epoch++; }
+  private signIn(token: string) { this.token = token; this.epoch++; }
+
+  private claims(): Record<string, unknown> {
+    try { const b = this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); const c = JSON.parse(atob(b)); return c && typeof c === 'object' ? c : {}; } catch { return {}; }
+  }
+  /**
+   * Session timing read from the in-memory token (display only: the server verifies every request). Times are in ms.
+   * `end` is when this token stops working, `limit` the absolute end of the whole sign-in (null when renewal is not possible for this token).
+   */
+  get sessionInfo(): { start: number; end: number; warnMs: number; limit: number | null } | null {
+    const c = this.claims(), num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const iat = num(c['iat']), exp = num(c['exp']); if (iat === null || exp === null) return null;
+    const auth = num(c['auth_time']), max = num(c['session_max']), warn = num(c['session_warn']);
+    return { start: iat * 1000, end: exp * 1000, warnMs: Math.min((warn ?? 120) * 1000, Math.floor((exp - iat) * 1000 / 3)), // never more than a third of the token life: a very short token must not sit in warning from the start
+       limit: auth !== null && max !== null ? (auth + max) * 1000 : null };
+  }
+  /**
+   * Asks the core for a fresh token of the same sign-in (POST /core/session/extend, the current token is the credential).
+   * 'extended' = the new token is in use; 'limit' = the absolute session limit leaves no extra time; 'expired' = the token is not valid any more.
+   */
+  async extendSession(): Promise<'extended' | 'limit' | 'expired'> {
+    const sent = this.token, epoch = this.epoch; if (!sent) return 'expired';
+    const r = await this.f('/core/session/extend', { method: 'POST', headers: { authorization: `Bearer ${sent}` } });
+    if (r.status === 401) return 'expired';
+    if (r.status === 409) return 'limit';
+    if (!r.ok) throw new Error('session renewal failed');
+    const t = ((await r.json().catch(() => ({}))) as { id_token?: string }).id_token;
+    if (!t) throw new Error('session renewal failed');
+    if (this.epoch !== epoch || this.token !== sent) return 'expired'; // signed out or in again while waiting: the new token is not ours to use
+    this.token = t;
+    return 'extended';
+  }
 
   /** Recommended sign-in: browser code+PKCE flow. Keeps a fresh state + verifier in sessionStorage and leaves for the core's login form. */
   async startBrowserLogin(storage: Pick<Storage, 'setItem'>, go: (url: string) => void, chain?: string, branchTest?: { branch: string; ticket: string }) {
@@ -58,7 +92,7 @@ export class ApiClient {
     if (!state || !verifier || !code || p.get('state') !== state) throw new Error('sign-in refused: state mismatch (code ignored)');
     const t = await this.f('/core/token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: REDIRECT, client_id: 'demo-web' }) });
     if (!t.ok) throw new Error('token exchange failed');
-    this.token = ((await t.json()) as { id_token: string }).id_token;
+    this.signIn(((await t.json()) as { id_token: string }).id_token);
   }
 
   /** Public list of the sign-in methods (chains) the live configuration offers. Names and declared levels only.
@@ -79,7 +113,7 @@ export class ApiClient {
     const { code } = (await a.json()) as { code: string };
     const t = await post('/token', { code, code_verifier: verifier, redirect_uri: REDIRECT, client_id: 'demo-web' });
     if (!t.ok) throw new Error('token exchange failed');
-    this.token = ((await t.json()) as { id_token: string }).id_token;
+    this.signIn(((await t.json()) as { id_token: string }).id_token);
   }
 
   async users() { return (await this.raw<{users: UserProfile[]}>('GET','/users')).data.users; }
@@ -94,15 +128,15 @@ export class ApiClient {
 
   private async call<T>(method: string, path: string, body?: object, extra: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
-    const sentToken = this.token, sentBranch=this.branch;
+    const sentToken = this.token, sentEpoch = this.epoch, sentBranch=this.branch;
     // '@/sso/{t}/...' addresses an API route outside /tenants (SSO sign-in requests); {t} is this tenant.
     const r = await this.f(path.startsWith('@') ? `/api${path.slice(1).replace('{t}', encodeURIComponent(this.tenant))}` : `/api/tenants/${this.tenant}${path}`, {
       method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...(this.branch ? {'x-iam-branch':this.branch} : {}), ...extra }, body: body ? JSON.stringify(body) : undefined,
     });
     const data = (await r.json().catch(() => ({}))) as T;
     if(this.branch!==sentBranch)throw new Error('Working branch changed. Request result ignored.');
-    if (this.token !== sentToken) throw new Error('Session changed. Request result ignored; check the current state.');
-    if (r.status === 401 && this.token === sentToken) throw this.unauthorized();
+    if (this.epoch !== sentEpoch) throw new Error('Session changed. Request result ignored; check the current state.');
+    if (r.status === 401) { if (this.token === sentToken) throw this.unauthorized(); throw new Error('Your session was just renewed. Please try the action again.'); }
     if (!r.ok && r.status !== 409) throw new Error((data as { message?: string }).message ?? `HTTP ${r.status}`);
     return { status: r.status, data };
   }

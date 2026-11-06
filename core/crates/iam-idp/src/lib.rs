@@ -22,6 +22,8 @@ pub struct Idp {
     users: HashMap<String, String>, // username -> demo password (FICTIONAL, plain text on purpose: demo only)
     codes: Mutex<HashMap<String, Code>>,
     ttl: u64,
+    /// Hard ceiling on every token lifetime, set only from the operator's environment (IAM_TOKEN_TTL_SECS).
+    ttl_cap: Option<u64>,
 }
 
 /// Authentication facts a sign-in may add to the id_token. Strict whitelist and shapes: the control plane's answer is not trusted to set anything else.
@@ -36,6 +38,10 @@ pub fn safe_auth_claims(extra: &Value) -> serde_json::Map<String, Value> {
             "amr" | "auth_methods" | "auth_simulated" => strs(v),
             "auth_level" | "auth_level_declared" => v.as_u64().is_some_and(|n| (1..=10).contains(&n)),
             "auth_mfa" => v.is_boolean(),
+            // Session settings (docs/session.md): seconds, bounded so the control plane can never ask for an unbounded token.
+            "session_ttl" => v.as_u64().is_some_and(|n| (10..=604_800).contains(&n)),
+            "session_warn" => v.as_u64().is_some_and(|n| (1..=86_400).contains(&n)),
+            "session_max" => v.as_u64().is_some_and(|n| (10..=604_800).contains(&n)),
             "auth_level_basis" | "auth_chain" => v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')),
             _ => false,
         };
@@ -66,12 +72,21 @@ impl Idp {
         users.insert("demo-bob".to_string(), "demo-only-not-a-secret".to_string());
         Self {
             key: SigningKey::from_bytes(&seed), issuer: issuer.into(), client_id: "demo-web".into(),
-            redirect_uris: demo_redirect_uris(), users, codes: Mutex::new(HashMap::new()), ttl: 300,
+            redirect_uris: demo_redirect_uris(), users, codes: Mutex::new(HashMap::new()), ttl: 300, ttl_cap: None,
         }
     }
 
     /// Token lifetime in seconds (local testing only, e.g. 1 to test expiry).
     pub fn with_ttl(mut self, ttl: u64) -> Self { self.ttl = ttl; self }
+    /// Operator ceiling: no token lives longer than this, whatever the configured session length says.
+    pub fn with_ttl_cap(mut self, cap: u64) -> Self { self.ttl_cap = Some(cap); self }
+    pub fn issuer(&self) -> &str { &self.issuer }
+
+    /// Session length of a token: the configured `session_ttl` (set by the control plane at sign-in), else the default, never above the operator ceiling.
+    fn session_ttl(&self, claims: &serde_json::Map<String, Value>) -> u64 {
+        let t = claims.get("session_ttl").and_then(Value::as_u64).unwrap_or(self.ttl);
+        self.ttl_cap.map_or(t, |c| t.min(c))
+    }
 
     pub fn discovery(&self) -> Value {
         json!({"issuer": self.issuer, "authorization_endpoint": format!("{}/authorize", self.issuer),
@@ -129,10 +144,28 @@ impl Idp {
         let ok_pkce = B64.encode(Sha256::digest(verifier.as_bytes())) == c.challenge;
         if !ok_pkce || c.exp < now() || c.redirect_uri != redirect_uri || c.client_id != client_id { return Err(IdpError::InvalidGrant); }
         let t = now();
-        let mut claims = json!({"iss": self.issuer, "sub": c.user, "aud": c.client_id, "iat": t, "exp": t + self.ttl, "tenant": "acme-demo"});
+        let ttl = self.session_ttl(&c.extra);
+        let mut claims = json!({"iss": self.issuer, "sub": c.user, "aud": c.client_id, "iat": t, "exp": t + ttl, "tenant": "acme-demo"});
         for (k, v) in c.extra { claims[k] = v; } // only keys that safe_auth_claims kept, none of which is a registered claim
+        claims["auth_time"] = json!(t); // core-set: when the person really signed in. The absolute session limit counts from here.
         if let Some(b) = c.branch { claims["branch"] = json!(b); } // core-set, after the merge: the control plane can never plant it
-        Ok(json!({"id_token": self.sign(&claims), "token_type": "Bearer", "expires_in": self.ttl}))
+        Ok(json!({"id_token": self.sign(&claims), "token_type": "Bearer", "expires_in": ttl}))
+    }
+
+    /// Renews a still valid session token (docs/session.md): same person, same claims, a fresh `iat`/`exp`.
+    /// New expiry = `now + session_ttl`, never later than `auth_time + session_max` (which a renewal never moves).
+    /// Refused when the token is invalid or expired, has no session limit, or the limit leaves no extra time.
+    pub fn extend(&self, token: &str) -> Result<Value, IdpError> {
+        let claims = verify(token, &self.jwks(), &self.issuer).ok_or(IdpError::InvalidGrant)?;
+        let mut o = claims.as_object().cloned().ok_or(IdpError::InvalidGrant)?;
+        let (auth_time, max) = (o.get("auth_time").and_then(Value::as_u64), o.get("session_max").and_then(Value::as_u64));
+        let (Some(auth_time), Some(max)) = (auth_time, max) else { return Err(IdpError::InvalidGrant) };
+        let (t, old_exp) = (now(), o.get("exp").and_then(Value::as_u64).unwrap_or(0));
+        let ttl = self.session_ttl(&o);
+        let new_exp = (t + ttl).min(auth_time + max);
+        if new_exp <= old_exp.max(t) { return Err(IdpError::InvalidGrant); } // limit reached: nothing to add
+        o.insert("iat".into(), json!(t)); o.insert("exp".into(), json!(new_exp));
+        Ok(json!({"id_token": self.sign(&Value::Object(o)), "token_type": "Bearer", "expires_in": new_exp - t, "session_ends_at": auth_time + max}))
     }
 
     fn sign(&self, claims: &Value) -> String {
@@ -238,6 +271,53 @@ mod tests {
         // a different key must not verify
         let j = Idp::demo("http://idp.test");
         assert!(verify(&tok, &j.jwks(), "http://idp.test").is_none());
+    }
+    #[test]
+    fn configured_session_length_is_used_capped_and_bounded() {
+        let signed = |i: &Idp, extra: Value| { let (v, ch) = pkce(); let code = i.authorize_verified_with("demo-web", REDIR, &ch, "demo-alice", &extra).unwrap(); i.token(&code, &v, REDIR, "demo-web").unwrap() };
+        let i = Idp::demo("http://idp.test");
+        let t = signed(&i, json!({"session_ttl": 1800, "session_warn": 120, "session_max": 28800}));
+        assert_eq!(t["expires_in"], 1800);
+        let c = verify(t["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap();
+        assert_eq!(c["exp"].as_u64().unwrap() - c["iat"].as_u64().unwrap(), 1800);
+        assert_eq!((c["session_warn"].as_u64(), c["session_max"].as_u64(), c["auth_time"] == c["iat"]), (Some(120), Some(28800), true));
+        assert_eq!(signed(&i, Value::Null)["expires_in"], 300);
+        assert_eq!(signed(&i, json!({"session_ttl": 99_999_999u64}))["expires_in"], 300);
+        assert_eq!(signed(&i, json!({"session_ttl": 1}))["expires_in"], 300);
+        let capped = Idp::demo("http://idp.test").with_ttl_cap(60);
+        assert_eq!(signed(&capped, json!({"session_ttl": 1800}))["expires_in"], 60);
+    }
+    #[test]
+    fn extend_renews_the_token_within_the_absolute_limit() {
+        let i = Idp::demo("http://idp.test"); let (v, ch) = pkce();
+        let code = i.authorize_verified_with("demo-web", REDIR, &ch, "demo-alice", &json!({"session_ttl": 600, "session_max": 3600, "auth_level": 3})).unwrap();
+        let old = i.token(&code, &v, REDIR, "demo-web").unwrap()["id_token"].as_str().unwrap().to_string();
+        let oc = verify(&old, &i.jwks(), "http://idp.test").unwrap();
+        let mut short = oc.as_object().unwrap().clone();
+        short.insert("exp".into(), json!(now() + 60));
+        let r = i.extend(&i.sign(&Value::Object(short))).unwrap();
+        let nc = verify(r["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap();
+        assert_eq!((nc["sub"].clone(), nc["auth_level"].clone(), nc["auth_time"].clone()), (oc["sub"].clone(), json!(3), oc["auth_time"].clone()));
+        assert!(nc["exp"].as_u64().unwrap() > now() + 590 && nc["exp"].as_u64().unwrap() <= now() + 600);
+        assert_eq!(r["session_ends_at"].as_u64().unwrap(), oc["auth_time"].as_u64().unwrap() + 3600);
+        let mut late = nc.as_object().unwrap().clone();
+        late.insert("auth_time".into(), json!(now() - 3500)); late.insert("exp".into(), json!(now() + 30));
+        let r = i.extend(&i.sign(&Value::Object(late))).unwrap();
+        let lc = verify(r["id_token"].as_str().unwrap(), &i.jwks(), "http://idp.test").unwrap();
+        assert!(lc["exp"].as_u64().unwrap() <= now() + 100);
+        let mut last = lc.as_object().unwrap().clone(); last.insert("exp".into(), json!(lc["auth_time"].as_u64().unwrap() + 3600));
+        assert_eq!(i.extend(&i.sign(&Value::Object(last))).unwrap_err(), IdpError::InvalidGrant);
+    }
+    #[test]
+    fn extend_refuses_expired_forged_and_unlimited_tokens() {
+        let i = Idp::demo("http://idp.test"); let other = Idp::demo("http://idp.test");
+        assert_eq!(i.extend("garbage").unwrap_err(), IdpError::InvalidGrant);
+        let mk = |idp: &Idp, exp: u64, with_max: bool| { let mut c = json!({"iss": "http://idp.test", "sub": "demo-alice", "aud": "demo-web", "iat": now() - 10, "exp": exp, "auth_time": now() - 10});
+            if with_max { c["session_max"] = json!(3600); c["session_ttl"] = json!(600); } idp.sign(&c) };
+        assert_eq!(i.extend(&mk(&i, now() - 1, true)).unwrap_err(), IdpError::InvalidGrant);
+        assert_eq!(i.extend(&mk(&other, now() + 30, true)).unwrap_err(), IdpError::InvalidGrant);
+        assert_eq!(i.extend(&mk(&i, now() + 30, false)).unwrap_err(), IdpError::InvalidGrant);
+        assert!(i.extend(&mk(&i, now() + 30, true)).is_ok());
     }
     #[test]
     fn branch_claim_is_core_set_and_never_comes_from_the_control_plane_extra() {

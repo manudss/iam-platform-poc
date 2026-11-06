@@ -8,7 +8,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 #[derive(Debug, PartialEq)]
-pub enum Gate { Allow, Deny, Unavailable }
+pub enum Gate { /// The control plane's untrusted extras (session length): the IdP filters them.
+    Allow(Value), Deny, Unavailable }
 
 /// addr must be a loopback host:port (checked at startup by `parse_addr`).
 pub fn parse_addr(a: &str) -> Option<String> {
@@ -19,7 +20,7 @@ pub fn parse_addr(a: &str) -> Option<String> {
 pub async fn check(addr: &str, token: &str, tenant: &str, user: &str, password: &str) -> Gate {
     // JSON /authorize path: a single password, no pages. A chain that needs more steps can only be completed in the browser flow, so it is a denial here.
     match step(addr, token, json!({"tenant": tenant, "subject": user, "password": password})).await {
-        Step::Allow { .. } => Gate::Allow,
+        Step::Allow { claims, .. } => Gate::Allow(claims),
         Step::Unavailable => Gate::Unavailable,
         _ => Gate::Deny,
     }
