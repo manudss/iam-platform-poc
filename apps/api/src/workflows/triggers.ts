@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
-import { AppEvent, AppEvents } from '../events/app-events.service.js';
+import { AppEvent, AppEvents, APP_EVENT_KINDS } from '../events/app-events.service.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { workspaceMode } from '../workspace/context.js';
@@ -27,7 +27,11 @@ export class WorkflowTriggersService implements OnModuleInit {
     @Optional() private readonly branches?: BranchRegistries,
   ) {}
 
-  onModuleInit() { this.events.on((e) => this.dispatch(e)); }
+  onModuleInit() {
+    this.events.on((e) => this.dispatch(e)); // no-bus fallback (unit tests, bus disabled)
+    // Step 3: over the bus, this service consumes its own durable address (at-least-once; the run guards absorb a duplicate).
+    this.events.consumeOnBus('workflow-triggers', APP_EVENT_KINDS, (e) => this.dispatch(e));
+  }
 
   private async dispatch(e: AppEvent) {
     const registry = workspaceMode() && this.branches ? await this.branches.get(e.branch) : this.reg;

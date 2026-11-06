@@ -19,7 +19,9 @@
  *   memory; a durable ledger belongs to the later effects step). A redelivered effect gets a `deduped` reply
  *   instead of a second run.
  */
+import { createHash } from 'node:crypto';
 import { connect, AckPolicy, ConsumerMessages, JsMsg, JSONCodec, KV, Msg, NatsConnection, Subscription, JetStreamClient, nanos } from 'nats';
+import { AppEvent, AppEvents, APP_EVENT_KINDS } from '../../events/app-events.service.js';
 import { HOOKS, PluginContext } from './hooks.js';
 import { BusBridge, PluginRegistry } from './registry.js';
 import { validateSettings } from './settings.js';
@@ -108,8 +110,25 @@ export class BusHost {
   /** Platform kinds = hooks whose only mode is async. Blocking hooks stay in process until the auth migration step. */
   private async declarePlatformKinds() {
     const kinds = [...HOOKS.entries()].filter(([, modes]) => modes.length === 1 && modes[0] === 'async').map(([name]) => ({ name, mode: 'notify' as const }));
-    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [], declare_kinds: kinds });
+    // The platform's application events (user.created, sso.login.*, ...) are notify kinds declared by `api` too.
+    const appKinds = APP_EVENT_KINDS.map((name) => ({ name, mode: 'notify' as const }));
+    await this.post('/v1/bus/plugins/register', { plugin: 'api', subscriptions: [], emits: [...APP_EVENT_KINDS], declare_kinds: [...kinds, ...appKinds] });
     for (const k of kinds) this.routedKinds.add(k.name);
+  }
+
+  /** Step 3: the application events travel on the bus. Emissions stay fire-and-forget (the producing write is
+   * already committed; a bus failure is logged, never propagated) and carry a deterministic effect key: a bus
+   * redelivery replays the SAME event (same key, the consumers' handlers absorb the duplicate), while two
+   * genuinely distinct events always differ in at least one field. Consumers get their own durable address. */
+  attachEvents(events: AppEvents) {
+    events.attachBus(
+      (e: AppEvent) => {
+        const effectKey = createHash('sha256').update(JSON.stringify([e.type, e.tenant, e.branch, e.at, Object.keys(e.payload).sort().map((k) => [k, e.payload[k]])])).digest('hex').slice(0, 48);
+        this.post('/v1/bus/emit', { source: 'api', kind: e.type, tenant: e.tenant, branch: e.branch, payload: { ...e.payload, at: e.at }, effect_key: effectKey })
+          .catch((err) => this.log({ warn: 'application event not emitted', kind: e.type, error: String(err) }));
+      },
+      (address, kinds, handler) => { this.serveService(address, kinds, handler).catch((err) => this.log({ warn: 'service not served', address, error: String(err) })); },
+    );
   }
 
   private listeningOn?: PluginRegistry;

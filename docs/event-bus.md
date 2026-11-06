@@ -40,10 +40,22 @@ synchronous request/reply path. Every observer record is also persisted to the `
 (`bus.journal`); the HTTP feed still reads the fast in-memory ring. Envelopes carry `branch`: the API host
 resolves each delivery against the registry of that working branch (decision: all branches share the one bus).
 
+### Application events on the bus
+
+The platform's own application events (`user.created`, `signup.approved`, `sso.login.*`, ... - the
+`APP_EVENT_KINDS` list, mirrored by `WF_EVENTS` in the workflows model) travel on the same bus. When the API's
+bus host is up it attaches `AppEvents`: emissions become notify envelopes declared by `api` (`at` rides inside
+the payload, the branch is stamped), and the two internal listeners consume their own durable delivery
+addresses - `workflow-triggers` (all application kinds: a matching definition starts a run) and `audit-trail`
+(the `sso.*` kinds: sign-in decisions land in the audit log). Emissions stay fire-and-forget with a
+deterministic effect key (hash of the whole event), so a bus redelivery replays the same key and the consumers
+absorb the duplicate; a bus failure is logged, never propagated - an event listener can still never break the
+action that produced it. Without the bus (unit tests, bus disabled) the historical in-process fan-out applies.
+
 ## What is prepared, NOT built (later steps)
 
-Absorbing AppEvents of PR #7 (not merged), routing blocking hooks (auth step),
-restart-proof reads of the journal stream, local in-process duplicate for latency (D16 evaluation: not done).
+Routing blocking hooks (auth step), restart-proof reads of the journal stream,
+local in-process duplicate for latency (D16 evaluation: not done).
 
 ## Step 2 endpoints (plugin host protocol)
 

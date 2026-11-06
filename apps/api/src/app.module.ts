@@ -3,7 +3,7 @@ import { WorkflowsModule } from './workflows/workflows.module.js';
 import { UsersModule } from './users/users.module.js';
 import { BusModule } from './bus/bus.module.js';
 import { Module } from '@nestjs/common';
-import { AppEvents } from './events/app-events.service.js';
+import { AppEvent, AppEvents, APP_EVENT_KINDS } from './events/app-events.service.js';
 import { HealthController } from './health.controller.js';
 import { ActivationModule } from './activation/activation.module.js';
 import { AccessController } from './access/access.controller.js';
@@ -26,9 +26,12 @@ import { CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioSe
 export class AppModule {
   /** SSO events (sign-in allowed, refused, tokens issued) go to the decision audit: who, which application, when. No claim values, no tokens. */
   constructor(events: AppEvents, audit: AuditService) {
-    events.on((e) => {
+    const record = (e: AppEvent) => {
       if (!e.type.startsWith('sso.')) return;
       return audit.record({ tenant: e.tenant, subject: e.payload.subject ?? '', principal: e.payload.subject ?? '', action: e.type, resource: `app:${e.payload.app ?? ''}`, allow: e.type === 'sso.login.succeeded' || e.type === 'sso.token.issued', reasons: e.payload.reason ? [e.payload.reason] : [], activation_seq: null, commit: null, source: 'http' });
-    });
+    };
+    events.on(record); // no-bus fallback (unit tests, bus disabled)
+    // Step 3: over the bus, the SSO audit trail consumes its own durable address (at-least-once).
+    events.consumeOnBus('audit-trail', APP_EVENT_KINDS.filter((k) => k.startsWith('sso.')), record);
   }
 }

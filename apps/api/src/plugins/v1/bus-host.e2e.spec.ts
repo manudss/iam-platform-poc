@@ -13,6 +13,7 @@ import { BusHost } from './bus-host.js';
 import { MemoryMigrationStore, MemorySettingsStore } from './memory-stores.js';
 import { notifyLog, orgManager } from './builtin/index.js';
 import type { PluginImpl } from './registry.js';
+import { AppEvent, AppEvents } from '../../events/app-events.service.js';
 
 /** Test plugin: records every payload it receives, so the tests can see the asynchronous effects. */
 const received: { kind: string; payload: any }[] = [];
@@ -166,5 +167,30 @@ describe('bus host e2e (step 2): plugins served by the core bus', { skip: false 
     const t0 = Date.now();
     while (!got.some((x) => x.endsWith(':e2e-5')) && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 100));
     assert.equal(got.filter((x) => x.endsWith(':e2e-5')).length, 1, 'the service received the event once');
+  });
+
+  it('application events travel on the bus once the host attaches (commit 5)', async (t) => {
+    if (!available) return t.skip('no nats-server or core binary');
+    const events = new AppEvents();
+    const local: AppEvent[] = [];
+    events.on((e) => { local.push(e); }); // the fallback listener must stay silent once the bus is attached
+    const got: AppEvent[] = [];
+    events.consumeOnBus('app-events-test', ['user.created', 'sso.login.succeeded'], (e) => { got.push(e); });
+    host!.attachEvents(events); // registered consumers are served on attach
+    assert.ok(events.routedToBus);
+    events.emit({ type: 'user.created', tenant: T, branch: 'main', at: new Date().toISOString(), payload: { subject: 'demo-zoe', displayName: 'Zoe', department: 'it', email: 'zoe@acme.test' } });
+    const t0 = Date.now();
+    while (!got.length && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 100));
+    assert.equal(got.length, 1, 'the consumer received the event over the bus');
+    assert.equal(got[0].type, 'user.created');
+    assert.equal(got[0].branch, 'main');
+    assert.equal(got[0].payload.subject, 'demo-zoe');
+    assert.equal(got[0].payload.displayName, 'Zoe');
+    assert.ok(got[0].at, 'the at timestamp rides along');
+    assert.equal(local.length, 0, 'no in-process fan-out once routed to the bus');
+    // An event kind the consumer did not subscribe to never reaches it.
+    events.emit({ type: 'user.disabled', tenant: T, branch: 'main', at: new Date().toISOString(), payload: { subject: 'demo-zoe' } });
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(got.length, 1, 'unsubscribed kinds are not delivered');
   });
 });
