@@ -24,3 +24,19 @@ export class AdminGuard implements CanActivate {
     return true;
   }
 }
+
+/** The policy-admin RIGHT (policy studio step 4): who may WRITE rules and template links (propose endpoints).
+ *  Reads and simulations stay behind the administrator capability; writes additionally require the caller's subject in
+ *  IAM_API_POLICY_ADMIN_SUBJECTS when that list is set (when unset, every administrator may write - the demo default). */
+@Injectable()
+export class PolicyAdminGuard extends AdminGuard {
+  override canActivate(ctx: ExecutionContext): boolean {
+    super.canActivate(ctx);
+    const listed = (process.env.IAM_API_POLICY_ADMIN_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (listed.length) {
+      const sub = ctx.switchToHttp().getRequest().user?.sub;
+      if (typeof sub !== 'string' || !listed.includes(sub)) throw new ForbiddenException('the policy-admin right is required to change rules');
+    }
+    return true;
+  }
+}

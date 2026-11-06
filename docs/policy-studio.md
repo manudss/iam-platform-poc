@@ -1,4 +1,4 @@
-# Policy studio (Cedar rules) - step 1: read-only catalogue; step 2: schema validation; step 3: the "why refused?" simulator
+# Policy studio (Cedar rules) - step 1: read-only catalogue; step 2: schema validation; step 3: the "why refused?" simulator; step 4 (core part): template links and candidate validation
 
 The platform decides every access with [Cedar](https://docs.cedarpolicy.com/) rules inside the Rust core. This plugin shows those rules.
 Step 1 changes nothing about a decision: it names the rules, lists them, and makes the decision audit say which rule decided.
@@ -69,6 +69,76 @@ forbid overrules it."
 - **Console**: the simulator card under the catalogue (own components). The context field is free JSON, validated before sending.
 - Read-only like steps 1-2: a simulation decides nothing, writes nothing to the audit, changes nothing.
 
+## Template links and candidate validation (step 4, core)
+
+A **template link** instantiates a template (`principal == ?principal`, `resource == ?resource`) once per beneficiary - a person
+(`User::"demo-bob"`), a role (`Role::"auditor"`, applies through entity parents) or an organisation. A link is DATA, not rule text:
+the engine takes `{ id, template, values }`, Cedar checks the slots, and the link id (`delegate:demo-bob`) is what `reasons` and the
+audit carry when the grant decides. A link naming an unknown template (or a static rule), a duplicate id or a missing slot value
+refuses the whole build - never a partial rule set. A linked rule cannot be rendered back to Cedar text, so the catalogue shows it
+with `kind: "link"`, its `template` id and the template's text. Verified Cedar behaviour: the schema validates the rules and the
+templates, not a link's slot values - a mistyped value simply matches no request (a dead grant, not a hole), which is why the
+console picks link values from existing people, roles and organisations.
+
+Two admin-token endpoints work on CANDIDATE rules ({sets, links}) without ever touching the loaded engine:
+
+- **`POST /v1/policies/validate`** dry-builds the candidate against the SAME schema the core loaded (`schema: false` in the answer
+  means no schema is configured, so only parsing was checked). 200 returns the candidate's catalogue (readable ids, generated
+  summaries) so the console can preview before committing; 400 returns the error naming the rule. Limits: 1-32 sets, 256 KiB per
+  set, 512 links.
+- **`POST /v1/policies/simulate`** accepts an optional `policies` field: the simulation then runs on the candidate rules
+  (links included) instead of the loaded ones - "what would this branch's rules decide?" - and a candidate that does not build
+  is a 400 naming the rule, never a fake simulation.
+
+## Rules carried by the activation snapshot (step 4, core)
+
+Until now the only rules were the boot file (`policies/*.cedar`, the fallback set). A version snapshot can now carry its own
+rules: `policies` (the same {sets, links} shape as the candidate endpoints) and `policy_links`. On **Apply**, the core builds
+the tenant's engine from those rules FIRST: a version whose rules do not parse or do not validate against the schema is
+refused with a 400 naming the rule, and the previous version keeps serving (fail closed - a broken push never decides).
+When the build passes, decisions, `GET /v1/policies?tenant=...` and the simulator (`tenant` field, answer carries
+`engine_of: "tenant" | "boot"`) all use the tenant's rules; `engine.source` in the catalogue says which engine a tenant is on.
+A version WITHOUT `policies` keeps the current behaviour: the tenant reverts to the boot set, which stays the fallback
+("jeu de secours"). `load_state` (core restart) applies the same rule: a stored version whose rules no longer build is
+skipped, so a restart never revives a broken rule set.
+
+## Rule storage in Dolt (step 4, API)
+
+The rules are business data, versioned in Dolt like roles: `policy_sets` (named sets), `policy_rules` (one row per rule - its
+Cedar text with its annotations), `policy_template_links` (one row per beneficiary: template id + slot values). The demo seed
+loads the six demo rules of `policies/demo.cedar` as rows of the set `default`, so a fresh demo behaves identically with or
+without activation. `snapshotAt` (the export an Apply sends to the core) reads those tables AS OF the activated commit:
+rules of a set are concatenated in id order into `{set, text}` sources, links become `{id, template, values}`. Empty (or
+missing) tables = no `policies` field in the snapshot: the tenant falls back to the boot file - the fallback set stays one
+merge away. Because the core refuses a version whose rules do not build, a broken rule row merged by mistake fails the Apply
+(journaled `failed`, the error names the rule) and the previous version keeps serving.
+
+## Editing rules on a branch (step 4, API)
+
+Two endpoints change the rules - never main directly. `POST .../policies/rules/propose` ({op: upsert|delete, set, id, cedar?})
+and `POST .../policies/links/propose` ({op, id, template?, values?}) apply ONE change on a NEW Dolt branch, then read the
+branch's WHOLE rule set from the working rows and dry-build it through the core's `/v1/policies/validate` - the pre-commit
+validation against the very schema the core loaded. Only a candidate that builds is committed ({branch, commit} plus the
+validated catalogue preview); a refused one is a 400 with the core's error naming the rule, and Dolt is left exactly as it
+was (no commit, no branch). Merging the branch stays the explicit, existing act (workspace Apply / PR merge), and the Apply
+then re-validates: a broken rule can never reach the engine twice-guarded. Writes require the **policy-admin right**: the
+administrator capability plus, when `IAM_API_POLICY_ADMIN_SUBJECTS` is set, a caller subject in that list (unset: every
+administrator may write - the demo default). The second approver per policy is a later step.
+
+## The console editor (step 4, web)
+
+The Policies screen edits the rules: New rule / Edit / Delete on every rule and template, Link / Unlink on every template and
+link. Every action calls the propose endpoints above - one change per branch, validated by the core before the commit - and the
+answer card says where the change landed (branch, commit) and that nothing decides until the branch is merged and Applied
+(Workspace). The Link form picks the beneficiary from the people, roles and organisations that EXIST (datalist from /users,
+/roles, /organizations): the schema does not check a link's slot values, a mistyped beneficiary would be a dead grant. While the
+rule editor is open, the simulator runs on YOUR candidate rules - the catalogue rebuilt client-side with your edit
+(`buildCandidate`), sent as the `policies` field of the simulate call - so you see what the branch would decide before
+proposing anything. Writes need the policy-admin right; without it the propose call is refused and the card says so.
+
+That closes step 4: rules in Dolt, edited from the console, validated against the schema and testable in the simulator before
+they are applied. Still deferred on purpose: the second approver per policy and the AI-assisted authoring.
+
 ## Limits of steps 1-3
 
 Read-only. No editor, no impact analysis. The simulator evaluates the request you type; it does not look up the tenant's active version (so `roles` and `sod_conflict` are yours to set, not read from Dolt), and it does not create template links (step 4). The schema covers the current actions; a rule set introducing a new action
@@ -76,6 +146,6 @@ needs the schema extended first (on purpose: the schema is the contract of what 
 
 ## Tests
 
-- Rust: `cargo test` in `core` (rule names, sets, composition, templates, catalogue endpoint, directory loading, simulator engine and endpoint).
-- API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers).
-- Web: `policies.spec.ts` (filters, wording, simulator context parsing).
+- Rust: `cargo test` in `core` (rule names, sets, composition, templates and links, catalogue endpoint, directory loading, simulator engine and endpoint, candidate validation and simulation, snapshot-carried rules with fail-closed activation and per-tenant engine).
+- API: `policies/policy-studio.spec.ts` (endpoint, plugin gate, usage, simulator request checks) and `policies/policy-studio.e2e.spec.ts` (real core binary, readable names in reasons and audit, simulation answers). `activation.e2e.spec.ts` (real Dolt + real core): the snapshot carries the Dolt rules (tenant engine), a new rule row decides after activation, a broken rule row fails the Apply and the previous version keeps serving.
+- Web: `policies.spec.ts` (filters, wording, simulator context parsing, candidate rebuild from the catalogue, beneficiary suggestions).

@@ -124,4 +124,42 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     assert.equal((await fetch(`${CORE}/v1/activate`, { method: 'POST', headers: h, body })).status, 401);
     assert.equal((await fetch(`${CORE}/v1/activate`, { method: 'POST', headers: { ...h, 'x-core-admin-token': ADMIN }, body })).status, 409);
   });
+  it('policy-studio step 4: the snapshot carries the Dolt rules; a broken rule refuses the activation', async () => {
+    // The seed loaded the six demo rules as rows: the tenant engine is built from them, the boot file is only the fallback.
+    const cat = await (await fetch(`${CORE}/v1/policies?tenant=${T}`, { headers: { 'x-core-admin-token': ADMIN } })).json() as { engine: { source: string; rules: number } };
+    assert.deepEqual(cat.engine, { source: 'tenant', rules: 6, sets: 1, schema: true });
+    // A new rule row in Dolt decides once its commit is activated: carol may approve, and the audit name is the rule id.
+    await sql(`insert into policy_rules values ('default','carol-approves','@id("carol-approves")\\npermit(principal == User::"carol", action == Action::"approve", resource);')`);
+    const a = await svc.activate(T, await new DoltService().head());
+    assert.equal(a.state, 'applied');
+    const d = await decide('carol');
+    assert.equal(d.allow, true); assert.deepEqual(d.reasons, ['carol-approves']);
+    // A BROKEN rule row refuses the activation (journaled failed, core said why): the previous version keeps deciding.
+    await sql("insert into policy_rules values ('default','broken','this is not cedar')");
+    const f = await svc.activate(T, await new DoltService().head());
+    assert.equal(f.state, 'failed'); assert.match(f.error ?? '', /policy rules refused/);
+    assert.equal((await decide('carol')).allow, true);
+  });
+  it('policy-studio step 4d: a proposed rule is validated pre-commit, then merged and activated end to end', async () => {
+    await sql("delete from policy_rules where id='broken'"); // clean up the poisoned row the previous test left on main
+    const dolt = new DoltService();
+    const branches = async () => { const c = await createConnection({ host: '127.0.0.1', port: 13317, user: 'root', database: 'iam' }); try { const [r] = await c.query('select name from dolt_branches'); return (r as { name: string }[]).map((x) => x.name); } finally { await c.end(); } };
+    const validate = async (cand: unknown) => {
+      const res = await fetch(`${CORE}/v1/policies/validate`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-core-admin-token': ADMIN }, body: JSON.stringify(cand) });
+      if (!res.ok) throw new Error(`core refused the candidate: HTTP ${res.status} ${await res.text()}`);
+    };
+    // A candidate the core refuses: no commit, no branch left behind.
+    const before = await branches();
+    await assert.rejects(dolt.proposePolicyChange({ kind: 'upsert-rule', set: 'default', id: 'nope', cedar: 'permit(' }, validate), /core refused the candidate/);
+    assert.deepEqual(await branches(), before);
+    // A valid rule: committed on its branch, merged, activated - and it decides.
+    const { branch } = await dolt.proposePolicyChange({ kind: 'upsert-rule', set: 'default', id: 'dave-approves', cedar: '@id("dave-approves")\npermit(principal == User::"dave", action == Action::"approve", resource);' }, validate);
+    const merged = await dolt.merge(branch);
+    const a = await svc.activate(T, merged.commit);
+    assert.equal(a.state, 'applied');
+    const d = await decide('dave');
+    assert.equal(d.allow, true); assert.deepEqual(d.reasons, ['dave-approves']);
+  });
 });
+
+

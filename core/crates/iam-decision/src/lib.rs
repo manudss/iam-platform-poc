@@ -8,7 +8,7 @@
 //! id: its `@id("...")` annotation (prefixed by the set name unless the set is "default"), else Cedar's generated `policyN`. That id is what
 //! `reasons` and error messages carry, so the decision audit names the rule. `catalog()` lists the rules for the read-only console screen.
 use cedar_policy::{
-    Authorizer, Context, Decision, Effect, Entities, EntityUid, Policy, PolicyId, PolicySet, Request, Schema, Template,
+    Authorizer, Context, Decision, Effect, Entities, EntityUid, Policy, PolicyId, PolicySet, Request, Schema, SlotId, Template,
     ValidationMode, Validator,
 };
 use serde::{Deserialize, Serialize};
@@ -74,10 +74,23 @@ pub struct Simulation {
 }
 
 /// One named set of Cedar rules (one file, later one Dolt row group). The name "default" is not shown in rule ids.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicySource {
     pub set: String,
     pub text: String,
+}
+
+/// One template link (policy-studio step 4): instantiates a template once per beneficiary (a person, a role or an
+/// organisation), exactly like `PolicySet::link`. The link id is what `reasons` and the audit carry for the grant,
+/// e.g. `sso/delegate-read:demo-bob`. Links are data (stored in Dolt, applied with the rest of a version).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PolicyLink {
+    /// Id of the instantiated rule. Must be unique across rules, templates and other links.
+    pub id: String,
+    /// Catalogue id of the template to instantiate (e.g. `sso/delegate-read`).
+    pub template: String,
+    /// Slot values: `principal` and/or `resource`, as entity uid text (`User::"alice"`, `Role::"auditor"`, ...).
+    pub values: BTreeMap<String, String>,
 }
 
 /// A rule as the catalogue shows it. Read-only view: nothing here changes a decision.
@@ -98,6 +111,12 @@ pub struct RuleInfo {
     pub conditions: usize,
     pub annotations: BTreeMap<String, String>,
     pub text: String,
+    /// For a `link`: the catalogue id of the template it instantiates. Absent on rules and templates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    /// For a `link`: its slot values (`principal` and/or `resource`, entity uid text) - the beneficiary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<BTreeMap<String, String>>,
 }
 
 pub struct Engine {
@@ -151,25 +170,37 @@ impl Engine {
 
     /// A single set, validated against the given Cedar schema (cedarschema syntax) before it can decide anything.
     pub fn new_with_schema(policy_text: &str, schema: &str) -> Result<Self, DecisionError> {
-        Self::build(&[PolicySource { set: "default".into(), text: policy_text.into() }], Some(schema))
+        Self::build(&[PolicySource { set: "default".into(), text: policy_text.into() }], Some(schema), &[])
     }
 
     /// Several named sets, validated against the given Cedar schema.
     pub fn from_sets_with_schema(sets: &[PolicySource], schema: &str) -> Result<Self, DecisionError> {
-        Self::build(sets, Some(schema))
+        Self::build(sets, Some(schema), &[])
     }
 
     /// Several named sets merged into one Cedar set. A duplicate rule id (same set and name, or the same prefixed id) is refused: ids must be unique
     /// because the audit identifies a rule by it. An empty list of sets is refused (never an empty, permissive-looking engine).
     pub fn from_sets(sets: &[PolicySource]) -> Result<Self, DecisionError> {
-        Self::build(sets, None)
+        Self::build(sets, None, &[])
     }
 
-    fn build(sets: &[PolicySource], schema: Option<&str>) -> Result<Self, DecisionError> {
+    /// Sets plus template links (policy-studio step 4), no schema validation.
+    pub fn from_sets_and_links(sets: &[PolicySource], links: &[PolicyLink]) -> Result<Self, DecisionError> {
+        Self::build(sets, None, links)
+    }
+
+    /// Sets plus template links, validated against the given Cedar schema (linked instances are validated too:
+    /// a link whose value has the wrong entity type for the template is refused like any other rule error).
+    pub fn from_sets_with_schema_and_links(sets: &[PolicySource], schema: &str, links: &[PolicyLink]) -> Result<Self, DecisionError> {
+        Self::build(sets, Some(schema), links)
+    }
+
+    fn build(sets: &[PolicySource], schema: Option<&str>, links: &[PolicyLink]) -> Result<Self, DecisionError> {
         if sets.is_empty() { return Err(DecisionError::Policy("at least one policy set is required".into())); }
         let mut merged = PolicySet::new();
         let mut catalog = Vec::new();
         let mut seen_sets = std::collections::BTreeSet::new();
+        let mut templates: std::collections::HashMap<String, PolicyId> = std::collections::HashMap::new();
         for src in sets {
             if !valid_set_name(&src.set) { return Err(DecisionError::Policy(format!("invalid policy set name {:?}: lowercase letters, digits, - and _ (max 64)", src.set))); }
             if !seen_sets.insert(src.set.clone()) { return Err(DecisionError::Policy(format!("duplicate policy set {:?}", src.set))); }
@@ -193,7 +224,7 @@ impl Engine {
                     description: renamed.annotation("description").map(str::to_string), pillar: renamed.annotation("pillar").map(str::to_string),
                     summary: summarize(renamed.effect(), &json, n), conditions: n,
                     annotations: renamed.annotations().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-                    text: renamed.to_cedar().unwrap_or_default(),
+                    text: renamed.to_cedar().unwrap_or_default(), template: None, values: None,
                 });
                 merged.add(renamed).map_err(|e| DecisionError::Policy(format!("rule id {id} is used twice: {e}")))?;
             }
@@ -208,10 +239,43 @@ impl Engine {
                     description: renamed.annotation("description").map(str::to_string), pillar: renamed.annotation("pillar").map(str::to_string),
                     summary: summarize(renamed.effect(), &json, n), conditions: n,
                     annotations: renamed.annotations().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-                    text: renamed.to_cedar(),
+                    text: renamed.to_cedar(), template: None, values: None,
                 });
+                templates.insert(id.clone(), renamed.id().clone());
                 merged.add_template(renamed).map_err(|e| DecisionError::Policy(format!("rule id {id} is used twice: {e}")))?;
             }
+        }
+        // Template links (policy-studio step 4): instantiate each linked template once per beneficiary. A link naming an unknown
+        // template (or a static rule), an invalid slot or uid, a duplicate id or a missing slot value refuses the whole build:
+        // a partial rule set never reaches a decision.
+        for l in links {
+            if !valid_rule_name(&l.id) { return Err(DecisionError::Policy(format!("invalid link id {:?} (letters, digits, - _ . : ; max 80)", l.id))); }
+            let template_id = templates.get(&l.template)
+                .ok_or_else(|| DecisionError::Policy(format!("link {}: no template named {} (it may be a static rule, which cannot be linked)", l.id, l.template)))?;
+            let mut values = std::collections::HashMap::new();
+            for (slot, uid) in &l.values {
+                let slot = match slot.as_str() {
+                    "principal" => SlotId::principal(),
+                    "resource" => SlotId::resource(),
+                    other => return Err(DecisionError::Policy(format!("link {}: unknown slot {:?} (principal or resource)", l.id, other))),
+                };
+                values.insert(slot, EntityUid::from_str(uid).map_err(|e| DecisionError::Policy(format!("link {}: invalid {uid}: {e}", l.id)))?);
+            }
+            merged.link(template_id.clone(), PolicyId::new(&l.id), values)
+                .map_err(|e| DecisionError::Policy(format!("link {}: {e}", l.id)))?;
+            let linked = merged.policy(&PolicyId::new(&l.id)).ok_or_else(|| DecisionError::Policy(format!("link {}: linked rule missing", l.id)))?;
+            let json = linked.to_json().map_err(|e| DecisionError::Policy(e.to_string()))?;
+            let n = json.get("conditions").and_then(|c| c.as_array()).map(|a| a.len()).unwrap_or(0);
+            // A linked rule cannot be rendered back to Cedar text (it is data, not text): the catalogue shows the template's text.
+            let text = merged.template(template_id).map(|t| t.to_cedar()).unwrap_or_default();
+            catalog.push(RuleInfo {
+                id: l.id.clone(), set: l.template.rsplit_once('/').map(|(s, _)| s.to_string()).unwrap_or_else(|| "default".into()),
+                name: l.id.clone(), kind: "link", effect: effect_name(linked.effect()),
+                description: linked.annotation("description").map(str::to_string), pillar: linked.annotation("pillar").map(str::to_string),
+                summary: summarize(linked.effect(), &json, n), conditions: n,
+                annotations: linked.annotations().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                text, template: Some(l.template.clone()), values: Some(l.values.clone()),
+            });
         }
         catalog.sort_by(|a, b| (&a.set, &a.id).cmp(&(&b.set, &b.id)));
         let validated = match schema {
@@ -261,8 +325,15 @@ impl Engine {
         let mut errored_rules = Vec::new();
         for p in self.policies.policies() {
             let mut one = PolicySet::new();
-            // The merged set holds each rule exactly once with its readable id, so adding it to a fresh set cannot conflict.
-            one.add(p.clone()).map_err(|e| DecisionError::Policy(e.to_string()))?;
+            if let (Some(tid), Some(vals)) = (p.template_id(), p.template_links()) {
+                // A linked rule cannot be added to a fresh set directly: rebuild it from its template and its slot values.
+                let t = self.policies.template(tid).ok_or_else(|| DecisionError::Policy(format!("link {}: template missing", p.id())))?;
+                one.add_template(t.clone()).map_err(|e| DecisionError::Policy(e.to_string()))?;
+                one.link(tid.clone(), p.id().clone(), vals).map_err(|e| DecisionError::Policy(e.to_string()))?;
+            } else {
+                // The merged set holds each static rule exactly once with its readable id, so adding it to a fresh set cannot conflict.
+                one.add(p.clone()).map_err(|e| DecisionError::Policy(e.to_string()))?;
+            }
             let r = self.authorizer.is_authorized(&request, &one, &ents);
             let errs: Vec<String> = r.diagnostics().errors().map(|e| e.to_string()).collect();
             let id = p.id().to_string();
@@ -693,4 +764,120 @@ forbid(principal, action, resource) when { context.frozen == true };
         // forbid beats the per-person grant too
         assert!(!ask(r#"User::"alice""#, r#"Resource::"r1""#, true).0);
     }
+
+    // ---- Template links in the engine (policy-studio step 4) ----
+
+    fn link(id: &str, template: &str, values: &[(&str, &str)]) -> PolicyLink {
+        PolicyLink { id: id.into(), template: template.into(), values: values.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }
+    }
+
+    const TPL_SETS: &str = r#"
+@id("delegated-read") @description("Read granted to one beneficiary") @pillar("sso")
+permit(principal == ?principal, action == Action::"read", resource == ?resource);
+@id("everyone-reads") permit(principal, action == Action::"read", resource);
+"#;
+
+    #[test]
+    fn a_linked_template_decides_and_the_audit_names_the_link() {
+        let e = Engine::from_sets_and_links(&[src("sso", TPL_SETS)], &[
+            link("delegate:alice:r1", "sso/delegated-read", &[("principal", r#"User::"alice""#), ("resource", r#"Resource::"r1""#)]),
+        ]).unwrap();
+        // The template itself never applies: nobody gets allowed by it directly...
+        let d = |who: &str, res: &str| e.decide(&dreq(who, r#"Action::"read""#, json!({}), json!([]))).unwrap();
+        // ...everyone-reads permits all reads here, so use a set without it to prove the link's effect.
+        let e2 = Engine::from_sets_and_links(&[src("sso", r#"@id("delegated-read") permit(principal == ?principal, action == Action::"read", resource == ?resource);"#)], &[
+            link("delegate:alice:r1", "sso/delegated-read", &[("principal", r#"User::"alice""#), ("resource", r#"Resource::"r1""#)]),
+        ]).unwrap();
+        // dreq fixes the resource to r1, so build the r2 request explicitly.
+        let d2 = |who: &str, res: &str| e2.decide(&DecisionRequest { principal: who.into(), action: r#"Action::"read""#.into(), resource: res.into(), context: json!({}), entities: json!([]) }).unwrap();
+        let r = d2(r#"User::"alice""#, r#"Resource::"r1""#);
+        assert!(r.allow);
+        assert_eq!(r.reasons, vec!["delegate:alice:r1"]);
+        assert!(!d2(r#"User::"alice""#, r#"Resource::"r2""#).allow, "the link only covers its resource");
+        assert!(!d2(r#"User::"carol""#, r#"Resource::"r1""#).allow, "the link only covers its person");
+        let _ = d(r#"User::"alice""#, r#"Resource::"r1""#);
+        // The catalogue lists the link, its template and the template's annotations.
+        let entry = e.catalog().iter().find(|r| r.id == "delegate:alice:r1").unwrap();
+        assert_eq!((entry.kind, entry.template.as_deref(), entry.description.as_deref()), ("link", Some("sso/delegated-read"), Some("Read granted to one beneficiary")));
+        assert_eq!(entry.values.as_ref().map(|v| v.get("principal").cloned()), Some(Some("User::\"alice\"".to_string())));
+        // A forbid still wins over a per-person grant.
+        let e3 = Engine::from_sets_and_links(&[
+            src("sso", r#"@id("delegated-read") permit(principal == ?principal, action == Action::"read", resource == ?resource);"#),
+            src("sod", r#"@id("freeze") forbid(principal, action, resource) when { context has frozen && context.frozen == true };"#),
+        ], &[link("delegate:alice:r1", "sso/delegated-read", &[("principal", r#"User::"alice""#), ("resource", r#"Resource::"r1""#)])]).unwrap();
+        let r = e3.decide(&dreq(r#"User::"alice""#, r#"Action::"read""#, json!({"frozen": true}), json!([]))).unwrap();
+        assert!(!r.allow);
+        assert_eq!(r.reasons, vec!["sod/freeze"]);
+    }
+
+    #[test]
+    fn a_link_per_role_applies_through_entity_parents() {
+        let e = Engine::from_sets_and_links(&[src("default", r#"@id("role-read") permit(principal in ?principal, action == Action::"read", resource);"#)], &[
+            link("role-read:auditor", "role-read", &[("principal", r#"Role::"auditor""#)]),
+        ]).unwrap();
+        let ents = json!([
+            {"uid":{"type":"User","id":"bob"},"attrs":{},"parents":[{"type":"Role","id":"auditor"}]},
+            {"uid":{"type":"Role","id":"auditor"},"attrs":{},"parents":[]}
+        ]);
+        let r = e.decide(&dreq(r#"User::"bob""#, r#"Action::"read""#, json!({}), ents.clone())).unwrap();
+        assert!(r.allow);
+        assert_eq!(r.reasons, vec!["role-read:auditor"]);
+        assert!(!e.decide(&dreq(r#"User::"carol""#, r#"Action::"read""#, json!({}), ents)).unwrap().allow);
+    }
+
+    #[test]
+    fn a_bad_link_refuses_the_whole_build() {
+        let sets = [src("sso", TPL_SETS)];
+        // Unknown template (or a static rule used as a template).
+        let err = Engine::from_sets_and_links(&sets, &[link("l1", "sso/no-such-template", &[("principal", r#"User::"a""#)])]).err().unwrap();
+        assert!(err.to_string().contains("l1") && err.to_string().contains("sso/no-such-template"), "{err}");
+        let err = Engine::from_sets_and_links(&sets, &[link("l1", "sso/everyone-reads", &[("principal", r#"User::"a""#)])]).err().unwrap();
+        assert!(err.to_string().contains("l1"), "{err}");
+        // A missing slot value is refused (Cedar rejects an incomplete link).
+        assert!(Engine::from_sets_and_links(&sets, &[link("l1", "sso/delegated-read", &[("principal", r#"User::"a""#)])]).is_err());
+        // An invalid slot name, an invalid uid, an invalid link id.
+        assert!(Engine::from_sets_and_links(&sets, &[link("l1", "sso/delegated-read", &[("action", r#"User::"a""#)])]).is_err());
+        assert!(Engine::from_sets_and_links(&sets, &[link("l1", "sso/delegated-read", &[("principal", "not-a-uid"), ("resource", r#"Resource::"r1""#)])]).is_err());
+        assert!(Engine::from_sets_and_links(&sets, &[link("bad id", "sso/delegated-read", &[("principal", r#"User::"a""#), ("resource", r#"Resource::"r1""#)])]).is_err());
+        // A link id colliding with a rule, a template or another link is refused.
+        assert!(Engine::from_sets_and_links(&sets, &[link("sso/everyone-reads", "sso/delegated-read", &[("principal", r#"User::"a""#), ("resource", r#"Resource::"r1""#)])]).is_err());
+        let two = [link("l1", "sso/delegated-read", &[("principal", r#"User::"a""#), ("resource", r#"Resource::"r1""#)]),
+                   link("l1", "sso/delegated-read", &[("principal", r#"User::"b""#), ("resource", r#"Resource::"r2""#)])];
+        assert!(Engine::from_sets_and_links(&sets, &two).is_err());
+    }
+
+    #[test]
+    fn the_schema_validates_rules_and_templates_and_a_mistyped_link_just_never_matches() {
+        // Verified Cedar behaviour: the validator checks the rules and the templates, NOT the slot values of a link
+        // (a template stays generic). A link whose value has the wrong entity type builds fine but matches no request -
+        // a dead grant, not a safety hole. The console therefore picks link values from existing people/roles/organisations.
+        let schema = r#"
+entity Role;
+entity User in [Role];
+entity Resource;
+action "read" appliesTo { principal: [User], resource: [Resource] };
+"#;
+        let sets = [src("default", r#"@id("delegated-read") permit(principal == ?principal, action == Action::"read", resource == ?resource);"#)];
+        let ok = Engine::from_sets_with_schema_and_links(&sets, schema, &[
+            link("delegate:alice:r1", "delegated-read", &[("principal", r#"User::"alice""#), ("resource", r#"Resource::"r1""#)])]).unwrap();
+        assert!(ok.validated());
+        let r = ok.decide(&dreq(r#"User::"alice""#, r#"Action::"read""#, json!({}), json!([]))).unwrap();
+        assert!(r.allow);
+        assert_eq!(r.reasons, vec!["delegate:alice:r1"]);
+        let mistyped = Engine::from_sets_with_schema_and_links(&sets, schema, &[
+            link("delegate:r1:r1", "delegated-read", &[("principal", r#"Resource::"r1""#), ("resource", r#"Resource::"r1""#)])]).unwrap();
+        assert!(mistyped.validated(), "the schema does not type-check link values (verified)");
+        assert!(!mistyped.decide(&dreq(r#"User::"alice""#, r#"Action::"read""#, json!({}), json!([]))).unwrap().allow, "a mistyped link matches nothing");
+    }
+
+    #[test]
+    fn the_simulator_sees_links_and_still_lists_templates() {
+        let e = Engine::from_sets_and_links(&[src("default", TPL_SETS)], &[
+            link("delegate:alice:r1", "delegated-read", &[("principal", r#"User::"alice""#), ("resource", r#"Resource::"r1""#)])]).unwrap();
+        let r = e.simulate(&dreq(r#"User::"alice""#, r#"Action::"read""#, json!({}), json!([]))).unwrap();
+        assert!(r.allow);
+        assert!(r.matched_permits.contains(&"delegate:alice:r1".to_string()), "{r:?}");
+        assert_eq!(r.templates, vec!["delegated-read"], "the template itself stays listed as not generally applicable");
+    }
+
 }

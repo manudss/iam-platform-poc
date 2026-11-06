@@ -3,6 +3,8 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuditService } from '../access/audit.service.js';
 import { ProfileService } from '../profile/profile.service.js';
+import { PolicyAdminGuard } from '../auth/admin.guard.js';
+import { DoltService, PolicyCandidate, PolicyChange } from '../dolt/dolt.service.js';
 
 /**
  * Policy studio (plugin `policy-studio`). Step 1: a READ-ONLY catalogue of the Cedar rules the core decides with, and how often
@@ -17,8 +19,9 @@ export const POLICY_STUDIO_PLUGIN = 'policy-studio';
 export const USAGE_WINDOW = 500;
 
 export interface RuleInfo {
-  id: string; set: string; name: string; kind: 'policy' | 'template'; effect: 'permit' | 'forbid';
+  id: string; set: string; name: string; kind: 'policy' | 'template' | 'link'; effect: 'permit' | 'forbid';
   description: string | null; pillar: string | null; summary: string; conditions: number; annotations: Record<string, string>; text: string;
+  template?: string; values?: Record<string, string>; // a link: the template it instantiates and its slot values (the beneficiary)
 }
 export interface CoreCatalog { engine: { rules: number; sets: number; schema?: boolean }; sets: { name: string; rules: number }[]; rules: RuleInfo[] }
 export interface RuleUsage { allow: number; deny: number; last_at: string | null }
@@ -29,7 +32,8 @@ export interface SimulationResult {
   errored_rules: { id: string; error: string }[]; templates: string[]; explanation: string;
 }
 
-export interface PolicySource { catalog(): Promise<CoreCatalog>; simulate(body: SimulationRequest): Promise<SimulationResult> }
+export interface PolicyValidation { valid: boolean; schema?: boolean; engine?: { rules: number; sets: number }; rules?: RuleInfo[] }
+export interface PolicySource { catalog(): Promise<CoreCatalog>; simulate(body: SimulationRequest): Promise<SimulationResult>; validate(candidate: PolicyCandidate): Promise<PolicyValidation> }
 export const POLICY_SOURCE = Symbol('POLICY_SOURCE');
 
 /** The real source: the core over HTTP, with the core admin token. Not configured or not reachable = 503 (the screen says so; never an empty list). */
@@ -45,6 +49,17 @@ export class CorePolicySource implements PolicySource {
     const c = (await res.json()) as CoreCatalog;
     if (!Array.isArray(c?.rules)) throw new ServiceUnavailableException('the core answered an unexpected catalogue');
     return c;
+  }
+  async validate(candidate: PolicyCandidate): Promise<PolicyValidation> {
+    const url = process.env.IAM_CORE_URL, token = process.env.IAM_CORE_ADMIN_TOKEN;
+    if (!url || !token) throw new ServiceUnavailableException('rule validation needs IAM_CORE_URL and IAM_CORE_ADMIN_TOKEN');
+    let res: Response;
+    try {
+      res = await fetch(`${url.replace(/\/$/, '')}/v1/policies/validate`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-core-admin-token': token }, body: JSON.stringify(candidate), signal: AbortSignal.timeout(5000) });
+    } catch { throw new ServiceUnavailableException('the core is not reachable'); }
+    if (res.status === 400) { const e = (await res.json().catch(() => ({}))) as { error?: string }; throw new BadRequestException(e.error ?? 'the core refused these rules'); }
+    if (!res.ok) throw new ServiceUnavailableException(`the core refused the validation (${res.status})`);
+    return (await res.json()) as PolicyValidation;
   }
   async simulate(body: SimulationRequest): Promise<SimulationResult> {
     const url = process.env.IAM_CORE_URL, token = process.env.IAM_CORE_ADMIN_TOKEN;
@@ -84,9 +99,30 @@ export function usageByRule(entries: { reasons: string[]; allow: boolean; at?: s
   return out;
 }
 
+
+/** A rule proposal: upsert (with its Cedar text) or delete one rule of one set. Ids stay small url-safe tokens. */
+export function checkRuleProposal(b: unknown): PolicyChange {
+  const r = b as { op?: string; set?: string; id?: string; cedar?: string };
+  if (!r || (r.op !== 'upsert' && r.op !== 'delete')) throw new BadRequestException('op must be upsert or delete');
+  if (typeof r.set !== 'string' || typeof r.id !== 'string') throw new BadRequestException('set and id are required');
+  if (r.op === 'upsert') return { kind: 'upsert-rule', set: r.set, id: r.id, cedar: r.cedar as string };
+  return { kind: 'delete-rule', set: r.set, id: r.id };
+}
+/** A link proposal: upsert (template + slot values) or delete one template link. */
+export function checkLinkProposal(b: unknown): PolicyChange {
+  const r = b as { op?: string; id?: string; template?: string; values?: Record<string, string> };
+  if (!r || (r.op !== 'upsert' && r.op !== 'delete')) throw new BadRequestException('op must be upsert or delete');
+  if (typeof r.id !== 'string') throw new BadRequestException('id is required');
+  if (r.op === 'upsert') {
+    if (typeof r.template !== 'string') throw new BadRequestException('template is required');
+    return { kind: 'upsert-link', id: r.id, template: r.template, values: r.values ?? {} };
+  }
+  return { kind: 'delete-link', id: r.id };
+}
+
 @Injectable()
 export class PolicyStudioService {
-  constructor(private readonly profile: ProfileService, @Inject(POLICY_SOURCE) private readonly source: PolicySource, private readonly audit: AuditService) {}
+  constructor(private readonly profile: ProfileService, @Inject(POLICY_SOURCE) private readonly source: PolicySource, private readonly audit: AuditService, private readonly dolt: DoltService) {}
   private async need(t: string) { if (!(await this.profile.pluginActive(t, POLICY_STUDIO_PLUGIN, 'work'))) throw new NotFoundException('the policy-studio plugin is not enabled'); }
   async catalog(t: string) {
     await this.need(t);
@@ -98,6 +134,16 @@ export class PolicyStudioService {
     await this.need(t);
     return this.source.simulate(checkSimulationRequest(body));
   }
+  /** Step 4: one rule or link change on a NEW Dolt branch, committed only when the core's dry-run build accepts the
+   *  branch's whole rule set. Returns the branch, its commit and the validated catalogue preview. Merge stays an explicit act. */
+  private async propose(t: string, change: PolicyChange) {
+    await this.need(t);
+    let validation: PolicyValidation | undefined;
+    const { branch, commit } = await this.dolt.proposePolicyChange(change, async (cand) => { validation = await this.source.validate(cand); });
+    return { branch, commit, valid: validation?.valid ?? true, schema: validation?.schema, engine: validation?.engine, catalogue: validation?.rules };
+  }
+  async proposeRule(t: string, body: unknown) { return this.propose(t, checkRuleProposal(body)); }
+  async proposeLink(t: string, body: unknown) { return this.propose(t, checkLinkProposal(body)); }
 }
 
 @UseGuards(AuthGuard, AdminGuard)
@@ -106,4 +152,7 @@ export class PolicyStudioController {
   constructor(private readonly s: PolicyStudioService) {}
   @Get() list(@Param('tenant') t: string) { return this.s.catalog(t); }
   @Post('simulate') @HttpCode(200) simulate(@Param('tenant') t: string, @Body() body: unknown) { return this.s.simulate(t, body); } // a query, not a creation
+  // Writes (step 4): the policy-admin RIGHT, not only the administrator capability. Each proposal is one branch, validated pre-commit.
+  @Post('rules/propose') @UseGuards(PolicyAdminGuard) proposeRule(@Param('tenant') t: string, @Body() body: unknown) { return this.s.proposeRule(t, body); }
+  @Post('links/propose') @UseGuards(PolicyAdminGuard) proposeLink(@Param('tenant') t: string, @Body() body: unknown) { return this.s.proposeLink(t, body); }
 }
