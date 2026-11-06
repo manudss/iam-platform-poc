@@ -53,6 +53,7 @@ In the console: click "Sign in (browser flow, recommended)": you go to the core 
 | `IAM_CORE_GRPC_ADDR` | core, api | core: also serve gRPC `Decision/Decide` on this `host:port` (plaintext, no TLS/auth: always bind 127.0.0.1 or a private network, never a public interface; there is no default, it is off unless set). api: `/access/check` calls the core over gRPC instead of HTTP when set |
 | `IAM_ISSUER` | core, API | token issuer; must be identical on both sides |
 | `IAM_POLICY_FILE` | core | Cedar policy file (`../policies/demo.cedar`) |
+| `IAM_POLICY_SCHEMA` | core | Cedar schema the rules are validated against at load (`../policies/demo.cedarschema` by default when it exists; a set but unreadable/invalid schema refuses the start) |
 | `IAM_TOKEN_TTL_SECS` | core | token lifetime (300) |
 | `IAM_PLUGIN_WAT` | core | WASM plugin (text format) run on `/v1/decide` |
 | `IAM_CORE_URL` | API | core base URL |

@@ -18,7 +18,7 @@ export interface RuleInfo {
   id: string; set: string; name: string; kind: 'policy' | 'template'; effect: 'permit' | 'forbid';
   description: string | null; pillar: string | null; summary: string; conditions: number; annotations: Record<string, string>; text: string;
 }
-export interface CoreCatalog { engine: { rules: number; sets: number }; sets: { name: string; rules: number }[]; rules: RuleInfo[] }
+export interface CoreCatalog { engine: { rules: number; sets: number; schema?: boolean }; sets: { name: string; rules: number }[]; rules: RuleInfo[] }
 export interface RuleUsage { allow: number; deny: number; last_at: string | null }
 
 export interface PolicySource { catalog(): Promise<CoreCatalog> }

@@ -24,6 +24,11 @@ jobs:
           echo "IAM_REQUIRE_NATS=1" >> $GITHUB_ENV
       - run: cargo test --locked
         working-directory: core
+      # Policy-studio step 2: the schema checks run inside cargo test above; this named step makes a schema
+      # failure obvious in the run summary (the demo rules are validated against policies/demo.cedarschema).
+      - name: Validate the Cedar rules against their schema
+        run: cargo test --locked -p iam-decision -p iam-core schema
+        working-directory: core
   api:
     # Integration job: installs the real service binaries from their GitHub releases (free, no Docker) so the real-service suites RUN
     # instead of skipping: Dolt, PostgreSQL (embedded-postgres npm package), NATS JetStream, OpenBao, Temporal dev server, plus the

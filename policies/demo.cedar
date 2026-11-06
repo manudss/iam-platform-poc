@@ -15,9 +15,9 @@ permit(principal == User::"bob",   action == Action::"read",    resource) unless
 @pillar("human")
 permit(principal, action == Action::"approve", resource) when { context has roles && context.roles.contains("payment-approver") };
 @id("sod-blocks-approve")
-@description("Separation of duties: nobody with a SoD conflict may approve, whatever other rules allow.")
+@description("Separation of duties: nobody with a SoD conflict may approve, whatever other rules allow. The attribute is optional in the schema, so the rule guards its read with `has`.")
 @pillar("sod")
-forbid(principal, action == Action::"approve", resource) when { context.sod_conflict == true };
+forbid(principal, action == Action::"approve", resource) when { context has sod_conflict && context.sod_conflict == true };
 
 // MCP sessions (AI access): the AI acts only inside its own data branch, authorized per call by this same
 // engine, as the session owner. Requires the mcp-operator role from the ACTIVE version (main): a role the AI

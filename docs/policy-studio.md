@@ -1,4 +1,4 @@
-# Policy studio (Cedar rules) - step 1: read-only catalogue
+# Policy studio (Cedar rules) - step 1: read-only catalogue; step 2: schema validation
 
 The platform decides every access with [Cedar](https://docs.cedarpolicy.com/) rules inside the Rust core. This plugin shows those rules.
 Step 1 changes nothing about a decision: it names the rules, lists them, and makes the decision audit say which rule decided.
@@ -30,9 +30,33 @@ These points are covered by unit tests in `core/crates/iam-decision/src/lib.rs`:
 
 Not done yet: the engine does not create template links (step 4 stores them in Dolt), and rules are still read from files, not from Dolt.
 
-## Limits of step 1
+## Schema validation (step 2)
 
-Read-only. No editor, no schema validation, no simulator, no impact analysis. Summaries are generated from the rule scope and the number of conditions; the conditions themselves are read in the Cedar text. Usage counts come from the audit window (last 500 decisions of the tenant at most; the in-memory audit is lost on restart).
+The rules are validated against a [Cedar schema](https://docs.cedarpolicy.com/policies/validation.html) before the engine can decide
+anything: a rule that names an unknown action, entity type or attribute, reads a value of the wrong type, or reads an optional
+attribute without a `has` guard is REFUSED, and the core does not start on it (the error names the rule, e.g. `[sod-blocks-approve] ...`).
+This is the strict Cedar validation, the one the later SymCC analysis (step 6) also assumes.
+
+- **The schema is `policies/demo.cedarschema`** (cedarschema syntax). It declares the POC nouns (`User`, `Role`, the resource types),
+  the actions (`approve`, `read`, `mcp:read` / `mcp:write` / `mcp:lifecycle`, and `mcp:proxy` for the gateway branch) and the context
+  each action carries. The tenant context attributes (`tenant_mode`, `roles`, `sod_conflict`) are all OPTIONAL, because a request without
+  tenant data carries none of them: rules must guard their reads with `context has ...` (the `sod-blocks-approve` rule shows the pattern).
+- **Which schema applies:** `IAM_POLICY_SCHEMA` when set - a set but unreadable or invalid schema refuses the start, a demanded check is
+  never silently skipped - else the sibling of the rules when it exists (`x.cedar` -> `x.cedarschema`; in a directory of sets,
+  `schema.cedarschema`), else no validation (legacy behaviour).
+- **In CI:** the check runs inside `cargo test` (the demo rules are validated against the shipped schema), with a named step
+  "Validate the Cedar rules against their schema" so a failure is obvious in the run summary.
+- **Visible in the console:** the Policies screen says whether the loaded rules were validated (`engine.schema` in the catalogue
+  answers), and the API relays the flag unchanged.
+
+One rule text changed for this: `sod-blocks-approve` now reads `context has sod_conflict && context.sod_conflict == true`. Reading an
+optional attribute without the guard errored at evaluation time (the rule was skipped and the decision denied); with the guard the
+forbid simply does not apply when the attribute is absent. In tenant mode the core always injects the attribute, so nothing changes there.
+
+## Limits of steps 1-2
+
+Read-only. No editor, no simulator, no impact analysis. The schema covers the current actions; a rule set introducing a new action
+needs the schema extended first (on purpose: the schema is the contract of what a rule may name). Summaries are generated from the rule scope and the number of conditions; the conditions themselves are read in the Cedar text. Usage counts come from the audit window (last 500 decisions of the tenant at most; the in-memory audit is lost on restart).
 
 ## Tests
 
