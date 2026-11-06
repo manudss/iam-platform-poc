@@ -8,7 +8,7 @@ import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { AuditService } from '../access/audit.service.js';
-import { CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService, usageByRule, type CoreCatalog } from './policy-studio.js';
+import { checkSimulationRequest, CorePolicySource, POLICY_SOURCE, PolicyStudioController, PolicyStudioService, usageByRule, type CoreCatalog, type SimulationResult } from './policy-studio.js';
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const rule = (id: string, effect: 'permit' | 'forbid', pillar: string) => ({ id, set: 'default', name: id, kind: 'policy' as const, effect, description: `${id} description`, pillar, summary: 'Permits any principal to do any action on any resource.', conditions: 0, annotations: { id }, text: `${effect}(principal, action, resource);` });
@@ -32,7 +32,7 @@ describe('policy-studio API', () => {
     process.env.IAM_API_ADMIN_TOKEN = ADMIN; delete process.env.IAM_PG_URL;
     const guard = { canActivate: (c: any) => { c.switchToHttp().getRequest().user = { sub: 'demo-alice' }; return true; } };
     audit = new AuditService();
-    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: audit }, { provide: POLICY_SOURCE, useValue: { catalog: async () => CATALOG } }] })
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: audit }, { provide: POLICY_SOURCE, useValue: { catalog: async () => CATALOG, simulate: async () => SIM } }] })
       .overrideGuard(AuthGuard).useValue(guard).compile();
     app = mod.createNestApplication(); await app.init(); reg = app.get(PluginRegistry);
   });
@@ -64,9 +64,58 @@ describe('policy-studio API', () => {
   });
 });
 
+const SIM: SimulationResult = { allow: false, reasons: ['sod-blocks-approve'], errors: [], matched_permits: [], matched_forbids: ['sod-blocks-approve'], errored_rules: [], templates: [], explanation: 'DENIED: the forbid sod-blocks-approve applies.' };
+
+describe('checkSimulationRequest', () => {
+  it('accepts a full request and trims the entity ids', () => {
+    assert.deepEqual(checkSimulationRequest({ principal: ' User::"a" ', action: 'Action::"read"', resource: 'R::"1"', context: { roles: ['x'] } }),
+      { principal: 'User::"a"', action: 'Action::"read"', resource: 'R::"1"', context: { roles: ['x'] }, entities: undefined });
+  });
+  it('refuses missing fields and a non-object context', () => {
+    assert.throws(() => checkSimulationRequest({}), /principal, action and resource/);
+    assert.throws(() => checkSimulationRequest({ principal: 'User::"a"', action: '', resource: 'R::"1"' }), /principal, action and resource/);
+    assert.throws(() => checkSimulationRequest({ principal: 'User::"a"', action: 'Action::"read"', resource: 'R::"1"', context: 'roles' }), /context must be a JSON object/);
+    assert.throws(() => checkSimulationRequest({ principal: 'User::"a"', action: 'Action::"read"', resource: 'R::"1"', entities: {} }), /entities must be a JSON array/);
+  });
+});
+
+describe('policy-studio simulator API', () => {
+  let app: INestApplication, reg: PluginRegistry; const env = { a: process.env.IAM_API_ADMIN_TOKEN, p: process.env.IAM_PG_URL };
+  before(async () => {
+    process.env.IAM_API_ADMIN_TOKEN = ADMIN; delete process.env.IAM_PG_URL;
+    const guard = { canActivate: (c: any) => { c.switchToHttp().getRequest().user = { sub: 'demo-alice' }; return true; } };
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module], controllers: [PolicyStudioController], providers: [PolicyStudioService, { provide: AuditService, useValue: new AuditService() }, { provide: POLICY_SOURCE, useValue: { catalog: async () => CATALOG, simulate: async () => SIM } }] })
+      .overrideGuard(AuthGuard).useValue(guard).compile();
+    app = mod.createNestApplication(); await app.init(); reg = app.get(PluginRegistry);
+  });
+  after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; if (env.p) process.env.IAM_PG_URL = env.p; await app.close(); });
+  const api = () => request(app.getHttpServer()), adm = { 'x-api-admin-token': ADMIN };
+  const body = { principal: 'User::"carol"', action: 'Action::"approve"', resource: 'Request::"r1"', context: { roles: ['viewer'], sod_conflict: true } };
+
+  it('answers "why refused" for an administrator, only while the plugin is on', async () => {
+    assert.equal((await api().post(`/tenants/${T}/policies/simulate`).set(adm).send(body)).status, 404);
+    await reg.install(T, 'policy-studio', {}); await reg.enable(T, 'policy-studio', {});
+    assert.equal((await api().post(`/tenants/${T}/policies/simulate`).send(body)).status, 403);
+    const r = await api().post(`/tenants/${T}/policies/simulate`).set(adm).send(body);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.allow, false);
+    assert.deepEqual(r.body.matched_forbids, ['sod-blocks-approve']);
+    assert.match(r.body.explanation, /sod-blocks-approve/);
+    await reg.disable(T, 'policy-studio');
+  });
+  it('refuses a malformed simulation request with a 400, not a 500', async () => {
+    await reg.enable(T, 'policy-studio', {});
+    assert.equal((await api().post(`/tenants/${T}/policies/simulate`).set(adm).send({ principal: 'User::"a"' })).status, 400);
+    await reg.disable(T, 'policy-studio');
+  });
+});
+
 describe('CorePolicySource without a core', () => {
   it('answers 503 (never an empty list) when the core is not configured', async () => {
     const e = { u: process.env.IAM_CORE_URL, t: process.env.IAM_CORE_ADMIN_TOKEN }; delete process.env.IAM_CORE_URL; delete process.env.IAM_CORE_ADMIN_TOKEN;
-    try { await assert.rejects(new CorePolicySource().catalog(), /IAM_CORE_URL/); } finally { if (e.u) process.env.IAM_CORE_URL = e.u; if (e.t) process.env.IAM_CORE_ADMIN_TOKEN = e.t; }
+    try {
+      await assert.rejects(new CorePolicySource().catalog(), /IAM_CORE_URL/);
+      await assert.rejects(new CorePolicySource().simulate({ principal: 'User::"a"', action: 'Action::"read"', resource: 'R::"1"' }), /IAM_CORE_URL/);
+    } finally { if (e.u) process.env.IAM_CORE_URL = e.u; if (e.t) process.env.IAM_CORE_ADMIN_TOKEN = e.t; }
   });
 });
