@@ -25,7 +25,9 @@ import { generateKeyPairSync, randomBytes } from 'node:crypto';
 
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
 const require = createRequire(new URL('../../apps/api/package.json', import.meta.url));
-const Provider = require('oidc-provider');
+const oidcProviderPkg = require('oidc-provider');
+// The package is a transpiled ESM build: require() returns the module object, the Provider class is its default.
+const Provider = oidcProviderPkg.default ?? oidcProviderPkg.Provider ?? oidcProviderPkg;
 const { BadRequestException, NotFoundException } = require('@nestjs/common');
 
 export const OIDC_PLUGIN = 'oidc-provider';
