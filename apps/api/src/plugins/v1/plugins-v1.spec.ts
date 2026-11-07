@@ -2,7 +2,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginRegistry, PluginError } from './registry.js';
 import { MemoryMigrationStore, MemorySettingsStore } from './memory-stores.js';
-import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } from './builtin/index.js';
+import { authPassword, authPasswordLockout, directory, notifyLog, orgManager, riskGeo } from './builtin/index.js';
 import { validateManifest } from './manifest.js';
 import { HOOKS } from './hooks.js';
 import { toFormModel } from './settings.js';
@@ -219,6 +219,33 @@ describe('plugin registry v1', () => {
     await reg.install(T, m.id, { install: true });
     await assert.rejects(reg.uninstall(T, m.id), (e: PluginError) => e.code === 'uninstall-incomplete');
     assert.ok((await mig.applied(m.id)).length > 0, 'nothing was reverted');
+  });
+
+  it('directory is a real slot: a replacement takes the rules, disabling returns them to the base (phase 2 step 1)', async () => {
+    reg.register(directory);
+    reg.setBus(fakeBusBridge(reg));
+    const good_user = { id: 'ok-user', email: 'a@b.c', display_name: 'Ok', password: 'a-long-enough-password' };
+    const base = await reg.callSlot<any>(T, 'directory.default', 'directory.user.validate', { body: good_user, create: true });
+    assert.equal(base.result.valid, true, 'base validates');
+    assert.equal(base.servedBy, 'directory');
+
+    const repl = { manifest: { ...structuredClone(directory.manifest), id: 'directory-strict', base: false, extends: 'directory' } };
+    const handlers = Object.fromEntries(Object.entries(directory.handlers).map(([h, fn]) => [h, async (p: any, ctx: any) => {
+      if (h === 'directory.user.validate' && p.body?.department === 'Sales') return { valid: false, errors: ['no Sales'] };
+      return (fn as any)(p, ctx);
+    }]));
+    reg.register({ manifest: repl.manifest, handlers } as any);
+    reg.setBus(fakeBusBridge(reg));
+    await reg.install(T, 'directory-strict', {});
+    await reg.enable(T, 'directory-strict');
+    const taken = await reg.callSlot<any>(T, 'directory.default', 'directory.user.validate', { body: { ...good_user, department: 'Sales' }, create: true });
+    assert.equal(taken.servedBy, 'directory-strict');
+    assert.equal(taken.result.valid, false, 'the replacement rule applies');
+
+    await reg.disable(T, 'directory-strict');
+    const back = await reg.callSlot<any>(T, 'directory.default', 'directory.user.validate', { body: { ...good_user, department: 'Sales' }, create: true });
+    assert.equal(back.servedBy, 'directory', 'base rules are back');
+    assert.equal(back.result.valid, true, 'the replacement rule no longer applies');
   });
 
   it('settings: validation, defaults and generated form with masked secrets', async () => {
