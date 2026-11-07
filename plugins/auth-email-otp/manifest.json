@@ -4,15 +4,79 @@
   "version": "1.0.0",
   "name": "One-time code by e-mail (base)",
   "publisher": "iam-platform",
-  "kinds": ["auth-method"],
-  "base": true,
-  "provides": ["auth.email-otp"],
-  "hooks": [{ "name": "auth.prepare", "mode": "blocking" }, { "name": "auth.verify", "mode": "blocking" }, { "name": "auth.verification", "mode": "blocking" }],
-  "settings": [
-    { "key": "codeLength", "type": "number", "label": "Code length (digits)", "default": 6, "min": 4, "max": 8, "group": "Code" },
-    { "key": "delivery", "type": "select", "label": "Delivery", "default": "demo-outbox", "options": [{ "value": "demo-outbox", "label": "Demo outbox (simulated, no e-mail sent)" }, { "value": "smtp", "label": "Real e-mail (server configured: Resend or SMTP)" }], "help": "Real delivery is configured on the server only (RESEND_API_KEY or IAM_SMTP_*), never here. Until it is, this method stays simulated.", "group": "Delivery" }
+  "kinds": [
+    "auth-method"
   ],
-  "authMethod": { "name": "One-time code by e-mail", "description": "Sends a short code to the user's e-mail address and asks for it. In this POC the e-mail goes to a DEMO OUTBOX visible to administrators: no real e-mail is sent, so it proves nothing about possession of a mailbox.", "factor": "possession", "amr": "otp", "maturity": "implemented", "suggestedLevel": 4, "provisioning": "admin-demo", "inlineWithUsername": false },
-  "entrypoints": { "handlers": "handlers.mjs" },
-  "security": { "signed": true }
+  "base": true,
+  "provides": [
+    "auth.email-otp"
+  ],
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verify",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "codeLength",
+      "type": "number",
+      "label": "Code length (digits)",
+      "default": 6,
+      "min": 4,
+      "max": 8,
+      "group": "Code"
+    },
+    {
+      "key": "ttlSeconds",
+      "type": "number",
+      "label": "Code lifetime (seconds)",
+      "default": 300,
+      "min": 60,
+      "max": 900,
+      "group": "Code"
+    },
+    {
+      "key": "delivery",
+      "type": "select",
+      "label": "Delivery",
+      "default": "demo-outbox",
+      "options": [
+        {
+          "value": "demo-outbox",
+          "label": "Demo outbox (simulated, no e-mail sent)"
+        },
+        {
+          "value": "smtp",
+          "label": "Real e-mail (server configured: Resend or SMTP)"
+        }
+      ],
+      "help": "Real delivery is configured on the server only (RESEND_API_KEY or IAM_SMTP_*), never here. Until it is, this method stays simulated.",
+      "group": "Delivery"
+    }
+  ],
+  "authMethod": {
+    "name": "One-time code by e-mail",
+    "description": "Sends a short code to the user's e-mail address and asks for it. In this POC the e-mail goes to a DEMO OUTBOX visible to administrators: no real e-mail is sent, so it proves nothing about possession of a mailbox.",
+    "factor": "possession",
+    "amr": "otp",
+    "maturity": "implemented",
+    "suggestedLevel": 4,
+    "provisioning": "admin-demo",
+    "inlineWithUsername": false
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
 }

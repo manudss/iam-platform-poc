@@ -23,9 +23,9 @@ export default {
     return { prompt: { title: 'Check your e-mail', message: real ? 'If the account exists, a code was sent to its e-mail address.' : 'DEMO ONLY: no e-mail is sent. In this prototype the code is written to a demo outbox that an administrator can read.', fields: [{ name: 'code', label: 'Code', type: 'digits', maxLength: len, hint: `${len} digits` }] },
       state: { hash: sha(`${p.instanceId}:${code}`), exp: c.now() + ttl * 1000, used: false } };
   },
-  'auth.verify': async (p, _c, a) => {
+  'auth.verify': async (p, c) => {
     const st = p.state ?? {}, answers = p.answers ?? {};
-    if (!p.known || st.used || p.now() > st.exp || typeof answers.code !== 'string') return false;
+    if (!p.known || st.used || c.now() > st.exp || typeof answers.code !== 'string') return false;
     const ok = eq(sha(`${p.instanceId}:${answers.code.trim()}`), st.hash); if (ok) st.used = true; return ok;
   },
 };
