@@ -52,8 +52,9 @@ export class SignupService {
       currentBranch: () => { try { return currentBranch(); } catch { return undefined; } },
     });
   }
-  /** Exposed for tests and operational inspection (same object the plugin engine mutates). */
+  /** Exposed for tests and operational inspection (same objects the plugin engine mutates). */
   get hits() { return this.manager.hits; }
+  get pending() { return this.manager.pending; }
   schema(tenant: string) { return this.manager.schema(tenant); }
   submit(tenant: string, body: unknown, ip: string) { return this.manager.submit(tenant, body, ip); }
   confirm(tenant: string, token: unknown) { return this.manager.confirm(tenant, token); }
