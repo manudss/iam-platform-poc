@@ -18,6 +18,9 @@ import { SamlIdpService, SamlInteractionController } from '../../sso/saml.js';
 import { SecretsService } from '../../integrations/secrets.service.js';
 import { AppConnectorController, AppConnectorService, APP_CONNECTOR_STORE, DoltAppConnectorStore, MemoryAppConnectorStore } from '../../connectors/app-connector.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
+import { PluginHttpController } from './plugins-http.controller.js';
+import { AuthGuard } from '../../auth/auth.guard.js';
+import { AdminGuard } from '../../auth/admin.guard.js';
 import { AuthGateController } from './auth-gate.controller.js';
 import { ProfileService, PROFILE_STORE, SIGNUP_ALLOWED, defaultSignupAllowed } from '../../profile/profile.service.js';
 import { SignupService } from '../../profile/signup.service.js';
@@ -39,8 +42,8 @@ import { SessionAdminController } from '../../authn/session.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
-  controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
-  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
+  controllers: [PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
     provide: SSO_DIRECTORY,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltSsoDirectory(v) : new MemorySsoDirectory(),

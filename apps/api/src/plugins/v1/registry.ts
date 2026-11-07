@@ -126,7 +126,8 @@ export class PluginRegistry {
     const errs = validateManifest(m, HOOKS);
     for (const h of m.hooks) if (!impl.handlers[h.name]) errs.push(`hook ${h.name} declared but no handler`);
     for (const s of m.subscribes ?? []) if (!impl.handlers[s.name]) errs.push(`subscribes: ${s.name} declared but no handler`);
-    const declared = new Set([...m.hooks.map((d) => d.name), ...(m.subscribes ?? []).map((s) => s.name)]);
+    for (const r of m.httpRoutes ?? []) if (!impl.handlers[r.handler ?? `http:${r.method} ${r.path}`]) errs.push(`http route ${r.handler ?? `http:${r.method} ${r.path}`} declared but no handler`);
+    const declared = new Set([...m.hooks.map((d) => d.name), ...(m.subscribes ?? []).map((s) => s.name), ...(m.httpRoutes ?? []).map((r) => r.handler ?? `http:${r.method} ${r.path}`)]);
     for (const h of Object.keys(impl.handlers)) if (!declared.has(h)) errs.push(`handler for undeclared hook ${h}`);
     if (this.impls.has(m.id)) errs.push(`plugin ${m.id} already registered`);
     if (m.extends) {
@@ -375,6 +376,32 @@ export class PluginRegistry {
     const out = await bus.emit(tenant, hook, payload, payload.effectKey, this.branchRef);
     this.done.add(key);
     return out;
+  }
+
+  /**
+   * Matches a manifest httpRoute (step 3) for an ACTIVE plugin: method + path segments, `:param` placeholders.
+   * The handler key is the declared one, or `http:<METHOD> <path>`. A declared route without a handler is a fault, not a 404.
+   */
+  httpRoute(tenant: string, id: string, method: string, path: string): { impl: PluginImpl; handler: HookHandler; auth: 'user' | 'admin' | 'public'; params: Record<string, string> } | undefined {
+    const impl = this.impls.get(id);
+    if (!impl || !this.isActive(tenant, id)) return undefined;
+    for (const d of impl.manifest.httpRoutes ?? []) {
+      if (d.method !== method) continue;
+      const want = d.path.split('/').filter(Boolean), got = path.split('/').filter(Boolean);
+      if (want.length !== got.length) continue;
+      const params: Record<string, string> = {};
+      let ok = true;
+      for (let i = 0; i < want.length; i++) {
+        if (want[i].startsWith(':')) params[want[i].slice(1)] = decodeURIComponent(got[i]);
+        else if (want[i] !== got[i]) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const key = d.handler ?? `http:${d.method} ${d.path}`;
+      const handler = impl.handlers[key];
+      if (!handler) throw new PluginError('plugin-failed', `${id}: http route ${key} declared but no handler`);
+      return { impl, handler, auth: d.auth ?? 'user', params };
+    }
+    return undefined;
   }
 
   /** Console menu entries declared by the plugins active for this tenant (manifest v3 `menu`). An entry disappears with its plugin. */

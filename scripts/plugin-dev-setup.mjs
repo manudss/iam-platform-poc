@@ -42,11 +42,8 @@ export function ensureDevSetup(pluginsDir) {
   const confDir = resolve(pluginsDir, '..', 'conf');
   const keyPath = join(confDir, 'plugin-dev-key.json');
   const trustPath = join(confDir, 'plugin-trust.json');
-  const done = () => existsSync(keyPath) && existsSync(trustPath) &&
-    readdirSync(pluginsDir, { withFileTypes: true }).every((e) => !e.isDirectory() || !existsSync(join(pluginsDir, e.name, 'manifest.json')) || existsSync(join(pluginsDir, e.name, 'signature.json')));
-  if (done()) return;
+  // Signing always re-runs under the lock (source files change during development); only key generation is one-time.
   withLock(confDir, () => {
-    if (done()) return; // another process finished while we waited
   const privateKeys = existsSync(keyPath) ? JSON.parse(readFileSync(keyPath, 'utf8')) : {};
   const trust = existsSync(trustPath) ? JSON.parse(readFileSync(trustPath, 'utf8')) : {};
   const pubs = new Set();

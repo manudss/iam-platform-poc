@@ -19,5 +19,6 @@
     { "id": "members", "title": "Members", "area": "admin", "render": "schema", "schemaRef": "plg_org_manager_members" }
   ],
   "entrypoints": { "handlers": "handlers.mjs" },
+  "httpRoutes": [{ "method": "GET", "path": "/ping", "auth": "public" }],
   "security": { "signed": true }
 }
