@@ -45,6 +45,13 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
   const delegate = (token: string | undefined, body: object) => fetch(`${API}/agent/delegations`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
   const call = (secret: string | undefined, tool: unknown) => fetch(`${API}/agent/tools/call`, { method: 'POST', headers: { 'content-type': 'application/json', ...(secret ? { 'x-agent-delegation': secret } : {}) }, body: JSON.stringify({ tool }) });
   const audit = async (t: string) => ((await (await fetch(`${API}/tenants/acme-demo/audit`, { headers: { authorization: `Bearer ${t}` } })).json()) as { entries: Entry[] }).entries;
+  // The trail is fed asynchronously over the bus (access.decided) for decisions the core answered, and bus
+  // delivery can also land AFTER a later locally-written denial: poll for the expected row instead of
+  // assuming it is the newest entry right after the call (racy on slow CI).
+  const auditWait = async (t: string, match: (e: Entry) => boolean): Promise<Entry> => {
+    for (let i = 0; i < 200; i++) { const hit = (await audit(t)).find(match); if (hit) return hit; await sleep(25); }
+    throw new Error('expected audit entry never arrived within 5s');
+  };
   const mk = async (t: string, body: object = {}) => (await (await delegate(t, { agent_id: 'demo-agent', tools: ['approve-payment'], ...body })).json()) as { delegation: string; expires_at: string };
 
   it('allowlisted tool: tenant-mode Cedar decision as the TOKEN subject, simulated result, audited as source=agent', async () => {
@@ -61,7 +68,9 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
   it('policy still applies from server data: bob (creator+approver in the active version) is denied by SoD; no ambient read right in tenant mode', async () => {
     const tb = await login('demo-bob');
     assert.equal((await call((await mk(tb)).delegation, 'approve-payment')).status, 403);
-    const e = (await audit(tb))[0]; assert.deepEqual([e.source, e.allow, e.principal], ['agent', false, 'User::"demo-bob"']);
+    // bob's denial was answered by the core: its row rides the bus, wait for it instead of reading position 0
+    const e = await auditWait(tb, (x) => x.source === 'agent' && x.principal === 'User::"demo-bob"');
+    assert.deepEqual([e.source, e.allow, e.principal], ['agent', false, 'User::"demo-bob"']);
     const ta = await login();
     assert.equal((await call((await mk(ta, { tools: ['read-report'] })).delegation, 'read-report')).status, 403); // no read permit in tenant mode
   });
@@ -121,7 +130,10 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
     assert.equal((await call(r.delegation, 'approve-payment')).status, 201);
     assert.equal((await call(r.delegation, 'approve-payment')).status, 201);
     assert.equal((await call(r.delegation, 'approve-payment')).status, 403);
-    assert.deepEqual([(await audit(t))[0].reasons], [['call-budget-exhausted']]);
+    // the budget denial is written locally at once, but the two allowed calls' rows can arrive from the bus
+    // after it: match the entry instead of assuming the newest position
+    const budget = await auditWait(t, (x) => x.reasons.includes('call-budget-exhausted'));
+    assert.deepEqual([budget.allow, budget.reasons], [false, ['call-budget-exhausted']]);
     const s = await mk(t, { ttl_seconds: 1 }); await sleep(1300);
     assert.equal((await call(s.delegation, 'approve-payment')).status, 401);
   });
