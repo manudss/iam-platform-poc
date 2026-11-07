@@ -88,8 +88,7 @@ describe('decision audit (real core + API)', { skip: !existsSync(bin) && 'core b
     core.kill(); await sleep(400);
     assert.equal((await check(t, { principal: 'User::"demo-alice"', context: {} })).status, 502);
     await start(); // the guard's cached key is still valid, token stays usable
-    const rr = await audit(await login()); assert.equal(rr.status, 200, await rr.clone().text()); const { entries } = (await rr.json()) as { entries: Entry[] };
-    assert.equal(entries.length, before + 1);
+    const entries = await auditUntil(await login(), before + 1);
     assert.deepEqual([entries[0].allow, entries[0].reasons], [false, ['core-unreachable']]);
   });
 });
