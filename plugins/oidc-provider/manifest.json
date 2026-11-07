@@ -4,10 +4,19 @@
   "version": "0.1.0",
   "name": "OpenID Connect provider (SSO)",
   "publisher": "iam-platform",
-  "kinds": ["connector"],
+  "kinds": [
+    "connector"
+  ],
   "description": "Lets the registered applications sign in with OpenID Connect (authorization code + PKCE). Turning the plugin off removes every /sso/:tenant/oidc endpoint (404) without touching the application registry.",
-  "requires": ["app-connector"],
+  "requires": [
+    "app-connector"
+  ],
   "hooks": [],
   "settings": [],
-  "security": { "signed": true }
+  "security": {
+    "signed": true
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  }
 }
