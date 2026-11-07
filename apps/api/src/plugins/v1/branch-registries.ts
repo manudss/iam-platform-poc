@@ -54,8 +54,8 @@ export class BranchRegistries {
     }
     return r;
   }
-  /** Registers an archive-imported plugin into every already-built registry. Branch registries built LATER see it after a restart (they register the shipped list) - the import response says so. */
+  /** Registers an archive-imported plugin into every already-built registry. Branch registries built LATER see it after a restart (they register the shipped list) - the import response says so. Only the duplicate case is skipped; any other registration error aborts the import (P0-7: errors are not absorbed). */
   registerEverywhere(impl: PluginImpl) {
-    for (const reg of this.resolved.values()) { try { reg.register(impl); } catch { /* already registered */ } }
+    for (const reg of this.resolved.values()) if (!reg.impl(impl.manifest.id)) reg.register(impl);
   }
 }

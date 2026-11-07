@@ -4,8 +4,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { unpackZip, installArchive, loadInstalledPlugin } from './archive.js';
-import { PluginRegistry } from './registry.js';
+import { unpackZip, installArchive, loadInstalledPlugin, removeInstalledPlugin } from './archive.js';
+import { PluginError, PluginRegistry } from './registry.js';
 import { MemoryMigrationStore, MemorySettingsStore } from './memory-stores.js';
 import { defaultPluginsDir } from './loader.js';
 
@@ -107,5 +107,62 @@ describe('signed archive import (step 8)', () => {
     const srv = freshSrv();
     installArchive(srv, makePlugin(), { trust });
     assert.throws(() => installArchive(srv, makePlugin(), { trust }), /already present/);
+  });
+
+  /** Finds the central-directory entry offset of a file in a packed zip (for byte-level tampering). */
+  function centralEntry(buf: Buffer, name: string): number {
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= 0; i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    let off = buf.readUInt32LE(eocd + 16);
+    const count = buf.readUInt16LE(eocd + 10);
+    for (let n = 0; n < count; n++) {
+      const nameLen = buf.readUInt16LE(off + 28);
+      if (buf.subarray(off + 46, off + 46 + nameLen).toString() === name) return off;
+      off += 46 + nameLen + buf.readUInt16LE(off + 30) + buf.readUInt16LE(off + 32);
+    }
+    throw new Error(`${name} not in archive`);
+  }
+
+  it('P0-7: a lying uncompressed size (zip-bomb shape) is refused before inflation', () => {
+    const buf = Buffer.from(makePlugin());
+    const off = centralEntry(buf, 'handlers.mjs');
+    buf.writeUInt32LE(64 * 1024 * 1024, off + 24); // claims 64 MB uncompressed
+    assert.throws(() => unpackZip(buf), (e: PluginError) => e.code === 'invalid-archive' && /too large/.test(e.message));
+  });
+
+  it('P0-7: a lying small size is refused (declared 1 byte, real content larger)', () => {
+    const buf = Buffer.from(makePlugin());
+    const off = centralEntry(buf, 'handlers.mjs');
+    buf.writeUInt32LE(1, off + 24);
+    assert.throws(() => unpackZip(buf), (e: PluginError) => e.code === 'invalid-archive' && /size mismatch/.test(e.message));
+  });
+
+  it('P0-7: a truncated archive is refused', () => {
+    const buf = makePlugin();
+    assert.throws(() => unpackZip(buf.subarray(0, buf.length - 40)), (e: PluginError) => e.code === 'invalid-archive');
+  });
+
+  it('P0-7: a central-directory offset out of bounds is refused', () => {
+    const buf = Buffer.from(makePlugin());
+    buf.writeUInt32LE(buf.length - 30, buf.length - 22 + 16); // eocd: central offset -> near EOF
+    assert.throws(() => unpackZip(buf), (e: PluginError) => e.code === 'invalid-archive' && /out of bounds|corrupt|truncated/.test(e.message));
+  });
+
+  it('P0-7: an invalid module leaves no final folder (install -> load fails -> rollback removes it)', () => {
+    // A SYNTAX-BROKEN but correctly signed module: verification passes, import fails.
+    const buf = makePlugin((dir) => {
+      const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+      m.entrypoints = { handlers: 'handlers.mjs' }; // the loader must actually import the module
+      writeFileSync(join(dir, 'manifest.json'), JSON.stringify(m));
+      writeFileSync(join(dir, 'handlers.mjs'), 'export default { this is not javascript\n');
+      pack.signPlugin(dir, keys); // re-sign the broken file: the signature is valid, the module is not
+    });
+    const srv = freshSrv();
+    const manifest = installArchive(srv, buf, { trust });
+    assert.ok(existsSync(join(srv, manifest.id, 'manifest.json')), 'installed');
+    assert.throws(() => loadInstalledPlugin(srv, manifest.id, { trust }));
+    // The controller's rollback path:
+    removeInstalledPlugin(srv, manifest.id);
+    assert.equal(existsSync(join(srv, manifest.id)), false, 'no final folder left behind');
   });
 });

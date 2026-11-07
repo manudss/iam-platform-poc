@@ -5,7 +5,7 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpExc
 import { AuthGuard } from '../../auth/auth.guard.js';
 import { AdminGuard } from '../../auth/admin.guard.js';
 import { Grants, PluginError, PluginRegistry } from './registry.js';
-import { installArchive, loadInstalledPlugin } from './archive.js';
+import { installArchive, loadInstalledPlugin, removeInstalledPlugin } from './archive.js';
 import { defaultPluginsDir } from './loader.js';
 
 const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503, 'invalid-archive': 400, 'already-exists': 409, 'signature-invalid': 400 };
@@ -61,9 +61,16 @@ export class PluginsAdminController {
     return wrap(async () => {
       const dir = defaultPluginsDir();
       const manifest = installArchive(dir, buf);
-      const impl = loadInstalledPlugin(dir, manifest.id);
-      this.reg.register(impl);
-      this.branches?.registerEverywhere(impl);
+      // Atomic install (P0-7): if loading or registering the module fails, the installed folder is rolled back -
+      // an invalid module never leaves a final folder behind.
+      try {
+        const impl = loadInstalledPlugin(dir, manifest.id);
+        if (!this.reg.impl(manifest.id)) this.reg.register(impl);
+        this.branches?.registerEverywhere(impl);
+      } catch (e) {
+        removeInstalledPlugin(dir, manifest.id);
+        throw e;
+      }
       return { imported: manifest.id, version: manifest.version, tenant: t, note: 'Registered in the running registries; a restart loads it everywhere (new branch registries, auth-method catalogue). Per-tenant install/enable stays a separate granted step.' };
     });
   }

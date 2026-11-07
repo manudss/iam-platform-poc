@@ -16,7 +16,7 @@ import { LoadOptions, loadPlugins, verifyPackage } from './loader.js';
  * folder tree at boot). Per-tenant install/enable stays a separate, granted step (decision 6).
  */
 
-const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024, MAX_FILES = 64, MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024, MAX_FILES = 64, MAX_FILE_BYTES = 4 * 1024 * 1024, MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
 
 /** Minimal zip reader (stored and deflated entries): the counterpart of the writer in scripts/plugin-pack.mjs. */
@@ -29,26 +29,34 @@ export function unpackZip(buf: Buffer): Map<string, Buffer> {
   const count = buf.readUInt16LE(eocd + 10);
   if (count > MAX_FILES) throw new PluginError('invalid-archive', `too many files (${MAX_FILES} max)`);
   let off = buf.readUInt32LE(eocd + 16);
+  if (off >= eocd) throw new PluginError('invalid-archive', 'central directory offset out of bounds');
   const out = new Map<string, Buffer>();
   let total = 0;
   for (let n = 0; n < count; n++) {
+    if (off + 46 > eocd + 22 || off + 46 > buf.length) throw new PluginError('invalid-archive', 'truncated central directory');
     if (buf.readUInt32LE(off) !== 0x02014b50) throw new PluginError('invalid-archive', 'corrupt central directory');
     const method = buf.readUInt16LE(off + 10), flags = buf.readUInt16LE(off + 8);
-    const size = buf.readUInt32LE(off + 20);
+    const compSize = buf.readUInt32LE(off + 20), size = buf.readUInt32LE(off + 24);
     const nameLen = buf.readUInt16LE(off + 28), extraLen = buf.readUInt16LE(off + 30), commentLen = buf.readUInt16LE(off + 32);
     const localOff = buf.readUInt32LE(off + 42);
+    if (off + 46 + nameLen + extraLen + commentLen > buf.length) throw new PluginError('invalid-archive', 'truncated central directory entry');
     const name = buf.subarray(off + 46, off + 46 + nameLen).toString('utf8');
     off += 46 + nameLen + extraLen + commentLen;
     if (flags & 0x1) throw new PluginError('invalid-archive', 'encrypted entries are not supported');
     if (flags & 0x8) throw new PluginError('invalid-archive', 'data descriptors are not supported (repack with scripts/plugin-pack.mjs)');
     if (!name || name.endsWith('/') || !SAFE.test(name) || name.includes('..') || name.includes('\\') || name.includes('//')) throw new PluginError('invalid-archive', `unsafe file name ${JSON.stringify(name)}`);
+    if (size > MAX_FILE_BYTES) throw new PluginError('invalid-archive', `${name} too large (4 MB max per file)`);
     total += size; if (total > MAX_TOTAL_BYTES) throw new PluginError('invalid-archive', 'unpacked content too large (8 MB max)');
+    if (localOff + 30 > buf.length) throw new PluginError('invalid-archive', 'local header offset out of bounds');
     if (buf.readUInt32LE(localOff) !== 0x04034b50) throw new PluginError('invalid-archive', 'corrupt local header');
     const lNameLen = buf.readUInt16LE(localOff + 26), lExtraLen = buf.readUInt16LE(localOff + 28);
     const dataStart = localOff + 30 + lNameLen + lExtraLen;
-    const raw = buf.subarray(dataStart, dataStart + buf.readUInt32LE(localOff + 18));
+    if (dataStart + compSize > buf.length) throw new PluginError('invalid-archive', `${name}: truncated data`);
+    const raw = buf.subarray(dataStart, dataStart + compSize);
     let data: Buffer;
-    try { data = method === 0 ? Buffer.from(raw) : method === 8 ? inflateRawSync(raw) : (() => { throw new PluginError('invalid-archive', `unsupported compression method ${method}`); })(); }
+    // Real decompression cap (P0-7): the declared size bounds the output buffer, so a lying header cannot
+    // inflate past it (zip bomb stops at the cap instead of expanding in memory first).
+    try { data = method === 0 ? Buffer.from(raw) : method === 8 ? inflateRawSync(raw, { maxOutputLength: size }) : (() => { throw new PluginError('invalid-archive', `unsupported compression method ${method}`); })(); }
     catch (e) { if (e instanceof PluginError) throw e; throw new PluginError('invalid-archive', `cannot inflate ${name}`); }
     if (data.length !== size) throw new PluginError('invalid-archive', `${name}: size mismatch`);
     out.set(name, data);
