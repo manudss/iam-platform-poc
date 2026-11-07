@@ -51,6 +51,24 @@ export class PgPluginStore implements MigrationStore, SettingsStore, StateStore 
     await this.init();
     return (await this.pool.query('select 1 from plugin_seeds where tenant = $1 and plugin = $2', [tenant, plugin])).rowCount! > 0;
   }
+  async removeTenantData(tenant: string, plugin: string, tables: string[]) {
+    await this.init();
+    for (const t of tables) {
+      if (!/^plg_[a-z0-9_]+$/.test(t)) throw new Error(`table ${t} is not a plugin table`);
+      await this.pool.query(`delete from ${t} where tenant = $1`, [tenant]);
+    }
+    await this.pool.query('delete from plugin_seeds where tenant = $1 and plugin = $2', [tenant, plugin]);
+  }
+  async revert(plugin: string, id: string, sql: string[]) {
+    await this.init();
+    const c = await this.pool.connect();
+    try {
+      await c.query('begin');
+      for (const s of sql) await c.query(s);
+      await c.query('delete from plugin_migrations where plugin = $1 and id = $2', [plugin, id]);
+      await c.query('commit');
+    } catch (e) { await c.query('rollback').catch(() => {}); throw e; } finally { c.release(); }
+  }
 
   async get(tenant: string, plugin: string) {
     await this.init();

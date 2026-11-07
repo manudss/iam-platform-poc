@@ -25,6 +25,10 @@ export interface MigrationStore {
   seed(tenant: string, pluginId: string, table: string, row: Record<string, unknown>): Promise<void>;
   /** True when this tenant already received the plugin's seed rows. */
   seeded(tenant: string, pluginId: string): Promise<boolean>;
+  /** Uninstall: removes one tenant's rows from the plugin's own tables and its seed record. */
+  removeTenantData(tenant: string, pluginId: string, tables: string[]): Promise<void>;
+  /** Uninstall of the last tenant: runs a migration's declared inverse in one transaction and removes the migration record. */
+  revert(pluginId: string, id: string, sql: string[]): Promise<void>;
 }
 export interface StoredState { tenant: string; plugin: string; installed: boolean; enabled: boolean; faulted: boolean; grants: Grants; }
 /** Durable enablement, grants and fault flags: the admin state survives a restart. */
@@ -301,6 +305,46 @@ export class PluginRegistry {
     await this.activity();
   }
 
+  /** Uninstall (plan D): the destructive inverse of install. The plugin must be disabled first (uninstall never silently
+   * disables, so the base is restored by an explicit audited step). The tenant's rows are removed from the plugin's own
+   * tables; the tables themselves are dropped by the declared down migrations only when no other tenant still has the
+   * plugin installed (plugin tables are shared, rows are tenant-isolated). Every applied migration must still exist,
+   * be unchanged and declare an inverse, otherwise uninstall refuses rather than guessing. Settings are kept for a
+   * possible reinstall (secrets are not orphaned in logs). */
+  async uninstall(tenant: string, id: string) {
+    const p = this.plugin(id);
+    if (p.manifest.base) throw new PluginError('base-required', `${id} is a base plugin and cannot be uninstalled`);
+    const st = this.state.get(this.k(tenant, id));
+    if (!st?.installed) return;
+    if (st.enabled) throw new PluginError('still-enabled', `disable ${id} before uninstalling it`);
+    for (const other of this.impls.values()) if (this.isActive(tenant, other.manifest.id) && other.manifest.requires?.includes(id)) throw new PluginError('in-use', `${other.manifest.id} requires ${id}`);
+    const declared = new Map((p.manifest.install?.migrations ?? []).map((m) => [m.id, m]));
+    const done = await this.migrations.applied(id);
+    const lastTenant = ![...this.state.entries()].some(([k2, s2]) => k2 !== this.k(tenant, id) && k2.endsWith(`/${id}`) && s2.installed);
+    const tables = ownedTables(p.manifest);
+    if (done.length && lastTenant) {
+      for (const a of [...done].reverse()) {
+        const mig = declared.get(a.id);
+        if (!mig) throw new PluginError('migration-unknown', `applied migration ${a.id} is no longer declared: uninstall cannot invert it`);
+        if (checksum(JSON.stringify(mig.sql)) !== a.checksum) throw new PluginError('migration-changed', `migration ${a.id} was edited after being applied: uninstall refuses to guess the inverse`);
+        if (!mig.down?.length) throw new PluginError('uninstall-incomplete', `migration ${a.id} declares no inverse: its tables would be orphaned`);
+      }
+      for (const a of [...done].reverse()) await this.migrations.revert(id, a.id, declared.get(a.id)!.down!);
+      await this.migrations.removeTenantData(tenant, id, []); // clears the seed ledger row; the tables are dropped above
+    } else {
+      await this.migrations.removeTenantData(tenant, id, tables);
+    }
+    st.installed = false;
+    st.enabled = false;
+    st.grants = {};
+    this.faulted.delete(this.k(tenant, id));
+    for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
+    this.invalidateInventories();
+    await this.persist(tenant, id);
+    this.emitAudit({ tenant, action: 'plugin.uninstall', plugin: id, detail: done.length && lastTenant ? 'down migrations reverted; owned tables dropped' : `tenant rows removed; tables kept${lastTenant ? ' (no migrations applied)' : ' for other tenants'}` });
+    await this.activity();
+  }
+
   isActive(tenant: string, id: string) {
     const p = this.impls.get(id);
     if (!p) return false;
@@ -454,6 +498,17 @@ export class PluginRegistry {
       return res;
     });
   }
+}
+
+/** Tables created by the plugin's up migrations; scopes uninstall's per-tenant row removal to what the plugin owns. */
+export function ownedTables(m: PluginManifest): string[] {
+  const out: string[] = [];
+  for (const mig of m.install?.migrations ?? []) for (const s of mig.sql) {
+    const t = /create\s+table\s+(?:if\s+not\s+exists\s+)?([a-z0-9_]+)/gi;
+    let x: RegExpExecArray | null;
+    while ((x = t.exec(s))) out.push(x[1].toLowerCase());
+  }
+  return [...new Set(out)];
 }
 
 function checksum(s: string) {

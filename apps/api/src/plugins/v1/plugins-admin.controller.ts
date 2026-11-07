@@ -86,4 +86,9 @@ export class PluginsAdminController {
 
   @UseGuards(AdminGuard) @Post(':id/disable')
   disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }
+
+  /** Plan D: destructive uninstall. The plugin must be disabled first; the tenant's rows go, and the down migrations
+   * drop the owned tables when no other tenant still has it installed. Refuses when an applied migration lacks an inverse. */
+  @UseGuards(AdminGuard) @Post(':id/uninstall')
+  uninstall(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).uninstall(t, id); return { uninstalled: id }; }); }
 }

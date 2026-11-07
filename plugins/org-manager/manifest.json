@@ -4,21 +4,91 @@
   "version": "1.0.0",
   "name": "Organizations",
   "publisher": "iam-platform",
-  "kinds": ["profile", "workflow", "ui"],
-  "hooks": [{ "name": "profile.enrich", "mode": "blocking" }, { "name": "identity.changed", "mode": "async" }],
+  "kinds": [
+    "profile",
+    "workflow",
+    "ui"
+  ],
+  "hooks": [
+    {
+      "name": "profile.enrich",
+      "mode": "blocking"
+    },
+    {
+      "name": "identity.changed",
+      "mode": "async"
+    }
+  ],
   "install": {
-    "migrations": [{ "id": "001-orgs", "sql": ["create table if not exists plg_org_manager_orgs (tenant text not null, id text not null, parent text, name text not null, primary key (tenant, id))", "create table if not exists plg_org_manager_members (tenant text not null, org text not null, subject text not null, primary key (tenant, org, subject))"] }],
-    "seed": [{ "table": "plg_org_manager_orgs", "row": { "id": "root", "name": "Demo company" } }]
+    "migrations": [
+      {
+        "id": "001-orgs",
+        "sql": [
+          "create table if not exists plg_org_manager_orgs (tenant text not null, id text not null, parent text, name text not null, primary key (tenant, id))",
+          "create table if not exists plg_org_manager_members (tenant text not null, org text not null, subject text not null, primary key (tenant, org, subject))"
+        ],
+        "down": [
+          "drop table if exists plg_org_manager_members",
+          "drop table if exists plg_org_manager_orgs"
+        ]
+      }
+    ],
+    "seed": [
+      {
+        "table": "plg_org_manager_orgs",
+        "row": {
+          "id": "root",
+          "name": "Demo company"
+        }
+      }
+    ]
   },
   "settings": [
-    { "key": "maxDepth", "type": "number", "label": "Maximum hierarchy depth", "default": 5, "min": 1, "max": 12, "group": "General" },
-    { "key": "claimName", "type": "string", "label": "Claim that carries the organization", "default": "org", "pattern": "^[a-z_]+$", "group": "Claims" }
+    {
+      "key": "maxDepth",
+      "type": "number",
+      "label": "Maximum hierarchy depth",
+      "default": 5,
+      "min": 1,
+      "max": 12,
+      "group": "General"
+    },
+    {
+      "key": "claimName",
+      "type": "string",
+      "label": "Claim that carries the organization",
+      "default": "org",
+      "pattern": "^[a-z_]+$",
+      "group": "Claims"
+    }
   ],
   "screens": [
-    { "id": "orgs", "title": "Organizations", "area": "admin", "render": "schema", "schemaRef": "plg_org_manager_orgs" },
-    { "id": "members", "title": "Members", "area": "admin", "render": "schema", "schemaRef": "plg_org_manager_members" }
+    {
+      "id": "orgs",
+      "title": "Organizations",
+      "area": "admin",
+      "render": "schema",
+      "schemaRef": "plg_org_manager_orgs"
+    },
+    {
+      "id": "members",
+      "title": "Members",
+      "area": "admin",
+      "render": "schema",
+      "schemaRef": "plg_org_manager_members"
+    }
   ],
-  "entrypoints": { "handlers": "handlers.mjs" },
-  "httpRoutes": [{ "method": "GET", "path": "/ping", "auth": "public" }],
-  "security": { "signed": true }
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "httpRoutes": [
+    {
+      "method": "GET",
+      "path": "/ping",
+      "auth": "public"
+    }
+  ],
+  "security": {
+    "signed": true
+  }
 }

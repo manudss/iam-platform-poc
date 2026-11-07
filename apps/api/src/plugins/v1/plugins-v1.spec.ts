@@ -176,6 +176,51 @@ describe('plugin registry v1', () => {
     assert.ok(errs.some((e) => /drop table is not allowed/.test(e)));
   });
 
+  it('migration inverses (down) may drop the plugin\'s own tables but never another prefix', () => {
+    const m = structuredClone(orgManager.manifest);
+    m.install!.migrations[0].down = ['drop table if exists plg_org_manager_orgs'];
+    assert.equal(validateManifest(m, HOOKS).filter((e) => /inverse/.test(e)).length, 0, 'own-prefix drop allowed in an inverse');
+    m.install!.migrations[0].down = ['drop table users'];
+    assert.ok(validateManifest(m, HOOKS).some((e) => /inverse: table users must start with plg_org_manager_/.test(e)));
+  });
+
+  it('disable/enable keep data; uninstall needs disable, removes only the tenant\'s rows, and drops tables for the last tenant', async () => {
+    reg.register(orgManager);
+    await reg.install(T, 'org-manager', { install: true });
+    await reg.install('t2', 'org-manager', { install: true });
+    await reg.enable(T, 'org-manager');
+    const before = await mig.applied('org-manager');
+    await reg.disable(T, 'org-manager');
+    await reg.enable(T, 'org-manager');
+    assert.deepEqual(await mig.applied('org-manager'), before, 'disable/enable never re-applies migrations');
+    assert.equal(mig.rows.filter((r) => r.plugin === 'org-manager' && r.tenant === T).length, 1, 'seed is not duplicated');
+
+    await assert.rejects(reg.uninstall(T, 'org-manager'), (e: PluginError) => e.code === 'still-enabled');
+    await assert.rejects(reg.uninstall(T, 'auth-password'), (e: PluginError) => e.code === 'base-required');
+    await reg.disable(T, 'org-manager');
+    await reg.uninstall(T, 'org-manager');
+    assert.equal(mig.rows.filter((r) => r.plugin === 'org-manager' && r.tenant === T).length, 0, 't1 rows removed');
+    assert.equal(mig.rows.filter((r) => r.plugin === 'org-manager' && r.tenant === 't2').length, 1, 't2 rows untouched');
+    assert.equal((await mig.applied('org-manager')).length, 1, 'tables kept while another tenant has it installed');
+
+    await reg.uninstall('t2', 'org-manager'); // installed but never enabled: no disable needed
+    assert.equal((await mig.applied('org-manager')).length, 0, 'last tenant reverts the migrations');
+    assert.ok(mig.log.some((l) => l.id === '001-orgs (down)' && l.sql.some((q) => /drop table/i.test(q))), 'declared inverse ran');
+    assert.ok(audit.includes('plugin.uninstall:org-manager'));
+
+    await reg.install(T, 'org-manager', { install: true });
+    assert.equal((await mig.applied('org-manager')).length, 1, 'reinstall re-applies on a clean slate');
+  });
+
+  it('uninstall refuses an applied migration without a declared inverse', async () => {
+    const m = structuredClone(orgManager.manifest);
+    delete m.install!.migrations[0].down;
+    reg.register({ manifest: m, handlers: orgManager.handlers });
+    await reg.install(T, m.id, { install: true });
+    await assert.rejects(reg.uninstall(T, m.id), (e: PluginError) => e.code === 'uninstall-incomplete');
+    assert.ok((await mig.applied(m.id)).length > 0, 'nothing was reverted');
+  });
+
   it('settings: validation, defaults and generated form with masked secrets', async () => {
     reg.register(orgManager);
     await reg.install(T, 'org-manager', { install: true });

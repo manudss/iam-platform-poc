@@ -50,6 +50,9 @@ export interface Migration {
   id: string;
   /** Statements run in order inside one transaction by the installer. Tables must be prefixed `plg_<pluginId>_`. */
   sql: string[];
+  /** Inverse statements run in reverse order when the LAST tenant uninstalls the plugin (plan D: destructive inverses).
+   * A down may drop the plugin's own tables (only uninstall may drop). Uninstall refuses an applied migration without one. */
+  down?: string[];
 }
 export interface SeedRow {
   table: string;
@@ -214,7 +217,13 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
       let x: RegExpExecArray | null;
       while ((x = t.exec(s))) if (!x[1].toLowerCase().startsWith(prefix)) errs.push(`migration ${mig.id}: table ${x[1]} must start with ${prefix}`);
       if (/create\s+table/i.test(s) && !/\btenant\s+text\s+not\s+null\b/i.test(s)) errs.push(`migration ${mig.id}: every table needs a "tenant text not null" column (rows are isolated per tenant)`);
-      if (/\bdrop\s+table\b/i.test(s)) errs.push(`migration ${mig.id}: drop table is not allowed (uninstall keeps data)`);
+      if (/\bdrop\s+table\b/i.test(s)) errs.push(`migration ${mig.id}: drop table is not allowed in an up migration (declare the inverse in down)`);
+    }
+    for (const s of mig.down ?? []) {
+      const t = /(?:create|alter|drop)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?([a-z0-9_]+)/gi;
+      let x: RegExpExecArray | null;
+      while ((x = t.exec(s))) if (!x[1].toLowerCase().startsWith(prefix)) errs.push(`migration ${mig.id} inverse: table ${x[1]} must start with ${prefix}`);
+      if (/create\s+table/i.test(s)) errs.push(`migration ${mig.id} inverse: create table makes no sense in an inverse`);
     }
   }
   for (const s of m.install?.seed ?? []) if (!s.table.toLowerCase().startsWith(prefix)) errs.push(`seed table ${s.table} must start with ${prefix}`);
