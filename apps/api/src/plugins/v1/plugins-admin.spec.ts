@@ -54,9 +54,10 @@ describe('plugin admin API', () => {
     const before = await s().get('/tenants/t2/plugins/menu').expect(200);
     assert.equal(before.body.entries.filter((e: any) => e.plugin === 'organizations').length, 0);
     await s().post('/tenants/t2/plugins/organizations/install').set(adm).send({}).expect(201);
-    await s().post('/tenants/t2/plugins/organizations/enable').set(adm).send({}).expect(201);
+    await s().post('/tenants/t2/plugins/organizations/enable').set(adm).send({}).expect(403); // packaged screen: the uiComponents grant is required
+    await s().post('/tenants/t2/plugins/organizations/enable').set(adm).send({ grants: { uiComponents: true } }).expect(201);
     const menu = await s().get('/tenants/t2/plugins/menu').expect(200);
-    assert.deepEqual(menu.body.entries.filter((e: any) => e.plugin === 'organizations').map((e: any) => ({ id: e.id, path: e.path, group: e.group })), [{ id: 'organizations', path: '/organizations', group: 'Access (IAM)' }]);
+    assert.deepEqual(menu.body.entries.filter((e: any) => e.plugin === 'organizations').map((e: any) => ({ id: e.id, path: e.path, group: e.group })), [{ id: 'organizations', path: '/screens/organizations/orgs', group: 'Access (IAM)' }]);
     assert.equal((await s().get('/tenants/t3/plugins/menu')).body.entries.filter((e: any) => e.plugin === 'organizations').length, 0);
     // http routes (step 3): a declared route answers only while the plugin is active, per tenant
     const pong = await s().get('/tenants/t2/plugins/org-manager/ping').expect(200);

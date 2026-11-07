@@ -9,7 +9,6 @@ import { MyProfilePage } from './my-profile';
 import { SignupPage } from './signup-page';
 import { PrivacyPage } from './privacy-page';
 import { AboutPage } from './about-page';
-import { OrganizationsPage } from './organizations';
 import { SsoInteractionPage } from './sso-interaction';
 import { SsoSamlPage } from './sso-saml';
 import { ApplicationsPage } from './applications';
@@ -42,7 +41,6 @@ export const routes: Routes = [
       { path: 'overview', component: OverviewPage, title: 'Dashboard', canActivate: [accessGuard] },
       { path: 'users', component: UsersPage, title: 'Users', canActivate: [accessGuard] },
       { path: 'profile-fields', canActivate: [accessGuard], component: ProfileFieldsPage, title: 'Profile fields' },
-      { path: 'organizations', component: OrganizationsPage, title: 'Organizations', canActivate: [accessGuard, pluginGuard('organizations')] },
       { path: 'applications', component: ApplicationsPage, title: 'Applications', canActivate: [accessGuard, pluginGuard('app-connector')] },
       { path: 'policies', component: PoliciesPage, title: 'Policies', canActivate: [accessGuard, pluginGuard('policy-studio')] },
       { path: 'profile-reviews', component: ProfileReviewsPage, title: 'Profile reviews', canActivate: [accessGuard] },

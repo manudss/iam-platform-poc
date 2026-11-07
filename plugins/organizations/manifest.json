@@ -17,7 +17,7 @@
       "group": "Access (IAM)",
       "icon": "⌂",
       "order": 30,
-      "path": "/organizations"
+      "path": "/screens/organizations/orgs"
     }
   ],
   "security": {
@@ -25,5 +25,14 @@
   },
   "entrypoints": {
     "handlers": "handlers.mjs"
-  }
+  },
+  "screens": [
+    {
+      "id": "orgs",
+      "title": "Organizations",
+      "area": "admin",
+      "render": "component",
+      "component": "screens/orgs.mjs"
+    }
+  ]
 }

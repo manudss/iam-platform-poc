@@ -180,13 +180,13 @@ describe('routing and sign-in guard', () => {
   it('once signed in, shows the administration layout with the whole navigation and the requested page', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
-    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: { organizations: true } } : path === '/plugins/menu' ? { entries: [{ plugin: 'organizations', id: 'organizations', title: 'Organizations', area: 'admin', group: 'Access (IAM)', icon: '⌂', order: 30, path: '/organizations' }, { plugin: 'workflows-iga', id: 'workflows', title: 'Workflows', area: 'admin', group: 'Automation (IGA)', icon: '⟳', order: 10, path: '/workflows' }] } : [] })) as never;    s.workflowsEnabled.set(true); // plugin gate: the Automation menu only exists while the workflows-iga plugin is enabled
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: { organizations: true } } : path === '/plugins/menu' ? { entries: [{ plugin: 'organizations', id: 'organizations', title: 'Organizations', area: 'admin', group: 'Access (IAM)', icon: '⌂', order: 30, path: '/screens/organizations/orgs' }, { plugin: 'workflows-iga', id: 'workflows', title: 'Workflows', area: 'admin', group: 'Automation (IGA)', icon: '⟳', order: 10, path: '/workflows' }] } : [] })) as never;    s.workflowsEnabled.set(true); // plugin gate: the Automation menu only exists while the workflows-iga plugin is enabled
     const h = await RouterTestingHarness.create();
     await h.navigateByUrl('/activation');
     await new Promise((r) => setTimeout(r, 0)); h.detectChanges(); // the plugin menu loads asynchronously (GET /plugins/menu)
     const el = h.routeNativeElement as HTMLElement;
     const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
-    expect(nav).toEqual(['/overview', '/users', '/profile-fields', '/organizations', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
+    expect(nav).toEqual(['/overview', '/users', '/profile-fields', '/screens/organizations/orgs', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
     expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
     expect(el.textContent).toContain('Choose your working branch');
   });
