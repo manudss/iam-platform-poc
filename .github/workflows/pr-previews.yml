@@ -19,7 +19,9 @@ name: PR Previews
 #   Actions > PR Previews > Run workflow. One free Render web service per PR
 #   (Docker, 0.1 CPU / 512 MB, spins down after 15 min idle), created on the first
 #   demand in the "dev" environment, deleted when the PR closes.
-# - GitHub-hosted minutes: a few seconds per event (Node script only, no build on the runner).
+# - GitHub-hosted minutes: ensure/cleanup take a few seconds per event; a refresh job holds
+#   a runner while it watches the Render build (up to ~26 min, timeout 35). Public repo:
+#   GitHub-hosted runners are free.
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, closed]
@@ -73,7 +75,7 @@ jobs:
       startsWith(github.event.comment.body, '/preview') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Check out the default branch (trusted code)
         uses: actions/checkout@v5
@@ -98,7 +100,7 @@ jobs:
     name: Deploy the preview on demand (manual dispatch)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - name: Check out the default branch (trusted code)
         uses: actions/checkout@v5
