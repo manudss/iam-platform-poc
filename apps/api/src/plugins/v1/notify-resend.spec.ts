@@ -12,6 +12,7 @@ describe('notify-resend plugin', () => {
     reg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, new MemoryStateStore());
     for (const p of loadPlugins()) reg.register(p);
     await reg.load();
+    await reg.install('t1', 'notify-resend', {});
     await reg.enable('t1', 'notify-resend', {});
   });
   after(() => { delete process.env.RESEND_API_KEY; });

@@ -12,6 +12,7 @@ describe('plugin menu + http routes', () => {
     reg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, new MemoryStateStore());
     for (const p of loadPlugins()) reg.register(p);
     await reg.load();
+    await reg.install('t1', 'organizations', {});
     await reg.enable('t1', 'organizations', {});
     await reg.install('t1', 'org-manager', { install: true });
     await reg.configure('t1', 'org-manager', { maxDepth: 4 });
@@ -30,8 +31,7 @@ describe('plugin menu + http routes', () => {
     assert.equal(reg.httpRoute('t2', 'org-manager', 'GET', 'ping'), undefined); // not enabled on t2
     assert.equal(reg.httpRoute('t1', 'unknown-plugin', 'GET', 'ping'), undefined);
   });
-  it('a declared route without a handler is a fault, not a 404', () => {
-    reg.register({ manifest: { apiVersion: 'plugin/v3', id: 'broken-http', version: '1.0.0', name: 'Broken', publisher: 'iam-platform', kinds: ['ui'], hooks: [], settings: [], httpRoutes: [{ method: 'GET', path: '/x', auth: 'public' }] }, handlers: {} });
-    assert.throws(() => reg.httpRoute('t1', 'broken-http', 'GET', 'x'), /declared but no handler/);
+  it('a declared route without a handler is a fault, not a 404: registration is refused', () => {
+    assert.throws(() => reg.register({ manifest: { apiVersion: 'plugin/v3', id: 'broken-http', version: '1.0.0', name: 'Broken', publisher: 'iam-platform', kinds: ['ui'], hooks: [], settings: [], httpRoutes: [{ method: 'GET', path: '/x', auth: 'public' }] }, handlers: {} }), /declared but no handler/);
   });
 });

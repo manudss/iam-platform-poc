@@ -203,7 +203,7 @@ describe('plugin registry v1', () => {
 
   it('a plugin cannot be disabled while another needs it', async () => {
     reg.register(orgManager);
-    const dep = structuredClone(orgManager.manifest); dep.id = 'org-reports'; dep.requires = ['org-manager']; dep.install = undefined; dep.screens = undefined; dep.hooks = [];
+    const dep = structuredClone(orgManager.manifest); dep.id = 'org-reports'; dep.requires = ['org-manager']; dep.install = undefined; dep.screens = undefined; dep.hooks = []; dep.httpRoutes = []; dep.menu = [];
     reg.register({ manifest: dep, handlers: {} });
     for (const id of ['org-manager', 'org-reports']) { await reg.install(T, id, { install: true }); await reg.configure(T, id, {}); }
     await reg.enable(T, 'org-reports').catch((e) => assert.equal(e.code, 'missing-dependency'));
