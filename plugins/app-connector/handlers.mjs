@@ -17,7 +17,7 @@
 import { createRequire } from 'node:module';
 
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
-const require = createRequire(new URL('../../apps/api/package.json', import.meta.url));
+const require = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url));
 const { BadRequestException, ConflictException, NotFoundException } = require('@nestjs/common');
 
 export const APP_CONNECTOR_PLUGIN = 'app-connector';

@@ -24,7 +24,7 @@ import { createRequire } from 'node:module';
 import { randomBytes, scryptSync, createHash } from 'node:crypto';
 
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
-const require = createRequire(new URL('../../apps/api/package.json', import.meta.url));
+const require = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url));
 const { BadRequestException, ConflictException, ForbiddenException, HttpException, NotFoundException } = require('@nestjs/common');
 
 const ID = /^[a-z0-9-]{1,32}$/, EMAIL = /^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}$/;

@@ -21,7 +21,7 @@ import { selfSignedCert } from './selfsigned.mjs';
 const mayOpen = (app, u) => !!u && app.enabled && app.allowed_roles.some((r) => u.roles.includes(r));
 
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
-const require = createRequire(new URL('../../apps/api/package.json', import.meta.url));
+const require = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url));
 const samlify = require('samlify');
 const { DOMParser } = require('@xmldom/xmldom');
 const { BadRequestException, NotFoundException } = require('@nestjs/common');
