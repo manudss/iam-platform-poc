@@ -20,7 +20,7 @@ A plugin lists one or more `kinds`. Kinds say what it is for; hooks say what it 
 | --- | --- | --- | --- |
 | `auth-method` | prove who the user is | `auth.authenticate`, `auth.challenge` | password (base), password with lockout, TOTP, passkeys/WebAuthn, SMS or mail OTP, federation to an external OIDC/SAML IdP, smart card |
 | `profile` | enrich the user profile and claims | `profile.enrich`, `identity.changed` | organizations and hierarchy, manager lookup, cost center, HR attributes, derived claims (is_contractor), photo, locale |
-| `notifier` | deliver messages | `notify.send` | log (base), SMTP, Teams/Slack, webhook, SMS, mobile push, digest |
+| `notifier` | deliver messages | `notify.send`, `notify.capability` | log (base), Resend (shipped), SMTP, Teams/Slack, webhook, SMS, mobile push, digest |
 | `workflow` | steps of approval and certification flows | `workflow.step`, `identity.changed` | manager approval, access review campaign, SoD exception with expiry, four-eyes, escalation after N days, ticketing |
 | `ui` | extra screens | `ui.screens` (static) | organizations screen, campaign dashboard, sign-in map, self-service access request page |
 | `connector` | read from or write to a target | `connector.import`, `connector.provision` | CSV, SCIM, LDAP/AD, Entra ID, Google Workspace, SAP, a database, a SaaS API |
@@ -149,6 +149,8 @@ Covered by running code and tests in this POC: `auth-method` (base password + lo
 A wrong password is a business denial: it never faults the plugin for everyone. A technical failure is fail-closed and the base plugin is not asked after a replacement failed. The endpoint answers 404 unless the token is set and 401 on a wrong token. A `challenge` outcome is treated as a denial, because the demo form has no second step. Covered by `signin-gate.e2e.spec.ts` (real core binary, real API, registry) and unit tests in `core/crates/iam-core/src/gate.rs`.
 
 **Notifications (`notify.send`).** With `IAM_EFFECTS=1`, the activation effects also fan out `notify.send` to the active notifier plugins (`role.changed`, one call per effect key, idempotent). It is best effort: a notifier problem is logged and never fails the role effects or becomes an access decision.
+
+**One-time-code e-mail (`notify.capability` + `notify.send`).** The sign-in OTP (`auth-email-otp`, `delivery: 'smtp'`) delivers ONLY through the `notify.default` slot (P1-E: no mail adapter in the core anymore - the single Resend path is the `notify-resend` plugin, key in `RESEND_API_KEY` only). Before sending, the flow asks the slot's `notify.capability` (blocking, single responder): `{ real: true }` means the chosen notifier really delivers (shipped `notify-resend` with a key); anything else is the explicit unavailability policy - the base log transport answers `{ real: false }`, and `notify-resend` without a key answers `{ real: false, note: 'RESEND_API_KEY not set...' }` and degrades `notify.send` to the base log transport with `degraded` stated in the result. When delivery is not real, the code goes to the demo outbox and the page says DEMO ONLY. Disabling or replacing the notifier changes the OTP path with it, coherently.
 
 ## 11b. Plugin configuration versioned in Dolt
 

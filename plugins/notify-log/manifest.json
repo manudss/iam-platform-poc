@@ -7,7 +7,7 @@
   "kinds": ["notifier"],
   "base": true,
   "provides": ["notify.default"],
-  "hooks": [{ "name": "notify.send", "mode": "async" }],
+  "hooks": [{ "name": "notify.send", "mode": "async" }, { "name": "notify.capability", "mode": "blocking" }],
   "settings": [{ "key": "prefix", "type": "string", "label": "Log prefix", "default": "notify", "group": "General" }],
   "entrypoints": { "handlers": "handlers.mjs" },
   "security": { "signed": true }

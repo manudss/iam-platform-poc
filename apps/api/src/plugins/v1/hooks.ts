@@ -16,6 +16,7 @@ export const HOOKS = new Map<string, HookMode[]>([
   ['identity.changed', ['async']], // joiner / mover / leaver, role change
   ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM) - documented bus exception (decision 8)
   ['notify.send', ['async']], // deliver a message
+  ['notify.capability', ['blocking']], // the notifier chosen on the slot declares its real delivery capability (P1-E)
   ['workflow.step', ['async']], // run one step of an approval or certification flow
   ['connector.provision', ['async']], // create / update / delete in a target
   ['connector.import', ['async']], // pull identities from a source

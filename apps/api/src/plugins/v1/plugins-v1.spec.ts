@@ -117,7 +117,7 @@ describe('plugin registry v1', () => {
 
   it('a failing replacement is faulted and refused (no fallback: redelivery replaced it), until an admin disables it', async () => {
     const m = structuredClone(notifyLog.manifest); m.id = 'notify-bad'; m.base = false; m.extends = 'notify-log'; m.provides = ['notify.default'];
-    reg.register({ manifest: m, handlers: { 'notify.send': () => { throw new Error('smtp down'); } } });
+    reg.register({ manifest: m, handlers: { 'notify.send': () => { throw new Error('smtp down'); }, 'notify.capability': () => ({ real: false }) } });
     await reg.install(T, 'notify-bad', {}); await reg.configure(T, 'notify-bad', {}); await reg.enable(T, 'notify-bad');
     await assert.rejects(reg.callSlot(T, 'notify.default', 'notify.send', { to: 'x', template: 't' }), (e: PluginError) => e.code === 'plugin-failed');
     assert.ok(audit.includes('plugin.fault.closed:notify-bad'));
@@ -271,7 +271,7 @@ describe('bus facade (step 2)', () => {
 
   it('a bus failure raises without any in-process fallback (no double effects, D16)', async () => {
     let ranInProcess = false;
-    const spy = { manifest: notifyLog.manifest, handlers: { 'notify.send': () => { ranInProcess = true; return {}; } } };
+    const spy = { manifest: { ...notifyLog.manifest, hooks: notifyLog.manifest.hooks.filter((h) => h.name === 'notify.send') }, handlers: { 'notify.send': () => { ranInProcess = true; return {}; } } };
     const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
     reg2.register(spy);
     reg2.setBus(stub({ routed: () => true, emit: async () => { throw new Error('core unreachable'); } }));

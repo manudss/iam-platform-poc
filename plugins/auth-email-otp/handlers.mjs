@@ -2,23 +2,35 @@ import { createHash, randomInt, timingSafeEqual } from 'node:crypto';
 
 const eq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 const sha = (s) => createHash('sha256').update(s).digest('hex');
-const realConfigured = () => !!process.env.RESEND_API_KEY || !!(process.env.IAM_SMTP_HOST && process.env.IAM_SMTP_FROM);
 
-/** One-time code by e-mail. Delivery through the server mail adapter (Resend or SMTP) or the demo outbox. */
+/**
+ * One-time code by e-mail. The SEND PATH IS THE notify.default SLOT (P1-E): the notifier plugin chosen on the slot
+ * (notify-resend, or any replacement) delivers; the base log transport simulates. No core mail adapter anymore.
+ * The slot's notify.capability answer decides whether the page promises a real e-mail (explicit unavailability policy).
+ */
 export default {
-  'auth.verification': (p) => p.config.delivery === 'smtp' && realConfigured()
-    ? { real: true, note: 'Code delivered by e-mail to the address on the user profile: proves access to that mailbox.' }
+  'auth.verification': (p) => p.config.delivery === 'smtp'
+    ? { real: true, note: 'Code delivered by e-mail through the active notify.default plugin, when that plugin really delivers (the shipped notify-resend needs RESEND_API_KEY on the server): checked live at every sign-in.' }
     : { real: false, note: 'SIMULATED: the code is written to a demo outbox that administrators can read, so it does not prove possession of a mailbox.' },
   'auth.prepare': async (p, c) => {
     const len = Number(p.config.codeLength ?? 6), ttl = Number(p.config.ttlSeconds ?? 300);
     const code = String(randomInt(0, 10 ** len)).padStart(len, '0');
-    const real = p.config.delivery === 'smtp' && !!c.smtp;
+    const wantsReal = p.config.delivery === 'smtp';
+    let real = false;
     // The profile address first, the demo enrollment address as a fallback. Unknown accounts get the same page and no message.
     const to = p.known ? (await c.profileEmail()) ?? (await c.enroll.email(c.tenant, p.subject, p.instanceId)) ?? `${p.subject}@mail.example.invalid` : '';
     if (p.known) {
-      const msg = { tenant: c.tenant, to, subject: 'Your sign-in code', text: `Your sign-in code is ${code}. It expires in ${Math.round(ttl / 60)} minute(s). If you did not try to sign in, ignore this message.`, subjectUser: p.subject };
-      if (real) { try { await c.smtp.send(msg); } catch (e) { console.error('[authn] mail delivery failed:', e.message); } }  // never reveal a delivery failure to the page
-      else await c.mail.send(msg);
+      const text = `Your sign-in code is ${code}. It expires in ${Math.round(ttl / 60)} minute(s). If you did not try to sign in, ignore this message.`;
+      if (wantsReal) {
+        try {
+          const cap = await c.notifyCapability();
+          if (cap?.real) {
+            await c.notify({ tenant: c.tenant, to, template: 'sign-in-code', data: { code, ttlMinutes: Math.round(ttl / 60), subjectUser: p.subject }, effectKey: `otp:${sha(`${p.instanceId}:${code}`).slice(0, 32)}` });
+            real = true;
+          }
+        } catch (e) { console.error('[authn] notify slot delivery failed:', e.message); } // never reveal a delivery failure to the page
+      }
+      if (!real) await c.mail.send({ tenant: c.tenant, to, subject: 'Your sign-in code', text, subjectUser: p.subject });
     }
     return { prompt: { title: 'Check your e-mail', message: real ? 'If the account exists, a code was sent to its e-mail address.' : 'DEMO ONLY: no e-mail is sent. In this prototype the code is written to a demo outbox that an administrator can read.', fields: [{ name: 'code', label: 'Code', type: 'digits', maxLength: len, hint: `${len} digits` }] },
       state: { hash: sha(`${p.instanceId}:${code}`), exp: c.now() + ttl * 1000, used: false } };

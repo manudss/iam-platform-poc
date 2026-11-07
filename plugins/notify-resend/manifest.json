@@ -8,7 +8,7 @@
   "kinds": ["notifier"],
   "extends": "notify-log",
   "provides": ["notify.default"],
-  "hooks": [{ "name": "notify.send", "mode": "async" }],
+  "hooks": [{ "name": "notify.send", "mode": "async" }, { "name": "notify.capability", "mode": "blocking" }],
   "settings": [
     { "key": "prefix", "type": "string", "label": "Log prefix (fallback)", "default": "notify", "help": "Used by the base log transport when RESEND_API_KEY is not set.", "group": "Delivery" },
     { "key": "from", "type": "string", "label": "Sender address", "default": "lyam@dss.name", "help": "Verified sender on the Resend domain. The API key is NEVER a setting: it lives in the RESEND_API_KEY environment variable on the server.", "group": "Delivery" }

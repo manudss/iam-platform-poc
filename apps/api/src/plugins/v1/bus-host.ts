@@ -41,7 +41,7 @@ const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (
 /** Blocking kinds that travel on the bus as mandatory controls (step 3, auth migration): the serving plugin
  * answers `plugin.<id>.call`, the core merges the verdict, a silent mandatory subscriber denies (fail closed)
  * and the caller refuses when nobody answered at all. ui.screens and access.decide stay in process (decision 8). */
-export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score']);
+export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score', 'notify.capability']);
 /** Blocking kinds that travel on the bus as merged QUERIES (step 3): every active plugin answers with the
  * fields it owns, the core merges the objects; a silent or disabled plugin simply does not appear. */
 export const BUS_QUERY_KINDS = new Set(['profile.enrich']);

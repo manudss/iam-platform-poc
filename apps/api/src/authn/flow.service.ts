@@ -9,8 +9,7 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
-import { ResendMailAdapter, SmtpMailAdapter } from './mail.js';
-import { CATALOGUE, DemoOutbox, MailAdapter, MethodCtx, Prompt, methodType } from './methods.js';
+import { CATALOGUE, DemoOutbox, MethodCtx, Prompt, methodType } from './methods.js';
 
 export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string> }
 export type GateResponse =
@@ -44,8 +43,6 @@ export const DEMO_TOTP_SECRET = 'JBSWY3DPEHPK3PXP', DEMO_PIN = '246810', DEMO_PI
 export class AuthnService implements OnApplicationBootstrap {
   readonly enroll = new EnrollmentStore();
   readonly outbox = new DemoOutbox();
-  /** Set from the server environment only; tests may replace it. */
-  smtp: MailAdapter | null = ResendMailAdapter.fromEnv() ?? SmtpMailAdapter.fromEnv();
   private sessions = new Map<string, Session>();
   private fails = new Map<string, number[]>();
   now = () => Date.now();
@@ -121,7 +118,12 @@ export class AuthnService implements OnApplicationBootstrap {
     return r.result.outcome === 'allow';
   }
   private ctx(s: Session, step: Session['steps'][number]): MethodCtx {
-    return { tenant: s.tenant, subject: s.subject, instanceId: step.id, config: step.config as Record<string, any>, known: s.known, enroll: this.enroll, mail: this.outbox, smtp: this.smtp, profileEmail: () => this.profileEmail(s.subject, s.branch), passwordCheck: (t, u, p) => this.passwordCheck(t, u, p, s.branch), now: this.now };
+    const tenant = s.tenant, branch = s.branch;
+    // Delivery of one-time codes goes through the notify.default slot (P1-E): the plugin chosen on the slot
+    // sends (durable emission); its notify.capability answer says whether delivery is real or simulated.
+    const notify = (msg: Record<string, unknown>) => this.signinRegistry(branch).then((r) => r.emit(tenant, 'notify.send', msg as { effectKey: string }));
+    const notifyCapability = async () => (await (await this.signinRegistry(branch)).callSlot<{ real: boolean; note?: string }>(tenant, 'notify.default', 'notify.capability', {})).result;
+    return { tenant, subject: s.subject, instanceId: step.id, config: step.config as Record<string, any>, known: s.known, enroll: this.enroll, mail: this.outbox, notify, notifyCapability, profileEmail: () => this.profileEmail(s.subject, s.branch), passwordCheck: (t, u, p) => this.passwordCheck(t, u, p, s.branch), now: this.now };
   }
   private audit(e: Record<string, unknown>) { console.log('[authn]', JSON.stringify(e)); }
   private throttled(key: string) { const t = (this.fails.get(key) ?? []).filter((x) => x > this.now() - THROTTLE_MS); this.fails.set(key, t); return t.length >= THROTTLE_N; }

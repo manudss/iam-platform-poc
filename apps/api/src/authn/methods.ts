@@ -10,8 +10,11 @@ export interface PromptField { name: string; label: string; type: 'password' | '
   keys?: KeypadKey[]; entered?: number; length?: number }
 export interface Prompt { title: string; message?: string; fields: PromptField[] }
 
-/** Delivery channel of one-time codes. The POC ships only the demo outbox: nothing leaves the process. */
+/** One-time-code messages. The POC ships only the demo outbox: nothing leaves the process that way.
+ * Real delivery goes through the notify.default slot (P1-E): the plugin chosen on the slot decides the path. */
 export interface MailAdapter { id: string; real: boolean; send(m: { tenant: string; to: string; subject: string; text: string; subjectUser: string }): Promise<void> }
+/** What the notifier chosen on notify.default declares (P1-E): real delivery or explicit simulation. */
+export interface NotifyCapability { real: boolean; note?: string }
 export interface OutboxMessage { at: string; tenant: string; to: string; subject: string; text: string; user: string }
 export class DemoOutbox implements MailAdapter {
   id = 'demo-outbox'; real = false;
@@ -31,8 +34,10 @@ export interface MethodCtx {
   /** False when the account does not exist or cannot sign in: methods still behave the same way from the outside (no enumeration). */
   known: boolean;
   enroll: EnrollmentStore; mail: DemoOutbox;
-  /** Real mail adapter when the server is configured for it (see mail.ts), else null. */
-  smtp: MailAdapter | null;
+  /** Deliver a message through the notify.default slot (durable bus emission; msg carries its effectKey). */
+  notify(msg: Record<string, unknown>): Promise<unknown>;
+  /** What the notifier chosen on the slot declares: real delivery or explicit simulation. */
+  notifyCapability(): Promise<NotifyCapability>;
   /** E-mail address from the user's profile (live data), if any. */
   profileEmail(): Promise<string | undefined>;
   /** Password check through the platform's auth.password slot (so a lockout replacement keeps working). */
