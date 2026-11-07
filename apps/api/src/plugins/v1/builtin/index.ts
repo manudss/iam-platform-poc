@@ -35,6 +35,23 @@ export const scimConnector = need('scim-connector');
 export const mcpGateway = need('mcp-gateway');
 export const directory = need('directory');
 
+/**
+ * The ONE shipped registration list, sourced from the shared verified catalogue (P1: catalogue partagé) and
+ * consumed by BOTH the main registry factory (plugins-v1.module) and every branch registry
+ * (branch-registries): the two used to carry their own diverging hardcoded lists (branch registries silently
+ * missed notify-resend, saml-idp, csv-connector, scim-connector, mcp-gateway and directory). auth-password is
+ * first so callers can apply their runtime base override before registering; bases precede their replacements.
+ */
+export const SHIPPED_PLUGIN_IDS = ['auth-password', 'notify-log', 'notify-resend', 'auth-password-lockout', 'org-manager', 'risk-geo', 'hr-attributes', 'organizations', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp', 'csv-connector', 'scim-connector', 'mcp-gateway', 'directory'] as const;
+export function shippedPlugins(): PluginImpl[] {
+  const c = pluginCatalogue();
+  return SHIPPED_PLUGIN_IDS.map((id) => {
+    const p = c.get(id);
+    if (!p) throw new Error(`shipped plugin ${id} not found under ${c.dir}`);
+    return p;
+  });
+}
+
 /** Fresh lockout plugin per call (fresh failure counters), keeping the factory shape the callers use. */
 export function authPasswordLockout(_failures?: unknown, _base?: unknown): PluginImpl {
   // catalogue.get invokes the lockout factory: fresh failure counters per registration, no rescan.

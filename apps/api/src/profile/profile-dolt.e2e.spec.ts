@@ -17,6 +17,7 @@ import { RolesService } from './roles.js';
 import { DemoDataService } from './demo-data.service.js';
 import { UsersService } from '../users/users.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { SHIPPED_PLUGIN_IDS } from '../plugins/v1/builtin/index.js';
 
 let testBus: TestBus | undefined;
 before(async () => { testBus = await startTestBus(import.meta.url); });
@@ -169,6 +170,18 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
       await inBranch(() => rs.removeRule('admin', 'auditor', first, true));
       l = await inBranch(() => rs.remove('admin', 'auditor')); assert.ok(!l.roles.some((r) => r.id === 'auditor'));
     } finally { delete process.env.IAM_WORKSPACE_MODE; }
+  });
+
+  it('P1: a branch registry registers the same shipped set as the main registry (catalogue partagé)', async () => {
+    const busRef = new BusHostRef();
+    process.env.IAM_WORKSPACE_MODE = '1';
+    try {
+      const v = new VersioningService(), users = new UsersService(v), br = new BranchRegistries(v, users, undefined, busRef);
+      const reg = await br.get('main');
+      // The two registration lists used to diverge silently: notify-resend, saml-idp, csv-connector,
+      // scim-connector, mcp-gateway and directory were missing from every branch registry.
+      for (const id of SHIPPED_PLUGIN_IDS) assert.ok(reg.impl(id), `branch registry registers ${id}`);
+    } finally { await busRef.onModuleDestroy(); delete process.env.IAM_WORKSPACE_MODE; }
   });
 
   it('demo data seed: organizations and HR plugins enabled, people with profile values, sign-up open, idempotent', async () => {
