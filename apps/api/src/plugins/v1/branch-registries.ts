@@ -2,7 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { ApplicationBus } from '../../events/application-bus.service.js';
 import { VersioningService } from '../../versioning/versioning.service.js';
 import { UsersService } from '../../users/users.service.js';
-import { PluginRegistry } from './registry.js';
+import { PluginImpl, PluginRegistry } from './registry.js';
 import { BusHost, BusHostRef } from './bus-host.js';
 import { DoltPluginStore } from './dolt-stores.js';
 import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector, policyStudio, oidcProvider } from './builtin/index.js';
@@ -53,5 +53,9 @@ export class BranchRegistries {
       if(host)r.setBus(host.bridge(),ref);
     }
     return r;
+  }
+  /** Registers an archive-imported plugin into every already-built registry. Branch registries built LATER see it after a restart (they register the shipped list) - the import response says so. */
+  registerEverywhere(impl: PluginImpl) {
+    for (const reg of this.resolved.values()) { try { reg.register(impl); } catch { /* already registered */ } }
   }
 }

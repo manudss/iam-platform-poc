@@ -5,8 +5,10 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpExc
 import { AuthGuard } from '../../auth/auth.guard.js';
 import { AdminGuard } from '../../auth/admin.guard.js';
 import { Grants, PluginError, PluginRegistry } from './registry.js';
+import { installArchive, loadInstalledPlugin } from './archive.js';
+import { defaultPluginsDir } from './loader.js';
 
-const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503 };
+const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503, 'invalid-archive': 400, 'already-exists': 409, 'signature-invalid': 400 };
 function wrap<T>(f: () => Promise<T> | T): Promise<T> {
   return Promise.resolve().then(f).catch((e) => {
     if (e instanceof PluginError) throw new HttpException({ code: e.code, message: e.message }, STATUS[e.code] ?? 400);
@@ -46,6 +48,25 @@ export class PluginsAdminController {
 
   @UseGuards(AdminGuard) @Post(':id/enable')
   enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); return { enabled: id }; }); }
+
+  /** Plan step 8: imports a signed plugin archive (zip from scripts/plugin-pack.mjs --zip, base64 in { archive }).
+   * The package is validated, verified against the trust store (Ed25519, decision 3), written into the plugins
+   * folder and registered into the running registries. Per-tenant install/enable stays a separate granted step. */
+  @UseGuards(AdminGuard) @Post('import-archive')
+  importArchive(@Param('tenant') t: string, @Body() b: { archive?: unknown }) {
+    if (typeof b?.archive !== 'string' || !b.archive) throw new BadRequestException('archive: base64 zip from scripts/plugin-pack.mjs --zip');
+    let buf: Buffer;
+    try { buf = Buffer.from(b.archive, 'base64'); } catch { throw new BadRequestException('archive is not valid base64'); }
+    if (!buf.length) throw new BadRequestException('archive is empty');
+    return wrap(async () => {
+      const dir = defaultPluginsDir();
+      const manifest = installArchive(dir, buf);
+      const impl = loadInstalledPlugin(dir, manifest.id);
+      this.reg.register(impl);
+      this.branches?.registerEverywhere(impl);
+      return { imported: manifest.id, version: manifest.version, tenant: t, note: 'Registered in the running registries; a restart loads it everywhere (new branch registries, auth-method catalogue). Per-tenant install/enable stays a separate granted step.' };
+    });
+  }
 
   @UseGuards(AdminGuard) @Post(':id/disable')
   disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }
