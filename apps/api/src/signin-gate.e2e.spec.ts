@@ -13,6 +13,12 @@ import { AppModule } from './app.module.js';
 import { PluginRegistry } from './plugins/v1/registry.js';
 import { ActivationEffects } from './effects/activation-effects.js';
 import { EffectStore } from './effects/effect-store.js';
+import { startTestBus, TestBus } from './testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const root = resolve(process.cwd(), '../..');
 const bin = resolve(root, 'core/target/debug/iam-core');
@@ -71,7 +77,7 @@ describe('sign-in gate (real core + API + plugins)', { skip: !existsSync(bin) &&
     await fx.handle({ tenant: T, seq: 2, commit: 'c2' });
     await fx.handle({ tenant: T, seq: 2, commit: 'c2' }); // redelivery
     assert.equal(lines.length, 1);
-    assert.match(JSON.stringify(lines[0]), /notify: role\.changed -> manager-of:demo-alice/);
+    assert.deepEqual(lines[0], { plugin: 'notify-log', result: { queued: true } }); // notify is asynchronous; consumer execution is covered by activation-bus.e2e
   });
 
   it('gate unreachable: sign-in is refused (fail closed), not served by the plain IdP check', async () => {

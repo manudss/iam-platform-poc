@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { ActivationService } from './activation/activation.service.js';
 import { SecretsService } from './integrations/secrets.service.js';
-import { NatsService } from './integrations/nats.service.js';
 
 const bin = process.env.PG_BIN;
 const have = !!bin && existsSync(join(bin, 'postgres')) && existsSync(join(bin, 'initdb'));
@@ -67,7 +66,7 @@ describe('activation journal on real PostgreSQL', { skip: !have && 'PG_BIN not s
     const url = process.env.IAM_PG_URL!;
     delete process.env.IAM_PG_URL;
     const stub = { get: async (p: string) => (p === 'iam/pg' ? { url } : undefined) } as unknown as SecretsService;
-    const a = new ActivationService(stub, new NatsService());
+    const a = new ActivationService(stub);
     assert.equal((await a.current('t1'))?.seq, 3); // sees the durable rows written by the first test
     await a.onModuleDestroy();
     process.env.IAM_PG_URL = url;

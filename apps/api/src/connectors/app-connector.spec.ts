@@ -7,8 +7,14 @@ import assert from 'node:assert/strict';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { AppConnectorService, MemoryAppConnectorStore, build, checkUrl, DEMO_APP_CONNECTORS } from './app-connector.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const oidc = { id: 'wiki', name: 'Wiki', protocol: 'oidc', redirect_uris: ['https://wiki.example.invalid/cb'] };
@@ -89,7 +95,7 @@ describe('app-connector plugin: registry of applications on the admin API', () =
 
 describe('app-connector events', () => {
   it('emits app.registered, app.updated and app.removed only after a successful write', async () => {
-    const events = new AppEvents(), seen: { type: string; payload: Record<string, string> }[] = []; events.on((e) => { seen.push(e); });
+    const events = new ApplicationBus(), seen: { type: string; payload: Record<string, string> }[] = []; events.attachBus((e) => { seen.push(e); }, () => {});
     const svc = new AppConnectorService({ pluginActive: async () => true } as never, new MemoryAppConnectorStore(), events);
     await svc.create(T, 'demo-alice', oidc);
     await assert.rejects(svc.create(T, 'demo-alice', oidc), /already exists/);

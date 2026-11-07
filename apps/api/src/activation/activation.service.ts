@@ -1,6 +1,5 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import pg from 'pg';
-import { NatsService } from '../integrations/nats.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
 import { SecretsService } from '../integrations/secrets.service.js';
 
@@ -16,8 +15,9 @@ export interface Activation {
 /** pending: journaled, not yet applied. applied: the Rust core confirmed this version. failed: core apply failed (retry or reconcile). recorded: journal only (core apply not configured). */
 export type ActivationState = 'pending' | 'applied' | 'failed' | 'recorded';
 
-/** Result of activate(): the event field says honestly whether the NATS event was acknowledged. */
-export type ActivationResult = Activation & { event: 'published' | 'not-published' | 'disabled' };
+/** Result of activate(): 'core' = the core applied the version and emitted its durable activation.applied event
+ * on the bus (the single activation circuit, step 3); 'disabled' = journal only, core apply not configured. */
+export type ActivationResult = Activation & { event: 'core' | 'disabled' };
 
 /**
  * Activation journal. A merge changes nothing; only an explicit activation makes a Dolt commit live.
@@ -25,9 +25,10 @@ export type ActivationResult = Activation & { event: 'published' | 'not-publishe
  *
  * Storage: PostgreSQL when IAM_PG_URL is set (durable, seq allocated under a per-tenant advisory lock),
  * otherwise an in-memory list (lost on restart - dev fallback only).
- * After the journal commit, a NATS JetStream event iam.activation.<tenant> is published when IAM_NATS_URL is set (not atomic with
- * the journal: no outbox yet). The PostgreSQL URL comes from IAM_PG_URL or, if absent, from OpenBao KV secret/iam/pg field "url".
- * TODO(POC): outbox is PostgreSQL-only and only when core-apply is enabled; otherwise the event is published directly after the journal write.
+ * When core apply is enabled, the CORE applies the version and emits the durable activation.applied event on the
+ * bus itself (the single activation circuit, step 3: no API-side NATS client, no outbox relay - the core owns and
+ * sends the fact; the effects service is a durable subscriber and replays the journal at startup to catch up).
+ * The PostgreSQL URL comes from IAM_PG_URL or, if absent, from OpenBao KV secret/iam/pg field "url".
  */
 @Injectable()
 export class ActivationService implements OnModuleInit, OnModuleDestroy {
@@ -39,7 +40,7 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
 
   private resolved?: Promise<string | undefined>;
 
-  constructor(private readonly secrets: SecretsService = new SecretsService(), private readonly nats: NatsService = new NatsService(),
+  constructor(private readonly secrets: SecretsService = new SecretsService(),
     private readonly dolt: DoltService = new DoltService()) {}
 
   /** Core apply is on only when IAM_CORE_URL and IAM_CORE_ADMIN_TOKEN are both set. */
@@ -59,15 +60,14 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS state text NOT NULL DEFAULT 'recorded';
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS error text;
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS request_id text;
-       CREATE TABLE IF NOT EXISTS outbox (id bigserial PRIMARY KEY, tenant text NOT NULL, seq integer NOT NULL, payload jsonb NOT NULL,
-         created_at timestamptz NOT NULL DEFAULT now(), sent_at timestamptz, UNIQUE (tenant, seq));
        CREATE UNIQUE INDEX IF NOT EXISTS activations_request ON activations (tenant, request_id) WHERE request_id IS NOT NULL`).then(() => undefined);
     return this.ready.then(() => this.pool!);
   }
 
   /**
    * Activation protocol: (1) journal a pending row, (2) export the Dolt data AS OF the commit and POST it to the core,
-   * (3) mark applied or failed, (4) tag the commit act-<tenant>-<seq> in Dolt, (5) publish the NATS event only when applied.
+   * (3) mark applied or failed, (4) tag the commit act-<tenant>-<seq> in Dolt. The core emits activation.applied on
+   * the bus when it applies (step 3: the event circuit is the core's; the API publishes nothing itself).
    * Idempotence is per REQUEST id (client-supplied, stable across retries), never per commit hash: a request id seen before
    * returns/retries the same activation (same seq, no new effect); without it every call is a new activation (A -> B -> A = 3 seqs).
    */
@@ -91,35 +91,7 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
     }
     if (this.applyEnabled) a = await this.apply(a);
     if (a.state === 'failed') return { ...a, event: 'disabled' };
-    const outbox = this.applyEnabled && !!(await this.resolveUrl());
-    if (outbox) { // events leave through the PostgreSQL outbox, written in the same transaction as the 'applied' state
-      await this.relay();
-      const sent = (await (await this.db()).query('SELECT sent_at FROM outbox WHERE tenant=$1 AND seq=$2', [a.tenant, a.seq])).rows[0]?.sent_at;
-      return { ...a, event: sent ? 'published' : this.nats.enabled ? 'not-published' : 'disabled' };
-    }
-    const ev = this.nats.enabled ? ((await this.nats.publish(`iam.activation.${a.tenant}`, a)) ? 'published' : 'not-published') : 'disabled';
-    return { ...a, event: ev };
-  }
-
-  /**
-   * Outbox relay: publishes unsent events in order and marks them sent only after the NATS ack (at-least-once:
-   * a crash between ack and mark re-publishes; consumers must dedupe on tenant+seq). Safe to call repeatedly.
-   * Returns the number of events published. Does nothing when NATS is disabled or unreachable (rows stay unsent).
-   */
-  async relay(): Promise<number> {
-    if (!this.nats.enabled || !(await this.resolveUrl())) return 0;
-    const c = await (await this.db()).connect();
-    let n = 0;
-    try {
-      await c.query('BEGIN');
-      const rows = (await c.query('SELECT id, tenant, seq, payload FROM outbox WHERE sent_at IS NULL ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 100')).rows;
-      for (const r of rows) {
-        if (!(await this.nats.publish(`iam.activation.${r.tenant}`, r.payload))) break; // keep order: stop at the first failure
-        await c.query('UPDATE outbox SET sent_at = now() WHERE id=$1', [r.id]); n++;
-      }
-      await c.query('COMMIT');
-    } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
-    return n;
+    return { ...a, event: this.applyEnabled ? 'core' : 'disabled' };
   }
 
   private async apply(a: Activation): Promise<Activation> {
@@ -132,7 +104,7 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) throw new Error(`core refused activation: HTTP ${res.status} ${await res.text()}`);
-      await this.markApplied(a);
+      await this.setState(a, 'applied');
       await this.dolt.tagActivation(a.tenant, a.seq, a.commit).catch(() => undefined); // reference only; core already applied
       return { ...a, state: 'applied', error: undefined };
     } catch (e) {
@@ -140,18 +112,6 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
       await this.setState(a, 'failed', msg);
       return { ...a, state: 'failed', error: msg };
     }
-  }
-
-  private async markApplied(a: Activation) {
-    if (!(await this.resolveUrl())) return this.setState(a, 'applied');
-    const c = await (await this.db()).connect();
-    try {
-      await c.query('BEGIN');
-      await c.query("UPDATE activations SET state='applied', error=NULL WHERE tenant=$1 AND seq=$2", [a.tenant, a.seq]);
-      await c.query('INSERT INTO outbox (tenant, seq, payload) VALUES ($1,$2,$3) ON CONFLICT (tenant, seq) DO NOTHING',
-        [a.tenant, a.seq, JSON.stringify({ tenant: a.tenant, seq: a.seq, commit: a.commit, state: 'applied' })]);
-      await c.query('COMMIT');
-    } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
 
   private async setState(a: Activation, state: ActivationState, error?: string) {
@@ -178,7 +138,6 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
     } catch { /* core unreachable: treated as not running the version */ }
     if (core && core.seq === latest.seq && core.commit === latest.commit && latest.state === 'applied') return { action: 'none', core, activation: latest };
     const a = await this.apply(latest);
-    await this.relay().catch(() => undefined);
     return { action: a.state === 'applied' ? 'reapplied' : 'failed', core, activation: a };
   }
 
@@ -212,24 +171,23 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
     return (await this.list(tenant)).at(-1);
   }
 
-  /** Background loop, only when IAM_RECONCILE_INTERVAL_MS (>= 200) is set: tick() = relay outbox + reconcile every tenant. */
+  /** Background loop, only when IAM_RECONCILE_INTERVAL_MS (>= 200) is set: tick() = reconcile every tenant. */
   onModuleInit() {
     const ms = Number(process.env.IAM_RECONCILE_INTERVAL_MS ?? 0);
     if (ms >= 200) { this.timer = setInterval(() => void this.tick().catch(() => undefined), ms); this.timer.unref(); }
   }
 
-  /** One pass: publish pending outbox events, then reconcile each tenant that has activations (PostgreSQL journal only). Never overlaps itself. */
-  async tick(): Promise<{ relayed: number; reconciled: string[] }> {
-    if (this.ticking || !(await this.resolveUrl())) return { relayed: 0, reconciled: [] };
+  /** One pass: reconcile each tenant that has activations (PostgreSQL journal only). Never overlaps itself. */
+  async tick(): Promise<{ reconciled: string[] }> {
+    if (this.ticking || !(await this.resolveUrl())) return { reconciled: [] };
     this.ticking = true;
     try {
-      const relayed = await this.relay().catch(() => 0);
       const reconciled: string[] = [];
       for (const r of (await (await this.db()).query('SELECT DISTINCT tenant FROM activations')).rows) {
         const x = await this.reconcile(r.tenant as string).catch(() => ({ action: 'failed' as const }));
         if (x.action === 'reapplied') reconciled.push(r.tenant as string);
       }
-      return { relayed, reconciled };
+      return { reconciled };
     } finally { this.ticking = false; }
   }
 

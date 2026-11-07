@@ -52,18 +52,18 @@ export class AgentController {
     if (!d || d.exp <= Date.now()) { this.store.delete(key); throw new UnauthorizedException('unknown or expired delegation'); }
     const tool = typeof b?.tool === 'string' ? b.tool : '';
     const def = Object.hasOwn(AGENT_TOOLS, tool) ? AGENT_TOOLS[tool] : undefined;
-    const rec = (out: DecideOut, note: string) => this.audit.record({ tenant: d.tenant, subject: d.sub, principal: d.principal, action: def?.action ?? `Tool::"${tool.slice(0, 64)}"`, resource: def?.resource ?? '-',
-      allow: out.allow === true, reasons: [...(out.reasons ?? []), ...(out.errors ?? [])], activation_seq: out.version?.seq ?? null, commit: out.version?.commit ?? null, source: 'agent', note: `agent=${d.agent} tool=${tool.slice(0, 64)} ${note}` });
+    const rec = (out: DecideOut, note: string, answered = false) => this.audit.recordDecision({ tenant: d.tenant, subject: d.sub, principal: d.principal, action: def?.action ?? `Tool::"${tool.slice(0, 64)}"`, resource: def?.resource ?? '-',
+      allow: out.allow === true, reasons: [...(out.reasons ?? []), ...(out.errors ?? [])], activation_seq: out.version?.seq ?? null, commit: out.version?.commit ?? null, source: 'agent', note: `agent=${d.agent} tool=${tool.slice(0, 64)} ${note}` }, answered);
     if (!def || !d.tools.has(tool)) { await rec({ allow: false, reasons: ['tool-not-in-allowlist'] }, 'denied before the decision'); throw new ForbiddenException({ allow: false, error: 'tool not in the delegated allowlist' }); }
     if (d.left <= 0) { await rec({ allow: false, reasons: ['call-budget-exhausted'] }, 'denied before the decision'); throw new ForbiddenException({ allow: false, error: 'delegation call budget exhausted' }); }
     d.left--;
     let res: Response;
     try {
-      res = await fetch(`${this.core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tenant: d.tenant, principal: d.principal, action: def.action, resource: def.resource, context: {} }) });
+      res = await fetch(`${this.core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tenant: d.tenant, principal: d.principal, action: def.action, resource: def.resource, context: {}, audit: { source: 'agent', subject: d.sub, note: `agent=${d.agent} tool=${tool.slice(0, 64)}` } }) });
     } catch { await rec({ allow: false, reasons: ['core-unreachable'] }, 'denied: core unreachable'); throw new BadGatewayException({ allow: false, error: 'core unreachable (denied)' }); }
     if (!res.ok) { await rec({ allow: false, reasons: [`core-error-${res.status}`] }, 'denied: core error'); throw new BadGatewayException({ allow: false, error: `core error ${res.status} (denied)` }); }
     const out = (await res.json()) as DecideOut;
-    await rec(out, out.allow ? 'allowed' : 'denied by policy');
+    await rec(out, out.allow ? 'allowed' : 'denied by policy', true);
     if (!out.allow) throw new ForbiddenException({ allow: false, reasons: out.reasons ?? [], error: 'denied by policy' });
     return { allow: true, simulated: true, tool, output: `simulated result of "${def.describe}" (no real side effect)`, calls_left: d.left };
   }

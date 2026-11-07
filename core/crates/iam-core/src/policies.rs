@@ -147,6 +147,7 @@ fn candidate_engine(c: &Core, cand: &CandidatePolicies) -> Result<Engine, String
 /// 200 = the candidate builds (answer: its catalogue, so a console can preview ids and summaries before committing);
 /// 400 = refused, the error names the rule. Nothing is swapped: the loaded engine is untouched either way.
 pub async fn validate(State(c): State<Arc<Core>>, headers: HeaderMap, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    c.bus_emit("policy.admin", json!({"operation":"validate", "authorized":crate::bus_wiring::is_admin(&c, &headers)}), None);
     if !crate::bus_wiring::is_admin(&c, &headers) { return (StatusCode::UNAUTHORIZED, Json(json!({"error": "admin token required"}))); }
     let cand: CandidatePolicies = match serde_json::from_value(body) {
         Ok(r) => r,
@@ -172,6 +173,7 @@ pub async fn validate(State(c): State<Arc<Core>>, headers: HeaderMap, Json(body)
 /// With a `policies` field ({sets, links}) the simulation runs on those CANDIDATE rules instead (step 4: check a branch's
 /// rules before applying them); a candidate that does not build is a 400 naming the rule.
 pub async fn simulate(State(c): State<Arc<Core>>, headers: HeaderMap, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    c.bus_emit("policy.admin", json!({"operation":"simulate", "authorized":crate::bus_wiring::is_admin(&c, &headers)}), None);
     if !crate::bus_wiring::is_admin(&c, &headers) { return (StatusCode::UNAUTHORIZED, Json(json!({"error": "admin token required"}))); }
     #[derive(serde::Deserialize)]
     struct SimulateBody {

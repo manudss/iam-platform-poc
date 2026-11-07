@@ -6,7 +6,7 @@ import type { Connection } from 'mysql2/promise';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { ProfileService } from '../profile/profile.service.js';
 import { VersioningService } from '../versioning/versioning.service.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { SecretsService } from '../integrations/secrets.service.js';
 import { AppConnector, AppConnectorService } from '../connectors/app-connector.js';
 
@@ -95,7 +95,7 @@ export class OidcProviderService implements OnModuleInit {
   constructor(
     private readonly apps: AppConnectorService, private readonly profile: ProfileService,
     @Inject(SSO_DIRECTORY) private readonly dir: SsoDirectory, private readonly secrets: SecretsService,
-    @Optional() private readonly events?: AppEvents, @Optional() private readonly host?: HttpAdapterHost,
+    @Optional() private readonly events?: ApplicationBus, @Optional() private readonly host?: HttpAdapterHost,
   ) {}
 
   /** Mounts /sso/:tenant/oidc/* on the HTTP server (before the Nest routes). */

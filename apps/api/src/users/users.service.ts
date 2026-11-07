@@ -1,7 +1,7 @@
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { Injectable, BadRequestException, ConflictException, NotFoundException, Optional } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -9,7 +9,7 @@ import { dirname } from 'node:path';
 /** Profiles are business data on Dolt main. Password hashes NEVER enter Dolt or SQL, including history. */
 @Injectable()
 export class UsersService {
-  constructor(private readonly v: VersioningService, @Optional() private readonly events?: AppEvents) {}
+  constructor(private readonly v: VersioningService, @Optional() private readonly events?: ApplicationBus) {}
   private ready?: Promise<void>;
   async onModuleInit() { if (workspaceMode()) await this.init(); }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }

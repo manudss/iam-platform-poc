@@ -1,3 +1,5 @@
+import { BusHostRef } from '../plugins/v1/bus-host.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
 // Profile values in a REAL Dolt server: a user's own edit goes to main, an administrator's edit stays on the working branch until the merge,
 // and a main edit made after the branch was cut merges without conflict. Skipped without DOLT_BIN (or dolt on PATH).
 import 'reflect-metadata';
@@ -15,6 +17,10 @@ import { RolesService } from './roles.js';
 import { DemoDataService } from './demo-data.service.js';
 import { UsersService } from '../users/users.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
@@ -166,9 +172,10 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
   });
 
   it('demo data seed: organizations and HR plugins enabled, people with profile values, sign-up open, idempotent', async () => {
+    const busRef = new BusHostRef();
     const ST = 'seed-demo'; process.env.IAM_WORKSPACE_MODE = '1'; process.env.IAM_CREDENTIAL_FILE = join(dir, 'cred.json');
     try {
-      const v = new VersioningService(), users = new UsersService(v), br = new BranchRegistries(v, users), store = new DoltProfileStore(v, () => 'main');
+      const v = new VersioningService(), users = new UsersService(v), br = new BranchRegistries(v, users, undefined, busRef), store = new DoltProfileStore(v, () => 'main');
       const seed = new DemoDataService(v, users, br, store);
       assert.equal(await seed.seed(ST), true); assert.equal(await seed.seed(ST), false, 'second start does nothing');
       const reg = await br.get('main');
@@ -178,6 +185,6 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
       const apps = (await new DoltAppConnectorStore(v, () => 'main').list(ST, 'live')).apps; assert.deepEqual(apps.map((a) => a.id), ['crm', 'payroll', 'wiki']); assert.equal(reg.isActive(ST, 'app-connector'), true);
       assert.equal((await store.get(ST, 'camille-martin', 'live'))['hr-attributes.job_title'], 'Chief accountant');
       const cfg = await reg.coreSettings(ST, 'core-profile-fields') as { signup?: { open: boolean } }; assert.equal(cfg.signup?.open, true);
-    } finally { delete process.env.IAM_WORKSPACE_MODE; delete process.env.IAM_CREDENTIAL_FILE; }
+    } finally { await busRef.onModuleDestroy(); delete process.env.IAM_WORKSPACE_MODE; delete process.env.IAM_CREDENTIAL_FILE; }
   });
 });

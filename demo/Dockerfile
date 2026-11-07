@@ -1,7 +1,7 @@
 # All-in-one hosted-demo image (fictional data only). Build context = repository root.
 # One container: Dolt sql-server + Rust core + NestJS API + Angular console (static, same-origin proxy).
-# Core bus: a local nats-server runs INSIDE this container (loopback, per-boot random password; IAM_DEMO_NATS=0 turns it off).
-# Optional pieces of the local stack (PostgreSQL journal, API-side NATS, Temporal, OpenBao) are OFF here:
+# Core bus: a local nats-server runs INSIDE this container (loopback, per-boot random password; required for API startup).
+# Optional pieces of the local stack (PostgreSQL journal, Temporal, OpenBao) are OFF here:
 # the API runs on its in-memory fallbacks, documented in docs/demo.md.
 
 FROM rust:1-bookworm AS corebuild

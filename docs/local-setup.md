@@ -11,7 +11,7 @@ Recommended path: infrastructure in Docker (`infra/docker-compose.yml`), the thr
 | NestJS API | `127.0.0.1:3000` | `apps/api/` |
 | Angular console (proxies `/core` -> 8081, `/api` -> 3000) | `http://localhost:4200` | `apps/web/` |
 | Dolt SQL (container, seeded with `data/demo/01-schema.sql`) | `127.0.0.1:3307` | compose |
-| PostgreSQL runtime (container: journal, outbox, audit) | `127.0.0.1:5433` | compose |
+| PostgreSQL runtime (container: journal, audit) | `127.0.0.1:5433` | compose |
 | Temporal / NATS JetStream / OpenBao dev (containers) | `7233` / `4222` / `8200` | compose |
 
 ## 1. Install the prerequisites (once)
@@ -86,7 +86,6 @@ $env:IAM_CORE_ADMIN_TOKEN = "local-demo-admin-token"    # same as the core
 $env:DOLT_PASSWORD        = "dev-only-change-me"        # = DOLT_ROOT_PASSWORD (Dolt host/port/user/db default to 127.0.0.1:3307 root iam)
 $env:IAM_PG_URL           = "postgres://postgres:dev-only-change-me@127.0.0.1:5433/runtime"   # durable journal + audit
 # optional integrations (all served by compose):
-$env:IAM_NATS_URL         = "127.0.0.1:4222"
 $env:IAM_TEMPORAL_ADDR    = "127.0.0.1:7233"
 $env:IAM_BAO_ADDR         = "http://127.0.0.1:8200"; $env:IAM_BAO_TOKEN = "dev-only-change-me"
 node dist/main.js                                       # listens on 3000 (takes a few seconds to start)
@@ -96,7 +95,7 @@ bash:
 cd apps/api
 IAM_CORE_URL=http://127.0.0.1:8081 IAM_ISSUER=http://127.0.0.1:8081 IAM_CORE_ADMIN_TOKEN=local-demo-admin-token \
 DOLT_PASSWORD=dev-only-change-me IAM_PG_URL=postgres://postgres:dev-only-change-me@127.0.0.1:5433/runtime \
-IAM_NATS_URL=127.0.0.1:4222 IAM_TEMPORAL_ADDR=127.0.0.1:7233 node dist/main.js
+IAM_TEMPORAL_ADDR=127.0.0.1:7233 node dist/main.js
 ```
 Without `IAM_PG_URL` the journal and audit are in memory. Without `IAM_CORE_ADMIN_TOKEN` activations are only journaled
 (`state: recorded`) and decisions in tenant mode stay deny. Full list of variables: `docs/usage.md` section 3.
@@ -149,3 +148,32 @@ docker compose --env-file .env -f infra/docker-compose.yml down -v     # also de
 - API: `cd apps\api; npm test`. Most end-to-end suites need local service binaries and look for `core/target/debug/iam-core`
   (no `.exe`) and use `sh`: on Windows they are SKIPPED with a message; run them on Linux/macOS or WSL (see `docs/e2e.md`).
   Compose suites, with the stack of step 4 running: `$env:COMPOSE_STACK="1"; node --test dist/compose.e2e.spec.js`.
+
+## Step 3: mandatory event bus (big-bang migration)
+
+The API requires a reachable NATS JetStream server and Rust core. Set `IAM_BUS_NATS_URL`,
+`IAM_BUS_NATS_PASSWORD`, `IAM_CORE_URL`, and `IAM_CORE_ADMIN_TOKEN` before starting it;
+`IAM_BUS_NATS_USER` defaults to `api-host`. The core uses `IAM_CORE_NATS_URL` and
+`IAM_CORE_NATS_PASSWORD`. Local-only development credentials are in `conf/nats-local.conf`.
+There is no feature flag and no in-process fallback. If NATS is down, authentication refuses.
+`scripts/demo-start.sh` starts NATS first and supervises NATS and the core with restart loops.
+
+The old AppEvents fan-out and prototype PluginHost are removed. `ApplicationBus` is only a
+bus facade: every event goes through the core and every service has a durable delivery address.
+The registry's emit/control/query/callSlot methods require the bus. The only documented
+exceptions are manifest `ui.screens` and core WASM `access.decide`, plus the direct Cedar
+administration queries; their audit events stay on the bus (`access.decided`, `policy.admin`).
+`policy.changed` announces a committed policy proposal on its working branch, not a main activation.
+
+Notify delivery is at-least-once with explicit acknowledgement after the handler and a
+JetStream KV effect ledger. A crash between the effect and its ledger entry can rerun the
+handler: handlers must use stable idempotency keys. Audit rows have a unique event ID.
+A business refusal (wrong password or lockout) stays a normal denial; a missing mandatory
+subscriber, handler fault, timeout or bus outage never falls back to a weaker handler.
+Branch is part of the envelope and effect namespace. A handler fault is persisted and audited;
+a replacement remains faulted until an explicit admin disable/re-enable.
+
+Tests that boot the API use `src/testing/test-bus.ts` (real NATS + core, unique spec ports);
+registry unit tests use a fake bridge from `src/testing/fake-bus.ts`, not a production bypass.
+Build the core and set `NATS_SERVER_BIN` before `npm test`. Missing test infrastructure fails
+rather than silently using local handlers. CI runs only via `workflow_dispatch`.

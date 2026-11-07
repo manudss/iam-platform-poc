@@ -1,6 +1,6 @@
 import { Global, Module } from '@nestjs/common';
-import { AppEvents } from './app-events.service.js';
+import { ApplicationBus } from './application-bus.service.js';
 
 @Global()
-@Module({ providers: [AppEvents], exports: [AppEvents] })
+@Module({ providers: [ApplicationBus], exports: [ApplicationBus] })
 export class EventsModule {}

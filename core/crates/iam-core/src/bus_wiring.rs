@@ -1,6 +1,8 @@
 //! Optional wiring of the event bus. Off unless IAM_CORE_NATS_URL is set. When on, the core connects to NATS, tells the bus
 //! about real events (activation applied, sign-in succeeded/refused: notifications only, no decision depends on them) and keeps
 //! a bounded, MASKED record of every exchange for the read-only observer (`GET /v1/bus/records`, admin token).
+//! Step 3: Notify deliveries are durably queued in JetStream (stream IAM_BUS_EVENTS, at-least-once) and every observer
+//! record is also persisted to the IAM_BUS_JOURNAL stream (survives the core; the HTTP feed still reads the fast ring).
 //! `GET /v1/bus` runs a LIVE self-test through NATS. Existing behaviour (decisions, activation, IdP, gRPC) is unchanged.
 use axum::{Json, extract::{Query, State}, http::{HeaderMap, StatusCode}};
 use iam_bus::{BusRecord, Catalogue, Dispatcher, Envelope, Handler, HandlerResult, Mode, Observer, SubStatus, Subscription, Verdict, nats};
@@ -10,9 +12,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 const RING: usize = 500;
-const NOTIFY_KINDS: [&str; 3] = ["activation.applied", "signin.succeeded", "signin.refused"];
+const NOTIFY_KINDS: [&str; 5] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided", "policy.admin"];
 
-/// Bounded in-memory record, numbered. In memory only: lost on restart (stated in docs/event-bus.md).
+/// Bounded in-memory record, numbered. The HTTP feed reads this fast ring; the same records are also persisted
+/// to the IAM_BUS_JOURNAL JetStream stream (step 3), which a later step re-reads after a restart.
 #[derive(Default)]
 pub struct Ring { buf: Mutex<VecDeque<(u64, BusRecord)>>, next: Mutex<u64> }
 impl Observer for Ring {
@@ -24,7 +27,26 @@ impl Observer for Ring {
         if b.len() > RING { b.pop_front(); }
     }
 }
+/// Persists every record to the journal stream (fire and forget: observation must never slow the bus down).
+struct Journal { js: async_nats::jetstream::Context }
+impl Observer for Journal {
+    fn record(&self, r: &BusRecord) {
+        if let Ok(body) = serde_json::to_vec(r) {
+            let js = self.js.clone();
+            tokio::spawn(async move { let _ = js.publish(nats::JOURNAL_SUBJECT, body.into()).await; });
+        }
+    }
+}
+
 impl Ring {
+    /// Replay from the durable journal after a restart: records keep their order, get fresh ring seqs.
+    fn load(&self, r: BusRecord) {
+        let mut n = self.next.lock().unwrap();
+        *n += 1;
+        let mut b = self.buf.lock().unwrap();
+        b.push_back((*n, r));
+        if b.len() > RING { b.pop_front(); }
+    }
     fn since(&self, after: u64, limit: usize) -> (Vec<Value>, u64, u64) {
         let b = self.buf.lock().unwrap();
         let first = b.front().map(|x| x.0).unwrap_or(0);
@@ -36,12 +58,14 @@ impl Ring {
 fn view(seq: u64, r: &BusRecord) -> Value {
     json!({
         "seq": seq, "at_ms": r.at_ms, "envelope_id": r.envelope_id, "kind": r.kind,
-        "mode": format!("{:?}", r.mode).to_lowercase(), "tenant": r.tenant, "effect_key": r.effect_key, "source": r.source,
+        "mode": format!("{:?}", r.mode).to_lowercase(), "tenant": r.tenant, "branch": r.branch, "effect_key": r.effect_key, "source": r.source,
         "payload": r.payload, "elapsed_ms": r.elapsed_ms, "verdict": r.verdict,
         // who was expected to answer, and what each one did
         "expected": r.outcomes.iter().map(|o| json!({"id": o.subscriber, "mandatory": o.mandatory})).collect::<Vec<_>>(),
         "outcomes": r.outcomes.iter().map(|o| match &o.status {
             SubStatus::Replied(rep) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "replied", "verdict": rep.verdict, "data_keys": rep.data.as_ref().and_then(|d| d.as_object()).map(|m| m.keys().cloned().collect::<Vec<_>>())}),
+            SubStatus::Queued => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "queued", "detail": "stored in JetStream; delivery is at-least-once, the consumer acks after processing"}),
+            SubStatus::NotConcerned => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "not-concerned", "detail": "disabled on the envelope's branch (or not concerned): neither an answer nor silence"}),
             SubStatus::Silent(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "silent", "detail": why}),
             SubStatus::Invalid(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "invalid", "detail": why.chars().take(80).collect::<String>()}),
         }).collect::<Vec<_>>(),
@@ -73,20 +97,51 @@ impl BusLink {
                 Err(e) => return Err(e),
             }
         };
-        // Subscribers hosted by the core itself are still reached through NATS (D16).
+        // Durable bus storage first: without it there is no at-least-once delivery, so the core refuses to start
+        // (same rule as NATS down: the bus is a base process, not a degraded mode).
+        nats::ensure_bus_streams(&client).await?;
+        // Control/query subscribers hosted by the core are reached through request/reply (D16).
         nats::serve(client.clone(), "core-selftest", Arc::new(Ack)).await?;
-        nats::serve(client.clone(), "audit-log", Arc::new(Ack)).await?;
+        // Notify subscribers hosted by the core pull their durable deliveries from JetStream.
+        nats::serve_events(client.clone(), "audit-log", Arc::new(Ack)).await?;
         let mut cat = Catalogue::new().declare("core.selftest", Mode::Control);
         for k in NOTIFY_KINDS { cat = cat.declare(k, Mode::Notify); }
-        let d = Dispatcher::new(cat, Arc::new(nats::NatsTransport::new(client)), Duration::from_millis(500));
+        let d = Dispatcher::new(cat, Arc::new(nats::NatsTransport::new(client.clone())), Duration::from_millis(500));
         let ring = Arc::new(Ring::default());
         d.observe(ring.clone());
+        d.observe(Arc::new(Journal { js: async_nats::jetstream::new(client.clone()) }));
         let sub = |id: &str, kind: &str, mandatory: bool| Subscription { subscriber: id.into(), kind: kind.into(), mandatory, group: None };
         d.subscribe(sub("core-selftest", "core.selftest", true)).map_err(|e| e.to_string())?;
         d.subscribe(sub("core-absent", "core.selftest", false)).map_err(|e| e.to_string())?;
         for k in NOTIFY_KINDS { d.subscribe(sub("audit-log", k, false)).map_err(|e| e.to_string())?; }
         // activation.applied also has a subscriber that is never started: the observer must show "expected, silent".
         d.subscribe(sub("mail-notifier", "activation.applied", false)).map_err(|e| e.to_string())?;
+        // Restart-proof observer (step 3): the IAM_BUS_JOURNAL stream survives the core; replay its last RING
+        // records into the ring so the HTTP feed keeps its history across a restart. Records are renumbered in
+        // replay order; the feed's first_seq makes the new numbering explicit. Best effort: a replay failure
+        // never blocks the bus (the ring simply starts empty, as before).
+        {
+            let js = async_nats::jetstream::new(client.clone());
+            if let Ok(mut stream) = js.get_stream(nats::JOURNAL_STREAM).await {
+                let (first, last) = stream.info().await.map(|i| (i.state.first_sequence, i.state.last_sequence)).unwrap_or((1, 0));
+                if last >= first {
+                    let start = std::cmp::max(first, last.saturating_sub(RING as u64 - 1));
+                    let cfg = async_nats::jetstream::consumer::pull::Config {
+                        deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::ByStartSequence { start_sequence: start },
+                        ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
+                        ..Default::default()
+                    };
+                    if let Ok(cons) = stream.create_consumer(cfg).await {
+                        if let Ok(mut batch) = cons.fetch().max_messages(RING).messages().await {
+                            use tokio_stream::StreamExt;
+                            while let Some(Ok(m)) = batch.next().await {
+                                if let Ok(r) = serde_json::from_slice::<BusRecord>(&m.message.payload) { ring.load(r); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(BusLink { dispatcher: Arc::new(d), ring, errors, url: url.to_string(), cache: Mutex::new(None), hosts: RwLock::new(HashMap::new()) })
     }
     /// Fire and forget: the caller never waits for the bus and never sees its errors.
@@ -96,7 +151,8 @@ impl BusLink {
         tokio::spawn(async move {
             let mut e = Envelope::new(id, kind, payload);
             e.effect_key = effect_key;
-            let _ = d.notify(&e).await;
+            // Fire and forget for the caller, but never silent: a queueing failure breaks at-least-once, so log it loud.
+            if let Err(e) = d.notify(&e).await { tracing::warn!("bus emit of kind '{kind}' was not durably queued: {e}"); }
         });
     }
     async fn selftest(&self) -> Value {
@@ -149,7 +205,7 @@ pub async fn records(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Quer
     let after = q.get("after").and_then(|v| v.parse().ok()).unwrap_or(0u64);
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200usize).clamp(1, 500);
     let (records, first, last) = b.ring.since(after, limit);
-    (StatusCode::OK, Json(json!({"enabled": true, "records": records, "first_seq": first, "last_seq": last, "capacity": RING, "note": "in memory, lost on core restart; payloads are masked"})))
+    (StatusCode::OK, Json(json!({"enabled": true, "records": records, "first_seq": first, "last_seq": last, "capacity": RING, "note": "ring in memory, refilled from the durable journal on restart; payloads are masked"})))
 }
 
 // ---------- Step 2: plugin host protocol ----------
@@ -160,8 +216,12 @@ pub async fn records(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Quer
 //   POST /v1/bus/emit               emit one event; the core checks the emission grant and stamps `source` itself
 // Plugins receive their deliveries over NATS (`plugin.<id>.call`) and answer like any step-1 subscriber.
 
-/// Kinds owned by the core itself: an external emitter never sends them (they report core-internal facts).
-const CORE_KINDS: [&str; 4] = ["core.selftest", "activation.applied", "signin.succeeded", "signin.refused"];
+/// Kinds owned by the core itself: an external emitter never sends nor declares them (they report core-internal facts).
+/// Step 3: external subscribers MAY subscribe to the core-emitted ones (the activation effects and the audit
+/// trail live outside the core); `core.selftest` stays fully private.
+const CORE_KINDS: [&str; 6] = ["core.selftest", "activation.applied", "signin.succeeded", "signin.refused", "access.decided", "policy.admin"];
+/// Core-owned kinds an external plugin may subscribe to (never emit, never declare).
+const CORE_EMITTED_SUBSCRIBABLE: [&str; 5] = ["activation.applied", "signin.succeeded", "signin.refused", "access.decided", "policy.admin"];
 /// Subscriber ids hosted inside the core: an external plugin never takes one (its answers would be trusted as the core's).
 const INTERNAL_IDS: [&str; 3] = ["core-selftest", "audit-log", "mail-notifier"];
 
@@ -201,7 +261,9 @@ fn validate_register(cat: &Catalogue, plugin: &str, subs: &[SubDecl], emits: &[S
     let mode_of = |k: &str| cat.mode(k).ok().or_else(|| declares.iter().find(|d| d.name == k).and_then(|d| parse_mode(&d.mode).ok()));
     for s in subs {
         if !known(&s.kind) { return Err(format!("unknown kind '{}'", s.kind)); }
-        if CORE_KINDS.contains(&s.kind.as_str()) { return Err(format!("kind '{}' is core-internal", s.kind)); }
+        if CORE_KINDS.contains(&s.kind.as_str()) && !CORE_EMITTED_SUBSCRIBABLE.contains(&s.kind.as_str()) {
+            return Err(format!("kind '{}' is core-internal", s.kind));
+        }
         match mode_of(&s.kind) {
             Some(Mode::Notify) => if s.mandatory { return Err(format!("mandatory does not apply to notify kind '{}'", s.kind)); },
             Some(_) => if s.group.is_some() { return Err(format!("one-of groups only apply to notify kinds ('{}')", s.kind)); },
@@ -273,6 +335,8 @@ pub struct EmitReq {
     kind: String,
     #[serde(default)] payload: Value,
     #[serde(default)] tenant: Option<String>,
+    /// Working branch the event belongs to (step 3): carried, never interpreted (like the tenant).
+    #[serde(default)] branch: Option<String>,
     #[serde(default)] effect_key: Option<String>,
     #[serde(default)] timeout_ms: Option<u64>,
 }
@@ -280,6 +344,8 @@ pub struct EmitReq {
 fn outcomes_json(outcomes: &[iam_bus::SubOutcome]) -> Value {
     outcomes.iter().map(|o| match &o.status {
         SubStatus::Replied(r) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "replied", "verdict": r.verdict, "data": r.data}),
+        SubStatus::Queued => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "queued"}),
+        SubStatus::NotConcerned => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "not-concerned"}),
         SubStatus::Silent(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "silent", "detail": why}),
         SubStatus::Invalid(why) => json!({"id": o.subscriber, "mandatory": o.mandatory, "status": "invalid", "detail": why}),
     }).collect()
@@ -300,7 +366,7 @@ pub async fn emit_http(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Js
     if CORE_KINDS.contains(&r.kind.as_str()) { return (StatusCode::FORBIDDEN, Json(json!({"error": format!("kind '{}' is owned by the core", r.kind)}))); }
     let mode = match b.dispatcher.catalogue().mode(&r.kind) { Ok(m) => m, Err(_) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("unknown kind '{}'", r.kind)}))) };
     let mut env = Envelope::new(format!("http-{}", uuid_like()), &r.kind, r.payload);
-    env.tenant = r.tenant; env.effect_key = r.effect_key; env.source = Some(r.source.clone());
+    env.tenant = r.tenant; env.branch = r.branch; env.effect_key = r.effect_key; env.source = Some(r.source.clone());
     match mode {
         Mode::Notify => match b.dispatcher.notify(&env).await {
             Ok(o) => (StatusCode::OK, Json(json!({"mode": "notify", "outcomes": outcomes_json(&o)}))),
@@ -330,7 +396,7 @@ mod step2_validation_tests {
         assert!(validate_register(&c, "core-x", &[], &[], &[]).is_err());
         assert!(validate_register(&c, "audit-log", &[], &[], &[]).is_err());
         assert!(validate_register(&c, "bad id!", &[], &[], &[]).is_err());
-        assert!(validate_register(&c, "notify-log", &[sub("activation.applied", false, None)], &[], &[]).is_err(), "core-internal subscribe");
+        assert!(validate_register(&c, "notify-log", &[sub("core.selftest", false, None)], &[], &[]).is_err(), "core-internal subscribe");
         assert!(validate_register(&c, "notify-log", &[], &["signin.succeeded".into()], &[]).is_err(), "core-owned emit");
         assert!(validate_register(&c, "notify-log", &[], &[], &[decl("signin.refused", "notify")]).is_err(), "core-owned declare");
     }

@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
-import { AppEvent, AppEvents } from '../events/app-events.service.js';
+import { AppEvent, ApplicationBus, APP_EVENT_KINDS } from '../events/application-bus.service.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { workspaceMode } from '../workspace/context.js';
@@ -13,21 +13,24 @@ import { WorkflowsService } from './workflows.service.js';
  * except it branches from the branch the event happened on and is reviewed back into it.
  *
  * Safety: trigger dispatch never loops (the engine writes through SQL, never through the services that
- * emit events), never breaks the action that fired the event (AppEvents is fire-and-forget), and stays
+ * emit events), never breaks the action that fired the event (ApplicationBus is fire-and-forget), and stays
  * silent while the workflows-iga plugin is disabled on the event's branch.
  */
 @Injectable()
 export class WorkflowTriggersService implements OnModuleInit {
   private readonly log = new Logger('workflow-triggers');
   constructor(
-    private readonly events: AppEvents,
+    private readonly events: ApplicationBus,
     private readonly store: WorkflowStore,
     private readonly wf: WorkflowsService,
     private readonly reg: PluginRegistry,
     @Optional() private readonly branches?: BranchRegistries,
   ) {}
 
-  onModuleInit() { this.events.on((e) => this.dispatch(e)); }
+  onModuleInit() {
+    // Step 3: over the bus, this service consumes its own durable address (at-least-once; the run guards absorb a duplicate).
+    this.events.consumeOnBus('workflow-triggers', APP_EVENT_KINDS, (e) => this.dispatch(e));
+  }
 
   private async dispatch(e: AppEvent) {
     const registry = workspaceMode() && this.branches ? await this.branches.get(e.branch) : this.reg;
@@ -39,10 +42,11 @@ export class WorkflowTriggersService implements OnModuleInit {
     });
     for (const d of defs) {
       try {
-        const view = await this.wf.start(e.tenant, d.id, `event:${e.type}`, { branch: e.branch, payload: e.payload });
+        const view = await this.wf.start(e.tenant, d.id, `event:${e.type}`, { branch: e.branch, payload: e.payload, eventId: e.id });
         this.log.log(`${e.type} (${e.payload.subject ?? '-'}) started run ${view.run.id} of "${d.name}"`);
       } catch (err) {
         this.log.warn(`${e.type} could not start "${d.name}": ${(err as Error).message}`);
+        throw err; // keep the delivery unacked; stable run IDs make redelivery safe
       }
     }
   }

@@ -1,3 +1,4 @@
+import { startTestBus, TestBus } from '../testing/test-bus.js';
 // End-to-end with a REAL Dolt SQL server (no Docker, no core): workflow definitions and runs.
 // Auth is replaced by a fake that mirrors the real guard's contract (bearer token, tenant claim must equal :tenant),
 // because the real one needs the Rust core; the real AdminGuard is used. Skipped if the dolt binary is missing (DOLT_BIN).
@@ -257,3 +258,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(await s2.getDefinition(T, 'wf-stale-meta', s2.liveRef), null, 'the marker prevents resurrection from the stale meta row');
   });
 });
+
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });

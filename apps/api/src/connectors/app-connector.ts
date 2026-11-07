@@ -3,7 +3,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } fro
 import type { Connection } from 'mysql2/promise';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ProfileService } from '../profile/profile.service.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 import { currentBranch } from '../workspace/context.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
@@ -113,7 +113,7 @@ export function build(id: string, b: Record<string, unknown>, base?: AppConnecto
 
 @Injectable()
 export class AppConnectorService {
-  constructor(private readonly profile: ProfileService, @Inject(APP_CONNECTOR_STORE) private readonly store: AppConnectorStore, @Optional() private readonly events?: AppEvents) {}
+  constructor(private readonly profile: ProfileService, @Inject(APP_CONNECTOR_STORE) private readonly store: AppConnectorStore, @Optional() private readonly events?: ApplicationBus) {}
   private async need(t: string) { if (!(await this.profile.pluginActive(t, APP_CONNECTOR_PLUGIN, 'work'))) throw new NotFoundException('the app-connector plugin is not enabled'); }
   private emit(type: string, t: string, a: AppConnector, actor: string) { this.events?.emit({ type, tenant: t, branch: currentBranch(), at: new Date().toISOString(), payload: { app: a.id, protocol: a.protocol, actor } }); }
   async list(t: string) { await this.need(t); return this.store.list(t, 'work'); }

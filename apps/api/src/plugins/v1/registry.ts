@@ -45,12 +45,17 @@ export class PluginError extends Error {
 }
 
 /** Step 2: the bridge to the core's event bus, provided by the plugin host (bus-host.ts) when it is enabled.
- * `routed` is false for every kind when the bus is off: behaviour is then exactly the in-process one. */
+ * Every routed call requires this bridge; absence refuses rather than executing locally. */
 export interface BusBridge {
-  /** True when this kind is delivered through the bus. Only pure-async hooks route in step 2; blocking hooks stay in process. */
+  /** True when this kind is delivered through the bus. Controls, queries and asynchronous kinds all route on the bus. */
   routed(kind: string): boolean;
-  emit(tenant: string, kind: string, payload: unknown, effectKey?: string): Promise<{ plugin: string; result: unknown }[]>;
-  call(tenant: string, kind: string, payload: unknown, timeoutMs?: number): Promise<{ verdict: string; reason?: string; result: unknown }>;
+  emit(tenant: string, kind: string, payload: unknown, effectKey?: string, branch?: string): Promise<{ plugin: string; result: unknown }[]>;
+  /** `answered` is false when NO subscriber gave a usable reply (all silent or not-concerned): for a blocking
+   * hook that is a refusal too ("no response = deny", plan step 3), even if the merged verdict says allow. */
+  call(tenant: string, kind: string, payload: unknown, timeoutMs?: number, branch?: string): Promise<{ verdict: string; reason?: string; result: unknown; answered: boolean; answeredBy?: string; businessDenial?: boolean }>;
+  /** Merged query (step 3: profile.enrich): the shallow union of the responders' objects, fields from the
+   * responders only; `conflicts` lists the keys several plugins answered differently. */
+  query(tenant: string, kind: string, payload: unknown, timeoutMs?: number, branch?: string): Promise<{ data: Record<string, unknown>; conflicts: string[]; answeredBy: string[] }>;
 }
 
 export class PluginRegistry {
@@ -62,14 +67,27 @@ export class PluginRegistry {
   private faulted = new Set<string>();
 
   private bus?: BusBridge;
-  private activityListeners: (() => void)[] = [];
+  /** Working branch this registry serves (decision 7): stamped on every envelope emitted through the bus. */
+  private branchRef?: string;
+  private activityListeners: (() => void | Promise<void>)[] = [];
   constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}, private states?: StateStore) {}
 
-  /** Attaches the bus bridge (step 2). Routing activates per kind, never globally. */
-  setBus(b: BusBridge | undefined) { this.bus = b; }
+  private readonly auditListeners: RegistryAudit[] = [];
+  /** Step 3: extra audit sinks (the bus host turns them into audit.event). The constructor callback stays the primary sink. */
+  onAudit(l: RegistryAudit): void { this.auditListeners.push(l); }
+  private emitAudit(e: Parameters<RegistryAudit>[0]): void { this.audit(e); for (const l of this.auditListeners) l(e); }
+
+  /** Attaches the bus bridge (step 2). Mandatory since the step 3 cleanup (decision 6): every hook call goes
+   * through the bus; a registry without a bridge refuses every call. Tests attach testing/fake-bus.ts. */
+  setBus(b: BusBridge | undefined, branch?: string) { this.bus = b; this.branchRef = branch; }
+  private requireBus(hook: string): BusBridge {
+    if (!this.bus) throw new PluginError('bus-unavailable', `event bus required (step 3): no bridge attached, '${hook}' refused`);
+    if (!this.bus.routed(hook)) throw new PluginError('bus-unavailable', `kind '${hook}' is not routed on the bus`);
+    return this.bus;
+  }
   /** The bus host listens here to re-push registrations when enablement changes. */
-  onActivityChange(fn: () => void) { this.activityListeners.push(fn); }
-  private activity() { for (const f of this.activityListeners) { try { f(); } catch { /* a listener error never changes plugin state */ } } }
+  onActivityChange(fn: () => void | Promise<void>) { this.activityListeners.push(fn); }
+  private async activity() { for (const f of this.activityListeners) await f(); }
   /** Read access for the bus host (delivery path). */
   impl(id: string): PluginImpl | undefined { return this.impls.get(id); }
   /** Tenants that have any plugin state: the bus host syncs registrations for each of them. */
@@ -89,7 +107,7 @@ export class PluginRegistry {
   }
   /** Platform-core settings that are not a plugin (for example the authentication methods and chains). They live in the same versioned store as plugin settings, so a working branch holds them until Apply. */
   coreSettings(tenant: string, key: string) { return this.settings.get(tenant, key); }
-  async putCoreSettings(tenant: string, key: string, values: Record<string, unknown>) { await this.settings.put(tenant, key, values); this.audit({ tenant, action: 'core.settings.changed', plugin: key }); }
+  async putCoreSettings(tenant: string, key: string, values: Record<string, unknown>) { await this.settings.put(tenant, key, values); this.emitAudit({ tenant, action: 'core.settings.changed', plugin: key }); }
   private async persist(tenant: string, id: string) {
     const st = this.state.get(this.k(tenant, id));
     if (this.states && st) await this.states.save({ tenant, plugin: id, installed: st.installed, enabled: st.enabled, faulted: this.faulted.has(this.k(tenant, id)), grants: st.grants });
@@ -171,7 +189,7 @@ export class PluginRegistry {
     st.installed = true; st.grants = { ...st.grants, ...grants };
     this.state.set(this.k(tenant, id), st);
     await this.persist(tenant, id);
-    this.audit({ tenant, action: 'plugin.install', plugin: id });
+    this.emitAudit({ tenant, action: 'plugin.install', plugin: id });
   }
 
   async configure(tenant: string, id: string, input: Record<string, unknown>) {
@@ -183,7 +201,7 @@ export class PluginRegistry {
     const r = validateSettings(p.manifest.settings, merged);
     if (!r.ok) throw new PluginError('invalid-settings', r.errors.join('; '));
     await this.settings.put(tenant, id, r.values);
-    this.audit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
+    this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
   }
 
   async form(tenant: string, id: string): Promise<FormModel> {
@@ -212,8 +230,8 @@ export class PluginRegistry {
     if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
     this.faulted.delete(this.k(tenant, id));
     await this.persist(tenant, id);
-    this.audit({ tenant, action: 'plugin.enable', plugin: id });
-    this.activity();
+    this.emitAudit({ tenant, action: 'plugin.enable', plugin: id });
+    await this.activity();
   }
 
   /** Current configuration in the form versioned in Dolt: enablement plus NON-SECRET settings (secret fields are never exported). */
@@ -235,7 +253,7 @@ export class PluginRegistry {
     if (p.manifest.base) return;
     if (cfg.enabled) await this.enable(tenant, id, {});
     else await this.disable(tenant, id);
-    this.audit({ tenant, action: 'plugin.config.applied', plugin: id, detail: 'from a merged Dolt version; grants unchanged' });
+    this.emitAudit({ tenant, action: 'plugin.config.applied', plugin: id, detail: 'from a merged Dolt version; grants unchanged' });
   }
 
   /** Disable: slots fall back to the base plugin with the base's own stored configuration. Data is never dropped. */
@@ -256,8 +274,8 @@ export class PluginRegistry {
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
     await this.persist(tenant, id);
     // The replacement's own state (failure counters, lockouts) is not carried to the base: say so in the audit trail.
-    this.audit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
-    this.activity();
+    this.emitAudit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
+    await this.activity();
   }
 
   isActive(tenant: string, id: string) {
@@ -283,39 +301,63 @@ export class PluginRegistry {
    *   (PluginError `plugin-failed`) and the replacement is marked faulted: every later call is refused too. The base plugin is NEVER asked
    *   after a refusal, error or timeout of a replacement, because the base may be less restrictive (no lockout, no extra factor). Callers must
    *   treat the error as a denial. Failure counters and other state of a replacement are never rolled back or reset by the registry.
-   * - Non-sensitive hooks (for example notifications) may fall back to the base: a missed message is not an access decision.
+   * - No hook silently falls back to a weaker handler; notifications retry through durable delivery.
    * - The way out of a fault is an explicit admin action: `disable` (return to a valid base configuration, audited) or `enable` again.
    */
+  /** Step 3 cleanup: a blocking handler that fails on the bus is marked faulted here (by the bus-host delivery,
+   * or the fake bridge in unit specs). Persisted and audited; the replacement then refuses every call until an
+   * admin disables or re-enables it (fail closed). There is NO fallback to the base anymore: at-least-once
+   * redelivery replaced the old in-process fallback. */
+  async markFaulted(tenant: string, id: string, detail: string) {
+    if (this.faulted.has(this.k(tenant, id))) return;
+    this.faulted.add(this.k(tenant, id));
+    await this.persist(tenant, id);
+    this.emitAudit({ tenant, action: 'plugin.fault.closed', plugin: id, detail });
+  }
+
+  /** Bus delivery of a blocking kind (step 3): only the plugin CHOSEN for the slot answers (single responder);
+   * every other plugin with a handler is explicitly not concerned. A faulted replacement refuses (fail closed,
+   * same rule as callSlot: the base is never asked in its place). */
+  blockingResponder(tenant: string, id: string, kind: string): 'answer' | 'not-concerned' | 'refuse' {
+    const impl = this.impls.get(id);
+    if (!impl || !impl.handlers[kind] || !this.isActive(tenant, id)) return 'not-concerned';
+    // A plugin WITHOUT a slot (risk signal, profile enrichment) answers whenever it is active; a slotted plugin
+    // answers only when it is the one chosen for the slot (single responder: base or replacement).
+    const slots = impl.manifest.provides ?? [];
+    if (slots.length && !slots.some((s) => { try { return this.resolve(tenant, s).manifest.id === id; } catch { return false; } })) return 'not-concerned';
+    if (impl.manifest.extends && this.faulted.has(this.k(tenant, id))) return 'refuse';
+    return 'answer';
+  }
+
+  /** Generic blocking control (step 3: risk.score). Bus only (step 3 cleanup): one control call - a deny verdict
+   * or no usable answer refuses (fail closed, sensitive hook). There is no in-process path anymore. */
+  async control<R>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string }> {
+    const bus = this.requireBus(hook);
+    const r = await bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
+    if (r.verdict !== 'allow' || !r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? (r.answered ? 'denied' : 'no responder')}`);
+    return { result: r.result as R, servedBy: r.answeredBy ?? 'bus' };
+  }
+
+  /** Merged query (step 3: profile.enrich): the union of the responders' fields - only the plugins that
+   * answered appear; a key several plugins answer differently is reported as a conflict (first answer kept). */
+  async queryHook<R extends Record<string, unknown>>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ data: R; conflicts: string[]; answeredBy: string[] }> {
+    const bus = this.requireBus(hook);
+    const r = await bus.query(tenant, hook, payload, timeoutMs, this.branchRef);
+    return { data: r.data as R, conflicts: r.conflicts, answeredBy: r.answeredBy };
+  }
+
   async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
-    if (this.bus?.routed(hook)) {
-      // Generic bus path. Dormant in step 2 (no blocking kind is routed yet): the auth migration step enables it.
-      // Fail closed is preserved by the core itself: a silent mandatory subscriber denies the call (D3).
-      const r = await this.bus.call(tenant, hook, payload, timeoutMs);
-      if (r.verdict !== 'allow') throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? 'denied'}`);
-      return { result: r.result as R, servedBy: 'bus', fellBack: false };
-    }
-    const primary = this.resolve(tenant, slot);
-    const run = async (p: PluginImpl) => {
-      const h = p.handlers[hook];
-      if (!h) throw new PluginError('no-handler', `${p.manifest.id} has no ${hook}`);
-      const settings = validateSettings(p.manifest.settings, (await this.settings.get(tenant, p.manifest.id)) ?? {}).values;
-      const ctx: PluginContext = { tenant, settings };
-      return await withTimeout(Promise.resolve(h(payload, ctx)), timeoutMs);
-    };
-    const sensitive = SENSITIVE_HOOKS.has(hook);
-    const fk = this.k(tenant, primary.manifest.id);
-    if (primary.manifest.extends && this.faulted.has(fk)) throw new PluginError('plugin-failed', `${primary.manifest.id} is faulted: refused until an admin disables or re-enables it`);
-    try {
-      return { result: (await run(primary)) as R, servedBy: primary.manifest.id, fellBack: false };
-    } catch (e) {
-      if (!primary.manifest.extends) throw e; // the base itself failed: nothing to fall back to
-      this.faulted.add(fk);
-      await this.persist(tenant, primary.manifest.id);
-      this.audit({ tenant, action: sensitive ? 'plugin.fault.closed' : 'plugin.fault.fallback', plugin: primary.manifest.id, detail: String((e as Error).message) });
-      if (sensitive) throw new PluginError('plugin-failed', `${primary.manifest.id} failed (${(e as Error).message}); refused, no fallback for ${hook}`);
-      const base = [...this.impls.values()].find((i) => i.manifest.base && i.manifest.provides?.includes(slot))!;
-      return { result: (await run(base)) as R, servedBy: base.manifest.id, fellBack: true };
-    }
+    // Bus only (step 3 cleanup): the call travels on the bus (envelope stamped with this registry's branch,
+    // decision 7) and the serving plugin answers over NATS. Fail closed both ways: a deny verdict, a silent
+    // mandatory subscriber (the core denies) or NO usable answer at all (bus down, nobody serving) refuse.
+    const bus = this.requireBus(hook);
+    const r = await bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
+    if (!r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? 'no responder'}`);
+    // A plugin's own denial (bad credentials, locked out, ...) is DATA, not a fault: the answer rode back with
+    // the deny verdict. A deny WITHOUT an answer payload is an infrastructure refusal (faulted replacement,
+    // silent mandatory subscriber) and throws, exactly like the old in-process path distinguished them.
+    if (r.verdict !== 'allow' && !r.businessDenial) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? 'denied'}`);
+    return { result: r.result as R, servedBy: r.answeredBy ?? 'bus', fellBack: false };
   }
 
   /** Async hook fan-out: every active plugin that declared the hook, deduplicated by effectKey.
@@ -324,24 +366,14 @@ export class PluginRegistry {
    * falling back would risk a double effect (D16). The caller retries the same effectKey; the host ledger dedupes. */
   private done = new Set<string>();
   async emit(tenant: string, hook: string, payload: { effectKey: string }) {
-    if (this.bus?.routed(hook)) {
-      const key = `${tenant}:bus:${hook}:${payload.effectKey}`;
-      if (this.done.has(key)) return [];
-      const out = await this.bus.emit(tenant, hook, payload, payload.effectKey);
-      this.done.add(key);
-      return out;
-    }
-    const out: { plugin: string; result: unknown }[] = [];
-    for (const p of this.impls.values()) {
-      if (!this.isActive(tenant, p.manifest.id)) continue;
-      const decl = p.manifest.hooks.find((h) => h.name === hook && h.mode === 'async');
-      if (!decl) continue;
-      const key = `${tenant}:${p.manifest.id}:${hook}:${payload.effectKey}`;
-      if (this.done.has(key)) continue;
-      const settings = validateSettings(p.manifest.settings, (await this.settings.get(tenant, p.manifest.id)) ?? {}).values;
-      out.push({ plugin: p.manifest.id, result: await p.handlers[hook](payload, { tenant, settings }) });
-      this.done.add(key);
-    }
+    // Bus only (step 3 cleanup): the emission goes through the core (plugins answer over NATS, at-least-once).
+    // A bus failure raises `bus-unavailable` WITHOUT an in-process fallback: the delivery may have happened, so
+    // falling back would risk a double effect (D16). The caller retries the same effectKey; the host ledger dedupes.
+    const bus = this.requireBus(hook);
+    const key = `${tenant}:bus:${hook}:${payload.effectKey}`;
+    if (this.done.has(key)) return [];
+    const out = await bus.emit(tenant, hook, payload, payload.effectKey, this.branchRef);
+    this.done.add(key);
     return out;
   }
 
@@ -364,10 +396,4 @@ function checksum(s: string) {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return h.toString(16);
-}
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise((res, rej) => {
-    const t = setTimeout(() => rej(new PluginError('timeout', `hook exceeded ${ms} ms`)), ms);
-    p.then((v) => { clearTimeout(t); res(v); }, (e) => { clearTimeout(t); rej(e); });
-  });
 }

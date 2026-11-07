@@ -48,8 +48,8 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     for (let i = 0; i < 100; i++) { if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', '13317', '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break; await new Promise((r) => setTimeout(r, 150)); }
     await startCore();
     Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN, DOLT_PORT: '13317', DOLT_DATABASE: 'iam' });
-    delete process.env.IAM_PG_URL; delete process.env.IAM_NATS_URL;
-    svc = new ActivationService(undefined, undefined, new DoltService());
+    delete process.env.IAM_PG_URL;
+    svc = new ActivationService(undefined, new DoltService());
   });
   after(async () => { await stopCore(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 

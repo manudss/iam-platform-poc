@@ -6,7 +6,7 @@ import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { branchName } from '../versioning/guards.js';
 import { BASE_FIELDS, CORE_PROFILE_SETTINGS_ID, CatalogField, Context, EffectiveField, ProfileConfig, checkValue, effectiveSchema, parseProfileConfig, settingFor, toCatalog, validateProfileConfig } from './fields.js';
 import { ProfileValueStore, Values } from './store.js';
-import { AppEvents } from '../events/app-events.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 
 export const PROFILE_STORE = 'PROFILE_VALUE_STORE';
 /** Public sign-up may only exist in the hosted workspace mode, where every administration route is guarded. Provided as a function so tests can exercise the open path without a Dolt-backed workspace. */
@@ -16,7 +16,7 @@ const SUBJECT = /^[A-Za-z0-9._@-]{1,64}$/;
 
 @Injectable()
 export class ProfileService {
-  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Inject(PROFILE_STORE) private readonly store: ProfileValueStore, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService, @Optional() @Inject(SIGNUP_ALLOWED) private readonly signupAllowed: () => boolean = defaultSignupAllowed, @Optional() private readonly events?: AppEvents) {}
+  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Inject(PROFILE_STORE) private readonly store: ProfileValueStore, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService, @Optional() @Inject(SIGNUP_ALLOWED) private readonly signupAllowed: () => boolean = defaultSignupAllowed, @Optional() private readonly events?: ApplicationBus) {}
 
   private async registry(ref: 'live' | 'work', write = false): Promise<PluginRegistry> {
     if (!workspaceMode()) return this.reg;

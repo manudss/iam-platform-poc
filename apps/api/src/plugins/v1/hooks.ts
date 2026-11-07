@@ -8,16 +8,16 @@ import type { HookMode } from './manifest.js';
 export const HOOKS = new Map<string, HookMode[]>([
   ['auth.authenticate', ['blocking']], // verify a credential -> allow / deny / challenge
   ['auth.challenge', ['blocking']], // second factor or step-up prompt
-  ['profile.enrich', ['blocking', 'async']], // add attributes or claims
+  ['profile.enrich', ['blocking', 'async']], // add attributes or claims; the blocking mode is a merged bus query (step 3)
   ['identity.changed', ['async']], // joiner / mover / leaver, role change
-  ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM)
+  ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM) - documented bus exception (decision 8)
   ['notify.send', ['async']], // deliver a message
   ['workflow.step', ['async']], // run one step of an approval or certification flow
   ['connector.provision', ['async']], // create / update / delete in a target
   ['connector.import', ['async']], // pull identities from a source
   ['audit.event', ['async']], // forward an audit event
-  ['risk.score', ['blocking']], // return a 0..100 score for a sign-in or access request
-  ['ui.screens', ['blocking']], // declare screens (static, answered from the manifest)
+  ['risk.score', ['blocking']], // return a 0..100 score for a sign-in or access request; mandatory bus control (step 3)
+  ['ui.screens', ['blocking']], // declare screens (static, answered from the manifest) - documented bus exception (decision 8)
 ]);
 
 export interface AuthenticatePayload { tenant: string; subject: string; credential: Record<string, unknown>; }

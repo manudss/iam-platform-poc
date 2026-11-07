@@ -270,12 +270,18 @@ async fn decide(State(c): State<Arc<Core>>, Json(raw): Json<Value>)
 pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, Value)> {
     let bad = |m: String| (StatusCode::BAD_REQUEST, json!({"error": m}));
     let tenant = raw.get("tenant").and_then(|v| v.as_str()).map(str::to_string);
+    // Optional caller audit meta (step 3): the API stamps who asked (source, note, subject); it rides in the
+    // access.decided bus event so the trail keeps the caller context. Never trusted for the decision itself.
+    let audit_meta = raw.get("audit").cloned();
     let mut req: DecisionRequest = serde_json::from_value(raw).map_err(|e| bad(e.to_string()))?;
     let mut version = None;
     if let Some(t) = &tenant {
         match tenant_context(c, t, &req.principal, &mut req.context) {
             Ok(v) => version = Some(v),
-            Err(()) => return Ok(json!({"allow": false, "reasons": ["no-active-version"], "errors": []})),
+            Err(()) => {
+                emit_decision(c, tenant.as_deref(), &req, false, &["no-active-version".to_string()], None, audit_meta.as_ref());
+                return Ok(json!({"allow": false, "reasons": ["no-active-version"], "errors": []}));
+            }
         }
     }
     let tenant_engine = tenant.as_ref().and_then(|t| c.engines.read().unwrap().get(t).cloned());
@@ -295,8 +301,24 @@ pub(crate) fn decide_value(c: &Core, raw: Value) -> Result<Value, (StatusCode, V
         }
     }
     let mut out = serde_json::to_value(&resp).unwrap();
-    if let Some((seq, commit)) = version { out["version"] = json!({"seq": seq, "commit": commit}); }
+    if let Some((seq, commit)) = &version { out["version"] = json!({"seq": seq, "commit": commit}); }
+    emit_decision(c, tenant.as_deref(), &req, resp.allow, &resp.reasons, version.as_ref(), audit_meta.as_ref());
     Ok(out)
+}
+
+/// Step 3: every decision (allow or deny, HTTP or gRPC) is emitted on the bus as access.decided, durable and
+/// at-least-once. The payload never carries the request context (it may hold personal data) - only the inputs
+/// that identify the request, mirroring the API's decision_audit rule.
+fn emit_decision(c: &Core, tenant: Option<&str>, req: &DecisionRequest, allow: bool, reasons: &[String], version: Option<&(u64, String)>, audit_meta: Option<&Value>) {
+    if c.bus.is_none() { return; }
+    let mut p = json!({"principal": req.principal, "action": req.action, "resource": req.resource, "allow": allow, "reasons": reasons});
+    if let Some(t) = tenant { p["tenant"] = json!(t); }
+    if let Some((seq, commit)) = version { p["seq"] = json!(seq); p["commit"] = json!(commit); }
+    if let Some(a) = audit_meta {
+        for k in ["source", "note", "subject"] { if let Some(v) = a.get(k) { p[k] = v.clone(); } }
+    }
+    if tenant.is_none() { if let Some(t) = audit_meta.and_then(|a| a.get("tenant")) { p["tenant"] = t.clone(); } }
+    c.bus_emit("access.decided", p, None);
 }
 
 #[tokio::main]
@@ -330,10 +352,15 @@ async fn main() {
     if let Ok(url) = std::env::var("IAM_CORE_NATS_URL") {
         let user = std::env::var("IAM_CORE_NATS_USER").unwrap_or_else(|_| "core".into());
         let pass = std::env::var("IAM_CORE_NATS_PASSWORD").unwrap_or_default();
+        // Step 3 (decision: NATS is a base process, always up): a configured bus that cannot connect is a FATAL
+        // error, not a degraded mode. The core exits; the start scripts bring NATS up first and restart the core.
+        // Without IAM_CORE_NATS_URL the core still starts (pure decision tests); a warning says the bus is off.
         match bus_wiring::BusLink::connect(&url, &user, &pass).await {
             Ok(b) => { tracing::info!("core bus connected to NATS {url}"); core.bus = Some(b); }
-            Err(e) => tracing::warn!("core bus disabled: {e} (the core keeps running without it)"),
+            Err(e) => panic!("NATS is a base process and must be running before the core starts: {e}. Start nats-server first (scripts/demo-start.sh), then restart the core."),
         }
+    } else {
+        tracing::warn!("IAM_CORE_NATS_URL is not set: the event bus is OFF (decisions and the IdP still work; nothing is audited on the bus and no plugin is served)");
     }
     let engine = Arc::new(core);
     let addr = std::env::var("IAM_CORE_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".into());

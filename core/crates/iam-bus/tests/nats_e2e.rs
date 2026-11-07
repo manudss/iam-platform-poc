@@ -17,6 +17,8 @@ fn start(port: u16) -> Option<Server> {
     let conf = format!("{}/../../../conf/nats-local.conf", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&conf).unwrap().replace("127.0.0.1:4222", &format!("127.0.0.1:{port}")).replace("/tmp/iam-nats-js", &format!("/tmp/iam-nats-js-{port}"));
     let tmp = format!("/tmp/iam-bus-test-{port}.conf");
+    // Empty JetStream store per run: durable-consumer state survives nats-server and breaks at-least-once assertions.
+    let _ = std::fs::remove_dir_all(format!("/tmp/iam-nats-js-{port}"));
     std::fs::write(&tmp, text).unwrap();
     let child = Command::new(&bin).args(["-c", &tmp]).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
     let child = match child { Ok(c) => c, Err(e) => { assert!(std::env::var("IAM_REQUIRE_NATS").is_err(), "nats-server required: {e}"); eprintln!("SKIPPED: no nats-server ({e})"); return None } };
@@ -42,9 +44,21 @@ async fn plugin(url: &str, id: &str, h: Arc<dyn Handler>) -> (tokio::task::JoinH
     let (c, errs) = nats::connect(url, id, id, Some(&format!("_INBOX.{id}"))).await.unwrap();
     (nats::serve(c, id, h).await.unwrap(), errs)
 }
+/// Step 3: a notify consumer pulls its durable deliveries from JetStream. Several consumers may share one
+/// address (a group): pass the group name as `address` to each of them.
+async fn events(url: &str, user: &str, address: &str, h: Arc<dyn Handler>) -> tokio::task::JoinHandle<()> {
+    let (c, _) = nats::connect(url, user, user, Some(&format!("_INBOX.{user}"))).await.unwrap();
+    nats::serve_events(c, address, h).await.unwrap()
+}
 async fn core(url: &str) -> Dispatcher {
     let (c, _) = nats::connect(url, "core", "core-dev", None).await.unwrap();
+    nats::ensure_bus_streams(&c).await.unwrap();
     Dispatcher::new(cat(), Arc::new(NatsTransport::new(c)), Duration::from_millis(400))
+}
+/// Wait until `cond` holds (durable delivery is asynchronous), at most ~5 s.
+async fn until(mut cond: impl FnMut() -> bool) {
+    for _ in 0..100 { if cond() { return } tokio::time::sleep(Duration::from_millis(50)).await; }
+    panic!("condition not met within 5s");
 }
 fn env(id: &str, kind: &str) -> Envelope { Envelope::new(id, kind, json!({})) }
 
@@ -143,14 +157,21 @@ async fn notify_broadcast_and_one_of_without_double_delivery() {
         async fn handle(&self, e: &Envelope) -> Option<HandlerResult> { self.0.lock().unwrap().push(format!("{}:{}", self.1, e.id)); allow() }
     }
     let log = Arc::new(Mutex::new(vec![]));
-    let _a = plugin(&s.url, "sub-a", Arc::new(Count(log.clone(), "a"))).await;
-    let _b = plugin(&s.url, "sub-b", Arc::new(Count(log.clone(), "b"))).await;
-    let _c = plugin(&s.url, "sub-c", Arc::new(Count(log.clone(), "c"))).await;
-    let d = core(&s.url).await;
+    let d = core(&s.url).await; // first: the core side creates the JetStream streams
+    let _a = events(&s.url, "sub-a", "sub-a", Arc::new(Count(log.clone(), "a"))).await;
+    // group "mail": two consumers pull the SAME durable delivery address; NATS load-balances between them
+    let _b = events(&s.url, "sub-b", "mail", Arc::new(Count(log.clone(), "b"))).await;
+    let _c = events(&s.url, "sub-c", "mail", Arc::new(Count(log.clone(), "c"))).await;
     d.subscribe(sub("sub-a", "user.created", false, None)).unwrap(); // broadcast
     d.subscribe(sub("sub-b", "user.created", false, Some("mail"))).unwrap(); // one of "mail"
     d.subscribe(sub("sub-c", "user.created", false, Some("mail"))).unwrap();
-    for i in 0..4 { d.notify(&env(&i.to_string(), "user.created")).await.unwrap(); }
+    for i in 0..4 {
+        let out = d.notify(&env(&i.to_string(), "user.created")).await.unwrap();
+        assert_eq!(out.iter().map(|o| o.subscriber.as_str()).collect::<Vec<_>>(), vec!["mail", "sub-a"]);
+        assert!(out.iter().all(|o| matches!(o.status, SubStatus::Queued)), "every delivery is durably queued: {out:?}");
+    }
+    until(|| log.lock().unwrap().iter().filter(|x| x.starts_with("a:")).count() == 4
+        && log.lock().unwrap().iter().filter(|x| x.starts_with("b:") || x.starts_with("c:")).count() == 4).await;
     let l = log.lock().unwrap().clone();
     assert_eq!(l.iter().filter(|x| x.starts_with("a:")).count(), 4, "broadcast reaches every event");
     for i in 0..4 { assert_eq!(l.iter().filter(|x| (x.starts_with("b:") || x.starts_with("c:")) && x.ends_with(&format!(":{i}"))).count(), 1, "exactly one of the group per event {i}: {l:?}"); }
@@ -170,12 +191,14 @@ async fn same_effect_key_twice_runs_the_effect_once() {
         }
     }
     let n = Arc::new(Mutex::new(0));
-    let _a = plugin(&s.url, "sub-a", Arc::new(Exec(EffectLedger::new(), n.clone()))).await;
-    let d = core(&s.url).await;
+    let d = core(&s.url).await; // first: the core side creates the JetStream streams
+    let _a = events(&s.url, "sub-a", "sub-a", Arc::new(Exec(EffectLedger::new(), n.clone()))).await;
     d.subscribe(sub("sub-a", "user.created", false, None)).unwrap();
     let e = Envelope::new("m1", "user.created", json!({})).with_effect_key("effect-123");
     d.notify(&e).await.unwrap();
-    d.notify(&e).await.unwrap();
+    d.notify(&e).await.unwrap(); // a duplicate publish (retry): stored twice, run once
     d.notify(&Envelope::new("m2", "user.created", json!({})).with_effect_key("effect-456")).await.unwrap();
-    assert_eq!(*n.lock().unwrap(), 2);
+    until(|| *n.lock().unwrap() == 2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(*n.lock().unwrap(), 2, "the duplicated effect key ran once");
 }

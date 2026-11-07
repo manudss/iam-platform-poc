@@ -1,5 +1,6 @@
-// WIRING of the opt-in EffectsService (IAM_EFFECTS=1), no stub: real Dolt data -> real DoltService export/snapshotAt -> ActivationService (real PostgreSQL journal+outbox)
-// -> REAL Rust core -> outbox relay -> REAL NATS JetStream -> EffectsService (Nest lifecycle, env-driven) -> notification sink + provisioning target started by this test on loopback.
+// WIRING of the opt-in EffectsService (IAM_EFFECTS=1), no stub: real Dolt data -> real DoltService export/snapshotAt -> ActivationService (real PostgreSQL journal)
+// -> REAL Rust core (emits activation.applied on the REAL bus when it applies) -> EffectsService durable bus subscriber (Nest lifecycle, env-driven)
+// -> notification sink + provisioning target started by this test on loopback.
 // Nothing leaves the machine. Skipped if any of the dolt, postgres, nats binaries or the core binary is missing.
 import 'reflect-metadata';
 import { describe, it, before, after } from 'node:test';
@@ -9,28 +10,26 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createConnection } from 'mysql2/promise';
-import { connect } from 'nats';
 import pg from 'pg';
 import { ActivationService } from './activation/activation.service.js';
-import { NatsService } from './integrations/nats.service.js';
 import { EffectsService } from './effects/effects.service.js';
+import { startBusHarness, busBinsPresent, BusHarness } from './testing/bus-harness.js';
 import { createServer, Server } from 'node:http';
 import { DoltService } from './dolt/dolt.service.js';
 
 const root = resolve(process.cwd(), '../..');
-const coreBin = resolve(root, 'core/target/debug/iam-core');
-const doltBin = process.env.DOLT_BIN, natsBin = process.env.NATS_SERVER_BIN, pgBin = process.env.PG_BIN;
-const have = !!doltBin && existsSync(doltBin) && !!natsBin && existsSync(natsBin) && !!pgBin && existsSync(join(pgBin, 'postgres')) && existsSync(coreBin);
+const doltBin = process.env.DOLT_BIN, pgBin = process.env.PG_BIN;
+const have = !!doltBin && existsSync(doltBin) && !!pgBin && existsSync(join(pgBin, 'postgres')) && busBinsPresent;
 const CORE = 'http://127.0.0.1:18096', ADMIN = 'local-demo-admin-token', T = 'acme-demo'; // local fictional value
 const DP = 13329, PGP = 15445, NP = 14235, SINK = 18161, TARGET = 18162;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-describe('EffectsService wiring: real Dolt export + PostgreSQL + core + NATS -> local sink and provisioning target', { skip: !have && 'a required binary is missing' }, () => {
-  let dolt: ChildProcess, pgp: ChildProcess, nats: ChildProcess, core: ChildProcess, dir: string, svc: ActivationService, ns: NatsService, eff: EffectsService, sink: Server, target: Server, pool: pg.Pool;
+describe('EffectsService wiring: real Dolt export + PostgreSQL + core + bus -> local sink and provisioning target', { skip: !have && 'a required binary is missing' }, () => {
+  let dolt: ChildProcess, pgp: ChildProcess, bus: BusHarness, dir: string, svc: ActivationService, eff: EffectsService, sink: Server, target: Server, pool: pg.Pool;
   type Call = { method: string; url: string; key: string; body: string };
   const sinkCalls: Call[] = [], targetCalls: Call[] = []; let sinkFail = 0;
   const listen = (port: number, calls: Call[], fail?: () => boolean) => new Promise<Server>((ok) => { const sv = createServer((req, res) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => { if (fail?.()) { res.statusCode = 503; return res.end(); } const key = String(req.headers['idempotency-key'] ?? ''); if (!calls.some((c) => c.key === key)) calls.push({ method: req.method!, url: req.url!, key, body: b }); res.statusCode = 204; res.end(); }); }); sv.listen(port, '127.0.0.1', () => ok(sv)); });
-  const pump = async (until: () => boolean) => { for (let i = 0; i < 150 && !until(); i++) { await svc.relay(); await sleep(100); } };
+  const pump = async (until: () => boolean) => { for (let i = 0; i < 150 && !until(); i++) { await sleep(100); } }; // push delivery: nothing to relay
   const sql = async (q: string) => { const c = await createConnection({ host: '127.0.0.1', port: DP, user: 'root', database: 'iam' }); try { await c.query(q); await c.query("call dolt_commit('-Am', 'fullstack change')"); } finally { await c.end(); } };
   const decide = async (id: string) => (await (await fetch(`${CORE}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ tenant: T, principal: `User::"${id}"`, action: 'Action::"approve"', resource: 'Request::"r1"', context: {} }) })).json()) as { allow: boolean; version?: { seq: number } };
@@ -48,20 +47,17 @@ describe('EffectsService wiring: real Dolt export + PostgreSQL + core + NATS -> 
     process.env.IAM_PG_URL = `postgres://poc@127.0.0.1:${PGP}/postgres`;
     pool = new pg.Pool({ connectionString: process.env.IAM_PG_URL });
     for (let k = 0; k < 100; k++) { try { await pool.query('select 1'); break; } catch { await sleep(200); } }
-    nats = spawn(natsBin!, ['-js', '-a', '127.0.0.1', '-p', String(NP), '-sd', join(dir, 'nats')], { stdio: 'ignore' });
-    for (let i = 0; i < 50; i++) { try { (await connect({ servers: `127.0.0.1:${NP}` })).close(); break; } catch { await sleep(100); } }
-    core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18096', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
-    for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
-    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN, DOLT_PORT: String(DP), DOLT_DATABASE: 'iam', IAM_NATS_URL: `127.0.0.1:${NP}` });
-    ns = new NatsService(); svc = new ActivationService(undefined, ns, new DoltService());
+    bus = await startBusHarness({ natsPort: NP, corePort: 18096, token: ADMIN });
+    Object.assign(process.env, { DOLT_PORT: String(DP), DOLT_DATABASE: 'iam' });
+    svc = new ActivationService(undefined, new DoltService());
     sink = await listen(SINK, sinkCalls, () => (sinkFail > 0 ? (sinkFail--, true) : false)); target = await listen(TARGET, targetCalls);
     Object.assign(process.env, { IAM_EFFECTS: '1', IAM_NOTIFY_SINK_URL: `http://127.0.0.1:${SINK}`, IAM_PROVISION_TARGET_URL: `http://127.0.0.1:${TARGET}` });
-    eff = new EffectsService(new DoltService()); await eff.onModuleInit(); // the real Nest lifecycle hook, driven only by the environment
+    eff = new EffectsService(new DoltService(), undefined, bus.ref); await eff.onModuleInit(); // the real Nest lifecycle hook, driven only by the environment
   });
   after(async () => {
-    await eff?.onModuleDestroy(); sink?.close(); target?.close(); delete process.env.IAM_EFFECTS; await svc?.onModuleDestroy(); await ns?.onModuleDestroy(); await pool?.end();
-    delete process.env.IAM_PG_URL; delete process.env.IAM_NATS_URL;
-    core?.kill(); nats?.kill(); pgp?.kill(); dolt?.kill(); await sleep(800);
+    await eff?.onModuleDestroy(); sink?.close(); target?.close(); delete process.env.IAM_EFFECTS; await svc?.onModuleDestroy(); await pool?.end();
+    delete process.env.IAM_PG_URL;
+    await bus?.close(); pgp?.kill(); dolt?.kill(); await sleep(800);
     if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   });
 
@@ -93,12 +89,14 @@ describe('EffectsService wiring: real Dolt export + PostgreSQL + core + NATS -> 
     assert.equal((await pool.query("select count(*)::int n from effects where state <> 'done'")).rows[0].n, 0); // every effect ended done after the retries
     assert.equal((await pool.query("select count(*)::int n from effects where tenant=$1", [T])).rows[0].n, 10); // (3+2 changes) x (notify, provision)
   });
-  it('replaying the same activation events does not repeat any effect (idempotent per tenant+seq)', async () => {
+  it('the startup catch-up replays the journal without repeating any effect (idempotent per effect key)', async () => {
     const before = [sinkCalls.length, targetCalls.length];
-    await pool.query('update outbox set sent_at = null'); // the relay publishes both events AGAIN
-    for (let i = 0; i < 20; i++) { await svc.relay(); await sleep(100); } await sleep(500);
-    assert.equal((await pool.query('select count(*)::int n from outbox where sent_at is not null')).rows[0].n, 2); // they really were re-sent
+    // A fresh EffectsService (an API restart) replays every applied activation of the journal: per-effect keys make it a no-op.
+    const eff2 = new EffectsService(new DoltService(), undefined, bus.ref);
+    await eff2.onModuleInit();
+    await sleep(500);
     assert.deepEqual([sinkCalls.length, targetCalls.length], before);
+    await eff2.onModuleDestroy();
   });
   it('negative: a non-loopback target URL is refused before any request (nothing leaves the machine)', async () => {
     const { assertLoopback } = await import('./effects/loopback.js');

@@ -9,16 +9,14 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { connect } from 'nats';
 import pg from 'pg';
-import { ActivationConsumer } from './integrations/activation-consumer.js';
-import { NatsService } from './integrations/nats.service.js';
+import { startBusHarness, busBinsPresent } from './testing/bus-harness.js';
 import { ActivationEffects, diff, Snapshot } from './effects/activation-effects.js';
 import { EffectStore } from './effects/effect-store.js';
 
-const pgBin = process.env.PG_BIN, natsBin = process.env.NATS_SERVER_BIN;
-const have = !!pgBin && existsSync(join(pgBin, 'postgres')) && !!natsBin && existsSync(natsBin);
-const PGP = 15451, NP = 14251, SINK = 18151, TARGET = 18152;
+const pgBin = process.env.PG_BIN;
+const have = !!pgBin && existsSync(join(pgBin, 'postgres')) && busBinsPresent;
+const PGP = 15451, NP = 14251, COREP = 18097, SINK = 18151, TARGET = 18152;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const snaps: Record<string, Snapshot> = {
   c1: { assignments: [{ identity_id: 'demo-bob', role_id: 'payment-creator' }] },
@@ -42,8 +40,8 @@ function fake(port: number, state: { calls: { method: string; url: string; key: 
   });
 }
 
-describe('effects: notification manager + outbound provisioning (local fictional targets)', { skip: !have && 'PG_BIN or NATS_SERVER_BIN missing' }, () => {
-  let pgp: ChildProcess, nats: ChildProcess, dir: string, pool: pg.Pool, sink: Server, target: Server, fx: ActivationEffects, store: EffectStore;
+describe('effects: notification manager + outbound provisioning (local fictional targets)', { skip: !have && 'PG_BIN, NATS_SERVER_BIN or core binary missing' }, () => {
+  let pgp: ChildProcess, dir: string, pool: pg.Pool, sink: Server, target: Server, fx: ActivationEffects, store: EffectStore;
   const sinkState = { calls: [] as { method: string; url: string; key: string; body: string }[], failNext: 0, seenKeys: new Set<string>() };
   const targetState = { calls: [] as { method: string; url: string; key: string; body: string }[], failNext: 0, seenKeys: new Set<string>() };
   const deps = (over: object = {}) => ({ store, snapshotAt: async (c: string) => snaps[c], previousCommit: async (t: string, s: number) => prev[`${s}:${t}`] || undefined,
@@ -56,12 +54,10 @@ describe('effects: notification manager + outbound provisioning (local fictional
     process.env.IAM_PG_URL = `postgres://poc@127.0.0.1:${PGP}/postgres`;
     pool = new pg.Pool({ connectionString: process.env.IAM_PG_URL });
     for (let k = 0; k < 100; k++) { try { await pool.query('select 1'); break; } catch { await sleep(200); } }
-    nats = spawn(natsBin!, ['-js', '-a', '127.0.0.1', '-p', String(NP), '-sd', join(dir, 'nats')], { stdio: 'ignore' });
-    for (let i = 0; i < 50; i++) { try { (await connect({ servers: `127.0.0.1:${NP}` })).close(); break; } catch { await sleep(100); } }
     sink = await fake(SINK, sinkState); target = await fake(TARGET, targetState);
     store = new EffectStore(pool); fx = new ActivationEffects(deps());
   });
-  after(async () => { sink?.close(); target?.close(); await pool?.end(); nats?.kill(); pgp?.kill(); delete process.env.IAM_PG_URL; await sleep(500); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
+  after(async () => { sink?.close(); target?.close(); await pool?.end(); pgp?.kill(); delete process.env.IAM_PG_URL; await sleep(500); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
 
   it('diff: grants and revokes between two data versions', () => {
     assert.deepEqual(diff(snaps.c1, snaps.c2), [{ subject: 'demo-alice', role: 'payment-approver', change: 'granted' }]);
@@ -101,22 +97,29 @@ describe('effects: notification manager + outbound provisioning (local fictional
     assert.equal(sinkState.calls.length, n0);
     assert.ok((await store.list('gamma')).some((r) => r.state === 'failed' && /not a loopback host/.test(r.lastError ?? '')));
   });
-  it('through NATS: a duplicated event runs the effects once; a failing target makes the consumer retry via redelivery', async () => {
-    const f2 = new ActivationEffects(deps());
-    const handled: string[] = [];
-    const cons = new ActivationConsumer(pool, async (e) => { await f2.handle(e); handled.push(`${e.tenant}:${e.seq}`); });
-    const n = new NatsService(); process.env.IAM_NATS_URL = `127.0.0.1:${NP}`;
-    const nSink = sinkState.calls.length;
-    targetState.failNext = 1; // first delivery fails on the target, handler throws, consumer rolls back and naks
-    const ev = { tenant: 'acme', seq: 3, commit: 'c3', state: 'applied' }; // seq 3 already done above -> use a new tenant-seq via different tenant
-    const ev2 = { ...ev, tenant: 'beta' }; prev['3:beta'] = 'c2';
-    await n.publish('iam.activation.beta', ev2); await n.publish('iam.activation.beta', ev2); // duplicate publication
-    await cons.start(`127.0.0.1:${NP}`, 'fx-consumer');
-    for (let i = 0; i < 80 && !handled.includes('beta:3'); i++) await sleep(150);
-    await sleep(800);
-    await cons.stop(); await n.onModuleDestroy(); delete process.env.IAM_NATS_URL;
-    assert.deepEqual(handled.filter((h) => h === 'beta:3'), ['beta:3']);
-    assert.equal(sinkState.calls.length - nSink, 1); // revoke of demo-bob notified exactly once
-    assert.ok(targetState.calls.some((c) => c.url === '/Users/demo-bob/Roles/payment-creator' && c.key.startsWith('beta:3:')));
+  it('through the bus: a failing delivery is redelivered and the effects still run once (idempotent per effect key)', async () => {
+    const bus = await startBusHarness({ natsPort: NP, corePort: COREP, token: 'fx-e2e-token' });
+    try {
+      const f2 = new ActivationEffects(deps());
+      const handled: string[] = [];
+      const nSink = sinkState.calls.length;
+      targetState.failNext = 1; // the target answers 503 once: the handler throws, the delivery is nakked and redelivered
+      await bus.host.serveService('fx-test', ['activation.applied'], async (env) => {
+        const p = env.payload as { tenant: string; seq: number; commit: string };
+        if (p.tenant !== 'beta') return;
+        await f2.handle(p); // throws while the target 503s -> nak -> redelivery
+        handled.push(`${p.tenant}:${p.seq}`);
+      });
+      prev['3:beta'] = 'c2';
+      // The core owns and emits activation.applied when it applies (the single activation circuit, step 3).
+      const r = await fetch(`${bus.coreUrl}/v1/activate`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-core-admin-token': bus.token },
+        body: JSON.stringify({ tenant: 'beta', seq: 3, commit: 'c3', snapshot: { assignments: [], sod_rules: [] } }) });
+      assert.ok(r.ok, `core activate: ${r.status}`);
+      for (let i = 0; i < 100 && !handled.includes('beta:3'); i++) await sleep(150);
+      await sleep(800);
+      assert.deepEqual(handled.filter((h) => h === 'beta:3'), ['beta:3']);
+      assert.equal(sinkState.calls.length - nSink, 1); // revoke of demo-bob notified exactly once, despite the redelivery
+      assert.ok(targetState.calls.some((c) => c.url === '/Users/demo-bob/Roles/payment-creator' && c.key.startsWith('beta:3:')));
+    } finally { await bus.close(); }
   });
 });

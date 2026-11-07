@@ -1,5 +1,7 @@
 # End-to-end tests: how to run them and what they prove
 
+Step 3: build the Rust core and set `NATS_SERVER_BIN` before running API tests. Modules that boot the API require a real bus; missing bus infrastructure fails rather than choosing a local bypass.
+
 All commands run from `apps/api` unless stated. `npm test` compiles TypeScript, then runs the suites with `node --test`. The suite list is discovered automatically (`node --test "dist/**/*.spec.js"`): a new `*.spec.ts` is picked up as-is, never add file names to the `test` script.
 
 ## Environment variables that switch the real-service suites on
@@ -17,7 +19,7 @@ PostgreSQL binaries without a system install: `npm i embedded-postgres` somewher
 A suite whose variable is unset is reported as skipped with a reason, never as passed.
 
 ## What each suite covers
-- `app.spec.ts` (unit, guard overridden): health, activation journal logic (A,B,A), invalid commit, plugin idempotence.
+- `app.spec.ts` (unit, guard overridden): health, activation journal logic (A,B,A), invalid commit. Retired local prototype plugin tests are removed; bus idempotence is tested in activation-bus.e2e.
 - `e2e.spec.ts` (real core + API): IdP login (wrong password 401, burnt code), decisions (approve, SoD forbid, unknown principal deny),
   negative authentication: no token, garbage/alg=none, tampered payload, expired token, other issuer, wrong audience, wrong tenant (403),
   fail-closed when the core is down (502).
@@ -26,13 +28,13 @@ A suite whose variable is unset is reported as skipped with a reason, never as p
 - `pg.e2e.spec.ts` (real PostgreSQL): durable journal across service restart, concurrent activations get distinct seq, URL from a (stubbed) secret store.
 - `integrations.e2e.spec.ts`: real NATS JetStream (event received; unreachable -> `not-published`; disabled), real OpenBao dev server (KV read, missing, bad token).
 - `temporal.e2e.spec.ts` (real Temporal dev server + real Dolt): workflow success; unknown commit fails the workflow and nothing is journaled.
-- `fullstack.e2e.spec.ts` (real Dolt + PostgreSQL + NATS JetStream + Rust core + NestJS services, nothing stubbed): Dolt data change -> export -> activation -> core applies and the decision flips -> outbox relay -> NATS -> idempotent consumer handles it once; same request id again gives no new seq; SoD computed by the core.
+- `fullstack.e2e.spec.ts` (real Dolt + PostgreSQL + NATS JetStream + Rust core + NestJS services, nothing stubbed): Dolt data change -> export -> activation -> core applies and the decision flips -> durable core bus -> JetStream -> idempotent consumer handles it once; same request id again gives no new seq; SoD computed by the core.
 - `grpc.e2e.spec.ts` (real core binary with `IAM_CORE_GRPC_ADDR`, NestJS gRPC client): gRPC allow/deny equals HTTP, tenant mode fail closed then activated, unreachable core rejects. Rust: `grpc.rs` test over a real socket.
 - `audit.e2e.spec.ts` (real core + API; PostgreSQL part on a real server): allow/deny/core-down recorded with tenant, seq, commit; no token 401, other tenant 403, context not stored; rows survive a restart and are tenant-isolated.
 - `effects.e2e.spec.ts` (real PostgreSQL + NATS, local HTTP fakes, Dolt stubbed): role diff, notification and provisioning once per effect key, DELETE on revoke, target down then retry, non-loopback refused, duplicate NATS event.
 - Rust: `cd core && cargo test --locked` (Cedar engine, WASM runtime, IdP).
 - Angular: `cd apps/web && npm test -- --watch=false` (PKCE S256 test vector, API client with a fake fetch, component render).
-- Real browser: `DOLT_BIN=... CHROME_BIN=/usr/bin/google-chrome NODE_PATH=<dir with playwright-core>/node_modules node scripts/ui-e2e.mjs [outDir]` starts Dolt, core, API and `ng serve` on 127.0.0.1, drives the console in headless Chrome and writes screenshots (build core and API first).
+- Real browser: `NATS_SERVER_BIN=... DOLT_BIN=... CHROME_BIN=/usr/bin/google-chrome NODE_PATH=<dir with playwright-core>/node_modules node scripts/ui-e2e.mjs [outDir]` starts Dolt, core, API and `ng serve` on 127.0.0.1, drives the console in headless Chrome and writes screenshots (build core and API first).
 - Script: `DOLT_BIN=... scripts/dolt-smoke.sh` (Dolt CLI branch/merge scenario).
 
 ## What is NOT covered

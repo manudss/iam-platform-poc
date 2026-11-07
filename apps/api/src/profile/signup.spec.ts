@@ -11,6 +11,12 @@ import { UsersService } from '../users/users.service.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { SignupService } from './signup.service.js';
 import { SIGNUP_ALLOWED } from './profile.service.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const good = { id: 'new-nora', display_name: 'Nora Test', email: 'nora@example.invalid', password: 'a-fictional-password-1', values: { 'hr-attributes.job_title': 'Tester' } };

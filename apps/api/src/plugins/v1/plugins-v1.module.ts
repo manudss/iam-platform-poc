@@ -6,7 +6,9 @@ import { UsersModule } from '../../users/users.module.js';
 import { UsersService } from '../../users/users.service.js';
 import { Module } from '@nestjs/common';
 import { PluginRegistry } from './registry.js';
-import { BusHost } from './bus-host.js';
+import { BusHost, BusHostRef } from './bus-host.js';
+import { ApplicationBus } from '../../events/application-bus.service.js';
+import { EventsModule } from '../../events/events.module.js';
 import pg from 'pg';
 import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from './memory-stores.js';
 import { PgPluginStore } from './pg-stores.js';
@@ -36,9 +38,9 @@ import { SessionAdminController } from '../../authn/session.controller.js';
  * (install migrations really run there). Without it (unit tests, quick local demo) everything is in memory and a restart returns to the base plugins.
  */
 @Module({
-  imports: [VersioningModule, UsersModule],
+  imports: [VersioningModule, UsersModule, EventsModule],
   controllers: [PluginsAdminController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
-  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
     provide: SSO_DIRECTORY,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltSsoDirectory(v) : new MemorySsoDirectory(),
@@ -56,8 +58,8 @@ import { SessionAdminController } from '../../authn/session.controller.js';
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltProfileStore(v, (w) => currentBranch(w)) : new MemoryProfileStore(),
   }, {
     provide: PluginRegistry,
-    inject: [VersioningService, UsersService, BranchRegistries],
-    useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries) => {
+    inject: [VersioningService, UsersService, BranchRegistries, ApplicationBus, BusHostRef],
+    useFactory: async (v: VersioningService, users: UsersService, branches: BranchRegistries, events: ApplicationBus, busRef: BusHostRef) => {
       if (process.env.IAM_WORKSPACE_MODE === '1') return branches.get('main');
       const audit = (e: unknown) => console.log(`[plugins] ${JSON.stringify(e)}`);
       const url = process.env.IAM_PG_URL;
@@ -71,11 +73,13 @@ import { SessionAdminController } from '../../authn/session.controller.js';
       }
       await r.load();
       // Step 2: serve the plugins over the core bus when it is configured (no-op otherwise).
+      // Decision 6: the bus is MANDATORY on the API - no host, no startup (specs use testing/test-bus.ts).
       const host = await BusHost.startIfConfigured(async () => r);
-      if (host) r.setBus(host.bridge());
+      if (!host) throw new Error('event bus required (step 3, decision 6): set IAM_BUS_NATS_URL, IAM_BUS_NATS_PASSWORD and IAM_CORE_ADMIN_TOKEN, with a reachable nats-server and core');
+      r.setBus(host.bridge()); host.attachEvents(events); busRef.host = host;
       return r;
     },
   }],
-  exports: [AppConnectorService, OidcProviderService, SamlIdpService, PluginRegistry, BranchRegistries, AuthnService, ProfileService, OrgService, RolesService],
+  exports: [AppConnectorService, OidcProviderService, SamlIdpService, PluginRegistry, BranchRegistries, BusHostRef, AuthnService, ProfileService, OrgService, RolesService],
 })
 export class PluginsV1Module {}

@@ -5,11 +5,11 @@ import { DefinitionRow, WorkflowStore } from './store.js';
 /**
  * DEMO ONLY, opt-in with IAM_DEMO_DATA_SEED=1 (the hosted demo sets it): three triggered workflow
  * definitions so the feature is alive out of the box - a joiner, a mover and a leaver scenario that
- * start by themselves on application events. Idempotent (fixed ids, never overwritten).
+ * start from durable application-bus events. Redelivery reuses the same run ID. Idempotent (fixed ids, never overwritten).
  */
 const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: 'assign-role' | 'revoke-role' | 'notify' | 'set-profile-field'; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
   {
-    id: 'wf-joiner', name: 'Joiner: new hire baseline', description: 'Starts when a user is created: grants the employee baseline role (real, on the run branch) and informs the manager (simulated).',
+    id: 'wf-joiner', name: 'Joiner: new hire baseline', description: 'Starts from user.created on the durable bus: grants the employee baseline role (real, on the run branch) and informs the manager (simulated).',
     trigger: { event: 'user.created' },
     nodes: [
       { id: 'grant', type: 'assign-role', name: 'Grant the employee baseline', config: { identity: '{{event.subject}}', role: 'employee' } },

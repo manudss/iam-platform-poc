@@ -6,7 +6,12 @@ import { AppModule } from './app.module.js';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { AuthGuard } from './auth/auth.guard.js';
-import { PluginHost } from './plugins/plugin-host.service.js';
+import { startTestBus, TestBus } from './testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 describe('api', () => {
   let app: INestApplication;
@@ -36,11 +41,4 @@ describe('api', () => {
     await request(app.getHttpServer()).post('/tenants/t1/activations').set('x-api-admin-token', 'local-demo-simulation-token').send({ commit: 'x' }).expect(400);
   });
 
-  it('async plugin is idempotent per activation', async () => {
-    const host = app.get(PluginHost);
-    const e = { tenant: 't1', activation: 1, commit: 'aaaaaaaa', type: 'role.changed' as const, subject: 'demo-user-1', newRole: 'accountant' };
-    await host.dispatch(e);
-    await host.dispatch(e);
-    assert.equal(host.effects.length, 1);
-  });
 });

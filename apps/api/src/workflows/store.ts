@@ -127,9 +127,11 @@ export class WorkflowStore {
   async createRun(run: RunRow, steps: StepRow[]): Promise<void> {
     const m = await this.meta();
     try {
+      await m.beginTransaction();
       await m.query('insert into workflow_runs (id, tenant, definition_id, name, graph, branch, base_branch, status, error, started_by, started_at, finished_at) values (?,?,?,?,?,?,?,?,?,?,?,?)', [run.id, run.tenant, run.definition_id, run.name, JSON.stringify(run.graph), run.branch, run.base_branch, run.status, run.error, run.started_by, run.started_at, run.finished_at]);
       for (const s of steps) await m.query('insert into workflow_steps (run_id, node_id, status, simulated, attempts, error, log) values (?,?,?,?,0,null,?)', [s.run_id, s.node_id, s.status, s.simulated, JSON.stringify([])]);
-    } finally { await m.end(); }
+      await m.commit();
+    } catch (e) { await m.rollback(); throw e; } finally { await m.end(); }
   }
   async getRunById(id: string): Promise<RunRow | null> {
     const m = await this.meta();

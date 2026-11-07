@@ -5,7 +5,8 @@ use std::sync::RwLock;
 /// How an event kind behaves.
 /// Notify: delivered, no answer used. Control: every subscriber may answer allow/deny (blocking call).
 /// Query: subscribers answer with data that the core merges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Mode { Notify, Control, Query }
 
 /// Known event kinds and their modes. Interior mutability: step 2 lets the control plane declare new kinds at

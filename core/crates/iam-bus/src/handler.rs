@@ -7,6 +7,9 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HandlerResult { pub verdict: Option<Verdict>, pub data: Option<Value> }
+/// A handler may also answer "not concerned" (disabled for this branch): the host turns it into a reply flag.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HandlerOutcome { pub result: Option<HandlerResult>, pub not_concerned: bool }
 
 /// A subscriber's code. `None` = stays silent (no reply at all).
 #[async_trait]
@@ -17,7 +20,7 @@ pub trait Handler: Send + Sync {
 /// The `from` field is always set by the host from the subscriber id, never by the handler.
 pub async fn reply_bytes(id: &str, h: &dyn Handler, env: &Envelope) -> Option<Vec<u8>> {
     let r = h.handle(env).await?;
-    serde_json::to_vec(&Reply { from: id.to_string(), id: env.id.clone(), verdict: r.verdict, data: r.data }).ok()
+    serde_json::to_vec(&Reply { from: id.to_string(), id: env.id.clone(), verdict: r.verdict, data: r.data, not_concerned: false }).ok()
 }
 
 /// WASM subscriber wired to the existing v0 runtime: payload `{"hour": n, "sensitive": bool}` -> allow/deny.

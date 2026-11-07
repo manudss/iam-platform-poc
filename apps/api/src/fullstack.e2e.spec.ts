@@ -1,6 +1,6 @@
-// FULL local chain in ONE test, no stub: real Dolt (data) -> real DoltService export -> ActivationService with REAL PostgreSQL journal+outbox
-// -> REAL Rust core (applies the version, decides) -> outbox relay -> REAL NATS JetStream -> idempotent consumer (real PostgreSQL).
-// Not covered here: Temporal (temporal.e2e.spec.ts), Docker Compose containers (CI job `compose`), gRPC (not implemented), a real external effect behind the consumer.
+// FULL local chain in ONE test, no stub: real Dolt (data) -> real DoltService export -> ActivationService with REAL PostgreSQL journal
+// -> REAL Rust core (applies the version, decides) -> the core emits activation.applied on the REAL bus -> durable consumer (real PostgreSQL ledger).
+// Not covered here: Temporal (temporal.e2e.spec.ts), Docker Compose containers (CI job `compose`), gRPC (compose-app.e2e.spec.ts), a real external effect behind the consumer.
 // Skipped if any of the dolt, postgres, nats binaries or the core binary is missing.
 import 'reflect-metadata';
 import { describe, it, before, after } from 'node:test';
@@ -10,23 +10,20 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createConnection } from 'mysql2/promise';
-import { connect } from 'nats';
 import pg from 'pg';
 import { ActivationService } from './activation/activation.service.js';
-import { NatsService } from './integrations/nats.service.js';
-import { ActivationConsumer } from './integrations/activation-consumer.js';
 import { DoltService } from './dolt/dolt.service.js';
+import { startBusHarness, busBinsPresent, BusHarness } from './testing/bus-harness.js';
 
 const root = resolve(process.cwd(), '../..');
-const coreBin = resolve(root, 'core/target/debug/iam-core');
-const doltBin = process.env.DOLT_BIN, natsBin = process.env.NATS_SERVER_BIN, pgBin = process.env.PG_BIN;
-const have = !!doltBin && existsSync(doltBin) && !!natsBin && existsSync(natsBin) && !!pgBin && existsSync(join(pgBin, 'postgres')) && existsSync(coreBin);
+const doltBin = process.env.DOLT_BIN, pgBin = process.env.PG_BIN;
+const have = !!doltBin && existsSync(doltBin) && !!pgBin && existsSync(join(pgBin, 'postgres')) && busBinsPresent;
 const CORE = 'http://127.0.0.1:18095', ADMIN = 'local-demo-admin-token', T = 'acme-demo'; // local fictional value
 const DP = 13319, PGP = 15435, NP = 14225;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-describe('full chain: Dolt -> NestJS activation -> PostgreSQL outbox -> Rust core -> NATS -> idempotent consumer', { skip: !have && 'a required binary is missing' }, () => {
-  let dolt: ChildProcess, pgp: ChildProcess, nats: ChildProcess, core: ChildProcess, dir: string, svc: ActivationService, ns: NatsService, cons: ActivationConsumer, pool: pg.Pool;
+describe('full chain: Dolt -> NestJS activation -> PostgreSQL journal -> Rust core -> bus -> durable consumer', { skip: !have && 'a required binary is missing' }, () => {
+  let dolt: ChildProcess, pgp: ChildProcess, bus: BusHarness, dir: string, svc: ActivationService, pool: pg.Pool;
   const handled: string[] = [];
   const sql = async (q: string) => { const c = await createConnection({ host: '127.0.0.1', port: DP, user: 'root', database: 'iam' }); try { await c.query(q); await c.query("call dolt_commit('-Am', 'fullstack change')"); } finally { await c.end(); } };
   const decide = async (id: string) => (await (await fetch(`${CORE}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -45,19 +42,18 @@ describe('full chain: Dolt -> NestJS activation -> PostgreSQL outbox -> Rust cor
     process.env.IAM_PG_URL = `postgres://poc@127.0.0.1:${PGP}/postgres`;
     pool = new pg.Pool({ connectionString: process.env.IAM_PG_URL });
     for (let k = 0; k < 100; k++) { try { await pool.query('select 1'); break; } catch { await sleep(200); } }
-    nats = spawn(natsBin!, ['-js', '-a', '127.0.0.1', '-p', String(NP), '-sd', join(dir, 'nats')], { stdio: 'ignore' });
-    for (let i = 0; i < 50; i++) { try { (await connect({ servers: `127.0.0.1:${NP}` })).close(); break; } catch { await sleep(100); } }
-    core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18095', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
-    for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
-    Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_CORE_ADMIN_TOKEN: ADMIN, DOLT_PORT: String(DP), DOLT_DATABASE: 'iam', IAM_NATS_URL: `127.0.0.1:${NP}` });
-    ns = new NatsService(); svc = new ActivationService(undefined, ns, new DoltService());
-    cons = new ActivationConsumer(pool, async (_e, key) => { handled.push(key); });
-    await cons.start(`127.0.0.1:${NP}`, 'fullstack-consumer');
+    bus = await startBusHarness({ natsPort: NP, corePort: 18095, token: ADMIN });
+    Object.assign(process.env, { DOLT_PORT: String(DP), DOLT_DATABASE: 'iam' });
+    svc = new ActivationService(undefined, new DoltService());
+    await bus.host.serveService('fullstack-consumer', ['activation.applied'], async (env) => {
+      const p = env.payload as { tenant: string; seq: number };
+      handled.push(`${p.tenant}:${p.seq}`);
+    });
   });
   after(async () => {
-    await cons?.stop(); await svc?.onModuleDestroy(); await ns?.onModuleDestroy(); await pool?.end();
-    delete process.env.IAM_PG_URL; delete process.env.IAM_NATS_URL;
-    core?.kill(); nats?.kill(); pgp?.kill(); dolt?.kill(); await sleep(800);
+    await svc?.onModuleDestroy(); await pool?.end();
+    delete process.env.IAM_PG_URL;
+    await bus?.close(); pgp?.kill(); dolt?.kill(); await sleep(800);
     if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   });
 
@@ -70,9 +66,8 @@ describe('full chain: Dolt -> NestJS activation -> PostgreSQL outbox -> Rust cor
     const d = await decide('demo-alice');
     assert.equal(d.allow, true); assert.equal(d.version?.seq, 1); // the REAL core applied the REAL Dolt export
     assert.deepEqual((await pool.query('select state, seq from activations')).rows.map((r) => [r.state, r.seq]), [['applied', 1]]); // durable PG journal
-    for (let i = 0; i < 60 && !handled.includes(`${T}:1`); i++) { await svc.relay(); await sleep(100); }
+    for (let i = 0; i < 60 && !handled.includes(`${T}:1`); i++) { await sleep(100); } // push delivery: nothing to relay
     assert.deepEqual(handled.filter((k) => k === `${T}:1`), [`${T}:1`]);
-    assert.equal((await pool.query('select count(*)::int n from processed_events where tenant=$1 and seq=1', [T])).rows[0].n, 1);
   });
   it('same request id again: no new seq, no new event; a SoD-violating data version is computed by the core after the next activation', async () => {
     const again = await svc.activate(T, await new DoltService().head(), 'req-full-0001');
@@ -82,7 +77,7 @@ describe('full chain: Dolt -> NestJS activation -> PostgreSQL outbox -> Rust cor
     assert.equal(b.seq, 2); assert.equal(b.state, 'applied');
     assert.equal((await decide('demo-bob')).allow, false);
     assert.equal((await decide('demo-alice')).allow, true);
-    for (let i = 0; i < 60 && !handled.includes(`${T}:2`); i++) { await svc.relay(); await sleep(100); }
+    for (let i = 0; i < 60 && !handled.includes(`${T}:2`); i++) { await sleep(100); }
     assert.deepEqual([...handled].sort(), [`${T}:1`, `${T}:2`]);
   });
 });

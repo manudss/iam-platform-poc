@@ -100,15 +100,17 @@ async function decide(ctx: ToolCtx, tool: string, kind: Kind, resourceOverride?:
   const action = `Action::"mcp:${kind}"`, resource = resourceOverride ?? `Branch::"${ctx.session.branch}"`;
   const principal = `User::"${ctx.session.owner}"`;
   let out: DecideOut;
+  let answered = false;
   try {
-    const res = await fetch(`${ctx.core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tenant: ctx.tenant, principal, action, resource, context: {} }) });
+    const res = await fetch(`${ctx.core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tenant: ctx.tenant, principal, action, resource, context: {}, audit: { source: 'agent', subject: ctx.session.owner, note: `mcp session=${ctx.session.id} tool=${tool}` } }) });
+    answered = res.ok;
     out = res.ok ? ((await res.json()) as DecideOut) : { allow: false, reasons: [`core-error-${res.status}`] };
   } catch { out = { allow: false, reasons: ['core-unreachable'] }; }
-  await ctx.audit.record({
+  await ctx.audit.recordDecision({
     tenant: ctx.tenant, subject: ctx.session.owner, principal, action, resource, allow: out.allow === true,
     reasons: [...(out.reasons ?? []), ...(out.errors ?? [])], activation_seq: out.version?.seq ?? null, commit: out.version?.commit ?? null,
     source: 'agent', note: `mcp session=${ctx.session.id} tool=${tool}`,
-  });
+  }, answered);
   return out;
 }
 

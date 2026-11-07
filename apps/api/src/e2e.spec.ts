@@ -9,7 +9,14 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
+import { DoltService } from './dolt/dolt.service.js';
 import { AppModule } from './app.module.js';
+import { startTestBus, TestBus } from './testing/test-bus.js';
+
+// Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 const root = resolve(process.cwd(), '../..');
 const bin = resolve(root, 'core/target/debug/iam-core');
@@ -46,12 +53,14 @@ describe('e2e core + api', { skip: !existsSync(bin) && 'core binary not built' }
     spawn(bin, [], { env: { ...process.env, IAM_CORE_ADDR: addr, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), ...extra }, stdio: 'ignore' });
 
   before(async () => {
-    core = spawnCore('127.0.0.1:18081', { IAM_ISSUER: CORE });
+    core = spawnCore('127.0.0.1:18081', { IAM_ISSUER: CORE, IAM_CORE_NATS_URL: `127.0.0.1:${testBus!.natsPort}`, IAM_CORE_NATS_PASSWORD: 'core-dev', IAM_CORE_ADMIN_TOKEN: 'e2e-spec-admin' });
     short = spawnCore('127.0.0.1:18082', { IAM_ISSUER: SHORT, IAM_TOKEN_TTL_SECS: '3' });
     await waitUp(CORE); await waitUp(SHORT);
-    process.env.IAM_CORE_URL = CORE; process.env.IAM_API_ADMIN_TOKEN = 'local-demo-simulation-token';
+    process.env.IAM_CORE_URL = CORE; process.env.IAM_API_ADMIN_TOKEN = 'local-demo-simulation-token'; process.env.IAM_CORE_ADMIN_TOKEN = 'e2e-spec-admin';
     process.env.IAM_ISSUER = CORE;
     app = await NestFactory.create(AppModule, { logger: false });
+    // This suite has no Dolt: activation snapshot export is covered in activation.e2e.spec.ts.
+    app.get(DoltService).snapshotAt = async () => ({ assignments: [], sod_rules: [], mcp_grants: [] });
     await app.listen(13000);
   });
   after(async () => { await app?.close(); core?.kill(); short?.kill(); });
@@ -117,7 +126,7 @@ describe('e2e core + api', { skip: !existsSync(bin) && 'core binary not built' }
     const t = await login(CORE);
     assert.equal((await post(`${API}/tenants/other-tenant/activations`, { commit: 'aaaaaaaa' }, t)).status, 403);
     const a = await post(`${API}/tenants/acme-demo/activations`, { commit: 'aaaaaaaa' }, t);
-    assert.equal(a.status, 201);
+    assert.equal(a.status, 201, a.status === 201 ? '' : await a.clone().text());
     assert.equal(((await a.json()) as { seq: number }).seq, 1);
     assert.equal((await post(`${API}/tenants/acme-demo/activations`, { commit: 'zz' }, t)).status, 400);
   });

@@ -4,18 +4,20 @@ import { Session } from './session';
 
 export interface BusOutcome { id: string; mandatory: boolean; status: string; verdict?: string | null; detail?: string | null; data_keys?: string[] | null }
 export interface BusRec { seq: number; at_ms: number; envelope_id: string; kind: string; mode: string; tenant?: string | null; effect_key?: string | null; source?: string | null; payload: Record<string, string>; elapsed_ms: number; verdict?: string | null; expected: { id: string; mandatory: boolean }[]; outcomes: BusOutcome[] }
-export type Result = 'ok' | 'refused' | 'error' | 'no-consumer' | 'silent-optional';
+export type Result = 'ok' | 'refused' | 'error' | 'no-consumer' | 'silent-optional' | 'queued';
 
 /** What the exchange amounted to, read from the real record. A silent MANDATORY subscriber is a refusal (D3); a silent optional one is ignored. */
 export function result(r: BusRec): Result {
   if (r.outcomes.some((o) => o.status === 'invalid')) return 'error';
   if (r.verdict === 'deny' || r.outcomes.some((o) => o.mandatory && o.status === 'silent')) return 'refused';
+  if (r.outcomes.some(o => o.status === 'queued')) return 'queued';
   if (!r.expected.length) return 'no-consumer';
   if (r.outcomes.some((o) => o.status === 'silent')) return 'silent-optional';
   return 'ok';
 }
 export const answered = (r: BusRec): string[] => r.outcomes.filter((o) => o.status === 'replied').map((o) => o.id);
-export const silentOnes = (r: BusRec): string[] => r.outcomes.filter((o) => o.status !== 'replied').map((o) => o.id);
+export const queuedOnes = (r: BusRec): string[] => r.outcomes.filter(o => o.status === 'queued').map(o => o.id);
+export const silentOnes = (r: BusRec): string[] => r.outcomes.filter((o) => o.status === 'silent' || o.status === 'invalid').map((o) => o.id);
 
 export const FIT = 0, FIT_SECONDS = 60;
 /** x1 = one second of playback is one second of recorded history; FIT compresses the whole span into 60 s (effective factor displayed). */
@@ -33,16 +35,16 @@ export function stepTo(rs: BusRec[], cursor: number, dir: 1 | -1): number | unde
 
 /**
  * Event bus observer. READ ONLY: a re-reading of what really went through the core's NATS bus (events, who was expected, who answered,
- * delay, silence). No button sends, replays or answers anything. The record lives in the core's memory (bounded); it is empty after a core restart.
+ * delay, silence). No button sends, replays or answers anything. The bounded ring is refilled from the durable JetStream journal after core restart.
  */
 @Component({
   selector: 'app-bus-observer', imports: [FormsModule], styleUrl: './pages.css',
   template: `
   <p class="lead">Event bus (NATS), as seen by the core. Which events went through, who was expected to answer, who did, how long it took. Read only: viewing never sends, replays or answers anything. Data is masked.</p>
   @if (problem()) { <p role="alert" class="msg bad" id="bo-problem">{{problem()}}</p> }
-  @if (off()) { <p class="hint" id="bo-off">The bus is not connected on this core (no NATS). Nothing to observe, and nothing depends on it.</p> } @else {
+  @if (off()) { <p class="hint" id="bo-off">The bus is not connected on this core (no NATS). Authentication refuses until the bus is available.</p> } @else {
   <section class="card">
-    <p class="hint" id="bo-since">{{entries().length}} exchange(s) in the core's memory (keeps the last {{capacity()}}, lost when the core restarts).@if (dropped()) { Older ones were dropped. }</p>
+    <p class="hint" id="bo-since">{{entries().length}} exchange(s) in the observer (last {{capacity()}}, refilled from JetStream after core restart).@if (dropped()) { Older ones were dropped. }</p>
     <label>Kind<select name="bk" [ngModel]="kind()" (ngModelChange)="kind.set($event)" id="bo-kind"><option value="">All</option>@for (k of kinds(); track k) { <option [value]="k">{{k}}</option> }</select></label>
     <button type="button" id="bo-refresh" (click)="load()">Refresh</button>
   </section>
@@ -57,7 +59,7 @@ export function stepTo(rs: BusRec[], cursor: number, dir: 1 | -1): number | unde
     <p class="hint" id="bo-clock">Position: {{cursorLabel()}} ({{seen().length}} of {{list().length}} exchanges seen). Speed: {{speedLabel()}}. Only re-reads the record: nothing is sent again.</p>
     @if (current(); as c) { <div id="bo-step" class="card"><strong>{{c.kind}}</strong> ({{c.mode}}) - {{label(c)}} - {{c.elapsed_ms}} ms<br>
       Expected: @for (x of c.expected; track x.id) { <span class="chip">{{x.id}}@if (x.mandatory) { (mandatory) }</span> } @empty { nobody subscribed }
-      <br>Answered: @for (x of ans(c); track x) { <span class="chip ok">{{x}}</span> } @empty { <span class="chip warn">nobody</span> }
+      @for (q of queued(c); track q) { <span class="chip">queued: {{q}}</span> }<br>Answered: @for (x of ans(c); track x) { <span class="chip ok">{{x}}</span> } @empty { <span class="chip warn">nobody</span> }
       @for (s of mute(c); track s) { <span class="chip mute">silent: {{s}}</span> }
       <br><small>Correlation: {{c.envelope_id}}@if (c.effect_key) { - effectKey {{c.effect_key}} } - Source: {{c.source ?? 'core'}}</small>
       <br><small>Data (masked): {{payloadText(c)}}</small></div> }
@@ -66,7 +68,7 @@ export function stepTo(rs: BusRec[], cursor: number, dir: 1 | -1): number | unde
   @for (e of seen(); track e.seq) { <tr [class.bo-now]="e === current()">
     <td>{{time(e)}}</td><td>{{e.kind}}<br><small>{{e.mode}} - {{e.source ?? 'core'}} - {{e.envelope_id}}</small></td>
     <td>@for (x of e.expected; track x.id) { <span class="chip">{{x.id}}</span> } @empty { - }</td>
-    <td>@for (a of ans(e); track a) { <span class="chip ok">{{a}}</span> } @empty { <span class="chip warn">nobody</span> }@for (s of mute(e); track s) { <span class="chip mute" title="expected, did not answer">silent: {{s}}</span> }</td>
+    <td>@for (q of queued(e); track q) { <span class="chip">queued: {{q}}</span> }@for (a of ans(e); track a) { <span class="chip ok">{{a}}</span> } @empty { <span class="chip warn">nobody</span> }@for (s of mute(e); track s) { <span class="chip mute" title="expected, did not answer">silent: {{s}}</span> }</td>
     <td>{{label(e)}}</td><td>{{e.elapsed_ms}} ms</td></tr> }
   @empty { <tr><td colspan="6">@if (list().length) { Press Play: exchanges appear as the playback reaches them. } @else { No exchange recorded yet. }</td></tr> }</tbody></table></div></section> }`,
   styles: [`.chip.ok{background:#dcfce7}.chip.warn{background:#fef3c7}.chip.mute{background:#f1f5f9}.bo-now{background:#eef2ff}.bo-scrub{display:block;margin:.5rem 0}.bo-scrub input{width:100%}`],
@@ -86,8 +88,8 @@ export class BusObserverPage implements OnDestroy {
   protected cursorLabel = computed(() => new Date(this.cursor()).toISOString().slice(11, 23) + ' UTC');
   protected speedLabel = computed(() => (this.speed() === FIT ? 'compressed, effective ' : '') + factorLabel(factor(this.speed(), this.range()[0], this.range()[1])));
   constructor() { effect(() => { this.s.adminToken(); void this.load(); }); }
-  protected ans = answered; protected mute = silentOnes;
-  protected label(r: BusRec) { return ({ ok: 'ok', refused: 'refused', error: 'error (invalid answer)', 'no-consumer': 'no consumer', 'silent-optional': 'ok, an optional party stayed silent' } as Record<Result, string>)[result(r)]; }
+  protected queued = queuedOnes; protected ans = answered; protected mute = silentOnes;
+  protected label(r: BusRec) { return ({ queued: 'durably queued', ok: 'ok', refused: 'refused', error: 'error (invalid answer)', 'no-consumer': 'no consumer', 'silent-optional': 'ok, an optional party stayed silent' } as Record<Result, string>)[result(r)]; }
   protected time(r: BusRec) { return new Date(r.at_ms).toISOString().slice(11, 23); }
   protected payloadText(r: BusRec) { return JSON.stringify(r.payload); }
   protected toggle() {
