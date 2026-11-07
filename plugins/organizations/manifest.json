@@ -1,0 +1,12 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "organizations",
+  "version": "1.0.0",
+  "name": "Organizations (example)",
+  "publisher": "iam-platform",
+  "kinds": ["profile"],
+  "hooks": [],
+  "settings": [],
+  "menu": [{ "id": "organizations", "title": "Organizations", "area": "admin", "group": "Access (IAM)", "icon": "⌂", "order": 30, "path": "/organizations" }],
+  "security": { "signed": true }
+}

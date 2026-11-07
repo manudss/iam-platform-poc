@@ -1,0 +1,17 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-password",
+  "version": "1.0.0",
+  "name": "Password sign-in (base)",
+  "publisher": "iam-platform",
+  "kinds": ["auth-method"],
+  "base": true,
+  "provides": ["auth.password"],
+  "hooks": [{ "name": "auth.authenticate", "mode": "blocking" }],
+  "settings": [
+    { "key": "minLength", "type": "number", "label": "Minimum password length", "default": 12, "min": 8, "max": 128, "group": "Policy" },
+    { "key": "allowedDomains", "type": "list", "label": "Allowed e-mail domains (empty = all)", "default": [], "group": "Policy" }
+  ],
+  "entrypoints": { "handlers": "handlers.mjs" },
+  "security": { "signed": true }
+}

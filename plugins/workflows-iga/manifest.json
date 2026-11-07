@@ -1,0 +1,14 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "workflows-iga",
+  "version": "0.1.0",
+  "name": "Workflows (IGA)",
+  "publisher": "iam-platform",
+  "kinds": ["workflow", "ui"],
+  "description": "Visual IGA workflow scenarios: build a graph of steps, run it, follow every step. Simulated steps (wait, notification, deliberate failure) never have an external effect; real data steps write on the run's own Dolt branch; publishing to main always stays a human merge. While disabled, the Workflows menu is hidden and every /workflows* endpoint answers 403.",
+  "hooks": [],
+  "settings": [],
+  "screens": [{ "id": "workflows", "title": "Workflows", "area": "admin", "render": "schema" }],
+  "menu": [{ "id": "workflows", "title": "Workflows", "area": "admin", "group": "Automation (IGA)", "icon": "⟳", "order": 10, "path": "/workflows" }],
+  "security": { "signed": true }
+}

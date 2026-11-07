@@ -83,8 +83,29 @@ export interface SubscribeDecl {
   group?: string;
 }
 
+export interface HttpRouteDecl {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  /** Route path under `/plugins/:id/`, for example `/apps` or `/apps/:appId`. */
+  path: string;
+  /** Key of the handler in the plugin's handlers module; defaults to `http:<METHOD> <path>`. */
+  handler?: string;
+  /** `user` (signed-in, default), `admin` (admin capability) or `public` (sign-in pages and protocol endpoints). */
+  auth?: 'user' | 'admin' | 'public';
+}
+export interface MenuEntry {
+  id: string;
+  title: string;
+  /** Console area: the administration menu or the self-service space. */
+  area: 'admin' | 'self-service';
+  /** Sidebar group the entry joins (created on demand). */
+  group: string;
+  icon?: string;
+  order?: number;
+  /** Console route the entry opens, for example `/applications`. */
+  path: string;
+}
 export interface PluginManifest {
-  apiVersion: 'plugin/v1';
+  apiVersion: 'plugin/v1' | 'plugin/v3';
   id: string; // lowercase-kebab
   version: string; // semver
   name: string;
@@ -110,6 +131,14 @@ export interface PluginManifest {
   subscribes?: SubscribeDecl[];
   /** v2: custom event kinds (namespace `plg.<id>.*`) this plugin may emit on the bus. The core checks this grant before accepting an emission. */
   emits?: string[];
+  /** v3 (folder plugins): where the plugin's code lives inside its folder. */
+  entrypoints?: { handlers?: string };
+  /** v3: HTTP routes mounted under `/plugins/:id/`. Each needs a handler; public routes are for sign-in and protocol endpoints only. */
+  httpRoutes?: HttpRouteDecl[];
+  /** v3: console menu entries. An entry disappears with its plugin (disabled = out of the menu, routes refuse). */
+  menu?: MenuEntry[];
+  /** v3: package security. `signed` requires a valid signature.json verified at load against the trust store. */
+  security?: { signed?: boolean };
 }
 
 const ID = /^[a-z][a-z0-9-]{1,48}$/;
@@ -119,7 +148,7 @@ const FIELD_TYPES: FieldType[] = ['string', 'text', 'number', 'boolean', 'select
 /** Returns the list of problems; an empty list means the manifest is well formed. */
 export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<string, HookMode[]>): string[] {
   const errs: string[] = [];
-  if (m.apiVersion !== 'plugin/v1') errs.push('apiVersion must be plugin/v1');
+  if (m.apiVersion !== 'plugin/v1' && m.apiVersion !== 'plugin/v3') errs.push('apiVersion must be plugin/v1 or plugin/v3');
   if (!ID.test(m.id ?? '')) errs.push('id must be lowercase kebab-case');
   if (!SEMVER.test(m.version ?? '')) errs.push('version must be x.y.z');
   if (!m.name) errs.push('name is required');
@@ -170,6 +199,29 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
   }
   for (const e of m.emits ?? []) {
     if (!e?.startsWith(ns)) errs.push(`emits: ${e} must be in the plugin's own namespace ${ns}*`);
+  }
+  if (m.entrypoints?.handlers !== undefined) {
+    const h = m.entrypoints.handlers;
+    if (typeof h !== 'string' || h.includes('..') || h.startsWith('/') || !h.endsWith('.mjs')) errs.push('entrypoints.handlers must be a relative .mjs path inside the plugin folder');
+  }
+  const seenRoutes = new Set<string>();
+  for (const r of m.httpRoutes ?? []) {
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method)) errs.push(`httpRoutes: unknown method ${r.method}`);
+    if (typeof r.path !== 'string' || !r.path.startsWith('/')) errs.push(`httpRoutes: path must start with /`);
+    if (r.handler !== undefined && !/^[a-zA-Z][a-zA-Z0-9:_/ -]*$/.test(r.handler)) errs.push(`httpRoutes: invalid handler name ${r.handler}`);
+    if (r.auth !== undefined && !['user', 'admin', 'public'].includes(r.auth)) errs.push(`httpRoutes: unknown auth ${r.auth}`);
+    const k = `${r.method} ${r.path}`;
+    if (seenRoutes.has(k)) errs.push(`httpRoutes: ${k} declared twice`);
+    seenRoutes.add(k);
+  }
+  const seenMenu = new Set<string>();
+  for (const e of m.menu ?? []) {
+    if (!e.id || !e.title) errs.push('menu: id and title are required');
+    if (e.area !== undefined && !['admin', 'self-service'].includes(e.area)) errs.push(`menu ${e.id}: unknown area ${e.area}`);
+    if (!e.group) errs.push(`menu ${e.id}: group is required`);
+    if (typeof e.path !== 'string' || !e.path.startsWith('/')) errs.push(`menu ${e.id}: path must start with /`);
+    if (seenMenu.has(e.id)) errs.push(`menu ${e.id} declared twice`);
+    seenMenu.add(e.id);
   }
   errs.push(...validateFieldDecls(m.id, m.profileFields));
   if (m.base && m.extends) errs.push('a base plugin cannot extend another plugin');

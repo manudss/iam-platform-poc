@@ -1,0 +1,14 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "app-connector",
+  "version": "0.1.0",
+  "name": "Application connectors (SSO)",
+  "publisher": "iam-platform",
+  "kinds": ["connector", "ui"],
+  "description": "Register the applications that sign in through this platform (OIDC or SAML): redirect URIs, attribute mapping, allowed roles. While disabled, the Applications menu is hidden and every /app-connectors endpoint answers 404.",
+  "hooks": [],
+  "settings": [],
+  "screens": [{ "id": "applications", "title": "Applications", "area": "admin", "render": "schema" }],
+  "menu": [{ "id": "applications", "title": "Applications", "area": "admin", "group": "Access (IAM)", "icon": "⇲", "order": 40, "path": "/applications" }],
+  "security": { "signed": true }
+}

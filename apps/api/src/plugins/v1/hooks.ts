@@ -36,4 +36,7 @@ export interface PluginContext {
   tenant: string;
   /** The plugin's validated settings, with secrets resolved by reference. */
   settings: Record<string, unknown>;
+  /** For a replacement (manifest `extends`): the base plugin's handlers, so it can reuse the base behaviour
+   * (for example the lockout replacement asking the base password check). Set by the loader/registry, never by the plugin. */
+  base?: Record<string, HookHandler>;
 }

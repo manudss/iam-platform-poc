@@ -1,0 +1,13 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "risk-geo",
+  "version": "0.1.0",
+  "name": "Geo-velocity risk signal",
+  "publisher": "example",
+  "kinds": ["risk-signal", "ui"],
+  "hooks": [{ "name": "risk.score", "mode": "blocking" }],
+  "settings": [{ "key": "maxKmPerHour", "type": "number", "label": "Impossible travel speed (km/h)", "default": 900, "min": 100, "max": 3000 }],
+  "screens": [{ "id": "map", "title": "Sign-in map", "area": "admin", "render": "component", "component": "risk-geo-map" }],
+  "entrypoints": { "handlers": "handlers.mjs" },
+  "security": { "signed": true }
+}
