@@ -207,6 +207,20 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
       try { new RegExp(f.pattern); } catch { errs.push(`setting ${f.key}: invalid pattern`); }
     }
   }
+  const screenIds = new Set<string>();
+  for (const sc of m.screens ?? []) {
+    if (!ID.test(sc.id ?? '')) errs.push(`screen ${sc.id ?? '?'}: id must be lowercase kebab-case`);
+    if (screenIds.has(sc.id)) errs.push(`screen ${sc.id} declared twice`);
+    screenIds.add(sc.id);
+    if (!sc.title) errs.push(`screen ${sc.id}: title is required`);
+    if (!['admin', 'self-service'].includes(sc.area)) errs.push(`screen ${sc.id}: unknown area ${sc.area}`);
+    // schema without schemaRef still means a console-native page while the generic schema renderer lands.
+    if (sc.render === 'component') {
+      if (!sc.component) errs.push(`screen ${sc.id}: render 'component' needs component (a packaged .mjs asset served by the assets route)`);
+      else if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*\.mjs$/.test(sc.component) || sc.component.split('/').some((seg) => !seg || seg === '.' || seg === '..')) errs.push(`screen ${sc.id}: component must be a relative .mjs path inside the plugin folder`);
+    }
+    if (!['schema', 'component'].includes(sc.render)) errs.push(`screen ${sc.id}: unknown render ${sc.render}`);
+  }
   const prefix = `plg_${(m.id ?? '').replace(/-/g, '_')}_`;
   const ids = new Set<string>();
   for (const mig of m.install?.migrations ?? []) {

@@ -171,3 +171,30 @@ test('P0-1: no core file imports a plugin path directly (everything goes through
   walk(src);
   assert.deepEqual(offenders, []);
 });
+
+test('1b: a component screen declares a relative .mjs asset inside the package', () => {
+  const { dir, plug, trust, priv } = fixture();
+  mkdirSync(join(plug, 'screens'));
+  writeFileSync(join(plug, 'screens', 'demo.mjs'), 'customElements.define("demo-screen", class extends HTMLElement {});\n');
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify({ ...BASE, hooks: [], entrypoints: undefined, screens: [{ id: 'demo', title: 'Demo', area: 'admin', render: 'component', component: 'screens/demo.mjs' }] }));
+  signPlugin(plug, priv);
+  const [impl] = loadPlugins(dir, { trust });
+  assert.equal(impl.manifest.screens?.[0].component, 'screens/demo.mjs');
+});
+
+test('1b: a component screen pointing outside the folder or at a missing file is refused', () => {
+  for (const [component, pattern] of [['../handlers.mjs', /relative .mjs path/], ['/abs/x.mjs', /relative .mjs path/], ['screens/missing.mjs', /missing from the signed package/], ['screens/noext.js', /relative .mjs path/]] as const) {
+    const { dir, plug, trust, priv } = fixture();
+    mkdirSync(join(plug, 'screens'));
+    writeFileSync(join(plug, 'manifest.json'), JSON.stringify({ ...BASE, hooks: [], entrypoints: undefined, screens: [{ id: 'demo', title: 'Demo', area: 'admin', render: 'component', component }] }));
+    signPlugin(plug, priv);
+    assert.throws(() => loadPlugins(dir, { trust }), pattern, component);
+  }
+});
+
+test('1b: a duplicate screen id or an unknown render mode is refused', () => {
+  const { dir, plug, trust, priv } = fixture();
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify({ ...BASE, hooks: [], entrypoints: undefined, screens: [{ id: 'a', title: 'A', area: 'admin', render: 'schema' }, { id: 'a', title: 'A2', area: 'admin', render: 'schema', schemaRef: 'x' }, { id: 'b', title: 'B', area: 'admin', render: 'widget' }] }));
+  signPlugin(plug, priv);
+  assert.throws(() => loadPlugins(dir, { trust }), /declared twice.*unknown render widget|unknown render widget.*declared twice/);
+});

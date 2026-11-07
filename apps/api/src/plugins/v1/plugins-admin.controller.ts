@@ -1,7 +1,9 @@
 import { Optional } from '@nestjs/common';
 import { BranchRegistries } from './branch-registries.js';
 import { currentBranch, workspaceMode } from '../../workspace/context.js';
-import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, NotFoundException, Param, Post, Put, Res, UseGuards } from '@nestjs/common';
+import { readFileSync, statSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { AuthGuard } from '../../auth/auth.guard.js';
 import { AdminGuard } from '../../auth/admin.guard.js';
 import { Grants, PluginError, PluginRegistry } from './registry.js';
@@ -36,6 +38,25 @@ export class PluginsAdminController {
   @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
   @Get('menu') async menu(@Param('tenant') t: string) { return { tenant: t, entries: (await this.registry()).menu(t) }; }
   @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
+
+  /** Packaged component screens (constat 4): the console import()s a screen's .mjs straight from the plugin's
+   * signed folder, so a screen's code ships with the plugin and disappears with it. Sign-in only (like the
+   * screens inventory); the plugin must be active for the tenant and the file must be a screen component the
+   * manifest declares, never an arbitrary package file (the server-side handlers stay private). */
+  @Get(':id/assets/{*path}')
+  async screenAsset(@Param('tenant') t: string, @Param('id') id: string, @Param('path') path: string[] | string, @Res() res: { type: (c: string) => { send: (b: unknown) => void } }) {
+    const tail = (Array.isArray(path) ? path.join('/') : (path ?? '')).replace(/^\/+/, '');
+    const reg = await this.registry();
+    const impl = reg.impl(id);
+    if (!impl) throw new NotFoundException(`unknown plugin ${id}`);
+    if (!reg.isActive(t, id)) throw new ForbiddenException(`plugin ${id} is not enabled on this branch`);
+    if (!impl.manifest.screens?.some((sc) => sc.render === 'component' && sc.component === tail)) throw new NotFoundException(`${tail} is not a screen component of plugin ${id}`);
+    const base = resolve(defaultPluginsDir(), id);
+    const file = resolve(base, tail);
+    if (!file.startsWith(base + sep)) throw new BadRequestException('assets stay inside the plugin folder');
+    try { if (!statSync(file).isFile()) throw 0; } catch { throw new NotFoundException(`no asset ${tail}`); }
+    res.type('text/javascript; charset=utf-8').send(readFileSync(file));
+  }
 
   @UseGuards(AdminGuard) @Post(':id/install')
   install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).install(t, id, grants(b)); return { installed: id }; }); }

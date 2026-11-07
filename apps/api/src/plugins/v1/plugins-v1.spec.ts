@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginRegistry, PluginError } from './registry.js';
 import { MemoryMigrationStore, MemorySettingsStore } from './memory-stores.js';
+import type { PluginImpl } from './registry.js';
 import { authPassword, authPasswordLockout, directory, notifyLog, orgManager, riskGeo } from './builtin/index.js';
 import { validateManifest } from './manifest.js';
 import { HOOKS } from './hooks.js';
@@ -157,7 +158,10 @@ describe('plugin registry v1', () => {
   });
 
   it('declared schemas grant nothing: sensitive hooks and component screens need explicit grants', async () => {
-    reg.register(riskGeo);
+    // risk-geo ships no screen today (its placeholder was dropped in 1b); clone its manifest with a real
+    // component screen declaration to exercise the uiComponents grant gate.
+    const geoScreen: PluginImpl = { manifest: { ...structuredClone(riskGeo.manifest), screens: [{ id: 'map', title: 'Sign-in map', area: 'admin', render: 'component', component: 'screens/map.mjs' }] }, handlers: riskGeo.handlers };
+    reg.register(geoScreen);
     await reg.install(T, 'risk-geo', {});
     await assert.rejects(reg.enable(T, 'risk-geo', {}), /sensitive/);
     await assert.rejects(reg.enable(T, 'risk-geo', { hooks: ['risk.score'] }), /component screens/);

@@ -164,6 +164,7 @@ function scanPlugins(dir: string, opts: LoadOptions): ScannedPlugin[] {
     const errs = validateManifest(manifest, HOOKS);
     if (errs.length) throw new PluginError('invalid-manifest', `${entry.name}: ${errs.join('; ')}`);
     verifyPluginPackage(pdir, manifest, trust, allowUnsigned);
+    for (const sc of manifest.screens ?? []) if (sc.render === 'component' && !existsSync(join(pdir, sc.component!))) throw new PluginError('invalid-manifest', `${entry.name}: screen ${sc.id} component ${sc.component} is missing from the signed package`);
     let scanned: ScannedPlugin = { manifest, handlers: {} };
     if (manifest.entrypoints?.handlers) {
       const mod = req(resolve(pdir, manifest.entrypoints.handlers));
