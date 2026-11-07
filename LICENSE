@@ -1,0 +1,89 @@
+LICENCE PROPRIÉTAIRE — TOUS DROITS RÉSERVÉS
+PROPRIETARY LICENSE — ALL RIGHTS RESERVED
+
+Copyright (c) 2026 Projet lyam. Tous droits réservés.
+Copyright (c) 2026 Projet lyam. All rights reserved.
+
+────────────────────────────────────────────────────────────────────────
+FRANÇAIS
+────────────────────────────────────────────────────────────────────────
+
+1. Propriété
+
+Ce dépôt et l'ensemble de son contenu (code source, documentation, données de
+démonstration, éléments graphiques) sont la propriété exclusive du projet
+lyam et sont protégés par le droit d'auteur (code de la propriété intellectuelle,
+notamment ses articles L.111-1 et L.122-6).
+
+2. Absence de licence
+
+AUCUNE licence open source ou autre n'est accordée. Sauf autorisation écrite
+préalable de l'auteur, toute utilisation, exécution, copie, reproduction,
+modification, adaptation, fusion, publication, distribution, sous-licence, location,
+vente ou réutilisation de tout ou partie de ce contenu, quel qu'en soit le support ou
+la finalité, est INTERDITE.
+
+La mise en ligne publique de ce dépôt a pour seul objet la démonstration et la
+transparence sur une architecture. Conformément aux conditions d'utilisation de
+GitHub, les autres utilisateurs peuvent consulter ce dépôt et le fork sur GitHub ;
+cela ne confère aucun droit d'utilisation, de modification ou de redistribution
+au-delà de ce cadre.
+
+3. Nature du projet : preuve de concept de démonstration
+
+Ce projet est un prototype (proof of concept) destiné EXCLUSIVEMENT à la
+démonstration et à l'évaluation. Il n'est pas conçu, testé ni durci pour un usage
+réel : il ne doit en aucun cas être utilisé en production, pour gérer ou protéger
+des identités ou des données réelles, ni dans quelque contexte que ce soit hors
+démonstration. Les identifiants de démonstration sont fictifs et volontairement non
+secrets.
+
+IL EST FOURNI « EN L'ÉTAT », SANS AUCUNE GARANTIE D'AUCUNE SORTE, EXPRESSE OU
+IMPLICITE, ET SANS AUCUN SUPPORT NI MAINTENANCE. L'auteur décline toute
+responsabilité quant aux dommages directs ou indirects résultant de sa consultation
+ou de son utilisation.
+
+4. Composants tiers
+
+Ce projet utilise des composants open source tiers, qui restent soumis à leurs
+licences respectives. Leurs attributions figurent dans le fichier NOTICE.
+
+────────────────────────────────────────────────────────────────────────
+ENGLISH
+────────────────────────────────────────────────────────────────────────
+
+1. Ownership
+
+This repository and all of its content (source code, documentation, demo data,
+artwork) are the exclusive property of the lyam project and are
+protected
+by copyright (French intellectual property code, including articles L.111-1 and
+L.122-6).
+
+2. No license granted
+
+NO open source or other license is granted. Without the author's prior written
+permission, any use, execution, copying, reproduction, modification, adaptation,
+merging, publication, distribution, sublicensing, rental, sale or reuse of all or
+part of this content, on any medium and for any purpose, is PROHIBITED.
+
+This repository is public for demonstration and architectural transparency only.
+Under GitHub's Terms of Service, other users may view this repository and fork it
+on GitHub; this grants no right to use, modify or redistribute beyond that scope.
+
+3. Nature of the project: demonstration proof of concept
+
+This project is a prototype (proof of concept) intended EXCLUSIVELY for
+demonstration and evaluation. It is not designed, tested or hardened for real-world
+use: it must never be used in production, to manage or protect real identities or
+data, or in any context other than demonstration. Demo credentials are fictional and
+intentionally non-secret.
+
+IT IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, AND
+WITHOUT ANY SUPPORT OR MAINTENANCE. The author disclaims all liability for any
+direct or indirect damage arising from viewing or using it.
+
+4. Third-party components
+
+This project uses third-party open source components, which remain governed by
+their respective licenses. Their attributions are listed in the NOTICE file.
