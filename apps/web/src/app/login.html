@@ -3,7 +3,7 @@
 <app-theme-switch class="auth-theme" />
 <main class="login">
   <section class="card hero">
-    <div class="brand"><h1 class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>Administration console</span></h1></div>
+    <div class="brand"><h1 class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>IAM next generation</span></h1></div>
     @if (test(); as t) { <p class="msg test" id="branch-test-banner" role="status">Branch test: you are trying the sign-in of data branch <b>{{ t.branch }}</b>. Its unpublished configuration applies here; main is unchanged. <a href="/login">Back to the normal sign-in</a></p> }
     @if (s.expired()) { <p class="msg error" role="status">Session expired or invalid. Sign in again to continue. Your action was not retried; check its current state before trying again.</p> }
     @if (s.message()) { <p class="msg" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }

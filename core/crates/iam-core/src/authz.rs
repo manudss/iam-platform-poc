@@ -5,7 +5,7 @@
 //! only S256; `state` is required and echoed; a wrong password re-renders the form (401) and never redirects; passwords never appear in URLs.
 //! The code is single use and bound to the challenge, redirect_uri and client (see iam-idp). Not a standard OIDC implementation.
 use crate::Core;
-use axum::{Form, extract::{Query, State}, http::{HeaderValue, StatusCode, header}, response::{IntoResponse, Response}};
+use axum::{Form, extract::{Query, State}, http::{HeaderMap, HeaderValue, StatusCode, header}, response::{IntoResponse, Response}};
 use iam_idp::IdpError;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
@@ -13,18 +13,126 @@ use std::{collections::HashMap, sync::Arc};
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;") }
 fn pct(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect() }
 
-const STYLE: &str = "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f1f5f9;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#0f172a}main{width:min(26rem,calc(100vw - 2rem));background:#fff;border:1px solid #e2e8f0;border-radius:.9rem;padding:1.4rem 1.5rem;box-shadow:0 8px 28px #4f46e51f}h1{font-size:1.35rem;margin:0 0 .4rem}p{margin:.4rem 0;color:#475569}label{display:block;margin:.8rem 0 0;font-weight:600}input{display:block;width:100%;margin-top:.25rem;padding:.65rem .75rem;font:inherit;border:1px solid #cbd5e1;border-radius:.55rem}input:focus{outline:2px solid #6366f1;border-color:#6366f1}button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:#fff;background:#4f46e5;border:0;border-radius:.55rem;cursor:pointer}.dots{display:flex;gap:.5rem;justify-content:center;margin:1rem 0}.dots i{width:.85rem;height:.85rem;border-radius:50%;border:2px solid #6366f1}.dots i.on{background:#4f46e5}.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}.pad .k{margin:0;padding:.7rem 0;background:#eef2ff;color:#1e1b4b;display:flex;flex-direction:column;align-items:center;line-height:1.1;min-height:3.4rem}.pad .k b{font-size:1.4rem}.pad .k small{font-size:.65rem;letter-spacing:.18em;color:#64748b;min-height:.8rem}.pad .del{justify-content:center;font-size:1.3rem}.pad .go{grid-column:1/-1;background:#4f46e5;color:#fff;min-height:0;padding:.75rem}.pad .go:disabled{background:#cbd5e1;color:#64748b;cursor:default}.demo{background:#fffbeb;border:1px solid #fcd34d;border-radius:.55rem;padding:.5rem .7rem;color:#92400e}</style>";
+/// Shared frame of every browser sign-in page: the random photo background, the lyam brand, the theme
+/// selector and the footer are identical to the console's auth pages (apps/web login.css / styles.css).
+/// A method (password, code, keypad, ...) only contributes the inner HTML of the central card.
+/// No JavaScript by design (the CSP below forbids scripts): the theme selector is three plain links to
+/// /authorize/theme, which remembers the choice in the `iam_theme` cookie shared with the console.
+const CSS: &str = r#"*{box-sizing:border-box}
+:root{color-scheme:light;--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--accent:#4f46e5;--accent-soft:#eef2ff;--link:#4f46e5;--warn-soft:#fef3c7;--warn-line:#fcd34d;--warn-ink:#92400e;--bad:#b91c1c;--veil:rgba(246,248,252,.45);--card-auth:rgba(255,255,255,.78);--auth-field:rgba(255,255,255,.88);--chip-bg:#eef2ff;--chip-ink:#4f46e5;--brand-sub:#64748b}
+:root[data-theme='dark']{color-scheme:dark;--bg:#0b1220;--card:#101a2e;--ink:#e6ecf7;--muted:#94a3b8;--line:#27334e;--accent-soft:rgba(129,140,248,.16);--link:#a5b4fc;--warn-soft:rgba(251,191,36,.12);--warn-line:#92600e;--warn-ink:#fbbf24;--bad:#f87171;--veil:rgba(2,6,23,.60);--card-auth:rgba(13,20,38,.70);--auth-field:rgba(2,6,23,.45);--chip-bg:rgba(129,140,248,.18);--chip-ink:#a5b4fc;--brand-sub:#94a3b8}
+@media (prefers-color-scheme:dark){:root:not([data-theme='light']){color-scheme:dark;--bg:#0b1220;--card:#101a2e;--ink:#e6ecf7;--muted:#94a3b8;--line:#27334e;--accent-soft:rgba(129,140,248,.16);--link:#a5b4fc;--warn-soft:rgba(251,191,36,.12);--warn-line:#92600e;--warn-ink:#fbbf24;--bad:#f87171;--veil:rgba(2,6,23,.60);--card-auth:rgba(13,20,38,.70);--auth-field:rgba(2,6,23,.45);--chip-bg:rgba(129,140,248,.18);--chip-ink:#a5b4fc;--brand-sub:#94a3b8}}
+body{margin:0;min-height:100vh;font:16px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--ink);background:var(--bg)}
+a{color:var(--link)}
+.auth-bg{position:fixed;inset:0;z-index:-2;background:radial-gradient(1200px 600px at 10% -10%,var(--accent) 0,transparent 60%),linear-gradient(160deg,var(--bg),var(--card))}
+.auth-bg img{width:100%;height:100%;object-fit:cover;display:block}
+.auth-veil{position:fixed;inset:0;z-index:-1;background:var(--veil)}
+.seg{position:fixed;top:1rem;right:1rem;z-index:10;display:inline-flex;gap:.25rem;padding:.28rem;border-radius:999px;background:var(--card-auth);border:1px solid var(--line);box-shadow:0 1px 2px #0f172a0d,0 4px 14px #0f172a0a;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.seg a{display:inline-flex;align-items:center;gap:.35rem;padding:.32rem .7rem;border-radius:999px;color:var(--muted);font-size:.8rem;font-weight:600;text-decoration:none}
+.seg a.on{background:var(--accent);color:#fff}
+.seg a svg{width:.85rem;height:.85rem}
+@media (max-width:480px){.seg a span{display:none}.seg a{padding:.32rem .55rem}}
+.login{min-height:100vh;display:grid;place-items:center;padding:1.5rem}
+.card{width:min(30rem,100%);background:var(--card-auth);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);border-radius:.9rem;box-shadow:0 24px 60px rgba(2,6,23,.30);padding:2rem}
+.brand{margin-bottom:1rem}
+.brand-title{display:grid;gap:.2rem;justify-items:start}
+.brandlogo{display:grid}
+.brandlogo img{height:2.6rem;width:auto}
+.brandlogo .for-dark{display:none}
+:root[data-theme='dark'] .brandlogo .for-light{display:none}
+:root[data-theme='dark'] .brandlogo .for-dark{display:block}
+@media (prefers-color-scheme:dark){:root:not([data-theme='light']) .brandlogo .for-light{display:none}:root:not([data-theme='light']) .brandlogo .for-dark{display:block}}
+.brand-title span{color:var(--brand-sub);font-size:.9rem}
+.page-title{font-size:1.35rem;margin:0 0 .4rem;line-height:1.25}
+p{margin:.4rem 0;color:var(--muted)}
+.lead{color:var(--muted);line-height:1.5}
+label{display:block;margin:.8rem 0 0;font-weight:600;color:var(--ink)}
+input{display:block;width:100%;margin-top:.25rem;padding:.65rem .75rem;font:inherit;border:1px solid var(--line);border-radius:.55rem;background:var(--auth-field);color:var(--ink)}
+input:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:.55rem;cursor:pointer}
+.err{color:var(--bad)}
+.back{display:inline-block;margin-top:1rem}
+.dots{display:flex;gap:.5rem;justify-content:center;margin:1rem 0}
+.dots i{width:.85rem;height:.85rem;border-radius:50%;border:2px solid var(--accent)}
+.dots i.on{background:var(--accent)}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}
+.pad .k{margin:0;padding:.7rem 0;background:var(--chip-bg);color:var(--chip-ink);display:flex;flex-direction:column;align-items:center;line-height:1.1;min-height:3.4rem}
+.pad .k b{font-size:1.4rem}
+.pad .k small{font-size:.65rem;letter-spacing:.18em;color:var(--muted);min-height:.8rem}
+.pad .del{justify-content:center;font-size:1.3rem}
+.pad .go{grid-column:1/-1;background:var(--accent);color:#fff;min-height:0;padding:.75rem}
+.pad .go:disabled{background:var(--line);color:var(--muted);cursor:default}
+.demo{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:.55rem;padding:.5rem .7rem;color:var(--warn-ink)}
+.foot{margin:1.2rem 0 0;font-size:.78rem;color:var(--muted)}
+@media (max-width:480px){.login{padding:1rem}.card{padding:1.4rem}}"#;
+
+const ICON_AUTO: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>"#;
+const ICON_LIGHT: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>"#;
+const ICON_DARK: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>"#;
+
+/// The auto/light/dark selector: three links (no script). `back` is the page to return to.
+fn theme_nav(theme: &str, back: &str) -> String {
+    let b = pct(back);
+    let link = |mode: &str, label: &str, icon: &str| format!("<a class=\"{}\" href=\"/authorize/theme?mode={mode}&amp;back={b}\"{}>{icon}<span>{label}</span></a>",
+        if theme == mode { "on" } else { "" }, if theme == mode { " aria-current=\"true\"" } else { "" });
+    format!("<nav class=\"seg\" aria-label=\"Color theme\">{}</nav>", [link("auto", "Auto", ICON_AUTO), link("light", "Light", ICON_LIGHT), link("dark", "Dark", ICON_DARK)].concat())
+}
+
+/// The GET-able authorize URL of a page, so the theme links can come back to it. On a step page the
+/// running attempt is abandoned (like "Choose another sign-in method"): the chain restarts at step 1.
+fn authorize_back(p: &HashMap<String, String>) -> String {
+    let mut q: Vec<String> = if p.contains_key("response_type") { vec![] } else { vec!["response_type=code".to_string()] };
+    for k in ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain", "branch", "ticket"] {
+        if let Some(v) = p.get(k) { q.push(format!("{k}={}", pct(v))); }
+    }
+    format!("/authorize?{}", q.join("&"))
+}
+
+/// The remembered theme choice (`iam_theme` cookie, written here or mirrored by the console). Default: auto.
+fn theme_of(h: &HeaderMap) -> String {
+    h.get(header::COOKIE).and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(';').filter_map(|c| c.trim().split_once('=')).find(|(k, _)| k.trim() == "iam_theme").map(|(_, v)| v.trim().to_string()))
+        .filter(|v| ["auto", "light", "dark"].contains(&v.as_str()))
+        .unwrap_or_else(|| "auto".to_string())
+}
+
+/// Remembers the theme choice and returns to the page the user was on. `back` must stay a local
+/// /authorize URL: anything else (external or protocol-relative) falls back to a bare /authorize.
+pub async fn set_theme(Query(q): Query<HashMap<String, String>>) -> Response {
+    let mode = q.get("mode").map(String::as_str).filter(|m| ["auto", "light", "dark"].contains(m)).unwrap_or("auto");
+    let back = q.get("back").map(String::as_str).filter(|b| b.starts_with("/authorize") && !b.starts_with("//")).unwrap_or("/authorize");
+    let mut r = (StatusCode::SEE_OTHER, [(header::LOCATION, back.to_string())]).into_response();
+    if let Ok(v) = HeaderValue::from_str(&format!("iam_theme={mode}; Path=/; Max-Age=31536000; SameSite=Lax")) { r.headers_mut().insert(header::SET_COOKIE, v); }
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    r
+}
+
+/// The whole page: common frame + the card inner HTML supplied by the sign-in step being rendered.
+fn frame(title: &str, card: &str, theme: &str, back: &str) -> String {
+    let attr = if theme == "light" || theme == "dark" { format!(" data-theme=\"{theme}\"") } else { String::new() };
+    format!("<!doctype html><html lang=\"en\"{attr}><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+<title>{}</title><link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{CSS}</style></head>\
+<body><div class=\"auth-bg\" aria-hidden=\"true\"><img src=\"https://picsum.photos/1920/1080\" alt=\"\"></div><div class=\"auth-veil\" aria-hidden=\"true\"></div>{}\
+<main class=\"login\"><section class=\"card\"><div class=\"brand\"><div class=\"brand-title\"><picture class=\"brandlogo\">\
+<img class=\"for-light\" src=\"/lyam-logo-horizontal-light.svg\" alt=\"lyam\"><img class=\"for-dark\" src=\"/lyam-logo-horizontal-dark.svg\" alt=\"\" aria-hidden=\"true\"></picture><span>IAM next generation</span></div></div>\
+{}<p class=\"foot\">Fictional demo data only. Do not enter real data. <a href=\"/privacy\">Politique de confidentialité / Privacy</a> &middot; <a href=\"/about\">About this demo</a></p></section></main></body></html>",
+        esc(title), theme_nav(theme, back), card)
+}
+
 fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response {
     let mut r = (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     let h = r.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    // No scripts (keypad flows stay scriptless on purpose). Images: the same-origin brand assets and the
+    // picsum background (it redirects to fastly.picsum.photos, so both hosts are allowed).
     // Browsers also apply form-action to the redirect that follows the POST: the (already validated, registered) redirect origin must be allowed.
-    let csp = format!("default-src 'none'; style-src 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
+    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
     if let Ok(v) = HeaderValue::from_str(&csp) { h.insert(header::CONTENT_SECURITY_POLICY, v); }
     r
 }
-fn error_page(status: StatusCode, msg: &str) -> Response { page(status, format!("<!doctype html><title>Sign-in error</title><p>{}</p>", esc(msg)), None) }
+fn error_page(status: StatusCode, msg: &str, theme: &str) -> Response { page(status, frame("Sign-in error", &format!("<h1 class=\"page-title\">Sign-in error</h1><p class=\"err\">{}</p>", esc(msg)), theme, "/authorize"), None) }
+
 
 fn hidden(p: &HashMap<String, String>) -> String {
     ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain", "branch", "ticket"].iter()
@@ -79,21 +187,21 @@ fn keypad_html(f: &Value, label: &str) -> Option<String> {
 }
 
 /// First page. `fields` None = the classic user + password form (no chain is live). Some(fields) = user name plus the first step's inputs (possibly none).
-fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value]>) -> Response {
+fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value]>, theme: &str) -> Response {
     let hid = hidden(p);
-    let err = error.map(|e| format!("<p style=\"color:#b91c1c\">{}</p>", esc(e))).unwrap_or_default();
+    let err = error.map(|e| format!("<p class=\"err\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
     let inputs = match fields {
         None => "<label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\"></label> ".to_string(),
         Some(f) => f.iter().filter_map(input_html).collect::<String>(),
     };
     let button = if fields.is_some_and(|f| f.is_empty()) { "Continue" } else { "Sign in" };
-    page(if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
-        "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Sign in (local prototype)</title><main><h1>Sign in</h1><p>OAuth/OIDC-inspired authentication prototype, local demo accounts only.</p>{err}\
-         <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form>{}</main>", back_link(p)), Some(&origin_of(p)))
+    let card = format!("<h1 class=\"page-title\">Sign in</h1><p class=\"lead\">OAuth/OIDC-inspired authentication prototype, local demo accounts only.</p>{err}\
+         <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form>{}", back_link(p));
+    page(if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, frame("Sign in (local prototype)", &card, theme, &authorize_back(p)), Some(&origin_of(p)))
 }
 
 /// The chains the live configuration offers: one link each (plain HTML, no script). The link only adds `chain=<id>`; the control plane re-checks the id at every step.
-fn choice_page(p: &HashMap<String, String>, chains: &[Value]) -> Response {
+fn choice_page(p: &HashMap<String, String>, chains: &[Value], theme: &str) -> Response {
     let base = ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "branch", "ticket"].iter()
         .filter_map(|k| p.get(*k).map(|v| format!("{k}={}", pct(v)))).collect::<Vec<_>>().join("&");
     let items = chains.iter().filter_map(|c| {
@@ -104,60 +212,62 @@ fn choice_page(p: &HashMap<String, String>, chains: &[Value]) -> Response {
         let rec = if c["recommended"].as_bool().unwrap_or(false) { " <b>(recommended)</b>" } else { "" };
         Some(format!("<li><a class=\"chain\" href=\"/authorize?{base}&amp;chain={}\"><b>{}</b>{rec}</a><br><small>{steps} &middot; declared level {lvl} of 10{sim}</small></li>", pct(id), esc(c["name"].as_str().unwrap_or(id))))
     }).collect::<String>();
-    page(StatusCode::OK, format!(
-        "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Choose how to sign in</title><main><h1>Choose how to sign in</h1><p>Pick one of the methods configured and enabled for this demo. Levels are declared by an administrator (10 = strongest), not measured. Fictional accounts only.</p><ul style=\"padding-left:1.1rem;line-height:1.7\">{items}</ul></main>"), Some(&origin_of(p)))
+    let card = format!("<h1 class=\"page-title\">Choose how to sign in</h1><p class=\"lead\">Pick one of the methods configured and enabled for this demo. Levels are declared by an administrator (10 = strongest), not measured. Fictional accounts only.</p><ul style=\"padding-left:1.1rem;line-height:1.7\">{items}</ul>");
+    page(StatusCode::OK, frame("Choose how to sign in", &card, theme, &authorize_back(p)), Some(&origin_of(p)))
 }
 
 /// A later step of a chain: the opaque session id is the only link to the first page (the user name is not sent again).
-fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>) -> Response {
+fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>, theme: &str) -> Response {
     let st = &v["step"];
     let title = st["title"].as_str().unwrap_or("Verification");
     let (i, n) = (st["index"].as_u64().unwrap_or(0) + 1, st["total"].as_u64().unwrap_or(1));
     let msg = st["message"].as_str().map(|m| format!("<p{}>{}</p>", if m.starts_with("DEMO") { " class=\"demo\"" } else { "" }, esc(m))).unwrap_or_default();
-    let err = error.or(v["error"].as_str()).map(|e| format!("<p style=\"color:#b91c1c\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
+    let err = error.or(v["error"].as_str()).map(|e| format!("<p class=\"err\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
     let inputs = st["fields"].as_array().map(|f| f.iter().filter_map(input_html).collect::<String>()).unwrap_or_default();
     let cont = if inputs.contains("class=\"pad\"") { "" } else { "<button type=\"submit\">Continue</button>" };
-    page(if error.is_some() || v["error"].is_string() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, format!(
-        "<!doctype html><meta charset=\"utf-8\">{STYLE}<title>Sign in, step {i} of {n}</title><main><h1>{}</h1><p>Step {i} of {n}.</p>{msg}{err}\
-         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}{cont}</form>{}</main>",
-        esc(title), hidden(p), esc(v["session"].as_str().unwrap_or("")), back_link(p)), Some(&origin_of(p)))
+    let card = format!("<h1 class=\"page-title\">{}</h1><p class=\"lead\">Step {i} of {n}.</p>{msg}{err}\
+         <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}{cont}</form>{}",
+        esc(title), hidden(p), esc(v["session"].as_str().unwrap_or("")), back_link(p));
+    page(if error.is_some() || v["error"].is_string() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, frame(&format!("Sign in, step {i} of {n}"), &card, theme, &authorize_back(p)), Some(&origin_of(p)))
 }
 
 /// Validates the authorization request parameters. Err = (status, message), never a redirect.
-fn validate(c: &Core, p: &HashMap<String, String>) -> Result<(), Response> {
+fn validate(c: &Core, p: &HashMap<String, String>, theme: &str) -> Result<(), Response> {
     let g = |k: &str| p.get(k).map(String::as_str).unwrap_or("");
-    if !c.idp.check_client(g("client_id"), g("redirect_uri")) { return Err(error_page(StatusCode::BAD_REQUEST, "unknown client or redirect_uri")); }
-    if p.get("response_type").map(String::as_str).unwrap_or("code") != "code" { return Err(error_page(StatusCode::BAD_REQUEST, "only response_type=code")); }
-    if g("code_challenge_method") != "S256" { return Err(error_page(StatusCode::BAD_REQUEST, "code_challenge_method must be S256")); }
-    if g("code_challenge").len() < 43 || g("code_challenge").len() > 128 { return Err(error_page(StatusCode::BAD_REQUEST, "invalid code_challenge")); }
-    if g("state").is_empty() || g("state").len() > 256 { return Err(error_page(StatusCode::BAD_REQUEST, "state is required (max 256 chars)")); }
+    if !c.idp.check_client(g("client_id"), g("redirect_uri")) { return Err(error_page(StatusCode::BAD_REQUEST, "unknown client or redirect_uri", &theme)); }
+    if p.get("response_type").map(String::as_str).unwrap_or("code") != "code" { return Err(error_page(StatusCode::BAD_REQUEST, "only response_type=code", &theme)); }
+    if g("code_challenge_method") != "S256" { return Err(error_page(StatusCode::BAD_REQUEST, "code_challenge_method must be S256", &theme)); }
+    if g("code_challenge").len() < 43 || g("code_challenge").len() > 128 { return Err(error_page(StatusCode::BAD_REQUEST, "invalid code_challenge", &theme)); }
+    if g("state").is_empty() || g("state").len() > 256 { return Err(error_page(StatusCode::BAD_REQUEST, "state is required (max 256 chars)", &theme)); }
     // Branch test (docs/branch-test.md): a non-main Dolt data branch plus the short-lived ticket the console issued to an administrator.
     let (b, t) = (g("branch"), g("ticket"));
     if !b.is_empty() {
         let ok = b.len() <= 32 && b.bytes().all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'-');
-        if !ok || b == "main" { return Err(error_page(StatusCode::BAD_REQUEST, "invalid data branch")); }
-        if t.len() < 10 || t.len() > 64 || !t.bytes().all(|x| x.is_ascii_alphanumeric() || x == b'-' || x == b'_') { return Err(error_page(StatusCode::BAD_REQUEST, "a branch test needs the ticket of the test link")); }
+        if !ok || b == "main" { return Err(error_page(StatusCode::BAD_REQUEST, "invalid data branch", &theme)); }
+        if t.len() < 10 || t.len() > 64 || !t.bytes().all(|x| x.is_ascii_alphanumeric() || x == b'-' || x == b'_') { return Err(error_page(StatusCode::BAD_REQUEST, "a branch test needs the ticket of the test link", &theme)); }
     } else if !t.is_empty() {
-        return Err(error_page(StatusCode::BAD_REQUEST, "a branch-test ticket without a branch"));
+        return Err(error_page(StatusCode::BAD_REQUEST, "a branch-test ticket without a branch", &theme));
     }
     Ok(())
 }
 
-pub async fn authorize_form(State(c): State<Arc<Core>>, Query(p): Query<HashMap<String, String>>) -> Response {
-    if let Err(r) = validate(&c, &p) { return r; }
-    let Some((addr, tok)) = &c.gate else { return form(&p, None, None) };
+pub async fn authorize_form(State(c): State<Arc<Core>>, headers: HeaderMap, Query(p): Query<HashMap<String, String>>) -> Response {
+    let theme = theme_of(&headers);
+    if let Err(r) = validate(&c, &p, &theme) { return r; }
+    let Some((addr, tok)) = &c.gate else { return form(&p, None, None, &theme) };
     let (b, t) = (p.get("branch").map(String::as_str), p.get("ticket").map(String::as_str));
     match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str), b, t).await {
-        None => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable"),
-        Some(v) if v["mode"] == "error" => error_page(StatusCode::BAD_REQUEST, v["message"].as_str().unwrap_or("this sign-in link is not valid")),
-        Some(v) if v["mode"] == "choice" => choice_page(&p, v["chains"].as_array().map(Vec::as_slice).unwrap_or(&[])),
-        Some(v) if v["mode"] == "chain" => form(&p, None, Some(v["fields"].as_array().map(Vec::as_slice).unwrap_or(&[]))),
-        Some(_) => form(&p, None, None),
+        None => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
+        Some(v) if v["mode"] == "error" => error_page(StatusCode::BAD_REQUEST, v["message"].as_str().unwrap_or("this sign-in link is not valid"), &theme),
+        Some(v) if v["mode"] == "choice" => choice_page(&p, v["chains"].as_array().map(Vec::as_slice).unwrap_or(&[]), &theme),
+        Some(v) if v["mode"] == "chain" => form(&p, None, Some(v["fields"].as_array().map(Vec::as_slice).unwrap_or(&[])), &theme),
+        Some(_) => form(&p, None, None, &theme),
     }
 }
 
-pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, String>>) -> Response {
-    if let Err(r) = validate(&c, &p) { return r; } // hidden fields are not trusted: validated again
+pub async fn login(State(c): State<Arc<Core>>, headers: HeaderMap, Form(p): Form<HashMap<String, String>>) -> Response {
+    let theme = theme_of(&headers);
+    if let Err(r) = validate(&c, &p, &theme) { return r; } // hidden fields are not trusted: validated again
     let g = |k: &str| p.get(k).map(String::as_str).unwrap_or("");
     let mut extra = Value::Null;
     let mut who = g("username").to_string();
@@ -173,16 +283,16 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
         let first_page = || async { match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str), p.get("branch").map(String::as_str), p.get("ticket").map(String::as_str)).await { Some(v) if v["mode"] == "chain" => Some(v["fields"].as_array().cloned().unwrap_or_default()), _ => None } };
         match crate::gate::step(addr, tok, body).await {
             crate::gate::Step::Allow { subject, claims } => {
-                if !session.is_empty() { match subject { Some(s) => who = s, None => return form(&p, Some("Sign-in failed. Check your details and try again."), None) } } else if let Some(s) = subject { who = s; }
+                if !session.is_empty() { match subject { Some(s) => who = s, None => return form(&p, Some("Sign-in failed. Check your details and try again."), None, &theme) } } else if let Some(s) = subject { who = s; }
                 extra = claims;
             }
             crate::gate::Step::Deny(m) => {
                 c.bus_emit("signin.refused", serde_json::json!({"subject": g("username"), "client_id": g("client_id")}), None);
                 let msg = m.unwrap_or_else(|| "Wrong user or password.".into());
-                return match first_page().await { Some(f) => form(&p, Some(&msg), Some(&f)), None => form(&p, Some(&msg), None) };
+                return match first_page().await { Some(f) => form(&p, Some(&msg), Some(&f), &theme), None => form(&p, Some(&msg), None, &theme) };
             }
-            crate::gate::Step::Challenge(v) => return step_page(&p, &v, None),
-            crate::gate::Step::Unavailable => return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable"),
+            crate::gate::Step::Challenge(v) => return step_page(&p, &v, None, &theme),
+            crate::gate::Step::Unavailable => return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
         }
     }
     let test_branch = if g("branch").is_empty() { None } else { Some(g("branch")) };
@@ -197,9 +307,9 @@ pub async fn login(State(c): State<Arc<Core>>, Form(p): Form<HashMap<String, Str
         }
         Err(IdpError::InvalidCredentials) => {
             c.bus_emit("signin.refused", serde_json::json!({"subject": g("username"), "client_id": g("client_id")}), None);
-            form(&p, Some("Wrong user or password."), None)
+            form(&p, Some("Wrong user or password."), None, &theme)
         }
-        Err(_) => error_page(StatusCode::BAD_REQUEST, "invalid request"),
+        Err(_) => error_page(StatusCode::BAD_REQUEST, "invalid request", &theme),
     }
 }
 
@@ -398,4 +508,76 @@ mod tests {
         // no gate in this test core: without the control plane that checks the ticket, no branch is ever bound
         assert!(claims.get("branch").is_none());
     }
+
+    // ---- common frame + theme selector ----
+
+    #[tokio::test]
+    async fn theme_endpoint_remembers_the_choice_and_returns_to_the_page() {
+        let c = core();
+        let back = "/authorize?client_id=demo-web%26x%3D1";
+        let req = Request::builder().uri(format!("/authorize/theme?mode=dark&back={back}")).body(Body::empty()).unwrap();
+        let (st, h, _) = send(&c, req).await;
+        assert_eq!(st, StatusCode::SEE_OTHER);
+        assert_eq!(h[header::LOCATION], "/authorize?client_id=demo-web&x=1");
+        let cookie = h[header::SET_COOKIE].to_str().unwrap();
+        assert!(cookie.contains("iam_theme=dark") && cookie.contains("Path=/") && cookie.contains("SameSite=Lax"), "{cookie}");
+        // a remembered choice lands on the html element of every framed page
+        let req = Request::builder().uri(format!("/authorize?{}", q(""))).header(header::COOKIE, "iam_theme=light").body(Body::empty()).unwrap();
+        let (_, _, body) = send(&c, req).await;
+        assert!(body.contains("<html lang=\"en\" data-theme=\"light\">"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn theme_endpoint_never_redirects_away_and_rejects_odd_modes() {
+        let c = core();
+        for back in ["https%3A%2F%2Fevil.example%2Fx", "%2F%2Fevil.example", "javascript%3Aalert(1)"] {
+            let req = Request::builder().uri(format!("/authorize/theme?mode=dark&back={back}")).body(Body::empty()).unwrap();
+            let (st, h, _) = send(&c, req).await;
+            assert_eq!(st, StatusCode::SEE_OTHER);
+            assert_eq!(h[header::LOCATION], "/authorize", "{back}");
+        }
+        let req = Request::builder().uri("/authorize/theme?mode=blue").body(Body::empty()).unwrap();
+        let (_, h, _) = send(&c, req).await;
+        assert!(h[header::SET_COOKIE].to_str().unwrap().contains("iam_theme=auto"));
+        assert!(h.get(header::CACHE_CONTROL).is_some());
+    }
+
+    #[test]
+    fn theme_cookie_is_parsed_with_a_safe_default() {
+        let parse = |raw: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::COOKIE, HeaderValue::from_str(raw).unwrap());
+            theme_of(&h)
+        };
+        assert_eq!(parse(""), "auto");
+        assert_eq!(parse("other=x; iam_theme=dark; more=y"), "dark");
+        assert_eq!(parse("iam_theme=blue"), "auto");
+        assert_eq!(theme_of(&HeaderMap::new()), "auto");
+    }
+
+    #[tokio::test]
+    async fn framed_pages_carry_the_common_frame_and_no_script() {
+        let c = core();
+        let (_, h, body) = send(&c, get(&q(""))).await;
+        // default is auto: no data-theme attr, but the selector marks it current
+        assert!(body.contains("<html lang=\"en\">"));
+        assert!(body.contains("https://picsum.photos/1920/1080"), "background image");
+        assert!(body.contains("/authorize/theme?mode=light&amp;back=") && body.contains("/authorize/theme?mode=dark&amp;back="), "theme links");
+        assert!(body.contains("aria-current=\"true\""));
+        assert!(body.contains("IAM next generation"));
+        assert!(body.contains("lyam-logo-horizontal-light.svg") && body.contains("lyam-logo-horizontal-dark.svg"));
+        assert!(!body.contains("<script"), "framed pages stay scriptless");
+        let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(csp.contains("img-src 'self' https://picsum.photos https://fastly.picsum.photos") && !csp.contains("script-src"), "{csp}");
+        // the error page is framed too
+        let (_, _, body) = send(&c, get(&q("").replace("localhost%3A4200", "evil.example"))).await;
+        assert!(body.contains("https://picsum.photos/1920/1080") && body.contains("IAM next generation") && body.contains("Sign-in error"));
+        // the theme back link of a step page points at a GET-able authorize URL, never at the session
+        let mut p: HashMap<String, String> = HashMap::new();
+        p.insert("client_id".into(), "demo-web".into());
+        p.insert("state".into(), "s".into());
+        let back = authorize_back(&p);
+        assert!(back.starts_with("/authorize?response_type=code&") && back.contains("client_id=demo-web"));
+    }
 }
+

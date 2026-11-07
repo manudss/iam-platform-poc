@@ -79,3 +79,10 @@ With `IAM_AUTHN_DEMO_SEED=1` (set in `demo/start.sh`, never the default) the API
 - No enabled chain: classic base password, one "Sign in" button (unchanged).
 - The "legacy JSON login" was removed from the console. The JSON `POST /core/authorize` stays as a non-UI API for tests and scripts and resolves to the recommended chain, or to a single-step password chain, or is denied.
 - Offering "Password only" next to stronger chains lets a person pick the weaker one; the `auth_level` claim reflects the chain actually used. Restrict the offer by disabling that chain.
+
+## Page frame: the plugins only supply the card content
+
+Every browser sign-in page (`/core/authorize...` and the errors) is rendered inside ONE common frame owned by the core (`frame()` in `core/crates/iam-core/src/authz.rs`): full-screen random photo (picsum.photos, with the themed gradient as fallback while it loads), lyam logo and "IAM next generation" baseline, the Auto/Light/Dark selector, and the footer (privacy + about links). A plugin's HTML is only the inner content of the central card: its title, form fields and messages. Plugins must not output a full document, styles for the page chrome, or scripts (the CSP has no `script-src`; `img-src` allows the same-origin brand assets and picsum.photos).
+
+- Theme: the selector is three plain links to `GET /core/authorize/theme?mode=auto|light|dark&back=<url>` which remembers the choice in the `iam_theme` cookie (1 year, SameSite=Lax) and redirects back; the console mirrors its own choice to the same cookie. `back` must stay a local `/authorize` URL, anything else falls back to a bare `/authorize`. Auto (the default) follows `prefers-color-scheme`.
+- Changing the theme while a multi-step attempt is displayed abandons that attempt (a step page is POST-rendered, there is no GET URL to return to): the chain restarts at step 1, like "Choose another sign-in method".
