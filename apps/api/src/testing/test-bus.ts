@@ -36,11 +36,22 @@ function ports(seed: string): { nats: number; core: number } {
 
 export interface TestBus { natsPort: number; coreUrl: string; token: string; close(): Promise<void> }
 
+/** A spec process killed before close() (timeout, OOM, hard exit) orphans its nats+core: they keep the
+ * ports and serve their stale JetStream state to every later run of the same spec (mysterious red specs).
+ * The pid file lets the next run reclaim its slot. */
+function killLeftovers(dir: string) {
+  try {
+    const pids: number[] = JSON.parse(readFileSync(join(dir, 'pids.json'), 'utf8'));
+    for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+  } catch { /* no pid file: nothing to reclaim */ }
+}
+
 export async function startTestBus(seedUrl: string): Promise<TestBus> {
   if (!testBusBinsPresent) throw new Error('test bus: NATS_SERVER_BIN or the core binary is missing');
   const { nats: natsPort, core: corePort } = ports(seedUrl);
   const token = `test-bus-token-${natsPort}`;
   const dir = join(tmpdir(), `iam-test-bus-${natsPort}`);
+  killLeftovers(dir);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const conf = readFileSync(resolve(root, 'conf/nats-local.conf'), 'utf8')
@@ -50,6 +61,7 @@ export async function startTestBus(seedUrl: string): Promise<TestBus> {
   const nats = spawn(testBusNatsBin!, ['-c', join(dir, 'nats.conf')], { stdio: 'ignore' });
   nats.unref();
   for (let i = 0; i < 50; i++) { try { (await connect({ servers: `127.0.0.1:${natsPort}`, timeout: 500 })).close(); break; } catch { await sleep(100); } }
+  if (nats.exitCode !== null) throw new Error(`test bus: nats-server exited at startup (port ${natsPort} still held by a leftover process?)`);
   const coreUrl = `http://127.0.0.1:${corePort}`;
   const core = spawn(testBusCoreBin, [], {
     stdio: 'ignore',
@@ -57,7 +69,9 @@ export async function startTestBus(seedUrl: string): Promise<TestBus> {
       IAM_CORE_ADMIN_TOKEN: token, IAM_CORE_ADDR: `127.0.0.1:${corePort}`, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar') },
   });
   core.unref();
+  writeFileSync(join(dir, 'pids.json'), JSON.stringify([nats.pid, core.pid]));
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`${coreUrl}/health`, { signal: AbortSignal.timeout(500) })).ok) break; } catch { await sleep(100); } }
+  if (core.exitCode !== null) throw new Error(`test bus: iam-core exited at startup (port ${corePort} still held by a leftover process?)`);
   const saved: Record<string, string | undefined> = {};
   for (const k of ['IAM_BUS_NATS_URL', 'IAM_BUS_NATS_USER', 'IAM_BUS_NATS_PASSWORD', 'IAM_CORE_URL', 'IAM_CORE_ADMIN_TOKEN']) saved[k] = process.env[k];
   Object.assign(process.env, {
