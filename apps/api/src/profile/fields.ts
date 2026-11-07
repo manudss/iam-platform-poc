@@ -1,6 +1,4 @@
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * Profile fields (see docs/profile-fields.md). Three separate things:
@@ -65,7 +63,7 @@ interface DirectoryFieldsModule {
   effectiveSchema: (catalogue: CatalogField[], cfg: ProfileConfig, ctx: Context) => EffectiveField[];
   checkValue: (f: { fullKey: string; type: ProfileFieldType; options?: { value: string }[]; min?: number; max?: number; pattern?: string }, v: unknown) => string | number | boolean | null;
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'directory', 'fields.mjs')) as DirectoryFieldsModule;
+const plugin = loadPluginModule('directory', 'fields.mjs') as DirectoryFieldsModule;
 
 export const SAFE_DEFAULTS = plugin.SAFE_DEFAULTS;
 /** The base fields. They live in the identities table (UsersService); a plugin can never add a column to it. */

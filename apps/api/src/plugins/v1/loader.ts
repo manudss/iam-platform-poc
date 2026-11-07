@@ -114,6 +114,33 @@ export function verifyPackage(dir: string, trust: Record<string, string>): strin
   return errs;
 }
 
+/** Package security check shared by every load path (P0-1): provenance and integrity BEFORE any import. */
+function verifyPluginPackage(pdir: string, manifest: PluginManifest, trust: Record<string, string>, allowUnsigned: boolean) {
+  // No sandbox (decision 3), but a signed, integrity-checked package. The signature is verified whenever the
+  // manifest asks for it, the plugin ships code, or a signature is present.
+  const mustVerify = manifest.security?.signed === true || !!manifest.entrypoints?.handlers || existsSync(join(pdir, 'signature.json'));
+  if (mustVerify) {
+    const sigErrs = verifyPackage(pdir, trust);
+    if (sigErrs.length && !(allowUnsigned && sigErrs.every((e) => e.startsWith('signature.json missing')))) throw new PluginError('signature-invalid', `${manifest.id}: ${sigErrs.join('; ')}`);
+  }
+}
+
+/**
+ * The ONE verified way for core code (adapters) to import a plugin file (P0-1). The package signature is
+ * verified first; a rejected package has NO load effect (the file is never imported). Any file of the signed
+ * inventory can be loaded this way (handlers, engine, model, helpers).
+ */
+export function loadPluginModule<T = unknown>(id: string, file: string, opts: LoadOptions = {}): T {
+  if (file.includes('..') || file.startsWith('/') || file.startsWith('\\')) throw new PluginError('invalid-manifest', `${id}: invalid module path ${file}`);
+  const pdir = join(defaultPluginsDir(), id);
+  const mpath = join(pdir, 'manifest.json');
+  if (!existsSync(mpath)) throw new PluginError('invalid-manifest', `${id}: manifest.json missing`);
+  const manifest = JSON.parse(readFileSync(mpath, 'utf8')) as PluginManifest;
+  if (manifest.id !== id) throw new PluginError('invalid-manifest', `${id}: manifest id must be the folder name`);
+  verifyPluginPackage(pdir, manifest, opts.trust ?? loadTrust(defaultPluginsDir()), opts.allowUnsigned ?? process.env.IAM_PLUGIN_UNSIGNED === '1');
+  return createRequire(import.meta.url)(resolve(pdir, file)) as T;
+}
+
 /** Loads every plugin folder under `dir` (one level of folders). Bases come first so replacements can be wrapped. */
 export function loadPlugins(dir: string = defaultPluginsDir(), opts: LoadOptions = {}): PluginImpl[] {
   const trust = opts.trust ?? loadTrust(dir);
@@ -130,13 +157,7 @@ export function loadPlugins(dir: string = defaultPluginsDir(), opts: LoadOptions
     if (manifest.id !== entry.name) throw new PluginError('invalid-manifest', `${entry.name}: manifest id must be the folder name`);
     const errs = validateManifest(manifest, HOOKS);
     if (errs.length) throw new PluginError('invalid-manifest', `${entry.name}: ${errs.join('; ')}`);
-    // Package security (decision 3): no sandbox, but a signed, integrity-checked package. The signature is
-    // verified whenever the manifest asks for it (security.signed), the plugin ships code, or a signature is present.
-    const mustVerify = manifest.security?.signed === true || !!manifest.entrypoints?.handlers || existsSync(join(pdir, 'signature.json'));
-    if (mustVerify) {
-      const sigErrs = verifyPackage(pdir, trust);
-      if (sigErrs.length && !(allowUnsigned && sigErrs.every((e) => e.startsWith('signature.json missing')))) throw new PluginError('signature-invalid', `${entry.name}: ${sigErrs.join('; ')}`);
-    }
+    verifyPluginPackage(pdir, manifest, trust, allowUnsigned);
     let handlers: Record<string, HookHandler> = {};
     if (manifest.entrypoints?.handlers) {
       const mod = req(resolve(pdir, manifest.entrypoints.handlers));

@@ -1,7 +1,5 @@
 import { Body, Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Optional } from '@nestjs/common';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import type { Connection } from 'mysql2/promise';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ProfileService } from '../profile/profile.service.js';
@@ -9,7 +7,7 @@ import { ApplicationBus } from '../events/application-bus.service.js';
 import { currentBranch } from '../workspace/context.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * Application connector (plugin `app-connector`): validation and registry logic live in the plugin folder
@@ -60,7 +58,7 @@ interface AppConnectorPluginModule {
   };
   DEMO_APP_CONNECTORS: AppConnector[];
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'app-connector', 'handlers.mjs')) as AppConnectorPluginModule;
+const plugin = loadPluginModule('app-connector', 'handlers.mjs') as AppConnectorPluginModule;
 
 export const APP_CONNECTOR_PLUGIN = plugin.APP_CONNECTOR_PLUGIN;
 export const APP_CONNECTOR_DDL = plugin.APP_CONNECTOR_DDL;

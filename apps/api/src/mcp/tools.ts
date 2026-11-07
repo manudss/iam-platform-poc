@@ -1,5 +1,3 @@
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
@@ -16,7 +14,7 @@ import { WorkflowsService } from '../workflows/workflows.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { scrub } from '../bus/bus.controller.js';
 import { AuthnService } from '../authn/flow.service.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * MCP tool surface of the IAM POC. The tools and their confinement live in the `mcp-gateway` plugin folder
@@ -52,7 +50,7 @@ interface McpToolsModule {
   guardedWithKind: (ctx: ToolCtx, tool: string, kind: Kind, run: Run, resourceOverride?: string) => Promise<unknown>;
   registerTools: (server: McpServer, ctx: ToolCtx) => void;
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'mcp-gateway', 'tools.mjs')) as McpToolsModule;
+const plugin = loadPluginModule('mcp-gateway', 'tools.mjs') as McpToolsModule;
 plugin.bindCoreApi({ checkSql, scanSql, scrub, SOD_SQL, branchRun: (b, fn) => branchContext.run({ branch: b }, fn) });
 
 /** A refusal by the MCP confinement itself (not by the policy engine): traced as a DENIAL. */

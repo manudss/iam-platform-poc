@@ -1,10 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { branchContext } from '../workspace/context.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { authorOf } from '../versioning/guards.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 import { RunRow, StepRow, WorkflowStore } from './store.js';
 import type { WfGraph } from './model.js';
 
@@ -29,7 +27,7 @@ interface WorkflowEngineApi {
   cancelFlag: (runId: string) => void;
   forget: (runId: string) => void;
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'workflows-iga', 'engine.mjs')) as { createWorkflowEngine: (deps: EngineDeps) => WorkflowEngineApi };
+const plugin = loadPluginModule('workflows-iga', 'engine.mjs') as { createWorkflowEngine: (deps: EngineDeps) => WorkflowEngineApi };
 
 @Injectable()
 export class WorkflowEngine implements OnModuleInit {

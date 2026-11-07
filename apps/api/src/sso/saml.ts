@@ -1,14 +1,12 @@
 import { Body, Controller, Get, Inject, Injectable, Logger, OnModuleInit, Optional, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { ProfileService } from '../profile/profile.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { SecretsService } from '../integrations/secrets.service.js';
 import { AppConnector, AppConnectorService } from '../connectors/app-connector.js';
 import { SSO_DIRECTORY, SsoDirectory, DirectoryUser } from './oidc.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * SAML 2.0 identity provider (plugin `saml-idp`, step 3 of the SSO plan): the protocol engine lives in the
@@ -37,7 +35,7 @@ interface SamlPluginModule {
     warn: (message: string) => void;
   }) => SamlEngine;
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'saml-idp', 'handlers.mjs')) as SamlPluginModule;
+const plugin = loadPluginModule('saml-idp', 'handlers.mjs') as SamlPluginModule;
 
 export const SAML_PLUGIN = plugin.SAML_PLUGIN;
 export const samlAttributesFor = plugin.samlAttributesFor;

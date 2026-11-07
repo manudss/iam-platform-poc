@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { defaultPluginsDir, loadPlugins, verifyPackage } from './loader.js';
+import { defaultPluginsDir, loadPlugins, loadPluginModule, verifyPackage } from './loader.js';
 
 const { signPlugin } = createRequire(import.meta.url)(join(defaultPluginsDir(), '..', 'scripts', 'plugin-pack.mjs')) as { signPlugin: (dir: string, keys: Record<string, string>) => unknown };
 
@@ -129,4 +129,42 @@ test('P0-3: no trust store and no keys are ever generated at load time (explicit
   assert.throws(() => loadPlugins(dir), /untrusted publisher|signature/);
   assert.equal(existsSync(join(dir, '..', 'conf', 'plugin-trust.json')), false, 'no trust store appeared');
   assert.equal(existsSync(join(dir, '..', 'conf', 'plugin-dev-key.json')), false, 'no private key was generated');
+});
+
+test('P0-1: loadPluginModule verifies the package BEFORE importing (a rejected package has no load effect)', () => {
+  const { dir, plug, trust, priv } = fixture();
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify(BASE));
+  writeFileSync(join(plug, 'handlers.mjs'), 'export default { "notify.send": () => ({}) };\n');
+  writeFileSync(join(plug, 'helper.mjs'), 'export const answer = 42;\n');
+  signPlugin(plug, priv);
+  // A signed helper loads through the verified catalogue.
+  // (loadPluginModule resolves the SHIPPED plugins dir; point it at this fixture through IAM_PLUGINS_DIR.)
+  const saved = process.env.IAM_PLUGINS_DIR;
+  process.env.IAM_PLUGINS_DIR = dir;
+  try {
+    const ok = loadPluginModule<{ answer: number }>('demo-plug', 'helper.mjs', { trust });
+    assert.equal(ok.answer, 42);
+    // Tampered file: rejected before any import.
+    writeFileSync(join(plug, 'helper.mjs'), 'export const answer = -1; throw new Error("must never execute");\n');
+    assert.throws(() => loadPluginModule('demo-plug', 'helper.mjs', { trust }), /was modified after signing/);
+  } finally { if (saved === undefined) delete process.env.IAM_PLUGINS_DIR; else process.env.IAM_PLUGINS_DIR = saved; }
+});
+
+test('P0-1: no core file imports a plugin path directly (everything goes through the verified catalogue)', () => {
+  const src = join(defaultPluginsDir(), '..', 'apps', 'api', 'src');
+  const offenders: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) { if (e.name !== 'dist' && e.name !== 'node_modules') walk(p); continue; }
+      if (!e.name.endsWith('.ts')) continue;
+      const rel = join(src, e.name) && p.slice(src.length + 1);
+      if (rel === join('plugins', 'v1', 'loader.ts')) continue; // the catalogue itself
+      const text = readFileSync(p, 'utf8');
+      if (/createRequire\([^)]*\)\(resolve\(defaultPluginsDir\(\)/.test(text)) offenders.push(rel);
+      if (/require\([^)]*plugins[\\/][\w-]+[\\/]\w+\.mjs/.test(text)) offenders.push(rel);
+    }
+  };
+  walk(src);
+  assert.deepEqual(offenders, []);
 });

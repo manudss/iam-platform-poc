@@ -1,7 +1,5 @@
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { EffectStore } from './effect-store.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * Activation effects: the engine (role diff between two activated data versions -> notification and
@@ -28,7 +26,7 @@ interface DirectoryEffectsModule {
   diff: (prev: Snapshot | undefined, cur: Snapshot) => Change[];
   ActivationEffects: new (d: EffectsDeps) => { handle(e: ActivationEventIn): Promise<{ changes: number; failed: string[] }> };
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'directory', 'effects.mjs')) as DirectoryEffectsModule;
+const plugin = loadPluginModule('directory', 'effects.mjs') as DirectoryEffectsModule;
 
 export const diff = plugin.diff;
 export const ActivationEffects = plugin.ActivationEffects;

@@ -1,7 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { Connection } from 'mysql2/promise';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ProfileService } from './profile.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
@@ -9,7 +7,7 @@ import { currentBranch } from '../workspace/context.js';
 import { Body, Controller, Delete, Param, Patch, Post, Put, Get, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 export interface Org { id: string; name: string; parent_id: string | null }
 export interface OrgStore {
   list(t: string, ref: 'live' | 'work'): Promise<{ orgs: Org[]; members: { subject: string; org_id: string }[] }>;
@@ -75,7 +73,7 @@ interface OrgsPluginModule {
     section: (t: string, subject: string, ref: 'live' | 'work') => Promise<{ id: string; name: string }[] | undefined>;
   };
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'organizations', 'handlers.mjs')) as OrgsPluginModule;
+const plugin = loadPluginModule('organizations', 'handlers.mjs') as OrgsPluginModule;
 
 @Injectable()
 export class OrgService {

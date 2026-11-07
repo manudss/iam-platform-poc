@@ -1,8 +1,6 @@
 import { currentBranch, workspaceMode } from '../workspace/context.js';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
-const { validateUserInput } = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'directory', 'users.mjs')) as { validateUserInput: (b: Record<string, unknown>, create: boolean) => void };
+import { loadPluginModule } from '../plugins/v1/loader.js';
+const { validateUserInput } = loadPluginModule('directory', 'users.mjs') as { validateUserInput: (b: Record<string, unknown>, create: boolean) => void };
 import { Injectable, BadRequestException, ConflictException, NotFoundException, Optional } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';

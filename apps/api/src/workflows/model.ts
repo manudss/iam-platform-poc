@@ -1,6 +1,4 @@
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * Workflow model: the graph/step types below are shared with the core, but every rule (step catalogue,
@@ -32,7 +30,7 @@ interface WfModelModule {
   validateGraph: (input: unknown) => { graph: WfGraph; order: string[] };
   hasDataSteps: (g: WfGraph) => boolean;
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'workflows-iga', 'model.mjs')) as WfModelModule;
+const plugin = loadPluginModule('workflows-iga', 'model.mjs') as WfModelModule;
 
 export const STEP_TYPES = plugin.STEP_TYPES;
 export const WF_EVENTS = plugin.WF_EVENTS;

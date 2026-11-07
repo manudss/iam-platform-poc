@@ -1,10 +1,8 @@
 import { BadRequestException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { createConnection, Connection } from 'mysql2/promise';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { VersioningService } from '../versioning/versioning.service.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /** Public view of a registered external MCP server. The upstream token is NEVER returned by any route. */
 export interface McpUpstream {
@@ -35,7 +33,7 @@ interface UpstreamRulesModule {
   redact: (msg: string, token: string) => string;
   UpstreamHttpError: new (message: string, status: number) => Error & { status: number };
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'mcp-gateway', 'upstream.mjs')) as UpstreamRulesModule;
+const plugin = loadPluginModule('mcp-gateway', 'upstream.mjs') as UpstreamRulesModule;
 export const validateUpstreamUrl = plugin.validateUpstreamUrl;
 export const validUpstreamName = plugin.validUpstreamName;
 export const authHeader = plugin.authHeader;

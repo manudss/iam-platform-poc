@@ -1,7 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Injectable, Param, Post, UseGuards } from '@nestjs/common';
 import { Optional } from '@nestjs/common';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
@@ -9,7 +7,7 @@ import { AuditService } from '../access/audit.service.js';
 import { ProfileService } from '../profile/profile.service.js';
 import { PolicyAdminGuard } from '../auth/admin.guard.js';
 import { DoltService, PolicyCandidate, PolicyChange } from '../dolt/dolt.service.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * Policy studio (plugin `policy-studio`). The catalogue/simulator/proposal logic lives in the plugin folder
@@ -58,7 +56,7 @@ interface PolicyStudioPluginModule {
     proposeLink: (t: string, body: unknown) => Promise<unknown>;
   };
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'policy-studio', 'handlers.mjs')) as PolicyStudioPluginModule;
+const plugin = loadPluginModule('policy-studio', 'handlers.mjs') as PolicyStudioPluginModule;
 
 export const POLICY_STUDIO_PLUGIN = plugin.POLICY_STUDIO_PLUGIN;
 /** Decisions looked at to count rule usage: the most recent ones kept by the audit (its own maximum is 500). */

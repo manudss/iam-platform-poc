@@ -1,12 +1,10 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { UsersService } from '../users/users.service.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { ProfileService } from './profile.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { currentBranch } from '../workspace/context.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * Public sign-up. The management rules live in the directory plugin (plugins/directory/signup.mjs);
@@ -34,7 +32,7 @@ interface SignupPluginModule {
     reject: (id: string) => { rejected: boolean };
   };
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'directory', 'signup.mjs')) as SignupPluginModule;
+const plugin = loadPluginModule('directory', 'signup.mjs') as SignupPluginModule;
 
 @Injectable()
 export class SignupService {

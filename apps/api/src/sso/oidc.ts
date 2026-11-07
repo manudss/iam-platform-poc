@@ -1,7 +1,5 @@
 import { Body, Controller, Get, Inject, Injectable, Logger, OnModuleInit, Optional, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import type { Connection } from 'mysql2/promise';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { ProfileService } from '../profile/profile.service.js';
@@ -9,7 +7,7 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { SecretsService } from '../integrations/secrets.service.js';
 import { AppConnector, AppConnectorService } from '../connectors/app-connector.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * OIDC provider (plugin `oidc-provider`, step 2 of the SSO plan): the protocol engine lives in the plugin
@@ -40,7 +38,7 @@ interface OidcPluginModule {
     warn: (message: string) => void;
   }) => OidcEngine;
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'oidc-provider', 'handlers.mjs')) as OidcPluginModule;
+const plugin = loadPluginModule('oidc-provider', 'handlers.mjs') as OidcPluginModule;
 
 export const OIDC_PLUGIN = plugin.OIDC_PLUGIN;
 /** Claims this provider can send. An application's `attribute_mapping` picks among them (any other name is ignored). */

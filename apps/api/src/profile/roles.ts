@@ -1,12 +1,10 @@
 import { BadRequestException, Controller, Delete, Get, Injectable, Param, Patch, Post, Body, UseGuards, Optional, Req } from '@nestjs/common';
 import type { Connection } from 'mysql2/promise';
-import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
-import { defaultPluginsDir } from '../plugins/v1/loader.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
  * Role and separation-of-duties management. The management rules live in the directory plugin
@@ -23,7 +21,7 @@ interface RolesPluginModule {
     removeRule: (actor: string, a: string, z: string, confirm: unknown) => Promise<RolesView>;
   };
 }
-const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'directory', 'roles.mjs')) as RolesPluginModule;
+const plugin = loadPluginModule('directory', 'roles.mjs') as RolesPluginModule;
 
 @Injectable()
 export class RolesService {
