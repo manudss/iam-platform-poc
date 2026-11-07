@@ -1,0 +1,13 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "directory",
+  "version": "1.0.0",
+  "name": "Directory (base, replaceable)",
+  "publisher": "iam-platform",
+  "kinds": ["directory"],
+  "description": "Base directory management (decision 2): identity storage stays core; the management rules live here and the plugin is replaceable by slot. Owns the profile-field catalogue rules (field types, security classes, admin configuration validation, effective schema per context, value checking) and the activation effects engine (role diff -> notification + provisioning fan-out, idempotent).",
+  "hooks": [],
+  "settings": [],
+  "entrypoints": { "handlers": "handlers.mjs" },
+  "security": { "signed": true }
+}

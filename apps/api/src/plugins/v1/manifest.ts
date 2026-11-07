@@ -7,6 +7,7 @@ import { validateFieldDecls } from '../../profile/fields.js';
  */
 export const PLUGIN_KINDS = [
   'auth-method', // how a user proves who they are (password, TOTP, passkey, federation)
+  'directory', // manages identities, profiles, roles and sign-up (decision 2: base plugin, replaceable by slot; storage stays core)
   'profile', // enriches the user profile (attributes, derived claims)
   'notifier', // sends notifications (mail, chat, webhook)
   'workflow', // approval / certification steps in IGA flows
