@@ -486,13 +486,13 @@ export class PluginRegistry {
   /** Screens visible to the admin console. Component screens only appear if granted. */
   screens(tenant: string) {
     return this.derive(`screens:${tenant}`, () => {
-      const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string }[] = [];
+      const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string; component?: string }[] = [];
       for (const p of this.impls.values()) {
         if (!this.isActive(tenant, p.manifest.id)) continue;
         const g = this.state.get(this.k(tenant, p.manifest.id))?.grants ?? {};
         for (const s of p.manifest.screens ?? []) {
           if (s.render === 'component' && !g.uiComponents && !p.manifest.base) continue;
-          res.push({ plugin: p.manifest.id, id: s.id, title: s.title, area: s.area, render: s.render, schemaRef: s.schemaRef });
+          res.push({ plugin: p.manifest.id, id: s.id, title: s.title, area: s.area, render: s.render, schemaRef: s.schemaRef, component: s.component });
         }
       }
       return res;

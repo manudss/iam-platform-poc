@@ -22,6 +22,7 @@ import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard
 import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
 import { ReviewPage } from './review';
+import { PluginScreenPage } from './plugin-screen';
 
 /** /plugins and /plugins/:id share one route (and so one component instance): selecting a plugin only updates the address. */
 export const pluginsMatcher: UrlMatcher = (segs: UrlSegment[]) =>
@@ -59,6 +60,9 @@ export const routes: Routes = [
       { path: 'database', pathMatch: 'full', redirectTo: 'database/branches' },
       { path: 'review', canActivate: [accessGuard], component: ReviewPage, title: 'Review changes' },
       { path: 'database/:tab', canActivate: [accessGuard], component: ExplorerPage, title: 'Database (Dolt)' },
+      // Packaged plugin screens (constat 4): one generic route; the host reads the tenant's screen inventory and
+      // imports the plugin's own module, so a plugin adds/removes its screen with no apps/web change.
+      { path: 'screens/:plugin/:screen', canActivate: [accessGuard], component: PluginScreenPage, title: 'Plugin screen' },
     ],
   },
   { path: '**', redirectTo: '' },

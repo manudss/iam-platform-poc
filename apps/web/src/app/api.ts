@@ -25,7 +25,9 @@ export class ApiClient {
   private epoch = 0;
   branch = '';
 
-  constructor(private readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a), private readonly onUnauthorized: () => void = () => {}) {}
+  constructor(readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a), private readonly onUnauthorized: () => void = () => {}) {}
+  /** Packaged plugin screens call the API with the same session; the token stays in memory (never localStorage). */
+  get bearerToken() { return this.token; }
 
   get loggedIn() { return !!this.token; }
   /** Unverified claim used only to end the UI session early. The server still verifies every request. */
