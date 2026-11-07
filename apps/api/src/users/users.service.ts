@@ -1,4 +1,8 @@
 import { currentBranch, workspaceMode } from '../workspace/context.js';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
+import { defaultPluginsDir } from '../plugins/v1/loader.js';
+const { validateUserInput } = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'directory', 'users.mjs')) as { validateUserInput: (b: Record<string, unknown>, create: boolean) => void };
 import { Injectable, BadRequestException, ConflictException, NotFoundException, Optional } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
@@ -50,14 +54,8 @@ export class UsersService {
     const creds = await this.credentials();
     return (r as Record<string, unknown>[]).map(x => ({ ...x, id: String(x.id), credential_revision: x.credential_revision, login_enabled: !!x.login_enabled, hasCredential: !!creds[String(x.credential_revision)] }));
   }); }
-  private validate(b: Record<string, unknown>, create: boolean) {
-    if (create && (typeof b.id !== 'string' || !/^[a-z0-9-]{1,32}$/.test(b.id))) throw new BadRequestException('id: lowercase letters, digits, hyphens; max 32');
-    for (const [k, max] of [['display_name',80], ['department',40], ['manager_id',32], ['email',254]] as const) if (b[k] !== undefined && b[k] !== null && (typeof b[k] !== 'string' || (b[k] as string).length > max)) throw new BadRequestException(`invalid ${k}`);
-    if (typeof b.email === 'string' && b.email !== '' && !/^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}$/.test(b.email)) throw new BadRequestException('invalid email address');
-    if (b.login_enabled !== undefined && typeof b.login_enabled !== 'boolean') throw new BadRequestException('login_enabled must be boolean');
-    if ((create || b.password !== undefined) && (typeof b.password !== 'string' || b.password.length < 12 || b.password.length > 128)) throw new BadRequestException('password: 12 to 128 characters');
-    if (Object.keys(b).some(k => !['id','display_name','department','manager_id','email','login_enabled','password'].includes(k))) throw new BadRequestException('unknown user field');
-  }
+  /** The validation rules live in the directory plugin (plugins/directory/users.mjs); storage stays here. */
+  private validate(b: Record<string, unknown>, create: boolean) { validateUserInput(b as Record<string, unknown>, create); }
   /** `pre`: a credential hashed earlier (sign-up approval). The plain password is never kept. */
   /** DEMO SEED ONLY (called at start-up with IAM_DEMO_DATA_SEED=1): creates a FICTIONAL account on main when it does not exist. Never overwrites. */
   async seedAccount(a: { id: string; display_name: string; department: string; manager_id: string | null; email: string }, password: string) {
