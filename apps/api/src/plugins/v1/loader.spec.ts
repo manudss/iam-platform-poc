@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
@@ -118,4 +118,15 @@ test('P0-2: refuses a manifest whose declared entrypoint is not signed', () => {
   writeFileSync(join(plug, 'other.mjs'), 'export default { "notify.send": () => ({}) };\n');
   const errs = verifyPackage(plug, trust);
   assert.ok(errs.some((e) => /manifest\.json was modified/.test(e)), 'tampered manifest is caught by its hash');
+});
+
+test('P0-3: no trust store and no keys are ever generated at load time (explicit dev setup only)', () => {
+  const { dir, plug, trust, priv } = fixture();
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify(BASE));
+  writeFileSync(join(plug, 'handlers.mjs'), 'export default { "notify.send": () => ({}) };\n');
+  signPlugin(plug, priv);
+  // No conf/plugin-trust.json next to this temp plugins dir: loading must REFUSE, and must not create anything.
+  assert.throws(() => loadPlugins(dir), /untrusted publisher|signature/);
+  assert.equal(existsSync(join(dir, '..', 'conf', 'plugin-trust.json')), false, 'no trust store appeared');
+  assert.equal(existsSync(join(dir, '..', 'conf', 'plugin-dev-key.json')), false, 'no private key was generated');
 });

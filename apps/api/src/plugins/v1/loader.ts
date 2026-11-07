@@ -43,12 +43,9 @@ function loadTrust(dir: string): Record<string, string> {
     return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, string>) : {};
   }
   const path = resolve(dir, '..', 'conf', 'plugin-trust.json');
-  if (!existsSync(path)) {
-    // No committed secrets: dev signing keys are generated locally, never committed (decision 3 still applies:
-    // every plugin is signature-verified against this local trust store). Production ships its own trust store.
-    const setup = createRequire(import.meta.url)(resolve(dir, '..', 'scripts', 'plugin-dev-setup.mjs')) as { ensureDevSetup: (d: string) => void };
-    setup.ensureDevSetup(dir);
-  }
+  // P0-3: keys are NEVER generated at runtime. A missing trust store means every verification fails (boot is
+  // refused), in development as in production. Development provisions its keys with the explicit command
+  // `node scripts/plugin-dev-setup.mjs` (or `npm run plugins:setup`); production ships its own trust store.
   return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, string>) : {};
 }
 

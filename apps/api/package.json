@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.spec.js\""
+    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.spec.js\"",
+    "plugins:setup": "node ../scripts/plugin-dev-setup.mjs"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.6",

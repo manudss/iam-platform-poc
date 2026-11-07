@@ -73,6 +73,8 @@ jobs:
         run: |
           for v in DOLT_BIN NATS_SERVER_BIN BAO_BIN TEMPORAL_BIN; do p="${!v}"; test -x "$p" && echo "$v=$p" || { echo "$v missing"; exit 1; }; done
           test -x "$PG_BIN/postgres"
+      - name: Plugin dev signing keys (explicit dev setup, P0-3)
+        run: node scripts/plugin-dev-setup.mjs
       - run: npm ci && npm test
         working-directory: apps/api
       - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
@@ -111,6 +113,8 @@ jobs:
             echo "port $p open=$ok"; [ $ok = 1 ] || { docker compose -f infra/docker-compose.yml ps; docker compose -f infra/docker-compose.yml logs --tail=100; exit 1; }
           done
           sleep 15
+      - name: Plugin dev signing keys (explicit dev setup, P0-3)
+        run: node scripts/plugin-dev-setup.mjs
       - name: Build the Rust core (runs as a local process next to the containers, gRPC enabled by the test)
         run: cargo build -p iam-core --locked
         working-directory: core
