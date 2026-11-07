@@ -122,7 +122,7 @@ rather than silently using local handlers. CI runs only via `workflow_dispatch`.
 
 ## License — Tous droits réservés / All rights reserved
 
-Copyright (c) 2026 Emmanuel De Saint Steban. This is **not** open source: no right to
+Copyright (c) 2026 Projet lyam. This is **not** open source: no right to
 use, copy, modify, redistribute or reuse any part of this repository is granted
 without prior written permission. Public visibility on GitHub is for demonstration
 only (viewing and forking on GitHub per its Terms of Service). See [LICENSE](LICENSE).
