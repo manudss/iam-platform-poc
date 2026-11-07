@@ -59,7 +59,25 @@ function canonical(v: unknown): string {
   return JSON.stringify(v);
 }
 
-/** Verifies signature.json against the folder files and the trust store. Returns the problems found (empty = valid). */
+/** Every file of the package, relative paths, signature.json excluded. Symlinks are reported, not followed. */
+function packageFiles(dir: string): { files: string[]; symlinks: string[] } {
+  const files: string[] = []; const symlinks: string[] = [];
+  const walk = (rel: string) => {
+    for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      if (e.name.startsWith('.')) continue; // same convention as the signer (scripts/plugin-pack.mjs)
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isSymbolicLink()) { symlinks.push(r); continue; }
+      if (e.isDirectory()) { walk(r); continue; }
+      if (r !== 'signature.json') files.push(r);
+    }
+  };
+  walk('');
+  return { files, symlinks };
+}
+
+/** Verifies signature.json against the folder files and the trust store. Returns the problems found (empty = valid).
+ * Exhaustive (P0-2): every file of the package must be signed, the manifest and the declared entrypoints must be
+ * covered, the manifest publisher must be the signing publisher, escaping paths and symlinks are refused. */
 export function verifyPackage(dir: string, trust: Record<string, string>): string[] {
   const sigPath = join(dir, 'signature.json');
   if (!existsSync(sigPath)) return ['signature.json missing (sign the plugin with scripts/plugin-pack.mjs)'];
@@ -69,12 +87,26 @@ export function verifyPackage(dir: string, trust: Record<string, string>): strin
   if (sig.alg !== 'ed25519') errs.push(`signature: unknown algorithm ${sig.alg}`);
   const key = trust[sig.publisher];
   if (!key) errs.push(`signature: untrusted publisher ${sig.publisher}`);
+  const signed = new Set(Object.keys(sig.files ?? {}));
   for (const [file, hash] of Object.entries(sig.files ?? {})) {
-    if (file.includes('..') || file.startsWith('/')) { errs.push(`signature: invalid file entry ${file}`); continue; }
+    if (file.includes('..') || file.startsWith('\\') || file.startsWith('/')) { errs.push(`signature: invalid file entry ${file}`); continue; }
     const p = join(dir, file);
     if (!existsSync(p)) { errs.push(`signature: ${file} listed but missing`); continue; }
     const actual = createHash('sha256').update(readFileSync(p)).digest('hex');
     if (actual !== hash) errs.push(`signature: ${file} was modified after signing`);
+  }
+  // The signed inventory must cover the WHOLE package: an added, unsigned file is a rejection, not a blind spot.
+  const { files, symlinks } = packageFiles(dir);
+  for (const s of symlinks) errs.push(`signature: symlink ${s} is not allowed in a plugin package`);
+  for (const f of files) if (!signed.has(f)) errs.push(`signature: ${f} is present but not signed`);
+  // The manifest must be signed and must agree with the signature about who published the package.
+  if (!signed.has('manifest.json')) errs.push('signature: manifest.json is not signed');
+  else if (existsSync(join(dir, 'manifest.json'))) {
+    try {
+      const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as PluginManifest;
+      if (m.publisher && m.publisher !== sig.publisher) errs.push(`signature: manifest publisher ${m.publisher} differs from signing publisher ${sig.publisher}`);
+      for (const ep of Object.values(m.entrypoints ?? {})) if (typeof ep === 'string' && !signed.has(ep)) errs.push(`signature: entrypoint ${ep} is not signed`);
+    } catch { errs.push('manifest.json is not valid JSON'); }
   }
   if (!errs.length && key) {
     const payload = canonical({ alg: sig.alg, publisher: sig.publisher, files: sig.files });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
@@ -75,4 +75,47 @@ test('the shipped plugins load from the repository folder', () => {
   void lockout.handlers['auth.authenticate']({ subject: 'demo-alice', credential: { password: 'demo-only-not-a-secret' } }, { tenant: 't', settings: { maxFailures: 5 }, base: base.handlers });
   assert.ok(true);
   void calls;
+});
+
+test('P0-2: refuses a package with an added, unsigned file (the signed inventory must cover everything)', () => {
+  const { dir, plug, trust, priv } = fixture();
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify(BASE));
+  writeFileSync(join(plug, 'handlers.mjs'), 'export default { "notify.send": () => ({}) };\n');
+  signPlugin(plug, priv);
+  writeFileSync(join(plug, 'extra.mjs'), 'export const backdoor = true;\n');
+  assert.throws(() => loadPlugins(dir, { trust }), /extra\.mjs is present but not signed/);
+});
+
+test('P0-2: refuses a signature whose publisher is not in the trust store', () => {
+  const { dir, plug, trust, priv } = fixture();
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify(BASE));
+  writeFileSync(join(plug, 'handlers.mjs'), 'export default { "notify.send": () => ({}) };\n');
+  signPlugin(plug, priv);
+  // Hand-crafted signature metadata: claims a publisher the trust store does not know.
+  const sig = JSON.parse(readFileSync(join(plug, 'signature.json'), 'utf8'));
+  sig.publisher = 'evil-corp';
+  writeFileSync(join(plug, 'signature.json'), JSON.stringify(sig));
+  assert.ok(verifyPackage(plug, trust).some((e) => /untrusted publisher evil-corp/.test(e)));
+  assert.throws(() => loadPlugins(dir, { trust }), /untrusted publisher/);
+});
+
+test('P0-2: refuses a symlink inside the package', () => {
+  const { dir, plug, trust, priv } = fixture();
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify(BASE));
+  writeFileSync(join(plug, 'handlers.mjs'), 'export default { "notify.send": () => ({}) };\n');
+  signPlugin(plug, priv);
+  symlinkSync(join(plug, 'handlers.mjs'), join(plug, 'linked.mjs'));
+  assert.throws(() => loadPlugins(dir, { trust }), /symlink/);
+});
+
+test('P0-2: refuses a manifest whose declared entrypoint is not signed', () => {
+  const { dir, plug, trust, priv } = fixture();
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify(BASE));
+  writeFileSync(join(plug, 'handlers.mjs'), 'export default { "notify.send": () => ({}) };\n');
+  signPlugin(plug, priv);
+  // Rewrite the manifest so a different (unsigned) entrypoint is declared, then restore the manifest's original hash path.
+  writeFileSync(join(plug, 'manifest.json'), JSON.stringify({ ...BASE, entrypoints: { handlers: 'other.mjs' } }));
+  writeFileSync(join(plug, 'other.mjs'), 'export default { "notify.send": () => ({}) };\n');
+  const errs = verifyPackage(plug, trust);
+  assert.ok(errs.some((e) => /manifest\.json was modified/.test(e)), 'tampered manifest is caught by its hash');
 });
