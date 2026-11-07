@@ -76,7 +76,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push (BuildKit cache: GitHub Actions cache, shared scope)
+      - name: 'Build and push (BuildKit cache: GitHub Actions cache, shared scope)'
         id: build
         uses: docker/build-push-action@v6
         with:
