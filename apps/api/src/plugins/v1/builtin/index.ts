@@ -6,6 +6,8 @@ import type { PluginImpl } from '../registry.js';
  * a folder - manifest.json, handlers.mjs, signature.json). This module only adapts the folder loader to the
  * named exports the rest of the API (and the specs) use; the loader validates each manifest and verifies the
  * package signature against conf/plugin-trust.json.
+ * csv-connector and scim-connector ship no hooks: they are parsing libraries the core import flow calls
+ * through its adapters; registering them keeps the admin catalogue honest about what is installed.
  */
 const loaded = loadPlugins();
 const byId = new Map(loaded.map((i) => [i.manifest.id, i]));
@@ -27,6 +29,8 @@ export const appConnector = need('app-connector');
 export const policyStudio = need('policy-studio');
 export const oidcProvider = need('oidc-provider');
 export const samlIdp = need('saml-idp');
+export const csvConnector = need('csv-connector');
+export const scimConnector = need('scim-connector');
 
 /** Fresh lockout plugin per call (fresh failure counters), keeping the factory shape the callers use. */
 export function authPasswordLockout(_failures?: unknown, _base?: unknown): PluginImpl {
