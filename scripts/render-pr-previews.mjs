@@ -96,7 +96,10 @@ async function gh(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GH ${method} ${path} -> ${res.status}`);
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => '')).slice(0, 300);
+    throw new Error(`GH ${method} ${path} -> ${res.status} ${detail}`);
+  }
   return res.status === 204 ? null : res.json();
 }
 async function upsertComment(markdown) {
