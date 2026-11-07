@@ -33,8 +33,15 @@ commit SHA (immutable, the one previews deploy), `pr-<N>` (moving), and
 `latest` (main only). `workflow_dispatch` with an optional `ref` is the
 backstop when a commit's image is missing.
 
-The GHCR package is **public** (one-time toggle in the package settings after
-the first push): Render pulls it anonymously, no credential to maintain.
+Measured on PR #55 (2026-11-08, commit `b82cffd`): cold GitHub build +
+push 8 min 12 s, Render image pull + create + boot + live **~2 min**, versus
+~9 min for a git-backed Render build of the same tree the same evening - and
+those 9 minutes came out of the 500-minutes quota while the image deploy
+consumed **zero**.
+
+The GHCR package is readable anonymously from its first push (GitHub inherits
+the public repo's visibility): Render pulls it without a credential, nothing
+to toggle in the package settings.
 
 ## Deploy on demand
 
@@ -94,6 +101,15 @@ comment explains why. The orchestration itself
 - The `Demo image (GHCR)` workflow builds the PR's Dockerfile with a
   `packages: write` GITHUB_TOKEN, on same-repo PRs only (fork PRs are skipped):
   the same trust boundary as the repository's other CI.
+- Commenting the PR from a `pull_request` run needs `pull-requests: write` in
+  addition to `issues: write` (measured: `issues: write` alone got a 403 on
+  `POST /issues/<N>/comments`). The trusted `pull_request_target` flow is not
+  affected.
+- `.github/workflows/prebuilt-image-trial.yml` is the temporary experiment
+  harness that proved this end to end on PR #55 (it deploys the PR's image
+  with the real secrets from a same-repo `pull_request` run, gated on the
+  migration branch name). It is inert on every other PR; delete it after the
+  migration merges.
 
 ## Setup (already done on this repository)
 
