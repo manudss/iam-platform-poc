@@ -82,6 +82,17 @@ branch it is pointed at.
    (`IAM_IDP_EXTRA_REDIRECT_URIS`) and the API issuer check from it. The
    console derives its API and core URLs from `location.origin`, so the whole
    demo is same-origin behind the edge server.
+
+   Several public origins can serve the same service (a custom domain next to
+   the `*.onrender.com` URL). Sign-in then works on every one of them: the
+   console builds its redirect URI from `location.origin`, and the start script
+   registers each origin's `/callback` with the IdP
+   (`demo/public-redirect-uris.mjs`). The `*.onrender.com` URL is picked up
+   automatically from Render's own `RENDER_EXTERNAL_URL`; list any further
+   origins (e.g. a retired custom domain) in `IAM_PUBLIC_ORIGIN_EXTRA`,
+   comma-separated. Example with `IAM_PUBLIC_ORIGIN=https://lyam.dss.name`:
+   sign-in works on both `https://lyam.dss.name` and
+   `https://<your-service>.onrender.com`.
 4. Deploy. Auto-deploy is disabled on this service; use Manual Deploy, or
    change the branch in Settings to demo another branch.
 

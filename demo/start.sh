@@ -29,7 +29,10 @@ export IAM_API_ADMIN_TOKEN="$API_TOKEN"
 export IAM_API_ADMIN_SUBJECTS="${IAM_API_ADMIN_SUBJECTS:-demo-alice}"
 export IAM_POLICY_FILE=/app/policies/demo.cedar
 export IAM_CORE_STATE_DIR="$HOME_DIR/core-state"
-export IAM_IDP_EXTRA_REDIRECT_URIS="${PUBLIC_ORIGIN}/callback,http://localhost:4200/callback"
+# Every public origin the console is reachable on needs its /callback registered (the IdP exact-matches).
+# demo/public-redirect-uris.mjs adds the Render *.onrender.com URL (RENDER_EXTERNAL_URL) and any
+# IAM_PUBLIC_ORIGIN_EXTRA origins on top of the canonical one.
+export IAM_IDP_EXTRA_REDIRECT_URIS="$(PUBLIC_ORIGIN="$PUBLIC_ORIGIN" node /app/demo/public-redirect-uris.mjs)"
 export IAM_ISSUER="${PUBLIC_ORIGIN}/core"
 # SSO (oidc-provider plugin): applications reach the API through the edge under /api
 export IAM_SSO_BASE_URL="${PUBLIC_ORIGIN}/api"
