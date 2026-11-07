@@ -1,0 +1,62 @@
+name: Prebuilt-image trial
+
+# Experiment harness for the prebuilt-image migration (see docs/pr-previews.md).
+# It runs ONLY on the migration branch's pull request: it takes the GHCR image
+# that "Demo image (GHCR)" built for the PR head and deploys it as this PR's
+# Render preview with the image-backed scripts/render-pr-previews.mjs, end to
+# end, with the real secrets - which a pull_request (same-repo) run may use,
+# unlike the trusted default-branch /preview flow that only sees the merged
+# script. It also records the timings that justify the migration.
+# Gated on the head branch name: after the migration merges it is inert on
+# every other PR and can be deleted (or kept for debugging).
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  actions: write # the refresh script may dispatch the image build as a backstop
+  issues: write # it also maintains the PR status comment
+
+jobs:
+  deploy-prebuilt-preview:
+    name: Deploy the GHCR image as this PR's preview (trial)
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'chore/prebuilt-demo-image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+      RENDER_ENVIRONMENT_ID: ${{ vars.RENDER_ENVIRONMENT_ID }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Check out the PR head (the script under test lives there)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Deploy the prebuilt image to the preview (waits for the build first)
+        id: deploy
+        run: |
+          set -eu
+          echo "trial_start=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+          START=$(date +%s)
+          node scripts/render-pr-previews.mjs refresh
+          echo "refresh_seconds=$(( $(date +%s) - START ))" >> "$GITHUB_OUTPUT"
+
+      - name: Report timings
+        if: always()
+        run: |
+          set -eu
+          SHA="${{ github.event.pull_request.head.sha }}"
+          {
+            echo "### Prebuilt-image trial (PR #${{ github.event.pull_request.number }})"
+            echo "- head: \`${SHA:0:7}\`"
+            echo "- refresh (image wait + Render pull + go-live): ${{ steps.deploy.outputs.refresh_seconds }}s"
+            echo "- image build run: see workflow 'Demo image (GHCR)' for this head sha"
+          } >> "$GITHUB_STEP_SUMMARY"
