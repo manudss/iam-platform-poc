@@ -22,7 +22,7 @@ export class Shell {
   protected async loadChanges(){const b=this.s.branch();if(!b||b==='main'||!this.isAdmin()){this.changes.set(null);return;}try{const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());if(r.status<400)this.changes.set(r.data?.diff?.rows?.total??r.data?.diff?.tables?.length??0);}catch{/* the badge is a hint; Review & Apply still reads the diff itself */}}
   /** Menu entries declared by the tenant's active plugins (GET /plugins/menu): a screen joins the sidebar with its plugin and leaves with it. */
   protected readonly pluginMenu=signal<{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]>([]);
-  protected async loadPluginMenu(){try{const r=await this.s.api.raw<{entries:{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]}>('GET','/plugins/menu',undefined,this.headers());if(r.status<400)this.pluginMenu.set(r.data.entries??[]);}catch{/* the static console still works without it */}}
+  protected async loadPluginMenu(){try{const r=await this.s.api.raw<{entries:{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]}>('GET','/plugins/menu',undefined,this.headers());if(r.status<400&&Array.isArray(r.data?.entries))this.pluginMenu.set(r.data.entries);}catch{/* the static console still works without it */}}
   protected openManage(){this.more.set(false);this.manage.set(!this.manage());}
   protected personal=signal('');protected renameTo='';
   /** Opens (or reuses) the signed-in user's own working branch so the console is ready to use on arrival. */
@@ -59,13 +59,18 @@ export class Shell {
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
     const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-profile' || adminOk).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
     // Plugin menu entries (step 2): declared in the plugin's manifest, present only while the plugin is active.
-    for (const m of this.pluginMenu()) {
+    const pluginEntries = this.pluginMenu?.(); // test harnesses can render before the field settles: no entries = static console
+    if (Array.isArray(pluginEntries)) for (const m of pluginEntries) {
       if (m.area === 'admin' && !adminOk) continue;
       let g = groups.find((x) => x.title === m.group);
       if (!g) { g = { title: m.group, items: [] }; groups.push(g); }
       if (!g.items.some((i) => i.path === m.path)) g.items.push({ path: m.path, label: m.title, icon: m.icon ?? '⬡', order: m.order ?? 50 });
     }
     for (const g of groups) g.items.sort((x, y) => (x.order ?? 50) - (y.order ?? 50) || x.label.localeCompare(y.label));
+    // Plugin groups keep the position the static menu had before step 2 (the menu must stay identical for the
+    // user): known groups take their historical slot, unknown plugin groups append after the core ones.
+    const GROUP_ORDER = ['Overview', 'Access (IAM)', 'Automation (IGA)', 'Extensions', 'Database (Dolt)'];
+    groups.sort((a, b) => (GROUP_ORDER.indexOf(a.title) < 0 ? 99 : GROUP_ORDER.indexOf(a.title)) - (GROUP_ORDER.indexOf(b.title) < 0 ? 99 : GROUP_ORDER.indexOf(b.title)));
     return groups.filter((g: NavGroup) => g.items.length);
   }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
