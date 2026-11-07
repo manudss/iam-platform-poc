@@ -40,6 +40,8 @@ function withLock(confDir, fn) {
 
 export function ensureDevSetup(pluginsDir) {
   const confDir = resolve(pluginsDir, '..', 'conf');
+  // The demo Dockerfile build stage copies only apps/api + scripts + plugins, so conf/ may not exist there yet.
+  mkdirSync(confDir, { recursive: true });
   const keyPath = join(confDir, 'plugin-dev-key.json');
   const trustPath = join(confDir, 'plugin-trust.json');
   // Signing always re-runs under the lock (source files change during development); only key generation is one-time.
