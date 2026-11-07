@@ -27,6 +27,7 @@ function mockFetch(handler) {
 }
 const json200 = (obj) => ({ ok: true, status: 200, json: async () => obj, text: async () => JSON.stringify(obj) });
 const notFound = { ok: false, status: 404, json: async () => ({}), text: async () => '{}' };
+const liveDeploy = () => json200([{ deploy: { id: 'dep-1', status: 'live', createdAt: new Date().toISOString() } }]);
 const openPr = (over = {}) => json200({
   state: 'open',
   head: { ref: 'feature/x', sha: SHA, repo: { full_name: 'manudss/iam-platform-poc' } },
@@ -34,7 +35,7 @@ const openPr = (over = {}) => json200({
 });
 
 async function load(env = {}) {
-  for (const k of Object.keys(process.env)) if (k.startsWith('RENDER_') || k.startsWith('PR_') || k === 'GITHUB_TOKEN' || k === 'GITHUB_REPOSITORY' || k === 'DRY_RUN' || k === 'GH_DRY') delete process.env[k];
+  for (const k of Object.keys(process.env)) if (k.startsWith('RENDER_') || k.startsWith('PR_') || k.startsWith('PREVIEW_') || k === 'GITHUB_TOKEN' || k === 'GITHUB_REPOSITORY' || k === 'DRY_RUN' || k === 'GH_DRY') delete process.env[k];
   Object.assign(process.env, BASE_ENV, env);
   process.argv[2] = env.MODE ?? 'ensure'; // the script reads its mode from argv
   return import(`./render-pr-previews.mjs?case=${importCounter++}`);
@@ -53,7 +54,7 @@ test('rejects an invalid GITHUB_REPOSITORY', async () => {
 // --- ensure: deploy on demand means a push never builds ---
 
 test('ensure with no service writes nothing to Render and comments the how-to', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     return json200([]); // GET /services?name=... -> no existing service
   });
@@ -67,18 +68,21 @@ test('ensure with no service writes nothing to Render and comments the how-to', 
   assert.equal(comments.length, 1);
   assert.match(comments[0].body.body, /render-previews-iam/);
   assert.match(comments[0].body.body, /\/preview/, 'comment tells how to deploy on demand');
-  assert.match(comments[0].body.body, /https:\/\/iam-pr3\.onrender\.com/, 'comment shows the future URL');
+  assert.doesNotMatch(comments[0].body.body, /onrender\.com/, 'no URL before any preview exists: a placeholder link would be dead');
+  assert.match(comments[0].body.body, /publiee ici automatiquement/, 'comment explains the URL comes once live');
 });
 
 test('ensure with an existing service keeps the link, adds the refresh how-to, and never deploys', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
+    if (u.includes('/deploys')) return liveDeploy();
     return json200({});
   });
   const m = await load();
   await m.ensure();
   assert.equal(renderCalls(calls, 'POST', /\/deploys/).length, 0, 'a push must not start a build');
+  assert.equal(renderCalls(calls, 'GET', /\/services\/srv-old\/deploys/).length, 1, 'live state checked before showing links');
   assert.equal(renderCalls(calls, 'PUT', /env-vars/).length, 0, 'no env rewrite from ensure');
   const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
   assert.equal(comments.length, 1);
@@ -87,7 +91,7 @@ test('ensure with an existing service keeps the link, adds the refresh how-to, a
 });
 
 test('ensure updates an existing marked comment instead of posting a new one', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([{ id: 42, body: '<!-- render-previews-iam -->\nold' }]);
     return json200([]);
   });
@@ -100,14 +104,15 @@ test('ensure updates an existing marked comment instead of posting a new one', a
 // --- refresh: explicit on-demand deploy ---
 
 test('refresh reads the head from the pulls API and creates the service once, with autoDeploy off', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
+    if (u.includes('/deploys') && (opts.method ?? 'GET') === 'GET') return liveDeploy();
     if (u.includes('/services') && !u.includes('name=')) return json200({ service: { id: 'srv-new', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } });
     return json200([]); // GET /services?name=... -> no existing service
   });
-  const m = await load({ MODE: 'refresh' });
+  const m = await load({ MODE: 'refresh', PREVIEW_POLL_MS: '1' });
   await m.refresh();
   assert.equal(ghCalls(calls, 'GET', /\/pulls\/3/).length, 1, 'head read back from the API');
   const creates = renderCalls(calls, 'POST', /\/v1\/services$/);
@@ -127,21 +132,24 @@ test('refresh reads the head from the pulls API and creates the service once, wi
   assert.deepEqual(body.envVars, [{ key: 'IAM_PUBLIC_ORIGIN', value: 'https://iam-pr3.onrender.com' }], 'only non-secret env var');
   assert.equal(renderCalls(calls, 'POST', /\/deploys/).length, 0, 'no explicit deploy on creation: Render deploys on create');
   const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
-  assert.equal(comments.length, 1);
-  assert.match(comments[0].body.body, /aaaaaaa/, 'comment names the deployed short sha');
-  assert.match(comments[0].body.body, /https:\/\/iam-pr3\.onrender\.com/);
+  assert.equal(comments.length, 2, 'immediate ack, then the live announcement');
+  assert.match(comments[0].body.body, /aaaaaaa/, 'ack comment names the building short sha');
+  assert.doesNotMatch(comments[0].body.body, /onrender\.com/, 'ack shows no URL while the build is only starting');
+  assert.match(comments[1].body.body, /Preview en ligne/, 'second comment announces the live preview');
+  assert.match(comments[1].body.body, /https:\/\/iam-pr3\.onrender\.com/, 'URL published only once live');
 });
 
 test('refresh on an existing service triggers exactly one explicit deploy when the origin is unchanged', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('/env-vars')) return json200([{ envVar: { key: 'IAM_PUBLIC_ORIGIN', value: 'https://iam-pr3.onrender.com' } }]);
+    if (u.includes('/deploys') && (opts.method ?? 'GET') === 'GET') return liveDeploy();
     if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
     return json200({});
   });
-  const m = await load({ MODE: 'refresh' });
+  const m = await load({ MODE: 'refresh', PREVIEW_POLL_MS: '1' });
   await m.refresh();
   assert.equal(renderCalls(calls, 'POST', /\/v1\/services$/).length, 0, 'no second creation');
   assert.equal(renderCalls(calls, 'POST', /\/services\/srv-old\/deploys/).length, 1, 'exactly one explicit deploy: no double build');
@@ -149,22 +157,23 @@ test('refresh on an existing service triggers exactly one explicit deploy when t
 });
 
 test('refresh with a changed URL updates the env var and does NOT also trigger a deploy', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('/env-vars')) return json200([{ envVar: { key: 'IAM_PUBLIC_ORIGIN', value: 'https://old.onrender.com' } }]);
+    if (u.includes('/deploys') && (opts.method ?? 'GET') === 'GET') return liveDeploy();
     if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
     return json200({});
   });
-  const m = await load({ MODE: 'refresh' });
+  const m = await load({ MODE: 'refresh', PREVIEW_POLL_MS: '1' });
   await m.refresh();
   assert.equal(renderCalls(calls, 'PUT', /\/services\/srv-old\/env-vars\/IAM_PUBLIC_ORIGIN/).length, 1);
   assert.equal(renderCalls(calls, 'POST', /\/deploys/).length, 0, 'env change redeploys by itself: no second trigger');
 });
 
 test('refresh refuses a fork PR', async () => {
-  mockFetch(async (u) => {
+  mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr({ head: { ref: 'feature/x', sha: SHA, repo: { full_name: 'someone/else' } } });
     return json200([]);
   });
@@ -173,7 +182,7 @@ test('refresh refuses a fork PR', async () => {
 });
 
 test('refresh refuses a closed PR', async () => {
-  mockFetch(async (u) => {
+  mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr({ state: 'closed' });
     return json200([]);
   });
@@ -182,7 +191,7 @@ test('refresh refuses a closed PR', async () => {
 });
 
 test('refresh skips cleanly when the branch has no demo/Dockerfile', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return notFound;
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
@@ -194,6 +203,59 @@ test('refresh skips cleanly when the branch has no demo/Dockerfile', async () =>
   const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
   assert.equal(comments.length, 1);
   assert.match(comments[0].body.body, /demo\/Dockerfile/);
+});
+
+
+test('ensure with an existing service whose deploy is not live shows no URL', async () => {
+  const calls = mockFetch(async (u, opts) => {
+    if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
+    if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
+    if (u.includes('/deploys')) return json200([{ deploy: { id: 'dep-1', status: 'build_failed', createdAt: new Date().toISOString() } }]);
+    return json200({});
+  });
+  const m = await load();
+  await m.ensure();
+  const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
+  assert.equal(comments.length, 1);
+  assert.doesNotMatch(comments[0].body.body, /onrender\.com/, 'no URL while the latest deploy is not live');
+  assert.match(comments[0].body.body, /build_failed/, 'comment states the deploy status instead');
+});
+
+test('refresh publishes a failure note without links when the build fails', async () => {
+  const calls = mockFetch(async (u, opts) => {
+    if (u.includes('/pulls/3')) return openPr();
+    if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
+    if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
+    if (u.includes('/env-vars')) return json200([{ envVar: { key: 'IAM_PUBLIC_ORIGIN', value: 'https://iam-pr3.onrender.com' } }]);
+    if (u.includes('/deploys') && (opts.method ?? 'GET') === 'GET') return json200([{ deploy: { id: 'dep-9', status: 'build_failed', createdAt: new Date().toISOString() } }]);
+    if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
+    return json200({});
+  });
+  const m = await load({ MODE: 'refresh', PREVIEW_POLL_MS: '1' });
+  await m.refresh();
+  const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
+  assert.equal(comments.length, 2, 'ack, then the failure note');
+  assert.match(comments[1].body.body, /echoue/, 'failure is reported');
+  assert.match(comments[1].body.body, /build_failed/, 'with the Render status');
+  assert.doesNotMatch(comments[1].body.body, /onrender\.com/, 'no URL on a failed build');
+});
+
+test('refresh notes it on the PR without links when the deploy watch times out', async () => {
+  const calls = mockFetch(async (u, opts) => {
+    if (u.includes('/pulls/3')) return openPr();
+    if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
+    if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
+    if (u.includes('/env-vars')) return json200([{ envVar: { key: 'IAM_PUBLIC_ORIGIN', value: 'https://iam-pr3.onrender.com' } }]);
+    if (u.includes('/deploys') && (opts.method ?? 'GET') === 'GET') return json200([{ deploy: { id: 'dep-9', status: 'build_in_progress', createdAt: new Date().toISOString() } }]);
+    if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3', serviceDetails: { url: 'https://iam-pr3.onrender.com' } } }]);
+    return json200({});
+  });
+  const m = await load({ MODE: 'refresh', PREVIEW_POLL_MS: '1', PREVIEW_WAIT_MAX_MS: '5' });
+  await m.refresh();
+  const comments = ghCalls(calls, 'POST', /\/issues\/3\/comments/);
+  assert.equal(comments.length, 2, 'ack, then the timeout note');
+  assert.match(comments[1].body.body, /toujours en cours/, 'timeout is reported as still building');
+  assert.doesNotMatch(comments[1].body.body, /onrender\.com/, 'no URL while nothing is live');
 });
 
 // --- cleanup: unchanged ---
@@ -211,7 +273,7 @@ test('workflow never pins trusted-code checkouts to pull_request metadata (stale
 });
 
 test('cleanup deletes the service and comments', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('name=')) return json200([{ service: { id: 'srv-old', name: 'iam-pr3' } }]);
     return json200({});
@@ -225,7 +287,7 @@ test('cleanup deletes the service and comments', async () => {
 });
 
 test('cleanup is a no-op on Render when the service does not exist', async () => {
-  const calls = mockFetch(async (u) => {
+  const calls = mockFetch(async (u, opts) => {
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     return json200([]);
   });
