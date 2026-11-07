@@ -1,0 +1,27 @@
+iam-platform-poc
+Copyright (c) 2026 Projet lyam. Tous droits réservés / All rights reserved.
+
+Ce projet est propriétaire : voir le fichier LICENSE. Le présent fichier sert
+uniquement à l'attribution des composants open source tiers, qui restent soumis à
+leurs licences respectives (reprise des mentions exigée par ces licences).
+
+This project is proprietary: see the LICENSE file. This file only provides
+attribution for third-party open source components, which remain governed by their
+respective licenses (retention of these notices is required by those licenses).
+
+Full dependency inventory with licenses / inventaire complet : docs/license-audit.md.
+
+Notable components / composants notables :
+- NestJS (MIT) — API framework
+- Angular (MIT) — administration console
+- Cedar (cedar-policy, Apache-2.0) — policy engine, Amazon
+- Wasmtime (Apache-2.0 with LLVM exception) — WASM plugin runtime, Bytecode Alliance
+- tokio / axum / tonic / prost (MIT / Apache-2.0) — Rust async, HTTP and gRPC stack
+- async-nats / nats.js (Apache-2.0) — event bus clients, Synadia
+- node-oidc-provider (MIT) — OIDC provider
+- samlify (MIT) — SAML IdP
+- Temporal TypeScript SDK (MIT) — workflow execution
+- @modelcontextprotocol/sdk (MIT) — MCP server and gateway
+- caniuse-lite (CC-BY-4.0) — browser support data
+- Dolt (Apache-2.0) — versioned SQL database, Dolthub (external binary)
+- NATS (Apache-2.0) — event bus server (external binary)

@@ -2,6 +2,8 @@
 name = "iam-bus"
 version = "0.1.0"
 edition = "2024"
+license = "UNLICENSED"
+publish = false
 description = "Event bus of the Rust core (step 1): envelope, catalogue, subscriptions, dispatcher, transports (in-process and NATS)."
 
 [dependencies]

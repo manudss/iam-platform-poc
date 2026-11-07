@@ -2,6 +2,8 @@
 name = "iam-plugin-runtime"
 version = "0.1.0"
 edition = "2024"
+license = "UNLICENSED"
+publish = false
 
 [dependencies]
 anyhow = "1.0.104"
