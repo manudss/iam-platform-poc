@@ -163,7 +163,32 @@ Covered by `plugins-dolt.e2e.spec.ts` (real Dolt, skipped without `DOLT_BIN`). N
 
 ## 11. Not done
 
-component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
+component screen loader; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above. (Package signing exists since manifest v3: see above.)
+
+## Manifest v3: folder plugins, signature, menu and HTTP routes
+
+Every shipped plugin is a **folder** under `plugins/<id>/`:
+
+```
+plugins/<id>/manifest.json    the manifest (apiVersion "plugin/v3" or "plugin/v1")
+plugins/<id>/handlers.mjs     hook and HTTP handlers (default export: { "<hook>": fn, "http:<METHOD> <path>": fn })
+plugins/<id>/signature.json   Ed25519 signature over the folder files (generated, never edited by hand)
+```
+
+New v3 manifest fields:
+
+- `entrypoints.handlers`: the handlers module inside the folder.
+- `httpRoutes`: HTTP routes mounted under `/tenants/:t/plugins/:id/` (`{ method, path, handler?, auth? }`). `auth` is `user` (signed-in, default), `admin` (admin capability too) or `public` (sign-in and protocol endpoints only). A route answers only while the plugin is active for the tenant; a declared route without a handler is a fault, not a 404.
+- `menu`: console sidebar entries (`{ id, title, area, group, icon?, order?, path }`). The console merges `GET /tenants/:t/plugins/menu` into its navigation: an entry appears with its plugin and disappears with it.
+- `security.signed`: the loader verifies `signature.json` (hashes + Ed25519 signature) against the trust store `conf/plugin-trust.json` before registering the plugin. Signature is enforced whenever the manifest asks for it, the plugin ships code, or a signature file is present. `IAM_PLUGIN_UNSIGNED=1` is a local-development escape hatch only.
+
+**Keys and signing (no secret in the repository).** Nothing secret is committed: `conf/plugin-dev-key.json` (private, mode 600), `conf/plugin-trust.json` (public keys) and every `signature.json` are gitignored and generated locally by `scripts/plugin-dev-setup.mjs`, which the loader runs automatically when the trust store is missing (fresh clone, CI). Production ships its own trust store and signs with its own keys: `node scripts/plugin-pack.mjs plugins/<id> --key key.json [--zip out.zip]`.
+
+**Generators.** `scripts/plugin-create.mjs <id>` scaffolds a new folder plugin, `scripts/plugin-extend.mjs <base-id> <new-id>` scaffolds a replacement (superset of the base, handlers delegating to `ctx.base`), `scripts/plugin-validate.mjs [dir ...]` checks manifests, signatures and extension compatibility (run `npm run build` in `apps/api` first).
+
+**Shipped plugins** (all folder plugins): `auth-password` (base), `auth-password-lockout`, `notify-log` (base), `notify-resend`, `org-manager`, `organizations`, `hr-attributes`, `risk-geo`, `workflows-iga`, `app-connector`, `policy-studio`, `oidc-provider`, `saml-idp`.
+
+**Mail delivery (`notify-resend`).** Real e-mail goes through the Resend HTTPS API (outbound SMTP is blocked on the Render free tier). The API key lives ONLY in the `RESEND_API_KEY` environment variable on the server - never in code, settings or data branches. Without it the plugin falls back to the base log transport, so development stays simulated. The sender (`lyam@dss.name`, verified domain) is a plain setting. The sign-in OTP method uses the same transport through `ResendMailAdapter` (preferred over SMTP when the key is set).
 
 ## Manifest v2 fields (step 2)
 
