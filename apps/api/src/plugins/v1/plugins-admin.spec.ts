@@ -31,6 +31,11 @@ describe('plugin admin API', () => {
     assert.equal(by['auth-password'].enabled, true); assert.equal(by['auth-password'].base, true);
     assert.equal(by['auth-password-lockout'].enabled, false);
   });
+  it('admin can refresh the shared plugin catalogue manually (P1 refresh endpoint)', async () => {
+    await s().post('/tenants/t1/plugins/refresh').expect(403); // admin capability required
+    const r = await s().post('/tenants/t1/plugins/refresh').set(adm).expect(201);
+    assert.equal(r.body.refreshed, true);
+  });
   it('changes need the admin capability', async () => {
     await s().post('/tenants/t1/plugins/org-manager/install').send({ grants: { install: true } }).expect(403);
     await s().put('/tenants/t1/plugins/org-manager/settings').send({ values: {} }).expect(403);

@@ -6,7 +6,7 @@ import { AuthGuard } from '../../auth/auth.guard.js';
 import { AdminGuard } from '../../auth/admin.guard.js';
 import { Grants, PluginError, PluginRegistry } from './registry.js';
 import { installArchive, loadInstalledPlugin, removeInstalledPlugin } from './archive.js';
-import { defaultPluginsDir } from './loader.js';
+import { defaultPluginsDir, refreshPluginCatalogue } from './loader.js';
 
 const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503, 'invalid-archive': 400, 'already-exists': 409, 'signature-invalid': 400 };
 function wrap<T>(f: () => Promise<T> | T): Promise<T> {
@@ -71,9 +71,18 @@ export class PluginsAdminController {
         removeInstalledPlugin(dir, manifest.id);
         throw e;
       }
-      return { imported: manifest.id, version: manifest.version, tenant: t, note: 'Registered in the running registries; a restart loads it everywhere (new branch registries, auth-method catalogue). Per-tenant install/enable stays a separate granted step.' };
+      // Invalidate the shared catalogue (P1): the new package is visible to every consumer (auth methods,
+      // menus, future branch registries) without a restart.
+      refreshPluginCatalogue();
+      return { imported: manifest.id, version: manifest.version, tenant: t, note: 'Registered in the running registries and the shared catalogue refreshed: new branch registries and the auth-method catalogue see it without a restart. Per-tenant install/enable stays a separate granted step.' };
     });
   }
+
+  /** Manual refresh of the shared plugin catalogue (P1, Emmanuel's refresh button backend): re-scans and
+   * re-verifies every package. Plugin-affecting actions (archive import, uninstall) already invalidate the
+   * catalogue; this endpoint is the admin's explicit path, used by the console's refresh button. */
+  @UseGuards(AdminGuard) @Post('refresh')
+  refresh(@Param('tenant') t: string) { return wrap(async () => { refreshPluginCatalogue(); return { refreshed: true, tenant: t }; }); }
 
   @UseGuards(AdminGuard) @Post(':id/disable')
   disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }
