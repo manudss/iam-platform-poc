@@ -61,7 +61,8 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
     const ok = await call(d.delegation, 'approve-payment'); assert.equal(ok.status, 201);
     const body = (await ok.json()) as { allow: boolean; simulated: boolean; calls_left: number };
     assert.deepEqual([body.allow, body.simulated, body.calls_left], [true, true, 4]);
-    const e = (await audit(t))[0];
+    // the core answered, so the audit row rides the bus asynchronously: wait for it (the trail can even be empty yet)
+    const e = await auditWait(t, (x) => x.source === 'agent' && x.principal === AL && x.allow);
     assert.deepEqual([e.source, e.allow, e.subject, e.principal], ['agent', true, 'demo-alice', AL]);
     assert.match(e.note, /agent=demo-agent-1 tool=approve-payment/);
   });
