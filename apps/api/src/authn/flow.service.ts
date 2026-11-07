@@ -9,7 +9,7 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
-import { SmtpMailAdapter } from './mail.js';
+import { ResendMailAdapter, SmtpMailAdapter } from './mail.js';
 import { CATALOGUE, DemoOutbox, MailAdapter, MethodCtx, Prompt, methodType } from './methods.js';
 
 export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string> }
@@ -45,7 +45,7 @@ export class AuthnService implements OnApplicationBootstrap {
   readonly enroll = new EnrollmentStore();
   readonly outbox = new DemoOutbox();
   /** Set from the server environment only; tests may replace it. */
-  smtp: MailAdapter | null = SmtpMailAdapter.fromEnv();
+  smtp: MailAdapter | null = ResendMailAdapter.fromEnv() ?? SmtpMailAdapter.fromEnv();
   private sessions = new Map<string, Session>();
   private fails = new Map<string, number[]>();
   now = () => Date.now();

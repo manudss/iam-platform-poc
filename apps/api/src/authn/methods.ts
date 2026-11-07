@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto
 import type { SettingField } from '../plugins/v1/manifest.js';
 import type { EnrollmentStore } from './enroll-store.js';
 import { totpVerify } from './totp.js';
-import { smtpConfigured } from './mail.js';
+import { resendConfigured, smtpConfigured } from './mail.js';
 
 export type Factor = 'knowledge' | 'possession' | 'inherence';
 export interface KeypadKey { id: string; digit: string; letters: string }
@@ -73,17 +73,17 @@ export const emailOtp: AuthMethodType = {
   settings: [
     { key: 'codeLength', type: 'number', label: 'Code length', default: 6, min: 4, max: 8, group: 'Code' },
     { key: 'ttlSeconds', type: 'number', label: 'Code lifetime (seconds)', default: 300, min: 60, max: 900, group: 'Code' },
-    { key: 'delivery', type: 'select', label: 'Delivery', default: 'demo-outbox', options: [{ value: 'demo-outbox', label: 'Demo outbox (simulated, no e-mail sent)' }, { value: 'smtp', label: 'SMTP (real e-mail, needs the server to be configured)' }], help: 'SMTP is configured on the server by IAM_SMTP_* variables, never here. Until it is, this method stays simulated.', group: 'Delivery' },
+    { key: 'delivery', type: 'select', label: 'Delivery', default: 'demo-outbox', options: [{ value: 'demo-outbox', label: 'Demo outbox (simulated, no e-mail sent)' }, { value: 'smtp', label: 'Real e-mail (server configured: Resend or SMTP)' }], help: 'Real delivery is configured on the server only (RESEND_API_KEY or IAM_SMTP_*), never here. Until it is, this method stays simulated.', group: 'Delivery' },
   ],
   provisioning: 'admin-demo',
   inlineWithUsername: () => false,
-  verification: (c) => c.delivery === 'smtp' && smtpConfigured()
+  verification: (c) => c.delivery === 'smtp' && (smtpConfigured() || resendConfigured())
     ? { real: true, note: 'Code delivered by SMTP to the address on the user profile: proves access to that mailbox.' }
     : { real: false, note: 'SIMULATED: the code is written to a demo outbox that administrators can read, so it does not prove possession of a mailbox.' },
   async prepare(ctx) {
     const len = Number(ctx.config.codeLength ?? 6), ttl = Number(ctx.config.ttlSeconds ?? 300);
     const code = String(randomInt(0, 10 ** len)).padStart(len, '0');
-    const real = ctx.config.delivery === 'smtp' && !!ctx.smtp && smtpConfigured();
+    const real = ctx.config.delivery === 'smtp' && !!ctx.smtp;
     // The profile address first, the demo enrollment address as a fallback. Unknown accounts get the same page and no message.
     const to = ctx.known ? (await ctx.profileEmail()) ?? (await ctx.enroll.email(ctx.tenant, ctx.subject, ctx.instanceId)) ?? `${ctx.subject}@mail.example.invalid` : '';
     if (ctx.known) {

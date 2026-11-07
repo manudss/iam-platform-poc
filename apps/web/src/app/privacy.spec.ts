@@ -19,7 +19,7 @@ describe('privacy page', () => {
     expect(el.querySelector('#privacy-page')).toBeTruthy();
     const text = el.textContent ?? '';
     expect(text).toContain('Politique de confidentialité');
-    expect(text).toContain('Mailjet');
+    expect(text).toContain('Resend');
     expect(text).toContain('Render');
     expect(text).toContain('iam@dss.name');
     expect(text).toContain('Privacy policy'); // English summary is part of the same page

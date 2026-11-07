@@ -1,0 +1,17 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "notify-resend",
+  "version": "1.0.0",
+  "name": "Mail delivery via Resend",
+  "description": "Real e-mail delivery through the Resend HTTPS API (the Render free tier blocks outbound SMTP). Without RESEND_API_KEY on the server it falls back to the base log transport (simulated).",
+  "publisher": "iam-platform",
+  "kinds": ["notifier"],
+  "extends": "notify-log",
+  "provides": ["notify.default"],
+  "hooks": [{ "name": "notify.send", "mode": "async" }],
+  "settings": [
+    { "key": "from", "type": "string", "label": "Sender address", "default": "lyam@dss.name", "help": "Verified sender on the Resend domain. The API key is NEVER a setting: it lives in the RESEND_API_KEY environment variable on the server.", "group": "Delivery" }
+  ],
+  "entrypoints": { "handlers": "handlers.mjs" },
+  "security": { "signed": true }
+}

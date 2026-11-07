@@ -101,7 +101,7 @@ try {
   await page.waitForSelector('#privacy-page');
   const privacy = (await page.textContent('#privacy-page')) ?? '';
   assert.match(privacy, /Politique de confidentialité/);
-  assert.match(privacy, /Mailjet/);
+  assert.match(privacy, /Resend/);
   assert.match(privacy, /iam@dss\.name/);
   assert.equal(await page.locator('nav').count(), 0, 'privacy page shows no administration layout');
   await shot('1a-privacy');

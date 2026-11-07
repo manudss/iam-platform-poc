@@ -17,6 +17,7 @@ const need = (id: string): PluginImpl => {
 
 export const authPassword = need('auth-password');
 export const notifyLog = need('notify-log');
+export const notifyResend = need('notify-resend');
 export const orgManager = need('org-manager');
 export const riskGeo = need('risk-geo');
 export const hrAttributes = need('hr-attributes');

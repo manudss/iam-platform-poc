@@ -1,9 +1,26 @@
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
+import { Resend } from 'resend';
 import type { MailAdapter } from './methods.js';
 
 /** Real delivery is configured ONLY by environment variables of the server (never versioned, never in Dolt). Nothing is assumed: no sender, no provider. */
 export const smtpConfigured = () => !!(process.env.IAM_SMTP_HOST && process.env.IAM_SMTP_FROM);
+
+/** Real delivery through the Resend HTTPS API (the Render free tier blocks outbound SMTP). Key from RESEND_API_KEY only, sender from RESEND_FROM (default lyam@dss.name). */
+export const resendConfigured = () => !!process.env.RESEND_API_KEY;
+export class ResendMailAdapter implements MailAdapter {
+  id = 'resend'; real = true;
+  constructor(private readonly key: string, private readonly from: string) {}
+  static fromEnv(): ResendMailAdapter | null {
+    const key = process.env.RESEND_API_KEY;
+    return key ? new ResendMailAdapter(key, process.env.RESEND_FROM ?? 'lyam@dss.name') : null;
+  }
+  async send(m: { tenant: string; to: string; subject: string; text: string; subjectUser: string }) {
+    if (!/^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}$/.test(m.to)) throw new Error('invalid recipient');
+    const r = await new Resend(this.key).emails.send({ from: this.from, to: m.to, subject: m.subject, text: m.text });
+    if (r.error) throw new Error(`resend delivery failed: ${r.error.message}`);
+  }
+}
 
 /** One-time codes by SMTP. The sender address and the provider are the operator's decision (IAM_SMTP_HOST, _PORT, _SECURE, _USER, _PASS, IAM_SMTP_FROM). */
 export class SmtpMailAdapter implements MailAdapter {
