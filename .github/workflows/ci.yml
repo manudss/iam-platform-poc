@@ -1,8 +1,6 @@
 # Runs on every PR (drafts included, re-run when marked ready) so the checks show on the PR page, and on demand
-# via Actions > ci > Run workflow. A push on a PR cancels that PR's previous run to save minutes.
-# Private repo + GitHub Free = 2,000 included Linux minutes per month (see docs.github.com billing docs); a full run
-# bills ~6-15 minutes (sum of the 4 jobs); usage above that is billed unless a budget with "stop usage" is set.
-# Each job is capped with timeout-minutes. Standard runners only.
+# via Actions > ci > Run workflow. A push on a PR cancels that PR's previous run.
+# The repo is public: GitHub-hosted standard runners are free for public repos. Jobs stay capped with timeout-minutes.
 # The api job downloads the real service binaries and runs the real-service suites (see the job comment and docs/e2e.md).
 # The core binary IS built, so the Rust-core end-to-end suite runs. The compose job starts the real docker-compose stack on the
 # runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts (container checks) and compose-app.e2e.spec.ts (application path: Dolt -> activation -> core over gRPC -> durable bus -> consumer on the containers).
