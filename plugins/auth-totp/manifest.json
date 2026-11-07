@@ -1,0 +1,20 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-totp",
+  "version": "1.0.0",
+  "name": "Authenticator app code / TOTP (base)",
+  "publisher": "iam-platform",
+  "kinds": ["auth-method"],
+  "base": true,
+  "provides": ["auth.totp"],
+  "hooks": [{ "name": "auth.prepare", "mode": "blocking" }, { "name": "auth.verify", "mode": "blocking" }, { "name": "auth.verification", "mode": "blocking" }],
+  "settings": [
+    { "key": "digits", "type": "select", "label": "Digits", "default": "6", "options": [{ "value": "6", "label": "6" }, { "value": "8", "label": "8" }], "group": "Code" },
+    { "key": "periodSeconds", "type": "select", "label": "Period (seconds)", "default": "30", "options": [{ "value": "30", "label": "30" }, { "value": "60", "label": "60" }], "group": "Code" },
+    { "key": "window", "type": "number", "label": "Accepted steps either side (clock drift)", "default": 1, "min": 0, "max": 2, "group": "Code" },
+    { "key": "issuer", "type": "string", "label": "Issuer shown in the app", "default": "IAM POC", "group": "Enrollment" }
+  ],
+  "authMethod": { "name": "Authenticator app code (TOTP)", "description": "Time-based one-time code (RFC 6238, HMAC-SHA-1) from an authenticator app. The secret is enrolled per user and never stored in Dolt.", "factor": "possession", "amr": "otp", "maturity": "implemented", "suggestedLevel": 7, "provisioning": "admin-demo", "inlineWithUsername": true },
+  "entrypoints": { "handlers": "handlers.mjs" },
+  "security": { "signed": true }
+}

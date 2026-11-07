@@ -8,6 +8,10 @@ import type { HookMode } from './manifest.js';
 export const HOOKS = new Map<string, HookMode[]>([
   ['auth.authenticate', ['blocking']], // verify a credential -> allow / deny / challenge
   ['auth.challenge', ['blocking']], // second factor or step-up prompt
+  ['auth.prepare', ['blocking']], // build the first prompt and the private state of a sign-in step
+  ['auth.verify', ['blocking']], // check the answers of a sign-in step
+  ['auth.interact', ['blocking']], // interactive step (keypad): one call per button press
+  ['auth.verification', ['blocking']], // what the method instance proves: { real, note }
   ['profile.enrich', ['blocking', 'async']], // add attributes or claims; the blocking mode is a merged bus query (step 3)
   ['identity.changed', ['async']], // joiner / mover / leaver, role change
   ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM) - documented bus exception (decision 8)

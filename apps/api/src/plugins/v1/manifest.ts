@@ -104,6 +104,22 @@ export interface MenuEntry {
   /** Console route the entry opens, for example `/applications`. */
   path: string;
 }
+/** v3: a plugin of kind `auth-method` that provides a sign-in method TYPE (slot `auth.<id>`).
+ * The chains and their levels stay in the core (decision 1); the method behaviour lives in the plugin's
+ * handlers (`auth.prepare`, `auth.verify`, `auth.interact`, `auth.verification`). */
+export interface AuthMethodDecl {
+  name: string;
+  description: string;
+  /** Category of factor the method DECLARES. A classification, not a measurement. */
+  factor: 'knowledge' | 'possession' | 'inherence' | 'other';
+  amr: string;
+  maturity: 'implemented' | 'catalogue';
+  suggestedLevel: number;
+  provisioning: 'directory' | 'admin-demo' | 'none';
+  /** The step runs on the same page as the username (first factor inline). */
+  inlineWithUsername?: boolean;
+}
+
 export interface PluginManifest {
   apiVersion: 'plugin/v1' | 'plugin/v3';
   id: string; // lowercase-kebab
@@ -137,6 +153,8 @@ export interface PluginManifest {
   httpRoutes?: HttpRouteDecl[];
   /** v3: console menu entries. An entry disappears with its plugin (disabled = out of the menu, routes refuse). */
   menu?: MenuEntry[];
+  /** v3: the sign-in method type this plugin provides (kind `auth-method` with a slot `auth.<id>`). */
+  authMethod?: AuthMethodDecl;
   /** v3: package security. `signed` requires a valid signature.json verified at load against the trust store. */
   security?: { signed?: boolean };
 }
@@ -164,6 +182,16 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     seenHooks.add(h.name);
   }
   const seen = new Set<string>();
+  if (m.authMethod) {
+    const a = m.authMethod;
+    if (!a.name) errs.push('authMethod.name is required');
+    if (!a.description) errs.push('authMethod.description is required');
+    if (!['knowledge', 'possession', 'inherence', 'other'].includes(a.factor)) errs.push(`authMethod.factor: unknown factor ${a.factor}`);
+    if (!a.amr) errs.push('authMethod.amr is required');
+    if (!['implemented', 'catalogue'].includes(a.maturity)) errs.push(`authMethod.maturity must be implemented or catalogue`);
+    if (!Number.isInteger(a.suggestedLevel) || a.suggestedLevel < 1 || a.suggestedLevel > 10) errs.push('authMethod.suggestedLevel must be a whole number from 1 to 10');
+    if (!['directory', 'admin-demo', 'none'].includes(a.provisioning)) errs.push(`authMethod.provisioning: unknown value ${a.provisioning}`);
+  }
   for (const f of m.settings ?? []) {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(f.key ?? '')) errs.push(`setting key ${f.key} is invalid`);
     if (seen.has(f.key)) errs.push(`setting ${f.key} declared twice`);

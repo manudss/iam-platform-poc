@@ -3,6 +3,10 @@
 export default function createHandlers() {
   const failures = new Map();
   return {
+    // The lockout changes the credential CHECK only: the prompt and the proof stay the base's.
+    'auth.prepare': (p, c) => c.base['auth.prepare'](p, c),
+    'auth.verify': (p, c) => c.base['auth.verify'](p, c),
+    'auth.verification': (p, c) => c.base['auth.verification'](p, c),
     'auth.authenticate': async (p, c) => {
       const n = failures.get(p.subject) ?? 0;
       if (n >= c.settings.maxFailures) return { outcome: 'deny', reason: 'locked' };
