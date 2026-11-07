@@ -1,8 +1,8 @@
 # iam-platform-poc
 
-Private proof of concept for a new IAM/IGA platform. Design choices come from the architecture document
-(stack: Angular, NestJS, Rust core, Dolt for versioned business data). No license has been granted for
-redistribution.
+Proof of concept for a new IAM/IGA platform: plugins, versioned business data on Dolt
+branches, an event bus, no-code workflows, and bounded AI access (MCP server and gateway).
+Stack: Angular, NestJS, Rust core, Dolt.
 
 Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md), [workflows](docs/workflows.md), [SSO: applications, OIDC provider, decision](docs/sso-connectors.md), [policy studio (Cedar rules)](docs/policy-studio.md), [event bus](docs/event-bus.md), [plugin contract v2 (plugins served by the bus)](docs/plugin-contract-v2.md).
 
@@ -119,3 +119,15 @@ Tests that boot the API use `src/testing/test-bus.ts` (real NATS + core, unique 
 registry unit tests use a fake bridge from `src/testing/fake-bus.ts`, not a production bypass.
 Build the core and set `NATS_SERVER_BIN` before `npm test`. Missing test infrastructure fails
 rather than silently using local handlers. CI runs only via `workflow_dispatch`.
+
+## License — Tous droits réservés / All rights reserved
+
+Copyright (c) 2026 Emmanuel De Saint Steban. This is **not** open source: no right to
+use, copy, modify, redistribute or reuse any part of this repository is granted
+without prior written permission. Public visibility on GitHub is for demonstration
+only (viewing and forking on GitHub per its Terms of Service). See [LICENSE](LICENSE).
+
+**Demonstration proof of concept**: not designed, tested or hardened for real-world
+use. Never use it in production or with real identities/data. Provided as is, without
+any warranty or support. Third-party open source components remain under their own
+licenses (see [NOTICE](NOTICE) and [docs/license-audit.md](docs/license-audit.md)).
