@@ -66,6 +66,16 @@ export class PluginRegistry {
   /** Replacements that failed at runtime (key tenant/plugin). A faulted replacement keeps its slot but answers every call with a refusal until an admin acts. */
   private faulted = new Set<string>();
 
+  /** Derived inventories (list/menu/screens/profileFields), computed once and cached per tenant (P1 cache):
+   * every state or registration mutation clears the whole map - these views are small and recomputed lazily. */
+  private derived = new Map<string, unknown>();
+  private derive<T>(key: string, compute: () => T): T {
+    const hit = this.derived.get(key);
+    if (hit !== undefined) return hit as T;
+    const v = compute(); this.derived.set(key, v); return v;
+  }
+  /** Public invalidation for the admin refresh path: re-derive every inventory on next read. */
+  invalidateInventories(): void { this.derived.clear(); }
   private bus?: BusBridge;
   /** Working branch this registry serves (decision 7): stamped on every envelope emitted through the bus. */
   private branchRef?: string;
@@ -104,6 +114,7 @@ export class PluginRegistry {
       if (r.faulted) this.faulted.add(this.k(r.tenant, r.plugin));
       if (r.enabled && p.manifest.extends) for (const sl of p.manifest.provides ?? []) this.chosen.set(this.k(r.tenant, sl), r.plugin);
     }
+    this.invalidateInventories();
   }
   /** Platform-core settings that are not a plugin (for example the authentication methods and chains). They live in the same versioned store as plugin settings, so a working branch holds them until Apply. */
   coreSettings(tenant: string, key: string) { return this.settings.get(tenant, key); }
@@ -156,22 +167,23 @@ export class PluginRegistry {
       impl = { ...impl, handlers: Object.fromEntries(Object.entries(impl.handlers).map(([k, h]) => [k, (payload: unknown, ctx: PluginContext) => h(payload, { ...ctx, base: base.handlers })])) };
     }
     this.impls.set(m.id, impl);
+    this.invalidateInventories();
   }
 
   list(tenant: string) {
-    return [...this.impls.values()].map((i) => {
+    return this.derive(`list:${tenant}`, () => [...this.impls.values()].map((i) => {
       const s = this.state.get(this.k(tenant, i.manifest.id));
       const base = !!i.manifest.base;
       return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), installed: base ? true : !!s?.installed,
         /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
         requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') },
         grants: s?.grants ?? {} };
-    });
+    }));
   }
 
   /** Profile fields declared by the plugins that are active for this tenant. */
   profileFields(tenant: string): { plugin: string; fields: import('../../profile/fields.js').ProfileFieldDecl[] }[] {
-    return [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! }));
+    return this.derive(`pf:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! })));
   }
 
   /** Install: runs migrations once (checksum-checked), seeds, only if the admin granted `install`. */
@@ -195,6 +207,7 @@ export class PluginRegistry {
     const st = this.state.get(this.k(tenant, id)) ?? { enabled: false, grants: {}, installed: false };
     st.installed = true; st.grants = { ...st.grants, ...grants };
     this.state.set(this.k(tenant, id), st);
+    this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.install', plugin: id });
   }
@@ -208,6 +221,7 @@ export class PluginRegistry {
     const r = validateSettings(p.manifest.settings, merged);
     if (!r.ok) throw new PluginError('invalid-settings', r.errors.join('; '));
     await this.settings.put(tenant, id, r.values);
+    this.invalidateInventories();
     this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
   }
 
@@ -236,6 +250,7 @@ export class PluginRegistry {
     // A replacement takes over its slots, the base keeps its own settings and data untouched.
     if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
     this.faulted.delete(this.k(tenant, id));
+    this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.enable', plugin: id });
     await this.activity();
@@ -279,6 +294,7 @@ export class PluginRegistry {
     st.enabled = false;
     this.faulted.delete(this.k(tenant, id));
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
+    this.invalidateInventories();
     await this.persist(tenant, id);
     // The replacement's own state (failure counters, lockouts) is not carried to the base: say so in the audit trail.
     this.emitAudit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
@@ -318,6 +334,7 @@ export class PluginRegistry {
   async markFaulted(tenant: string, id: string, detail: string) {
     if (this.faulted.has(this.k(tenant, id))) return;
     this.faulted.add(this.k(tenant, id));
+    this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.fault.closed', plugin: id, detail });
   }
@@ -412,26 +429,30 @@ export class PluginRegistry {
 
   /** Console menu entries declared by the plugins active for this tenant (manifest v3 `menu`). An entry disappears with its plugin. */
   menu(tenant: string) {
-    const out: { plugin: string; id: string; title: string; area: 'admin' | 'self-service'; group: string; icon?: string; order?: number; path: string }[] = [];
-    for (const p of this.impls.values()) {
-      if (!this.isActive(tenant, p.manifest.id)) continue;
-      for (const m of p.manifest.menu ?? []) out.push({ plugin: p.manifest.id, id: m.id, title: m.title, area: m.area, group: m.group, icon: m.icon, order: m.order, path: m.path });
-    }
-    return out.sort((a, b) => (a.order ?? 50) - (b.order ?? 50) || a.title.localeCompare(b.title));
+    return this.derive(`menu:${tenant}`, () => {
+      const out: { plugin: string; id: string; title: string; area: 'admin' | 'self-service'; group: string; icon?: string; order?: number; path: string }[] = [];
+      for (const p of this.impls.values()) {
+        if (!this.isActive(tenant, p.manifest.id)) continue;
+        for (const m of p.manifest.menu ?? []) out.push({ plugin: p.manifest.id, id: m.id, title: m.title, area: m.area, group: m.group, icon: m.icon, order: m.order, path: m.path });
+      }
+      return out.sort((a, b) => (a.order ?? 50) - (b.order ?? 50) || a.title.localeCompare(b.title));
+    });
   }
 
   /** Screens visible to the admin console. Component screens only appear if granted. */
   screens(tenant: string) {
-    const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string }[] = [];
-    for (const p of this.impls.values()) {
-      if (!this.isActive(tenant, p.manifest.id)) continue;
-      const g = this.state.get(this.k(tenant, p.manifest.id))?.grants ?? {};
-      for (const s of p.manifest.screens ?? []) {
-        if (s.render === 'component' && !g.uiComponents && !p.manifest.base) continue;
-        res.push({ plugin: p.manifest.id, id: s.id, title: s.title, area: s.area, render: s.render, schemaRef: s.schemaRef });
+    return this.derive(`screens:${tenant}`, () => {
+      const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string }[] = [];
+      for (const p of this.impls.values()) {
+        if (!this.isActive(tenant, p.manifest.id)) continue;
+        const g = this.state.get(this.k(tenant, p.manifest.id))?.grants ?? {};
+        for (const s of p.manifest.screens ?? []) {
+          if (s.render === 'component' && !g.uiComponents && !p.manifest.base) continue;
+          res.push({ plugin: p.manifest.id, id: s.id, title: s.title, area: s.area, render: s.render, schemaRef: s.schemaRef });
+        }
       }
-    }
-    return res;
+      return res;
+    });
   }
 }
 

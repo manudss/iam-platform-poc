@@ -55,6 +55,9 @@ export class BranchRegistries {
     }
     return r;
   }
+  /** Re-derives the cached inventories of every built registry (P1 cache): the admin refresh path calls this
+   * together with the shared catalogue invalidation. */
+  invalidateInventoriesEverywhere() { for (const reg of this.resolved.values()) reg.invalidateInventories(); }
   /** Registers an archive-imported plugin into every already-built registry. Branch registries built LATER see it after a restart (they register the shipped list) - the import response says so. Only the duplicate case is skipped; any other registration error aborts the import (P0-7: errors are not absorbed). */
   registerEverywhere(impl: PluginImpl) {
     for (const reg of this.resolved.values()) if (!reg.impl(impl.manifest.id)) reg.register(impl);

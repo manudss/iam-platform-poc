@@ -82,7 +82,7 @@ export class PluginsAdminController {
    * re-verifies every package. Plugin-affecting actions (archive import, uninstall) already invalidate the
    * catalogue; this endpoint is the admin's explicit path, used by the console's refresh button. */
   @UseGuards(AdminGuard) @Post('refresh')
-  refresh(@Param('tenant') t: string) { return wrap(async () => { refreshPluginCatalogue(); return { refreshed: true, tenant: t }; }); }
+  refresh(@Param('tenant') t: string) { return wrap(async () => { refreshPluginCatalogue(); this.reg.invalidateInventories(); this.branches?.invalidateInventoriesEverywhere(); return { refreshed: true, tenant: t }; }); }
 
   @UseGuards(AdminGuard) @Post(':id/disable')
   disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }

@@ -308,4 +308,26 @@ describe('bus facade (step 2)', () => {
     await reg.disable(T, 'org-manager');
     assert.equal(fired, 2);
   });
+
+  it('P1 cache: inventories are computed once, then invalidated on install, enable, disable and refresh', async () => {
+    reg.register(orgManager);
+    const l1 = reg.list(T);
+    assert.equal(reg.list(T), l1, 'list is cached between reads');
+    const m1 = reg.menu(T);
+    assert.equal(reg.menu(T), m1, 'menu is cached between reads');
+    await reg.install(T, 'org-manager', { install: true });
+    const l2 = reg.list(T);
+    assert.notEqual(l2, l1, 'install invalidates the cached list');
+    assert.equal(l2.find((p) => p.id === 'org-manager')?.installed, true);
+    await reg.enable(T, 'org-manager', {});
+    const l3 = reg.list(T);
+    assert.notEqual(l3, l2, 'enable invalidates the cached list');
+    assert.equal(l3.find((p) => p.id === 'org-manager')?.enabled, true);
+    await reg.disable(T, 'org-manager');
+    assert.equal(reg.list(T).find((p) => p.id === 'org-manager')?.enabled, false, 'disable invalidates too');
+    const l4 = reg.list(T);
+    reg.invalidateInventories(); // the admin refresh path
+    assert.notEqual(reg.list(T), l4, 'manual refresh recomputes');
+    assert.deepEqual(reg.list(T), l4, 'same content, fresh derivation');
+  });
 });
