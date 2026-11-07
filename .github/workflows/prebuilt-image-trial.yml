@@ -17,6 +17,7 @@ permissions:
   contents: read
   actions: write # the refresh script may dispatch the image build as a backstop
   issues: write # it also maintains the PR status comment
+  pull-requests: write # PR-conversation comments via the issues API on pull_request runs
 
 jobs:
   deploy-prebuilt-preview:
