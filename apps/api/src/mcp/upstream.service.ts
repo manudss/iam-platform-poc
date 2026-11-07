@@ -1,7 +1,10 @@
 import { BadRequestException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createConnection, Connection } from 'mysql2/promise';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
 import { VersioningService } from '../versioning/versioning.service.js';
+import { defaultPluginsDir } from '../plugins/v1/loader.js';
 
 /** Public view of a registered external MCP server. The upstream token is NEVER returned by any route. */
 export interface McpUpstream {
@@ -13,90 +16,35 @@ export type UpstreamAuthType = 'bearer' | 'basic';
 interface UpstreamTool { name: string; description?: string; inputSchema?: Record<string, unknown> }
 interface Row { [k: string]: unknown }
 
-const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const ID = /^up-[0-9a-f]{12}$/;
 const LIST_CACHE_MS = 60_000;
 
 /**
- * Registry of external MCP servers relayed by the platform ("MCP gateway", P1).
- *
- * Security posture, enforced here server-side:
- *  - only an administrator registers an upstream; an AI agent can never choose the URL it reaches (SSRF);
- *  - the upstream token is stored encrypted (AES-256-GCM, key from IAM_MCP_UPSTREAM_KEY - POC grade: a real
- *    deployment injects a KMS/vault-managed key), is never returned by any route and never written to any log
- *    or trace entry (outbound errors are redacted against it before being recorded);
- *  - NO TOKEN PASSTHROUGH (MCP spec, security best practices): the agent's session secret terminates here;
- *    the relay authenticates to the upstream with the upstream's OWN stored token. The agent never sees it.
- *  - http is accepted only towards loopback hosts (local demo / tests); anything remote requires https.
- *    IAM_MCP_UPSTREAM_HOSTS (comma-separated hostnames) optionally restricts the allowed hosts further.
+ * Registry of external MCP servers relayed by the platform ("MCP gateway", P1): storage and HTTP relay stay
+ * in this core adapter; the security rules (URL/auth validation, token sealing, redaction) live in the
+ * `mcp-gateway` plugin folder (`plugins/mcp-gateway/upstream.mjs`) and are re-exported here.
  */
-export function validateUpstreamUrl(raw: unknown): string {
-  if (typeof raw !== 'string' || raw.length > 500) throw new BadRequestException('url required (max 500 chars)');
-  let u: URL;
-  try { u = new URL(raw); } catch { throw new BadRequestException('url must be an absolute URL'); }
-  const host = u.hostname.toLowerCase();
-  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
-  if (u.protocol === 'http:' && !loopback) throw new BadRequestException('http is only allowed towards a loopback host (local demo); use https for a remote server');
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new BadRequestException('only http(s) URLs are supported');
-  if (u.username || u.password) throw new BadRequestException('credentials in the URL are refused: use the token field');
-  const allow = (process.env.IAM_MCP_UPSTREAM_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
-  if (allow.length && !allow.includes(host)) throw new BadRequestException(`host "${host}" is not in IAM_MCP_UPSTREAM_HOSTS`);
-  return u.toString();
+interface UpstreamRulesModule {
+  validateUpstreamUrl: (raw: unknown) => string;
+  validUpstreamName: (name: unknown) => name is string;
+  authHeader: (authType: UpstreamAuthType, authUser: string | null, token: string) => string;
+  secretValues: (authType: UpstreamAuthType, authUser: string | null, token: string) => string[];
+  validateAuth: (authType: unknown, authUser: unknown) => { type: UpstreamAuthType; user: string | null };
+  sealToken: (token: string) => string;
+  openToken: (sealed: string) => string;
+  redact: (msg: string, token: string) => string;
+  UpstreamHttpError: new (message: string, status: number) => Error & { status: number };
 }
-
-export const validUpstreamName = (name: unknown): name is string => typeof name === 'string' && NAME.test(name);
-
-/**
- * Authorization header the relay sends to the upstream (P3).
- *  - bearer (default): `Bearer <token>` - the common remote-MCP scheme;
- *  - basic: `Basic base64(<user>:<token>)` - the Atlassian API-token scheme (account email + scoped token),
- *    which the Atlassian Rovo MCP accepts for machine-to-machine access next to OAuth 2.1.
- * The header is built server-side only; neither the token nor the derived credential ever leaves the platform.
- */
-export function authHeader(authType: UpstreamAuthType, authUser: string | null, token: string): string {
-  if (authType === 'basic') {
-    if (!authUser) throw new Error('basic auth requires the upstream auth user (e.g. the Atlassian account email)');
-    return `Basic ${Buffer.from(`${authUser}:${token}`, 'utf8').toString('base64')}`;
-  }
-  return `Bearer ${token}`;
-}
-
-/** Values that must never appear in a log, trace or error: the raw token AND the derived credential. */
-const secretValues = (authType: UpstreamAuthType, authUser: string | null, token: string): string[] =>
-  authType === 'basic' && authUser ? [token, authHeader(authType, authUser, token), Buffer.from(`${authUser}:${token}`, 'utf8').toString('base64')] : [token];
-
-/** Validation of the auth fields at registration: basic requires its user (the Atlassian account email). */
-function validateAuth(authType: unknown, authUser: unknown): { type: UpstreamAuthType; user: string | null } {
-  if (authType === undefined || authType === null || authType === 'bearer') return { type: 'bearer', user: null };
-  if (authType !== 'basic') throw new BadRequestException('authType must be "bearer" (default) or "basic" (Atlassian-style email:token)');
-  if (typeof authUser !== 'string' || !/^[^\s:]{3,200}$/.test(authUser.trim()))
-    throw new BadRequestException('authUser is required for basic auth: the upstream account email or id (3..200 chars, no space or colon)');
-  return { type: 'basic', user: authUser.trim() };
-}
-
-/** Token encryption at rest. POC-grade: the key comes from the environment, a deployment would use a KMS. */
-const encKey = () => createHash('sha256').update(process.env.IAM_MCP_UPSTREAM_KEY ?? 'demo-only-not-a-secret').digest();
-export function sealToken(token: string): string {
-  const iv = randomBytes(12);
-  const c = createCipheriv('aes-256-gcm', encKey(), iv);
-  const enc = Buffer.concat([c.update(token, 'utf8'), c.final()]);
-  return `${iv.toString('base64')}.${c.getAuthTag().toString('base64')}.${enc.toString('base64')}`;
-}
-export function openToken(sealed: string): string {
-  const [iv, tag, data] = sealed.split('.').map((p) => Buffer.from(p, 'base64'));
-  if (!iv?.length || !tag?.length || !data?.length) throw new Error('corrupt stored token');
-  const d = createDecipheriv('aes-256-gcm', encKey(), iv);
-  d.setAuthTag(tag);
-  return Buffer.concat([d.update(data), d.final()]).toString('utf8');
-}
-
-/** Error text from an upstream may quote a request: the stored token is redacted before anything is logged or returned. */
-export const redact = (msg: string, token: string) => (token ? msg.split(token).join('[redacted]') : msg);
-
-/** HTTP-level failure from an upstream call: carries the status so the session lifecycle can spot a lost session. */
-export class UpstreamHttpError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
-}
+const plugin = createRequire(import.meta.url)(resolve(defaultPluginsDir(), 'mcp-gateway', 'upstream.mjs')) as UpstreamRulesModule;
+export const validateUpstreamUrl = plugin.validateUpstreamUrl;
+export const validUpstreamName = plugin.validUpstreamName;
+export const authHeader = plugin.authHeader;
+const secretValues = plugin.secretValues;
+const validateAuth = plugin.validateAuth;
+export const sealToken = plugin.sealToken;
+export const openToken = plugin.openToken;
+export const redact = plugin.redact;
+export const UpstreamHttpError = plugin.UpstreamHttpError as unknown as new (message: string, status: number) => Error & { status: number };
 
 interface RpcOptions {
   /** mcp-session-id to attach (sessionful upstreams, e.g. the Atlassian Rovo MCP). */

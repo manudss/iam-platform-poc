@@ -31,6 +31,7 @@ export const oidcProvider = need('oidc-provider');
 export const samlIdp = need('saml-idp');
 export const csvConnector = need('csv-connector');
 export const scimConnector = need('scim-connector');
+export const mcpGateway = need('mcp-gateway');
 
 /** Fresh lockout plugin per call (fresh failure counters), keeping the factory shape the callers use. */
 export function authPasswordLockout(_failures?: unknown, _base?: unknown): PluginImpl {
