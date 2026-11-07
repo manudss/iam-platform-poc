@@ -10,7 +10,10 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { validateManifest } from '../plugins/v1/manifest.js';
 import { HOOKS } from '../plugins/v1/hooks.js';
 import { hrAttributes } from '../plugins/v1/builtin/index.js';
-import { BASE_FIELDS, checkValue, effectiveSchema, toCatalog, validateFieldDecls, validateProfileConfig } from './fields.js';
+import { BASE_FIELDS, toCatalog, validateFieldDecls } from './fields.js';
+import { MemoryMigrationStore, MemorySettingsStore } from '../plugins/v1/memory-stores.js';
+import { fakeBusBridge } from '../testing/fake-bus.js';
+import { directory } from '../plugins/v1/builtin/index.js';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
 
 // Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
@@ -20,6 +23,19 @@ after(async () => { await testBus?.close(); });
 
 const ADMIN = 'x'.repeat(20), T = 'acme-demo';
 const CAT = [...BASE_FIELDS, ...toCatalog('hr-attributes', hrAttributes.manifest.profileFields!)];
+
+/** The management RULES are answered by the directory.default slot (phase 2 step 1): these tests exercise them
+ * through the registry, like the runtime does. Declarations stay synchronous (manifest-time rule). */
+const rulesReg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+rulesReg.register(directory);
+rulesReg.setBus(fakeBusBridge(rulesReg));
+const RULES_T = 't-rules';
+const slot = <R>(hook: string, payload: unknown) => rulesReg.callSlot<R>(RULES_T, 'directory.default', hook, payload);
+const validateConfig = async (input: unknown) => (await slot<{ valid: boolean; config?: { fields: Record<string, object> }; errors?: string[] }>('directory.fields.validateConfig', { input, catalogue: CAT })).result;
+const schemaFor = async (ctx: 'signup' | 'self' | 'admin', cfg: unknown) => (await slot<{ fields: { key: string; klass: string; required: boolean; editable: boolean }[] }>('directory.fields.effectiveSchema', { catalogue: CAT, config: cfg, context: ctx })).result.fields;
+const check = async (field: object, value: unknown) => (await slot<{ valid: boolean; value?: unknown; error?: string }>('directory.fields.checkValue', { field, value })).result;
+const badConfig = async (input: unknown, re: RegExp) => { const r = await validateConfig(input); assert.ok(!r.valid, `expected refusal: ${JSON.stringify(input)}`); assert.ok(re.test(r.errors!.join('; ')), r.errors!.join('; ')); };
+const badValue = async (field: object, value: unknown, re: RegExp) => { const r = await check(field, value); assert.ok(!r.valid, `expected refusal: ${JSON.stringify(value)}`); assert.ok(re.test(r.error!), r.error!); };
 
 describe('profile field rules (pure)', () => {
   it('a plugin cannot declare an authority field that defaults to user-editable or sign-up', () => {
@@ -37,42 +53,44 @@ describe('profile field rules (pure)', () => {
     assert.deepEqual(validateManifest(hrAttributes.manifest, HOOKS), []);
     assert.ok(validateManifest({ ...hrAttributes.manifest, profileFields: [{ key: 'X', type: 'string', label: 'x' }] }, HOOKS).length);
   });
-  it('configuration: an authority field can never be user-editable or asked at sign-up, whatever the admin sends', () => {
-    for (const bad of [{ selfEdit: true }, { signup: 'optional' }, { signup: 'required' }]) assert.throws(() => validateProfileConfig({ fields: { 'hr-attributes.employee_grade': bad } }, CAT), /authority field/);
-    assert.throws(() => validateProfileConfig({ fields: { 'base.department': { selfEdit: true } } }, CAT), /authority/);
-    assert.throws(() => validateProfileConfig({ fields: { 'base.manager_id': { signup: 'optional' } } }, CAT), /authority/);
+  it('configuration: an authority field can never be user-editable or asked at sign-up, whatever the admin sends', async () => {
+    for (const bad of [{ selfEdit: true }, { signup: 'optional' }, { signup: 'required' }]) await badConfig({ fields: { 'hr-attributes.employee_grade': bad } }, /authority field/);
+    await badConfig({ fields: { 'base.department': { selfEdit: true } } }, /authority/);
+    await badConfig({ fields: { 'base.manager_id': { signup: 'optional' } } }, /authority/);
   });
-  it('configuration: consistency and unknown input', () => {
-    assert.throws(() => validateProfileConfig({ fields: { 'hr-attributes.phone': { enabled: false, selfEdit: true } } }, CAT), /disabled/);
-    assert.throws(() => validateProfileConfig({ fields: { 'hr-attributes.phone': { selfView: false, selfEdit: true } } }, CAT), /selfEdit needs selfView/);
-    assert.throws(() => validateProfileConfig({ fields: { 'nope.x': {} } }, CAT), /unknown profile field/);
-    assert.throws(() => validateProfileConfig({ fields: { 'hr-attributes.phone': { role: 'admin' } } }, CAT), /unknown setting/);
-    assert.throws(() => validateProfileConfig({ fields: {}, roles: ['admin'] }, CAT), /unknown configuration field/);
-    assert.deepEqual(validateProfileConfig({ fields: { 'hr-attributes.phone': { selfEdit: true, order: 3 } } }, CAT).fields['hr-attributes.phone'], { selfEdit: true, order: 3 });
+  it('configuration: consistency and unknown input', async () => {
+    await badConfig({ fields: { 'hr-attributes.phone': { enabled: false, selfEdit: true } } }, /disabled/);
+    await badConfig({ fields: { 'hr-attributes.phone': { selfView: false, selfEdit: true } } }, /selfEdit needs selfView/);
+    await badConfig({ fields: { 'nope.x': {} } }, /unknown profile field/);
+    await badConfig({ fields: { 'hr-attributes.phone': { role: 'admin' } } }, /unknown setting/);
+    await badConfig({ fields: {}, roles: ['admin'] }, /unknown configuration field/);
+    const ok = await validateConfig({ fields: { 'hr-attributes.phone': { selfEdit: true, order: 3 } } });
+    assert.ok(ok.valid, ok.errors?.join('; ') ?? '');
+    assert.deepEqual(ok.config!.fields['hr-attributes.phone'], { selfEdit: true, order: 3 });
   });
-  it('effective schema per context: sign-up never offers authority fields, base fields are not editable through the value store', () => {
+  it('effective schema per context: sign-up never offers authority fields, base fields are not editable through the value store', async () => {
     const cfg = { fields: { 'hr-attributes.job_title': { signup: 'required' as const } } };
-    const su = effectiveSchema(CAT, cfg, 'signup'); assert.ok(su.every((f) => f.klass === 'profile'));
+    const su = await schemaFor('signup', cfg); assert.ok(su.every((f) => f.klass === 'profile'));
     assert.equal(su.find((f) => f.key === 'hr-attributes.job_title')!.required, true);
     assert.ok(!su.some((f) => f.key.includes('grade') || f.key === 'base.department'));
-    const me = effectiveSchema(CAT, cfg, 'self'); assert.equal(me.find((f) => f.key === 'hr-attributes.employee_grade')!.editable, false);
+    const me = await schemaFor('self', cfg); assert.equal(me.find((f) => f.key === 'hr-attributes.employee_grade')!.editable, false);
     assert.equal(me.find((f) => f.key === 'base.display_name')!.editable, false);
-    assert.equal(effectiveSchema(CAT, { fields: { 'hr-attributes.phone': { enabled: false } } }, 'admin').some((f) => f.key === 'hr-attributes.phone'), false);
+    assert.equal((await schemaFor('admin', { fields: { 'hr-attributes.phone': { enabled: false } } })).some((f) => f.key === 'hr-attributes.phone'), false);
   });
-  it('a plugin cannot rely on a validation hook that does not exist: the manifest is refused, never silently ignored', () => {
+  it('a plugin cannot rely on a validation hook that does not exist: the manifest is refused, never silently ignored', async () => {
     for (const name of ['profile.validate', 'signup.check']) assert.ok(validateManifest({ ...hrAttributes.manifest, hooks: [{ name, mode: 'blocking' }] } as never, HOOKS).some((e) => /unknown hook/.test(e)), name);
     const f = { fullKey: 'p.code', type: 'string' as const, pattern: '^[A-Z]{3}$' };
-    assert.equal(checkValue(f, 'ABC'), 'ABC'); assert.throws(() => checkValue(f, 'abc'), /format/);
+    assert.equal((await check(f, 'ABC')).value, 'ABC'); await badValue(f, 'abc', /format/);
   });
-  it('values are checked by type', () => {
+  it('values are checked by type', async () => {
     const f = (k: string) => CAT.find((c) => c.fullKey === k)!;
-    assert.equal(checkValue(f('hr-attributes.phone'), '+33 6 12 34 56 78'), '+33 6 12 34 56 78');
-    assert.throws(() => checkValue(f('hr-attributes.phone'), 'call me'), /phone/);
-    assert.throws(() => checkValue(f('hr-attributes.language'), 'de'), /options/);
-    assert.equal(checkValue(f('hr-attributes.job_title'), '  Engineer '), 'Engineer');
-    assert.equal(checkValue(f('hr-attributes.job_title'), ''), null);
-    assert.throws(() => checkValue(f('hr-attributes.job_title'), 'x'.repeat(61)), /length/);
-    assert.throws(() => checkValue(f('hr-attributes.job_title'), 5), /text/);
+    assert.equal((await check(f('hr-attributes.phone'), '+33 6 12 34 56 78')).value, '+33 6 12 34 56 78');
+    await badValue(f('hr-attributes.phone'), 'call me', /phone/);
+    await badValue(f('hr-attributes.language'), 'de', /options/);
+    assert.equal((await check(f('hr-attributes.job_title'), '  Engineer ')).value, 'Engineer');
+    assert.equal((await check(f('hr-attributes.job_title'), '')).value, null);
+    await badValue(f('hr-attributes.job_title'), 'x'.repeat(61), /length/);
+    await badValue(f('hr-attributes.job_title'), 5, /text/);
   });
 });
 

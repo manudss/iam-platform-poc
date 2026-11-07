@@ -4,7 +4,7 @@ import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { branchName } from '../versioning/guards.js';
-import { BASE_FIELDS, CORE_PROFILE_SETTINGS_ID, CatalogField, Context, EffectiveField, ProfileConfig, checkValue, effectiveSchema, parseProfileConfig, settingFor, toCatalog, validateProfileConfig } from './fields.js';
+import { BASE_FIELDS, CORE_PROFILE_SETTINGS_ID, CatalogField, Context, EffectiveField, ProfileConfig, settingFor, toCatalog } from './fields.js';
 import { ProfileValueStore, Values } from './store.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 
@@ -29,14 +29,24 @@ export class ProfileService {
   }
   async activePlugins(tenant: string, ref: 'live' | 'work' = 'live'): Promise<string[]> { return (await this.registry(ref)).list(tenant).filter((x: { id: string; enabled?: boolean; active?: boolean }) => x.enabled ?? x.active).map((x: { id: string }) => x.id); }
   async pluginActive(tenant: string, id: string, ref: 'live' | 'work') { return (await this.registry(ref)).isActive(tenant, id); }
-  async config(tenant: string, ref: 'live' | 'work'): Promise<ProfileConfig> { return parseProfileConfig(await (await this.registry(ref)).coreSettings(tenant, CORE_PROFILE_SETTINGS_ID)); }
+  async config(tenant: string, ref: 'live' | 'work'): Promise<ProfileConfig> {
+    const reg = await this.registry(ref);
+    const raw = await reg.coreSettings(tenant, CORE_PROFILE_SETTINGS_ID);
+    return (await reg.callSlot<{ config: ProfileConfig }>(tenant, 'directory.default', 'directory.fields.parseConfig', { value: raw })).result.config;
+  }
   async saveConfig(tenant: string, input: unknown): Promise<ProfileConfig> {
-    const cfg = validateProfileConfig(input, await this.catalogue(tenant, 'work'));
+    const cat = await this.catalogue(tenant, 'work');
+    const v = (await (await this.registry('work')).callSlot<{ valid: boolean; config?: ProfileConfig; errors?: string[] }>(tenant, 'directory.default', 'directory.fields.validateConfig', { input, catalogue: cat })).result;
+    if (!v.valid) throw new BadRequestException(v.errors?.join('; ') ?? 'invalid profile configuration');
+    const cfg = v.config!;
     if (cfg.signup?.open && !this.signupAllowed()) throw new BadRequestException('public sign-up can only be opened in the hosted workspace mode (it is refused here, whatever the setting)');
     await (await this.registry('work', true)).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
     return cfg;
   }
-  async schema(tenant: string, ctx: Context, ref: 'live' | 'work'): Promise<EffectiveField[]> { return effectiveSchema(await this.catalogue(tenant, ref), await this.config(tenant, ref), ctx); }
+  async schema(tenant: string, ctx: Context, ref: 'live' | 'work'): Promise<EffectiveField[]> {
+    const cat = await this.catalogue(tenant, ref), cfg = await this.config(tenant, ref);
+    return (await (await this.registry(ref)).callSlot<{ fields: EffectiveField[] }>(tenant, 'directory.default', 'directory.fields.effectiveSchema', { catalogue: cat, config: cfg, context: ctx })).result.fields;
+  }
 
   private async subject(tenant: string, id: string, ref: 'live' | 'work') {
     if (!SUBJECT.test(id)) throw new BadRequestException('invalid user id');
@@ -121,9 +131,16 @@ export class ProfileService {
       const s = settingFor(f, cfg);
       const allowed = s.enabled && f.storage === 'values' && (ctx === 'self' ? s.selfEdit && f.klass === 'profile' : s.adminEdit);
       if (!allowed) throw new ForbiddenException(`${k} cannot be changed here`);
-      out[k] = checkValue(f, v);
+      out[k] = await this.checkValue(tenant, ref, f, v);
     }
     return out;
+  }
+
+  /** One entered value against the directory slot's rule (phase 2 step 1): a refusal is a 400, never a plugin fault. */
+  private async checkValue(tenant: string, ref: 'live' | 'work', f: CatalogField, v: unknown): Promise<string | number | boolean | null> {
+    const r = (await (await this.registry(ref)).callSlot<{ valid: boolean; value?: string | number | boolean | null; error?: string }>(tenant, 'directory.default', 'directory.fields.checkValue', { field: f, value: v })).result;
+    if (!r.valid) throw new BadRequestException(r.error ?? 'invalid value');
+    return r.value ?? null;
   }
 
   /** Sign-up support. The switch and the schema are the LIVE ones: nothing staged on a branch opens the public form. */
@@ -136,7 +153,7 @@ export class ProfileService {
     const cat = await this.catalogue(tenant, 'live'), out: Record<string, string | number | boolean | null> = {};
     for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
       if (!schema.some((f) => f.key === k)) throw new BadRequestException(`${k} is not asked at sign-up`);
-      out[k] = checkValue(cat.find((c) => c.fullKey === k)!, v);
+      out[k] = await this.checkValue(tenant, 'live', cat.find((c) => c.fullKey === k)!, v);
     }
     for (const f of schema) if (f.required && (out[f.key] === undefined || out[f.key] === null || out[f.key] === '')) throw new BadRequestException(`${f.label} is required`);
     return out;

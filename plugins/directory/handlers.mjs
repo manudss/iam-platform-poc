@@ -18,6 +18,9 @@ export default {
     catch (e) { return { valid: false, errors: [String(e?.message ?? e)] }; }
   },
   'directory.fields.effectiveSchema': ({ catalogue, config, context }) => ({ fields: fields.effectiveSchema(catalogue, config, context) }),
-  'directory.fields.checkValue': ({ field, value }) => ({ value: fields.checkValue(field, value) }),
+  'directory.fields.checkValue': ({ field, value }) => {
+    try { return { valid: true, value: fields.checkValue(field, value) }; }
+    catch (e) { return { valid: false, error: String(e?.message ?? e) }; }
+  },
   'directory.effects.compute': ({ prev, cur }) => ({ changes: effects.diff(prev, cur) }),
 };

@@ -58,20 +58,16 @@ interface DirectoryFieldsModule {
   validateFieldDecls: (plugin: string, fields: ProfileFieldDecl[] | undefined) => string[];
   toCatalog: (plugin: string, fields: ProfileFieldDecl[]) => CatalogField[];
   settingFor: (f: CatalogField, cfg: ProfileConfig) => FieldSetting;
-  parseProfileConfig: (v: Record<string, unknown> | undefined) => ProfileConfig;
-  validateProfileConfig: (input: unknown, catalogue: CatalogField[]) => ProfileConfig;
-  effectiveSchema: (catalogue: CatalogField[], cfg: ProfileConfig, ctx: Context) => EffectiveField[];
-  checkValue: (f: { fullKey: string; type: ProfileFieldType; options?: { value: string }[]; min?: number; max?: number; pattern?: string }, v: unknown) => string | number | boolean | null;
 }
 const plugin = loadPluginModule('directory', 'fields.mjs') as DirectoryFieldsModule;
 
 export const SAFE_DEFAULTS = plugin.SAFE_DEFAULTS;
 /** The base fields. They live in the identities table (UsersService); a plugin can never add a column to it. */
 export const BASE_FIELDS = plugin.BASE_FIELDS;
+/** Manifest-time declaration rule: registration is synchronous, so the manifest validator keeps this core-side
+ * (the same rule is answered on the directory.default slot for runtime uses). */
 export const validateFieldDecls = plugin.validateFieldDecls;
+/** Mechanical catalogue mapping (no rule): stays core. The RULES (parse/validate config, effective schema, value
+ * checking) are answered by the directory.default slot - ProfileService calls them through callSlot. */
 export const toCatalog = plugin.toCatalog;
 export const settingFor = plugin.settingFor;
-export const parseProfileConfig = plugin.parseProfileConfig;
-export const validateProfileConfig = plugin.validateProfileConfig;
-export const effectiveSchema = plugin.effectiveSchema;
-export const checkValue = plugin.checkValue;
