@@ -14,7 +14,7 @@ import { PluginError, PluginImpl } from './registry.js';
  *   plugins/<id>/signature.json  package signature over the folder files (see scripts/plugin-pack.mjs)
  * The loader scans the folder tree, validates each manifest with the SAME rules as the registry, checks the
  * package signature against the trust store, and returns PluginImpl records ready for `registry.register`.
- * A replacement (`extends`) is wrapped so its handlers receive the base plugin's handlers as `ctx.base`.
+ * A replacement (`extends`) receives the REGISTERED base plugin's handlers as `ctx.base` (wired by the registry at register time).
  */
 
 export interface SignatureFile { alg: 'ed25519'; publisher: string; files: Record<string, string>; signature: string }
@@ -117,15 +117,7 @@ export function loadPlugins(dir: string = defaultPluginsDir(), opts: LoadOptions
     }
     impls.push({ manifest, handlers });
   }
-  // Wrap replacements so their handlers receive the base plugin's handlers as ctx.base (contract of `extends`).
-  const byId = new Map(impls.map((i) => [i.manifest.id, i]));
-  for (const impl of impls) {
-    const baseId = impl.manifest.extends;
-    if (!baseId) continue;
-    const base = byId.get(baseId);
-    if (!base) continue; // the registry reports the missing base with its own message
-    const raw = impl.handlers;
-    impl.handlers = Object.fromEntries(Object.entries(raw).map(([k, h]) => [k, (payload: unknown, ctx: Parameters<HookHandler>[1]) => h(payload, { ...ctx, base: base.handlers })]));
-  }
+  // Replacements (`extends`) are NOT wrapped here: the registry wraps them at register() against the base
+  // actually registered there, which may carry runtime overrides (see registry.ts). ctx.base is set there.
   return impls;
 }

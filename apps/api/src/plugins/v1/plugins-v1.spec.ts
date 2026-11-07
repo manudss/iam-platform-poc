@@ -38,6 +38,20 @@ describe('plugin registry v1', () => {
     assert.throws(() => reg.register({ manifest: m3, handlers: {} }), /must handle base hook/);
   });
 
+  it('a replacement delegates to the base REGISTERED in this registry, not the one the loader saw (directory-auth override)', async () => {
+    // The directory-backed base (workspace mode) replaces only auth.authenticate; the lockout must call THAT one.
+    const directoryAuth = { ...authPassword, handlers: { ...authPassword.handlers, 'auth.authenticate': async (p: any) => p.credential.password === 'directory-pass' ? { outcome: 'allow', subject: p.subject, methods: ['pwd'] } : { outcome: 'deny', reason: 'bad-credentials' } } };
+    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {});
+    reg2.register(directoryAuth); reg2.register(authPasswordLockout());
+    reg2.setBus(fakeBusBridge(reg2));
+    await reg2.install(T, 'auth-password-lockout', { install: true });
+    await reg2.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] });
+    const ok = await reg2.callSlot<any>(T, 'auth.password', 'auth.authenticate', { subject: 'demo-user-1', credential: { password: 'directory-pass' } });
+    assert.equal(ok.result.outcome, 'allow', 'the lockout checked the credential against the registered (directory) base');
+    const ko = await reg2.callSlot<any>(T, 'auth.password', 'auth.authenticate', good); // demo credential: the disk base would accept it
+    assert.equal(ko.result.outcome, 'deny', 'the demo-credential base of the loader is NOT consulted');
+  });
+
   it('replacement takes over after install, grant and config; disabling returns to the base with base config', async () => {
     reg.register(authPasswordLockout());
     await assert.rejects(reg.install(T, 'auth-password-lockout', {}), (e: PluginError) => e.code === 'grant-required');

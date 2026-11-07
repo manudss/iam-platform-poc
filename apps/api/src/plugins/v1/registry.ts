@@ -149,6 +149,12 @@ export class PluginRegistry {
       }
     }
     if (errs.length) throw new PluginError('invalid-manifest', `${m.id}: ${errs.join('; ')}`);
+    // The base a replacement sees is the base REGISTERED HERE - it may carry runtime overrides (the
+    // directory-backed `auth.authenticate` in workspace mode), not the one the loader wrapped at load time.
+    if (m.extends) {
+      const base = this.impls.get(m.extends)!;
+      impl = { ...impl, handlers: Object.fromEntries(Object.entries(impl.handlers).map(([k, h]) => [k, (payload: unknown, ctx: PluginContext) => h(payload, { ...ctx, base: base.handlers })])) };
+    }
     this.impls.set(m.id, impl);
   }
 
