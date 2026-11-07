@@ -1,4 +1,5 @@
 <section id="plugins">
+  <div class="row" style="justify-content:flex-end"><button type="button" id="plugins-refresh" (click)="refreshPlugins()">Refresh plugin caches</button></div>
   <div class="card scroll"><table class="grid">    <thead><tr><th>Plugin</th><th>Kinds</th><th>Slot</th><th>State</th><th></th></tr></thead>
     <tbody>
       @for (p of plugins(); track p.id) {

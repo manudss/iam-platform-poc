@@ -176,6 +176,8 @@ export class PluginAdminClient {
   save(id: string, values: Record<string, unknown>) { return this.admin('PUT', `/plugins/${id}/settings`, { values }); }
   enable(id: string, grants: GrantsInput) { return this.admin('POST', `/plugins/${id}/enable`, { grants }); }
   disable(id: string) { return this.admin('POST', `/plugins/${id}/disable`); }
+  /** Re-verify every shipped plugin and rebuild the catalogue + inventories (manual cache refresh). */
+  refresh() { return this.admin<{ verified: string[] }>('POST', '/plugins/refresh'); }
 }
 /** Which fields to show now: a field with visibleIf only shows when the referenced field has that value. */
 export function visibleFields(fields: FormField[], values: Record<string, unknown>) {
