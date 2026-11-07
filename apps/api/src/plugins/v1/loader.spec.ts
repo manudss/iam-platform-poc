@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { defaultPluginsDir, loadPlugins, loadPluginModule, verifyPackage } from './loader.js';
+import { defaultPluginsDir, loadPlugins, loadPluginModule, refreshPluginCatalogue, verifyPackage } from './loader.js';
 
 const { signPlugin } = createRequire(import.meta.url)(join(defaultPluginsDir(), '..', 'scripts', 'plugin-pack.mjs')) as { signPlugin: (dir: string, keys: Record<string, string>) => unknown };
 
@@ -144,9 +144,12 @@ test('P0-1: loadPluginModule verifies the package BEFORE importing (a rejected p
   try {
     const ok = loadPluginModule<{ answer: number }>('demo-plug', 'helper.mjs', { trust });
     assert.equal(ok.answer, 42);
-    // Tampered file: rejected before any import.
+    // Tampered file: rejected before any import. The catalogue is shared and cached (P1): the rejection is
+    // re-evaluated after the explicit invalidation every plugin-affecting action performs.
     writeFileSync(join(plug, 'helper.mjs'), 'export const answer = -1; throw new Error("must never execute");\n');
+    refreshPluginCatalogue();
     assert.throws(() => loadPluginModule('demo-plug', 'helper.mjs', { trust }), /was modified after signing/);
+    refreshPluginCatalogue();
   } finally { if (saved === undefined) delete process.env.IAM_PLUGINS_DIR; else process.env.IAM_PLUGINS_DIR = saved; }
 });
 

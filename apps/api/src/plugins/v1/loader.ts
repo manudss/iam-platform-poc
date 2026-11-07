@@ -18,6 +18,16 @@ import { PluginError, PluginImpl } from './registry.js';
  */
 
 export interface SignatureFile { alg: 'ed25519'; publisher: string; files: Record<string, string>; signature: string }
+
+/** Catalogue instances keyed by resolved plugins-dir configuration. Lazily created on globalThis: core adapters
+ * call loadPluginModule at module scope while this very module is still evaluating (import cycle
+ * loader -> manifest -> profile/fields -> loader), so ANY module-level const here is still in the temporal
+ * dead zone at that point. */
+function catalogues(): Map<string, PluginCatalogue> {
+  const g = globalThis as { __iamPluginCatalogues?: Map<string, PluginCatalogue> };
+  return (g.__iamPluginCatalogues ??= new Map<string, PluginCatalogue>());
+}
+
 export interface LoadOptions {
   /** Trust store: publisher -> base64 Ed25519 public key. Defaults to conf/plugin-trust.json next to the plugins dir. */
   trust?: Record<string, string>;
@@ -131,22 +141,18 @@ function verifyPluginPackage(pdir: string, manifest: PluginManifest, trust: Reco
  * inventory can be loaded this way (handlers, engine, model, helpers).
  */
 export function loadPluginModule<T = unknown>(id: string, file: string, opts: LoadOptions = {}): T {
-  if (file.includes('..') || file.startsWith('/') || file.startsWith('\\')) throw new PluginError('invalid-manifest', `${id}: invalid module path ${file}`);
-  const pdir = join(defaultPluginsDir(), id);
-  const mpath = join(pdir, 'manifest.json');
-  if (!existsSync(mpath)) throw new PluginError('invalid-manifest', `${id}: manifest.json missing`);
-  const manifest = JSON.parse(readFileSync(mpath, 'utf8')) as PluginManifest;
-  if (manifest.id !== id) throw new PluginError('invalid-manifest', `${id}: manifest id must be the folder name`);
-  verifyPluginPackage(pdir, manifest, opts.trust ?? loadTrust(defaultPluginsDir()), opts.allowUnsigned ?? process.env.IAM_PLUGIN_UNSIGNED === '1');
-  return createRequire(import.meta.url)(resolve(pdir, file)) as T;
+  return pluginCatalogue(defaultPluginsDir(), opts).module<T>(id, file);
 }
 
-/** Loads every plugin folder under `dir` (one level of folders). Bases come first so replacements can be wrapped. */
-export function loadPlugins(dir: string = defaultPluginsDir(), opts: LoadOptions = {}): PluginImpl[] {
+interface ScannedPlugin { manifest: PluginManifest; handlers?: Record<string, HookHandler>; factory?: () => Record<string, HookHandler>; }
+
+/** Scans and verifies every plugin folder under `dir` (one level of folders). Factory modules stay factories so
+ * each registration can get fresh handler state; use loadPlugins/pluginCatalogue for the PluginImpl view. */
+function scanPlugins(dir: string, opts: LoadOptions): ScannedPlugin[] {
   const trust = opts.trust ?? loadTrust(dir);
   const allowUnsigned = opts.allowUnsigned ?? process.env.IAM_PLUGIN_UNSIGNED === '1';
   const req = createRequire(import.meta.url);
-  const impls: PluginImpl[] = [];
+  const impls: ScannedPlugin[] = [];
   if (!existsSync(dir)) return impls;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name.startsWith('_') || entry.name === 'examples') continue;
@@ -158,16 +164,87 @@ export function loadPlugins(dir: string = defaultPluginsDir(), opts: LoadOptions
     const errs = validateManifest(manifest, HOOKS);
     if (errs.length) throw new PluginError('invalid-manifest', `${entry.name}: ${errs.join('; ')}`);
     verifyPluginPackage(pdir, manifest, trust, allowUnsigned);
-    let handlers: Record<string, HookHandler> = {};
+    let scanned: ScannedPlugin = { manifest, handlers: {} };
     if (manifest.entrypoints?.handlers) {
       const mod = req(resolve(pdir, manifest.entrypoints.handlers));
       const exp = mod.default ?? mod;
       // A module may export the handler record directly, or a factory (fresh state per registration).
-      handlers = typeof exp === 'function' ? (exp() as Record<string, HookHandler>) : (exp as Record<string, HookHandler>);
+      scanned = typeof exp === 'function' ? { manifest, factory: exp as () => Record<string, HookHandler> } : { manifest, handlers: exp as Record<string, HookHandler> };
     }
-    impls.push({ manifest, handlers });
+    impls.push(scanned);
   }
-  // Replacements (`extends`) are NOT wrapped here: the registry wraps them at register() against the base
-  // actually registered there, which may carry runtime overrides (see registry.ts). ctx.base is set there.
   return impls;
 }
+
+/** Materializes a scanned plugin into a PluginImpl (factory modules produce fresh handler state per call). */
+function materialize(s: ScannedPlugin): PluginImpl {
+  return { manifest: s.manifest, handlers: s.factory ? s.factory() : (s.handlers ?? {}) };
+}
+
+/** Loads every plugin folder under `dir` (one level of folders). Bases come first so replacements can be wrapped.
+ * Replacements (`extends`) are NOT wrapped here: the registry wraps them at register() against the base
+ * actually registered there, which may carry runtime overrides (see registry.ts). ctx.base is set there. */
+export function loadPlugins(dir: string = defaultPluginsDir(), opts: LoadOptions = {}): PluginImpl[] {
+  return scanPlugins(dir, opts).map(materialize);
+}
+
+/**
+ * The ONE verified catalogue, shared by every consumer and every branch registry (P1). The folder scan and the
+ * package signature verifications happen ONCE per plugins-dir configuration and process, instead of each
+ * consumer rescanning (builtin exports, the lockout factory, the auth-methods list and every loadPluginModule
+ * adapter each used to rescan or re-verify). The catalogue is built lazily on first use and invalidated
+ * explicitly through refreshPluginCatalogue() after any plugin-affecting action (archive import, uninstall,
+ * enable/disable...) or the admin refresh endpoint. A spec that points IAM_PLUGINS_DIR/IAM_PLUGIN_TRUST at a
+ * fixture gets its own catalogue: the cache key carries the resolved configuration.
+ */
+export interface PluginCatalogue {
+  /** The plugins directory this catalogue was built from. */
+  dir: string;
+  /** Every verified plugin, fresh handler state per call. Scans + verifies ALL packages on first use. */
+  impls(): PluginImpl[];
+  /** One plugin by id (fresh handler state), or undefined. Scans on first use like impls(). */
+  get(id: string): PluginImpl | undefined;
+  /** Import any file of a verified package (handlers, engine, model, helpers). Only THIS package is read and
+   * verified (lazily, once per catalogue): core adapters call this at module scope while the manifest module
+   * is still evaluating (import cycle loader -> manifest -> profile/fields -> loader), so a full scan here
+   * would touch not-yet-initialized code. Verification is exhaustive (P0-2), so every in-package file is
+   * signature-covered. */
+  module<T>(id: string, file: string): T;
+}
+export function pluginCatalogue(dir: string = defaultPluginsDir(), opts: LoadOptions = {}): PluginCatalogue {
+  const trust = opts.trust ?? loadTrust(dir);
+  const allowUnsigned = opts.allowUnsigned ?? process.env.IAM_PLUGIN_UNSIGNED === '1';
+  const key = JSON.stringify([resolve(dir), trust, allowUnsigned]);
+  const hit = catalogues().get(key);
+  if (hit) return hit;
+  let scanned: ScannedPlugin[] | undefined;
+  let byId: Map<string, ScannedPlugin> | undefined;
+  const verified = new Set<string>();
+  const scan = () => {
+    if (!scanned) { scanned = scanPlugins(dir, { trust, allowUnsigned }); byId = new Map(scanned.map((x) => [x.manifest.id, x])); }
+    return byId!;
+  };
+  const req = createRequire(import.meta.url);
+  const cat: PluginCatalogue = {
+    dir,
+    impls: () => { scan(); return scanned!.map(materialize); },
+    get: (id) => { const x = scan().get(id); return x ? materialize(x) : undefined; },
+    module: <T>(id: string, file: string): T => {
+      if (file.includes('..') || file.startsWith('/') || file.startsWith('\\')) throw new PluginError('invalid-manifest', `${id}: invalid module path ${file}`);
+      const pdir = join(dir, id);
+      if (!verified.has(id)) {
+        const mpath = join(pdir, 'manifest.json');
+        if (!existsSync(mpath)) throw new PluginError('invalid-manifest', `${id}: manifest.json missing`);
+        const manifest = JSON.parse(readFileSync(mpath, 'utf8')) as PluginManifest;
+        if (manifest.id !== id) throw new PluginError('invalid-manifest', `${id}: manifest id must be the folder name`);
+        verifyPluginPackage(pdir, manifest, trust, allowUnsigned);
+        verified.add(id);
+      }
+      return req(resolve(pdir, file)) as T;
+    },
+  };
+  catalogues().set(key, cat);
+  return cat;
+}
+/** Drops every cached catalogue: the next read re-scans and re-verifies. Call after any plugin-affecting action. */
+export function refreshPluginCatalogue(): void { catalogues().clear(); }

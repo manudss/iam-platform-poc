@@ -1,4 +1,4 @@
-import { defaultPluginsDir, loadPlugins } from '../loader.js';
+import { defaultPluginsDir, pluginCatalogue } from '../loader.js';
 import type { PluginImpl } from '../registry.js';
 
 /**
@@ -9,7 +9,8 @@ import type { PluginImpl } from '../registry.js';
  * csv-connector and scim-connector ship no hooks: they are parsing libraries the core import flow calls
  * through its adapters; registering them keeps the admin catalogue honest about what is installed.
  */
-const loaded = loadPlugins();
+// The shared verified catalogue (P1): the folder scan and signature verifications happen once per process.
+const loaded = pluginCatalogue().impls();
 const byId = new Map(loaded.map((i) => [i.manifest.id, i]));
 const need = (id: string): PluginImpl => {
   const p = byId.get(id);
@@ -36,5 +37,6 @@ export const directory = need('directory');
 
 /** Fresh lockout plugin per call (fresh failure counters), keeping the factory shape the callers use. */
 export function authPasswordLockout(_failures?: unknown, _base?: unknown): PluginImpl {
-  return loadPlugins().find((i) => i.manifest.id === 'auth-password-lockout')!;
+  // catalogue.get invokes the lockout factory: fresh failure counters per registration, no rescan.
+  return pluginCatalogue().get('auth-password-lockout')!;
 }

@@ -1,6 +1,6 @@
 import type { SettingField } from '../plugins/v1/manifest.js';
 import type { EnrollmentStore } from './enroll-store.js';
-import { loadPlugins } from '../plugins/v1/loader.js';
+import { pluginCatalogue } from '../plugins/v1/loader.js';
 import type { HookHandler } from '../plugins/v1/hooks.js';
 
 export type Factor = 'knowledge' | 'possession' | 'inherence';
@@ -88,10 +88,10 @@ function fromPlugin(impl: { manifest: import('../plugins/v1/manifest.js').Plugin
   };
 }
 
-let cached: AuthMethodType[] | undefined;
+// The shared verified catalogue does the folder scan + signature verification once per process (P1); the
+// PLANNED merge here is cheap, so recomputing per call picks up a catalogue refresh without a restart.
 export function methodTypes(): AuthMethodType[] {
-  if (!cached) cached = [...loadPlugins().filter((i) => i.manifest.authMethod).map(fromPlugin), ...PLANNED];
-  return cached;
+  return [...pluginCatalogue().impls().filter((i) => i.manifest.authMethod).map(fromPlugin), ...PLANNED];
 }
 export const CATALOGUE: AuthMethodType[] = methodTypes();
 export const methodType = (id: string) => CATALOGUE.find((m) => m.id === id);
