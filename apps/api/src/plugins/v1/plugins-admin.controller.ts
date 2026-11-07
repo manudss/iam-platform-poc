@@ -32,6 +32,7 @@ export class PluginsAdminController {
 
   @Get() async list(@Param('tenant') t: string) { return { tenant: t, plugins: (await this.registry()).list(t) }; }
   @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
+  @Get('menu') async menu(@Param('tenant') t: string) { return { tenant: t, entries: (await this.registry()).menu(t) }; }
   @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
 
   @UseGuards(AdminGuard) @Post(':id/install')

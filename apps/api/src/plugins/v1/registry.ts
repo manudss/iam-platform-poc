@@ -377,6 +377,16 @@ export class PluginRegistry {
     return out;
   }
 
+  /** Console menu entries declared by the plugins active for this tenant (manifest v3 `menu`). An entry disappears with its plugin. */
+  menu(tenant: string) {
+    const out: { plugin: string; id: string; title: string; area: 'admin' | 'self-service'; group: string; icon?: string; order?: number; path: string }[] = [];
+    for (const p of this.impls.values()) {
+      if (!this.isActive(tenant, p.manifest.id)) continue;
+      for (const m of p.manifest.menu ?? []) out.push({ plugin: p.manifest.id, id: m.id, title: m.title, area: m.area, group: m.group, icon: m.icon, order: m.order, path: m.path });
+    }
+    return out.sort((a, b) => (a.order ?? 50) - (b.order ?? 50) || a.title.localeCompare(b.title));
+  }
+
   /** Screens visible to the admin console. Component screens only appear if granted. */
   screens(tenant: string) {
     const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string }[] = [];

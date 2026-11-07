@@ -45,6 +45,13 @@ describe('plugin admin API', () => {
     await s().post('/tenants/t2/plugins/org-manager/enable').set(adm).send({}).expect(201);
     const sc = await s().get('/tenants/t2/plugins/screens').expect(200);
     assert.equal(sc.body.screens.length, 2);
+    // menu (step 2): an entry appears only while its plugin is active, per tenant
+    const before = await s().get('/tenants/t2/plugins/menu').expect(200);
+    assert.equal(before.body.entries.filter((e: any) => e.plugin === 'organizations').length, 0);
+    await s().post('/tenants/t2/plugins/organizations/enable').set(adm).send({}).expect(201);
+    const menu = await s().get('/tenants/t2/plugins/menu').expect(200);
+    assert.deepEqual(menu.body.entries.filter((e: any) => e.plugin === 'organizations').map((e: any) => ({ id: e.id, path: e.path, group: e.group })), [{ id: 'organizations', path: '/organizations', group: 'Access (IAM)' }]);
+    assert.equal((await s().get('/tenants/t3/plugins/menu')).body.entries.filter((e: any) => e.plugin === 'organizations').length, 0);
     // tenant isolation: t3 sees nothing enabled
     assert.equal((await s().get('/tenants/t3/plugins/screens')).body.screens.length, 0);
   });
