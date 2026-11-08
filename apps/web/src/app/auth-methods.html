@@ -35,7 +35,7 @@
             <button class="secondary" (click)="unuse(e)" [attr.aria-label]="'Remove ' + e.name + ' from the list'">Remove</button></span>
         </li>
       } @empty {
-        @if (emptyList()) { <li class="empty" id="authn-empty"><b>No sign-in method is in use</b><p>People cannot choose a method yet: the classic password form stays until you apply a list.</p></li> }
+        @if (!loaded()) { <li class="empty">Loading...</li> } @else if (emptyList()) { <li class="empty" id="authn-empty"><b>No sign-in method is in use</b><p>People cannot choose a method yet: the classic password form stays until you apply a list.</p></li> }
       }
     </ol>
     <div class="drop" [class.over]="dropAt()===used().length" (dragover)="overItem($event, used().length)">Drop here to use</div>
@@ -51,7 +51,7 @@
             <app-level-gauge [level]="e.level" /></span>
           <span class="acts"><button class="secondary" (click)="edit(e)">Edit</button><button (click)="use(e)" [disabled]="!e.available" [attr.aria-label]="'Use ' + e.name">Use</button></span>
         </li>
-      } @empty { <li class="hint">Everything is in use.</li> }
+      } @empty { <li class="hint">@if (loaded()) { Everything is in use. } @else { Loading... }</li> }
     </ul>
     <div class="row-btns"><button class="secondary" id="authn-new-instance" (click)="openNew()" [disabled]="!loaded()">+ New instance</button><button class="secondary" id="authn-new-chain" (click)="panel.set('new-chain')" [disabled]="!loaded()">+ New chain</button></div>
   </section>
