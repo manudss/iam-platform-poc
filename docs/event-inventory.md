@@ -17,7 +17,7 @@ Production code: 35 points. Test code: 83 points.
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:98 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:100 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:101 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:141 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:152 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:35 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:39 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:48 |
