@@ -8,20 +8,22 @@ name: PR Previews
 # - The head branch/sha a deploy builds are read back from the GitHub API by the script,
 #   never taken from event metadata. PRs from forks are refused.
 # - `/preview` only works from a comment by an OWNER/MEMBER/COLLABORATOR.
-# - Render builds the PR code itself; the preview service only gets IAM_PUBLIC_ORIGIN (not a secret).
+# - The PR code is built into an image by the untrusted-side demo-image workflow; the preview service only gets IAM_PUBLIC_ORIGIN (not a secret).
 #   Infra secrets (RENDER_API_KEY) stay in this trusted workflow and never reach the preview service.
 #
-# COST MODEL (free tiers only) - DEPLOY ON DEMAND
-# - A push on a PR branch starts NO Render build. Each Docker build costs ~10-20 of the
-#   500 free pipeline minutes/month shared by the workspace; exhaustion blocks every
-#   build until the monthly reset (observed 2026-10-30, PR #7).
-# - The preview builds only on explicit demand: a `/preview` comment on the PR, or
+# COST MODEL (free tiers only) - DEPLOY ON DEMAND, PREBUILT IMAGES
+# - The Docker image is built on GitHub-hosted runners (workflow "Demo image (GHCR)",
+#   free on this public repo) and pushed to GHCR. Render only PULLS and starts it:
+#   no Render build at all, so the workspace's 500 free build pipeline minutes/month
+#   are untouched (exhaustion used to block every build until the monthly reset,
+#   observed 2026-10-30, PR #7) and a demand takes ~1-3 min instead of ~10-20.
+# - The preview deploys only on explicit demand: a `/preview` comment on the PR, or
 #   Actions > PR Previews > Run workflow. One free Render web service per PR
-#   (Docker, 0.1 CPU / 512 MB, spins down after 15 min idle), created on the first
-#   demand in the "dev" environment, deleted when the PR closes.
+#   (image-backed, 0.1 CPU / 512 MB, spins down after 15 min idle), created on the
+#   first demand in the "dev" environment, deleted when the PR closes.
 # - GitHub-hosted minutes: ensure/cleanup take a few seconds per event; a refresh job holds
-#   a runner while it watches the Render build (up to ~26 min, timeout 35). Public repo:
-#   GitHub-hosted runners are free.
+#   a runner while it waits for the image build (rare: the pull_request trigger usually
+#   pre-builds it) and then the Render pull+start. Public repo: runners are free.
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, closed]
@@ -38,6 +40,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  actions: write # backstop: dispatch the demo-image build when a commit's image is missing
 
 concurrency:
   group: pr-previews-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
@@ -75,7 +78,7 @@ jobs:
       startsWith(github.event.comment.body, '/preview') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     steps:
       - name: Check out the default branch (trusted code)
         uses: actions/checkout@v5
@@ -100,7 +103,7 @@ jobs:
     name: Deploy the preview on demand (manual dispatch)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     steps:
       - name: Check out the default branch (trusted code)
         uses: actions/checkout@v5
