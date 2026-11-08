@@ -75,7 +75,7 @@ jobs:
           test -x "$PG_BIN/postgres"
       - name: Plugin dev signing keys (explicit dev setup, P0-3)
         run: node scripts/plugin-dev-setup.mjs
-      - name: Plugin shared dependencies (step 4: the controlled install the plugins resolve against)
+      - name: Plugin shared dependencies (step 4 - the controlled install the plugins resolve against)
         run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
       - run: npm ci && npm test
         working-directory: apps/api
