@@ -67,9 +67,13 @@ echo '[demo] starting NestJS API on 127.0.0.1:3000 (activation journal in memory
 (cd /app/api && node --max-old-space-size="${API_MAX_OLD_SPACE:-192}" dist/main.js) >"$HOME_DIR/api.log" 2>&1 &
 
 # Wait for the API (its Dolt connection needs the server above), then serve the console.
+# A dead API must stop the container loudly (its log goes to a file, not stdout): serving the console
+# behind a 502-ing /api is worse than no container at all.
+api_up=0
 for i in $(seq 1 60); do
-  if node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then break; fi
+  if node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then api_up=1; break; fi
   sleep 2
 done
+if [ "$api_up" != 1 ]; then echo '[demo] FATAL: NestJS API never came up on :3000 - api.log tail follows'; tail -100 "$HOME_DIR/api.log"; exit 1; fi
 echo '[demo] starting edge server on 0.0.0.0:'"${PORT:-8080}"'(public origin '"$PUBLIC_ORIGIN"')'
 exec node /app/demo/server.mjs

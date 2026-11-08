@@ -59,6 +59,10 @@ COPY --from=apibuild /src/apps/api/dist /app/api/dist
 COPY --from=apibuild /src/apps/api/node_modules /app/api/node_modules
 COPY --from=apibuild /src/apps/api/package.json /app/api/package.json
 COPY --from=apibuild /src/node_modules /app/node_modules
+# Step 4: the host-provided @nestjs/common symlink inside node_modules is relative to the BUILD layout
+# (/src/node_modules -> /src/apps/api/...); in this image the API lives at /app/api, so recreate the link
+# for the /app layout or every plugin importing @nestjs/common crashes the API at boot (MODULE_NOT_FOUND).
+RUN ln -sfn ../../api/node_modules/@nestjs/common /app/node_modules/@nestjs/common
 # Signed plugin packages + the PUBLIC trust store (P0-6): the API refuses to boot without them (P0-3).
 COPY --from=apibuild /src/plugins /app/plugins
 COPY --from=apibuild /src/conf/plugin-trust.json /app/conf/plugin-trust.json

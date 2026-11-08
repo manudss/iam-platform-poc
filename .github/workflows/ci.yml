@@ -152,6 +152,9 @@ jobs:
           docker run -d --name iam-demo-ci -p 8080:8080 iam-demo:ci
           ok=0; for i in $(seq 1 90); do code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true); [ "$code" = 200 ] && { ok=1; break; }; sleep 2; done
           echo "healthz ok=$ok"; [ $ok = 1 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          # /healthz is the EDGE answering; the API must also be alive behind it (proxy /api -> :3000).
+          ok=0; for i in $(seq 1 30); do code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health || true); [ "$code" = 200 ] && { ok=1; break; }; sleep 2; done
+          echo "api health ok=$ok"; [ $ok = 1 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
       - name: Container logs on failure
         if: failure()
         run: docker logs iam-demo-ci --tail=150
