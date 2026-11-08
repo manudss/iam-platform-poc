@@ -21,7 +21,8 @@
 <div class="board" id="authn-methods">
   <section class="zone in" id="authn-used" aria-label="In use" (dragover)="overZone($event)" (drop)="dropUsed($event)">
     <h3>In use <small>sign-in list, in order</small></h3>
-    <p class="hint">Drag to reorder, or focus the handle and press the up or down arrow. Drag from the right, or press Use.</p>
+    <p class="hint desk">Drag to reorder, or focus the handle and press the up or down arrow. Drag from the right, or press Use.</p>
+    <p class="hint touch">Tap Up or Down to reorder. Tap Remove to take a method out of the list, or Use on the other list to add one.</p>
     <ol class="list">
       @for (e of used(); track e.key; let i = $index) {
         <li class="it" [class.rec]="isRecommended(e)" [class.over]="dropAt()===i" [attr.data-key]="e.key" draggable="true" (dragstart)="dragStart($event, e)" (dragend)="dragEnd()" (dragover)="overItem($event, i)">
@@ -30,7 +31,7 @@
           <span class="tx"><b>{{ e.name }}@if (isRecommended(e)) { <span class="tag">recommended</span> }@if (e.kind==='chain') { <span class="tag g">chain</span> }</b>
             <span class="sub">{{ sub(e) }} &middot; declared level {{ e.level }} of 10@if (simEntry(e)) { &middot; <b class="sim">simulated step</b> }</span>
             <app-level-gauge [level]="e.level" /></span>
-          <span class="acts"><button class="secondary" (click)="openPreview(e)">Preview</button><button class="secondary" (click)="edit(e)">Edit</button>
+          <span class="acts"><span class="mv"><button class="secondary" (click)="move(e, -1)" [disabled]="i===0" [attr.aria-label]="'Move ' + e.name + ' up'">&#8593; Up</button><button class="secondary" (click)="move(e, 1)" [disabled]="i===used().length-1" [attr.aria-label]="'Move ' + e.name + ' down'">&#8595; Down</button></span><button class="secondary" (click)="openPreview(e)">Preview</button><button class="secondary" (click)="edit(e)">Edit</button>
             <button class="secondary" (click)="unuse(e)" [attr.aria-label]="'Remove ' + e.name + ' from the list'">Remove</button></span>
         </li>
       } @empty {
@@ -106,7 +107,7 @@
               }@if (f.help) {<small>{{f.help}}</small>}</label>
           }
         }
-        <div class="row-btns"><button id="authn-create-instance" (click)="createInstance()">Create</button><button class="secondary" (click)="panel.set('new-type')">Back</button></div>
+        <div class="row-btns foot"><button id="authn-create-instance" (click)="createInstance()">Create</button><button class="secondary" (click)="panel.set('new-type')">Back</button></div>
       </aside>
     }
     @case ('edit') {
@@ -137,7 +138,7 @@
             @if (entryType(method(e.methodId)?.type ?? '')?.provisioning==='admin-demo') {
               <h4>Demo enrollment <span class="from">from plugin</span></h4>
               <p class="hint">For this demo only, stored outside the database. A secret or generated PIN is shown once. Save first.</p>
-              <div class="row-btns"><label>User<input type="text" name="enrolluser" [(ngModel)]="enrollUser" /></label>
+              <div class="stackf"><label>User<input type="text" name="enrolluser" [(ngModel)]="enrollUser" /></label>
                 @if (method(e.methodId)?.type==='email-otp') { <label>Demo address<input type="text" name="enrollemail" [(ngModel)]="enrollEmail" /></label> }
                 @if (method(e.methodId)?.type==='digit-code') { <label>PIN (or leave empty to generate)<input type="password" name="enrollpin" [(ngModel)]="enrollPin" autocomplete="off" /></label> }
                 <button (click)="enroll(method(e.methodId)!)" [disabled]="busy()">Provision</button></div>
@@ -151,7 +152,7 @@
                   <button class="secondary" (click)="moveStep(e, si, -1)" [disabled]="si===0" aria-label="Move step up">&#8593;</button><button class="secondary" (click)="moveStep(e, si, 1)" [disabled]="si===e.stepIds.length-1" aria-label="Move step down">&#8595;</button><button class="secondary" (click)="removeStep(e, si)" [attr.aria-label]="'Remove step ' + methodName(id)">&#10005;</button></li>
               } @empty { <li class="hint">No steps yet.</li> }
             </ol>
-            <div class="row-btns"><label>Add a step (any existing method)<select name="steppick" [(ngModel)]="stepPick">@for (m of stepChoices(e); track m.id) {<option [value]="m.id">{{ m.name }} ({{ methodInUse(m.id) ? 'in use' : 'not in use' }})</option>}</select></label><button class="secondary" id="authn-add-step" (click)="addStep(e)">Add step</button></div>
+            <div class="addstep"><label>Add a step (any existing method)<select name="steppick" [(ngModel)]="stepPick">@for (m of stepChoices(e); track m.id) {<option [value]="m.id">{{ m.name }} ({{ methodInUse(m.id) ? 'in use' : 'not in use' }})</option>}</select></label><button class="secondary" id="authn-add-step" (click)="addStep(e)">Add step</button></div>
             @if (analysis(e.chainId); as a) {
               <div class="analysis"><span class="pill" [class.ok]="a.mfa" [class.warn]="!a.mfa">{{ a.mfa ? 'Multi-factor (2+ verified factor categories)' : 'Not multi-factor' }}</span>
                 <span class="pill">Declared level {{ a.declaredLevel }}</span><span class="pill" [class.warn]="a.effectiveLevel<a.declaredLevel">Effective level {{ a.effectiveLevel }}</span>
@@ -159,10 +160,10 @@
             }
           }
           @if (!e.available) { <p class="msg bad">This entry is unavailable: a plugin it needs is not active.</p> }
-          <div class="row-btns"><button (click)="close()">Done</button><button class="secondary" (click)="openPreview(e)">Preview</button>
+          @if (e.kind==='method' && usedBy(e).length) { <p class="hint">Also a step of: {{ usedBy(e).join(', ') }}.</p> }
+          <div class="row-btns foot"><button (click)="close()">Done</button><button class="secondary" (click)="openPreview(e)">Preview</button>
             @if (e.inUse) { <button class="secondary" (click)="unuse(e)">Remove from the list</button> } @else { <button class="secondary" (click)="use(e)" [disabled]="!e.available">Use</button> }
             <button class="danger" (click)="deleteEntry(e)">Delete</button></div>
-          @if (e.kind==='method' && usedBy(e).length) { <p class="hint">Also a step of: {{ usedBy(e).join(', ') }}.</p> }
         </aside>
       }
     }
