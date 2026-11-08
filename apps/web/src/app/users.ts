@@ -2,6 +2,7 @@ import { Component, HostListener, inject, signal, computed } from '@angular/core
 import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 import { UserProfile } from './api';
+import { UserPluginSections } from './user-plugin-sections';
 
 /* Pure helpers, exported for the unit tests (users.spec.ts). */
 
@@ -66,7 +67,7 @@ export function userStats(users: UserProfile[]): UserStats {
   };
 }
 
-@Component({ selector: 'app-users', imports: [FormsModule], styleUrl: './users.css', template: `
+@Component({ selector: 'app-users', imports: [FormsModule, UserPluginSections], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
 <p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one in Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
@@ -123,8 +124,8 @@ export function userStats(users: UserProfile[]): UserStats {
 @if (editing()) {<div class="scrim" (click)="cancel()"></div>
 <aside class="drawer" id="user-editor" role="dialog" [attr.aria-label]="key ? 'Edit '+key : 'Create user'">
   <div class="dhead">
-    <!-- PROFILE-PICTURE-SLOT: the profile-plugins PR enriches this avatar (photo when the picture plugin is active, initials otherwise). -->
-    <span class="av big" [style.background]="deptColor(form.department || 'user')+'22'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')+'55'">{{initials(form.display_name || form.id || '?')}}</span>
+    @if (photo()) {<img class="av big" id="drawer-photo" [src]="photo()" [style.object-fit]="'cover'" alt="">}
+    @else {<span class="av big" [style.background]="deptColor(form.department || 'user')+'22'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')+'55'">{{initials(form.display_name || form.id || '?')}}</span>}
     <span class="tx"><h3>{{key ? (form.display_name || key) : 'Create user'}}</h3>
       @if (key) {<span class="sub">{{key}} · <span class="tag" [style.background]="deptColor(form.department || 'user')+'1f'" [style.color]="deptColor(form.department || 'user')">{{form.department || '—'}}</span>
         @if (current(); as cu) {<span class="st" [class.ok]="userStatus(cu)==='enabled'" [class.off]="userStatus(cu)==='no-credential'" [class.bad]="userStatus(cu)==='disabled'">{{statusLabel(userStatus(cu))}}</span>}</span>}
@@ -149,7 +150,7 @@ export function userStats(users: UserProfile[]): UserStats {
   @for (f of pfields(); track f.key) { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
   @if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
   @else {<input [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}</label> } }
-  <!-- PROFILE-PLUGINS-SLOT: the profile-plugins PR mounts <app-user-plugin-sections [userId]="key"> here (TOTP, PIN, lockout), between Profile fields and Security. Single marked line, additive only. -->
+  @if (key) {<app-user-plugin-sections [userId]="key" />}
   <h4>Security</h4>
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
   <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>
@@ -163,6 +164,8 @@ export class UsersPage {
   protected readonly s = inject(Session);
   protected users = signal<UserProfile[]>([]); protected note = signal(''); protected busy = signal(false); protected editing = signal(false);
   protected pfields = signal<any[]>([]); protected pvals = signal<Record<string, unknown>>({}); private pchanged: Record<string, unknown> = {};
+  /** The picture plugin's value for the edited user, when the plugin is active (the avatar shows it, initials otherwise). */
+  protected photo() { const v = this.pvals()['profile-picture.picture']; return typeof v === 'string' && v.startsWith('data:image/') ? v : ''; }
   protected search = signal(''); protected fdept = signal(''); protected fstatus = signal<'' | UserStatus>('');
   protected sortKey = signal<SortKey>('name'); protected sortDir = signal<1 | -1>(1);
   protected menuFor = signal<string | null>(null);

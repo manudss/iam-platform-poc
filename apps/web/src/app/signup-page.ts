@@ -3,7 +3,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ThemeSwitch } from './theme-switch';
 
-interface F { key: string; label: string; type: string; help?: string; options?: { value: string; label: string }[]; required: boolean }
+interface F { key: string; label: string; type: string; help?: string; options?: { value: string; label: string }[]; required: boolean; section?: string }
 
 /** Public account-request form on its own /signup page (no sign-in). Closed unless an administrator opened and applied it. It only sends a request. */
 @Component({
@@ -32,15 +32,28 @@ interface F { key: string; label: string; type: string; help?: string; options?:
       <label>Display name<input name="dn" [(ngModel)]="dn" required maxlength="80" /></label>
       <label>E-mail<input name="em" [(ngModel)]="em" required maxlength="254" autocomplete="off" /></label>
       <label>Password (12 to 128 characters)<input type="password" name="pw" [(ngModel)]="pw" required minlength="12" maxlength="128" autocomplete="new-password" /></label>
-      @for (f of fields(); track f.key) { <label>{{f.label}}@if (f.required) { * }
-        @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
-        @else { <input [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event" /> }</label> }
+      @for (sec of sections(); track sec.name) {
+        @if (sec.name) { <h3 class="profile-section">{{sec.name}}</h3> }
+        @for (f of sec.fields; track f.key) { <label>{{f.label}}@if (f.required) { * }
+          @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
+          @else { <input [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event" /> }</label> }
+      }
       <button id="su-send">Send request</button></form> }
   </ng-template>`,
 })
 export class SignupPage {
   protected state = signal<'loading' | 'closed' | 'form' | 'sent'>('loading'); protected fields = signal<F[]>([]); protected err = signal(''); protected msg = signal(''); protected confirmed = signal('');
   protected id = ''; protected dn = ''; protected em = ''; protected pw = ''; protected code = ''; protected vals: Record<string, string> = {};
+  /** Fields grouped by their declared section, in schema order (the server sorts by order, key). */
+  protected sections() {
+    const out: { name: string; fields: F[] }[] = [];
+    for (const f of this.fields()) {
+      const name = f.section ?? '';
+      const last = out[out.length - 1];
+      if (last && last.name === name) last.fields.push(f); else out.push({ name, fields: [f] });
+    }
+    return out;
+  }
   private base = '/api/tenants/acme-demo/signup';
   async ngOnInit() {
     try { const r = await fetch(`${this.base}/schema`); if (!r.ok) { this.state.set('closed'); return; } this.fields.set(((await r.json()).fields as F[]).filter((f) => !/(^|\.)(display_name|email|id|password)$/.test(f.key))); this.state.set('form'); } catch { this.state.set('closed'); }
