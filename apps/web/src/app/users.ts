@@ -148,6 +148,7 @@ export function userStats(users: UserProfile[]): UserStats {
   @for (f of pfields(); track f.key) { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
   @if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
   @else {<input [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}</label> } }
+  <!-- PLUGIN-SECTION-SEAM: the profile-plugins PR mounts its per-user components (TOTP, PIN, lockout, photo) here, between Profile fields and Security. Keep this a single marked line so either PR merges first without a conflict. -->
   <h4>Security</h4>
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
   <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>
