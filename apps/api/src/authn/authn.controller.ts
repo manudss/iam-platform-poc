@@ -37,6 +37,9 @@ export class AuthnAdminController {
   }
   private user(u: string) { if (!/^[a-z0-9-]{1,32}$/.test(u)) throw new BadRequestException('invalid user id'); return u; }
 
+  /** Enrollment counts per method instance (the admin profile component's overview). Never the secrets. */
+  @UseGuards(AdminGuard) @Get('enrollment-stats') async enrollmentStats(@Param('tenant') t: string) { return { tenant: t, instances: await this.authn.enroll.stats(t) }; }
+
   @UseGuards(AdminGuard) @Get('enrollments/:user') async enrollments(@Param('tenant') t: string, @Param('user') u: string) { return { user: this.user(u), enrollments: await this.authn.enroll.status(t, this.user(u)) }; }
 
   /**

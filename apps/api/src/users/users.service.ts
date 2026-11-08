@@ -2,7 +2,7 @@ import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { ModuleRef } from '@nestjs/core';
-import { Injectable, BadRequestException, ConflictException, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException, Optional } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -101,6 +101,18 @@ export class UsersService {
       if (!!prev.login_enabled && saved && !saved.login_enabled) this.events?.emit({ type: 'user.disabled', tenant, branch, at, payload: { subject: id } });
     }
     return saved;
+  }
+  /** Self-service password change (profile Security component): the current password re-authenticates the request. Writes on main, like every live self-service edit. */
+  async changePassword(tenant: string, id: string, current: string, next: string) {
+    if (typeof next !== 'string' || next.length < 12 || next.length > 128) throw new BadRequestException('password: 12 to 128 characters');
+    if (!(await this.authenticate(tenant, id, current))) throw new ForbiddenException('the current password does not match');
+    await this.init();
+    const revision = await this.password(id, next);
+    await this.v.lock(() => this.v.at('main', async (c) => {
+      await c.query('update identities set credential_revision=? where id=?', [revision, id]);
+      const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
+      if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} changed their password`]); }
+    }));
   }
   async authenticate(tenant: string, id: string, password: string) {
     if (tenant !== 'acme-demo') return false;
