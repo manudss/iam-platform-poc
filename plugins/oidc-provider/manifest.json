@@ -7,6 +7,10 @@
   "kinds": [
     "connector"
   ],
+  "extends": "sso-oidc-base",
+  "provides": [
+    "sso.oidc"
+  ],
   "description": "Lets the registered applications sign in with OpenID Connect (authorization code + PKCE). Turning the plugin off removes every /sso/:tenant/oidc endpoint (404) without touching the application registry.",
   "requires": [
     "app-connector"

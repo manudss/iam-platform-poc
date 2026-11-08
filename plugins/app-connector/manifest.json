@@ -8,6 +8,10 @@
     "connector",
     "ui"
   ],
+  "extends": "connector-app-base",
+  "provides": [
+    "connector.app"
+  ],
   "description": "Register the applications that sign in through this platform (OIDC or SAML): redirect URIs, attribute mapping, allowed roles. While disabled, the Applications menu is hidden and every /app-connectors endpoint answers 404.",
   "hooks": [],
   "settings": [],
@@ -25,7 +29,7 @@
       "title": "Applications",
       "area": "admin",
       "group": "Access (IAM)",
-      "icon": "⇲",
+      "icon": "\u21f2",
       "order": 40,
       "path": "/applications"
     }

@@ -11,8 +11,11 @@ import { AuditService } from '../access/audit.service.js';
 import { McpSessionService } from './session.service.js';
 import { McpUpstreamService } from './upstream.service.js';
 import { McpGrantsService } from './grants.service.js';
-import { registerTools } from './tools.js';
+import { bindGateway, registerTools as defaultRegisterTools, McpToolsModule } from './tools.js';
 import { registerProxyTools } from './proxy.js';
+import { PluginError } from '../plugins/v1/registry.js';
+import { resolveEngine } from '../plugins/v1/engines.js';
+import { loadPluginModule } from '../plugins/v1/loader.js';
 import { ProfileService } from '../profile/profile.service.js';
 import { OrgService } from '../profile/orgs.js';
 import { RolesService } from '../profile/roles.js';
@@ -76,9 +79,22 @@ export class McpController {
     if (!session) { this.challenge(res, req, tenant); return; }
 
     // Stateless streamable HTTP: one server + transport per request, JSON responses, no SSE session state.
+    // Step 3: the tool surface is the plugin serving the mcp.gateway slot for this tenant (registry-resolved
+    // per request). No provider enabled -> fail closed (503), the endpoint does not silently serve a default.
+    let gw: { registerTools: McpToolsModule['registerTools']; registerProxyTools: typeof registerProxyTools };
+    try {
+      gw = await resolveEngine(() => this.branches.get(session.branch), tenant, 'mcp.gateway', 'tools.mjs', (mod: McpToolsModule, impl) => {
+        bindGateway(mod);
+        return { registerTools: mod.registerTools, registerProxyTools: (loadPluginModule(impl.manifest.id, 'proxy.mjs') as { registerProxyTools: typeof registerProxyTools }).registerProxyTools };
+      });
+    } catch (e) {
+      if (e instanceof PluginError) { res.status(e.code === 'no-provider' ? 503 : 500).json({ error: e.code, message: e.message }); return; }
+      throw e;
+    }
     const server = new McpServer({ name: 'iam-platform-poc', version: '0.1.0' });
-    registerTools(server, { session, tenant, v: this.v, prs: this.prs, users: this.users, sessions: this.sessions, audit: this.audit, core: this.core, profile: this.profile, orgs: this.orgs, roles: this.roles, wf: this.wf, branches: this.branches, authn: this.authn });
-    await registerProxyTools(server, { session, tenant, v: this.v, prs: this.prs, users: this.users, sessions: this.sessions, audit: this.audit, core: this.core, profile: this.profile, orgs: this.orgs, roles: this.roles, wf: this.wf, branches: this.branches, authn: this.authn }, this.upstreams, this.grants);
+    const toolCtx = { session, tenant, v: this.v, prs: this.prs, users: this.users, sessions: this.sessions, audit: this.audit, core: this.core, profile: this.profile, orgs: this.orgs, roles: this.roles, wf: this.wf, branches: this.branches, authn: this.authn };
+    gw.registerTools(server, toolCtx);
+    await gw.registerProxyTools(server, toolCtx, this.upstreams, this.grants);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => { void transport.close(); void server.close(); });
     await server.connect(transport);

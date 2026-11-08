@@ -4,10 +4,20 @@
   "version": "1.0.0",
   "name": "MCP gateway",
   "publisher": "iam-platform",
-  "kinds": ["connector"],
+  "kinds": [
+    "connector"
+  ],
+  "extends": "mcp-gateway-base",
+  "provides": [
+    "mcp.gateway"
+  ],
   "description": "The MCP tool surface and its confinement (reads on the session branch, guarded writes only, no secret-like table, every call decided by the policy engine and traced), the proxy relay rules for external MCP servers, and the upstream security rules (SSRF guard, sealed tokens, redaction). Sessions, storage and HTTP transport stay core adapters.",
   "hooks": [],
   "settings": [],
-  "entrypoints": { "handlers": "handlers.mjs" },
-  "security": { "signed": true }
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
 }

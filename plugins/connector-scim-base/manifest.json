@@ -1,0 +1,22 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "connector-scim-base",
+  "version": "1.0.0",
+  "name": "SCIM connector slot (refusing base)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "connector"
+  ],
+  "base": true,
+  "provides": [
+    "connector.scim"
+  ],
+  "hooks": [],
+  "settings": [],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

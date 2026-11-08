@@ -53,6 +53,11 @@ interface McpToolsModule {
 const plugin = loadPluginModule('mcp-gateway', 'tools.mjs') as McpToolsModule;
 plugin.bindCoreApi({ checkSql, scanSql, scrub, SOD_SQL, branchRun: (b, fn) => branchContext.run({ branch: b }, fn) });
 
+/** Binds the core security primitives on a gateway provider's tools module (step 3: used by resolveEngine's
+ * factory when the mcp.gateway slot resolves to a provider, so a replacement gets the same core API). */
+export function bindGateway(mod: McpToolsModule) { mod.bindCoreApi({ checkSql, scanSql, scrub, SOD_SQL, branchRun: (b, fn) => branchContext.run({ branch: b }, fn) }); }
+export type { McpToolsModule };
+
 /** A refusal by the MCP confinement itself (not by the policy engine): traced as a DENIAL. */
 export const ConfinementError = plugin.ConfinementError;
 export const checkMcpSql = plugin.checkMcpSql;

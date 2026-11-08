@@ -8,12 +8,22 @@ import { ApplicationBus } from '../events/application-bus.service.js';
 import { SecretsService } from '../integrations/secrets.service.js';
 import { AppConnector, AppConnectorService } from '../connectors/app-connector.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
+import { PluginError, PluginRegistry } from '../plugins/v1/registry.js';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { engineHttpError, resolveEngine } from '../plugins/v1/engines.js';
+import { workspaceMode } from '../workspace/context.js';
 
 /**
  * OIDC provider (plugin `oidc-provider`, step 2 of the SSO plan): the protocol engine lives in the plugin
  * folder (`plugins/oidc-provider/handlers.mjs`); this file is the core adapter. It owns the directory
  * access (decision 2: identity storage stays core), feeds the engine its dependencies (application
- * registry, directory, secret store, event bus) and mounts its middleware at /sso/:tenant/oidc.
+ * registry, directory, secret store, event bus) and mounts the slot's engine at /sso/:tenant/oidc.
+ *
+ * Step 3: the engine is RESOLVED through the plugin registry (slot `sso.oidc`), per request, instead of
+ * being loaded by id at module scope. Disabling the plugin fails closed (503 no-provider); a replacement
+ * plugin extending `sso-oidc-base` takes over with no core change. The constants below stay re-exports of
+ * the shipped default provider: they are pure mapping helpers imported at module scope by other core
+ * modules — the serving engine is the resolved one. (Known remaining leak toward full tout-plugin.)
  */
 
 /** The plugin engine, loaded from its signed folder (the registry verifies the signature at boot). */
@@ -38,15 +48,15 @@ interface OidcPluginModule {
     warn: (message: string) => void;
   }) => OidcEngine;
 }
-const plugin = loadPluginModule('oidc-provider', 'handlers.mjs') as OidcPluginModule;
+const defaultPlugin = loadPluginModule('oidc-provider', 'handlers.mjs') as OidcPluginModule;
 
-export const OIDC_PLUGIN = plugin.OIDC_PLUGIN;
+export const OIDC_PLUGIN = defaultPlugin.OIDC_PLUGIN;
 /** Claims this provider can send. An application's `attribute_mapping` picks among them (any other name is ignored). */
-export const SUPPORTED_CLAIMS = plugin.SUPPORTED_CLAIMS;
+export const SUPPORTED_CLAIMS = defaultPlugin.SUPPORTED_CLAIMS;
 /** Profile keys an application may read a claim from. */
-export const PROFILE_KEYS = plugin.PROFILE_KEYS;
-export const claimsFor = plugin.claimsFor;
-export const mayOpen = plugin.mayOpen;
+export const PROFILE_KEYS = defaultPlugin.PROFILE_KEYS;
+export const claimsFor = defaultPlugin.claimsFor;
+export const mayOpen = defaultPlugin.mayOpen;
 
 export interface DirectoryUser { id: string; display_name: string; email: string; department: string; roles: string[] }
 /** Where the signed-in user's attributes and roles come from (live data: Dolt main). */
@@ -71,13 +81,14 @@ export class MemorySsoDirectory implements SsoDirectory {
 @Injectable()
 export class OidcProviderService implements OnModuleInit {
   private readonly log = new Logger('oidc-provider');
-  private readonly engine: OidcEngine;
+  private readonly deps: Parameters<OidcPluginModule['createOidcEngine']>[0];
   constructor(
     apps: AppConnectorService, profile: ProfileService,
     @Inject(SSO_DIRECTORY) dir: SsoDirectory, secrets: SecretsService,
+    private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries,
     @Optional() events?: ApplicationBus, @Optional() private readonly host?: HttpAdapterHost,
   ) {
-    this.engine = plugin.createOidcEngine({
+    this.deps = {
       liveApps: (t) => apps.liveApps(t),
       pluginActive: (t, id) => profile.pluginActive(t, id, 'live'),
       directoryUser: (t, id) => dir.user(t, id),
@@ -85,17 +96,28 @@ export class OidcProviderService implements OnModuleInit {
       emit: (type, tenant, payload) => events?.emit({ type, tenant, branch: 'main', at: new Date().toISOString(), payload }),
       env: process.env,
       warn: (m) => this.log.warn(m),
+    };
+  }
+
+  /** The engine of the plugin currently serving the sso.oidc slot for this tenant (live registry: SSO sign-in is main-only). */
+  private engine(t: string): Promise<OidcEngine> {
+    return resolveEngine(() => this.liveRegistry(), t, 'sso.oidc', 'handlers.mjs', (mod: OidcPluginModule) => mod.createOidcEngine(this.deps), this);
+  }
+  private async liveRegistry(): Promise<PluginRegistry> { return workspaceMode() && this.branches ? this.branches.get('main') : this.reg; }
+
+  /** Mounts /sso/:tenant/oidc/* on the HTTP server (before the Nest routes); every request resolves the slot's provider. */
+  onModuleInit() {
+    const app = this.host?.httpAdapter?.getInstance?.(); if (!app?.use) return;
+    app.use('/sso/:tenant/oidc', (req: { params?: { tenant?: string } }, res: { status: (n: number) => { json: (b: unknown) => void } }, next: (e?: unknown) => void) => {
+      this.engine(String(req.params?.tenant ?? '')).then((e) => e.middleware(req, res, next)).catch((e) => {
+        if (e instanceof PluginError) res.status(e.code === 'plugin-failed' ? 503 : e.code === 'no-provider' ? 404 : 400).json({ code: e.code, message: e.message });
+        else next(e);
+      });
     });
   }
 
-  /** Mounts /sso/:tenant/oidc/* on the HTTP server (before the Nest routes). */
-  onModuleInit() {
-    const app = this.host?.httpAdapter?.getInstance?.(); if (!app?.use) return;
-    app.use('/sso/:tenant/oidc', this.engine.middleware);
-  }
-
-  details(t: string, uid: string, sub: string, req: unknown) { return this.engine.details(t, uid, sub, req); }
-  complete(t: string, uid: string, sub: string, decision: unknown, req: unknown) { return this.engine.complete(t, uid, sub, decision, req); }
+  async details(t: string, uid: string, sub: string, req: unknown) { try { return await (await this.engine(t)).details(t, uid, sub, req); } catch (e) { engineHttpError(e); } }
+  async complete(t: string, uid: string, sub: string, decision: unknown, req: unknown) { try { return await (await this.engine(t)).complete(t, uid, sub, decision, req); } catch (e) { engineHttpError(e); } }
 }
 
 /** Console-facing API of the sign-in request (the user is signed in to the console with the normal chain; the bearer token proves who). */

@@ -8,6 +8,10 @@ import { currentBranch } from '../workspace/context.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { EngineRegistry, engineHttpError, resolveEngine } from '../plugins/v1/engines.js';
+import { branchContext, workspaceMode } from '../workspace/context.js';
 
 /**
  * Application connector (plugin `app-connector`): validation and registry logic live in the plugin folder
@@ -103,22 +107,30 @@ export class DoltAppConnectorStore implements AppConnectorStore {
 
 @Injectable()
 export class AppConnectorService {
-  private readonly registry: ReturnType<AppConnectorPluginModule['createAppRegistry']>;
-  constructor(profile: ProfileService, @Inject(APP_CONNECTOR_STORE) store: AppConnectorStore, @Optional() events?: ApplicationBus) {
-    this.registry = plugin.createAppRegistry({
+  private readonly deps: Parameters<AppConnectorPluginModule['createAppRegistry']>[0];
+  constructor(profile: ProfileService, @Inject(APP_CONNECTOR_STORE) store: AppConnectorStore,
+    private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() events?: ApplicationBus) {
+    this.deps = {
       pluginActive: (t, id, ref) => profile.pluginActive(t, id, ref),
       store,
       emit: (type, tenant, payload) => events?.emit({ type, tenant, branch: currentBranch(), at: new Date().toISOString(), payload }),
       branch: () => currentBranch(),
-    });
+    };
   }
-  list(t: string) { return this.registry.list(t); }
+
+  /** The registry engine of the plugin serving the connector.app slot (step 3), on the current branch's registry. */
+  private engine(t: string): Promise<ReturnType<AppConnectorPluginModule['createAppRegistry']>> {
+    return resolveEngine(() => this.branchRegistry(), t, 'connector.app', 'handlers.mjs', (mod: AppConnectorPluginModule) => mod.createAppRegistry(this.deps), this);
+  }
+  private async branchRegistry(): Promise<EngineRegistry> { return workspaceMode() && this.branches ? this.branches.get(branchContext.getStore()?.branch ?? 'main') : this.reg; }
+
+  async list(t: string) { try { return await (await this.engine(t)).list(t); } catch (e) { engineHttpError(e); } }
   /** Applications as they are LIVE (Dolt main): what the protocol plugins serve. Empty while the plugin is off. */
-  liveApps(t: string) { return this.registry.liveApps(t); }
-  get(t: string, id: string) { return this.registry.get(t, id); }
-  create(t: string, actor: string, b: Record<string, unknown>) { return this.registry.create(t, actor, b); }
-  update(t: string, actor: string, id: string, b: Record<string, unknown>) { return this.registry.update(t, actor, id, b); }
-  remove(t: string, actor: string, id: string) { return this.registry.remove(t, actor, id); }
+  async liveApps(t: string) { return (await this.engine(t)).liveApps(t); }
+  async get(t: string, id: string) { try { return await (await this.engine(t)).get(t, id); } catch (e) { engineHttpError(e); } }
+  async create(t: string, actor: string, b: Record<string, unknown>) { try { return await (await this.engine(t)).create(t, actor, b); } catch (e) { engineHttpError(e); } }
+  async update(t: string, actor: string, id: string, b: Record<string, unknown>) { try { return await (await this.engine(t)).update(t, actor, id, b); } catch (e) { engineHttpError(e); } }
+  async remove(t: string, actor: string, id: string) { try { return await (await this.engine(t)).remove(t, actor, id); } catch (e) { engineHttpError(e); } }
 }
 
 @UseGuards(AuthGuard, AdminGuard)

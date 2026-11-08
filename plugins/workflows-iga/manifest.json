@@ -8,6 +8,10 @@
     "workflow",
     "ui"
   ],
+  "extends": "workflows-engine-base",
+  "provides": [
+    "workflows.engine"
+  ],
   "description": "Visual IGA workflow scenarios: build a graph of steps, run it, follow every step. Simulated steps (wait, notification, deliberate failure) never have an external effect; real data steps write on the run's own Dolt branch; publishing to main always stays a human merge. While disabled, the Workflows menu is hidden and every /workflows* endpoint answers 403.",
   "hooks": [],
   "settings": [],
@@ -25,7 +29,7 @@
       "title": "Workflows",
       "area": "admin",
       "group": "Automation (IGA)",
-      "icon": "⟳",
+      "icon": "\u27f3",
       "order": 10,
       "path": "/workflows"
     }

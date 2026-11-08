@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
+import { PluginRegistry } from './plugins/v1/registry.js';
 import { startTestBus, TestBus } from './testing/test-bus.js';
 
 // Step 3 cleanup (decision 6): AppModule requires a reachable bus - one nats+core pair for this spec file.
@@ -55,6 +56,9 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
     Object.assign(process.env, { IAM_CORE_URL: CORE, IAM_ISSUER: CORE, IAM_CORE_ADMIN_TOKEN: 'dolt-e2e-admin', DOLT_PORT: '13307', DOLT_DATABASE: 'iam' });
     app = await NestFactory.create(AppModule, { logger: false });
     await app.listen(13010);
+    // Step 3: the CSV/SCIM import endpoints are served by the connector plugins' slots - enable them.
+    const reg = app.get(PluginRegistry);
+    for (const id of ['csv-connector', 'scim-connector']) { await reg.install('acme-demo', id, {}); await reg.enable('acme-demo', id, {}); }
   });
   after(async () => { await app?.close(); dolt?.kill(); core?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 

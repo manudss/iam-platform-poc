@@ -48,7 +48,7 @@ export const directory = need('directory');
  * missed notify-resend, saml-idp, csv-connector, scim-connector, mcp-gateway and directory). auth-password is
  * first so callers can apply their runtime base override before registering; bases precede their replacements.
  */
-export const SHIPPED_PLUGIN_IDS = ['auth-password', 'auth-totp-base', 'auth-email-otp-base', 'auth-digit-code-base', 'auth-totp', 'auth-email-otp', 'auth-digit-code', 'notify-log', 'notify-resend', 'auth-password-lockout', 'org-manager', 'risk-geo', 'hr-attributes', 'organizations', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp', 'csv-connector', 'scim-connector', 'mcp-gateway', 'directory'] as const;
+export const SHIPPED_PLUGIN_IDS = ['auth-password', 'auth-totp-base', 'auth-email-otp-base', 'auth-digit-code-base', 'auth-totp', 'auth-email-otp', 'auth-digit-code', 'notify-log', 'notify-resend', 'auth-password-lockout', 'org-manager', 'risk-geo', 'hr-attributes', 'organizations', 'workflows-engine-base', 'workflows-iga', 'connector-app-base', 'app-connector', 'policy-studio', 'sso-oidc-base', 'oidc-provider', 'sso-saml-base', 'saml-idp', 'connector-csv-base', 'csv-connector', 'connector-scim-base', 'scim-connector', 'mcp-gateway-base', 'mcp-gateway', 'directory'] as const;
 export function shippedPlugins(): PluginImpl[] {
   const c = pluginCatalogue();
   return SHIPPED_PLUGIN_IDS.map((id) => {

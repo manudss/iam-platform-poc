@@ -4,10 +4,20 @@
   "version": "1.0.0",
   "name": "SCIM identity import (subset)",
   "publisher": "iam-platform",
-  "kinds": ["connector"],
+  "kinds": [
+    "connector"
+  ],
+  "extends": "connector-scim-base",
+  "provides": [
+    "connector.scim"
+  ],
   "description": "SCIM 2.0-LIKE subset (NOT a SCIM server): accepts a ListResponse-shaped body and maps each user and role to a directory import row. The directory staging flow stays core; the mapping rules live here.",
   "hooks": [],
   "settings": [],
-  "entrypoints": { "handlers": "handlers.mjs" },
-  "security": { "signed": true }
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
 }

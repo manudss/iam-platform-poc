@@ -4,10 +4,20 @@
   "version": "1.0.0",
   "name": "CSV identity import",
   "publisher": "iam-platform",
-  "kinds": ["connector"],
+  "kinds": [
+    "connector"
+  ],
+  "extends": "connector-csv-base",
+  "provides": [
+    "connector.csv"
+  ],
   "description": "HR-style CSV connector: parses identity_id,display_name,manager_id,department,role_id uploads into directory import rows (strict validation, fictional data only). The directory staging flow stays core; the parsing rules live here.",
   "hooks": [],
   "settings": [],
-  "entrypoints": { "handlers": "handlers.mjs" },
-  "security": { "signed": true }
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
 }

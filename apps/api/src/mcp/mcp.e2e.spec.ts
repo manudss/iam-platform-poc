@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
 import { branchContext } from '../workspace/context.js';
 import type { Request, Response, NextFunction } from 'express';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
@@ -75,6 +76,10 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     app.use((req: Request, _res: Response, next: NextFunction) => branchContext.run({ branch: typeof req.headers['x-iam-branch'] === 'string' ? req.headers['x-iam-branch'] : undefined }, next));
     await app.listen(13171);
     adminToken = await login('demo-alice'); bobToken = await login('demo-bob');
+    // Step 3: the MCP tool surface is served by the plugin on the mcp.gateway slot - enable it on main
+    // (sessions cut their branch from main at creation, inheriting the plugin state).
+    const reg = app.get(PluginRegistry);
+    await reg.install('acme-demo', 'mcp-gateway', {}); await reg.enable('acme-demo', 'mcp-gateway', {});
   });
   after(async () => { await app?.close(); core?.kill(); dolt?.kill(); await sleep(800); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
