@@ -29,6 +29,20 @@ export class ProfileController {
     if (!['signup', 'self', 'admin'].includes(c)) throw new BadRequestException('context: signup, self or admin');
     return { context: c, fields: await this.p.schema(t, c as Context, ref === 'work' ? 'work' : 'live') };
   }
+  /** Components the active plugins contribute to a profile surface. surface=admin needs the admin capability (it feeds the administrator's user sheet). */
+  @Get('profile-components') async components(@Param('tenant') t: string, @Query('surface') surface: string, @Query('ref') ref: string | undefined, @Req() req: { headers: Record<string, unknown> }) {
+    if (!['self', 'admin'].includes(surface)) throw new BadRequestException('surface: self or admin');
+    if (surface === 'admin') new AdminGuard().canActivate({ switchToHttp: () => ({ getRequest: () => req }) } as never);
+    return { surface, components: await this.p.components(t, surface as 'self' | 'admin', ref === 'work' ? 'work' : 'live') };
+  }
+  /** The administrator's configuration view: every component of every active plugin, defaults and effective surfaces. */
+  @UseGuards(AdminGuard) @Get('profile-components-inventory') async componentsInventory(@Param('tenant') t: string, @Query('ref') ref?: string) {
+    return { components: await this.p.componentsInventory(t, ref === 'live' ? 'live' : 'work') };
+  }
+  /** How much profile data a plugin holds for this tenant; the console shows it in the uninstall confirmation. */
+  @UseGuards(AdminGuard) @Get('plugins/:id/profile-values') async pluginValues(@Param('tenant') t: string, @Param('id') id: string) {
+    return { plugin: id, values: await this.p.pluginValueCount(t, id) };
+  }
   /** The subject is the token's, never a value from the request. */
   /** A branch-test token (claim set by the core at sign-in) reads and edits its profile on the TESTED branch; every other token stays live. */
   private ref(req: { user?: { branch?: string } }): 'live' | 'work' { return req.user?.branch ? 'work' : 'live'; }

@@ -9,6 +9,7 @@ import { AdminGuard } from '../../auth/admin.guard.js';
 import { Grants, PluginError, PluginRegistry } from './registry.js';
 import { installArchive, loadInstalledPlugin, removeInstalledPlugin } from './archive.js';
 import { defaultPluginsDir, refreshPluginCatalogue } from './loader.js';
+import { ProfileService } from '../../profile/profile.service.js';
 
 const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503, 'invalid-archive': 400, 'already-exists': 409, 'signature-invalid': 400 };
 function wrap<T>(f: () => Promise<T> | T): Promise<T> {
@@ -31,7 +32,7 @@ function grants(b: unknown): Grants {
 @UseGuards(AuthGuard)
 @Controller('tenants/:tenant/plugins')
 export class PluginsAdminController {
-  constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries) {}
+  constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries, @Optional() private readonly profile?: ProfileService) {}
   private async registry(write=false) { return workspaceMode() ? this.branches.get(currentBranch(write)) : this.reg; }
 
   @Get() async list(@Param('tenant') t: string) { return { tenant: t, plugins: (await this.registry()).list(t) }; }
@@ -50,7 +51,9 @@ export class PluginsAdminController {
     const impl = reg.impl(id);
     if (!impl) throw new NotFoundException(`unknown plugin ${id}`);
     if (!reg.isActive(t, id)) throw new ForbiddenException(`plugin ${id} is not enabled on this branch`);
-    if (!impl.manifest.screens?.some((sc) => sc.render === 'component' && sc.component === tail)) throw new NotFoundException(`${tail} is not a screen component of plugin ${id}`);
+    const isScreen = impl.manifest.screens?.some((sc) => sc.render === 'component' && sc.component === tail);
+    const isProfileComponent = impl.manifest.profileComponents?.some((pc) => pc.component === tail);
+    if (!isScreen && !isProfileComponent) throw new NotFoundException(`${tail} is not a declared component of plugin ${id}`);
     const base = resolve(defaultPluginsDir(), id);
     const file = resolve(base, tail);
     if (!file.startsWith(base + sep)) throw new BadRequestException('assets stay inside the plugin folder');
@@ -109,7 +112,14 @@ export class PluginsAdminController {
   disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }
 
   /** Plan D: destructive uninstall. The plugin must be disabled first; the tenant's rows go, and the down migrations
-   * drop the owned tables when no other tenant still has it installed. Refuses when an applied migration lacks an inverse. */
+   * drop the owned tables when no other tenant still has it installed. Refuses when an applied migration lacks an inverse.
+   * The profile configuration the plugin leaves behind (field settings, component overrides) is purged with it. */
   @UseGuards(AdminGuard) @Post(':id/uninstall')
-  uninstall(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).uninstall(t, id); return { uninstalled: id }; }); }
+  uninstall(@Param('tenant') t: string, @Param('id') id: string) {
+    return wrap(async () => {
+      await (await this.registry(true)).uninstall(t, id);
+      const purge = this.profile ? await this.profile.purgePlugin(t, id) : undefined;
+      return { uninstalled: id, profileConfig: purge };
+    });
+  }
 }

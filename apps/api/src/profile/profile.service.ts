@@ -129,7 +129,7 @@ export class ProfileService {
     for (const [k, v] of entries) {
       const f = cat.find((c) => c.fullKey === k); if (!f) throw new BadRequestException(`unknown profile field ${k}`);
       const s = settingFor(f, cfg);
-      const allowed = s.enabled && f.storage === 'values' && (ctx === 'self' ? s.selfEdit && f.klass === 'profile' : s.adminEdit);
+      const allowed = s.enabled && f.storage !== 'identities' && (ctx === 'self' ? s.selfEdit && f.klass === 'profile' : s.adminEdit);
       if (!allowed) throw new ForbiddenException(`${k} cannot be changed here`);
       out[k] = await this.checkValue(tenant, ref, f, v);
     }
@@ -159,4 +159,57 @@ export class ProfileService {
     return out;
   }
   async putWorking(tenant: string, id: string, values: Record<string, string | number | boolean | null>, actor: string) { if (Object.keys(values).length) await this.store.put(tenant, id, values, 'work', actor); }
+
+  /** Profile components contributed by the plugins active on this side, with the configuration applied. surface=self is the person's own page; surface=admin the administrator's user sheet. */
+  async components(tenant: string, surface: 'self' | 'admin', ref: 'live' | 'work') {
+    const reg = await this.registry(ref);
+    const cfg = await this.config(tenant, ref);
+    const listed = new Map(reg.list(tenant).map((x: { id: string; base?: boolean; grants?: { uiComponents?: boolean } }) => [x.id, x]));
+    const out: { key: string; plugin: string; id: string; title: string; component: string; mode: 'manage' | 'readonly'; order: number }[] = [];
+    for (const { plugin, components } of reg.profileComponents(tenant)) {
+      const info = listed.get(plugin);
+      if (info && !info.base && !info.grants?.uiComponents) continue; // same rule as component screens: granted explicitly
+      for (const c of components) {
+        const ov = cfg.components?.[`${plugin}:${c.id}`] ?? {};
+        const mode = ov[surface] ?? c.surfaces?.[surface] ?? 'hidden';
+        if (mode === 'hidden') continue;
+        out.push({ key: `${plugin}:${c.id}`, plugin, id: c.id, title: c.title, component: c.component, mode, order: ov.order ?? c.order ?? 500 });
+      }
+    }
+    return out.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+  }
+  /** The admin configuration view of every component: manifest defaults plus the current overrides, hidden included. */
+  async componentsInventory(tenant: string, ref: 'live' | 'work' = 'work') {
+    const reg = await this.registry(ref);
+    const cfg = await this.config(tenant, ref);
+    const out: { key: string; plugin: string; id: string; title: string; component: string; defaults: { self: string; admin: string }; effective: { self: string; admin: string }; order: number }[] = [];
+    for (const { plugin, components } of reg.profileComponents(tenant))
+      for (const c of components) {
+        const ov = cfg.components?.[`${plugin}:${c.id}`] ?? {};
+        out.push({ key: `${plugin}:${c.id}`, plugin, id: c.id, title: c.title, component: c.component,
+          defaults: { self: c.surfaces?.self ?? 'hidden', admin: c.surfaces?.admin ?? 'hidden' },
+          effective: { self: ov.self ?? c.surfaces?.self ?? 'hidden', admin: ov.admin ?? c.surfaces?.admin ?? 'hidden' },
+          order: ov.order ?? c.order ?? 500 });
+      }
+    return out.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+  }
+  /** Uninstall hygiene (plugin lifecycle contract): a plugin that goes away takes its profile configuration with it - field settings and component overrides. Written on the working branch like every configuration change. */
+  async purgePlugin(tenant: string, pluginId: string) {
+    const reg = await this.registry('work', true);
+    const raw = await reg.coreSettings(tenant, CORE_PROFILE_SETTINGS_ID);
+    const cfg = (await reg.callSlot<{ config: ProfileConfig }>(tenant, 'directory.default', 'directory.fields.parseConfig', { value: raw })).result.config;
+    const fields = Object.fromEntries(Object.entries(cfg.fields).filter(([k]) => !k.startsWith(pluginId + '.')));
+    const components = Object.fromEntries(Object.entries(cfg.components ?? {}).filter(([k]) => !k.startsWith(pluginId + ':')));
+    const next: ProfileConfig = { ...cfg, fields, ...(Object.keys(components).length ? { components } : {}) };
+    if (!Object.keys(components).length) delete next.components;
+    await reg.putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, next as unknown as Record<string, unknown>);
+    return { purged: pluginId, fields: Object.keys(cfg.fields).length - Object.keys(fields).length };
+  }
+  /** How much profile data a plugin holds (the uninstall confirmation shows this number). */
+  async pluginValueCount(tenant: string, pluginId: string, ref: 'live' | 'work' = 'work'): Promise<number> {
+    if (!this.store.countForPlugin) return 0;
+    const cat = await this.catalogue(tenant, ref);
+    const routes = cat.filter((f) => f.plugin === pluginId && f.storage === 'table').map((f) => ({ fullKey: f.fullKey, type: f.type, table: f.table!, column: f.column! }));
+    return this.store.countForPlugin(tenant, `${pluginId}.`, routes, ref);
+  }
 }

@@ -199,6 +199,11 @@ export class PluginRegistry {
     return this.derive(`pf:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! })));
   }
 
+  /** Profile components declared by the plugins that are active for this tenant (My profile, the admin user sheet). */
+  profileComponents(tenant: string): { plugin: string; components: import('./manifest.js').ProfileComponentDecl[] }[] {
+    return this.derive(`pc:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileComponents?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, components: i.manifest.profileComponents! })));
+  }
+
   /** Install: runs migrations once (checksum-checked), seeds, only if the admin granted `install`. */
   async install(tenant: string, id: string, grants: Grants) {
     const p = this.plugin(id);
