@@ -123,6 +123,7 @@ export function userStats(users: UserProfile[]): UserStats {
 @if (editing()) {<div class="scrim" (click)="cancel()"></div>
 <aside class="drawer" id="user-editor" role="dialog" [attr.aria-label]="key ? 'Edit '+key : 'Create user'">
   <div class="dhead">
+    <!-- PROFILE-PICTURE-SLOT: the profile-plugins PR enriches this avatar (photo when the picture plugin is active, initials otherwise). -->
     <span class="av big" [style.background]="deptColor(form.department || 'user')+'22'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')+'55'">{{initials(form.display_name || form.id || '?')}}</span>
     <span class="tx"><h3>{{key ? (form.display_name || key) : 'Create user'}}</h3>
       @if (key) {<span class="sub">{{key}} · <span class="tag" [style.background]="deptColor(form.department || 'user')+'1f'" [style.color]="deptColor(form.department || 'user')">{{form.department || '—'}}</span>
@@ -148,7 +149,7 @@ export function userStats(users: UserProfile[]): UserStats {
   @for (f of pfields(); track f.key) { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
   @if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
   @else {<input [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}</label> } }
-  <!-- PLUGIN-SECTION-SEAM: the profile-plugins PR mounts its per-user components (TOTP, PIN, lockout, photo) here, between Profile fields and Security. Keep this a single marked line so either PR merges first without a conflict. -->
+  <!-- PROFILE-PLUGINS-SLOT: the profile-plugins PR mounts <app-user-plugin-sections [userId]="key"> here (TOTP, PIN, lockout), between Profile fields and Security. Single marked line, additive only. -->
   <h4>Security</h4>
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
   <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>
