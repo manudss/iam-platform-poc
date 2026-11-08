@@ -106,7 +106,7 @@ export const SEED_CONFIG: AuthnConfig = {
   methods: [
     { id: 'password', type: 'password', name: 'Password', enabled: true, level: 3, config: {} },
     { id: 'authenticator-app', type: 'totp', name: 'Authenticator app', enabled: true, level: 7, config: {} },
-    { id: 'e-mail-code', type: 'email-otp', name: 'E-mail code', enabled: true, level: 4, config: {} },
+    { id: 'e-mail-code', type: 'email-otp', name: 'E-mail code', enabled: true, level: 4, config: { delivery: 'smtp' } },
     { id: 'pin-keypad', type: 'digit-code', name: 'PIN keypad', enabled: true, level: 3, config: { length: 6 } },
     { id: 'pin-keypad-8', type: 'digit-code', name: 'PIN keypad (8 digits)', enabled: true, level: 4, config: { length: 8 } },
   ],
