@@ -45,7 +45,11 @@ export class AuthMethodsPage {
   protected enrollUser = 'demo-alice'; protected enrollEmail = ''; protected enrollPin = '';
   private timer?: ReturnType<typeof setTimeout>;
 
-  constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
+  constructor() {
+    effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); });
+    // The framed sign-in page announces itself once Angular is up: send it the draft then (same origin only).
+    addEventListener('message', (ev) => { if (ev.origin === location.origin && (ev.data as { type?: string } | null)?.type === 'iam-preview-ready') this.pushPreview(); });
+  }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
 
   // ---- derived views ----

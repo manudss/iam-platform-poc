@@ -60,3 +60,5 @@ form { display: grid; gap: .5rem; margin-top: .6rem; }
   .login { padding: 1rem; }
   .hero { padding: 1.4rem; }
 }
+.pvf { display: block; margin: .8rem 0; font-weight: 600; } .pvf input { display: block; width: 100%; margin-top: .3rem; }
+.m.pv { outline: 3px solid #4338ca; outline-offset: 2px; }
