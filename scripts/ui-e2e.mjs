@@ -303,9 +303,27 @@ try {
   await nav('/activation'); await page.waitForSelector('td:text-is("#3")'); // startup #1, earlier Apply #2, human PR merge #3
   await noBanner('activation after explorer apply');
 
+  // ---- Users page (redesign): stat cards, live search, rich drawer, footer count ----
+  await nav('/users'); await page.waitForSelector('#users-table tbody tr');
+  assert.ok((await page.locator('.stats .stat').count()) >= 4, 'users: the four stat cards render');
+  await shot('10-users-table');
+  await page.fill('input[name=userSearch]', 'camille-martin');
+  await page.waitForFunction(() => document.querySelectorAll('#users-table tbody tr').length === 1, { timeout: 10000 });
+  await shot('10-users-filtered');
+  await page.fill('input[name=userSearch]', '');
+  await page.waitForFunction(() => document.querySelectorAll('#users-table tbody tr').length > 1, { timeout: 10000 });
+  await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.waitForSelector('#user-editor');
+  const userSections = await page.locator('#user-editor h4').allTextContents();
+  assert.ok(userSections.some((t) => /Identity/.test(t)) && userSections.some((t) => /Security/.test(t)), 'users: the drawer shows the Identity and Security sections (got: ' + JSON.stringify(userSections) + ')');
+  await shot('11-user-drawer');
+  await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForSelector('#user-editor', { state: 'detached' });
+  await noBanner('users page');
+
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
   await page.setViewportSize({ width: 390, height: 800 });
-  for (const p of ['/overview', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
+  for (const p of ['/overview', '/users', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
     await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
     if (path() === '/login') { await coreLogin(); await page.waitForFunction(() => document.body.innerText.includes('admin capability')); await setToken(); await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
