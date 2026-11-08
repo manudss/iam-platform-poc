@@ -42,6 +42,8 @@ const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (
  * answers `plugin.<id>.call`, the core merges the verdict, a silent mandatory subscriber denies (fail closed)
  * and the caller refuses when nobody answered at all. ui.screens and access.decide stay in process (decision 8). */
 export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score', 'notify.capability',
+  // The mail renderer (mail-templates): slot-targeted blocking call before a delivery (docs/mail-templates.md).
+  'notify.render',
   // The sign-in method hooks (step 2): slot-targeted blocking calls (callSlot wraps the slot in the payload).
   'auth.prepare', 'auth.verify', 'auth.interact', 'auth.verification',
   'directory.user.validate', 'directory.fields.validateDecls', 'directory.fields.catalogue', 'directory.fields.parseConfig',

@@ -1,0 +1,42 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "mail-templates-base",
+  "version": "1.0.0",
+  "name": "E-mail templates (base)",
+  "description": "Renders every e-mail the platform sends: the template declared by the owning plugin (its manifest mailTemplates), customized per Dolt branch, wrapped in the global layout. Base of the notify.templates slot; the management screen ships in the mail-templates plugin.",
+  "publisher": "iam-platform",
+  "kinds": ["notifier"],
+  "base": true,
+  "provides": ["notify.templates"],
+  "hooks": [{ "name": "notify.render", "mode": "blocking" }],
+  "settings": [],
+  "mailTemplates": [
+    {
+      "key": "_layout",
+      "name": "Global layout",
+      "description": "The shell every e-mail body is injected into: logo, brand color, page background, footer. Each template only edits its own body.",
+      "layout": true,
+      "variables": [
+        { "name": "logo", "sample": "lyam" },
+        { "name": "brandColor", "sample": "#4f46e5" },
+        { "name": "pageBg", "sample": "#f1f5f9" },
+        { "name": "footer", "sample": "You received this e-mail because an action was taken on your account." },
+        { "name": "body", "sample": "<p>Hello,</p>" }
+      ],
+      "default": {
+        "subject": "",
+        "text": "",
+        "html": "<div style=\"background:{{pageBg}};padding:24px;font-family:Arial,Helvetica,sans-serif\">\n  <div style=\"max-width:520px;margin:auto;background:#ffffff;border-radius:12px;padding:24px\">\n    <h1 style=\"color:{{brandColor}};font-size:22px;margin:0 0 16px\">{{logo}}</h1>\n    {{body}}\n  </div>\n  <p style=\"color:#94a3b8;font-size:12px;text-align:center;margin:16px 0 0\">{{footer}}</p>\n</div>"
+      },
+      "vars": {
+        "logo": "lyam",
+        "logoUrl": "",
+        "brandColor": "#4f46e5",
+        "pageBg": "#f1f5f9",
+        "footer": "lyam - identity & access demo. You received this e-mail because an action was taken on your account."
+      }
+    }
+  ],
+  "entrypoints": { "handlers": "handlers.mjs" },
+  "security": { "signed": true }
+}

@@ -5,6 +5,8 @@ import { ProfileService } from './profile.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { currentBranch } from '../workspace/context.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
+import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
 /**
  * Public sign-up. The management rules live in the directory plugin (plugins/directory/signup.mjs);
@@ -19,6 +21,9 @@ interface SignupPluginModule {
     usersList?: (ref: string) => Promise<{ id: string; email?: string | null }[]>;
     usersSave?: (id: string, body: Record<string, unknown>, create: boolean, pre: { salt: string; hash: string }, tenant: string) => Promise<unknown>;
     outboxSend?: (message: { tenant: string; to: string; subject: string; text: string; subjectUser: string }) => Promise<void>;
+    /** Templated delivery (docs/mail-templates.md): render via notify.templates, real send via notify.default
+     * when its capability is real, otherwise the rendered text lands in the demo outbox. */
+    deliver?: (message: { tenant: string; to: string; template: string; data: Record<string, unknown>; subjectUser: string; effectKey: string }) => Promise<void>;
     emit: (type: string, tenant: string, branch: string, payload: Record<string, string>) => void;
     currentBranch: () => string | undefined;
   }) => {
@@ -37,7 +42,7 @@ const plugin = loadPluginModule('directory', 'signup.mjs') as SignupPluginModule
 @Injectable()
 export class SignupService {
   private readonly manager: ReturnType<SignupPluginModule['createSignupManager']>;
-  constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus) {
+  constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry) {
     this.manager = plugin.createSignupManager({
       signupOpen: (t) => profile.signupOpen(t),
       schema: (t, ctx, ref) => profile.schema(t, ctx, ref) as never,
@@ -46,6 +51,16 @@ export class SignupService {
       usersList: users ? (ref) => users.list(ref) as never : undefined,
       usersSave: users ? (id, body, create, pre, tenant) => users.save(id, body, create, pre, tenant) : undefined,
       outboxSend: authn ? (m) => authn.outbox.send(m) : undefined,
+      // Sign-up mails render through the notify.templates slot and deliver through notify.default when it really
+      // delivers (same rule as the sign-in code, P1-E); otherwise the rendered text lands in the demo outbox.
+      // Sign-up is a live path: the MAIN registry renders and sends (a working branch never changes live sign-up).
+      deliver: reg ? async (m) => {
+        const rendered = await renderMailOrLegacy(reg, m.tenant, m.template, m.data);
+        let real = false;
+        try { real = !!(await reg.callSlot<{ real: boolean }>(m.tenant, 'notify.default', 'notify.capability', {})).result.real; } catch { /* no capability answer: simulated path */ }
+        if (real) await reg.emit(m.tenant, 'notify.send', { effectKey: m.effectKey, tenant: m.tenant, to: m.to, template: m.template, data: m.data, ...(rendered ? { subject: rendered.subject, text: rendered.text, ...(rendered.html ? { html: rendered.html } : {}) } : {}) } as { effectKey: string });
+        else if (authn) await authn.outbox.send({ tenant: m.tenant, to: m.to, subject: rendered?.subject ?? `[iam] ${m.template}`, text: rendered?.text ?? Object.entries(m.data).map(([k, v]) => `${k}: ${v}`).join('\n'), subjectUser: m.subjectUser });
+      } : undefined,
       emit: (type, tenant, branch, payload) => events?.emit({ type, tenant, branch, at: new Date().toISOString(), payload }),
       currentBranch: () => { try { return currentBranch(); } catch { return undefined; } },
     });

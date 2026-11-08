@@ -43,6 +43,38 @@
     }
   ],
   "settings": [],
+  "mailTemplates": [
+    {
+      "key": "signup-confirmation",
+      "name": "Sign-up confirmation",
+      "description": "Sent when a public sign-up request is submitted, to confirm the e-mail address.",
+      "variables": [
+        { "name": "token", "sample": "KX7T2Q" },
+        { "name": "subjectUser", "sample": "new-user" }
+      ],
+      "default": {
+        "subject": "Confirm your sign-up request",
+        "text": "Hello,\n\nYour confirmation code: {{token}}\n\nIf you did not request this account, ignore this message.",
+        "html": "<p>Hello,</p>\n<p>Your confirmation code:</p>\n<p style=\"font-size:24px;letter-spacing:4px;margin:8px 0\"><strong>{{token}}</strong></p>\n<p style=\"color:#64748b\">If you did not request this account, ignore this message.</p>"
+      }
+    },
+    {
+      "key": "role.changed",
+      "name": "Role change notice",
+      "description": "Sent to the manager when a role activation grants or revokes a role.",
+      "variables": [
+        { "name": "subject", "sample": "demo-alice" },
+        { "name": "role", "sample": "accountant" },
+        { "name": "change", "sample": "granted" },
+        { "name": "activation", "sample": "42" }
+      ],
+      "default": {
+        "subject": "Role change for {{subject}}: {{role}} ({{change}})",
+        "text": "The role {{role}} was {{change}} for {{subject}} (activation {{activation}}).",
+        "html": "<p>The role <strong>{{role}}</strong> was {{change}} for <strong>{{subject}}</strong>.</p>\n<p style=\"color:#64748b\">Activation {{activation}}.</p>"
+      }
+    }
+  ],
   "entrypoints": {
     "handlers": "handlers.mjs"
   },
