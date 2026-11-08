@@ -1,0 +1,101 @@
+name: Demo image (GHCR)
+
+# Builds the all-in-one hosted-demo image (demo/Dockerfile: Dolt + Rust core +
+# NestJS API + Angular console) on GitHub-hosted runners - free and unlimited on
+# this public repo - and pushes it to GHCR. Render then only PULLS and starts the
+# image: it no longer spends any of the workspace's 500 free build pipeline
+# minutes/month on Docker builds (docs/pr-previews.md), and a /preview demand
+# goes from ~10-20 min of Render build to the time of an image pull + boot.
+#
+# Tags (ghcr.io/<owner>/<repo>):
+#   <full commit sha>   immutable tag, the one previews and the demo deploy
+#   pr-<N>              moving tag on pull requests (convenience)
+#   latest              moving tag on pushes to main only
+#
+# Triggers: every push to main and every (same-repo) PR head, so the image for a
+# PR head normally exists BEFORE anyone comments /preview; workflow_dispatch
+# (optional ref input) is the backstop used by scripts/render-pr-previews.mjs
+# when the image for a commit is missing.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or commit SHA to build (default: the default branch)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: demo-image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build + push ghcr.io/${{ github.repository }}
+    # Fork PRs get no packages:write token and no secrets: skip, their image is
+    # built after a maintainer pushes the branch to this repo.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact ref being built
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.sha }}
+
+      - name: Resolve the commit SHA and image tags
+        id: t
+        run: |
+          set -eu
+          SHA=$(git rev-parse HEAD)
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          TAGS="ghcr.io/${REPO}:${SHA}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TAGS="${TAGS},ghcr.io/${REPO}:pr-${{ github.event.pull_request.number }}"
+          fi
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS="${TAGS},ghcr.io/${REPO}:latest"
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Building ${REPO}@${SHA} -> ${TAGS}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR (GITHUB_TOKEN, no PAT to manage)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 'Build and push (BuildKit cache: GitHub Actions cache, shared scope)'
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: demo/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.t.outputs.tags }}
+          cache-from: type=gha,scope=demo-image
+          cache-to: type=gha,mode=max,scope=demo-image
+
+      - name: Record size and digest
+        run: |
+          set -eu
+          DIGEST="${{ steps.build.outputs.digest }}"
+          echo "Pushed ghcr.io/${{ github.repository }}@${DIGEST}"
+          {
+            echo "### Demo image built"
+            echo "- commit: \`${{ steps.t.outputs.sha }}\`"
+            echo "- tags: \`${{ steps.t.outputs.tags }}\`"
+            echo "- digest: \`${DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

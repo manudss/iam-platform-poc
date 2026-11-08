@@ -26,6 +26,10 @@ jobs:
           node-version: 24
       - run: node --check scripts/render-pr-previews.mjs
       - run: node --test scripts/render-pr-previews.test.mjs
+      # Production auto-deploy (demo-deploy.yml): the git-backed safety gate is what
+      # keeps a main deploy from ever starting a paid Render build.
+      - run: node --check scripts/render-prod-deploy.mjs
+      - run: node --test scripts/render-prod-deploy.test.mjs
       # Hosted-demo start tooling: redirect URIs registered with the IdP for every public origin.
       - run: node --check demo/public-redirect-uris.mjs
       - run: node --test demo/public-redirect-uris.test.mjs

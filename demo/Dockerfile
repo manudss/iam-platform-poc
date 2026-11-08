@@ -1,8 +1,14 @@
+# syntax=docker/dockerfile:1
 # All-in-one hosted-demo image (fictional data only). Build context = repository root.
 # One container: Dolt sql-server + Rust core + NestJS API + Angular console (static, same-origin proxy).
 # Core bus: a local nats-server runs INSIDE this container (loopback, per-boot random password; required for API startup).
 # Optional pieces of the local stack (PostgreSQL journal, Temporal, OpenBao) are OFF here:
 # the API runs on its in-memory fallbacks, documented in docs/demo.md.
+#
+# BuildKit cache mounts (cargo registry + target, npm cache) make REBUILDS on
+# warm runners (GitHub Actions cache, see .github/workflows/demo-image.yml) much
+# faster: only the changed crate/npm work is redone instead of full cold builds.
+# They are no-ops for correctness on any BuildKit builder (Render included).
 
 FROM rust:1-bookworm AS corebuild
 WORKDIR /src
@@ -10,17 +16,22 @@ COPY core/ core/
 COPY policies/ policies/
 COPY plugins/ plugins/
 COPY proto/ proto/
-RUN cd core && cargo build --release -p iam-core --locked
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/core/target \
+    cd core && cargo build --release -p iam-core --locked \
+ && cp target/release/iam-core /iam-core-bin
 
 FROM node:22-bookworm-slim AS apibuild
 WORKDIR /src
 COPY apps/api/ apps/api/
-RUN cd apps/api && npm ci && npm run build && npm prune --omit=dev
+RUN --mount=type=cache,target=/root/.npm \
+    cd apps/api && npm ci && npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS webbuild
 WORKDIR /src
 COPY apps/web/ apps/web/
-RUN cd apps/web && npm ci && npx ng build --configuration production
+RUN --mount=type=cache,target=/root/.npm \
+    cd apps/web && npm ci && npx ng build --configuration production
 
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -31,7 +42,7 @@ ARG NATS_VERSION=v2.15.2
 RUN curl -sSfL "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" | tar xz -C /opt \
  && ln -s /opt/nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
 WORKDIR /app
-COPY --from=corebuild /src/core/target/release/iam-core /app/iam-core
+COPY --from=corebuild /iam-core-bin /app/iam-core
 COPY policies/ /app/policies/
 COPY conf/nats-local.conf /app/conf/nats-local.conf
 COPY data/demo/ /app/data/demo/

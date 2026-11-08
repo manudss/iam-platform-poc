@@ -1,0 +1,54 @@
+name: Demo deploy (prod)
+
+# Auto-deploys the standing production demo (iam-poc-demo: iam-poc-demo.onrender.com
+# + the lyam.dss.name custom domain) after every push to main - WITHOUT any Render
+# build: the "Demo image (GHCR)" workflow builds and pushes the image on GitHub
+# (free on this public repo), then this workflow tells Render to pull and start it.
+# An image-backed deploy consumes ZERO of the 500 free build pipeline minutes/month.
+#
+# SAFETY: scripts/render-prod-deploy.mjs refuses to deploy while the service is
+# still git-backed (a deploy would then build from source and burn pipeline
+# minutes). The one-time git-backed -> image-backed switch is a manual step,
+# decided by the repo owner (docs/pr-previews.md, "Production demo: auto-deploy").
+# Until then every run here ends green with a "skipped" note.
+#
+# Trigger: workflow_run of the image build on main (this file must be on the
+# default branch to fire - it activates at merge). workflow_dispatch is the manual
+# backstop (redeploy the current image without pushing).
+on:
+  workflow_run:
+    workflows: ['Demo image (GHCR)']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy the fresh GHCR image to the production demo
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      PROD_SERVICE_NAME: iam-poc-demo
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: 'Deploy (image-backed gate) and watch to live'
+        run: node scripts/render-prod-deploy.mjs
+      - name: Health checks (both public URLs)
+        run: |
+          set -eu
+          curl -fsS --retry 6 --retry-delay 10 --retry-all-errors https://iam-poc-demo.onrender.com/healthz
+          echo
+          curl -fsS --retry 6 --retry-delay 10 --retry-all-errors https://lyam.dss.name/healthz
+          echo
