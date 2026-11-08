@@ -211,8 +211,9 @@ try {
   // grant its screen needs (the menu entry and the route only exist while the plugin is enabled).
   await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
+  await page.locator('#plugin-install, #plugin-enable, #plugin-disable').first().waitFor(); await page.waitForTimeout(500);
   if (await page.locator('#plugin-install').count()) {
-    if (await page.locator('input[name=gi]').count()) await page.locator('input[name=gi]').check();
+    if (await page.locator('input[name=gi]').count()) await page.locator('input[name=gi]').check({ timeout: 5000 }).catch(() => page.locator('input[name=gi]').check());
     await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/organizations/install')), page.click('#plugin-install')]);
     await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
   }
