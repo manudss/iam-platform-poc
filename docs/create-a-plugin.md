@@ -97,6 +97,31 @@ a result that says the delivery was simulated rather than pretending.
   event inventory, `plugin-validate`). A single non-exiting spec hangs the whole api job — close
   handles and stop timers in `after()`.
 
+## 7b. Profile fields and profile components
+
+A plugin can extend what a person IS (not only what the system does):
+
+- `profileFields` — declarations (key, label, type, klass, pii, section, order, defaults). Values of a
+  field WITHOUT storage land in the generic `profile_field_values` table. Prefer owning your data:
+  `storage: { table: 'plg_<yourId>_values', column, sqlType? }` plus an install migration that creates
+  the table and a `down` that drops it. The table name MUST start with `plg_<yourId>_` (the migration
+  runner refuses anything else, and bare `text` columns become `varchar(255)` - use `mediumtext` for
+  long values like images). Existing generic-store values are adopted into your table at install/enable.
+  Uninstall drops the table and purges your slice of the profile configuration: that is the lifecycle
+  contract, it is not optional. Fields of klass `authority` can never be user-editable or asked at
+  sign-up, whatever the admin sends.
+- `profileComponents` — self-contained blocks on the profile screens (the security sections of
+  `auth-totp` / `auth-digit-code` / `auth-password` are the reference): `component` is a `.mjs` custom
+  element served from your package, `surfaces` say where it appears (`self` / `admin`, each `manage`,
+  `readonly` or `hidden`). The element receives a context (`tenant`, `api`, `token`, `adminToken`,
+  `branch`, `surface`, `subject`, `mode`); in `readonly` mode it must render without any mutation.
+  Shipping components takes the `uiComponents` grant at enable, like a packaged admin screen.
+  Administrators can re-tune your surfaces per component; never write a component that breaks when it
+  is demoted to `readonly`.
+
+See `docs/profile-fields.md` for the configuration model and `plugins/profile-picture/` for a minimal
+complete example (image field, own table, one component, install migration).
+
 ## 8. Enable
 
 Plugins are installed (signed folder present), then ENABLED per organization through the admin API.
