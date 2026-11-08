@@ -1,0 +1,7 @@
+:host { display: inline-block; position: relative; min-width: 12rem; }
+.ls-btn { display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left; background: #fff; border: 1px solid #c9ccee; border-radius: .5rem; padding: .45rem .6rem; font: inherit; cursor: pointer; }
+.ls-btn .of { color: #6b6e92; font-size: .8rem; } .ls-btn .car { margin-left: auto; color: #6b6e92; }
+.ls-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: .25rem; list-style: none; background: #fff; border: 1px solid #c9ccee; border-radius: .6rem; box-shadow: 0 10px 30px rgba(30, 27, 75, .18); max-height: 18rem; overflow: auto; }
+.ls-list li { display: flex; align-items: center; gap: .7rem; padding: .35rem .5rem; border-radius: .4rem; cursor: pointer; }
+.ls-list li b { width: 1.4rem; text-align: right; }
+.ls-list li.act { background: #eef0ff; } .ls-list li.sel b { color: #4338ca; }
