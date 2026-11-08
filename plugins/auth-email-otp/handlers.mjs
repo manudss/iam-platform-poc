@@ -25,7 +25,7 @@ export default {
     const notify = p.known && wantsReal && p.notifyCapability?.real
       ? { tenant: p.tenant, to, template: 'sign-in-code', data: { code, ttlMinutes: Math.round(ttl / 60), subjectUser: p.subject }, effectKey: `otp:${sha(`${p.instanceId}:${code}`).slice(0, 32)}` }
       : undefined;
-    const mail = p.known && !notify ? { tenant: p.tenant, to, subject: 'Your sign-in code', text, subjectUser: p.subject } : undefined;
+    const mail = p.known && !notify ? { tenant: p.tenant, to, subject: 'Your sign-in code', text, subjectUser: p.subject, template: 'sign-in-code', data: { code, ttlMinutes: Math.round(ttl / 60), subjectUser: p.subject } } : undefined;
     const real = !!notify;
     return { prompt: { title: 'Check your e-mail', message: real ? 'If the account exists, a code was sent to its e-mail address.' : 'DEMO ONLY: no e-mail is sent. In this prototype the code is written to a demo outbox that an administrator can read.', fields: [{ name: 'code', label: 'Code', type: 'digits', maxLength: len, hint: `${len} digits` }] },
       state: { hash: sha(`${p.instanceId}:${code}`), exp: now + ttl * 1000, used: false }, ...(notify ? { notify } : {}), ...(mail ? { mail } : {}) };

@@ -34,6 +34,23 @@
       "path": "/workflows"
     }
   ],
+  "mailTemplates": [
+    {
+      "key": "workflow.notify",
+      "name": "Workflow notification",
+      "description": "Sent by a workflow's notify step. Simulated in this demo (nothing sent) unless a real notifier serves notify.default.",
+      "variables": [
+        { "name": "message", "sample": "The onboarding workflow finished." },
+        { "name": "workflow", "sample": "Onboarding" },
+        { "name": "recipient", "sample": "manager@example.org" }
+      ],
+      "default": {
+        "subject": "Workflow {{workflow}}: notification",
+        "text": "{{message}}",
+        "html": "<p>{{message}}</p>"
+      }
+    }
+  ],
   "security": {
     "signed": true
   },

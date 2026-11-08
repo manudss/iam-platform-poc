@@ -5,6 +5,7 @@ import pg from 'pg';
 import { DoltService } from '../dolt/dolt.service.js';
 import { ActivationEffects } from './activation-effects.js';
 import { EffectStore } from './effect-store.js';
+import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
 /**
  * Opt-in runtime for the local demo effects: set IAM_EFFECTS=1 together with IAM_PG_URL and the core bus, plus
@@ -26,7 +27,12 @@ export class EffectsService implements OnModuleInit, OnModuleDestroy {
     const fx = new ActivationEffects({
       store: new EffectStore(this.pool), snapshotAt: (c) => this.dolt.snapshotAt(c),
       previousCommit: async (tenant, seq) => (await this.pool!.query("SELECT commit_hash FROM activations WHERE tenant=$1 AND seq<$2 AND state='applied' ORDER BY seq DESC LIMIT 1", [tenant, seq])).rows[0]?.commit_hash,
-      pluginNotify: this.plugins ? async (t, p) => { await this.plugins!.emit(t, 'notify.send', p); } : undefined,
+      pluginNotify: this.plugins ? async (t, p) => {
+        // Render through the notify.templates slot first (docs/mail-templates.md); a renderer problem degrades
+        // to the legacy raw payload, explicitly logged, and never fails the role effects.
+        const rendered = await renderMailOrLegacy(this.plugins!, t, p.template, p.data);
+        await this.plugins!.emit(t, 'notify.send', { ...p, ...(rendered ? { subject: rendered.subject, text: rendered.text, ...(rendered.html ? { html: rendered.html } : {}) } : {}) });
+      } : undefined,
       notifySinkUrl: IAM_NOTIFY_SINK_URL, provisionTargetUrl: IAM_PROVISION_TARGET_URL,
     });
     await host.serveService('activation-effects', ['activation.applied'], async (env) => {

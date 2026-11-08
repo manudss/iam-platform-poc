@@ -1,0 +1,7 @@
+{
+  "name": "@iam-plugin/mail-templates-base",
+  "version": "1.0.0",
+  "private": true,
+  "description": "E-mail template rendering (base of the notify.templates slot) - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {}
+}

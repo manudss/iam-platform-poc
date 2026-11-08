@@ -19,8 +19,12 @@ export default {
       return { ...base, delivered: false, real: false, degraded: 'RESEND_API_KEY not set on the server' };
     }
     const from = c.settings.from || 'lyam@dss.name';
-    const text = `${p.template}\n\n${Object.entries(p.data ?? {}).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')}`;
-    const r = await new Resend(key()).emails.send({ from, to: p.to, subject: `[iam] ${p.template}`, text });
+    // Rendered content (subject/text/html) is attached by the core after a notify.render call on the
+    // notify.templates slot (mail-templates). The legacy raw dump stays for payloads without it.
+    const subject = typeof p.subject === 'string' && p.subject ? p.subject : `[iam] ${p.template}`;
+    const text = typeof p.text === 'string' && p.text ? p.text : `${p.template}\n\n${Object.entries(p.data ?? {}).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')}`;
+    const html = typeof p.html === 'string' && p.html ? p.html : undefined;
+    const r = await new Resend(key()).emails.send({ from, to: p.to, subject, text, ...(html ? { html } : {}) });
     if (r.error) throw new Error(`resend delivery failed: ${r.error.message}`);
     return { delivered: true, real: true, id: r.data?.id ?? null };
   },

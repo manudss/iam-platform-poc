@@ -17,6 +17,7 @@ export const HOOKS = new Map<string, HookMode[]>([
   ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM) - documented bus exception (decision 8)
   ['notify.send', ['async']], // deliver a message
   ['notify.capability', ['blocking']], // the notifier chosen on the slot declares its real delivery capability (P1-E)
+  ['notify.render', ['blocking']], // render a mail template (catalogue decl + branch customization + layout) into subject/text/html before delivery
   ['workflow.step', ['async']], // run one step of an approval or certification flow
   ['connector.provision', ['async']], // create / update / delete in a target
   ['connector.import', ['async']], // pull identities from a source
@@ -43,7 +44,21 @@ export type AuthenticateResult =
   | { outcome: 'challenge'; challenge: string };
 
 export interface EnrichPayload { tenant: string; subject: string; profile: Record<string, unknown>; }
-export interface NotifyPayload { tenant: string; to: string; template: string; data: Record<string, unknown>; effectKey: string; }
+export interface NotifyPayload { tenant: string; to: string; template: string; data: Record<string, unknown>; effectKey: string;
+  /** Rendered content, attached by the core after a notify.render call on the notify.templates slot (mail-templates).
+   * Absent on the legacy path (a renderer failure degrades to the raw template dump, explicitly logged). */
+  subject?: string; text?: string; html?: string; }
+/** notify.render payload: the template declaration comes from the owning plugin's manifest (mailTemplates),
+ * the customization (override) and the layout are read core-side on the relevant Dolt branch and travel IN THE
+ * PAYLOAD (bus-safe contract, same rule as the auth methods): the handler is pure interpolation. */
+export interface NotifyRenderPayload {
+  tenant: string; key: string; lang: string; data: Record<string, unknown>;
+  decl?: { subject: string; text: string; html?: string } | null;
+  override?: { subject: string; text: string; html?: string } | null;
+  layout?: { subject?: string; text?: string; html?: string; vars?: Record<string, string> } | null;
+  layoutOverride?: { html?: string; vars?: Record<string, string> } | null;
+}
+export interface NotifyRenderResult { subject: string; text: string; html?: string }
 export interface IdentityChangedPayload { tenant: string; subject: string; change: 'joiner' | 'mover' | 'leaver' | 'role.changed'; newRole?: string; effectKey: string; }
 export interface RiskPayload { tenant: string; subject: string; context: Record<string, unknown>; }
 

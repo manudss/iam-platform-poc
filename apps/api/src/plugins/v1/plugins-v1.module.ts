@@ -32,6 +32,7 @@ import { DoltProfileStore, MemoryProfileStore } from '../../profile/store.js';
 import { currentBranch } from '../../workspace/context.js';
 import { DemoDataService } from '../../profile/demo-data.service.js';
 import { SigninOptionsController } from '../../authn/signin-options.controller.js';
+import { MAIL_TEMPLATE_STORE, DoltMailTemplateStore, MemoryMailTemplateStore, MailTemplatesController, MailTemplatesService } from '../../mail/mail-templates.js';
 import { AuthnService } from '../../authn/flow.service.js';
 import { AuthnAdminController } from '../../authn/authn.controller.js';
 import { SessionAdminController } from '../../authn/session.controller.js';
@@ -42,8 +43,12 @@ import { SessionAdminController } from '../../authn/session.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
-  controllers: [PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController],
-  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, {
+  controllers: [PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController, MailTemplatesController],
+  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
+    provide: MAIL_TEMPLATE_STORE,
+    inject: [VersioningService],
+    useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltMailTemplateStore(v, (w) => currentBranch(w)) : new MemoryMailTemplateStore(),
+  }, {
     provide: SSO_DIRECTORY,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltSsoDirectory(v) : new MemorySsoDirectory(),
