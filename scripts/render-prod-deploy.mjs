@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
-// Deploys the standing PRODUCTION demo service (iam-poc-demo: iam-poc-demo.onrender.com
+// Deploys the standing PRODUCTION demo service (iam-poc: iam-poc-demo.onrender.com
 // + the lyam.dss.name custom domain) after the "Demo image (GHCR)" workflow built a
 // push to main. Render only PULLS the freshly pushed image: zero build pipeline
 // minutes (see docs/pr-previews.md).
@@ -21,14 +21,14 @@ import { pathToFileURL } from 'node:url';
 // No secret is ever printed or written anywhere: RENDER_API_KEY stays in the
 // GitHub secret, the service's own env vars (RESEND_API_KEY, ...) are never read.
 // Usage: node scripts/render-prod-deploy.mjs
-// Env: RENDER_API_KEY, PROD_SERVICE_NAME (default iam-poc-demo),
+// Env: RENDER_API_KEY, PROD_SERVICE_NAME (default iam-poc),
 //      PROD_POLL_MS / PROD_WAIT_MAX_MS (watch tuning), DRY_RUN=1 to print the plan.
 const e = process.env;
 const DRY = e.DRY_RUN === '1';
 if (!DRY && !e.RENDER_API_KEY) throw new Error('RENDER_API_KEY missing');
 
 const RENDER = 'https://api.render.com/v1';
-const SVC_NAME = e.PROD_SERVICE_NAME ?? 'iam-poc-demo';
+const SVC_NAME = e.PROD_SERVICE_NAME ?? 'iam-poc';
 const POLL_MS = Number(e.PROD_POLL_MS ?? 20000);
 const WAIT_MAX_MS = Number(e.PROD_WAIT_MAX_MS ?? 15 * 60 * 1000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
