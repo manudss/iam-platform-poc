@@ -63,3 +63,15 @@ language) and goes live on Apply, like every other administrator change; `main` 
 - `POST /preview` - render without saving: `{key, data?, override?, layoutOverride?}` (the editor live preview).
 - `POST /:key/send-test` - render with the branch customization and send one e-mail through the
   `notify.default` slot (`{to, data?}`); the answer says whether the slot really delivers.
+
+## Templates screen (Messaging > Templates)
+
+The mail-templates plugin ships the admin screen (gallery + editor), a packaged custom element.
+
+- Gallery: one card per mail type, the global layout first - live HTML preview rendered by the API through the
+  notify.templates slot, default/customized badge, Edit, Restore default, Send test (per-card recipient).
+- Editor: full page - subject, Text/HTML tabs, one sample-data field per declared variable (used for the preview
+  and the tests), live preview of the UNSAVED draft (POST preview), save on the working branch.
+- Layout editor: the HTML shell (must keep {{body}}) plus the layout variables (logo, logoUrl, brandColor,
+  pageBg, footer); the preview renders a sample mail inside the draft shell.
+- main stays read only: choose a working branch to customize, then Apply to go live.
