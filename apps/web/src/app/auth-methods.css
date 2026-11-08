@@ -51,7 +51,7 @@ input.name { min-width: min(24rem, 100%); width: 100%; max-width: 100%; box-sizi
 .drawer label, .modal label { display: block; margin: .5rem 0; font-weight: 600; font-size: .85rem; } .drawer label.inline { font-weight: 400; } .drawer input.pos { width: 4rem; }
 .type { display: flex; align-items: center; gap: .6rem; width: 100%; text-align: left; margin-bottom: .5rem; background: #fff; border: 1px solid #e3e4f2; border-radius: .7rem; padding: .6rem .8rem; cursor: pointer; } .type:disabled { opacity: .55; cursor: not-allowed; background: #f3f3f8; } .type .tx { flex: 1; } .type .tx b { display: block; } .type .sub { display: block; color: var(--muted); font-size: .8rem; } .type .cnt { color: var(--muted); font-size: .8rem; }
 .steps li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; list-style: none; } .steps { padding: 0; }
-.tabs2 { display: flex; gap: .4rem; margin: .4rem 0; flex-wrap: wrap; } .tabs2 button.on { background: #4338ca; color: #fff; }
-.frame { width: 100%; height: 26rem; border: 1px solid #c9ccee; border-radius: .7rem; background: #fff; margin-top: .6rem; }
+.tabs2 { display: flex; gap: .4rem; margin: .4rem 0; flex-wrap: wrap; } .tabs2 button:not(.on) { background: #fff; color: #1e1b4b; border: 1px solid #c9ccee; } .tabs2 button.on { background: #4338ca; color: #fff; }
+.frame { width: 100%; height: calc(100vh - 16rem); min-height: 26rem; border: 1px solid #c9ccee; border-radius: .7rem; background: #fff; margin-top: .6rem; }
 button.danger { color: #b91c1c; border-color: #fecaca; background: #fff; }
 @media (max-width: 800px) { .board { grid-template-columns: 1fr; } .it { flex-wrap: wrap; } .it .acts { width: 100%; justify-content: flex-start; } .modal { top: 1rem; } }
