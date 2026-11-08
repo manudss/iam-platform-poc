@@ -7,4 +7,4 @@
 .ls-list li { display: flex; align-items: center; gap: .8rem; padding: .5rem .6rem; min-height: 2.25rem; border-radius: .4rem; cursor: pointer; }
 .ls-list li b { width: 1.4rem; text-align: right; color: var(--ink); }
 .ls-list li.act { background: var(--accent-soft); } .ls-list li.sel { background: var(--accent); } .ls-list li.sel b { color: #fff; }
-@media (max-width: 600px) { .ls-list li { min-height: 2.75rem; } }
+@media (max-width: 600px) { .ls-list { position: static; margin-top: .4rem; max-height: none; } .ls-list li { min-height: 2.5rem; } }

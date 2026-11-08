@@ -161,9 +161,9 @@
           }
           @if (!e.available) { <p class="msg bad">This entry is unavailable: a plugin it needs is not active.</p> }
           @if (e.kind==='method' && usedBy(e).length) { <p class="hint">Also a step of: {{ usedBy(e).join(', ') }}.</p> }
-          <div class="row-btns foot"><button (click)="close()">Done</button><button class="secondary" (click)="openPreview(e)">Preview</button>
-            @if (e.inUse) { <button class="secondary" (click)="unuse(e)">Remove from the list</button> } @else { <button class="secondary" (click)="use(e)" [disabled]="!e.available">Use</button> }
+          <div class="row-btns danger-zone">@if (e.inUse) { <button class="secondary" (click)="unuse(e)">Remove from the list</button> } @else { <button class="secondary" (click)="use(e)" [disabled]="!e.available">Use</button> }
             <button class="danger" (click)="deleteEntry(e)">Delete</button></div>
+          <div class="row-btns foot"><button (click)="close()">Done</button><button class="secondary" (click)="openPreview(e)">Preview</button></div>
         </aside>
       }
     }
