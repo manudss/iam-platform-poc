@@ -134,3 +134,22 @@ jobs:
       - name: Stop
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
+  demo-docker:
+    # Step 7: every PR proves the all-in-one demo image still builds and boots (docs/demo.md).
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the demo image (build context = repository root)
+        run: docker build -f demo/Dockerfile -t iam-demo:ci .
+      - name: Boot it and wait for the API health check
+        run: |
+          docker run -d --name iam-demo-ci -p 8080:8080 iam-demo:ci
+          ok=0; for i in $(seq 1 90); do code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true); [ "$code" = 200 ] && { ok=1; break; }; sleep 2; done
+          echo "healthz ok=$ok"; [ $ok = 1 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs iam-demo-ci --tail=150
+      - name: Stop
+        if: always()
+        run: docker rm -f iam-demo-ci || true
