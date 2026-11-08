@@ -17,8 +17,8 @@ function mockFetch(handler) {
   return calls;
 }
 const json200 = (obj) => ({ ok: true, status: 200, json: async () => obj, text: async () => JSON.stringify(obj) });
-const gitBackedSvc = json200([{ service: { id: 'srv-1', name: 'iam-poc-demo', serviceDetails: { runtime: 'docker' } } }]);
-const imageBackedSvc = json200([{ service: { id: 'srv-1', name: 'iam-poc-demo', serviceDetails: { runtime: 'image' }, image: { imagePath: 'ghcr.io/manudss/iam-platform-poc:latest' } } }]);
+const gitBackedSvc = json200([{ service: { id: 'srv-1', name: 'iam-poc', serviceDetails: { runtime: 'docker' } } }]);
+const imageBackedSvc = json200([{ service: { id: 'srv-1', name: 'iam-poc', serviceDetails: { runtime: 'image' }, image: { imagePath: 'ghcr.io/manudss/iam-platform-poc:latest' } } }]);
 const liveDeploy = () => json200([{ deploy: { id: 'dep-1', status: 'live', createdAt: new Date().toISOString() } }]);
 
 async function load(env = {}) {
@@ -65,7 +65,7 @@ test('failed deploy: rejects (Actions run must go red)', async () => {
   await assert.rejects(m.run(), /a echoue/);
 });
 
-test('name filter: iam-poc-demo-2 is not iam-poc-demo', async () => {
+test('name filter: iam-poc-demo-2 is not iam-poc', async () => {
   mockFetch(async () => json200([{ service: { id: 'srv-9', name: 'iam-poc-demo-2', serviceDetails: { runtime: 'image' } } }]));
   const m = await load();
   await assert.rejects(m.run(), /introuvable/);
