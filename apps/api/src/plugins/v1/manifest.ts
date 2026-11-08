@@ -122,6 +122,8 @@ export interface AuthMethodDecl {
   provisioning: 'directory' | 'admin-demo' | 'none';
   /** The step runs on the same page as the username (first factor inline). */
   inlineWithUsername?: boolean;
+  /** How many instances of this type an administrator may create: `single` (one only, e.g. the directory password) or `multiple` (default: several, each with its own settings). */
+  instances?: 'single' | 'multiple';
 }
 
 export interface PluginManifest {
@@ -195,6 +197,7 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     if (!['implemented', 'catalogue'].includes(a.maturity)) errs.push(`authMethod.maturity must be implemented or catalogue`);
     if (!Number.isInteger(a.suggestedLevel) || a.suggestedLevel < 1 || a.suggestedLevel > 10) errs.push('authMethod.suggestedLevel must be a whole number from 1 to 10');
     if (!['directory', 'admin-demo', 'none'].includes(a.provisioning)) errs.push(`authMethod.provisioning: unknown value ${a.provisioning}`);
+    if (a.instances !== undefined && !['single', 'multiple'].includes(a.instances)) errs.push('authMethod.instances must be single or multiple');
   }
   for (const f of m.settings ?? []) {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(f.key ?? '')) errs.push(`setting key ${f.key} is invalid`);

@@ -45,6 +45,8 @@ export interface AuthMethodType {
   suggestedLevel: number;
   settings: SettingField[];
   provisioning: 'directory' | 'admin-demo' | 'none';
+  /** `single`: one instance at most per configuration. `multiple` (default): several, each with its own settings. */
+  instances: 'single' | 'multiple';
   inlineWithUsername(config: Record<string, any>): boolean;
   /** `real` = the check proves what the factor category says. A demo delivery channel proves nothing, so it is not real.
    * DESCRIPTIVE metadata for the catalogue and the chain analysis (config-only, never touches tenant state). Sign-in
@@ -55,7 +57,7 @@ export interface AuthMethodType {
 
 /** Ideas shown in the catalogue so the list reads as a roadmap. They cannot be created: nothing is implemented for them. */
 const planned = (id: string, name: string, description: string, factor: Factor, level: number, amr: string): AuthMethodType => ({
-  id, name, description, factor, amr, maturity: 'catalogue', suggestedLevel: level, settings: [], provisioning: 'none',
+  id, name, description, factor, amr, maturity: 'catalogue', suggestedLevel: level, settings: [], provisioning: 'none', instances: 'single',
   inlineWithUsername: () => false, verification: () => ({ real: false, note: 'Not implemented.' }),
 });
 const PLANNED: AuthMethodType[] = [
@@ -74,7 +76,7 @@ function fromPlugin(impl: { manifest: import('../plugins/v1/manifest.js').Plugin
   const id = (impl.manifest.provides ?? []).find((s) => s.startsWith('auth.'))!.slice('auth.'.length);
   return {
     id, name: a.name, description: a.description, factor: a.factor as Factor, amr: a.amr, maturity: a.maturity,
-    suggestedLevel: a.suggestedLevel, settings: impl.manifest.settings, provisioning: a.provisioning,
+    suggestedLevel: a.suggestedLevel, settings: impl.manifest.settings, provisioning: a.provisioning, instances: a.instances ?? 'multiple',
     inlineWithUsername: () => !!a.inlineWithUsername,
     verification: (config) => (impl.handlers['auth.verification']?.({ config }, { tenant: '', settings: {} }) ?? { real: false, note: 'no verification handler' }) as { real: boolean; note: string },
   };

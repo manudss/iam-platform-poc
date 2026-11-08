@@ -103,7 +103,18 @@ export class AuthnService implements OnApplicationBootstrap {
     return cfg;
   }
   analyses(cfg: AuthnConfig): ChainAnalysis[] { return cfg.chains.map((c) => analyzeChain(cfg, c)); }
-  catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
+  catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, instances: t.instances, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
+
+  /** Which instances and chains of a configuration are served right now by an ACTIVE plugin of the given registry (working branch or live).
+   * A method is unavailable when the plugin serving its type is disabled or absent; a chain is unavailable when any of its steps is. Drives the "no longer active" state of the console. */
+  async availability(tenant: string, cfg: AuthnConfig, ref: 'live' | 'work' = 'work') {
+    const reg = await this.registry(ref);
+    const methods: Record<string, { available: boolean; plugin?: string }> = {};
+    for (const m of cfg.methods) { const p = this.provider(reg, tenant, m.type); methods[m.id] = p ? { available: true, plugin: p.manifest.id } : { available: false, plugin: undefined }; }
+    const chains: Record<string, { available: boolean; missing: string[] }> = {};
+    for (const c of cfg.chains) { const missing = c.steps.filter((id) => !methods[id]?.available); chains[c.id] = { available: !missing.length, missing }; }
+    return { methods, chains };
+  }
 
   private async known(tenant: string, subject: string, branch?: string): Promise<boolean> {
     if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return false;
