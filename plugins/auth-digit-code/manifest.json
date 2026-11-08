@@ -2,16 +2,55 @@
   "apiVersion": "plugin/v3",
   "id": "auth-digit-code",
   "version": "1.0.0",
-  "name": "PIN on a shuffled keypad (base)",
+  "name": "PIN on a shuffled keypad",
   "publisher": "iam-platform",
-  "kinds": ["auth-method"],
-  "base": true,
-  "provides": ["auth.digit-code"],
-  "hooks": [{ "name": "auth.prepare", "mode": "blocking" }, { "name": "auth.interact", "mode": "blocking" }, { "name": "auth.verification", "mode": "blocking" }],
-  "settings": [
-    { "key": "length", "type": "number", "label": "PIN length (digits)", "default": 6, "min": 4, "max": 8, "group": "PIN", "help": "Enrolled PINs must have this length." }
+  "kinds": [
+    "auth-method"
   ],
-  "authMethod": { "name": "PIN on a shuffled keypad", "description": "A numeric PIN enrolled for the user, entered with on-screen buttons whose order changes on every page. A button carries only an opaque id valid for that page; the server maps it back to the digit, so the PIN digits are never sent as text. This hides the digits from simple form logging, it is NOT encryption: HTTPS is still required. A PIN is a knowledge factor: with a password it is NOT two different factors.", "factor": "knowledge", "amr": "pin", "maturity": "implemented", "suggestedLevel": 3, "provisioning": "admin-demo", "inlineWithUsername": false },
-  "entrypoints": { "handlers": "handlers.mjs" },
-  "security": { "signed": true }
+  "provides": [
+    "auth.digit-code"
+  ],
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.interact",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "length",
+      "type": "number",
+      "label": "PIN length (digits)",
+      "default": 6,
+      "min": 4,
+      "max": 8,
+      "group": "PIN",
+      "help": "Enrolled PINs must have this length."
+    }
+  ],
+  "authMethod": {
+    "name": "PIN on a shuffled keypad",
+    "description": "A numeric PIN enrolled for the user, entered with on-screen buttons whose order changes on every page. A button carries only an opaque id valid for that page; the server maps it back to the digit, so the PIN digits are never sent as text. This hides the digits from simple form logging, it is NOT encryption: HTTPS is still required. A PIN is a knowledge factor: with a password it is NOT two different factors.",
+    "factor": "knowledge",
+    "amr": "pin",
+    "maturity": "implemented",
+    "suggestedLevel": 3,
+    "provisioning": "admin-demo",
+    "inlineWithUsername": false
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  },
+  "extends": "auth-digit-code-base"
 }

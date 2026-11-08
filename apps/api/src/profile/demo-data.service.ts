@@ -59,6 +59,9 @@ export class DemoDataService implements OnApplicationBootstrap {
     }));
     const reg = await this.branches!.get('main');
     for (const id of ['organizations', 'hr-attributes', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, id === 'organizations' ? { uiComponents: true } : {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
+    // The seeded sign-in chains use TOTP, e-mail code and PIN: their method plugins must be serving (step 2:
+    // a method is usable only while its plugin is enabled on the slot).
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
     await (await this.branches!.get('main')).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, { fields: { 'hr-attributes.job_title': { selfEdit: true, signup: 'optional' }, 'hr-attributes.phone': { selfEdit: true }, 'hr-attributes.language': { selfEdit: true, signup: 'optional' } }, signup: { open: true }, selfEditPolicy: 'immediate' });
     for (const a of ACCOUNTS) await this.store!.put(tenant, a.id, { 'hr-attributes.job_title': a.title, 'hr-attributes.phone': a.phone, 'hr-attributes.language': a.language, 'hr-attributes.employee_grade': a.grade }, 'live', 'demo-seed');
     await this.v.lock(() => this.v.at('main', async (c) => {

@@ -386,9 +386,18 @@ export class PluginRegistry {
   /** Bus delivery of a blocking kind (step 3): only the plugin CHOSEN for the slot answers (single responder);
    * every other plugin with a handler is explicitly not concerned. A faulted replacement refuses (fail closed,
    * same rule as callSlot: the base is never asked in its place). */
-  blockingResponder(tenant: string, id: string, kind: string): 'answer' | 'not-concerned' | 'refuse' {
+  blockingResponder(tenant: string, id: string, kind: string, slot?: string): 'answer' | 'not-concerned' | 'refuse' {
     const impl = this.impls.get(id);
     if (!impl || !impl.handlers[kind] || !this.isActive(tenant, id)) return 'not-concerned';
+    if (slot) {
+      // Slot-targeted call (callSlot wrapper): only the plugin chosen for THIS slot answers; a faulted replacement
+      // chosen for it refuses (fail closed, the base is never asked in its place).
+      let chosen: string | undefined;
+      try { chosen = this.resolve(tenant, slot).manifest.id; } catch { return 'not-concerned'; } // no provider at all: nobody is concerned
+      if (chosen !== id) return 'not-concerned';
+      if (impl.manifest.extends && this.faulted.has(this.k(tenant, id))) return 'refuse';
+      return 'answer';
+    }
     // A plugin WITHOUT a slot (risk signal, profile enrichment) answers whenever it is active; a slotted plugin
     // answers only when it is the one chosen for the slot (single responder: base or replacement).
     const slots = impl.manifest.provides ?? [];
@@ -418,8 +427,11 @@ export class PluginRegistry {
     // Bus only (step 3 cleanup): the call travels on the bus (envelope stamped with this registry's branch,
     // decision 7) and the serving plugin answers over NATS. Fail closed both ways: a deny verdict, a silent
     // mandatory subscriber (the core denies) or NO usable answer at all (bus down, nobody serving) refuse.
+    // The hook name is shared by several slot families (auth.verify serves auth.password AND auth.totp), so the
+    // slot travels inside the payload wrapper: the bus forwards it opaquely, the delivery unwraps it and only the
+    // plugin chosen for THAT slot answers (blockingResponder).
     const bus = this.requireBus(hook);
-    const r = await bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
+    const r = await bus.call(tenant, hook, { __slot: slot, __payload: payload }, timeoutMs, this.branchRef);
     if (!r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? 'no responder'}`);
     // A plugin's own denial (bad credentials, locked out, ...) is DATA, not a fault: the answer rode back with
     // the deny verdict. A deny WITHOUT an answer payload is an infrastructure refusal (faulted replacement,

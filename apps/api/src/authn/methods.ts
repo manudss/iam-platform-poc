@@ -1,5 +1,4 @@
 import type { SettingField } from '../plugins/v1/manifest.js';
-import type { EnrollmentStore } from './enroll-store.js';
 import { pluginCatalogue } from '../plugins/v1/loader.js';
 import type { HookHandler } from '../plugins/v1/hooks.js';
 
@@ -27,23 +26,17 @@ export class DemoOutbox implements MailAdapter {
   clear(tenant: string) { this.msgs = this.msgs.filter((x) => x.tenant !== tenant); }
 }
 
-/** Capabilities the core flow engine hands to a method plugin's handlers (step 4, decision 1: the chains and
- * their levels stay in the core; the method behaviour lives in the plugin and receives this context). */
-export interface MethodCtx {
-  tenant: string; subject: string; instanceId: string; config: Record<string, any>;
-  /** False when the account does not exist or cannot sign in: methods still behave the same way from the outside (no enumeration). */
-  known: boolean;
-  enroll: EnrollmentStore; mail: DemoOutbox;
-  /** Deliver a message through the notify.default slot (durable bus emission; msg carries its effectKey). */
-  notify(msg: Record<string, unknown>): Promise<unknown>;
-  /** What the notifier chosen on the slot declares: real delivery or explicit simulation. */
-  notifyCapability(): Promise<NotifyCapability>;
-  /** E-mail address from the user's profile (live data), if any. */
-  profileEmail(): Promise<string | undefined>;
-  /** Password check through the platform's auth.password slot (so a lockout replacement keeps working). */
-  passwordCheck(tenant: string, subject: string, password: string): Promise<boolean>;
-  now(): number;
-}
+/** Bus contract of a sign-in method (step 2, review n:2): every method call goes through the registry (callSlot on
+ * the auth.<type> slot - grants, deadlines, faults, audit). The handler is PURE: everything it needs travels in the
+ * JSON payload, every effect it asks for comes back in the result for the core to apply.
+ * Payload: { tenant, subject, known, instanceId, config, state, answers, now,
+ *            enrollment?: { totp?: {secret,lastStep}, pin?: {length,salt,hash}, email?: string },
+ *            profileEmail?: string, notifyCapability?: {real, note?}, passwordOutcome?: 'allow'|'deny' }.
+ * Results: auth.prepare  -> { prompt, state, notify?, mail? }  (the core sends via the notify.default slot / the outbox);
+ *          auth.verify   -> { ok, consumeStep?, state? }       (the core applies the anti-replay consume / state patch);
+ *          auth.interact -> { done:false, prompt, state } | { done:true, ok }.
+ * Business failures are DATA ({ok:false} / {done:true, ok:false}), never a thrown error: a throw is a plugin FAULT
+ * (persisted, audited, fail closed - the slot's replacement refuses every later call until an admin acts). */
 export interface AuthMethodType {
   id: string; name: string; description: string;
   /** Category of factor the method DECLARES. It is a classification, not a measurement of strength or independence. */
@@ -53,12 +46,11 @@ export interface AuthMethodType {
   settings: SettingField[];
   provisioning: 'directory' | 'admin-demo' | 'none';
   inlineWithUsername(config: Record<string, any>): boolean;
-  /** `real` = the check proves what the factor category says. A demo delivery channel proves nothing, so it is not real. */
+  /** `real` = the check proves what the factor category says. A demo delivery channel proves nothing, so it is not real.
+   * DESCRIPTIVE metadata for the catalogue and the chain analysis (config-only, never touches tenant state). Sign-in
+   * NEVER uses this in-process call: at sign-in the same question goes through the registry (callSlot
+   * auth.verification) so a disabled or faulted plugin cannot answer. */
   verification(config: Record<string, any>): { real: boolean; note: string };
-  prepare?(ctx: MethodCtx): Promise<{ prompt: Prompt; state: Record<string, any> }>;
-  verify?(ctx: MethodCtx, state: Record<string, any>, answers: Record<string, string>): Promise<boolean>;
-  /** Interactive methods (keypad): one call per button press. `done:false` shows the next prompt and keeps the step open; `done:true` ends it with a verdict. */
-  interact?(ctx: MethodCtx, state: Record<string, any>, answers: Record<string, string>): Promise<{ done: false; prompt: Prompt; state: Record<string, any> } | { done: true; ok: boolean }>;
 }
 
 /** Ideas shown in the catalogue so the list reads as a roadmap. They cannot be created: nothing is implemented for them. */
@@ -74,22 +66,17 @@ const PLANNED: AuthMethodType[] = [
 
 /**
  * The method type catalogue, sourced from the folder plugins (step 4b): every plugin whose manifest declares
- * `authMethod` is a type, its handlers are the implementation. The payload/ctx split mirrors the hook contract:
- * payload = { config, subject, instanceId, known, answers, state }, ctx = the MethodCtx capabilities above.
+ * `authMethod` is a type. DESCRIPTIVE metadata only (name, factor, settings, the config-only verification note):
+ * the sign-in behaviour lives behind the registry (auth.prepare/verify/interact via callSlot, step 2).
  */
 function fromPlugin(impl: { manifest: import('../plugins/v1/manifest.js').PluginManifest; handlers: Record<string, HookHandler> }): AuthMethodType {
   const a = impl.manifest.authMethod!;
   const id = (impl.manifest.provides ?? []).find((s) => s.startsWith('auth.'))!.slice('auth.'.length);
-  const payload = (ctx: MethodCtx, state: Record<string, any>, answers?: Record<string, string>) => ({ config: ctx.config, subject: ctx.subject, instanceId: ctx.instanceId, known: ctx.known, state, answers });
   return {
     id, name: a.name, description: a.description, factor: a.factor as Factor, amr: a.amr, maturity: a.maturity,
     suggestedLevel: a.suggestedLevel, settings: impl.manifest.settings, provisioning: a.provisioning,
     inlineWithUsername: () => !!a.inlineWithUsername,
     verification: (config) => (impl.handlers['auth.verification']?.({ config }, { tenant: '', settings: {} }) ?? { real: false, note: 'no verification handler' }) as { real: boolean; note: string },
-    // The method plugins receive the MethodCtx capabilities directly (their ctx.settings is unused; only a replacement's own hooks see it).
-    ...(impl.handlers['auth.prepare'] ? { prepare: (ctx: MethodCtx) => impl.handlers['auth.prepare'](payload(ctx, {}), ctx as never) } : {}),
-    ...(impl.handlers['auth.verify'] ? { verify: (ctx: MethodCtx, state: Record<string, any>, answers: Record<string, string>) => impl.handlers['auth.verify'](payload(ctx, state, answers), ctx as never) } : {}),
-    ...(impl.handlers['auth.interact'] ? { interact: (ctx: MethodCtx, state: Record<string, any>, answers: Record<string, string>) => impl.handlers['auth.interact'](payload(ctx, state, answers), ctx as never) } : {}),
   };
 }
 
@@ -98,5 +85,6 @@ function fromPlugin(impl: { manifest: import('../plugins/v1/manifest.js').Plugin
 export function methodTypes(): AuthMethodType[] {
   return [...pluginCatalogue().impls().filter((i) => i.manifest.authMethod).map(fromPlugin), ...PLANNED];
 }
-export const CATALOGUE: AuthMethodType[] = methodTypes();
-export const methodType = (id: string) => CATALOGUE.find((m) => m.id === id);
+/** No frozen catalogue (review n:3): the lookup runs at EVERY call, so a plugin imported at runtime appears
+ * without a restart and a removed one disappears. */
+export const methodType = (id: string) => methodTypes().find((m) => m.id === id);

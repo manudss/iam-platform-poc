@@ -186,7 +186,19 @@ function materialize(s: ScannedPlugin): PluginImpl {
  * Replacements (`extends`) are NOT wrapped here: the registry wraps them at register() against the base
  * actually registered there, which may carry runtime overrides (see registry.ts). ctx.base is set there. */
 export function loadPlugins(dir: string = defaultPluginsDir(), opts: LoadOptions = {}): PluginImpl[] {
-  return scanPlugins(dir, opts).map(materialize);
+  // Registration order matters (step 2): a replacement requires its base to be registered first, so the list is
+  // topologically ordered - bases first, then each plugin after the one it extends.
+  const impls = scanPlugins(dir, opts).map(materialize);
+  const byId = new Map(impls.map((i) => [i.manifest.id, i]));
+  const ordered: PluginImpl[] = [], placed = new Set<string>();
+  for (let pass = 0; placed.size < impls.length && pass <= impls.length; pass++)
+    for (const i of impls) {
+      if (placed.has(i.manifest.id)) continue;
+      const ext = i.manifest.extends;
+      if (ext && byId.has(ext) && !placed.has(ext)) continue;
+      ordered.push(i); placed.add(i.manifest.id);
+    }
+  return ordered;
 }
 
 /**

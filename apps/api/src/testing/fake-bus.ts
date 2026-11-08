@@ -17,14 +17,17 @@ export function fakeBusBridge(registry: PluginRegistry, routed: (kind: string) =
     const settings = validateSettings(impl.manifest.settings, (await registry.settingsFor(tenant, id)) ?? {}).values;
     return impl.handlers[kind](payload, { tenant, settings });
   };
-  const responders = (tenant: string, kind: string) =>
-    registry.list(tenant).filter((i) => i.enabled && registry.impl(i.id)?.handlers[kind] && registry.blockingResponder(tenant, i.id, kind) === 'answer').map((i) => i.id);
+  const responders = (tenant: string, kind: string, slot?: string) =>
+    registry.list(tenant).filter((i) => i.enabled && registry.impl(i.id)?.handlers[kind] && registry.blockingResponder(tenant, i.id, kind, slot) === 'answer').map((i) => i.id);
   return {
     routed,
-    async call(tenant, kind, payload, timeoutMs = 2000) {
-      const refusers = registry.list(tenant).filter((i) => i.enabled && registry.impl(i.id)?.handlers[kind] && registry.blockingResponder(tenant, i.id, kind) === 'refuse').map((i) => i.id);
+    async call(tenant, kind, rawPayload, timeoutMs = 2000) {
+      // Slot-targeted calls (callSlot) arrive wrapped: only the plugin chosen for THAT slot answers.
+      const wrap = rawPayload && typeof rawPayload === 'object' && '__slot' in (rawPayload as Record<string, unknown>) ? (rawPayload as { __slot: string; __payload: unknown }) : undefined;
+      const payload = wrap ? wrap.__payload : rawPayload;
+      const refusers = registry.list(tenant).filter((i) => i.enabled && registry.impl(i.id)?.handlers[kind] && registry.blockingResponder(tenant, i.id, kind, wrap?.__slot) === 'refuse').map((i) => i.id);
       if (refusers.length) return { verdict: 'deny', reason: `${refusers[0]} is faulted: refused until an admin disables or re-enables it`, result: undefined, answered: true, answeredBy: refusers[0] };
-      const ids = responders(tenant, kind);
+      const ids = responders(tenant, kind, wrap?.__slot);
       if (!ids.length) return { verdict: 'deny', reason: 'no responder', result: undefined, answered: false };
       try {
         const result = await Promise.race([

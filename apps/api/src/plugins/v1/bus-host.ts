@@ -42,6 +42,8 @@ const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (
  * answers `plugin.<id>.call`, the core merges the verdict, a silent mandatory subscriber denies (fail closed)
  * and the caller refuses when nobody answered at all. ui.screens and access.decide stay in process (decision 8). */
 export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score', 'notify.capability',
+  // The sign-in method hooks (step 2): slot-targeted blocking calls (callSlot wraps the slot in the payload).
+  'auth.prepare', 'auth.verify', 'auth.interact', 'auth.verification',
   'directory.user.validate', 'directory.fields.validateDecls', 'directory.fields.catalogue', 'directory.fields.parseConfig',
   'directory.fields.validateConfig', 'directory.fields.effectiveSchema', 'directory.fields.checkValue', 'directory.effects.compute']);
 /** Blocking kinds that travel on the bus as merged QUERIES (step 3): every active plugin answers with the
@@ -331,10 +333,14 @@ export class BusHost {
       msg.respond(jc.encode({ from: id, id: env.id, data: result ?? null }));
       return;
     }
+    // A slot-targeted call (callSlot) wraps its payload: unwrap it here so the handler sees the original
+    // payload and only the plugin chosen for THAT slot answers (shared hook names across slot families).
+    const wrap = env.payload && typeof env.payload === 'object' && '__slot' in (env.payload as Record<string, unknown>) ? (env.payload as { __slot: string; __payload: unknown }) : undefined;
+    const payload = wrap ? wrap.__payload : env.payload;
     if (BUS_CONTROL_KINDS.has(env.kind)) {
       // Single responder: only the plugin chosen for the slot answers; the others say not-concerned (neither an
       // answer nor a silence). A faulted replacement refuses: the base is never asked in its place (callSlot rule).
-      const role = registry.blockingResponder(tenant, id, env.kind);
+      const role = registry.blockingResponder(tenant, id, env.kind, wrap?.__slot);
       if (role === 'not-concerned') { msg.respond(jc.encode({ from: id, id: env.id, not_concerned: true })); return; }
       if (role === 'refuse') { reply(undefined, 'deny'); return; } // fault: a deny WITHOUT payload - the caller reads it as an infrastructure refusal, not a plugin denial
     }
@@ -346,7 +352,7 @@ export class BusHost {
     const ctx: PluginContext = { tenant, settings };
     let result: any;
     try {
-      result = await handlerDeadline(Promise.resolve().then(() => handler(env.payload, ctx)), 1500);
+      result = await handlerDeadline(Promise.resolve().then(() => handler(payload, ctx)), 1500);
     } catch (e) {
       // Step 3 cleanup: record the fault (persisted, audited, blockingResponder refuses) and stay silent so a
       // mandatory control denies - the base is never asked in its place, no in-process fallback.

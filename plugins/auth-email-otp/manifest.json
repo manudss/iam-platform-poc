@@ -2,12 +2,11 @@
   "apiVersion": "plugin/v3",
   "id": "auth-email-otp",
   "version": "1.0.0",
-  "name": "One-time code by e-mail (base)",
+  "name": "One-time code by e-mail",
   "publisher": "iam-platform",
   "kinds": [
     "auth-method"
   ],
-  "base": true,
   "provides": [
     "auth.email-otp"
   ],
@@ -78,5 +77,6 @@
   },
   "security": {
     "signed": true
-  }
+  },
+  "extends": "auth-email-otp-base"
 }

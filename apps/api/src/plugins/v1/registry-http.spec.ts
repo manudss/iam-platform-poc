@@ -13,13 +13,13 @@ describe('plugin menu + http routes', () => {
     for (const p of loadPlugins()) reg.register(p);
     await reg.load();
     await reg.install('t1', 'organizations', {});
-    await reg.enable('t1', 'organizations', {});
+    await reg.enable('t1', 'organizations', { uiComponents: true }); // menu entries + routes require the screens grant (step 1b)
     await reg.install('t1', 'org-manager', { install: true });
     await reg.configure('t1', 'org-manager', { maxDepth: 4 });
     await reg.enable('t1', 'org-manager', {});
   });
   it('menu entries appear only while the plugin is active, per tenant', () => {
-    assert.deepEqual(reg.menu('t1').filter((e) => e.plugin === 'organizations').map((e) => ({ id: e.id, path: e.path, group: e.group })), [{ id: 'organizations', path: '/organizations', group: 'Access (IAM)' }]);
+    assert.deepEqual(reg.menu('t1').filter((e) => e.plugin === 'organizations').map((e) => ({ id: e.id, path: e.path, group: e.group })), [{ id: 'organizations', path: '/screens/organizations/orgs', group: 'Access (IAM)' }]);
     assert.equal(reg.menu('t2').filter((e) => e.plugin === 'organizations').length, 0);
   });
   it('http route dispatch: method + path + params, active plugin only', async () => {

@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
 import { analyzeChain, validateConfig, parseStored, SEED_CONFIG, isEmptyConfig } from './config.js';
 import { totpAt, base32Decode, hotp, base32Encode } from './totp.js';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
@@ -42,6 +43,9 @@ describe('authentication methods and chains', () => {
     process.env.IAM_API_ADMIN_TOKEN = ADMIN; process.env.IAM_AUTH_GATE_TOKEN = GATE; process.env.IAM_AUTHN_FILE = join(mkdtempSync(join(tmpdir(), 'authn-')), 'e.json');
     const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService); svc.now = () => clock;
+    // Step 2: a method is usable only while its plugin is enabled on the slot (the shipped plugins register disabled).
+    const reg = app.get(PluginRegistry);
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, {}); }
   });
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; process.env.IAM_AUTH_GATE_TOKEN = env.g; process.env.IAM_AUTHN_FILE = env.f; await app.close(); });
   const http = () => request(app.getHttpServer());

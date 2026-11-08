@@ -64,6 +64,9 @@ export class EnrollmentStore {
     });
   }
   async pinLength(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.pin?.length; }
+  /** Read-only snapshots for the method plugins' bus payloads (step 2): the core reads, the plugin decides, the core applies effects. */
+  async totpRecord(tenant: string, user: string, inst: string) { const t = this.get(await this.load(), tenant, user, inst)?.totp; return t ? { secret: t.secret, lastStep: t.lastStep ?? -1 } : undefined; }
+  async pinRecord(tenant: string, user: string, inst: string) { const p = this.get(await this.load(), tenant, user, inst)?.pin; return p ? { length: p.length, salt: p.salt, hash: p.hash } : undefined; }
   async verifyPinFull(tenant: string, user: string, inst: string, pin: string): Promise<boolean> {
     const p = this.get(await this.load(), tenant, user, inst)?.pin; if (!p || !/^\d{4,8}$/.test(pin)) return false;
     const a = Buffer.from(p.hash, 'hex'), b = scryptSync(pin, p.salt, 32); return a.length === b.length && timingSafeEqual(a, b);

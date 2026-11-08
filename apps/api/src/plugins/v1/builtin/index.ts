@@ -19,6 +19,12 @@ const need = (id: string): PluginImpl => {
 };
 
 export const authPassword = need('auth-password');
+export const authTotpBase = need('auth-totp-base');
+export const authEmailOtpBase = need('auth-email-otp-base');
+export const authDigitCodeBase = need('auth-digit-code-base');
+export const authTotp = need('auth-totp');
+export const authEmailOtp = need('auth-email-otp');
+export const authDigitCode = need('auth-digit-code');
 export const notifyLog = need('notify-log');
 export const notifyResend = need('notify-resend');
 export const orgManager = need('org-manager');
@@ -42,7 +48,7 @@ export const directory = need('directory');
  * missed notify-resend, saml-idp, csv-connector, scim-connector, mcp-gateway and directory). auth-password is
  * first so callers can apply their runtime base override before registering; bases precede their replacements.
  */
-export const SHIPPED_PLUGIN_IDS = ['auth-password', 'notify-log', 'notify-resend', 'auth-password-lockout', 'org-manager', 'risk-geo', 'hr-attributes', 'organizations', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp', 'csv-connector', 'scim-connector', 'mcp-gateway', 'directory'] as const;
+export const SHIPPED_PLUGIN_IDS = ['auth-password', 'auth-totp-base', 'auth-email-otp-base', 'auth-digit-code-base', 'auth-totp', 'auth-email-otp', 'auth-digit-code', 'notify-log', 'notify-resend', 'auth-password-lockout', 'org-manager', 'risk-geo', 'hr-attributes', 'organizations', 'workflows-iga', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp', 'csv-connector', 'scim-connector', 'mcp-gateway', 'directory'] as const;
 export function shippedPlugins(): PluginImpl[] {
   const c = pluginCatalogue();
   return SHIPPED_PLUGIN_IDS.map((id) => {
