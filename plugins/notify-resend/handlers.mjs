@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
-// The SDK is an apps/api dependency: resolve it from there (plugin folders have no node_modules of their own).
+// Step 4: the plugin declares its own dependency in its package.json and resolves it from the
+// controlled shared install at the repo root (scripts/plugin-deps.mjs).
 const { Resend } = createRequire(new URL('./package.json', import.meta.url))('resend');
 
 /**
