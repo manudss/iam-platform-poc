@@ -2,7 +2,7 @@
 
 Every pull request that targets this repository's default branch can get its own
 hosted preview, the same way the demo at <https://iam-poc-demo.onrender.com> is
-hosted, without touching the two standing services (`iam-poc-demo` in
+hosted, without touching the two standing services (`iam-poc` in
 `Production`, `iam-poc-explorer-test` in `dev`).
 
 ## Prebuilt images: GitHub builds, Render only pulls
@@ -137,14 +137,14 @@ comment explains why. The orchestration itself
 
 `.github/workflows/demo-deploy.yml` runs after every successful `Demo image
 (GHCR)` build on `main` (`workflow_run`, plus a manual `workflow_dispatch`
-backstop) and deploys the standing production service `iam-poc-demo`
+backstop) and deploys the standing production service `iam-poc`
 (`iam-poc-demo.onrender.com` + the `lyam.dss.name` custom domain) **from the
 prebuilt image**: every push to main is live ~2-3 min later, with **zero**
 Render build minutes spent. `scripts/render-prod-deploy.mjs` does it: read the
 service, gate, `POST /services/{id}/deploys`, watch to live, fail the run on a
 failed deploy. Health checks on both public URLs close the job.
 
-**Safety gate:** the script refuses to deploy while `iam-poc-demo` is still
+**Safety gate:** the script refuses to deploy while `iam-poc` is still
 git-backed - a deploy then would build from source and burn pipeline minutes.
 Until the one-time switch below is done, every run ends green with a `skipped`
 note and touches nothing. The deploy hook URL stays out of this flow for the
@@ -165,7 +165,7 @@ curl -X PATCH https://api.render.com/v1/services/<SRV_ID> \
 ```
 
 (`<SRV_ID>` and `<OWNER_ID>` are the service's own ids, visible in the dashboard
-URL / `GET /services?name=iam-poc-demo`; no registry credential is needed, the
+URL / `GET /services?name=iam-poc`; no registry credential is needed, the
 GHCR package is anonymously readable.) Then trigger one deploy from the
 dashboard, verify `/healthz` and the sign-in flow on both URLs, and the loop is
 closed: every push to `main` now rebuilds `latest` and auto-deploys it.
