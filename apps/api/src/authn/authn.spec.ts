@@ -45,7 +45,7 @@ describe('authentication methods and chains', () => {
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService); svc.now = () => clock;
     // Step 2: a method is usable only while its plugin is enabled on the slot (the shipped plugins register disabled).
     const reg = app.get(PluginRegistry);
-    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, {}); }
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, { uiComponents: true }); }
   });
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; process.env.IAM_AUTH_GATE_TOKEN = env.g; process.env.IAM_AUTHN_FILE = env.f; await app.close(); });
   const http = () => request(app.getHttpServer());

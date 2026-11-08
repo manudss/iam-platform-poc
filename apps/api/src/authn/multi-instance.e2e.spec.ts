@@ -45,7 +45,7 @@ describe('several instances of the same method plugin (step 6 acceptance)', () =
     const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService); svc.now = () => clock;
     const reg = app.get(PluginRegistry);
-    for (const id of ['auth-totp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, {}); }
+    for (const id of ['auth-totp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, { uiComponents: true }); }
   });
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; process.env.IAM_AUTH_GATE_TOKEN = env.g; process.env.IAM_AUTHN_FILE = env.f; await app.close(); });
   const http = () => request(app.getHttpServer());

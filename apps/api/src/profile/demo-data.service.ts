@@ -62,7 +62,7 @@ export class DemoDataService implements OnApplicationBootstrap {
     for (const id of ['organizations', 'hr-attributes', 'profile-picture', 'workflows-iga', 'mail-templates', 'app-connector', 'policy-studio', 'oidc-provider', 'saml-idp', 'mcp-gateway', 'csv-connector', 'scim-connector']) { try { await reg.install(tenant, id, { install: true }); } catch { /* already installed */ } try { await reg.enable(tenant, id, ['organizations', 'mail-templates', 'profile-picture'].includes(id) ? { uiComponents: true } : {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
     // The seeded sign-in chains use TOTP, e-mail code and PIN: their method plugins must be serving (step 2:
     // a method is usable only while its plugin is enabled on the slot).
-    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, { uiComponents: true }); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
     // The seeded e-mail OTP delivery is 'smtp': real codes only flow when a real notifier sits on the notify.default
     // slot. Seed the shipped Resend notifier so a fresh deploy delivers immediately when RESEND_API_KEY is set on the
     // server; without the key it degrades explicitly to the log transport (the page says DEMO ONLY, never a lie).

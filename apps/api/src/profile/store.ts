@@ -145,7 +145,8 @@ export class DoltProfileStore implements ProfileValueStore {
       for (const row of rows as { subject: string; field_key: string; value: unknown }[]) {
         const route = routes.find((r) => r.fullKey === row.field_key)!;
         if (!(await this.tableExists(c, route.table))) continue; // the owning plugin is not installed on main yet
-        const val = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+        // mysql2 usually returns a JSON column already parsed; some setups hand back the raw text. Accept both.
+        const val = typeof row.value === 'string' ? (() => { try { return JSON.parse(row.value); } catch { return row.value; } })() : row.value;
         await c.query(`insert into \`${route.table}\` (tenant, subject, \`${route.column}\`) values (?,?,?) on duplicate key update \`${route.column}\`=values(\`${route.column}\`)`, [t, row.subject, this.cell(route, val as string | number | boolean)]);
         await c.query('delete from profile_field_values where tenant=? and subject=? and field_key=?', [t, row.subject, row.field_key]);
         touched.add(route.table);
