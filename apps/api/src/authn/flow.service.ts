@@ -10,6 +10,7 @@ import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, valida
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
+import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
 export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string> }
 export type GateResponse =
@@ -239,9 +240,19 @@ export class AuthnService implements OnApplicationBootstrap {
     // failure: the gate answers 503 and the core refuses the sign-in (fail closed).
     const r = await reg.callSlot<{ prompt: Prompt; state: Record<string, any>; notify?: Record<string, unknown>; mail?: { tenant: string; to: string; subject: string; text: string; subjectUser: string } }>(s.tenant, `auth.${st.type}`, 'auth.prepare', await this.methodPayload(reg, s, st, {}));
     s.prepared = { prompt: r.result.prompt, state: r.result.state ?? {} }; s.tries = 0;
-    // Effects the pure handler asked for: the core applies them (durable notify emission, demo outbox).
-    if (r.result.notify) await reg.emit(s.tenant, 'notify.send', r.result.notify as { effectKey: string });
-    if (r.result.mail) await this.outbox.send(r.result.mail);
+    // Effects the pure handler asked for: the core applies them (durable notify emission, demo outbox). The
+    // mail content is rendered first through the notify.templates slot (mail-templates, docs/mail-templates.md):
+    // a renderer problem degrades to the legacy raw payload, explicitly logged (never blocks a sign-in).
+    if (r.result.notify) {
+      const n = r.result.notify as { tenant: string; to: string; template: string; data?: Record<string, unknown>; effectKey: string };
+      const rendered = await renderMailOrLegacy(reg, s.tenant, n.template, n.data ?? {});
+      await reg.emit(s.tenant, 'notify.send', { ...n, ...(rendered ? { subject: rendered.subject, text: rendered.text, ...(rendered.html ? { html: rendered.html } : {}) } : {}) });
+    }
+    if (r.result.mail) {
+      const m = r.result.mail as { tenant: string; to: string; subject: string; text: string; subjectUser: string; template?: string; data?: Record<string, unknown> };
+      const rendered = m.template ? await renderMailOrLegacy(reg, s.tenant, m.template, m.data ?? {}) : undefined;
+      await this.outbox.send(rendered ? { tenant: m.tenant, to: m.to, subject: rendered.subject, text: rendered.text, subjectUser: m.subjectUser } : m);
+    }
   }
   private challenge(s: Session, error?: string): GateResponse {
     const st = s.steps[s.index];

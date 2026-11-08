@@ -159,8 +159,28 @@ export interface PluginManifest {
   menu?: MenuEntry[];
   /** v3: the sign-in method type this plugin provides (kind `auth-method` with a slot `auth.<id>`). */
   authMethod?: AuthMethodDecl;
+  /** v3: the e-mail types this plugin can send (docs/mail-templates.md). Pure declarations: the owning plugin's
+   * handlers keep asking for effects; the mail-templates plugin (slot notify.templates) renders them, the
+   * notifier on notify.default delivers. `_layout` (layout: true) is the one global shell every body is
+   * injected into; exactly one plugin may declare it. */
+  mailTemplates?: MailTemplateDecl[];
   /** v3: package security. `signed` requires a valid signature.json verified at load against the trust store. */
   security?: { signed?: boolean };
+}
+
+export interface MailTemplateDecl {
+  /** Stable mail type key, for example `sign-in-code`. `_layout` is the reserved global layout. */
+  key: string;
+  name: string;
+  description?: string;
+  /** Variables the sender puts in `data`, with a sample value for previews. */
+  variables: { name: string; sample?: string }[];
+  /** Built-in EN default: subject, text body and optional HTML body (the layout wraps the HTML body). */
+  default: { subject: string; text: string; html?: string };
+  /** True only on the `_layout` decl: the default shell + its vars (logo, brandColor, pageBg, footer). */
+  layout?: boolean;
+  /** Layout decl only: default values of the layout variables. */
+  vars?: Record<string, string>;
 }
 
 const ID = /^[a-z][a-z0-9-]{1,48}$/;
@@ -276,6 +296,27 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     seenMenu.add(e.id);
   }
   errs.push(...validateFieldDecls(m.id, m.profileFields));
+  const seenMails = new Set<string>();
+  for (const d of m.mailTemplates ?? []) {
+    if (!/^_?[a-z0-9][a-z0-9._-]{0,60}$/.test(d.key ?? '')) errs.push(`mailTemplates: invalid key ${d.key ?? '?'}`);
+    if (seenMails.has(d.key)) errs.push(`mailTemplates: ${d.key} declared twice`);
+    seenMails.add(d.key);
+    if (!d.name) errs.push(`mailTemplates ${d.key}: name is required`);
+    if (d.layout) {
+      if (d.key !== '_layout') errs.push(`mailTemplates ${d.key}: layout: true is reserved for the _layout decl`);
+      if (!d.default?.html) errs.push('mailTemplates _layout: default.html (the shell) is required');
+    } else {
+      if (d.key === '_layout') errs.push('mailTemplates _layout: the layout decl must set layout: true');
+      if (typeof d.default?.subject !== 'string') errs.push(`mailTemplates ${d.key}: default.subject is required`);
+      if (typeof d.default?.text !== 'string') errs.push(`mailTemplates ${d.key}: default.text is required`);
+    }
+    const seenVars = new Set<string>();
+    for (const v of d.variables ?? []) {
+      if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(v.name ?? '')) errs.push(`mailTemplates ${d.key}: invalid variable ${v.name ?? '?'}`);
+      if (seenVars.has(v.name)) errs.push(`mailTemplates ${d.key}: variable ${v.name} declared twice`);
+      seenVars.add(v.name);
+    }
+  }
   if (m.base && m.extends) errs.push('a base plugin cannot extend another plugin');
   if (m.base && !(m.provides?.length)) errs.push('a base plugin must provide a slot');
   if (m.extends && !(m.provides?.length)) errs.push('a replacement plugin must provide the slot of its base');

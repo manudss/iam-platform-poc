@@ -1,0 +1,7 @@
+{
+  "name": "iam-plugin-mail-templates",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mail templates management screen (docs/mail-templates.md)."
+}

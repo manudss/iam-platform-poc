@@ -65,7 +65,10 @@ export function createSignupManager(deps) {
       if (taken || dup || pending.size >= MAX_PENDING) return NEUTRAL;
       const token = randomBytes(24).toString('base64url'), salt = randomBytes(24).toString('hex');
       pending.set(b.id, { id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
-      await deps.outboxSend?.({ tenant, to: b.email, subject: 'Confirm your sign-up request (demo)', text: `Confirmation code: ${token}`, subjectUser: b.id });
+      // The confirmation e-mail goes through the notify.templates renderer + notify.default slot when the core
+      // wires `deliver` (docs/mail-templates.md); the legacy dep outboxSend stays for adapters without it.
+      if (deps.deliver) await deps.deliver({ tenant, to: b.email, template: 'signup-confirmation', data: { token, subjectUser: b.id }, subjectUser: b.id, effectKey: `signup-confirmation:${b.id}:${sha(token).slice(0, 16)}` });
+      else await deps.outboxSend?.({ tenant, to: b.email, subject: 'Confirm your sign-up request (demo)', text: `Confirmation code: ${token}`, subjectUser: b.id });
       // A public request carries no working branch; the registration workflow belongs to the live directory.
       const branch = deps.currentBranch() ?? 'main';
       deps.emit('signup.requested', tenant, branch, { subject: b.id, email: b.email });
