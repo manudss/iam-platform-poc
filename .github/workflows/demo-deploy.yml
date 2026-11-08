@@ -1,6 +1,6 @@
 name: Demo deploy (prod)
 
-# Auto-deploys the standing production demo (iam-poc-demo: iam-poc-demo.onrender.com
+# Auto-deploys the standing production demo (iam-poc: iam-poc-demo.onrender.com
 # + the lyam.dss.name custom domain) after every push to main - WITHOUT any Render
 # build: the "Demo image (GHCR)" workflow builds and pushes the image on GitHub
 # (free on this public repo), then this workflow tells Render to pull and start it.
@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 25
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-      PROD_SERVICE_NAME: iam-poc-demo
+      PROD_SERVICE_NAME: iam-poc
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
