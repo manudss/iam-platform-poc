@@ -42,14 +42,16 @@ COPY apps/web/ apps/web/
 RUN --mount=type=cache,target=/root/.npm \
     cd apps/web && npm ci && npx ng build --configuration production
 
+# Service binaries come from the official Docker Hub images instead of the GitHub release CDN: release
+# downloads repeatedly 504 from CI runners (2026-11-08) while image pulls keep working. dolt-sql-server tags
+# track dolt releases 1:1; nats alpine ships /usr/local/bin/nats-server (paths verified in the image layers).
+FROM dolthub/dolt-sql-server:2.6.1 AS doltbin
+FROM nats:2.15.2-alpine AS natsbin
+
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
-ARG DOLT_VERSION=v2.6.1
-RUN curl -sSfL "https://github.com/dolthub/dolt/releases/download/${DOLT_VERSION}/dolt-linux-amd64.tar.gz" | tar xz -C /opt \
- && ln -s /opt/dolt-linux-amd64/bin/dolt /usr/local/bin/dolt
-ARG NATS_VERSION=v2.15.2
-RUN curl -sSfL --retry 8 --retry-delay 5 --retry-max-time 180 "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" | tar xz -C /opt \
- && ln -s /opt/nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
+COPY --from=doltbin /usr/local/bin/dolt /usr/local/bin/dolt
+COPY --from=natsbin /usr/local/bin/nats-server /usr/local/bin/nats-server
 WORKDIR /app
 COPY --from=corebuild /iam-core-bin /app/iam-core
 COPY policies/ /app/policies/
