@@ -75,6 +75,8 @@ jobs:
           test -x "$PG_BIN/postgres"
       - name: Plugin dev signing keys (explicit dev setup, P0-3)
         run: node scripts/plugin-dev-setup.mjs
+      - name: Plugin shared dependencies (step 4: the controlled install the plugins resolve against)
+        run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
       - run: npm ci && npm test
         working-directory: apps/api
       - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
@@ -115,6 +117,8 @@ jobs:
           sleep 15
       - name: Plugin dev signing keys (explicit dev setup, P0-3)
         run: node scripts/plugin-dev-setup.mjs
+      - name: Plugin shared dependencies (step 4)
+        run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
       - name: Build the Rust core (runs as a local process next to the containers, gRPC enabled by the test)
         run: cargo build -p iam-core --locked
         working-directory: core

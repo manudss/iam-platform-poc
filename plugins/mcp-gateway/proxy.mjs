@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-const require = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url));
+const require = createRequire(new URL('./package.json', import.meta.url));
 const { z } = require('zod');
 import { createHash } from 'node:crypto';
 import { guardedWithKind } from './tools.mjs';

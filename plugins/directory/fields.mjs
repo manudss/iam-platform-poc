@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
-const require = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url));
+const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
 /**
  * Profile fields (see docs/profile-fields.md). Three separate things:

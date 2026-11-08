@@ -1,0 +1,9 @@
+{
+  "name": "@iam-plugin/workflows-iga",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workflows (IGA) - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {
+    "@nestjs/common": "^12.3.2"
+  }
+}

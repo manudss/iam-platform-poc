@@ -1,0 +1,7 @@
+{
+  "name": "@iam-plugin/connector-csv-base",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CSV connector slot (refusing base) - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {}
+}

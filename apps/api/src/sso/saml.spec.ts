@@ -4,6 +4,19 @@ import { INestApplication } from '@nestjs/common';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import samlify from 'samlify';
+import { DOMParser } from '@xmldom/xmldom';
+
+// Step 4: the samlify instance this spec drives for the service-provider side is NOT the plugin's copy
+// anymore (the plugin resolves its own). samlify >= 2.15 refuses to parse without a registered schema
+// validator, so the SP side registers the same demonstration-grade structural check the plugin registers
+// on its own instance (well-formed XML rooted in a SAML namespace; signatures/conditions are samlify's).
+const SAML_NS = ['urn:oasis:names:tc:SAML:2.0:protocol', 'urn:oasis:names:tc:SAML:2.0:assertion'];
+samlify.setSchemaValidator({
+  validate: async (xml: unknown) => {
+    const root = new DOMParser().parseFromString(String(xml), 'text/xml')?.documentElement;
+    if (!root || !SAML_NS.includes(root.namespaceURI ?? '')) throw new Error('not a SAML message');
+  },
+});
 import { EventsModule } from '../events/events.module.js';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';

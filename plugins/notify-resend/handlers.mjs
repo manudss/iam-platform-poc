@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 // The SDK is an apps/api dependency: resolve it from there (plugin folders have no node_modules of their own).
-const { Resend } = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url))('resend');
+const { Resend } = createRequire(new URL('./package.json', import.meta.url))('resend');
 
 /**
  * notify.send over the Resend HTTPS API. The key comes from the RESEND_API_KEY environment variable only

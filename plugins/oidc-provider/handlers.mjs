@@ -24,7 +24,7 @@ import { createRequire } from 'node:module';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
-const require = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url));
+const require = createRequire(new URL('./package.json', import.meta.url));
 const oidcProviderPkg = require('oidc-provider');
 // The package is a transpiled ESM build: require() returns the module object, the Provider class is its default.
 const Provider = oidcProviderPkg.default ?? oidcProviderPkg.Provider ?? oidcProviderPkg;

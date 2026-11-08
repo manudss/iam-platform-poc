@@ -51,8 +51,9 @@ describe('sign-in methods are registry plugins (step 2 acceptance)', () => {
     pluginsDir = join(root, 'plugins');
     cpSync(defaultPluginsDir(), pluginsDir, { recursive: true });
     // The plugins anchor their dependency resolution at <pluginsDir>/../apps/api: point it at the real one.
-    mkdirSync(join(root, 'apps'), { recursive: true });
-    symlinkSync(resolve(defaultPluginsDir(), '..', 'apps', 'api'), join(root, 'apps', 'api'));
+    // Plugin code anchors its dependency resolution at its own package.json and resolution walks up:
+    // give the copied tree the real shared install (step 4).
+    symlinkSync(resolve(defaultPluginsDir(), '..', 'node_modules'), join(root, 'node_modules'), 'dir');
     mkdirSync(join(root, 'conf'), { recursive: true });
     setup.ensureDevSetup(pluginsDir); // fresh local keys + trust store, signs the copy
     const k = JSON.parse(readFileSync(join(root, 'conf', 'plugin-dev-key.json'), 'utf8')); delete k._comment; keys = k;

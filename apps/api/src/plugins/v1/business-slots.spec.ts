@@ -63,8 +63,9 @@ describe('business plugins serve registry engine slots (step 3 acceptance)', () 
     root = mkdtempSync(join(tmpdir(), 'iam-bizslots-'));
     pluginsDir = join(root, 'plugins');
     cpSync(defaultPluginsDir(), pluginsDir, { recursive: true });
-    mkdirSync(join(root, 'apps'), { recursive: true });
-    symlinkSync(resolve(defaultPluginsDir(), '..', 'apps', 'api'), join(root, 'apps', 'api'));
+    // Plugin code anchors its dependency resolution at its own package.json and resolution walks up:
+    // give the copied tree the real shared install (step 4).
+    symlinkSync(resolve(defaultPluginsDir(), '..', 'node_modules'), join(root, 'node_modules'), 'dir');
     mkdirSync(join(root, 'conf'), { recursive: true });
     const setup = req(resolve(defaultPluginsDir(), '..', 'scripts', 'plugin-dev-setup.mjs')) as { ensureDevSetup: (d: string) => void };
     setup.ensureDevSetup(pluginsDir);

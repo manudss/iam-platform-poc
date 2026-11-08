@@ -17,7 +17,10 @@ WORKDIR /src
 COPY apps/api/ apps/api/
 COPY scripts/ scripts/
 COPY plugins/ plugins/
+# The plugins' controlled shared install (step 4): the root package.json is generated from their declarations.
+COPY package.json package-lock.json ./
 RUN cd apps/api && npm ci && npm run build && npm prune --omit=dev
+RUN npm ci --omit=dev && node scripts/plugin-deps.mjs --check
 # Demo signing keys are generated AT BUILD (never committed): the plugins are signed here and only the PUBLIC
 # trust store reaches the final image. The private key (conf/plugin-dev-key.json) stays in this build stage.
 RUN node scripts/plugin-dev-setup.mjs
@@ -43,11 +46,12 @@ COPY data/demo/ /app/data/demo/
 COPY --from=apibuild /src/apps/api/dist /app/api/dist
 COPY --from=apibuild /src/apps/api/node_modules /app/api/node_modules
 COPY --from=apibuild /src/apps/api/package.json /app/api/package.json
+COPY --from=apibuild /src/node_modules /app/node_modules
 # Signed plugin packages + the PUBLIC trust store (P0-6): the API refuses to boot without them (P0-3).
 COPY --from=apibuild /src/plugins /app/plugins
 COPY --from=apibuild /src/conf/plugin-trust.json /app/conf/plugin-trust.json
 COPY --from=webbuild /src/apps/web/dist /app/web/dist
 COPY demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs /app/demo/
-ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json IAM_API_PACKAGE_JSON=/app/api/package.json
+ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json
 EXPOSE 8080
 CMD ["sh", "/app/demo/start.sh"]

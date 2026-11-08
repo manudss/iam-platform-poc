@@ -1,0 +1,11 @@
+{
+  "name": "@iam-plugin/saml-idp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SAML 2.0 identity provider (SSO) - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {
+    "@nestjs/common": "^12.3.2",
+    "@xmldom/xmldom": "0.9.12",
+    "samlify": "2.15.1"
+  }
+}

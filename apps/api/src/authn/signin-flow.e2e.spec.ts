@@ -55,11 +55,11 @@ describe('sign-in methods and login on the shipped image layout', { skip: !exist
     mkdirSync(join(img, 'conf'), { recursive: true });
     cpSync(resolve(root, 'plugins'), join(img, 'plugins'), { recursive: true });
     cpSync(resolve(root, 'conf/plugin-trust.json'), join(img, 'conf/plugin-trust.json'));
-    writeFileSync(join(img, 'api/package.json'), JSON.stringify({ name: '@iam/api', version: '0.0.1' }));
-    symlinkSync(resolve(process.cwd(), 'node_modules'), join(img, 'api/node_modules'), 'dir');
+    // Step 4: plugin code resolves its dependencies from its own package.json upward - the image layout
+    // provides the shared install at its root.
+    symlinkSync(resolve(process.cwd(), '..', '..', 'node_modules'), join(img, 'node_modules'), 'dir');
     setEnv('IAM_PLUGINS_DIR', join(img, 'plugins'));
     setEnv('IAM_PLUGIN_TRUST', join(img, 'conf/plugin-trust.json'));
-    setEnv('IAM_API_PACKAGE_JSON', join(img, 'api/package.json'));
 
     core = spawn(bin, [], { env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18083', IAM_ISSUER: CORE, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_NATS_URL: `127.0.0.1:${testBus!.natsPort}`, IAM_CORE_NATS_PASSWORD: 'core-dev', IAM_CORE_ADMIN_TOKEN: 'signin-flow-spec-admin' }, stdio: 'ignore' });
     await waitUp(CORE);

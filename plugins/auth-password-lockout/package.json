@@ -1,0 +1,7 @@
+{
+  "name": "@iam-plugin/auth-password-lockout",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Password sign-in with lockout - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {}
+}

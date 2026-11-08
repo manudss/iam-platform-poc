@@ -17,7 +17,7 @@ import { createRequire } from 'node:module';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
-const require = createRequire(process.env.IAM_API_PACKAGE_JSON ?? new URL('../../apps/api/package.json', import.meta.url));
+const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
 
 export const UPSTREAM_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
