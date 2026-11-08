@@ -6,6 +6,7 @@
 //   /healthz    -> 200 (platform health check)
 // Everything else falls back to index.html (Angular client routes, e.g. /callback).
 import http from 'node:http';
+import { framingHeaders } from './frame-policy.mjs';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 
@@ -46,7 +47,7 @@ const server = http.createServer(async (req, res) => {
     let data, ext = extname(file);
     try { data = await readFile(file); }
     catch { data = await readFile(join(WEB_ROOT, 'index.html')); ext = '.html'; } // SPA fallback
-    res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=3600' });
+    res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=3600', ...(ext === '.html' ? framingHeaders(p, url.search) : {}) });
     res.end(data);
   } catch (e) {
     if (!res.headersSent) res.writeHead(500);

@@ -12,12 +12,24 @@
       <p class="msg error" role="alert">{{ error() }}</p>
       <button type="button" class="secondary" (click)="load()">Try again</button>
     }
+    @else if (preview() && pview() === 'step' && previewChain(); as pc) {
+      <p class="msg test" role="status" id="preview-banner">Preview with fake data. Nothing is sent and nobody is signed in.</p>
+      <p class="lead">{{ pc.name }} &middot; step {{ pstep() + 1 }} of {{ pc.steps.length }}: <b>{{ previewStepOf()?.name }}</b></p>
+      @switch (stepKind(previewStepOf()?.type ?? '')) {
+        @case ('password') { <label class="pvf">Password<input type="password" disabled placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" /></label> }
+        @case ('pin') { <label class="pvf">PIN<input type="password" disabled placeholder="&#8226;&#8226;&#8226;&#8226;" /></label> }
+        @case ('code') { <label class="pvf">Verification code<input type="text" disabled placeholder="123 456" /></label>@if (previewStepOf()?.simulated) { <p class="sub"><b class="sim">Simulated step: no e-mail is sent.</b></p> } }
+        @default { <p class="sub">This step has its own screen.</p> }
+      }
+      <button type="button" class="primary" disabled>Continue</button>
+    }
     @else if (options().mode === 'choice') {
+      @if (preview()) { <p class="msg test" role="status" id="preview-banner">Preview with fake data. Nothing is sent and nobody is signed in.</p> }
       <p class="lead">Choose how to sign in. Levels are declared by an administrator (10 = strongest), not measured.</p>
       <ul id="signin-methods" class="methods">
         @for (c of options().chains; track c.id) {
           <li>
-            <button type="button" class="m" [class.rec]="c.recommended" [attr.data-chain]="c.id" [disabled]="busy()" (click)="signIn(c.id)">
+            <button type="button" class="m" [class.rec]="c.recommended || (preview() && c.id === highlight())" [class.pv]="preview() && c.id === highlight()" [attr.data-chain]="c.id" [disabled]="busy()" (click)="signIn(c.id)">
               <span class="ic" aria-hidden="true">
                 @switch (icon(c)) {
                   @case ('shield') { <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3.5v5c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11v-5L12 2z"/><path d="M9 12l2 2 4-4.5"/></svg> }

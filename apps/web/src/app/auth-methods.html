@@ -1,0 +1,189 @@
+<div class="head">
+  <div class="grow"><h2>Authentication methods</h2>
+    <p class="lead">Methods in use are offered at sign-in, in this order. A chain is a method made of other methods.</p></div>
+  @if (dirty()) { <span class="pill warn" id="authn-live">Unsaved edits</span> } @else if (differsFromLive()) { <span class="pill warn" id="authn-live">Saved on this branch, not live until Apply</span> } @else if (loaded()) { <span class="pill ok" id="authn-live">Same as live</span> }
+  <button class="secondary" id="authn-outbox-btn" (click)="showOutbox()">Demo outbox</button>
+  <button id="authn-save" (click)="save()" [disabled]="busy() || !loaded() || !!problem() || (s.branch()==='main')">Save on this branch</button>
+</div>
+@if (s.branch()==='main') { <p class="hint">Choose a working branch (not main) to save. Changes become live only after Apply.</p> }
+@if (note()) { <p role="status" class="msg" id="authn-note">{{note()}}</p> }
+@if (problem()) { <p role="alert" class="msg bad" id="authn-problem">{{problem()}}</p> }
+@if (dropped().length) {
+  <div role="alert" class="msg bad" id="authn-dropped">
+    <b>{{ dropped().length }} {{ dropped().length === 1 ? 'method is' : 'methods are' }} no longer active.</b>
+    @for (d of dropped(); track d.name) { <div>"{{ d.name }}" {{ d.reason }}. It was moved to Not in use.</div> }
+    <div>Enable the plugin again in Plugins to use {{ dropped().length === 1 ? 'it' : 'them' }}, then press Use.</div>
+  </div>
+}
+@if (seeded()) { <p class="hint" id="authn-seeded">Ready-to-try examples (fictional). Nothing is stored or live until you press Save on this branch and then Apply.</p> }
+<p class="sr" aria-live="polite" id="authn-announce">{{ announce() }}</p>
+
+<div class="board" id="authn-methods">
+  <section class="zone in" id="authn-used" aria-label="In use" (dragover)="overZone($event)" (drop)="dropUsed($event)">
+    <h3>In use <small>sign-in list, in order</small></h3>
+    <p class="hint desk">Drag to reorder, or focus the handle and press the up or down arrow. Drag from the right, or press Use.</p>
+    <p class="hint touch">Tap Up or Down to reorder. Tap Remove to take a method out of the list, or Use on the other list to add one.</p>
+    <ol class="list">
+      @for (e of used(); track e.key; let i = $index) {
+        <li class="it" [class.rec]="isRecommended(e)" [class.over]="dropAt()===i" [attr.data-key]="e.key" draggable="true" (dragstart)="dragStart($event, e)" (dragend)="dragEnd()" (dragover)="overItem($event, i)">
+          <button type="button" class="handle" [attr.aria-label]="'Reorder ' + e.name + ', position ' + (i+1) + ' of ' + used().length + '. Arrow up or down to move.'" (keydown)="handleKey($event, e)">&#8942;&#8942;</button>
+          <span class="num">{{ i + 1 }}</span>
+          <span class="tx"><b>{{ e.name }}@if (isRecommended(e)) { <span class="tag">recommended</span> }@if (e.kind==='chain') { <span class="tag g">chain</span> }</b>
+            <span class="sub">{{ sub(e) }} &middot; declared level {{ e.level }} of 10@if (simEntry(e)) { &middot; <b class="sim">simulated step</b> }</span>
+            <app-level-gauge [level]="e.level" /></span>
+          <span class="acts"><span class="mv"><button class="secondary" (click)="move(e, -1)" [disabled]="i===0" [attr.aria-label]="'Move ' + e.name + ' up'">&#8593; Up</button><button class="secondary" (click)="move(e, 1)" [disabled]="i===used().length-1" [attr.aria-label]="'Move ' + e.name + ' down'">&#8595; Down</button></span><button class="secondary" (click)="openPreview(e)">Preview</button><button class="secondary" (click)="edit(e)">Edit</button>
+            <button class="secondary" (click)="unuse(e)" [attr.aria-label]="'Remove ' + e.name + ' from the list'">Remove</button></span>
+        </li>
+      } @empty {
+        @if (!loaded()) { <li class="empty">Loading...</li> } @else if (emptyList()) { <li class="empty" id="authn-empty"><b>No sign-in method is in use</b><p>People cannot choose a method yet: the classic password form stays until you apply a list.</p></li> }
+      }
+    </ol>
+    <div class="drop" [class.over]="dropAt()===used().length" (dragover)="overItem($event, used().length)">Drop here to use</div>
+  </section>
+
+  <section class="zone out" id="authn-unused" aria-label="Not in use" (dragover)="overZone($event)" (drop)="dropUnused($event)">
+    <h3>Not in use <small>still available inside chains</small></h3>
+    <ul class="list">
+      @for (e of unused(); track e.key) {
+        <li class="it" [class.bad]="!e.available" [attr.data-key]="e.key" draggable="true" (dragstart)="dragStart($event, e)" (dragend)="dragEnd()">
+          <span class="tx"><b>{{ e.name }}@if (!e.available) { <span class="rtag">unavailable</span> }@if (e.kind==='chain') { <span class="tag g">chain</span> }</b>
+            <span class="sub">{{ sub(e) }} &middot; level {{ e.level }} of 10@if (!e.available) { &middot; its plugin is not active }</span>
+            <app-level-gauge [level]="e.level" /></span>
+          <span class="acts"><button class="secondary" (click)="edit(e)">Edit</button><button (click)="use(e)" [disabled]="!e.available" [attr.aria-label]="'Use ' + e.name">Use</button></span>
+        </li>
+      } @empty { <li class="hint">@if (loaded()) { Everything is in use. } @else { Loading... }</li> }
+    </ul>
+    <div class="row-btns"><button class="secondary" id="authn-new-instance" (click)="openNew()" [disabled]="!loaded()">+ New instance</button><button class="secondary" id="authn-new-chain" (click)="panel.set('new-chain')" [disabled]="!loaded()">+ New chain</button></div>
+  </section>
+</div>
+
+@if (allShown().length) { <section class="card result" id="authn-all-shown"><b>Shown once, fictional demo credentials for demo-alice (PINs and secrets cannot be shown again):</b><ul>@for (l of allShown(); track l) { <li>{{l}}</li> }</ul></section> }
+<details class="card"><summary>Demo provisioning and session settings</summary>
+  <p class="hint">Enrolls demo-alice in every method that needs enrollment. Save first.</p>
+  <button class="secondary" id="authn-enroll-all" (click)="enrollAll()" [disabled]="busy() || dirty() || !loaded()" title="Save first">Provision demo-alice</button>
+  <app-session-settings />
+</details>
+
+@if (panel()) {
+  <div class="scrim" (click)="close()"></div>
+  @switch (panel()) {
+    @case ('new-type') {
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nt-h" id="authn-type-chooser">
+        <div class="mh"><h3 id="nt-h">New instance: choose a type</h3><button class="secondary" (click)="close()" aria-label="Close">&#10005;</button></div>
+        <p class="hint">Types from installed, enabled plugins. A type can be instantiated several times with other settings, unless its plugin says single.</p>
+        @for (t of catalogue(); track t.id) {
+          <button type="button" class="type" [disabled]="t.maturity!=='implemented' || locked(t)" (click)="pickType(t)" [attr.data-type]="t.id">
+            <span class="tx"><b>{{ t.name }}</b><span class="sub">{{ t.factor }} &middot; @if (t.maturity!=='implemented') { catalogue only, not built } @else if (locked(t)) { single instance, already created } @else if (t.instances==='single') { single instance } @else { several instances allowed }</span></span>
+            <span class="cnt">@if (locked(t)) { 1 of 1 } @else if (t.maturity==='implemented') { {{ count(t.id) }} existing } @else { unavailable }</span>
+          </button>
+        }
+      </div>
+    }
+    @case ('new-chain') {
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nc-h">
+        <div class="mh"><h3 id="nc-h">New chain</h3><button class="secondary" (click)="close()" aria-label="Close">&#10005;</button></div>
+        <label>Name<input type="text" name="chainname" [(ngModel)]="chainName" maxlength="60" placeholder="for example Password then authenticator" /></label>
+        <p class="hint">You add the steps next. Any existing method can be a step, in use or not.</p>
+        <div class="row-btns"><button id="authn-create-chain" (click)="createChain()">Create and edit</button><button class="secondary" (click)="close()">Cancel</button></div>
+      </div>
+    }
+    @case ('new-form') {
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="nf-h" id="authn-new-form">
+        <div class="mh"><h3 id="nf-h">New instance: {{ newEntry()?.name }}</h3><button class="secondary" (click)="close()" aria-label="Close">&#10005;</button></div>
+        <p class="hint">{{ newEntry()?.description }}</p>
+        <h4>Common</h4>
+        <label>Name<input type="text" name="newname" [(ngModel)]="newName" maxlength="60" [placeholder]="newEntry()?.name ?? ''" /></label>
+        <label>Level<app-level-select [value]="newLevel()" (valueChange)="newLevel.set($event)" label="Level of the new instance" /></label>
+        <label class="inline"><input type="checkbox" name="newuse" [(ngModel)]="newUse" /> Put in the sign-in list now, at position <input type="number" class="pos" name="newpos" min="1" [max]="used().length + 1" [(ngModel)]="newPos" [disabled]="!newUse" /></label>
+        @for (g of newGroups(); track g.name) {
+          <h4>{{ g.name }} <span class="from">from plugin</span></h4>
+          @for (f of g.fields; track f.key) {
+            <label>{{ f.label }}
+              @switch (f.type) {
+                @case ('select') { <select [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=$event">@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
+                @case ('number') { <input type="number" [attr.min]="f.min ?? null" [attr.max]="f.max ?? null" [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=+$event" /> }
+                @case ('boolean') { <input type="checkbox" [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=$event" /> }
+                @default { <input type="text" [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=$event" /> }
+              }@if (f.help) {<small>{{f.help}}</small>}</label>
+          }
+        }
+        <div class="row-btns foot"><button id="authn-create-instance" (click)="createInstance()">Create</button><button class="secondary" (click)="panel.set('new-type')">Back</button></div>
+      </aside>
+    }
+    @case ('edit') {
+      @if (current(); as e) {
+        <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="ed-h" id="authn-edit" [attr.data-entry]="e.key">
+          <div class="mh"><h3 id="ed-h">{{ e.name }}</h3><button class="secondary" (click)="close()" aria-label="Close">&#10005;</button></div>
+          @if (e.kind==='method') {
+            <p class="hint">{{ typeName(method(e.methodId)?.type ?? '') }} &middot; {{ factor(method(e.methodId)?.type ?? '') }} factor &middot; plugin {{ pluginOf(method(e.methodId)) || 'not active' }}</p>
+          } @else { <p class="hint">Chain &middot; built into the core</p> }
+          <h4>Common <span class="core">core</span></h4>
+          <label>Name<input type="text" class="name" name="ename" [ngModel]="e.name" (ngModelChange)="rename(e, $event)" maxlength="60" /></label>
+          <label>Level<app-level-select [value]="e.level" (valueChange)="setLevel(e, $event)" [label]="'Level of ' + e.name" /></label>
+          @if (e.kind==='chain') { <p class="hint">A chain cannot be declared below its strongest step ({{ chain(e) ? minLevel(e) : 1 }}).</p> }
+          <label class="inline"><input type="checkbox" name="erec" [ngModel]="isRecommended(e)" (ngModelChange)="setRecommended(e, $event)" [disabled]="!e.inUse" /> Recommended on the sign-in page</label>
+          @if (e.kind==='method') {
+            @for (g of groups(method(e.methodId)); track g.name) {
+              <h4>{{ g.name }} <span class="from">from plugin</span></h4>
+              @for (f of g.fields; track f.key) {
+                <label>{{ f.label }}
+                  @switch (f.type) {
+                    @case ('select') { <select [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, $event)">@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
+                    @case ('number') { <input type="number" [attr.min]="f.min ?? null" [attr.max]="f.max ?? null" [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, +$event)" /> }
+                    @case ('boolean') { <input type="checkbox" [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, $event)" /> }
+                    @default { <input type="text" [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, $event)" /> }
+                  }@if (f.help) {<small>{{f.help}}</small>}</label>
+              }
+            } @empty { <p class="hint">This type has no settings.</p> }
+            @if (entryType(method(e.methodId)?.type ?? '')?.provisioning==='admin-demo') {
+              <h4>Demo enrollment <span class="from">from plugin</span></h4>
+              <p class="hint">For this demo only, stored outside the database. A secret or generated PIN is shown once. Save first.</p>
+              <div class="stackf"><label>User<input type="text" name="enrolluser" [(ngModel)]="enrollUser" /></label>
+                @if (method(e.methodId)?.type==='email-otp') { <label>Demo address<input type="text" name="enrollemail" [(ngModel)]="enrollEmail" /></label> }
+                @if (method(e.methodId)?.type==='digit-code') { <label>PIN (or leave empty to generate)<input type="password" name="enrollpin" [(ngModel)]="enrollPin" autocomplete="off" /></label> }
+                <button (click)="enroll(method(e.methodId)!)" [disabled]="busy()">Provision</button></div>
+              @if (shown()) { <div class="result" id="authn-shown"><b>Shown once.</b> {{ shown() }}</div> }
+            }
+          } @else {
+            <h4>Steps <span class="core">chain</span></h4>
+            <ol class="steps">
+              @for (id of e.stepIds; track id; let si = $index) {
+                <li><span class="num">{{ si + 1 }}</span><span class="tx"><b>{{ methodName(id) }}</b><span class="sub">{{ factor(method(id)?.type ?? '') }} &middot; {{ methodInUse(id) ? 'in use' : 'not in use' }}</span></span>
+                  <button class="secondary" (click)="moveStep(e, si, -1)" [disabled]="si===0" aria-label="Move step up">&#8593;</button><button class="secondary" (click)="moveStep(e, si, 1)" [disabled]="si===e.stepIds.length-1" aria-label="Move step down">&#8595;</button><button class="secondary" (click)="removeStep(e, si)" [attr.aria-label]="'Remove step ' + methodName(id)">&#10005;</button></li>
+              } @empty { <li class="hint">No steps yet.</li> }
+            </ol>
+            <div class="addstep"><label>Add a step (any existing method)<select name="steppick" [(ngModel)]="stepPick"><option value="">First available method</option>@for (m of stepChoices(e); track m.id) {<option [value]="m.id">{{ m.name }} ({{ methodInUse(m.id) ? 'in use' : 'not in use' }})</option>}</select></label><button class="secondary" id="authn-add-step" (click)="addStep(e)">Add step</button></div>
+            @if (analysis(e.chainId); as a) {
+              <div class="analysis"><span class="pill" [class.ok]="a.mfa" [class.warn]="!a.mfa">{{ a.mfa ? 'Multi-factor (2+ verified factor categories)' : 'Not multi-factor' }}</span>
+                <span class="pill">Declared level {{ a.declaredLevel }}</span><span class="pill" [class.warn]="a.effectiveLevel<a.declaredLevel">Effective level {{ a.effectiveLevel }}</span>
+                @for (w of a.warnings; track w) { <p class="warnline">&#9888; {{ w }}</p> }<small>{{ a.basis }}</small></div>
+            }
+          }
+          @if (!e.available) { <p class="msg bad">This entry is unavailable: a plugin it needs is not active.</p> }
+          @if (e.kind==='method' && usedBy(e).length) { <p class="hint">Also a step of: {{ usedBy(e).join(', ') }}.</p> }
+          <div class="row-btns danger-zone">@if (e.inUse) { <button class="secondary" (click)="unuse(e)">Remove from the list</button> } @else { <button class="secondary" (click)="use(e)" [disabled]="!e.available">Use</button> }
+            <button class="danger" (click)="deleteEntry(e)">Delete</button></div>
+          <div class="row-btns foot"><button (click)="close()">Done</button><button class="secondary" (click)="openPreview(e)">Preview</button></div>
+        </aside>
+      }
+    }
+    @case ('preview') {
+      <aside class="drawer wide" role="dialog" aria-modal="true" aria-labelledby="pv-h" id="authn-preview">
+        <div class="mh"><h3 id="pv-h">Preview: {{ current()?.name }}</h3><button class="secondary" (click)="close()" aria-label="Close">&#10005;</button></div>
+        <p class="hint">The real public sign-in page in a frame, fed with this draft. Fake data: nothing is sent or stored, no sign-in happens.</p>
+        <div class="tabs2" role="tablist"><button role="tab" [attr.aria-selected]="previewView()==='list'" [class.on]="previewView()==='list'" (click)="setView('list')">In the list</button>
+          <button role="tab" [attr.aria-selected]="previewView()==='step'" [class.on]="previewView()==='step'" (click)="setView('step')">Step screen</button>
+          <button class="secondary" (click)="toggleDark()">{{ previewDark() ? 'Light' : 'Dark' }}</button></div>
+        @if (previewView()==='step' && (current()?.stepIds?.length ?? 0) > 1) { <div class="row-btns"><button class="secondary" (click)="stepNext(-1)" [disabled]="previewStep()===0">Previous step</button><button class="secondary" (click)="stepNext(1)" [disabled]="previewStep()>=(current()?.stepIds?.length ?? 1)-1">Next step</button></div> }
+        <iframe id="authn-preview-frame" class="frame" title="Preview of the public sign-in page" [src]="previewSrcSafe" (load)="pushPreview($any($event.target))" sandbox="allow-same-origin allow-scripts"></iframe>
+      </aside>
+    }
+    @case ('outbox') {
+      <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="ob-h" id="authn-outbox">
+        <div class="mh"><h3 id="ob-h">Demo outbox</h3><button class="secondary" (click)="close()" aria-label="Close">&#10005;</button></div>
+        <p class="hint"><b>Simulated: no e-mail is sent.</b> Codes appear here in clear for administrators.</p>
+        <ul>@for (m of outbox(); track m.at) { <li>{{m.at}} to {{m.to}} (user {{m.user}}): {{m.text}}</li> } @empty { <li>Empty.</li> }</ul>
+      </aside>
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
 import { SigninChain, SigninOptions } from './api';
 import { Session } from './session';
+import { Theme } from './theme';
 import { ThemeSwitch } from './theme-switch';
 
 /** Sign-in page: lists the methods (chains) configured and enabled live, the person picks one, then the browser code+PKCE flow runs that chain. No JSON login in the UI. */
@@ -12,6 +13,17 @@ const TEST_KEY = 'iam.branch.test';
 function testParams(q: URLSearchParams): { branch: string; ticket: string } | null {
   const branch = q.get('branch') ?? '', ticket = q.get('ticket') ?? '';
   return /^[a-z0-9-]{1,32}$/.test(branch) && branch !== 'main' && ticket.length >= 10 ? { branch, ticket } : null;
+}
+
+/** True only for /login?preview=1 inside a frame. A top-level visit with the parameter behaves as a normal sign-in page. */
+export function isPreview(): boolean { try { return new URLSearchParams(location.search).get('preview') === '1' && window.parent !== window; } catch { return false; } }
+
+/** Validates the message sent by the admin page. Anything else is ignored. */
+export function previewMessage(d: unknown): { chains: SigninChain[]; highlight: string; view: 'list' | 'step'; step: number; dark: boolean } | null {
+  const x = d as Record<string, unknown> | null;
+  if (!x || x['type'] !== 'iam-preview' || !Array.isArray(x['chains'])) return null;
+  const chains = (x['chains'] as SigninChain[]).filter((c) => c && typeof c.id === 'string' && typeof c.name === 'string' && Array.isArray(c.steps)).slice(0, 50);
+  return { chains, highlight: typeof x['highlight'] === 'string' ? x['highlight'] : '', view: x['view'] === 'step' ? 'step' : 'list', step: Math.max(0, Number(x['step']) || 0), dark: x['dark'] === true };
 }
 
 @Component({ selector: 'app-login', imports: [ThemeSwitch], templateUrl: './login.html', styleUrl: './login.css' })
@@ -26,7 +38,20 @@ export class LoginPage {
   protected readonly options = signal<SigninOptions>({ mode: 'legacy', chains: [] });
   protected readonly test = signal<{ branch: string; ticket: string } | null>(null);
 
+  /** Preview mode: only when embedded in a frame (the admin "Preview"). Renders chains posted by the same origin; no API call, no sign-in, nothing sent. */
+  protected readonly preview = signal(isPreview());
+  protected readonly pview = signal<'list' | 'step'>('list');
+  protected readonly pstep = signal(0);
+  protected readonly highlight = signal('');
+  private readonly theme = inject(Theme);
+
   constructor() {
+    if (this.preview()) {
+      this.options.set({ mode: 'choice', chains: [] }); this.state.set('ready');
+      addEventListener('message', (ev) => this.onPreviewMessage(ev));
+      parent.postMessage({ type: 'iam-preview-ready' }, location.origin);
+      return;
+    }
     const t = testParams(new URLSearchParams(location.search));
     if (t) {
       // A test link opens a fresh, branch-bound session: any current sign-in ends here, explicitly.
@@ -37,6 +62,16 @@ export class LoginPage {
     } else if (this.s.loggedIn()) void this.router.navigateByUrl('/overview');
     else void this.load();
   }
+
+  private onPreviewMessage(ev: MessageEvent) {
+    if (ev.origin !== location.origin || ev.source !== parent) return;
+    const m = previewMessage(ev.data); if (!m) return;
+    this.options.set({ mode: 'choice', chains: m.chains }); this.highlight.set(m.highlight); this.pview.set(m.view); this.pstep.set(m.step);
+    this.theme.mode.set(m.dark ? 'dark' : 'light'); // not persisted: the admin theme is untouched
+  }
+  protected previewChain() { const c = this.options().chains; return c.find((x) => x.id === this.highlight()) ?? c[0]; }
+  protected previewStepOf() { const c = this.previewChain(); return c?.steps[Math.min(this.pstep(), (c?.steps.length ?? 1) - 1)]; }
+  protected stepKind(type: string): 'password' | 'code' | 'pin' | 'other' { return /pin|digit/i.test(type) ? 'pin' : /totp|authenticator|otp|mail/i.test(type) ? 'code' : /password/i.test(type) ? 'password' : 'other'; }
 
   protected async load() {
     this.state.set('loading');
@@ -56,6 +91,7 @@ export class LoginPage {
   }
 
   protected async signIn(chain?: string) {
+    if (this.preview()) return; // preview: no sign-in, nothing sent
     this.busy.set(true);
     try { await this.s.api.startBrowserLogin(sessionStorage, (u) => location.assign(u), chain, this.test() ?? undefined); }
     catch (e) { this.s.say((e as Error).message, 'error'); this.busy.set(false); }

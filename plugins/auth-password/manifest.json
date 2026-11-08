@@ -61,6 +61,7 @@
     "maturity": "implemented",
     "suggestedLevel": 3,
     "provisioning": "directory",
-    "inlineWithUsername": true
+    "inlineWithUsername": true,
+    "instances": "single"
   }
 }

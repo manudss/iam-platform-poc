@@ -9,6 +9,31 @@ Status: working POC slice. Code: `apps/api/src/authn/`, gate protocol in `core/c
 - A **chain** is an ordered list of method instances run by the core at sign-in. Every step must succeed. The core owns the chaining: plugins only verify one step.
 - All of it is stored as a `core-authn` settings entry of the plugin registry, so it is versioned on the Dolt working branch and becomes the live sign-in only after **Apply**. Until then the classic login form is unchanged. Enrollments (TOTP secret, PIN hash, e-mail address) are **not** versioned and live in a file outside the database (`IAM_AUTHN_FILE`).
 
+## The console page (one list)
+
+The page `Authentication methods` shows **one list**, not one block per concept.
+
+- **In use** (left): the methods people can choose at sign-in, in the order shown. Reorder by drag and drop, or focus the handle (the dots) and press the up or down arrow. Each row shows the level as a 10-bar gauge and "declared level N of 10", the same as the public sign-in page.
+- **Not in use** (right): everything else. A method here is still available as a **step of a chain**. Press **Use** to put it in the list.
+- A method used alone is stored as a chain with one step. The stored configuration keeps its shape; only the page changed. A chain is a method too, and the page does not separate them.
+- There is **no "disabled" state on a method**. A method is *in use* or *not in use*. To switch a method off for good, disable its plugin on the Plugins page.
+- **Plugin disabled**: methods of that plugin, and the chains that need them, leave the list and move to *Not in use*, marked **unavailable**, and a red banner says the method is no longer active. Enable the plugin again, then press **Use**. Nothing comes back by itself.
+- **Edit** opens a side panel. The form appears only to add or change something. Common fields (name, level, recommended) come first, then the **settings declared by the plugin** (grouped as the plugin says), the demo enrollment for types that need it, and for a chain its steps with the analysis (multi-factor or not, effective level).
+- **Level** is a select: each option shows the number (1 to 10) and the gauge. Keyboard: arrows, Home, End, Enter, Escape.
+- **+ New instance** opens a chooser with the installed types. A type declares `authMethod.instances` in its manifest: `multiple` (default, several instances with different settings) or `single` (for example the password). The chooser disables a single type that already has its instance, and the API refuses a second one. **+ New chain** asks for a name, then you add steps (any existing method, in use or not).
+- **Preview** shows the **real public sign-in page** in a frame, fed with the draft. See below.
+- Nothing is live until **Save on this branch** and then **Apply** (unchanged).
+
+### Preview
+
+The panel frames `/login?preview=1`. In that mode the sign-in page runs only if it is embedded in a frame, takes its chains from a same-origin `postMessage` of the admin page (other origins and other senders are ignored), highlights the chain being edited, and does **no API call and no sign-in**: buttons do nothing, nothing is sent, no e-mail, no session. The *Step screen* tab shows a fixed, fake screen for each step type (password, PIN, code) with disabled fields; *Next step* walks through a chain; there is a dark mode toggle that does not change the saved theme. It does not call the plugin's own step handler: what a plugin really renders at sign-in can differ.
+
+The demo edge refuses framing everywhere (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) except `/login?preview=1`, which allows the same origin only (`demo/frame-policy.mjs`, test `demo/frame-policy.test.mjs`).
+
+### Tests
+
+`scripts/test-all.sh` runs every check that needs no service (API unit tests, web unit tests, edge tests). The browser tests (`scripts/auth-methods-e2e.mjs` locally, `scripts/hosted-auth-check.mjs` on a preview) need services and run in CI.
+
 ## Honesty rules (read before using the levels)
 
 1. **Levels are declared, not measured.** The level on a method or chain is what the administrator decides. It is never summed across steps. A chain level must be at least its strongest step; that is a sanity bound, not a scientific rule. The console "Suggest level" button proposes the strongest step as a starting point only.

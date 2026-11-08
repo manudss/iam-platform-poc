@@ -38,6 +38,7 @@ export function validateConfig(input: unknown): AuthnConfig {
     if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') bad(`method ${raw.id}: enabled must be true or false`);
     const r = validateSettings(t!.settings, (raw.config && typeof raw.config === 'object' && !Array.isArray(raw.config) ? raw.config : {}) as Record<string, unknown>);
     if (!r.ok) bad(`method ${raw.id}: ${r.errors.join('; ')}`);
+    if (t!.instances === 'single' && methods.some((x) => x.type === t!.id)) bad(`method ${raw.id}: type ${t!.id} allows a single instance and one already exists`);
     methods.push({ id: raw.id, type: t!.id, name: raw.name.trim(), enabled: raw.enabled !== false, level: raw.level, config: r.values });
   }
   const byId = new Map(methods.map((m) => [m.id, m])), chains: Chain[] = [], cseen = new Set<string>();
