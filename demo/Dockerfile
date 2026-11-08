@@ -69,5 +69,9 @@ COPY --from=apibuild /src/conf/plugin-trust.json /app/conf/plugin-trust.json
 COPY --from=webbuild /src/apps/web/dist /app/web/dist
 COPY demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs /app/demo/
 ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json
+# Free-tier hosts (shared CPU) make every bus delivery slow (activity checks read Dolt on each one): give the
+# plugin hook calls and the core's gate client much larger budgets than the local defaults. Fail-closed
+# semantics are unchanged - a real timeout still refuses the sign-in.
+ENV IAM_HOOK_TIMEOUT_MS=8000 IAM_GATE_TIMEOUT_MS=30000
 EXPOSE 8080
 CMD ["sh", "/app/demo/start.sh"]

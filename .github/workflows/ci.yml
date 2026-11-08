@@ -155,6 +155,16 @@ jobs:
           # /healthz is the EDGE answering; the API must also be alive behind it (proxy /api -> :3000).
           ok=0; for i in $(seq 1 30); do code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health || true); [ "$code" = 200 ] && { ok=1; break; }; sleep 2; done
           echo "api health ok=$ok"; [ $ok = 1 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          # A healthy API is still not enough: the sign-in must work through the plugin bus. The Render preview
+          # once booted with entry answering but every authenticate failing behind the gate budgets. Start a
+          # chain through the edge, then complete a full demo login (fictional account, docs/demo.md).
+          CHAL=$(printf ci-demo-challenge | sha256sum | cut -d' ' -f1 | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=')
+          code=$(curl -s -o /tmp/entry.html -w '%{http_code}' "http://127.0.0.1:8080/core/authorize?client_id=demo-web&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback&response_type=code&state=ci&code_challenge=$CHAL&code_challenge_method=S256&chain=password-only")
+          echo "chain start http=$code"; [ "$code" = 200 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          body=$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:8080/core/authorize -H 'content-type: application/json' -d "{\"client_id\":\"demo-web\",\"redirect_uri\":\"http://localhost:8080/callback\",\"code_challenge\":\"$CHAL\",\"username\":\"demo-alice\",\"password\":\"demo-only-not-a-secret\"}")
+          echo "login answer: $body"
+          [ "$(echo "$body" | tail -1)" = 200 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          echo "$body" | head -n -1 | grep -q '"code"' || { docker logs iam-demo-ci --tail=150; exit 1; }
       - name: Container logs on failure
         if: failure()
         run: docker logs iam-demo-ci --tail=150

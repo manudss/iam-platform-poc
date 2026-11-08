@@ -48,6 +48,15 @@ export class PluginError extends Error {
   constructor(public code: string, message: string) { super(message); }
 }
 
+/** Budget for ONE blocking bus round trip (control, query, slot call). 2s is comfortable on a developer
+ * machine; the hosted demo runs on a tiny shared CPU where a delivery with its Dolt activity checks can take
+ * longer, so the image sets IAM_HOOK_TIMEOUT_MS higher. Fail-closed semantics are unchanged: a timeout still
+ * refuses the call. */
+export function defaultHookTimeoutMs(): number {
+  const v = Number(process.env.IAM_HOOK_TIMEOUT_MS);
+  return Number.isFinite(v) && v >= 250 ? v : 2000;
+}
+
 /** Step 2: the bridge to the core's event bus, provided by the plugin host (bus-host.ts) when it is enabled.
  * Every routed call requires this bridge; absence refuses rather than executing locally. */
 export interface BusBridge {
@@ -408,7 +417,7 @@ export class PluginRegistry {
 
   /** Generic blocking control (step 3: risk.score). Bus only (step 3 cleanup): one control call - a deny verdict
    * or no usable answer refuses (fail closed, sensitive hook). There is no in-process path anymore. */
-  async control<R>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string }> {
+  async control<R>(tenant: string, hook: string, payload: unknown, timeoutMs = defaultHookTimeoutMs()): Promise<{ result: R; servedBy: string }> {
     const bus = this.requireBus(hook);
     const r = await bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
     if (r.verdict !== 'allow' || !r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? (r.answered ? 'denied' : 'no responder')}`);
@@ -417,13 +426,13 @@ export class PluginRegistry {
 
   /** Merged query (step 3: profile.enrich): the union of the responders' fields - only the plugins that
    * answered appear; a key several plugins answer differently is reported as a conflict (first answer kept). */
-  async queryHook<R extends Record<string, unknown>>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ data: R; conflicts: string[]; answeredBy: string[] }> {
+  async queryHook<R extends Record<string, unknown>>(tenant: string, hook: string, payload: unknown, timeoutMs = defaultHookTimeoutMs()): Promise<{ data: R; conflicts: string[]; answeredBy: string[] }> {
     const bus = this.requireBus(hook);
     const r = await bus.query(tenant, hook, payload, timeoutMs, this.branchRef);
     return { data: r.data as R, conflicts: r.conflicts, answeredBy: r.answeredBy };
   }
 
-  async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
+  async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = defaultHookTimeoutMs()): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
     // Bus only (step 3 cleanup): the call travels on the bus (envelope stamped with this registry's branch,
     // decision 7) and the serving plugin answers over NATS. Fail closed both ways: a deny verdict, a silent
     // mandatory subscriber (the core denies) or NO usable answer at all (bus down, nobody serving) refuse.
