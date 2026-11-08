@@ -48,3 +48,18 @@ The layout template carries `default.html` with a `{{body}}` placeholder and its
 | `role.changed` | directory | role granted/revoked on a working branch, activation state in the message | `notify.default` slot |
 | `workflow.notify` | workflows-iga | workflow notification effect | simulated (`notify-log` today) |
 | `_layout` | mail-templates-base | — shared shell | — |
+
+## Management API (tenants/:tenant/mail-templates)
+
+The Templates screen drives this console API (signed-in read, admin capability to change anything). A
+customization lives on the working data branch (`plg_mail_templates_custom`, one row per template and
+language) and goes live on Apply, like every other administrator change; `main` is read-only.
+
+- `GET /` - the catalogue merged with the branch customizations (`customized` badge + effective content).
+- `GET /:key` - default vs override vs effective for one template.
+- `PUT /:key` - save a customization (`{subject, text, html?}`; `_layout` takes `{html, vars}` and must keep
+  `{{body}}`). Variables outside the declaration are refused.
+- `DELETE /:key` - restore the plugin default.
+- `POST /preview` - render without saving: `{key, data?, override?, layoutOverride?}` (the editor live preview).
+- `POST /:key/send-test` - render with the branch customization and send one e-mail through the
+  `notify.default` slot (`{to, data?}`); the answer says whether the slot really delivers.
