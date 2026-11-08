@@ -69,7 +69,7 @@ RUN ln -sfn ../../api/node_modules/@nestjs/common /app/node_modules/@nestjs/comm
 COPY --from=apibuild /src/plugins /app/plugins
 COPY --from=apibuild /src/conf/plugin-trust.json /app/conf/plugin-trust.json
 COPY --from=webbuild /src/apps/web/dist /app/web/dist
-COPY demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs /app/demo/
+COPY demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs demo/frame-policy.mjs /app/demo/
 ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json
 # Free-tier hosts (shared CPU) make every bus delivery slow (activity checks read Dolt on each one): give the
 # plugin hook calls and the core's gate client much larger budgets than the local defaults. Fail-closed
