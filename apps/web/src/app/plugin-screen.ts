@@ -4,11 +4,17 @@ import { Session } from './session';
 
 interface ScreenInv { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string; component?: string }
 
-/** The one seam the browser tests replace: fetch the packaged screen module. In production this is a plain
- * dynamic import() of the asset the API serves from the plugin's signed folder. */
+/** The one seam the browser tests replace: fetch the packaged screen module. A native import() cannot carry
+ * the session headers the assets route checks (sign-in + current branch), so the code is fetched with them and
+ * imported from a blob URL. The module is signed plugin code; it never sees the headers. */
 @Injectable({ providedIn: 'root' })
 export class PluginScreenLoader {
-  load(url: string): Promise<{ default?: string }> { return import(/* webpackIgnore: true */ url) as Promise<{ default?: string }>; }
+  async load(url: string, headers: Record<string, string>): Promise<{ default?: string }> {
+    const r = await fetch(url, { headers });
+    if (!r.ok) throw new Error(`screen asset: HTTP ${r.status}`);
+    const text = await r.text();
+    return import(/* @vite-ignore */ URL.createObjectURL(new Blob([text], { type: 'text/javascript' }))) as Promise<{ default?: string }>;
+  }
 }
 
 /**
@@ -55,7 +61,7 @@ export class PluginScreenPage {
     if (!sc) { this.problem.set('This screen is not available: the plugin is not enabled on this branch (or grants changed).'); return; }
     if (sc.render !== 'component' || !sc.component) { this.problem.set(`Screen ${plugin}/${screen} is console-native; it has no packaged module yet.`); return; }
     try {
-      const mod = await this.loader.load(`/api/tenants/${encodeURIComponent(this.s.api.tenant)}/plugins/${encodeURIComponent(plugin)}/assets/${sc.component.split('/').map(encodeURIComponent).join('/')}`);
+      const mod = await this.loader.load(`/api/tenants/${encodeURIComponent(this.s.api.tenant)}/plugins/${encodeURIComponent(plugin)}/assets/${sc.component.split('/').map(encodeURIComponent).join('/')}`, this.assetHeaders());
       const tag = mod?.default;
       if (req !== this.request) return;
       if (typeof tag !== 'string' || !tag) throw new Error('the screen module must default-export its custom-element tag');
@@ -66,6 +72,8 @@ export class PluginScreenPage {
   }
 
   private headers(): Record<string, string> { const t = this.s.adminToken(); return t ? { 'x-api-admin-token': t } : {}; }
+  /** The assets route checks the signed-in identity and serves the screen of the plugin active on the CURRENT branch. */
+  private assetHeaders(): Record<string, string> { const h: Record<string, string> = { authorization: `Bearer ${this.s.api.bearerToken}` }; if (this.s.branch()) h['x-iam-branch'] = this.s.branch(); return h; }
   private context() {
     return { tenant: this.s.api.tenant, api: `/api/tenants/${this.s.api.tenant}`, token: this.s.api.bearerToken, adminToken: this.s.adminToken(), branch: this.s.branch() };
   }

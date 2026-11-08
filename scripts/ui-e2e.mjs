@@ -72,7 +72,7 @@ try {
   const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
   const path = () => new URL(page.url()).pathname;
   const status = (txt) => page.waitForFunction((t) => [...document.querySelectorAll('[role=status]')].some((e) => e.textContent?.includes(t)), txt);
-  const noBanner = async (label) => { assert.equal(await page.locator('[role=alert]').count(), 0, label + ': no alert'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch|admin capability required/.test(t), label + ': no error banner'); };
+  const noBanner = async (label) => { const alerts = await page.locator('[role=alert]').allTextContents(); assert.equal(alerts.length, 0, label + ': no alert (got: ' + JSON.stringify(alerts) + ')'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch|admin capability required/.test(t), label + ': no error banner'); };
   const nav = (p) => page.click(`nav a[data-nav="${p}"]`);
   const setToken = async () => { await page.evaluate(() => { document.querySelector('details.token').open = true; }); await page.fill('input[name=admintoken]', ADMIN_TOKEN); };
   // the core login form: wrong password first when asked, then the right one; returns to the console
@@ -203,6 +203,59 @@ try {
   await status('personal branch');
   await page.waitForSelector('#plugins table'); assert.equal(path(), '/plugins/auth-password-lockout');
   await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
+
+  // ---- packaged plugin screen (constat 4 acceptance): the Organizations page ships in the plugin's signed folder ----
+  // The console has no Organizations page of its own: the sidebar entry comes from the plugin manifest and the
+  // generic host route imports the screen module from the plugin package through the assets route.
+  // This stack seeds nothing: install organizations on the working branch and enable it with the packaged-components
+  // grant its screen needs (the menu entry and the route only exist while the plugin is enabled).
+  await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
+  await page.waitForFunction(() => location.pathname === '/plugins/organizations');
+  if (await page.locator('#plugin-install').count()) {
+    if (await page.locator('input[name=gi]').count()) await page.locator('input[name=gi]').check();
+    await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/organizations/install')), page.click('#plugin-install')]);
+    await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
+  }
+  await page.locator('input[name=gc]').waitFor(); await page.locator('input[name=gc]').check();
+  await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
+  await noBanner('organizations enabled'); await shot('7b2-organizations-enabled');
+  const assetStatuses = [];
+  page.on('response', (r) => { if (r.url().includes('/plugins/organizations/assets/')) assetStatuses.push(r.url().split('/').pop() + ':' + r.status()); });
+  const invP = page.waitForResponse((r) => r.url().includes('/plugins/screens')).then((r) => r.json()).catch(() => '(no inventory response)');
+  await nav('/screens/organizations/orgs');
+  try { await page.waitForSelector('plg-organizations-orgs #org-table', { timeout: 30000 }); }
+  catch (e) {
+    const inv = await invP;
+    console.log('DIAG url', page.url(), '\nDIAG inventory', JSON.stringify(inv), '\nDIAG problem', await page.locator('#plugin-screen-problem').textContent().catch(() => '(none)'), '\nDIAG assets', JSON.stringify(assetStatuses));
+    await shot('diag-packaged-screen').catch(() => undefined); throw e;
+  }
+  assert.ok(assetStatuses.some((x) => x.endsWith(':200')), 'the packaged module was served by the assets route: ' + JSON.stringify(assetStatuses));
+  assert.equal(await page.locator('app-organizations').count(), 0, 'no console-native page anymore');
+  const visAlerts = await page.locator('[role=alert]:visible').allTextContents(); // the screen keeps a hidden alert placeholder: only a VISIBLE alert is a failure
+  assert.equal(visAlerts.length, 0, 'packaged organizations screen: no visible alert ' + JSON.stringify(visAlerts));
+  await shot('7c-packaged-organizations-screen');
+  // Disabling the plugin retires the route and the menu: the host says the screen is gone, the sidebar drops the entry.
+  await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
+  await page.waitForFunction(() => location.pathname === '/plugins/organizations');
+  await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
+  await page.goto(`${BASE}/screens/organizations/orgs`); // a full reload signs out (memory-only token): the deep link resumes after sign-in
+  await page.waitForSelector('#signin-browser');
+  await coreLogin();
+  await page.waitForFunction(() => location.pathname === '/screens/organizations/orgs');
+  await setToken(); // the screens inventory is an admin read: the capability token is memory-only, re-enter it after the reload
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); // ensurePersonal raced the token entry at sign-in: reopen the personal branch now that the token is back
+  await status('personal branch');
+  try { await page.waitForSelector('#plugin-screen-problem', { timeout: 30000 }); }
+  catch (e) { console.log('DIAG2 url', page.url(), '\nDIAG2 body', ((await page.textContent('body')) ?? '').slice(0, 600)); await shot('diag2-disabled-screen').catch(() => undefined); throw e; }
+  assert.equal(await page.locator('nav a[data-nav="/screens/organizations/orgs"]').count(), 0, 'the menu entry left with the plugin');
+  await shot('7d-packaged-screen-disabled');
+  // Re-enabling asks for the packaged-components grant explicitly, then the same screen comes back, still with zero apps/web change.
+  await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
+  await page.waitForFunction(() => location.pathname === '/plugins/organizations');
+  await page.locator('input[name=gc]').check();
+  await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
+  await nav('/screens/organizations/orgs'); await page.waitForSelector('plg-organizations-orgs #org-table');
+  await shot('7e-packaged-screen-back');
 
   // ---- database explorer, section by section (one component instance across the sections) ----
   await page.setViewportSize({ width: 1280, height: 1100 });

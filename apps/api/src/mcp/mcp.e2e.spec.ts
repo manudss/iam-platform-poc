@@ -234,7 +234,12 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.equal((await callTool(secret, 'install_plugin', { id: 'no-such-plugin' })).result?.isError, true);
     const inst = await callTool(secret, 'install_plugin', { id: 'organizations' });
     assert.notEqual(inst.result?.isError, true, textOf(inst));
-    assert.notEqual((await callTool(secret, 'set_plugin_enabled', { id: 'organizations', enabled: true })).result?.isError, true);
+    // organizations declares a packaged component screen: enabling it takes the uiComponents grant, which is console-only
+    // by design (mcp-gateway's set_plugin_enabled never grants sensitive grants) — the MCP enable is refused fail-closed...
+    assert.equal((await callTool(secret, 'set_plugin_enabled', { id: 'organizations', enabled: true })).result?.isError, true);
+    // ...and the human path grants it explicitly through the admin API, on the same working branch.
+    const en = await post(`${API}/tenants/acme-demo/plugins/organizations/enable`, { grants: { uiComponents: true } }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN, 'x-iam-branch': branch });
+    assert.equal(en.status, 201);
     assert.equal((await callTool(secret, 'configure_plugin', { id: 'organizations', settings: { nope: 1 } })).result?.isError, true); // manifest has no such setting
     const onMain = await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: "select count(*) n from plugin_config where plugin='organizations'" }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
     assert.equal(Number(((await onMain.json()) as { rows: { n: number }[] }).rows[0].n), 0); // main untouched

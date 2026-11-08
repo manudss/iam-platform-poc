@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
@@ -104,6 +104,8 @@ export class Shell {
 
   constructor() {
     this.router.events.pipe(filter((e) => e instanceof NavigationEnd)).subscribe(() => { this.menu.set(false); this.title.set(this.leafTitle()); void this.loadChanges(); });
+    // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
+    effect(() => { this.s.pluginsVersion(); void this.loadPluginMenu(); });
     this.title.set(this.leafTitle());
   }
   private leafTitle(): string {
