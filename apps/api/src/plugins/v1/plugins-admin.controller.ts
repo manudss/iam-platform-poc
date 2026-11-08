@@ -62,7 +62,7 @@ export class PluginsAdminController {
   }
 
   @UseGuards(AdminGuard) @Post(':id/install')
-  install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).install(t, id, grants(b)); return { installed: id }; }); }
+  install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).install(t, id, grants(b)); const adopted = this.profile ? await this.profile.adoptPlugin(t, id) : 0; return { installed: id, ...(adopted ? { adoptedValues: adopted } : {}) }; }); }
 
   @UseGuards(AdminGuard) @Put(':id/settings')
   settings(@Param('tenant') t: string, @Param('id') id: string, @Body() b: { values?: Record<string, unknown> }) {
@@ -71,7 +71,7 @@ export class PluginsAdminController {
   }
 
   @UseGuards(AdminGuard) @Post(':id/enable')
-  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); return { enabled: id }; }); }
+  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); const adopted = this.profile ? await this.profile.adoptPlugin(t, id) : 0; return { enabled: id, ...(adopted ? { adoptedValues: adopted } : {}) }; }); }
 
   /** Plan step 8: imports a signed plugin archive (zip from scripts/plugin-pack.mjs --zip, base64 in { archive }).
    * The package is validated, verified against the trust store (Ed25519, decision 3), written into the plugins

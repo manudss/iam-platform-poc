@@ -19,6 +19,8 @@ export interface ProfileValueStore {
   resolvePending(tenant: string, subject: string, accept: boolean, actor: string, base?: string): Promise<void>;
   /** How much profile data a plugin holds for a tenant (legacy rows under its key prefix plus filled columns of its tables). Feeds the uninstall confirmation. */
   countForPlugin?(tenant: string, keyPrefix: string, routes: FieldRoute[], ref: 'live' | 'work'): Promise<number>;
+  /** Moves legacy generic-store rows into a plugin's own tables (declared storage adopted at install/enable). Returns the number of moved values. */
+  adopt?(tenant: string, routes: FieldRoute[]): Promise<number>;
 }
 /** Dolt branch of one person's pending profile edits. Reversible encoding: [a-z0-9-] kept, every other character becomes _hh (hex). */
 /** Pending change set of one person against one base branch: 'main' keeps the historical name, any other base is encoded after a ';'. */
@@ -45,6 +47,7 @@ export class MemoryProfileStore implements ProfileValueStore {
     for (const [k, vals] of this.rows) if (k.split('/')[1] === t) for (const key of Object.keys(vals)) if (key.startsWith(keyPrefix)) n++;
     return n;
   }
+  async adopt(): Promise<number> { return 0; }
 }
 
 /**
@@ -131,6 +134,26 @@ export class DoltProfileStore implements ProfileValueStore {
     };
     if (ref === 'live') await this.v.lock(() => this.v.at('main', run));
     else await this.v.writeOn(this.workBranch(true), run);
+  }
+  async adopt(t: string, routes: FieldRoute[]): Promise<number> {
+    if (!routes.length) return 0;
+    return this.v.lock(() => this.v.at('main', async (c) => {
+      if (!(await this.tableExists(c, 'profile_field_values'))) return 0;
+      const [rows] = await c.query(`select subject, field_key, value from profile_field_values where tenant=? and field_key in (${routes.map(() => '?').join(',')})`, [t, ...routes.map((r) => r.fullKey)]);
+      let moved = 0;
+      const touched = new Set<string>(['profile_field_values']);
+      for (const row of rows as { subject: string; field_key: string; value: unknown }[]) {
+        const route = routes.find((r) => r.fullKey === row.field_key)!;
+        if (!(await this.tableExists(c, route.table))) continue; // the owning plugin is not installed on main yet
+        const val = typeof row.value === 'string' ? JSON.parse(row.value) : row.value;
+        await c.query(`insert into \`${route.table}\` (tenant, subject, \`${route.column}\`) values (?,?,?) on duplicate key update \`${route.column}\`=values(\`${route.column}\`)`, [t, row.subject, this.cell(route, val as string | number | boolean)]);
+        await c.query('delete from profile_field_values where tenant=? and subject=? and field_key=?', [t, row.subject, row.field_key]);
+        touched.add(route.table);
+        moved++;
+      }
+      if (moved) await this.commit(c, `profile: adopted ${moved} legacy values into plugin tables`, [...touched]);
+      return moved;
+    }));
   }
   async countForPlugin(t: string, keyPrefix: string, routes: FieldRoute[], ref: 'live' | 'work'): Promise<number> {
     return this.v.at(ref === 'live' ? 'main' : this.workBranch(false), async (c) => {

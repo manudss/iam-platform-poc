@@ -85,8 +85,8 @@ export function validateFieldDecls(plugin, fields) {
                 errs.push(`profile field ${f.key}: storage must be { table, column, sqlType? }`);
             }
             else {
-                if (!TABLE.test(st.table ?? '') || !(st.table === tablePrefix || st.table.startsWith(tablePrefix + '_')))
-                    errs.push(`profile field ${f.key}: storage table must be ${tablePrefix} or ${tablePrefix}_…`);
+                if (!TABLE.test(st.table ?? '') || !st.table.startsWith(tablePrefix + '_'))
+                    errs.push(`profile field ${f.key}: storage table must start with ${tablePrefix}_`);
                 if (!COLUMN.test(st.column ?? ''))
                     errs.push(`profile field ${f.key}: storage column is invalid`);
                 if (st.sqlType !== undefined && !SQL_TYPES.includes(String(st.sqlType).toLowerCase()))

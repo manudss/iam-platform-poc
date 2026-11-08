@@ -205,6 +205,13 @@ export class ProfileService {
     await reg.putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, next as unknown as Record<string, unknown>);
     return { purged: pluginId, fields: Object.keys(cfg.fields).length - Object.keys(fields).length };
   }
+  /** Adopts the legacy generic-store values of a plugin's storage-mapped fields into its own tables. Idempotent; the install and enable endpoints call it. */
+  async adoptPlugin(tenant: string, pluginId: string): Promise<number> {
+    if (!this.store.adopt) return 0;
+    const cat = await this.catalogue(tenant, 'live');
+    const routes = cat.filter((f) => f.plugin === pluginId && f.storage === 'table').map((f) => ({ fullKey: f.fullKey, type: f.type, table: f.table!, column: f.column! }));
+    return this.store.adopt(tenant, routes);
+  }
   /** How much profile data a plugin holds (the uninstall confirmation shows this number). */
   async pluginValueCount(tenant: string, pluginId: string, ref: 'live' | 'work' = 'work'): Promise<number> {
     if (!this.store.countForPlugin) return 0;

@@ -1,17 +1,26 @@
 {
   "apiVersion": "plugin/v3",
   "id": "hr-attributes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "HR attributes (example)",
   "publisher": "iam-platform",
   "kinds": ["profile"],
   "hooks": [],
   "settings": [],
   "profileFields": [
-    { "key": "job_title", "type": "string", "label": "Job title", "max": 60, "pii": "none", "defaults": { "selfEdit": true, "signup": "optional" } },
-    { "key": "phone", "type": "phone", "label": "Phone", "pii": "personal", "defaults": { "selfEdit": true } },
-    { "key": "language", "type": "select", "label": "Language", "pii": "none", "options": [{ "value": "fr", "label": "Français" }, { "value": "en", "label": "English" }], "defaults": { "selfEdit": true, "signup": "optional" } },
-    { "key": "employee_grade", "type": "string", "label": "Grade", "max": 20, "klass": "authority", "pii": "none", "help": "Read by access decisions: only an administrator can set it." }
+    { "key": "job_title", "type": "string", "label": "Job title", "max": 60, "pii": "none", "section": "HR", "order": 100, "storage": { "table": "plg_hr_attributes_values", "column": "job_title" }, "defaults": { "selfEdit": true, "signup": "optional" } },
+    { "key": "phone", "type": "phone", "label": "Phone", "pii": "personal", "section": "Contact", "order": 110, "storage": { "table": "plg_hr_attributes_values", "column": "phone" }, "defaults": { "selfEdit": true } },
+    { "key": "language", "type": "select", "label": "Language", "pii": "none", "section": "Contact", "order": 120, "storage": { "table": "plg_hr_attributes_values", "column": "language" }, "options": [{ "value": "fr", "label": "Français" }, { "value": "en", "label": "English" }], "defaults": { "selfEdit": true, "signup": "optional" } },
+    { "key": "employee_grade", "type": "string", "label": "Grade", "max": 20, "klass": "authority", "pii": "none", "section": "HR", "order": 130, "storage": { "table": "plg_hr_attributes_values", "column": "employee_grade" }, "help": "Read by access decisions: only an administrator can set it." }
   ],
+  "install": {
+    "migrations": [
+      {
+        "id": "001-hr-attributes-table",
+        "sql": ["create table plg_hr_attributes_values (tenant text not null, subject varchar(32) not null, job_title text null, phone text null, language text null, employee_grade text null, primary key (tenant, subject))"],
+        "down": ["drop table plg_hr_attributes_values"]
+      }
+    ]
+  },
   "security": { "signed": true }
 }
