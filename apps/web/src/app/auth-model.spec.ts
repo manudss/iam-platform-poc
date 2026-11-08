@@ -50,4 +50,12 @@ describe('auth model', () => {
   it('deleting a method is refused while a chain uses it as a step', () => {
     expect(deleteMethod(base(), 'totp')).toBe(false);
   });
+  it('regression: adding a first step to a new chain keeps the same entry (the drawer must not vanish)', () => {
+    const c = base(); c.chains.push({ id: 'mine', name: 'Mine', enabled: false, steps: [], level: 1 });
+    const before = entries(c, avail()).find((x) => x.chainId === 'mine')!;
+    c.chains.find((x) => x.id === 'mine')!.steps.push('totp');
+    const after = entries(c, avail()).find((x) => x.chainId === 'mine')!;
+    expect(after.key).toBe(before.key); expect(after.kind).toBe('chain');
+    expect(entries(c, avail()).some((x) => x.key === 'm:totp')).toBe(true); // the method itself stays listed
+  });
 });

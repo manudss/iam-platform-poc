@@ -152,7 +152,7 @@
                   <button class="secondary" (click)="moveStep(e, si, -1)" [disabled]="si===0" aria-label="Move step up">&#8593;</button><button class="secondary" (click)="moveStep(e, si, 1)" [disabled]="si===e.stepIds.length-1" aria-label="Move step down">&#8595;</button><button class="secondary" (click)="removeStep(e, si)" [attr.aria-label]="'Remove step ' + methodName(id)">&#10005;</button></li>
               } @empty { <li class="hint">No steps yet.</li> }
             </ol>
-            <div class="addstep"><label>Add a step (any existing method)<select name="steppick" [(ngModel)]="stepPick">@for (m of stepChoices(e); track m.id) {<option [value]="m.id">{{ m.name }} ({{ methodInUse(m.id) ? 'in use' : 'not in use' }})</option>}</select></label><button class="secondary" id="authn-add-step" (click)="addStep(e)">Add step</button></div>
+            <div class="addstep"><label>Add a step (any existing method)<select name="steppick" [(ngModel)]="stepPick"><option value="">First available method</option>@for (m of stepChoices(e); track m.id) {<option [value]="m.id">{{ m.name }} ({{ methodInUse(m.id) ? 'in use' : 'not in use' }})</option>}</select></label><button class="secondary" id="authn-add-step" (click)="addStep(e)">Add step</button></div>
             @if (analysis(e.chainId); as a) {
               <div class="analysis"><span class="pill" [class.ok]="a.mfa" [class.warn]="!a.mfa">{{ a.mfa ? 'Multi-factor (2+ verified factor categories)' : 'Not multi-factor' }}</span>
                 <span class="pill">Declared level {{ a.declaredLevel }}</span><span class="pill" [class.warn]="a.effectiveLevel<a.declaredLevel">Effective level {{ a.effectiveLevel }}</span>

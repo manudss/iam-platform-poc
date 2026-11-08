@@ -71,6 +71,12 @@ try {
   await editOf('c:password-then-authenticator'); await page.locator('#authn-edit [name=erec]').check();
   await page.waitForSelector('#authn-edit .analysis'); const a1 = await page.locator('#authn-edit .analysis').innerText(); await done();
   await editOf('c:e-mail-then-pin-keypad'); await page.waitForSelector('#authn-edit .analysis'); const a2 = await page.locator('#authn-edit .analysis').innerText(); await done();
+  // regression: a new chain accepts a step that is not in use, and its panel stays open
+  await page.click('#authn-new-chain'); await page.fill('.modal input[name=chainname]', 'Regression chain'); await page.click('#authn-create-chain'); await page.waitForSelector('#authn-edit');
+  await page.selectOption('#authn-edit select[name=steppick]', { label: 'E-mail code (not in use)' }).catch(async () => { await page.selectOption('#authn-edit select[name=steppick]', { index: 2 }); });
+  await page.click('#authn-add-step'); await page.waitForSelector('#authn-edit .steps li'); await page.click('#authn-add-step');
+  assert.equal(await page.locator('#authn-edit .steps li').count(), 2, 'two steps, panel still open');
+  await done(); await item('c:regression-chain').waitFor();
   assert.match(a1, /Multi-factor/); assert.match(a2, /Not multi-factor/); assert.match(a2, /simulated/i);
   await shot('2-chains-desktop');
   await page.setViewportSize({ width: 390, height: 800 }); await shot('2b-chains-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
@@ -139,8 +145,8 @@ try {
   // leave the shared preview as we found it: classic password sign-in again (a restart does not reset the stored configuration)
   await page.waitForSelector('[name=globalBranch]');
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('aw3-' + RUN);
-  await page.locator('nav a[data-nav="/auth-methods"]').click(); await item('m:password').waitFor();
-  await editOf('m:password'); await page.locator('#authn-edit [name=erec]').check(); await done(); await page.click('#authn-save'); await page.waitForSelector('#authn-note');
+  await page.locator('nav a[data-nav="/auth-methods"]').click(); await item('c:password-only').waitFor();
+  await editOf('c:password-only'); await page.locator('#authn-edit [name=erec]').check(); await done(); await page.click('#authn-save'); await page.waitForSelector('#authn-note');
   const ap3 = await (await call('POST', '/workspace/apply', { confirm: true }, 'aw3-' + RUN)).json(); assert.equal(ap3.applied, true, JSON.stringify(ap3));
   assert.deepEqual(errors, []);
   console.log('HOSTED PASS authn: methods and chains built in the console, staged until Apply, chain 1 (password+TOTP) MFA claims, chain 2 (simulated e-mail + shuffled PIN keypad) not MFA');

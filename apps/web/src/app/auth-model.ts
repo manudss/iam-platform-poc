@@ -15,7 +15,8 @@ export interface Entry {
 export interface Dropped { name: string; reason: string }
 
 export const slugId = (s: string, taken: string[]) => { const b = s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 34) || 'item'; let id = b, i = 2; while (taken.includes(id)) id = `${b}-${i++}`; return id; };
-const solo = (cfg: AuthnConfig, methodId: string) => cfg.chains.find((c) => c.steps.length === 1 && c.steps[0] === methodId);
+/** The one-step chain that IS a method's entry in the list: one step and the method's own name. Any other one-step chain (a user's new chain, a seeded "Password only") stays a chain, so its entry key never flips to a method when a first step is added. */
+const solo = (cfg: AuthnConfig, methodId: string) => cfg.chains.find((c) => c.steps.length === 1 && c.steps[0] === methodId && c.name === methodOf(cfg, methodId)?.name);
 const methodOf = (cfg: AuthnConfig, id: string) => cfg.methods.find((m) => m.id === id);
 const methodAvail = (a: Availability | null, id: string) => a ? (a.methods[id]?.available ?? false) : true;
 
