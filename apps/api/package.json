@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.spec.js\""
+    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.spec.js\"",
+    "plugins:setup": "node ../scripts/plugin-dev-setup.mjs"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.6",
@@ -21,10 +22,10 @@
     "@xmldom/xmldom": "0.9.12",
     "mysql2": "^3.24.6",
     "nats": "^2.29.3",
-    "nodemailer": "^6.10.1",
     "oidc-provider": "9.13.3",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
+    "resend": "^6.37.0",
     "rxjs": "^7.8.2",
     "samlify": "2.15.1"
   },
@@ -32,7 +33,6 @@
     "@nestjs/testing": "^12.3.2",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.5",
-    "@types/nodemailer": "^6.4.24",
     "@types/oidc-provider": "9.13.1",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",

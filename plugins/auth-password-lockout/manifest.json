@@ -1,0 +1,78 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-password-lockout",
+  "version": "1.0.0",
+  "name": "Password sign-in with lockout",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "extends": "auth-password",
+  "provides": [
+    "auth.password"
+  ],
+  "hooks": [
+    {
+      "name": "auth.authenticate",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verify",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    }
+  ],
+  "install": {
+    "migrations": [
+      {
+        "id": "001-attempts",
+        "sql": [
+          "create table if not exists plg_auth_password_lockout_attempts (tenant text not null, subject text not null, failures int not null default 0, locked_until timestamptz, primary key (tenant, subject))"
+        ],
+        "down": [
+          "drop table if exists plg_auth_password_lockout_attempts"
+        ]
+      }
+    ]
+  },
+  "settings": [
+    {
+      "key": "minLength",
+      "type": "number",
+      "label": "Minimum password length",
+      "default": 12,
+      "min": 8,
+      "max": 128,
+      "group": "Policy"
+    },
+    {
+      "key": "allowedDomains",
+      "type": "list",
+      "label": "Allowed e-mail domains (empty = all)",
+      "default": [],
+      "group": "Policy"
+    },
+    {
+      "key": "maxFailures",
+      "type": "number",
+      "label": "Failures before lockout",
+      "default": 5,
+      "min": 1,
+      "max": 50,
+      "group": "Lockout"
+    }
+  ],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

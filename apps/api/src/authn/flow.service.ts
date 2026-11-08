@@ -9,8 +9,7 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
-import { SmtpMailAdapter } from './mail.js';
-import { CATALOGUE, DemoOutbox, MailAdapter, MethodCtx, Prompt, methodType } from './methods.js';
+import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 
 export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string> }
 export type GateResponse =
@@ -44,8 +43,6 @@ export const DEMO_TOTP_SECRET = 'JBSWY3DPEHPK3PXP', DEMO_PIN = '246810', DEMO_PI
 export class AuthnService implements OnApplicationBootstrap {
   readonly enroll = new EnrollmentStore();
   readonly outbox = new DemoOutbox();
-  /** Set from the server environment only; tests may replace it. */
-  smtp: MailAdapter | null = SmtpMailAdapter.fromEnv();
   private sessions = new Map<string, Session>();
   private fails = new Map<string, number[]>();
   now = () => Date.now();
@@ -80,6 +77,8 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!isEmptyConfig(parseStored(await main.coreSettings(tenant, CORE_SETTINGS_ID)))) return false;
     const cfg = validateConfig(SEED_CONFIG);
     await main.putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+    // The seeded chains use TOTP, e-mail code and PIN: their method plugins must serve the slots (step 2).
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { try { await main.install(tenant, id, {}); } catch { /* already installed */ } try { await main.enable(tenant, id, {}); } catch (e) { console.warn('authn demo seed: cannot enable', id, (e as Error).message); } }
     const have = await this.enroll.status(tenant, 'demo-alice');
     if (!have['authenticator-app']) await this.enroll.setTotp(tenant, 'demo-alice', 'authenticator-app', DEMO_TOTP_SECRET);
     if (!have['pin-keypad']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad', DEMO_PIN);
@@ -104,7 +103,7 @@ export class AuthnService implements OnApplicationBootstrap {
     return cfg;
   }
   analyses(cfg: AuthnConfig): ChainAnalysis[] { return cfg.chains.map((c) => analyzeChain(cfg, c)); }
-  catalogue() { return CATALOGUE.map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
+  catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
 
   private async known(tenant: string, subject: string, branch?: string): Promise<boolean> {
     if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return false;
@@ -116,12 +115,40 @@ export class AuthnService implements OnApplicationBootstrap {
     if (process.env.IAM_DIRECTORY_AUTH !== '1' || !this.users) return undefined;
     try { return ((await this.users.list(branch ?? 'main')).find((u) => u.id === subject && u.login_enabled && u.hasCredential) as { email?: string | null } | undefined)?.email || undefined; } catch { return undefined; }
   }
-  private async passwordCheck(tenant: string, subject: string, password: string, branch?: string) {
-    const r = await (await this.signinRegistry(branch)).callSlot<AuthenticateResult>(tenant, 'auth.password', 'auth.authenticate', { tenant, subject, credential: { password } });
-    return r.result.outcome === 'allow';
+  /** The plugin SERVING a method type right now on this registry: the provider chosen for the auth.<type> slot
+   * (the working base, or the enabled replacement) - and only when it really is a method (the refusing base of a
+   * slot without an enabled method is NOT one). A disabled or removed method simply has no provider. */
+  private provider(reg: PluginRegistry, tenant: string, type: string) {
+    try { const p = reg.resolve(tenant, `auth.${type}`); return p.manifest.authMethod && reg.isActive(tenant, p.manifest.id) ? p : undefined; } catch { return undefined; }
   }
-  private ctx(s: Session, step: Session['steps'][number]): MethodCtx {
-    return { tenant: s.tenant, subject: s.subject, instanceId: step.id, config: step.config as Record<string, any>, known: s.known, enroll: this.enroll, mail: this.outbox, smtp: this.smtp, profileEmail: () => this.profileEmail(s.subject, s.branch), passwordCheck: (t, u, p) => this.passwordCheck(t, u, p, s.branch), now: this.now };
+  /** Descriptive verification note THROUGH THE REGISTRY (never in-process at sign-in, review n:2): a disabled or
+   * faulted plugin cannot answer, so the note degrades to 'unavailable' instead of lying. */
+  private async verification(reg: PluginRegistry, tenant: string, m: { type: string; config: Record<string, unknown> }): Promise<{ real: boolean; note: string }> {
+    if (!this.provider(reg, tenant, m.type)) return { real: false, note: 'Method unavailable (its plugin is disabled).' };
+    try { return (await reg.callSlot<{ real: boolean; note: string }>(tenant, `auth.${m.type}`, 'auth.verification', { config: m.config })).result; }
+    catch { return { real: false, note: 'Method unavailable (its plugin failed).' }; }
+  }
+  /** Read-side of the bus contract (step 2): the core assembles everything the pure plugin handler needs. */
+  private async enrollment(tenant: string, subject: string, st: { id: string; type: string }) {
+    if (st.type === 'totp') { const t = await this.enroll.totpRecord(tenant, subject, st.id); return t ? { totp: t } : {}; }
+    if (st.type === 'digit-code') { const p = await this.enroll.pinRecord(tenant, subject, st.id); return p ? { pin: p } : {}; }
+    if (st.type === 'email-otp') { const email = await this.enroll.email(tenant, subject, st.id); return email ? { email } : {}; }
+    return {};
+  }
+  private async notifyCapability(reg: PluginRegistry, tenant: string) {
+    // Delivery of one-time codes goes through the notify.default slot (P1-E): the plugin chosen on the slot
+    // sends (durable emission); its notify.capability answer says whether delivery is real or simulated.
+    try { return await (await reg.callSlot<{ real: boolean; note?: string }>(tenant, 'notify.default', 'notify.capability', {})).result; }
+    catch (e) { console.error('[authn] notify capability lookup failed:', (e as Error).message); return undefined; } // the plugin then takes the simulated path
+  }
+  private async methodPayload(reg: PluginRegistry, s: Session, st: Session['steps'][number], state: Record<string, any>, answers?: Record<string, string>) {
+    return {
+      tenant: s.tenant, subject: s.subject, known: s.known, instanceId: st.id, config: st.config as Record<string, any>,
+      state, answers, now: this.now(),
+      enrollment: await this.enrollment(s.tenant, s.subject, st),
+      ...(st.type === 'email-otp' ? { profileEmail: await this.profileEmail(s.subject, s.branch), notifyCapability: await this.notifyCapability(reg, s.tenant) } : {}),
+      ...(st.type === 'password' && answers ? { passwordOutcome: (await reg.callSlot<AuthenticateResult>(s.tenant, 'auth.password', 'auth.authenticate', { tenant: s.tenant, subject: s.subject, credential: { password: answers.password ?? '' } })).result.outcome } : {}),
+    };
   }
   private audit(e: Record<string, unknown>) { console.log('[authn]', JSON.stringify(e)); }
   private throttled(key: string) { const t = (this.fails.get(key) ?? []).filter((x) => x > this.now() - THROTTLE_MS); this.fails.set(key, t); return t.length >= THROTTLE_N; }
@@ -131,27 +158,30 @@ export class AuthnService implements OnApplicationBootstrap {
   private fail(key: string) { (this.fails.get(key) ?? this.fails.set(key, []).get(key)!).push(this.now()); }
   private sweep() { const n = this.now(); for (const [k, s] of this.sessions) if (s.exp < n) this.sessions.delete(k); while (this.sessions.size > 2000) this.sessions.delete(this.sessions.keys().next().value as string); }
 
-  /** Chains a person may pick at sign-in: enabled chains of the LIVE configuration whose methods are all enabled. */
-  private offered(cfg: AuthnConfig) {
-    return cfg.chains.filter((c) => c.enabled && c.steps.every((id) => cfg.methods.find((m) => m.id === id)?.enabled));
+  /** Chains a person may pick at sign-in: enabled chains of the LIVE configuration whose methods are all enabled
+   * AND served by an active plugin on the sign-in registry (review n:2 / acceptance 3: disabling a method's plugin
+   * retires the chains that use it from the sign-in options at once). */
+  private async offered(cfg: AuthnConfig, reg: PluginRegistry, tenant: string) {
+    return cfg.chains.filter((c) => c.enabled && c.steps.every((id) => { const m = cfg.methods.find((x) => x.id === id); return !!m?.enabled && !!this.provider(reg, tenant, m.type); }));
   }
   /** Public description of what can be chosen on the sign-in page. No enrollment, user or secret information. */
   async options(tenant: string, branch?: string) {
-    const cfg = await this.signinConfig(tenant, branch), list = this.offered(cfg);
+    const reg = await this.signinRegistry(branch);
+    const cfg = await this.signinConfig(tenant, branch), list = await this.offered(cfg, reg, tenant);
     return {
       mode: list.length ? 'choice' as const : 'legacy' as const,
-      chains: list.map((c) => {
+      chains: await Promise.all(list.map(async (c) => {
         const a = analyzeChain(cfg, c);
         return { id: c.id, name: c.name, declaredLevel: c.level, effectiveLevel: a.effectiveLevel, mfa: a.mfa, simulated: a.simulatedSteps.length > 0, recommended: cfg.defaultChain === c.id,
-          steps: c.steps.map((id) => { const m = cfg.methods.find((x) => x.id === id)!; return { name: m.name, type: m.type, simulated: !methodType(m.type)!.verification(m.config).real }; }), ...(c.note ? { note: c.note } : {}) };
-      }),
+          steps: await Promise.all(c.steps.map(async (id) => { const m = cfg.methods.find((x) => x.id === id)!; return { name: m.name, type: m.type, simulated: !(await this.verification(reg, tenant, m)).real }; })), ...(c.note ? { note: c.note } : {}) };
+      })),
       note: 'Levels are declared by an administrator (10 = strongest), not measured. A simulated step proves nothing.',
       ...(branch ? { branch, test: true as const } : {}),
     };
   }
   /** Which chain a sign-in uses: the one the person picked, else the administrator's default, else the plain single-password chain (JSON /authorize, scripts). None = refuse. */
-  private resolve(cfg: AuthnConfig, requested?: string) {
-    const list = this.offered(cfg);
+  private async resolve(cfg: AuthnConfig, reg: PluginRegistry, tenant: string, requested?: string) {
+    const list = await this.offered(cfg, reg, tenant);
     if (typeof requested === 'string' && requested) return list.find((c) => c.id === requested);
     const def = list.find((c) => c.id === cfg.defaultChain);
     if (def) return def;
@@ -160,14 +190,16 @@ export class AuthnService implements OnApplicationBootstrap {
 
   /** First page of the core's form. No chain is configured: classic form. Chains exist and none is picked: the list to choose from. A chain is picked: its first inputs. */
   async entry(tenant: string, chainId?: string, branch?: string): Promise<{ mode: 'legacy' } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields'] }> {
-    const cfg = await this.signinConfig(tenant, branch), list = this.offered(cfg);
+    const reg = await this.signinRegistry(branch);
+    const cfg = await this.signinConfig(tenant, branch), list = await this.offered(cfg, reg, tenant);
     if (!list.length) return { mode: 'legacy' };
     const chain = typeof chainId === 'string' && chainId ? list.find((c) => c.id === chainId) : undefined;
     if (!chain) return { mode: 'choice', chains: (await this.options(tenant, branch)).chains };
     const m = cfg.methods.find((x) => x.id === chain.steps[0])!, t = methodType(m.type)!;
     if (!t.inlineWithUsername(m.config)) return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: [] };
     const s = { tenant, subject: '', known: false, branch } as Session;
-    const p = await t.prepare!(this.ctx(s, { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: true }));
+    const st = { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: true };
+    const p = (await reg.callSlot<{ prompt: Prompt }>(tenant, `auth.${m.type}`, 'auth.prepare', await this.methodPayload(reg, s, st, {}))).result;
     return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: p.prompt.fields };
   }
 
@@ -175,16 +207,17 @@ export class AuthnService implements OnApplicationBootstrap {
   async authenticate(b: GateRequest): Promise<GateResponse | null> {
     this.sweep();
     if (b.session) return this.answer(b);
+    const reg = await this.signinRegistry(b.branch);
     const cfg = await this.signinConfig(b.tenant, b.branch);
-    if (!this.offered(cfg).length) return null;   // nothing configured and enabled: the classic single-password path, unchanged
-    const chain = this.resolve(cfg, typeof b.chain === 'string' ? b.chain.slice(0, 40) : undefined);
+    if (!(await this.offered(cfg, reg, b.tenant)).length) return null;   // nothing configured and enabled: the classic single-password path, unchanged
+    const chain = await this.resolve(cfg, reg, b.tenant, typeof b.chain === 'string' ? b.chain.slice(0, 40) : undefined);
     if (!chain) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };   // chains exist: never fall back to a laxer path
     const subject = typeof b.subject === 'string' ? b.subject : '';
     if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     const key = `${b.tenant}/${b.branch ?? 'live'}/${subject}`;
     if (this.throttled(key) || this.tooManyStarts(key)) { this.audit({ tenant: b.tenant, subject, outcome: 'throttled' }); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
     const a = analyzeChain(cfg, chain);
-    const steps = chain.steps.map((id) => { const m = cfg.methods.find((x) => x.id === id)!; return { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: methodType(m.type)!.verification(m.config).real }; });
+    const steps = await Promise.all(chain.steps.map(async (id) => { const m = cfg.methods.find((x) => x.id === id)!; return { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: (await this.verification(reg, b.tenant, m)).real }; }));
     const s: Session = { id: randomBytes(24).toString('base64url'), tenant: b.tenant, subject, branch: b.branch, known: await this.known(b.tenant, subject, b.branch), exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
     this.sessions.set(s.id, s);
     await this.prepare(s);
@@ -200,8 +233,15 @@ export class AuthnService implements OnApplicationBootstrap {
     return this.check(s, b.answers);
   }
   private async prepare(s: Session) {
-    const st = s.steps[s.index], t = methodType(st.type)!;
-    s.prepared = await t.prepare!(this.ctx(s, st)); s.tries = 0;
+    const st = s.steps[s.index];
+    const reg = await this.signinRegistry(s.branch);
+    // The method plugin answers over the bus (callSlot: grants, deadline, faults, audit); a throw is a technical
+    // failure: the gate answers 503 and the core refuses the sign-in (fail closed).
+    const r = await reg.callSlot<{ prompt: Prompt; state: Record<string, any>; notify?: Record<string, unknown>; mail?: { tenant: string; to: string; subject: string; text: string; subjectUser: string } }>(s.tenant, `auth.${st.type}`, 'auth.prepare', await this.methodPayload(reg, s, st, {}));
+    s.prepared = { prompt: r.result.prompt, state: r.result.state ?? {} }; s.tries = 0;
+    // Effects the pure handler asked for: the core applies them (durable notify emission, demo outbox).
+    if (r.result.notify) await reg.emit(s.tenant, 'notify.send', r.result.notify as { effectKey: string });
+    if (r.result.mail) await this.outbox.send(r.result.mail);
   }
   private challenge(s: Session, error?: string): GateResponse {
     const st = s.steps[s.index];
@@ -211,13 +251,22 @@ export class AuthnService implements OnApplicationBootstrap {
     const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
     const clean: Record<string, string> = {};
     for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= 256 && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
+    const reg = await this.signinRegistry(s.branch);
     let ok = false;
     try {
-      if (t.interact) {
-        const r = await t.interact(this.ctx(s, st), s.prepared!.state, clean);
-        if (!r.done) { s.prepared = { prompt: r.prompt, state: r.state }; return this.challenge(s); }   // a button press: no attempt used yet
-        ok = r.ok;
-      } else ok = await t.verify!(this.ctx(s, st), s.prepared!.state, clean);
+      const payload = await this.methodPayload(reg, s, st, s.prepared!.state, clean);
+      if (t.id === 'digit-code') {   // the interactive method: one bus call per button press
+        const r = (await reg.callSlot<{ done: boolean; ok?: boolean; prompt?: Prompt; state?: Record<string, any> }>(s.tenant, `auth.${st.type}`, 'auth.interact', payload)).result;
+        if (!r.done) { s.prepared = { prompt: r.prompt!, state: r.state! }; return this.challenge(s); }   // a button press: no attempt used yet
+        ok = !!r.ok;
+      } else {
+        const r = (await reg.callSlot<{ ok: boolean; consumeStep?: number; state?: Record<string, any> }>(s.tenant, `auth.${st.type}`, 'auth.verify', payload)).result;
+        ok = !!r?.ok;
+        if (r?.state) s.prepared!.state = r.state;   // e.g. the e-mail code's single-use flag
+        // Anti-replay effect: the step the plugin accepted is consumed ATOMICALLY by the store (a parallel attempt
+        // that read the same lastStep loses the race and fails here).
+        if (ok && typeof r?.consumeStep === 'number') ok = await this.enroll.consumeTotpStep(s.tenant, s.subject, st.id, r.consumeStep);
+      }
     } catch (e) { this.sessions.delete(s.id); throw e; }
     if (!ok) {
       this.fail(key); s.tries++;

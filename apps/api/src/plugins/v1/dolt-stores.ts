@@ -29,6 +29,14 @@ export class DoltPluginStore implements MigrationStore, SettingsStore, StateStor
     await this.write(async c => { const r = {...row,tenant}, cols = Object.keys(r); await c.query(`insert ignore into \`${table}\` (${cols.map(k=>`\`${k}\``).join(',')}) values (${cols.map(()=>'?').join(',')})`, Object.values(r)); await c.query('insert ignore into plugin_runtime_seeds values (?,?)',[tenant,plugin]); }, `plugin seed: ${plugin}`);
   }
   async seeded(t: string,p: string) { return this.read(async c => {const [r] = await c.query('select * from plugin_runtime_seeds where tenant=? and plugin=?',[t,p]);return (r as unknown[]).length>0;}); }
+  async removeTenantData(tenant: string, plugin: string, tables: string[]) { await this.write(async c => {
+    for (const t of tables) { if (!/^plg_[a-z0-9_]+$/.test(t)) throw new Error(`table ${t} is not a plugin table`); await c.query(`delete from \`${t}\` where tenant=?`, [tenant]); }
+    await c.query('delete from plugin_runtime_seeds where tenant=? and plugin=?', [tenant, plugin]);
+  }, `plugin uninstall: ${plugin} rows for ${tenant}`); }
+  async revert(plugin: string, id: string, sql: string[]) { await this.write(async c => {
+    for (const s of sql) await c.query(s.replace(/\btext\b/gi, 'varchar(255)').replace(/\btimestamptz\b/gi, 'datetime'));
+    await c.query('delete from plugin_runtime_migrations where plugin=? and id=?', [plugin, id]);
+  }, `plugin uninstall: revert ${plugin}/${id}`); }
   async get(t: string,p: string) { return this.read(async c => {const [r] = await c.query('select settings from plugin_runtime_settings where tenant=? and plugin=?',[t,p]);const x = (r as {settings:unknown}[])[0]?.settings;return (typeof x==='string'?JSON.parse(x):x) as Record<string,unknown>|undefined;}); }
   async put(t: string,p: string,values: Record<string,unknown>) { await this.write(async c => {await c.query('insert into plugin_runtime_settings values (?,?,?) on duplicate key update settings=values(settings)',[t,p,JSON.stringify(values)]);},`plugin settings: ${p}`); }
   async loadAll(): Promise<StoredState[]> { return this.read(async c => {const [r]=await c.query('select * from plugin_runtime_state');return (r as Record<string,any>[]).map(x=>({tenant:x.tenant,plugin:x.plugin,installed:!!x.installed,enabled:!!x.enabled,faulted:!!x.faulted,grants:typeof x.grants_json==='string'?JSON.parse(x.grants_json):x.grants_json}));}); }

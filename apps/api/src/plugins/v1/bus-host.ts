@@ -41,7 +41,11 @@ const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (
 /** Blocking kinds that travel on the bus as mandatory controls (step 3, auth migration): the serving plugin
  * answers `plugin.<id>.call`, the core merges the verdict, a silent mandatory subscriber denies (fail closed)
  * and the caller refuses when nobody answered at all. ui.screens and access.decide stay in process (decision 8). */
-export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score']);
+export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score', 'notify.capability',
+  // The sign-in method hooks (step 2): slot-targeted blocking calls (callSlot wraps the slot in the payload).
+  'auth.prepare', 'auth.verify', 'auth.interact', 'auth.verification',
+  'directory.user.validate', 'directory.fields.validateDecls', 'directory.fields.catalogue', 'directory.fields.parseConfig',
+  'directory.fields.validateConfig', 'directory.fields.effectiveSchema', 'directory.fields.checkValue', 'directory.effects.compute']);
 /** Blocking kinds that travel on the bus as merged QUERIES (step 3): every active plugin answers with the
  * fields it owns, the core merges the objects; a silent or disabled plugin simply does not appear. */
 export const BUS_QUERY_KINDS = new Set(['profile.enrich']);
@@ -55,7 +59,8 @@ export class BusHost {
   private routedKinds = new Set<string>();
   private serving = new Map<string, Subscription>();
   private events = new Map<string, Promise<void>>(); // delivery address -> running durable-consumer loop
-  private eventMsgs = new Map<string, ConsumerMessages>(); // delivery address -> live pull, stopped on close
+  private eventMsgs = new Map<string, ConsumerMessages>(); // delivery address -> live pull, stopped on close/disable
+  private closing = false; // set by close(): serveEvents must not install new consumers past this point
   private services = new Map<string, { kinds: string[]; handler: (env: BusEnvelope) => Promise<void> }>();
   private chain: Promise<void> = Promise.resolve();
   private timer?: NodeJS.Timeout;
@@ -225,7 +230,12 @@ export class BusHost {
         if (want.has(id)) continue;
         sub.unsubscribe();
         this.serving.delete(id);
-        this.events.delete(id); // the loop stops at the next message; the durable consumer stays (deliveries wait)
+        this.events.delete(id);
+        // End the live pull NOW: waiting for a next message that may never come leaks the consumer's
+        // heartbeat monitor forever (a live interval keeps `node --test` processes from ever exiting).
+        // The durable consumer stays server-side: deliveries queue while the plugin is disabled.
+        this.eventMsgs.get(id)?.stop();
+        this.eventMsgs.delete(id);
         await this.post('/v1/bus/plugins/unregister', { plugin: id }).catch(() => {});
       }
     }
@@ -256,7 +266,7 @@ export class BusHost {
    * or a nak means redelivery, the effect ledger dedupes). A plugin that is disabled or has no handler acks
    * without acting: the delivery is consumed, there is simply no effect (never a redelivery loop). */
   private serveEvents(id: string, service?: (env: BusEnvelope) => Promise<void>) {
-    if (this.events.has(id)) return;
+    if (this.events.has(id) || this.closing) return;
     this.events.set(id, (async () => {
       const jsm = await this.js.jetstreamManager(false); // false: no $JS.API.INFO ping (api-host has consumer rights only)
       try { await jsm.consumers.info(EVENTS_STREAM, id); }
@@ -268,12 +278,20 @@ export class BusHost {
       }
       const consumer = await this.js.consumers.get(EVENTS_STREAM, id);
       const messages = await consumer.consume();
+      // close() may have run while the consume was being set up: stop it immediately or its heartbeat
+      // monitor leaks forever (a live interval keeps `node --test` processes from ever exiting).
+      if (this.closing) { messages.stop(); return; }
       this.eventMsgs.set(id, messages);
-      for await (const m of messages) {
-        if (!this.events.has(id)) { messages.stop(); break; }
-        await this.deliverEvent(id, m, service).catch((e) => { this.log({ warn: 'event delivery failed, redelivery scheduled', plugin: id, error: String(e) }); m.nak(5_000); }); // nats.js nak() takes milliseconds
+      try {
+        for await (const m of messages) {
+          if (!this.events.has(id) || this.closing) break;
+          await this.deliverEvent(id, m, service).catch((e) => { this.log({ warn: 'event delivery failed, redelivery scheduled', plugin: id, error: String(e) }); m.nak(5_000); }); // nats.js nak() takes milliseconds
+        }
+      } finally {
+        messages.stop(); // kill the heartbeat monitor on ANY exit (error, close, desync), not just on close()
+        this.eventMsgs.delete(id);
       }
-    })().catch((e) => { this.events.delete(id); this.log({ warn: 'event consumer stopped', plugin: id, error: String(e) }); }));
+    })().catch((e) => { this.events.delete(id); if (!this.closing) this.log({ warn: 'event consumer stopped', plugin: id, error: String(e) }); }));
   }
 
   private async deliverEvent(id: string, m: JsMsg, service?: (env: BusEnvelope) => Promise<void>): Promise<void> {
@@ -329,10 +347,14 @@ export class BusHost {
       msg.respond(jc.encode({ from: id, id: env.id, data: result ?? null }));
       return;
     }
+    // A slot-targeted call (callSlot) wraps its payload: unwrap it here so the handler sees the original
+    // payload and only the plugin chosen for THAT slot answers (shared hook names across slot families).
+    const wrap = env.payload && typeof env.payload === 'object' && '__slot' in (env.payload as Record<string, unknown>) ? (env.payload as { __slot: string; __payload: unknown }) : undefined;
+    const payload = wrap ? wrap.__payload : env.payload;
     if (BUS_CONTROL_KINDS.has(env.kind)) {
       // Single responder: only the plugin chosen for the slot answers; the others say not-concerned (neither an
       // answer nor a silence). A faulted replacement refuses: the base is never asked in its place (callSlot rule).
-      const role = registry.blockingResponder(tenant, id, env.kind);
+      const role = registry.blockingResponder(tenant, id, env.kind, wrap?.__slot);
       if (role === 'not-concerned') { msg.respond(jc.encode({ from: id, id: env.id, not_concerned: true })); return; }
       if (role === 'refuse') { reply(undefined, 'deny'); return; } // fault: a deny WITHOUT payload - the caller reads it as an infrastructure refusal, not a plugin denial
     }
@@ -344,7 +366,7 @@ export class BusHost {
     const ctx: PluginContext = { tenant, settings };
     let result: any;
     try {
-      result = await handlerDeadline(Promise.resolve().then(() => handler(env.payload, ctx)), 1500);
+      result = await handlerDeadline(Promise.resolve().then(() => handler(payload, ctx)), 1500);
     } catch (e) {
       // Step 3 cleanup: record the fault (persisted, audited, blockingResponder refuses) and stay silent so a
       // mandatory control denies - the base is never asked in its place, no in-process fallback.
@@ -359,12 +381,16 @@ export class BusHost {
 
   /** Stops the host (tests and shutdown): no more deliveries, no more re-pushes. */
   async close() {
+    this.closing = true; // first: in-flight serveEvents setups stop their fresh consumer instead of leaking it
     if (this.timer) clearInterval(this.timer);
     for (const s of this.serving.values()) s.unsubscribe();
     for (const m of this.eventMsgs.values()) m.stop();
+    const pending = [...this.events.values()];
     this.events.clear();
     this.eventMsgs.clear();
     await this.nc.close();
+    // Let in-flight consumer setups finish: each stops its fresh consumer at the `closing` check above.
+    await Promise.allSettled(pending);
   }
 
   /** The registry's bridge: routes only the platform async kinds this host declared. */

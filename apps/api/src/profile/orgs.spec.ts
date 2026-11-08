@@ -28,7 +28,7 @@ describe('organizations plugin: CRUD and assignments by an administrator, read-o
 
   it('does not exist while the plugin is off, and needs the administrator capability', async () => {
     assert.equal((await api().get(u('organizations')).set(adm)).status, 404);
-    await reg.install(T, 'organizations', {}); await reg.enable(T, 'organizations', {});
+    await reg.install(T, 'organizations', {}); await reg.enable(T, 'organizations', { uiComponents: true });
     assert.equal((await api().get(u('organizations'))).status, 403);
     assert.equal((await api().post(u('organizations')).send({ id: 'x', name: 'X' })).status, 403);
     assert.equal((await api().get(u('organizations')).set(adm)).status, 200);

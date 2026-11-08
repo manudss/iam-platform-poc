@@ -1,0 +1,14 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "notify-log",
+  "version": "1.0.0",
+  "name": "Notifications to the log (base)",
+  "publisher": "iam-platform",
+  "kinds": ["notifier"],
+  "base": true,
+  "provides": ["notify.default"],
+  "hooks": [{ "name": "notify.send", "mode": "async" }, { "name": "notify.capability", "mode": "blocking" }],
+  "settings": [{ "key": "prefix", "type": "string", "label": "Log prefix", "default": "notify", "group": "General" }],
+  "entrypoints": { "handlers": "handlers.mjs" },
+  "security": { "signed": true }
+}

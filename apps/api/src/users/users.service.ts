@@ -1,4 +1,7 @@
 import { currentBranch, workspaceMode } from '../workspace/context.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { ModuleRef } from '@nestjs/core';
 import { Injectable, BadRequestException, ConflictException, NotFoundException, Optional } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
@@ -9,7 +12,14 @@ import { dirname } from 'node:path';
 /** Profiles are business data on Dolt main. Password hashes NEVER enter Dolt or SQL, including history. */
 @Injectable()
 export class UsersService {
-  constructor(private readonly v: VersioningService, @Optional() private readonly events?: ApplicationBus) {}
+  constructor(private readonly v: VersioningService, @Optional() private readonly modules?: ModuleRef, @Optional() private readonly events?: ApplicationBus) {}
+  /** Lazy registry lookup (ModuleRef, no import cycle with PluginsV1Module). Optional only so bare `new UsersService(v)`
+   * in low-level specs still works; saving a user without a registry refuses loudly. */
+  private async registry(write = false): Promise<PluginRegistry> {
+    if (!this.modules) throw new Error('directory.default slot requires the plugin registry (UsersService was built without ModuleRef)');
+    if (!workspaceMode()) return this.modules.get(PluginRegistry, { strict: false });
+    return this.modules.get(BranchRegistries, { strict: false }).get(currentBranch(write));
+  }
   private ready?: Promise<void>;
   async onModuleInit() { if (workspaceMode()) await this.init(); }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
@@ -50,13 +60,10 @@ export class UsersService {
     const creds = await this.credentials();
     return (r as Record<string, unknown>[]).map(x => ({ ...x, id: String(x.id), credential_revision: x.credential_revision, login_enabled: !!x.login_enabled, hasCredential: !!creds[String(x.credential_revision)] }));
   }); }
-  private validate(b: Record<string, unknown>, create: boolean) {
-    if (create && (typeof b.id !== 'string' || !/^[a-z0-9-]{1,32}$/.test(b.id))) throw new BadRequestException('id: lowercase letters, digits, hyphens; max 32');
-    for (const [k, max] of [['display_name',80], ['department',40], ['manager_id',32], ['email',254]] as const) if (b[k] !== undefined && b[k] !== null && (typeof b[k] !== 'string' || (b[k] as string).length > max)) throw new BadRequestException(`invalid ${k}`);
-    if (typeof b.email === 'string' && b.email !== '' && !/^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}$/.test(b.email)) throw new BadRequestException('invalid email address');
-    if (b.login_enabled !== undefined && typeof b.login_enabled !== 'boolean') throw new BadRequestException('login_enabled must be boolean');
-    if ((create || b.password !== undefined) && (typeof b.password !== 'string' || b.password.length < 12 || b.password.length > 128)) throw new BadRequestException('password: 12 to 128 characters');
-    if (Object.keys(b).some(k => !['id','display_name','department','manager_id','email','login_enabled','password'].includes(k))) throw new BadRequestException('unknown user field');
+  /** The validation rules are answered by the directory.default slot (plugins/directory/users.mjs); storage stays here. */
+  private async validate(tenant: string, b: Record<string, unknown>, create: boolean) {
+    const r = (await (await this.registry(true)).callSlot<{ valid: boolean; errors?: string[] }>(tenant, 'directory.default', 'directory.user.validate', { body: b, create })).result;
+    if (!r.valid) throw new BadRequestException(r.errors?.join('; ') ?? 'invalid user');
   }
   /** `pre`: a credential hashed earlier (sign-up approval). The plain password is never kept. */
   /** DEMO SEED ONLY (called at start-up with IAM_DEMO_DATA_SEED=1): creates a FICTIONAL account on main when it does not exist. Never overwrites. */
@@ -71,7 +78,7 @@ export class UsersService {
     }));
   }
   async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo') {
-    const branch = currentBranch(true); this.validate(pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
+    const branch = currentBranch(true); await this.validate(tenant, pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {
       const [rows] = await c.query('select * from identities where id=?', [id]); const prev = (rows as Record<string, unknown>[])[0];
       if (create && prev) throw new ConflictException('user already exists'); if (!create && !prev) throw new NotFoundException('unknown user');

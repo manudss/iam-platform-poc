@@ -1,0 +1,38 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "policy-studio",
+  "version": "0.1.0",
+  "name": "Policy studio (Cedar rules)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "ui"
+  ],
+  "description": "View the access rules (Cedar) the core decides with: names, effect, plain-language reading, and how often recent decisions used each. Read-only for now. While disabled, the Policies menu is hidden and every /policies endpoint answers 404.",
+  "hooks": [],
+  "settings": [],
+  "screens": [
+    {
+      "id": "policies",
+      "title": "Policies",
+      "area": "admin",
+      "render": "schema"
+    }
+  ],
+  "menu": [
+    {
+      "id": "policies",
+      "title": "Policies",
+      "area": "admin",
+      "group": "Access (IAM)",
+      "icon": "§",
+      "order": 50,
+      "path": "/policies"
+    }
+  ],
+  "security": {
+    "signed": true
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  }
+}

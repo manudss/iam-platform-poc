@@ -2,10 +2,10 @@ import { Injectable, Optional } from '@nestjs/common';
 import { ApplicationBus } from '../../events/application-bus.service.js';
 import { VersioningService } from '../../versioning/versioning.service.js';
 import { UsersService } from '../../users/users.service.js';
-import { PluginRegistry } from './registry.js';
+import { PluginImpl, PluginRegistry } from './registry.js';
 import { BusHost, BusHostRef } from './bus-host.js';
 import { DoltPluginStore } from './dolt-stores.js';
-import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo, hrAttributes, organizations, workflowsIga, appConnector, policyStudio, oidcProvider } from './builtin/index.js';
+import { authPassword, shippedPlugins } from './builtin/index.js';
 /** Separate registries per branch. Authentication always asks for main, never request's working branch. */
 @Injectable()
 export class BranchRegistries {
@@ -27,9 +27,10 @@ export class BranchRegistries {
   }
   private async create(ref: string) {
     const ds=new DoltPluginStore(this.v,ref);
-    const base={...authPassword,handlers:{'auth.authenticate':async(p:any)=>(await this.users.authenticate(p.tenant,p.subject,p.credential.password))?{outcome:'allow',subject:p.subject,methods:['pwd']}:{outcome:'deny',reason:'bad-credentials'}}};
+    const base={...authPassword,handlers:{...authPassword.handlers,'auth.authenticate':async(p:any)=>(await this.users.authenticate(p.tenant,p.subject,p.credential.password))?{outcome:'allow',subject:p.subject,methods:['pwd']}:{outcome:'deny',reason:'bad-credentials'}}};
     const r=new PluginRegistry(ds,ds,e=>console.log('[plugins]',JSON.stringify({...e,branch:ref})),ds);
-    for(const p of [base,notifyLog,authPasswordLockout(new Map(),base),orgManager,riskGeo,hrAttributes,organizations,workflowsIga,appConnector,policyStudio,oidcProvider])r.register(p);
+    // The one shipped list (P1: catalogue partagé) - same set as the main registry, base override first.
+    for(const p of [base,...shippedPlugins().slice(1)])r.register(p);
     await r.load();
     this.resolved.set(ref,r); // resolved BEFORE any host sync: the host reads only finished registries
     // Step 3 (decision 7): every branch shares the one bus. The host resolves each delivery against the registry
@@ -53,5 +54,12 @@ export class BranchRegistries {
       if(host)r.setBus(host.bridge(),ref);
     }
     return r;
+  }
+  /** Re-derives the cached inventories of every built registry (P1 cache): the admin refresh path calls this
+   * together with the shared catalogue invalidation. */
+  invalidateInventoriesEverywhere() { for (const reg of this.resolved.values()) reg.invalidateInventories(); }
+  /** Registers an archive-imported plugin into every already-built registry. Branch registries built LATER see it after a restart (they register the shipped list) - the import response says so. Only the duplicate case is skipped; any other registration error aborts the import (P0-7: errors are not absorbed). */
+  registerEverywhere(impl: PluginImpl) {
+    for (const reg of this.resolved.values()) if (!reg.impl(impl.manifest.id)) reg.register(impl);
   }
 }

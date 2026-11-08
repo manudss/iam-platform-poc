@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
 import { branchContext } from '../workspace/context.js';
 import type { Request, Response, NextFunction } from 'express';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
@@ -75,6 +76,10 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     app.use((req: Request, _res: Response, next: NextFunction) => branchContext.run({ branch: typeof req.headers['x-iam-branch'] === 'string' ? req.headers['x-iam-branch'] : undefined }, next));
     await app.listen(13171);
     adminToken = await login('demo-alice'); bobToken = await login('demo-bob');
+    // Step 3: the MCP tool surface is served by the plugin on the mcp.gateway slot - enable it on main
+    // (sessions cut their branch from main at creation, inheriting the plugin state).
+    const reg = app.get(PluginRegistry);
+    await reg.install('acme-demo', 'mcp-gateway', {}); await reg.enable('acme-demo', 'mcp-gateway', {});
   });
   after(async () => { await app?.close(); core?.kill(); dolt?.kill(); await sleep(800); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
@@ -234,7 +239,12 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.equal((await callTool(secret, 'install_plugin', { id: 'no-such-plugin' })).result?.isError, true);
     const inst = await callTool(secret, 'install_plugin', { id: 'organizations' });
     assert.notEqual(inst.result?.isError, true, textOf(inst));
-    assert.notEqual((await callTool(secret, 'set_plugin_enabled', { id: 'organizations', enabled: true })).result?.isError, true);
+    // organizations declares a packaged component screen: enabling it takes the uiComponents grant, which is console-only
+    // by design (mcp-gateway's set_plugin_enabled never grants sensitive grants) — the MCP enable is refused fail-closed...
+    assert.equal((await callTool(secret, 'set_plugin_enabled', { id: 'organizations', enabled: true })).result?.isError, true);
+    // ...and the human path grants it explicitly through the admin API, on the same working branch.
+    const en = await post(`${API}/tenants/acme-demo/plugins/organizations/enable`, { grants: { uiComponents: true } }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN, 'x-iam-branch': branch });
+    assert.equal(en.status, 201);
     assert.equal((await callTool(secret, 'configure_plugin', { id: 'organizations', settings: { nope: 1 } })).result?.isError, true); // manifest has no such setting
     const onMain = await post(`${API}/tenants/acme-demo/versioning/sql`, { ref: 'main', sql: "select count(*) n from plugin_config where plugin='organizations'" }, { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
     assert.equal(Number(((await onMain.json()) as { rows: { n: number }[] }).rows[0].n), 0); // main untouched

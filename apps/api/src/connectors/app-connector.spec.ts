@@ -96,7 +96,7 @@ describe('app-connector plugin: registry of applications on the admin API', () =
 describe('app-connector events', () => {
   it('emits app.registered, app.updated and app.removed only after a successful write', async () => {
     const events = new ApplicationBus(), seen: { type: string; payload: Record<string, string> }[] = []; events.attachBus((e) => { seen.push(e); }, () => {});
-    const svc = new AppConnectorService({ pluginActive: async () => true } as never, new MemoryAppConnectorStore(), events);
+    const svc = new AppConnectorService({ pluginActive: async () => true } as never, new MemoryAppConnectorStore(), { resolve: () => ({ manifest: { id: 'app-connector' } }) } as never, undefined, events);
     await svc.create(T, 'demo-alice', oidc);
     await assert.rejects(svc.create(T, 'demo-alice', oidc), /already exists/);
     await svc.update(T, 'demo-alice', 'wiki', { description: 'x' });

@@ -1,0 +1,38 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "organizations",
+  "version": "1.0.0",
+  "name": "Organizations (example)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "profile"
+  ],
+  "hooks": [],
+  "settings": [],
+  "menu": [
+    {
+      "id": "organizations",
+      "title": "Organizations",
+      "area": "admin",
+      "group": "Access (IAM)",
+      "icon": "⌂",
+      "order": 30,
+      "path": "/screens/organizations/orgs"
+    }
+  ],
+  "security": {
+    "signed": true
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "screens": [
+    {
+      "id": "orgs",
+      "title": "Organizations",
+      "area": "admin",
+      "render": "component",
+      "component": "screens/orgs.mjs"
+    }
+  ]
+}

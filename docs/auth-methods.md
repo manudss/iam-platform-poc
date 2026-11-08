@@ -26,7 +26,7 @@ Status: working POC slice. Code: `apps/api/src/authn/`, gate protocol in `core/c
 | --- | --- | --- |
 | Password | knowledge | real, through the base password slot (lockout still applies) |
 | Authenticator app (TOTP, RFC 6238) | possession | real verification (tested on RFC vectors, a used time step is refused again); demo enrollment by an admin |
-| One-time code by e-mail | possession | **simulated** (demo outbox) by default. **Real** only when the method's delivery is `SMTP` and the server has `IAM_SMTP_*` set; then it counts as a verified possession factor |
+| One-time code by e-mail | possession | **simulated** (demo outbox) by default. **Real** only when the method's delivery is `SMTP` and the notifier chosen on the `notify.default` slot really delivers (the shipped `notify-resend` needs `RESEND_API_KEY` on the server); then it counts as a verified possession factor |
 | PIN on a shuffled keypad | knowledge | real verification of a whole PIN (scrypt hash) |
 | Passkey, recovery codes, external IdP | | catalogue entries only, cannot be created |
 
@@ -44,9 +44,9 @@ Requirement from the product owner: a numeric PIN typed with on-screen buttons s
 
 - The address comes from the **user profile** (new `email` column of `identities`, edited on the Users page, versioned on the working branch and live after Apply). The demo enrollment address is only a fallback.
 - First step: the page asks for the user name and answers the same way whether the account exists or not; an unknown account gets the page and no message. Later step: the already identified account's address is used, nothing is asked again.
-- Real delivery is **configured only by server environment**, never in the console or the database: `IAM_SMTP_HOST`, `IAM_SMTP_FROM` (required, no default sender), `IAM_SMTP_PORT` (587), `IAM_SMTP_SECURE` (`1` for implicit TLS), `IAM_SMTP_USER`, `IAM_SMTP_PASS`. No provider, sending domain or sender identity is chosen by the code. Until they are set, a method set to `SMTP` stays simulated and says so.
+- Real delivery goes **only through the `notify.default` slot** (P1-E): there is no mail adapter in the core anymore. The notifier plugin chosen on the slot sends the code; the shipped `notify-resend` does it through the Resend HTTPS API, key in the `RESEND_API_KEY` server environment variable only (never in settings or the database), sender from the plugin's `from` setting (`lyam@dss.name` by default). Before sending, the flow asks the slot's `notify.capability`: real delivery or explicit simulation. Until a real notifier is active, a method set to `SMTP` stays simulated and says so.
 - A delivery failure is logged on the server (without the code) and never shown on the page.
-- Tested: message construction and recipient filtering through the mail transport, routing to the profile address, claims. **Not tested against a real SMTP server.**
+- Tested: slot-chosen delivery end to end (a fake notifier on the slot receives the code through the bus), the explicit unavailability answers of `notify-log`/`notify-resend`, routing to the profile address, claims. **Not tested against the real Resend API.**
 
 ## Sign-in flow
 

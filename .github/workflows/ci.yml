@@ -73,7 +73,14 @@ jobs:
         run: |
           for v in DOLT_BIN NATS_SERVER_BIN BAO_BIN TEMPORAL_BIN; do p="${!v}"; test -x "$p" && echo "$v=$p" || { echo "$v missing"; exit 1; }; done
           test -x "$PG_BIN/postgres"
-      - run: npm ci && npm test
+      - name: Plugin dev signing keys (explicit dev setup, P0-3)
+        run: node scripts/plugin-dev-setup.mjs
+      - name: Install the API dependencies (first - the host-provided plugin packages symlink into them)
+        run: npm ci
+        working-directory: apps/api
+      - name: Plugin shared dependencies (step 4 - the controlled install the plugins resolve against)
+        run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
+      - run: npm test
         working-directory: apps/api
       - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
         env:
@@ -111,13 +118,19 @@ jobs:
             echo "port $p open=$ok"; [ $ok = 1 ] || { docker compose -f infra/docker-compose.yml ps; docker compose -f infra/docker-compose.yml logs --tail=100; exit 1; }
           done
           sleep 15
+      - name: Plugin dev signing keys (explicit dev setup, P0-3)
+        run: node scripts/plugin-dev-setup.mjs
       - name: Build the Rust core (runs as a local process next to the containers, gRPC enabled by the test)
         run: cargo build -p iam-core --locked
         working-directory: core
+      - name: Install and build the API (first - the host-provided plugin packages symlink into its node_modules)
+        working-directory: apps/api
+        run: npm ci && npm run build
+      - name: Plugin shared dependencies (step 4)
+        run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
       - name: Run compose end-to-end suites (container checks, then the application path on the containers)
         working-directory: apps/api
         run: |
-          npm ci && npm run build
           COMPOSE_STACK=1 node --test dist/compose.e2e.spec.js
           COMPOSE_STACK=1 node --test dist/compose-app.e2e.spec.js
       - name: Logs on failure
@@ -126,3 +139,35 @@ jobs:
       - name: Stop
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
+  demo-docker:
+    # Step 7: every PR proves the all-in-one demo image still builds and boots (docs/demo.md).
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the demo image (build context = repository root)
+        run: docker build -f demo/Dockerfile -t iam-demo:ci .
+      - name: Boot it and wait for the API health check
+        run: |
+          docker run -d --name iam-demo-ci -p 8080:8080 iam-demo:ci
+          ok=0; for i in $(seq 1 90); do code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true); [ "$code" = 200 ] && { ok=1; break; }; sleep 2; done
+          echo "healthz ok=$ok"; [ $ok = 1 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          # /healthz is the EDGE answering; the API must also be alive behind it (proxy /api -> :3000).
+          ok=0; for i in $(seq 1 30); do code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health || true); [ "$code" = 200 ] && { ok=1; break; }; sleep 2; done
+          echo "api health ok=$ok"; [ $ok = 1 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          # A healthy API is still not enough: the sign-in must work through the plugin bus. The Render preview
+          # once booted with entry answering but every authenticate failing behind the gate budgets. Start a
+          # chain through the edge, then complete a full demo login (fictional account, docs/demo.md).
+          CHAL=$(printf ci-demo-challenge | sha256sum | cut -d' ' -f1 | xxd -r -p | base64 | tr '+/' '-_' | tr -d '=')
+          code=$(curl -s -o /tmp/entry.html -w '%{http_code}' "http://127.0.0.1:8080/core/authorize?client_id=demo-web&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback&response_type=code&state=ci&code_challenge=$CHAL&code_challenge_method=S256&chain=password-only")
+          echo "chain start http=$code"; [ "$code" = 200 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          body=$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:8080/core/authorize -H 'content-type: application/json' -d "{\"client_id\":\"demo-web\",\"redirect_uri\":\"http://localhost:8080/callback\",\"code_challenge\":\"$CHAL\",\"username\":\"demo-alice\",\"password\":\"demo-only-not-a-secret\"}")
+          echo "login answer: $body"
+          [ "$(echo "$body" | tail -1)" = 200 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
+          echo "$body" | head -n -1 | grep -q '"code"' || { docker logs iam-demo-ci --tail=150; exit 1; }
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs iam-demo-ci --tail=150
+      - name: Stop
+        if: always()
+        run: docker rm -f iam-demo-ci || true

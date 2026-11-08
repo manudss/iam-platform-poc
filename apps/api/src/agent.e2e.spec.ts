@@ -109,7 +109,9 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
     const t = await login();
     const d = await mk(t, { tools: ['read-report'] });
     assert.equal((await call(d.delegation, 'approve-payment')).status, 403);
-    assert.deepEqual([(await audit(t))[0].allow, (await audit(t))[0].reasons], [false, ['tool-not-in-allowlist']]);
+    // the allowlist denial is audited through the durable bus: wait for the matching row instead of reading [0]
+    const denied = await auditWait(t, (x) => x.reasons.includes('tool-not-in-allowlist'));
+    assert.deepEqual([denied.allow, denied.reasons], [false, ['tool-not-in-allowlist']]);
     assert.equal((await call(d.delegation, 'delete-everything')).status, 403);
     assert.equal((await call(d.delegation, { $ne: 1 })).status, 403);
     assert.equal((await call(undefined, 'read-report')).status, 401);
@@ -142,7 +144,7 @@ describe('bounded agent call demo (real core + API; tools are SIMULATED)', { ski
     const t = await login(); const d = await mk(t);
     core.kill(); await sleep(400);
     assert.equal((await call(d.delegation, 'approve-payment')).status, 502);
-    const e = (await audit(t))[0];
+    const e = await auditWait(t, (x) => x.source === 'agent');
     assert.deepEqual([e.source, e.allow, e.reasons], ['agent', false, ['core-unreachable']]);
   });
 });

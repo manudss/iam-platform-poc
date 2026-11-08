@@ -7,6 +7,7 @@ import { validateFieldDecls } from '../../profile/fields.js';
  */
 export const PLUGIN_KINDS = [
   'auth-method', // how a user proves who they are (password, TOTP, passkey, federation)
+  'directory', // manages identities, profiles, roles and sign-up (decision 2: base plugin, replaceable by slot; storage stays core)
   'profile', // enriches the user profile (attributes, derived claims)
   'notifier', // sends notifications (mail, chat, webhook)
   'workflow', // approval / certification steps in IGA flows
@@ -49,6 +50,9 @@ export interface Migration {
   id: string;
   /** Statements run in order inside one transaction by the installer. Tables must be prefixed `plg_<pluginId>_`. */
   sql: string[];
+  /** Inverse statements run in reverse order when the LAST tenant uninstalls the plugin (plan D: destructive inverses).
+   * A down may drop the plugin's own tables (only uninstall may drop). Uninstall refuses an applied migration without one. */
+  down?: string[];
 }
 export interface SeedRow {
   table: string;
@@ -83,8 +87,45 @@ export interface SubscribeDecl {
   group?: string;
 }
 
+export interface HttpRouteDecl {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  /** Route path under `/plugins/:id/`, for example `/apps` or `/apps/:appId`. */
+  path: string;
+  /** Key of the handler in the plugin's handlers module; defaults to `http:<METHOD> <path>`. */
+  handler?: string;
+  /** `user` (signed-in, default), `admin` (admin capability) or `public` (sign-in pages and protocol endpoints). */
+  auth?: 'user' | 'admin' | 'public';
+}
+export interface MenuEntry {
+  id: string;
+  title: string;
+  /** Console area: the administration menu or the self-service space. */
+  area: 'admin' | 'self-service';
+  /** Sidebar group the entry joins (created on demand). */
+  group: string;
+  icon?: string;
+  order?: number;
+  /** Console route the entry opens, for example `/applications`. */
+  path: string;
+}
+/** v3: a plugin of kind `auth-method` that provides a sign-in method TYPE (slot `auth.<id>`).
+ * The chains and their levels stay in the core (decision 1); the method behaviour lives in the plugin's
+ * handlers (`auth.prepare`, `auth.verify`, `auth.interact`, `auth.verification`). */
+export interface AuthMethodDecl {
+  name: string;
+  description: string;
+  /** Category of factor the method DECLARES. A classification, not a measurement. */
+  factor: 'knowledge' | 'possession' | 'inherence' | 'other';
+  amr: string;
+  maturity: 'implemented' | 'catalogue';
+  suggestedLevel: number;
+  provisioning: 'directory' | 'admin-demo' | 'none';
+  /** The step runs on the same page as the username (first factor inline). */
+  inlineWithUsername?: boolean;
+}
+
 export interface PluginManifest {
-  apiVersion: 'plugin/v1';
+  apiVersion: 'plugin/v1' | 'plugin/v3';
   id: string; // lowercase-kebab
   version: string; // semver
   name: string;
@@ -110,6 +151,16 @@ export interface PluginManifest {
   subscribes?: SubscribeDecl[];
   /** v2: custom event kinds (namespace `plg.<id>.*`) this plugin may emit on the bus. The core checks this grant before accepting an emission. */
   emits?: string[];
+  /** v3 (folder plugins): where the plugin's code lives inside its folder. */
+  entrypoints?: { handlers?: string };
+  /** v3: HTTP routes mounted under `/plugins/:id/`. Each needs a handler; public routes are for sign-in and protocol endpoints only. */
+  httpRoutes?: HttpRouteDecl[];
+  /** v3: console menu entries. An entry disappears with its plugin (disabled = out of the menu, routes refuse). */
+  menu?: MenuEntry[];
+  /** v3: the sign-in method type this plugin provides (kind `auth-method` with a slot `auth.<id>`). */
+  authMethod?: AuthMethodDecl;
+  /** v3: package security. `signed` requires a valid signature.json verified at load against the trust store. */
+  security?: { signed?: boolean };
 }
 
 const ID = /^[a-z][a-z0-9-]{1,48}$/;
@@ -119,7 +170,7 @@ const FIELD_TYPES: FieldType[] = ['string', 'text', 'number', 'boolean', 'select
 /** Returns the list of problems; an empty list means the manifest is well formed. */
 export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<string, HookMode[]>): string[] {
   const errs: string[] = [];
-  if (m.apiVersion !== 'plugin/v1') errs.push('apiVersion must be plugin/v1');
+  if (m.apiVersion !== 'plugin/v1' && m.apiVersion !== 'plugin/v3') errs.push('apiVersion must be plugin/v1 or plugin/v3');
   if (!ID.test(m.id ?? '')) errs.push('id must be lowercase kebab-case');
   if (!SEMVER.test(m.version ?? '')) errs.push('version must be x.y.z');
   if (!m.name) errs.push('name is required');
@@ -135,6 +186,16 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     seenHooks.add(h.name);
   }
   const seen = new Set<string>();
+  if (m.authMethod) {
+    const a = m.authMethod;
+    if (!a.name) errs.push('authMethod.name is required');
+    if (!a.description) errs.push('authMethod.description is required');
+    if (!['knowledge', 'possession', 'inherence', 'other'].includes(a.factor)) errs.push(`authMethod.factor: unknown factor ${a.factor}`);
+    if (!a.amr) errs.push('authMethod.amr is required');
+    if (!['implemented', 'catalogue'].includes(a.maturity)) errs.push(`authMethod.maturity must be implemented or catalogue`);
+    if (!Number.isInteger(a.suggestedLevel) || a.suggestedLevel < 1 || a.suggestedLevel > 10) errs.push('authMethod.suggestedLevel must be a whole number from 1 to 10');
+    if (!['directory', 'admin-demo', 'none'].includes(a.provisioning)) errs.push(`authMethod.provisioning: unknown value ${a.provisioning}`);
+  }
   for (const f of m.settings ?? []) {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(f.key ?? '')) errs.push(`setting key ${f.key} is invalid`);
     if (seen.has(f.key)) errs.push(`setting ${f.key} declared twice`);
@@ -146,6 +207,20 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
       try { new RegExp(f.pattern); } catch { errs.push(`setting ${f.key}: invalid pattern`); }
     }
   }
+  const screenIds = new Set<string>();
+  for (const sc of m.screens ?? []) {
+    if (!ID.test(sc.id ?? '')) errs.push(`screen ${sc.id ?? '?'}: id must be lowercase kebab-case`);
+    if (screenIds.has(sc.id)) errs.push(`screen ${sc.id} declared twice`);
+    screenIds.add(sc.id);
+    if (!sc.title) errs.push(`screen ${sc.id}: title is required`);
+    if (!['admin', 'self-service'].includes(sc.area)) errs.push(`screen ${sc.id}: unknown area ${sc.area}`);
+    // schema without schemaRef still means a console-native page while the generic schema renderer lands.
+    if (sc.render === 'component') {
+      if (!sc.component) errs.push(`screen ${sc.id}: render 'component' needs component (a packaged .mjs asset served by the assets route)`);
+      else if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*\.mjs$/.test(sc.component) || sc.component.split('/').some((seg) => !seg || seg === '.' || seg === '..')) errs.push(`screen ${sc.id}: component must be a relative .mjs path inside the plugin folder`);
+    }
+    if (!['schema', 'component'].includes(sc.render)) errs.push(`screen ${sc.id}: unknown render ${sc.render}`);
+  }
   const prefix = `plg_${(m.id ?? '').replace(/-/g, '_')}_`;
   const ids = new Set<string>();
   for (const mig of m.install?.migrations ?? []) {
@@ -156,7 +231,13 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
       let x: RegExpExecArray | null;
       while ((x = t.exec(s))) if (!x[1].toLowerCase().startsWith(prefix)) errs.push(`migration ${mig.id}: table ${x[1]} must start with ${prefix}`);
       if (/create\s+table/i.test(s) && !/\btenant\s+text\s+not\s+null\b/i.test(s)) errs.push(`migration ${mig.id}: every table needs a "tenant text not null" column (rows are isolated per tenant)`);
-      if (/\bdrop\s+table\b/i.test(s)) errs.push(`migration ${mig.id}: drop table is not allowed (uninstall keeps data)`);
+      if (/\bdrop\s+table\b/i.test(s)) errs.push(`migration ${mig.id}: drop table is not allowed in an up migration (declare the inverse in down)`);
+    }
+    for (const s of mig.down ?? []) {
+      const t = /(?:create|alter|drop)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?([a-z0-9_]+)/gi;
+      let x: RegExpExecArray | null;
+      while ((x = t.exec(s))) if (!x[1].toLowerCase().startsWith(prefix)) errs.push(`migration ${mig.id} inverse: table ${x[1]} must start with ${prefix}`);
+      if (/create\s+table/i.test(s)) errs.push(`migration ${mig.id} inverse: create table makes no sense in an inverse`);
     }
   }
   for (const s of m.install?.seed ?? []) if (!s.table.toLowerCase().startsWith(prefix)) errs.push(`seed table ${s.table} must start with ${prefix}`);
@@ -170,6 +251,29 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
   }
   for (const e of m.emits ?? []) {
     if (!e?.startsWith(ns)) errs.push(`emits: ${e} must be in the plugin's own namespace ${ns}*`);
+  }
+  if (m.entrypoints?.handlers !== undefined) {
+    const h = m.entrypoints.handlers;
+    if (typeof h !== 'string' || h.includes('..') || h.startsWith('/') || !h.endsWith('.mjs')) errs.push('entrypoints.handlers must be a relative .mjs path inside the plugin folder');
+  }
+  const seenRoutes = new Set<string>();
+  for (const r of m.httpRoutes ?? []) {
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method)) errs.push(`httpRoutes: unknown method ${r.method}`);
+    if (typeof r.path !== 'string' || !r.path.startsWith('/')) errs.push(`httpRoutes: path must start with /`);
+    if (r.handler !== undefined && !/^[a-zA-Z][a-zA-Z0-9:_/ -]*$/.test(r.handler)) errs.push(`httpRoutes: invalid handler name ${r.handler}`);
+    if (r.auth !== undefined && !['user', 'admin', 'public'].includes(r.auth)) errs.push(`httpRoutes: unknown auth ${r.auth}`);
+    const k = `${r.method} ${r.path}`;
+    if (seenRoutes.has(k)) errs.push(`httpRoutes: ${k} declared twice`);
+    seenRoutes.add(k);
+  }
+  const seenMenu = new Set<string>();
+  for (const e of m.menu ?? []) {
+    if (!e.id || !e.title) errs.push('menu: id and title are required');
+    if (e.area !== undefined && !['admin', 'self-service'].includes(e.area)) errs.push(`menu ${e.id}: unknown area ${e.area}`);
+    if (!e.group) errs.push(`menu ${e.id}: group is required`);
+    if (typeof e.path !== 'string' || !e.path.startsWith('/')) errs.push(`menu ${e.id}: path must start with /`);
+    if (seenMenu.has(e.id)) errs.push(`menu ${e.id} declared twice`);
+    seenMenu.add(e.id);
   }
   errs.push(...validateFieldDecls(m.id, m.profileFields));
   if (m.base && m.extends) errs.push('a base plugin cannot extend another plugin');

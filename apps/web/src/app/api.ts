@@ -25,7 +25,9 @@ export class ApiClient {
   private epoch = 0;
   branch = '';
 
-  constructor(private readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a), private readonly onUnauthorized: () => void = () => {}) {}
+  constructor(readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a), private readonly onUnauthorized: () => void = () => {}) {}
+  /** Packaged plugin screens call the API with the same session; the token stays in memory (never localStorage). */
+  get bearerToken() { return this.token; }
 
   get loggedIn() { return !!this.token; }
   /** Unverified claim used only to end the UI session early. The server still verifies every request. */
@@ -176,6 +178,8 @@ export class PluginAdminClient {
   save(id: string, values: Record<string, unknown>) { return this.admin('PUT', `/plugins/${id}/settings`, { values }); }
   enable(id: string, grants: GrantsInput) { return this.admin('POST', `/plugins/${id}/enable`, { grants }); }
   disable(id: string) { return this.admin('POST', `/plugins/${id}/disable`); }
+  /** Re-verify every shipped plugin and rebuild the catalogue + inventories (manual cache refresh). */
+  refresh() { return this.admin<{ verified: string[] }>('POST', '/plugins/refresh'); }
 }
 /** Which fields to show now: a field with visibleIf only shows when the referenced field has that value. */
 export function visibleFields(fields: FormField[], values: Record<string, unknown>) {

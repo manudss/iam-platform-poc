@@ -1,12 +1,16 @@
 import { Optional } from '@nestjs/common';
 import { BranchRegistries } from './branch-registries.js';
 import { currentBranch, workspaceMode } from '../../workspace/context.js';
-import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, NotFoundException, Param, Post, Put, Res, UseGuards } from '@nestjs/common';
+import { readFileSync, statSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { AuthGuard } from '../../auth/auth.guard.js';
 import { AdminGuard } from '../../auth/admin.guard.js';
 import { Grants, PluginError, PluginRegistry } from './registry.js';
+import { installArchive, loadInstalledPlugin, removeInstalledPlugin } from './archive.js';
+import { defaultPluginsDir, refreshPluginCatalogue } from './loader.js';
 
-const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503 };
+const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503, 'invalid-archive': 400, 'already-exists': 409, 'signature-invalid': 400 };
 function wrap<T>(f: () => Promise<T> | T): Promise<T> {
   return Promise.resolve().then(f).catch((e) => {
     if (e instanceof PluginError) throw new HttpException({ code: e.code, message: e.message }, STATUS[e.code] ?? 400);
@@ -32,7 +36,27 @@ export class PluginsAdminController {
 
   @Get() async list(@Param('tenant') t: string) { return { tenant: t, plugins: (await this.registry()).list(t) }; }
   @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
+  @Get('menu') async menu(@Param('tenant') t: string) { return { tenant: t, entries: (await this.registry()).menu(t) }; }
   @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
+
+  /** Packaged component screens (constat 4): the console import()s a screen's .mjs straight from the plugin's
+   * signed folder, so a screen's code ships with the plugin and disappears with it. Sign-in only (like the
+   * screens inventory); the plugin must be active for the tenant and the file must be a screen component the
+   * manifest declares, never an arbitrary package file (the server-side handlers stay private). */
+  @Get(':id/assets/{*path}')
+  async screenAsset(@Param('tenant') t: string, @Param('id') id: string, @Param('path') path: string[] | string, @Res() res: { type: (c: string) => { send: (b: unknown) => void } }) {
+    const tail = (Array.isArray(path) ? path.join('/') : (path ?? '')).replace(/^\/+/, '');
+    const reg = await this.registry();
+    const impl = reg.impl(id);
+    if (!impl) throw new NotFoundException(`unknown plugin ${id}`);
+    if (!reg.isActive(t, id)) throw new ForbiddenException(`plugin ${id} is not enabled on this branch`);
+    if (!impl.manifest.screens?.some((sc) => sc.render === 'component' && sc.component === tail)) throw new NotFoundException(`${tail} is not a screen component of plugin ${id}`);
+    const base = resolve(defaultPluginsDir(), id);
+    const file = resolve(base, tail);
+    if (!file.startsWith(base + sep)) throw new BadRequestException('assets stay inside the plugin folder');
+    try { if (!statSync(file).isFile()) throw 0; } catch { throw new NotFoundException(`no asset ${tail}`); }
+    res.type('text/javascript; charset=utf-8').send(readFileSync(file));
+  }
 
   @UseGuards(AdminGuard) @Post(':id/install')
   install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).install(t, id, grants(b)); return { installed: id }; }); }
@@ -46,6 +70,46 @@ export class PluginsAdminController {
   @UseGuards(AdminGuard) @Post(':id/enable')
   enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); return { enabled: id }; }); }
 
+  /** Plan step 8: imports a signed plugin archive (zip from scripts/plugin-pack.mjs --zip, base64 in { archive }).
+   * The package is validated, verified against the trust store (Ed25519, decision 3), written into the plugins
+   * folder and registered into the running registries. Per-tenant install/enable stays a separate granted step. */
+  @UseGuards(AdminGuard) @Post('import-archive')
+  importArchive(@Param('tenant') t: string, @Body() b: { archive?: unknown }) {
+    if (typeof b?.archive !== 'string' || !b.archive) throw new BadRequestException('archive: base64 zip from scripts/plugin-pack.mjs --zip');
+    let buf: Buffer;
+    try { buf = Buffer.from(b.archive, 'base64'); } catch { throw new BadRequestException('archive is not valid base64'); }
+    if (!buf.length) throw new BadRequestException('archive is empty');
+    return wrap(async () => {
+      const dir = defaultPluginsDir();
+      const manifest = installArchive(dir, buf);
+      // Atomic install (P0-7): if loading or registering the module fails, the installed folder is rolled back -
+      // an invalid module never leaves a final folder behind.
+      try {
+        const impl = loadInstalledPlugin(dir, manifest.id);
+        if (!this.reg.impl(manifest.id)) this.reg.register(impl);
+        this.branches?.registerEverywhere(impl);
+      } catch (e) {
+        removeInstalledPlugin(dir, manifest.id);
+        throw e;
+      }
+      // Invalidate the shared catalogue (P1): the new package is visible to every consumer (auth methods,
+      // menus, future branch registries) without a restart.
+      refreshPluginCatalogue();
+      return { imported: manifest.id, version: manifest.version, tenant: t, note: 'Registered in the running registries and the shared catalogue refreshed: new branch registries and the auth-method catalogue see it without a restart. Per-tenant install/enable stays a separate granted step.' };
+    });
+  }
+
+  /** Manual refresh of the shared plugin catalogue (P1, Emmanuel's refresh button backend): re-scans and
+   * re-verifies every package. Plugin-affecting actions (archive import, uninstall) already invalidate the
+   * catalogue; this endpoint is the admin's explicit path, used by the console's refresh button. */
+  @UseGuards(AdminGuard) @Post('refresh')
+  refresh(@Param('tenant') t: string) { return wrap(async () => { refreshPluginCatalogue(); this.reg.invalidateInventories(); this.branches?.invalidateInventoriesEverywhere(); return { refreshed: true, tenant: t }; }); }
+
   @UseGuards(AdminGuard) @Post(':id/disable')
   disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }
+
+  /** Plan D: destructive uninstall. The plugin must be disabled first; the tenant's rows go, and the down migrations
+   * drop the owned tables when no other tenant still has it installed. Refuses when an applied migration lacks an inverse. */
+  @UseGuards(AdminGuard) @Post(':id/uninstall')
+  uninstall(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).uninstall(t, id); return { uninstalled: id }; }); }
 }

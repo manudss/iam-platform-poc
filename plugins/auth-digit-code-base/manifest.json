@@ -1,0 +1,35 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-digit-code-base",
+  "version": "1.0.0",
+  "name": "PIN keypad slot (refusing base)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "base": true,
+  "provides": [
+    "auth.digit-code"
+  ],
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.interact",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

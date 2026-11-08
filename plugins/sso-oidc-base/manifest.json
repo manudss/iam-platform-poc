@@ -1,0 +1,22 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "sso-oidc-base",
+  "version": "1.0.0",
+  "name": "OIDC provider slot (refusing base)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "connector"
+  ],
+  "base": true,
+  "provides": [
+    "sso.oidc"
+  ],
+  "hooks": [],
+  "settings": [],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

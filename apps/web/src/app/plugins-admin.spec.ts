@@ -37,6 +37,16 @@ describe('PluginAdminClient', () => {
     expect(calls[1].url).toBe('/api/tenants/acme-demo/plugins/org-manager/settings'); expect(h(1)['x-api-admin-token']).toBe('admin-secret-token');
     expect(JSON.parse(calls[2].init.body as string)).toEqual({ grants: { hooks: ['x'] } });
   });
+  it('refresh() POSTs the manual cache-refresh endpoint with the admin token', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const f = (async (url: string, init: RequestInit) => { calls.push({ url, init }); return { ok: true, status: 200, json: async () => ({ verified: ['auth-password'] }) } as Response; }) as unknown as typeof fetch;
+    const c = new PluginAdminClient(new ApiClient('acme-demo', f));
+    c.adminToken = 'admin-secret-token';
+    await c.refresh();
+    expect(calls[0].url).toBe('/api/tenants/acme-demo/plugins/refresh');
+    expect(calls[0].init.method).toBe('POST');
+    expect((calls[0].init.headers as Record<string, string>)['x-api-admin-token']).toBe('admin-secret-token');
+  });
 });
 
 const settle = async (fx: { detectChanges(): void }) => { for (let i = 0; i < 3; i++) { await new Promise((r) => setTimeout(r, 5)); fx.detectChanges(); } };

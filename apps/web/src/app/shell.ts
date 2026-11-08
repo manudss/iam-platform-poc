@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
@@ -7,7 +7,7 @@ import { Session } from './session';
 import { SessionTimer } from './session-timer';
 import { ThemeSwitch } from './theme-switch';
 
-interface NavItem { path: string; label: string; icon: string }
+interface NavItem { path: string; label: string; icon: string; order?: number }
 interface NavGroup { title: string; items: NavItem[] }
 
 /** Administration layout: grouped sidebar, top bar with the signed-in identity, status bar and the page outlet. */
@@ -20,6 +20,9 @@ export class Shell {
   protected readonly more=signal(false);protected readonly manage=signal(false);protected readonly changes=signal<number|null>(null);
   protected dot(){const b=this.s.branch();return !b||b==='main'?'grey':b===this.personal()?'green':'orange';}
   protected async loadChanges(){const b=this.s.branch();if(!b||b==='main'||!this.isAdmin()){this.changes.set(null);return;}try{const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());if(r.status<400)this.changes.set(r.data?.diff?.rows?.total??r.data?.diff?.tables?.length??0);}catch{/* the badge is a hint; Review & Apply still reads the diff itself */}}
+  /** Menu entries declared by the tenant's active plugins (GET /plugins/menu): a screen joins the sidebar with its plugin and leaves with it. */
+  protected readonly pluginMenu=signal<{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]>([]);
+  protected async loadPluginMenu(){try{const r=await this.s.api.raw<{entries:{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]}>('GET','/plugins/menu',undefined,this.headers());if(r.status<400&&Array.isArray(r.data?.entries))this.pluginMenu.set(r.data.entries);}catch{/* the static console still works without it */}}
   protected openManage(){this.more.set(false);this.manage.set(!this.manage());}
   protected personal=signal('');protected renameTo='';
   /** Opens (or reuses) the signed-in user's own working branch so the console is ready to use on arrival. */
@@ -31,6 +34,7 @@ export class Shell {
     // Branch test: no personal branch, no workspace bar, no admin init; the app simply runs on the tested branch.
     if(this.s.testBranch()){if(!this.router.url.startsWith('/my-profile')&&!this.router.url.startsWith('/overview'))void this.router.navigateByUrl('/my-profile');return;}
     if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();void this.loadChanges();await this.s.refreshWorkflowsEnabled();}else if(!this.router.url.startsWith('/my-profile'))void this.router.navigateByUrl('/my-profile');
+    void this.loadPluginMenu();
   }
   /** Opens a sign-in test of the selected data branch in a new tab (docs/branch-test.md). The API issues the short-lived ticket. */
   protected testing=signal(false);
@@ -46,34 +50,45 @@ export class Shell {
   protected async select(){this.s.selectBranch(this.working);this.review.set(null);this.more.set(false);void this.loadChanges();this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
   protected async create(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();await v.createBranch(this.newBranch,'main');this.working=this.newBranch;this.newBranch='';await this.loadBranches();await this.select();this.manage.set(false);}catch(e){this.s.say((e as Error).message,'error');}}
   protected async prepareApply(){this.workingBusy.set(true);try{await this.loadBranches();const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());this.review.set(r.data);}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
-  protected async apply(){if(!confirm('Apply '+this.s.branch()+' into Dolt main? Its users, plugins and role permissions will become live.'))return;this.workingBusy.set(true);try{const head=this.branches().find(b=>b.name===this.s.branch())?.commit;const r=await this.s.api.raw<any>('POST','/workspace/apply',{confirm:true,expectedHead:head},this.headers());if(r.status>=400 || !r.data.applied)throw new Error(r.data.message??'Apply refused');this.review.set(null);this.s.branchEpoch.update(x=>x+1);this.s.say('Applied '+this.s.branch()+' into main: '+r.data.commit);await this.loadBranches();void this.loadChanges();}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
+  protected async apply(){if(!confirm('Apply '+this.s.branch()+' into Dolt main? Its users, plugins and role permissions will become live.'))return;this.workingBusy.set(true);try{const head=this.branches().find(b=>b.name===this.s.branch())?.commit;const r=await this.s.api.raw<any>('POST','/workspace/apply',{confirm:true,expectedHead:head},this.headers());if(r.status>=400 || !r.data.applied)throw new Error(r.data.message??'Apply refused');this.review.set(null);this.s.branchEpoch.update(x=>x+1);this.s.say('Applied '+this.s.branch()+' into main: '+r.data.commit);await this.loadBranches();void this.loadChanges();void this.loadPluginMenu();}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
   protected readonly menu = signal(false);
   /** Ordinary accounts see only their own space. Administration items need the administrator, plugin items need the plugin live. */
   protected visibleNav(): NavGroup[] {
     // Branch test shows the ordinary experience only: administration stays in the normal console.
     if (this.s.testBranch()) return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/overview' || i.path === '/my-profile') })).filter((g: NavGroup) => g.items.length);
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
-    const plugin: Record<string, string> = { '/organizations': 'organizations', '/applications': 'app-connector', '/policies': 'policy-studio' };
-    return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-profile' || (adminOk && (!plugin[i.path] || !a || a.plugins?.[plugin[i.path]]))) })).filter((g: NavGroup) => g.items.length);
+    const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-profile' || adminOk).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
+    // Plugin menu entries (step 2): declared in the plugin's manifest, present only while the plugin is active.
+    const pluginEntries = this.pluginMenu?.(); // test harnesses can render before the field settles: no entries = static console
+    if (Array.isArray(pluginEntries)) for (const m of pluginEntries) {
+      if (m.area === 'admin' && !adminOk) continue;
+      let g = groups.find((x) => x.title === m.group);
+      if (!g) { g = { title: m.group, items: [] }; groups.push(g); }
+      if (!g.items.some((i) => i.path === m.path)) g.items.push({ path: m.path, label: m.title, icon: m.icon ?? '⬡', order: m.order ?? 50 });
+    }
+    for (const g of groups) g.items.sort((x, y) => (x.order ?? 50) - (y.order ?? 50) || x.label.localeCompare(y.label));
+    // Plugin groups keep the position the static menu had before step 2 (the menu must stay identical for the
+    // user): known groups take their historical slot, unknown plugin groups append after the core ones.
+    const GROUP_ORDER = ['Overview', 'Access (IAM)', 'Automation (IGA)', 'Extensions', 'Database (Dolt)'];
+    groups.sort((a, b) => (GROUP_ORDER.indexOf(a.title) < 0 ? 99 : GROUP_ORDER.indexOf(a.title)) - (GROUP_ORDER.indexOf(b.title) < 0 ? 99 : GROUP_ORDER.indexOf(b.title)));
+    return groups.filter((g: NavGroup) => g.items.length);
   }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
   protected readonly title = signal('');
   protected readonly nav = computed<NavGroup[]>(() => {
     const groups: NavGroup[] = [
     { title: 'Overview', items: [{ path: '/overview', label: 'Dashboard', icon: '◧' }] },
+    // Plugin screens (organizations, applications, policies, workflows, ...) are NOT here: they come from the
+    // tenant's active plugins through GET /plugins/menu (step 2), grouped and ordered by their manifests.
     { title: 'Access (IAM)', items: [
       { path: '/users', label: 'Users', icon: '♙' },
       { path: '/profile-fields', label: 'Profile fields', icon: '☰' },
-      { path: '/organizations', label: 'Organizations', icon: '⌂' },
       { path: '/roles', label: 'Roles', icon: '⚖' },
-      { path: '/applications', label: 'Applications', icon: '⇲' },
-      { path: '/policies', label: 'Policies', icon: '§' },
       { path: '/profile-reviews', label: 'Profile reviews', icon: '✓' },
       { path: '/my-profile', label: 'My profile', icon: '☺' },
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
-    ...(this.s.workflowsEnabled() ? [{ title: 'Automation (IGA)', items: [{ path: '/workflows', label: 'Workflows', icon: '⟳' }] }] : []),
     { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }, { path: '/event-bus', label: 'Event bus', icon: '≋' }, { path: '/mcp', label: 'MCP (AI)', icon: '⚡' }] },
     { title: 'Database (Dolt)', items: [
       { path: '/database/branches', label: 'Branches', icon: '⑂' },
@@ -89,6 +104,8 @@ export class Shell {
 
   constructor() {
     this.router.events.pipe(filter((e) => e instanceof NavigationEnd)).subscribe(() => { this.menu.set(false); this.title.set(this.leafTitle()); void this.loadChanges(); });
+    // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
+    effect(() => { this.s.pluginsVersion(); void this.loadPluginMenu(); });
     this.title.set(this.leafTitle());
   }
   private leafTitle(): string {

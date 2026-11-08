@@ -37,9 +37,20 @@ pub enum Step {
     Unavailable,
 }
 
+/// Budget for one gate answer. 3s is comfortable locally; the hosted demo (tiny shared CPU, several bus
+/// deliveries per sign-in) needs more, so the image sets IAM_GATE_TIMEOUT_MS higher. Fail-closed semantics are
+/// unchanged: a slow gate is still `Unavailable`.
+fn gate_timeout() -> Duration {
+    std::env::var("IAM_GATE_TIMEOUT_MS").ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&ms| ms >= 250)
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_secs(3))
+}
+
 /// Asks the gate (loopback) for the next step. FAIL CLOSED: anything but a clear 200 answer is `Unavailable`.
 pub async fn step(addr: &str, token: &str, body: Value) -> Step {
-    match tokio::time::timeout(Duration::from_secs(3), post(addr, token, "/internal/auth/authenticate", &body)).await {
+    match tokio::time::timeout(gate_timeout(), post(addr, token, "/internal/auth/authenticate", &body)).await {
         Ok(Some(v)) => match v["outcome"].as_str() {
             Some("allow") => Step::Allow { subject: v["subject"].as_str().map(String::from), claims: v["claims"].clone() },
             Some("challenge") if v["session"].is_string() && v["step"]["fields"].is_array() => Step::Challenge(v),
@@ -58,7 +69,7 @@ pub async fn entry(addr: &str, token: &str, tenant: &str, chain: Option<&str>, b
     if let Some(c) = chain { if !c.is_empty() { body["chain"] = json!(c); } }
     if let Some(b) = branch { if !b.is_empty() { body["branch"] = json!(b); } }
     if let Some(t) = ticket { if !t.is_empty() { body["ticket"] = json!(t); } }
-    tokio::time::timeout(Duration::from_secs(3), post(addr, token, "/internal/auth/entry", &body)).await.ok().flatten()
+    tokio::time::timeout(gate_timeout(), post(addr, token, "/internal/auth/entry", &body)).await.ok().flatten()
 }
 
 async fn post(addr: &str, token: &str, path: &str, body: &Value) -> Option<Value> {

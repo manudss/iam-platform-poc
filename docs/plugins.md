@@ -20,7 +20,7 @@ A plugin lists one or more `kinds`. Kinds say what it is for; hooks say what it 
 | --- | --- | --- | --- |
 | `auth-method` | prove who the user is | `auth.authenticate`, `auth.challenge` | password (base), password with lockout, TOTP, passkeys/WebAuthn, SMS or mail OTP, federation to an external OIDC/SAML IdP, smart card |
 | `profile` | enrich the user profile and claims | `profile.enrich`, `identity.changed` | organizations and hierarchy, manager lookup, cost center, HR attributes, derived claims (is_contractor), photo, locale |
-| `notifier` | deliver messages | `notify.send` | log (base), SMTP, Teams/Slack, webhook, SMS, mobile push, digest |
+| `notifier` | deliver messages | `notify.send`, `notify.capability` | log (base), Resend (shipped), SMTP, Teams/Slack, webhook, SMS, mobile push, digest |
 | `workflow` | steps of approval and certification flows | `workflow.step`, `identity.changed` | manager approval, access review campaign, SoD exception with expiry, four-eyes, escalation after N days, ticketing |
 | `ui` | extra screens | `ui.screens` (static) | organizations screen, campaign dashboard, sign-in map, self-service access request page |
 | `connector` | read from or write to a target | `connector.import`, `connector.provision` | CSV, SCIM, LDAP/AD, Entra ID, Google Workspace, SAP, a database, a SaaS API |
@@ -66,7 +66,7 @@ Validated at registration (`validateManifest`): id, semver, kinds, known hooks a
 
 ## 5. Install file, settings, forms
 
-**Install** (`install.migrations`, `install.seed`): the installer runs each migration once. The ledger stores a checksum; an applied migration that was edited is refused (`migration-changed`): add a new one. Tables must start with `plg_<id>_`. `drop table` is refused: uninstalling or disabling never deletes data. Seeds run only on the first install. Running any of this requires the `install` grant. The ledger sits behind a `MigrationStore` interface with two implementations: in memory, and PostgreSQL (`pg-stores.ts`), which really runs the migration SQL in a transaction and records `plugin_migrations`, `plugin_seeds`, `plugin_settings`, `plugin_state`. Every table a plugin creates must have a `tenant text not null` column, and seed rows are written once per tenant, so tenants never share seeded data. After an API restart the registry reloads settings, grants, enablement and recorded faults (covered by `plugins-pg.e2e.spec.ts`, real PostgreSQL, skipped without `PG_BIN`).
+**Install** (`install.migrations`, `install.seed`): the installer runs each migration once. The ledger stores a checksum; an applied migration that was edited is refused (`migration-changed`): add a new one. Tables must start with `plg_<id>_`. `drop table` is refused in an up migration. Uninstall is the destructive inverse (P1-D): each migration may declare a `down` (same own-prefix rule, `drop table` allowed there only); `uninstall(tenant, id)` requires the plugin disabled first, removes the tenant's rows from the plugin's own tables, and runs the inverses in reverse order to drop those tables when the LAST tenant uninstalls. It refuses an applied migration that is missing, edited or without a declared inverse (`uninstall-incomplete`) rather than guessing. Enabling and disabling never touch data. Seeds run only on the first install. Running any of this requires the `install` grant. The ledger sits behind a `MigrationStore` interface with two implementations: in memory, and PostgreSQL (`pg-stores.ts`), which really runs the migration SQL in a transaction and records `plugin_migrations`, `plugin_seeds`, `plugin_settings`, `plugin_state`. Every table a plugin creates must have a `tenant text not null` column, and seed rows are written once per tenant, so tenants never share seeded data. After an API restart the registry reloads settings, grants, enablement and recorded faults (covered by `plugins-pg.e2e.spec.ts`, real PostgreSQL, skipped without `PG_BIN`).
 
 **Settings** (`settings`): each field has `key`, `type` (`string`, `text`, `number`, `boolean`, `select`, `multiselect`, `secret`, `url`, `list`), `label`, `help`, `default`, `required`, `min`/`max`, `pattern`, `options`, `group`, `visibleIf`. The server validates every save against the schema: unknown keys, wrong types and out-of-range values are refused (HTTP 400). `secret` fields have no default, are never returned (the form gets `********`), and keep their stored value when the console does not re-send them.
 
@@ -150,6 +150,8 @@ A wrong password is a business denial: it never faults the plugin for everyone. 
 
 **Notifications (`notify.send`).** With `IAM_EFFECTS=1`, the activation effects also fan out `notify.send` to the active notifier plugins (`role.changed`, one call per effect key, idempotent). It is best effort: a notifier problem is logged and never fails the role effects or becomes an access decision.
 
+**One-time-code e-mail (`notify.capability` + `notify.send`).** The sign-in OTP (`auth-email-otp`, `delivery: 'smtp'`) delivers ONLY through the `notify.default` slot (P1-E: no mail adapter in the core anymore - the single Resend path is the `notify-resend` plugin, key in `RESEND_API_KEY` only). Before sending, the flow asks the slot's `notify.capability` (blocking, single responder): `{ real: true }` means the chosen notifier really delivers (shipped `notify-resend` with a key); anything else is the explicit unavailability policy - the base log transport answers `{ real: false }`, and `notify-resend` without a key answers `{ real: false, note: 'RESEND_API_KEY not set...' }` and degrades `notify.send` to the base log transport with `degraded` stated in the result. When delivery is not real, the code goes to the demo outbox and the page says DEMO ONLY. Disabling or replacing the notifier changes the OTP path with it, coherently.
+
 ## 11b. Plugin configuration versioned in Dolt
 
 Enablement and the non-secret settings of a plugin can be versioned like a role change. Table `plugin_config(tenant, plugin, enabled, settings json)` lives in Dolt (`data/demo/01-schema.sql`).
@@ -163,7 +165,34 @@ Covered by `plugins-dolt.e2e.spec.ts` (real Dolt, skipped without `DOLT_BIN`). N
 
 ## 11. Not done
 
-component screen loader; plugin package signing for async plugins; uninstall with data export; versions and upgrade of a plugin; the other plugin kinds beyond the examples above.
+component screen loader (Angular screens imported from the plugin folders, not bundled in the console); auth methods driven by the registry (grants, faults, enable/disable with effect, catalogue read live); business plugins (SSO, workflows, MCP, connectors) behind real slots/hooks; plugin-owned dependencies; versions and upgrade of a plugin; the `plugin-add` / `plugin-check-extensions` generators and the plugin-author guide. Uninstall with declared inverses exists (P1-D, above). (Package signing exists since manifest v3: see above.)
+
+## Manifest v3: folder plugins, signature, menu and HTTP routes
+
+Every shipped plugin is a **folder** under `plugins/<id>/`:
+
+```
+plugins/<id>/manifest.json    the manifest (apiVersion "plugin/v3" or "plugin/v1")
+plugins/<id>/handlers.mjs     hook and HTTP handlers (default export: { "<hook>": fn, "http:<METHOD> <path>": fn })
+plugins/<id>/signature.json   Ed25519 signature over the folder files (generated, never edited by hand)
+```
+
+New v3 manifest fields:
+
+- `entrypoints.handlers`: the handlers module inside the folder.
+- `httpRoutes`: HTTP routes mounted under `/tenants/:t/plugins/:id/` (`{ method, path, handler?, auth? }`). `auth` is `user` (signed-in, default), `admin` (admin capability too) or `public` (sign-in and protocol endpoints only). A route answers only while the plugin is active for the tenant; a declared route without a handler is a fault, not a 404.
+- `menu`: console sidebar entries (`{ id, title, area, group, icon?, order?, path }`). The console merges `GET /tenants/:t/plugins/menu` into its navigation: an entry appears with its plugin and disappears with it.
+- `security.signed`: the loader verifies `signature.json` (hashes + Ed25519 signature) against the trust store `conf/plugin-trust.json` before registering the plugin. Signature is enforced whenever the manifest asks for it, the plugin ships code, or a signature file is present. `IAM_PLUGIN_UNSIGNED=1` is a local-development escape hatch only.
+
+**Keys and signing (no secret in the repository).** Nothing secret is committed: `conf/plugin-dev-key.json` (private, mode 600), `conf/plugin-trust.json` (public keys) and every `signature.json` are gitignored and generated locally by `scripts/plugin-dev-setup.mjs`. The setup is an EXPLICIT command (P0-3): the loader refuses to boot without a trust store, it never generates keys itself. Run `node scripts/plugin-dev-setup.mjs` once after a fresh clone; CI runs it as its own step. Production ships its own trust store and signs with its own keys: `node scripts/plugin-pack.mjs plugins/<id> --key key.json [--zip out.zip]`.
+
+**Generators.** `scripts/plugin-create.mjs <id>` scaffolds a new folder plugin, `scripts/plugin-extend.mjs <base-id> <new-id>` scaffolds a replacement (superset of the base, handlers delegating to `ctx.base`), `scripts/plugin-validate.mjs [dir ...]` checks manifests, signatures and extension compatibility (run `npm run build` in `apps/api` first).
+
+**Shipped plugins** (all folder plugins): `auth-password` (base), `auth-password-lockout`, `auth-email-otp`, `auth-digit-code`, `auth-totp`, `notify-log` (base), `notify-resend`, `org-manager`, `organizations`, `hr-attributes`, `risk-geo`, `directory`, `csv-connector`, `scim-connector`, `mcp-gateway`, `workflows-iga`, `app-connector`, `policy-studio`, `oidc-provider`, `saml-idp`.
+
+**Directory plugins (step 7).** Decision 2: identity storage stays core (Dolt tables, credential file); the management rules live in replaceable plugins. `directory` (kind `directory`, the base plugin) owns the profile-field catalogue and value rules (`fields.mjs`), the activation-effects engine (`effects.mjs` + `loopback.mjs`), role and separation-of-duties management (`roles.mjs`), public sign-up (`signup.mjs`) and identity validation (`users.mjs`). `organizations` owns organization management (CRUD, parent-cycle guard, administrator assignments, profile section). The core keeps the stores and wires the engines through `createX(deps)` factories; controllers and routes are unchanged.
+
+**Mail delivery (`notify-resend`).** Real e-mail goes through the Resend HTTPS API (outbound SMTP is blocked on the Render free tier). The API key lives ONLY in the `RESEND_API_KEY` environment variable on the server - never in code, settings or data branches. Without it the plugin falls back to the base log transport, so development stays simulated. The sender (`lyam@dss.name`, verified domain) is a plain setting. The sign-in OTP method uses the same transport through `ResendMailAdapter` (preferred over SMTP when the key is set).
 
 ## Manifest v2 fields (step 2)
 

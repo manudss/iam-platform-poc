@@ -5,3 +5,6 @@ target/
 .env
 *.log
 workflow-bundle-*.js
+conf/plugin-dev-key.json
+conf/plugin-trust.json
+plugins/*/signature.json

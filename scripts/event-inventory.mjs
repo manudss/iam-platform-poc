@@ -40,6 +40,10 @@ const RULES = [
   { id: 'core bus emit (Rust)', files: 'core', re: /\.(?:emit|notify|call|query)\(&e(?:nv)?\b/g, kind: 'emitter' },
   { id: 'core bus wiring event', files: 'core', re: /bus\.emit\(\s*"([a-z0-9._-]+)"/g, kind: 'emitter' },
   { id: 'oidc provider event hook', files: 'api', re: /provider\.on\(ev/g, kind: 'listener' },
+  // Folder plugins (tout-plugin refactor): their code lives under plugins/<id>/*.mjs and emits through the
+  // core-provided deps.emit (or a local alias of it). Same inventory duty as the API circuits.
+  { id: 'plugin deps.emit (durable app event)', files: 'plugins', re: /\bemit\(\s*'([a-z0-9._-]+)'/g, kind: 'emitter' },
+  { id: 'plugin oidc/saml provider event hook', files: 'plugins', re: /provider\.on\(ev/g, kind: 'listener' },
 ];
 
 // Architecture guard: the registry may invoke handlers only through the bus host, never through a local fallback.
@@ -54,8 +58,8 @@ for (const file of walk(join(ROOT, 'apps/api/src'), ['.ts'])) {
 function scan() {
   const rows = [];
   for (const rule of RULES) {
-    const dirs = rule.files === 'api' ? [join(ROOT, 'apps/api/src')] : [join(ROOT, 'core/crates')];
-    const exts = rule.files === 'api' ? ['.ts'] : ['.rs'];
+    const dirs = rule.files === 'api' ? [join(ROOT, 'apps/api/src')] : rule.files === 'plugins' ? [join(ROOT, 'plugins')] : [join(ROOT, 'core/crates')];
+    const exts = rule.files === 'api' ? ['.ts'] : rule.files === 'plugins' ? ['.mjs'] : ['.rs'];
     for (const dir of dirs) {
       for (const file of walk(dir, exts)) {
         const rel = relative(ROOT, file);

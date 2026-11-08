@@ -1,0 +1,26 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "saml-idp",
+  "version": "0.1.0",
+  "name": "SAML 2.0 identity provider (SSO)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "connector"
+  ],
+  "extends": "sso-saml-base",
+  "provides": [
+    "sso.saml"
+  ],
+  "description": "Lets the registered applications sign in with SAML 2.0 Web SSO (signed assertions, POST binding). Turning the plugin off removes every /sso/:tenant/saml endpoint (404) without touching the application registry.",
+  "requires": [
+    "app-connector"
+  ],
+  "hooks": [],
+  "settings": [],
+  "security": {
+    "signed": true
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  }
+}

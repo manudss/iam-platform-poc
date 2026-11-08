@@ -12,6 +12,11 @@ export class MemoryMigrationStore implements MigrationStore {
   }
   async seed(tenant: string, plugin: string, table: string, row: Record<string, unknown>) { this.rows.push({ tenant, plugin, table, row: { ...row, tenant } }); }
   async seeded(tenant: string, plugin: string) { return this.rows.some((r) => r.tenant === tenant && r.plugin === plugin); }
+  async removeTenantData(tenant: string, plugin: string, _tables: string[]) { this.rows = this.rows.filter((r) => !(r.tenant === tenant && r.plugin === plugin)); }
+  async revert(pluginId: string, id: string, sql: string[]) {
+    this.log.push({ plugin: pluginId, id: `${id} (down)`, sql });
+    this.sums.set(pluginId, (this.sums.get(pluginId) ?? []).filter((a) => a.id !== id));
+  }
 }
 export class MemorySettingsStore implements SettingsStore {
   private m = new Map<string, Record<string, unknown>>();

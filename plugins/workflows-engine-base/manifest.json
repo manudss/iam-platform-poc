@@ -1,0 +1,22 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "workflows-engine-base",
+  "version": "1.0.0",
+  "name": "Workflow engine slot (refusing base)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "workflow"
+  ],
+  "base": true,
+  "provides": [
+    "workflows.engine"
+  ],
+  "hooks": [],
+  "settings": [],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

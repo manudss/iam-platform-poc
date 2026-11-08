@@ -1,0 +1,10 @@
+{
+  "name": "@iam-plugin/mcp-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MCP gateway - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {
+    "@nestjs/common": "^12.3.2",
+    "zod": "^4.6.7"
+  }
+}

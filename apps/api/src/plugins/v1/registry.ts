@@ -25,6 +25,10 @@ export interface MigrationStore {
   seed(tenant: string, pluginId: string, table: string, row: Record<string, unknown>): Promise<void>;
   /** True when this tenant already received the plugin's seed rows. */
   seeded(tenant: string, pluginId: string): Promise<boolean>;
+  /** Uninstall: removes one tenant's rows from the plugin's own tables and its seed record. */
+  removeTenantData(tenant: string, pluginId: string, tables: string[]): Promise<void>;
+  /** Uninstall of the last tenant: runs a migration's declared inverse in one transaction and removes the migration record. */
+  revert(pluginId: string, id: string, sql: string[]): Promise<void>;
 }
 export interface StoredState { tenant: string; plugin: string; installed: boolean; enabled: boolean; faulted: boolean; grants: Grants; }
 /** Durable enablement, grants and fault flags: the admin state survives a restart. */
@@ -42,6 +46,15 @@ type State = { enabled: boolean; grants: Grants; installed: boolean };
 
 export class PluginError extends Error {
   constructor(public code: string, message: string) { super(message); }
+}
+
+/** Budget for ONE blocking bus round trip (control, query, slot call). 2s is comfortable on a developer
+ * machine; the hosted demo runs on a tiny shared CPU where a delivery with its Dolt activity checks can take
+ * longer, so the image sets IAM_HOOK_TIMEOUT_MS higher. Fail-closed semantics are unchanged: a timeout still
+ * refuses the call. */
+export function defaultHookTimeoutMs(): number {
+  const v = Number(process.env.IAM_HOOK_TIMEOUT_MS);
+  return Number.isFinite(v) && v >= 250 ? v : 2000;
 }
 
 /** Step 2: the bridge to the core's event bus, provided by the plugin host (bus-host.ts) when it is enabled.
@@ -66,6 +79,16 @@ export class PluginRegistry {
   /** Replacements that failed at runtime (key tenant/plugin). A faulted replacement keeps its slot but answers every call with a refusal until an admin acts. */
   private faulted = new Set<string>();
 
+  /** Derived inventories (list/menu/screens/profileFields), computed once and cached per tenant (P1 cache):
+   * every state or registration mutation clears the whole map - these views are small and recomputed lazily. */
+  private derived = new Map<string, unknown>();
+  private derive<T>(key: string, compute: () => T): T {
+    const hit = this.derived.get(key);
+    if (hit !== undefined) return hit as T;
+    const v = compute(); this.derived.set(key, v); return v;
+  }
+  /** Public invalidation for the admin refresh path: re-derive every inventory on next read. */
+  invalidateInventories(): void { this.derived.clear(); }
   private bus?: BusBridge;
   /** Working branch this registry serves (decision 7): stamped on every envelope emitted through the bus. */
   private branchRef?: string;
@@ -104,6 +127,7 @@ export class PluginRegistry {
       if (r.faulted) this.faulted.add(this.k(r.tenant, r.plugin));
       if (r.enabled && p.manifest.extends) for (const sl of p.manifest.provides ?? []) this.chosen.set(this.k(r.tenant, sl), r.plugin);
     }
+    this.invalidateInventories();
   }
   /** Platform-core settings that are not a plugin (for example the authentication methods and chains). They live in the same versioned store as plugin settings, so a working branch holds them until Apply. */
   coreSettings(tenant: string, key: string) { return this.settings.get(tenant, key); }
@@ -126,7 +150,8 @@ export class PluginRegistry {
     const errs = validateManifest(m, HOOKS);
     for (const h of m.hooks) if (!impl.handlers[h.name]) errs.push(`hook ${h.name} declared but no handler`);
     for (const s of m.subscribes ?? []) if (!impl.handlers[s.name]) errs.push(`subscribes: ${s.name} declared but no handler`);
-    const declared = new Set([...m.hooks.map((d) => d.name), ...(m.subscribes ?? []).map((s) => s.name)]);
+    for (const r of m.httpRoutes ?? []) if (!impl.handlers[r.handler ?? `http:${r.method} ${r.path}`]) errs.push(`http route ${r.handler ?? `http:${r.method} ${r.path}`} declared but no handler`);
+    const declared = new Set([...m.hooks.map((d) => d.name), ...(m.subscribes ?? []).map((s) => s.name), ...(m.httpRoutes ?? []).map((r) => r.handler ?? `http:${r.method} ${r.path}`)]);
     for (const h of Object.keys(impl.handlers)) if (!declared.has(h)) errs.push(`handler for undeclared hook ${h}`);
     if (this.impls.has(m.id)) errs.push(`plugin ${m.id} already registered`);
     if (m.extends) {
@@ -148,23 +173,30 @@ export class PluginRegistry {
       }
     }
     if (errs.length) throw new PluginError('invalid-manifest', `${m.id}: ${errs.join('; ')}`);
+    // The base a replacement sees is the base REGISTERED HERE - it may carry runtime overrides (the
+    // directory-backed `auth.authenticate` in workspace mode), not the one the loader wrapped at load time.
+    if (m.extends) {
+      const base = this.impls.get(m.extends)!;
+      impl = { ...impl, handlers: Object.fromEntries(Object.entries(impl.handlers).map(([k, h]) => [k, (payload: unknown, ctx: PluginContext) => h(payload, { ...ctx, base: base.handlers })])) };
+    }
     this.impls.set(m.id, impl);
+    this.invalidateInventories();
   }
 
   list(tenant: string) {
-    return [...this.impls.values()].map((i) => {
+    return this.derive(`list:${tenant}`, () => [...this.impls.values()].map((i) => {
       const s = this.state.get(this.k(tenant, i.manifest.id));
       const base = !!i.manifest.base;
       return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), installed: base ? true : !!s?.installed,
         /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
         requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') },
         grants: s?.grants ?? {} };
-    });
+    }));
   }
 
   /** Profile fields declared by the plugins that are active for this tenant. */
   profileFields(tenant: string): { plugin: string; fields: import('../../profile/fields.js').ProfileFieldDecl[] }[] {
-    return [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! }));
+    return this.derive(`pf:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! })));
   }
 
   /** Install: runs migrations once (checksum-checked), seeds, only if the admin granted `install`. */
@@ -188,6 +220,7 @@ export class PluginRegistry {
     const st = this.state.get(this.k(tenant, id)) ?? { enabled: false, grants: {}, installed: false };
     st.installed = true; st.grants = { ...st.grants, ...grants };
     this.state.set(this.k(tenant, id), st);
+    this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.install', plugin: id });
   }
@@ -201,6 +234,7 @@ export class PluginRegistry {
     const r = validateSettings(p.manifest.settings, merged);
     if (!r.ok) throw new PluginError('invalid-settings', r.errors.join('; '));
     await this.settings.put(tenant, id, r.values);
+    this.invalidateInventories();
     this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
   }
 
@@ -229,6 +263,7 @@ export class PluginRegistry {
     // A replacement takes over its slots, the base keeps its own settings and data untouched.
     if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
     this.faulted.delete(this.k(tenant, id));
+    this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.enable', plugin: id });
     await this.activity();
@@ -272,9 +307,50 @@ export class PluginRegistry {
     st.enabled = false;
     this.faulted.delete(this.k(tenant, id));
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
+    this.invalidateInventories();
     await this.persist(tenant, id);
     // The replacement's own state (failure counters, lockouts) is not carried to the base: say so in the audit trail.
     this.emitAudit({ tenant, action: 'plugin.disable', plugin: id, detail: p.manifest.extends ? `explicit return to ${p.manifest.extends}; replacement-owned state is kept but no longer enforced` : undefined });
+    await this.activity();
+  }
+
+  /** Uninstall (plan D): the destructive inverse of install. The plugin must be disabled first (uninstall never silently
+   * disables, so the base is restored by an explicit audited step). The tenant's rows are removed from the plugin's own
+   * tables; the tables themselves are dropped by the declared down migrations only when no other tenant still has the
+   * plugin installed (plugin tables are shared, rows are tenant-isolated). Every applied migration must still exist,
+   * be unchanged and declare an inverse, otherwise uninstall refuses rather than guessing. Settings are kept for a
+   * possible reinstall (secrets are not orphaned in logs). */
+  async uninstall(tenant: string, id: string) {
+    const p = this.plugin(id);
+    if (p.manifest.base) throw new PluginError('base-required', `${id} is a base plugin and cannot be uninstalled`);
+    const st = this.state.get(this.k(tenant, id));
+    if (!st?.installed) return;
+    if (st.enabled) throw new PluginError('still-enabled', `disable ${id} before uninstalling it`);
+    for (const other of this.impls.values()) if (this.isActive(tenant, other.manifest.id) && other.manifest.requires?.includes(id)) throw new PluginError('in-use', `${other.manifest.id} requires ${id}`);
+    const declared = new Map((p.manifest.install?.migrations ?? []).map((m) => [m.id, m]));
+    const done = await this.migrations.applied(id);
+    const lastTenant = ![...this.state.entries()].some(([k2, s2]) => k2 !== this.k(tenant, id) && k2.endsWith(`/${id}`) && s2.installed);
+    const tables = ownedTables(p.manifest);
+    if (done.length && lastTenant) {
+      for (const a of [...done].reverse()) {
+        const mig = declared.get(a.id);
+        if (!mig) throw new PluginError('migration-unknown', `applied migration ${a.id} is no longer declared: uninstall cannot invert it`);
+        if (checksum(JSON.stringify(mig.sql)) !== a.checksum) throw new PluginError('migration-changed', `migration ${a.id} was edited after being applied: uninstall refuses to guess the inverse`);
+        if (!mig.down?.length) throw new PluginError('uninstall-incomplete', `migration ${a.id} declares no inverse: its tables would be orphaned`);
+      }
+      for (const a of [...done].reverse()) await this.migrations.revert(id, a.id, declared.get(a.id)!.down!);
+      await this.migrations.removeTenantData(tenant, id, []); // clears the seed ledger row; the tables are dropped above
+    } else {
+      await this.migrations.removeTenantData(tenant, id, tables);
+    }
+    st.installed = false;
+    st.enabled = false;
+    st.grants = {};
+    this.faulted.delete(this.k(tenant, id));
+    for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
+    this.invalidateInventories();
+    await this.persist(tenant, id);
+    this.emitAudit({ tenant, action: 'plugin.uninstall', plugin: id, detail: done.length && lastTenant ? 'down migrations reverted; owned tables dropped' : `tenant rows removed; tables kept${lastTenant ? ' (no migrations applied)' : ' for other tenants'}` });
     await this.activity();
   }
 
@@ -311,6 +387,7 @@ export class PluginRegistry {
   async markFaulted(tenant: string, id: string, detail: string) {
     if (this.faulted.has(this.k(tenant, id))) return;
     this.faulted.add(this.k(tenant, id));
+    this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.fault.closed', plugin: id, detail });
   }
@@ -318,9 +395,18 @@ export class PluginRegistry {
   /** Bus delivery of a blocking kind (step 3): only the plugin CHOSEN for the slot answers (single responder);
    * every other plugin with a handler is explicitly not concerned. A faulted replacement refuses (fail closed,
    * same rule as callSlot: the base is never asked in its place). */
-  blockingResponder(tenant: string, id: string, kind: string): 'answer' | 'not-concerned' | 'refuse' {
+  blockingResponder(tenant: string, id: string, kind: string, slot?: string): 'answer' | 'not-concerned' | 'refuse' {
     const impl = this.impls.get(id);
     if (!impl || !impl.handlers[kind] || !this.isActive(tenant, id)) return 'not-concerned';
+    if (slot) {
+      // Slot-targeted call (callSlot wrapper): only the plugin chosen for THIS slot answers; a faulted replacement
+      // chosen for it refuses (fail closed, the base is never asked in its place).
+      let chosen: string | undefined;
+      try { chosen = this.resolve(tenant, slot).manifest.id; } catch { return 'not-concerned'; } // no provider at all: nobody is concerned
+      if (chosen !== id) return 'not-concerned';
+      if (impl.manifest.extends && this.faulted.has(this.k(tenant, id))) return 'refuse';
+      return 'answer';
+    }
     // A plugin WITHOUT a slot (risk signal, profile enrichment) answers whenever it is active; a slotted plugin
     // answers only when it is the one chosen for the slot (single responder: base or replacement).
     const slots = impl.manifest.provides ?? [];
@@ -331,7 +417,7 @@ export class PluginRegistry {
 
   /** Generic blocking control (step 3: risk.score). Bus only (step 3 cleanup): one control call - a deny verdict
    * or no usable answer refuses (fail closed, sensitive hook). There is no in-process path anymore. */
-  async control<R>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string }> {
+  async control<R>(tenant: string, hook: string, payload: unknown, timeoutMs = defaultHookTimeoutMs()): Promise<{ result: R; servedBy: string }> {
     const bus = this.requireBus(hook);
     const r = await bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
     if (r.verdict !== 'allow' || !r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? (r.answered ? 'denied' : 'no responder')}`);
@@ -340,18 +426,21 @@ export class PluginRegistry {
 
   /** Merged query (step 3: profile.enrich): the union of the responders' fields - only the plugins that
    * answered appear; a key several plugins answer differently is reported as a conflict (first answer kept). */
-  async queryHook<R extends Record<string, unknown>>(tenant: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ data: R; conflicts: string[]; answeredBy: string[] }> {
+  async queryHook<R extends Record<string, unknown>>(tenant: string, hook: string, payload: unknown, timeoutMs = defaultHookTimeoutMs()): Promise<{ data: R; conflicts: string[]; answeredBy: string[] }> {
     const bus = this.requireBus(hook);
     const r = await bus.query(tenant, hook, payload, timeoutMs, this.branchRef);
     return { data: r.data as R, conflicts: r.conflicts, answeredBy: r.answeredBy };
   }
 
-  async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = 2000): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
+  async callSlot<R>(tenant: string, slot: string, hook: string, payload: unknown, timeoutMs = defaultHookTimeoutMs()): Promise<{ result: R; servedBy: string; fellBack: boolean }> {
     // Bus only (step 3 cleanup): the call travels on the bus (envelope stamped with this registry's branch,
     // decision 7) and the serving plugin answers over NATS. Fail closed both ways: a deny verdict, a silent
     // mandatory subscriber (the core denies) or NO usable answer at all (bus down, nobody serving) refuse.
+    // The hook name is shared by several slot families (auth.verify serves auth.password AND auth.totp), so the
+    // slot travels inside the payload wrapper: the bus forwards it opaquely, the delivery unwraps it and only the
+    // plugin chosen for THAT slot answers (blockingResponder).
     const bus = this.requireBus(hook);
-    const r = await bus.call(tenant, hook, payload, timeoutMs, this.branchRef);
+    const r = await bus.call(tenant, hook, { __slot: slot, __payload: payload }, timeoutMs, this.branchRef);
     if (!r.answered) throw new PluginError('plugin-failed', `${hook} refused on the bus: ${r.reason ?? 'no responder'}`);
     // A plugin's own denial (bad credentials, locked out, ...) is DATA, not a fault: the answer rode back with
     // the deny verdict. A deny WITHOUT an answer payload is an infrastructure refusal (faulted replacement,
@@ -377,19 +466,70 @@ export class PluginRegistry {
     return out;
   }
 
+  /**
+   * Matches a manifest httpRoute (step 3) for an ACTIVE plugin: method + path segments, `:param` placeholders.
+   * The handler key is the declared one, or `http:<METHOD> <path>`. A declared route without a handler is a fault, not a 404.
+   */
+  httpRoute(tenant: string, id: string, method: string, path: string): { impl: PluginImpl; handler: HookHandler; auth: 'user' | 'admin' | 'public'; params: Record<string, string> } | undefined {
+    const impl = this.impls.get(id);
+    if (!impl || !this.isActive(tenant, id)) return undefined;
+    for (const d of impl.manifest.httpRoutes ?? []) {
+      if (d.method !== method) continue;
+      const want = d.path.split('/').filter(Boolean), got = path.split('/').filter(Boolean);
+      if (want.length !== got.length) continue;
+      const params: Record<string, string> = {};
+      let ok = true;
+      for (let i = 0; i < want.length; i++) {
+        if (want[i].startsWith(':')) params[want[i].slice(1)] = decodeURIComponent(got[i]);
+        else if (want[i] !== got[i]) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const key = d.handler ?? `http:${d.method} ${d.path}`;
+      const handler = impl.handlers[key];
+      if (!handler) throw new PluginError('plugin-failed', `${id}: http route ${key} declared but no handler`);
+      return { impl, handler, auth: d.auth ?? 'user', params };
+    }
+    return undefined;
+  }
+
+  /** Console menu entries declared by the plugins active for this tenant (manifest v3 `menu`). An entry disappears with its plugin. */
+  menu(tenant: string) {
+    return this.derive(`menu:${tenant}`, () => {
+      const out: { plugin: string; id: string; title: string; area: 'admin' | 'self-service'; group: string; icon?: string; order?: number; path: string }[] = [];
+      for (const p of this.impls.values()) {
+        if (!this.isActive(tenant, p.manifest.id)) continue;
+        for (const m of p.manifest.menu ?? []) out.push({ plugin: p.manifest.id, id: m.id, title: m.title, area: m.area, group: m.group, icon: m.icon, order: m.order, path: m.path });
+      }
+      return out.sort((a, b) => (a.order ?? 50) - (b.order ?? 50) || a.title.localeCompare(b.title));
+    });
+  }
+
   /** Screens visible to the admin console. Component screens only appear if granted. */
   screens(tenant: string) {
-    const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string }[] = [];
-    for (const p of this.impls.values()) {
-      if (!this.isActive(tenant, p.manifest.id)) continue;
-      const g = this.state.get(this.k(tenant, p.manifest.id))?.grants ?? {};
-      for (const s of p.manifest.screens ?? []) {
-        if (s.render === 'component' && !g.uiComponents && !p.manifest.base) continue;
-        res.push({ plugin: p.manifest.id, id: s.id, title: s.title, area: s.area, render: s.render, schemaRef: s.schemaRef });
+    return this.derive(`screens:${tenant}`, () => {
+      const res: { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string; component?: string }[] = [];
+      for (const p of this.impls.values()) {
+        if (!this.isActive(tenant, p.manifest.id)) continue;
+        const g = this.state.get(this.k(tenant, p.manifest.id))?.grants ?? {};
+        for (const s of p.manifest.screens ?? []) {
+          if (s.render === 'component' && !g.uiComponents && !p.manifest.base) continue;
+          res.push({ plugin: p.manifest.id, id: s.id, title: s.title, area: s.area, render: s.render, schemaRef: s.schemaRef, component: s.component });
+        }
       }
-    }
-    return res;
+      return res;
+    });
   }
+}
+
+/** Tables created by the plugin's up migrations; scopes uninstall's per-tenant row removal to what the plugin owns. */
+export function ownedTables(m: PluginManifest): string[] {
+  const out: string[] = [];
+  for (const mig of m.install?.migrations ?? []) for (const s of mig.sql) {
+    const t = /create\s+table\s+(?:if\s+not\s+exists\s+)?([a-z0-9_]+)/gi;
+    let x: RegExpExecArray | null;
+    while ((x = t.exec(s))) out.push(x[1].toLowerCase());
+  }
+  return [...new Set(out)];
 }
 
 function checksum(s: string) {

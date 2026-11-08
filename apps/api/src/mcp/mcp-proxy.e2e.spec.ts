@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
 import { branchContext } from '../workspace/context.js';
 import type { Request, Response, NextFunction } from 'express';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
@@ -80,6 +81,9 @@ describe('MCP gateway P1 (real Dolt + core + fake upstream): registry, relay, tr
     app = await NestFactory.create(AppModule, { logger: false });
     app.use((req: Request, _res: Response, next: NextFunction) => branchContext.run({ branch: typeof req.headers['x-iam-branch'] === 'string' ? req.headers['x-iam-branch'] : undefined }, next));
     await app.listen(13173);
+    // Step 3: the MCP tool surface is served by the plugin on the mcp.gateway slot - enable it on main.
+    const reg = app.get(PluginRegistry);
+    await reg.install('acme-demo', 'mcp-gateway', {}); await reg.enable('acme-demo', 'mcp-gateway', {});
     adminToken = await login('demo-alice'); bobToken = await login('demo-bob');
   });
   after(async () => { await app?.close(); core?.kill(); dolt?.kill(); upstream?.kill(); upstreamBasic?.kill(); upstreamSess?.kill(); await sleep(800); if (dir && !process.env.KEEP_E2E_DIR) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });

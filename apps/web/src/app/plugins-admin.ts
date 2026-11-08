@@ -57,4 +57,6 @@ export class PluginsAdmin {
   protected save() { const p = this.selected()!; return this.act(() => this.admin.save(p.id, formValues(this.model()!, this.edited)), 'Settings saved.'); }
   protected enable() { const p = this.selected()!; return this.act(() => this.admin.enable(p.id, this.grants()), `Enabled ${p.name}.`); }
   protected disable() { const p = this.selected()!; return this.act(() => this.admin.disable(p.id), `Disabled ${p.name}: its slots are served by the base plugin again.`); }
+  /** Manual cache refresh (Emmanuel's requirement): re-verify the shipped plugins and re-derive every inventory server-side, then reload. */
+  protected refreshPlugins() { return this.act(() => this.admin.refresh(), 'Plugin catalogue and inventories refreshed.'); }
 }

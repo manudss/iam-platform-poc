@@ -31,6 +31,11 @@ describe('plugin admin API', () => {
     assert.equal(by['auth-password'].enabled, true); assert.equal(by['auth-password'].base, true);
     assert.equal(by['auth-password-lockout'].enabled, false);
   });
+  it('admin can refresh the shared plugin catalogue manually (P1 refresh endpoint)', async () => {
+    await s().post('/tenants/t1/plugins/refresh').expect(403); // admin capability required
+    const r = await s().post('/tenants/t1/plugins/refresh').set(adm).expect(201);
+    assert.equal(r.body.refreshed, true);
+  });
   it('changes need the admin capability', async () => {
     await s().post('/tenants/t1/plugins/org-manager/install').send({ grants: { install: true } }).expect(403);
     await s().put('/tenants/t1/plugins/org-manager/settings').send({ values: {} }).expect(403);
@@ -45,6 +50,20 @@ describe('plugin admin API', () => {
     await s().post('/tenants/t2/plugins/org-manager/enable').set(adm).send({}).expect(201);
     const sc = await s().get('/tenants/t2/plugins/screens').expect(200);
     assert.equal(sc.body.screens.length, 2);
+    // menu (step 2): an entry appears only while its plugin is active, per tenant
+    const before = await s().get('/tenants/t2/plugins/menu').expect(200);
+    assert.equal(before.body.entries.filter((e: any) => e.plugin === 'organizations').length, 0);
+    await s().post('/tenants/t2/plugins/organizations/install').set(adm).send({}).expect(201);
+    await s().post('/tenants/t2/plugins/organizations/enable').set(adm).send({}).expect(403); // packaged screen: the uiComponents grant is required
+    await s().post('/tenants/t2/plugins/organizations/enable').set(adm).send({ grants: { uiComponents: true } }).expect(201);
+    const menu = await s().get('/tenants/t2/plugins/menu').expect(200);
+    assert.deepEqual(menu.body.entries.filter((e: any) => e.plugin === 'organizations').map((e: any) => ({ id: e.id, path: e.path, group: e.group })), [{ id: 'organizations', path: '/screens/organizations/orgs', group: 'Access (IAM)' }]);
+    assert.equal((await s().get('/tenants/t3/plugins/menu')).body.entries.filter((e: any) => e.plugin === 'organizations').length, 0);
+    // http routes (step 3): a declared route answers only while the plugin is active, per tenant
+    const pong = await s().get('/tenants/t2/plugins/org-manager/ping').expect(200);
+    assert.deepEqual(pong.body, { pong: true, tenant: 't2', maxDepth: 4 });
+    await s().get('/tenants/t3/plugins/org-manager/ping').expect(404); // not enabled on t3
+    await s().post('/tenants/t2/plugins/org-manager/ping').expect(404); // method not declared
     // tenant isolation: t3 sees nothing enabled
     assert.equal((await s().get('/tenants/t3/plugins/screens')).body.screens.length, 0);
   });

@@ -2,7 +2,8 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginRegistry, PluginError } from './registry.js';
 import { MemoryMigrationStore, MemorySettingsStore } from './memory-stores.js';
-import { authPassword, authPasswordLockout, notifyLog, orgManager, riskGeo } from './builtin/index.js';
+import type { PluginImpl } from './registry.js';
+import { authPassword, authPasswordLockout, directory, notifyLog, orgManager, riskGeo } from './builtin/index.js';
 import { validateManifest } from './manifest.js';
 import { HOOKS } from './hooks.js';
 import { toFormModel } from './settings.js';
@@ -36,6 +37,20 @@ describe('plugin registry v1', () => {
     assert.throws(() => reg.register({ manifest: m2, handlers: authPasswordLockout().handlers }), /type string differs/);
     const m3 = structuredClone(authPasswordLockout().manifest); m3.id = 'auth-y'; m3.hooks = [];
     assert.throws(() => reg.register({ manifest: m3, handlers: {} }), /must handle base hook/);
+  });
+
+  it('a replacement delegates to the base REGISTERED in this registry, not the one the loader saw (directory-auth override)', async () => {
+    // The directory-backed base (workspace mode) replaces only auth.authenticate; the lockout must call THAT one.
+    const directoryAuth = { ...authPassword, handlers: { ...authPassword.handlers, 'auth.authenticate': async (p: any) => p.credential.password === 'directory-pass' ? { outcome: 'allow', subject: p.subject, methods: ['pwd'] } : { outcome: 'deny', reason: 'bad-credentials' } } };
+    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {});
+    reg2.register(directoryAuth); reg2.register(authPasswordLockout());
+    reg2.setBus(fakeBusBridge(reg2));
+    await reg2.install(T, 'auth-password-lockout', { install: true });
+    await reg2.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] });
+    const ok = await reg2.callSlot<any>(T, 'auth.password', 'auth.authenticate', { subject: 'demo-user-1', credential: { password: 'directory-pass' } });
+    assert.equal(ok.result.outcome, 'allow', 'the lockout checked the credential against the registered (directory) base');
+    const ko = await reg2.callSlot<any>(T, 'auth.password', 'auth.authenticate', good); // demo credential: the disk base would accept it
+    assert.equal(ko.result.outcome, 'deny', 'the demo-credential base of the loader is NOT consulted');
   });
 
   it('replacement takes over after install, grant and config; disabling returns to the base with base config', async () => {
@@ -103,7 +118,7 @@ describe('plugin registry v1', () => {
 
   it('a failing replacement is faulted and refused (no fallback: redelivery replaced it), until an admin disables it', async () => {
     const m = structuredClone(notifyLog.manifest); m.id = 'notify-bad'; m.base = false; m.extends = 'notify-log'; m.provides = ['notify.default'];
-    reg.register({ manifest: m, handlers: { 'notify.send': () => { throw new Error('smtp down'); } } });
+    reg.register({ manifest: m, handlers: { 'notify.send': () => { throw new Error('smtp down'); }, 'notify.capability': () => ({ real: false }) } });
     await reg.install(T, 'notify-bad', {}); await reg.configure(T, 'notify-bad', {}); await reg.enable(T, 'notify-bad');
     await assert.rejects(reg.callSlot(T, 'notify.default', 'notify.send', { to: 'x', template: 't' }), (e: PluginError) => e.code === 'plugin-failed');
     assert.ok(audit.includes('plugin.fault.closed:notify-bad'));
@@ -143,7 +158,10 @@ describe('plugin registry v1', () => {
   });
 
   it('declared schemas grant nothing: sensitive hooks and component screens need explicit grants', async () => {
-    reg.register(riskGeo);
+    // risk-geo ships no screen today (its placeholder was dropped in 1b); clone its manifest with a real
+    // component screen declaration to exercise the uiComponents grant gate.
+    const geoScreen: PluginImpl = { manifest: { ...structuredClone(riskGeo.manifest), screens: [{ id: 'map', title: 'Sign-in map', area: 'admin', render: 'component', component: 'screens/map.mjs' }] }, handlers: riskGeo.handlers };
+    reg.register(geoScreen);
     await reg.install(T, 'risk-geo', {});
     await assert.rejects(reg.enable(T, 'risk-geo', {}), /sensitive/);
     await assert.rejects(reg.enable(T, 'risk-geo', { hooks: ['risk.score'] }), /component screens/);
@@ -160,6 +178,78 @@ describe('plugin registry v1', () => {
     const errs = validateManifest(m, HOOKS);
     assert.ok(errs.some((e) => /table users must start with plg_org_manager_/.test(e)));
     assert.ok(errs.some((e) => /drop table is not allowed/.test(e)));
+  });
+
+  it('migration inverses (down) may drop the plugin\'s own tables but never another prefix', () => {
+    const m = structuredClone(orgManager.manifest);
+    m.install!.migrations[0].down = ['drop table if exists plg_org_manager_orgs'];
+    assert.equal(validateManifest(m, HOOKS).filter((e) => /inverse/.test(e)).length, 0, 'own-prefix drop allowed in an inverse');
+    m.install!.migrations[0].down = ['drop table users'];
+    assert.ok(validateManifest(m, HOOKS).some((e) => /inverse: table users must start with plg_org_manager_/.test(e)));
+  });
+
+  it('disable/enable keep data; uninstall needs disable, removes only the tenant\'s rows, and drops tables for the last tenant', async () => {
+    reg.register(orgManager);
+    await reg.install(T, 'org-manager', { install: true });
+    await reg.install('t2', 'org-manager', { install: true });
+    await reg.enable(T, 'org-manager');
+    const before = await mig.applied('org-manager');
+    await reg.disable(T, 'org-manager');
+    await reg.enable(T, 'org-manager');
+    assert.deepEqual(await mig.applied('org-manager'), before, 'disable/enable never re-applies migrations');
+    assert.equal(mig.rows.filter((r) => r.plugin === 'org-manager' && r.tenant === T).length, 1, 'seed is not duplicated');
+
+    await assert.rejects(reg.uninstall(T, 'org-manager'), (e: PluginError) => e.code === 'still-enabled');
+    await assert.rejects(reg.uninstall(T, 'auth-password'), (e: PluginError) => e.code === 'base-required');
+    await reg.disable(T, 'org-manager');
+    await reg.uninstall(T, 'org-manager');
+    assert.equal(mig.rows.filter((r) => r.plugin === 'org-manager' && r.tenant === T).length, 0, 't1 rows removed');
+    assert.equal(mig.rows.filter((r) => r.plugin === 'org-manager' && r.tenant === 't2').length, 1, 't2 rows untouched');
+    assert.equal((await mig.applied('org-manager')).length, 1, 'tables kept while another tenant has it installed');
+
+    await reg.uninstall('t2', 'org-manager'); // installed but never enabled: no disable needed
+    assert.equal((await mig.applied('org-manager')).length, 0, 'last tenant reverts the migrations');
+    assert.ok(mig.log.some((l) => l.id === '001-orgs (down)' && l.sql.some((q) => /drop table/i.test(q))), 'declared inverse ran');
+    assert.ok(audit.includes('plugin.uninstall:org-manager'));
+
+    await reg.install(T, 'org-manager', { install: true });
+    assert.equal((await mig.applied('org-manager')).length, 1, 'reinstall re-applies on a clean slate');
+  });
+
+  it('uninstall refuses an applied migration without a declared inverse', async () => {
+    const m = structuredClone(orgManager.manifest);
+    delete m.install!.migrations[0].down;
+    reg.register({ manifest: m, handlers: orgManager.handlers });
+    await reg.install(T, m.id, { install: true });
+    await assert.rejects(reg.uninstall(T, m.id), (e: PluginError) => e.code === 'uninstall-incomplete');
+    assert.ok((await mig.applied(m.id)).length > 0, 'nothing was reverted');
+  });
+
+  it('directory is a real slot: a replacement takes the rules, disabling returns them to the base (phase 2 step 1)', async () => {
+    reg.register(directory);
+    reg.setBus(fakeBusBridge(reg));
+    const good_user = { id: 'ok-user', email: 'a@b.c', display_name: 'Ok', password: 'a-long-enough-password' };
+    const base = await reg.callSlot<any>(T, 'directory.default', 'directory.user.validate', { body: good_user, create: true });
+    assert.equal(base.result.valid, true, 'base validates');
+    assert.equal(base.servedBy, 'directory');
+
+    const repl = { manifest: { ...structuredClone(directory.manifest), id: 'directory-strict', base: false, extends: 'directory' } };
+    const handlers = Object.fromEntries(Object.entries(directory.handlers).map(([h, fn]) => [h, async (p: any, ctx: any) => {
+      if (h === 'directory.user.validate' && p.body?.department === 'Sales') return { valid: false, errors: ['no Sales'] };
+      return (fn as any)(p, ctx);
+    }]));
+    reg.register({ manifest: repl.manifest, handlers } as any);
+    reg.setBus(fakeBusBridge(reg));
+    await reg.install(T, 'directory-strict', {});
+    await reg.enable(T, 'directory-strict');
+    const taken = await reg.callSlot<any>(T, 'directory.default', 'directory.user.validate', { body: { ...good_user, department: 'Sales' }, create: true });
+    assert.equal(taken.servedBy, 'directory-strict');
+    assert.equal(taken.result.valid, false, 'the replacement rule applies');
+
+    await reg.disable(T, 'directory-strict');
+    const back = await reg.callSlot<any>(T, 'directory.default', 'directory.user.validate', { body: { ...good_user, department: 'Sales' }, create: true });
+    assert.equal(back.servedBy, 'directory', 'base rules are back');
+    assert.equal(back.result.valid, true, 'the replacement rule no longer applies');
   });
 
   it('settings: validation, defaults and generated form with masked secrets', async () => {
@@ -203,7 +293,7 @@ describe('plugin registry v1', () => {
 
   it('a plugin cannot be disabled while another needs it', async () => {
     reg.register(orgManager);
-    const dep = structuredClone(orgManager.manifest); dep.id = 'org-reports'; dep.requires = ['org-manager']; dep.install = undefined; dep.screens = undefined; dep.hooks = [];
+    const dep = structuredClone(orgManager.manifest); dep.id = 'org-reports'; dep.requires = ['org-manager']; dep.install = undefined; dep.screens = undefined; dep.hooks = []; dep.httpRoutes = []; dep.menu = [];
     reg.register({ manifest: dep, handlers: {} });
     for (const id of ['org-manager', 'org-reports']) { await reg.install(T, id, { install: true }); await reg.configure(T, id, {}); }
     await reg.enable(T, 'org-reports').catch((e) => assert.equal(e.code, 'missing-dependency'));
@@ -257,7 +347,7 @@ describe('bus facade (step 2)', () => {
 
   it('a bus failure raises without any in-process fallback (no double effects, D16)', async () => {
     let ranInProcess = false;
-    const spy = { manifest: notifyLog.manifest, handlers: { 'notify.send': () => { ranInProcess = true; return {}; } } };
+    const spy = { manifest: { ...notifyLog.manifest, hooks: notifyLog.manifest.hooks.filter((h) => h.name === 'notify.send') }, handlers: { 'notify.send': () => { ranInProcess = true; return {}; } } };
     const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
     reg2.register(spy);
     reg2.setBus(stub({ routed: () => true, emit: async () => { throw new Error('core unreachable'); } }));
@@ -293,5 +383,27 @@ describe('bus facade (step 2)', () => {
     await reg.enable(T, 'org-manager', {});
     await reg.disable(T, 'org-manager');
     assert.equal(fired, 2);
+  });
+
+  it('P1 cache: inventories are computed once, then invalidated on install, enable, disable and refresh', async () => {
+    reg.register(orgManager);
+    const l1 = reg.list(T);
+    assert.equal(reg.list(T), l1, 'list is cached between reads');
+    const m1 = reg.menu(T);
+    assert.equal(reg.menu(T), m1, 'menu is cached between reads');
+    await reg.install(T, 'org-manager', { install: true });
+    const l2 = reg.list(T);
+    assert.notEqual(l2, l1, 'install invalidates the cached list');
+    assert.equal(l2.find((p) => p.id === 'org-manager')?.installed, true);
+    await reg.enable(T, 'org-manager', {});
+    const l3 = reg.list(T);
+    assert.notEqual(l3, l2, 'enable invalidates the cached list');
+    assert.equal(l3.find((p) => p.id === 'org-manager')?.enabled, true);
+    await reg.disable(T, 'org-manager');
+    assert.equal(reg.list(T).find((p) => p.id === 'org-manager')?.enabled, false, 'disable invalidates too');
+    const l4 = reg.list(T);
+    reg.invalidateInventories(); // the admin refresh path
+    assert.notEqual(reg.list(T), l4, 'manual refresh recomputes');
+    assert.deepEqual(reg.list(T), l4, 'same content, fresh derivation');
   });
 });
