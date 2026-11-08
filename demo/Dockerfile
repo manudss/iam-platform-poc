@@ -48,7 +48,7 @@ ARG DOLT_VERSION=v2.6.1
 RUN curl -sSfL "https://github.com/dolthub/dolt/releases/download/${DOLT_VERSION}/dolt-linux-amd64.tar.gz" | tar xz -C /opt \
  && ln -s /opt/dolt-linux-amd64/bin/dolt /usr/local/bin/dolt
 ARG NATS_VERSION=v2.15.2
-RUN curl -sSfL "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" | tar xz -C /opt \
+RUN curl -sSfL --retry 8 --retry-delay 5 --retry-max-time 180 "https://github.com/nats-io/nats-server/releases/download/${NATS_VERSION}/nats-server-${NATS_VERSION}-linux-amd64.tar.gz" | tar xz -C /opt \
  && ln -s /opt/nats-server-${NATS_VERSION}-linux-amd64/nats-server /usr/local/bin/nats-server
 WORKDIR /app
 COPY --from=corebuild /iam-core-bin /app/iam-core
