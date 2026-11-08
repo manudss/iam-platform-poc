@@ -1,7 +1,7 @@
 <div class="head">
   <div class="grow"><h2>Authentication methods</h2>
     <p class="lead">Methods in use are offered at sign-in, in this order. A chain is a method made of other methods.</p></div>
-  @if (dirty()) { <span class="pill warn">Unsaved edits</span> } @else if (differsFromLive()) { <span class="pill warn">Saved on this branch, not live until Apply</span> } @else if (loaded()) { <span class="pill ok">Same as live</span> }
+  @if (dirty()) { <span class="pill warn" id="authn-live">Unsaved edits</span> } @else if (differsFromLive()) { <span class="pill warn" id="authn-live">Saved on this branch, not live until Apply</span> } @else if (loaded()) { <span class="pill ok" id="authn-live">Same as live</span> }
   <button class="secondary" id="authn-outbox-btn" (click)="showOutbox()">Demo outbox</button>
   <button id="authn-save" (click)="save()" [disabled]="busy() || !loaded() || !!problem() || (s.branch()==='main')">Save on this branch</button>
 </div>
@@ -18,7 +18,7 @@
 @if (seeded()) { <p class="hint" id="authn-seeded">Ready-to-try examples (fictional). Nothing is stored or live until you press Save on this branch and then Apply.</p> }
 <p class="sr" aria-live="polite" id="authn-announce">{{ announce() }}</p>
 
-<div class="board">
+<div class="board" id="authn-methods">
   <section class="zone in" id="authn-used" aria-label="In use" (dragover)="overZone($event)" (drop)="dropUsed($event)">
     <h3>In use <small>sign-in list, in order</small></h3>
     <p class="hint">Drag to reorder, or focus the handle and press the up or down arrow. Drag from the right, or press Use.</p>

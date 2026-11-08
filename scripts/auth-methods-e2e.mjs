@@ -54,10 +54,14 @@ try {
   const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: false });
   const claims = () => JSON.parse(Buffer.from(lastToken.split('.')[1], 'base64url').toString());
   const noAlert = async (l) => assert.equal(await page.locator('[role=alert]').count(), 0, l + ': no alert (' + (await page.locator('[role=alert]').allInnerTexts()).join('|') + ')');
-  const fillRow = async (id, sel, value) => page.locator(`tr:has(small:text-is("${id}")) ${sel}`).first().fill(String(value));
-  const signInFirstStep = async (user, pw) => {
-    await page.waitForSelector('#signin-browser');
-    await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.click('#signin-browser')]);
+  const item = (key) => page.locator(`.it[data-key="${key}"]`);
+  const editOf = async (key) => { await item(key).getByRole('button', { name: 'Edit', exact: true }).click(); await page.waitForSelector('#authn-edit'); };
+  const done = async () => { await page.locator('#authn-edit').getByRole('button', { name: 'Done', exact: true }).click(); await page.waitForSelector('#authn-edit', { state: 'detached' }); };
+  const useIt = async (key) => { await item(key).getByRole('button', { name: /^Use/ }).click(); await page.waitForSelector(`#authn-used .it[data-key="${key}"]`); };
+  const signInFirstStep = async (user, pw, chain) => {
+    const sel = chain ? `[data-chain="${chain}"], #signin-browser` : '#signin-browser, #signin-methods [data-chain]'; // legacy button, or the offered chain
+    await page.waitForSelector(sel);
+    await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.locator(sel).first().click()]);
     await page.waitForSelector('input[name=username]');
     await page.fill('input[name=username]', user);
     if (pw !== undefined) await page.fill('input[name=password]', pw);
@@ -83,17 +87,20 @@ try {
 
   // ---- 2. build methods and chains in the console
   await page.waitForSelector('#authn-seeded'); // examples are offered before anything is stored
-  assert.equal(await page.locator('tr:has(small:text-is("passkey"))').count(), 0, 'catalogue-only types are not seeded');
-  await page.waitForSelector('tr:has(small:text-is("pin-keypad"))');
-  // creating a new method and a new chain still works on top of the examples
-  await page.selectOption('select[name=newtype]', 'totp'); await page.fill('input[name=newname]', 'Backup authenticator'); await page.click('#authn-add-method');
-  await page.waitForSelector('tr:has(small:text-is("backup-authenticator"))');
-  const chainBox = (id) => page.locator(`.chain[data-chain="${id}"]`);
-  const c1 = chainBox('password-then-authenticator'), c2 = chainBox('e-mail-then-pin-keypad');
-  await c1.waitFor();
-  await c1.locator('input[type=radio]').check();
-  await page.waitForFunction(() => document.querySelectorAll('.analysis').length >= 3);
-  const a1 = await c1.locator('.analysis').innerText(), a2 = await c2.locator('.analysis').innerText();
+  assert.equal(await item('m:passkey').count(), 0, 'catalogue-only types are not seeded');
+  await item('m:pin-keypad').waitFor();
+  assert.ok(await page.locator('#authn-used .it').count() >= 5, 'the seeded examples are in use, in one list');
+  // a new instance: one button, a type chooser (no list of types in the page itself)
+  await page.click('#authn-new-instance'); await page.waitForSelector('#authn-type-chooser');
+  await page.click('#authn-type-chooser [data-type="totp"]'); await page.fill('input[name=newname]', 'Backup authenticator'); await page.click('#authn-create-instance');
+  await item('m:backup-authenticator').waitFor();
+  // a level select with the gauge, not a text field
+  await editOf('m:backup-authenticator'); assert.equal(await page.locator('#authn-edit input[name=level]').count(), 0, 'level is a select, not a text field'); await page.locator('#authn-edit app-level-select button').first().click(); assert.ok(await page.locator('#authn-edit [role=option]').count() >= 10, '10 options'); await page.keyboard.press('Escape'); await done();
+  // use the two chains, make the first the recommended one, read the analysis
+  await item('c:password-then-authenticator').waitFor(); await item('c:e-mail-then-pin-keypad').waitFor();
+  await editOf('c:password-then-authenticator'); await page.locator('#authn-edit [name=erec]').check();
+  await page.waitForSelector('#authn-edit .analysis'); const a1 = await page.locator('#authn-edit .analysis').innerText(); await shot('2-chain-drawer-desktop'); await done();
+  await editOf('c:e-mail-then-pin-keypad'); await page.waitForSelector('#authn-edit .analysis'); const a2 = await page.locator('#authn-edit .analysis').innerText(); await done();
   assert.match(a1, /Multi-factor/); assert.match(a2, /Not multi-factor/); assert.match(a2, /simulated/i);
   await shot('2-chains-desktop');
   await page.setViewportSize({ width: 390, height: 800 }); await shot('2b-chains-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
@@ -104,7 +111,7 @@ try {
   assert.match(await page.textContent('#authn-live'), /Saved on this branch, not live until Apply|single base password/);
 
   // ---- 3. demo enrollment (secret shown once)
-  const enroll = async (id) => { await page.locator(`tr:has(small:text-is("${id}")) button:text-is("Settings")`).click(); };
+  const enroll = async (id) => { if (await page.locator('#authn-edit').count()) await done(); await editOf('m:' + id); };
   await enroll('authenticator-app'); await page.fill('input[name=enrolluser]', 'demo-alice'); await page.getByRole('button', { name: 'Provision', exact: true }).click();
   await page.waitForSelector('#authn-shown');
   const secret = (await page.locator('#authn-shown').innerText()).match(/: ([A-Z2-7]{16,})/)[1];
@@ -113,7 +120,7 @@ try {
   await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollemail]', 'alice@example.invalid'); await page.getByRole('button', { name: 'Provision', exact: true }).click(); await page.waitForSelector('#authn-shown');
   await enroll('e-mail-code'); await enroll('pin-keypad');
   await page.fill('input[name=enrolluser]', 'demo-alice'); await page.fill('input[name=enrollpin]', '246810'); await page.getByRole('button', { name: 'Provision', exact: true }).click(); await page.waitForSelector('#authn-shown'); await sleep(500);
-  await noAlert('enroll');
+  if (await page.locator('#authn-edit').count()) await done(); await noAlert('enroll');
   await shot('3b-methods-enrolled-desktop');
   const ap = await call('POST', '/workspace/apply', { confirm: true }, 'authn-work'); const apj = await ap.json(); assert.equal(apj.applied, true, JSON.stringify(apj));
 
@@ -135,8 +142,8 @@ try {
   await page.waitForSelector('[name=globalBranch]');
   await page.locator('details.token').evaluate((e) => (e.open = true)); await page.fill('[name=admintoken]', ADMIN_TOKEN);
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('authn-work2');
-  await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="e-mail-then-pin-keypad"]');
-  await page.locator('.chain[data-chain="e-mail-then-pin-keypad"] input[type=radio]').check();
+  await page.locator('nav a[data-nav="/auth-methods"]').click(); await item('c:e-mail-then-pin-keypad').waitFor();
+  await editOf('c:e-mail-then-pin-keypad'); await page.locator('#authn-edit [name=erec]').check(); await done();
   await page.click('#authn-save'); await page.waitForSelector('#authn-note');
   await shot('5-chain2-selected-desktop');
   const ap2 = await (await call('POST', '/workspace/apply', { confirm: true }, 'authn-work2')).json(); assert.equal(ap2.applied, true, JSON.stringify(ap2));
@@ -169,6 +176,6 @@ try {
   assert.deepEqual(errors, []);
   console.log('PASS authn: methods and chains built in the console, staged until Apply, chain 1 (password+TOTP) MFA claims, chain 2 (simulated e-mail + shuffled PIN keypad) not MFA');
 } catch (e) {
-  console.error('FAILED:', e.message); try { console.error((await browser?.contexts()[0]?.pages()[0]?.evaluate(() => [...document.querySelectorAll('.chain select')].map(e=>e.outerHTML).join('\n'))) ?? ''); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
+  console.error('FAILED:', e.message); try { console.error((await browser?.contexts()[0]?.pages()[0]?.evaluate(() => [...document.querySelectorAll('#authn-edit select')].map(e=>e.outerHTML).join('\n'))) ?? ''); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
   process.exitCode = 1;
 } finally { await browser?.close(); await stopAll(); }

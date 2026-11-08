@@ -100,6 +100,8 @@ jobs:
         with: { node-version: 22 }
       - run: npm ci && npm test -- --watch=false
         working-directory: apps/web
+      - name: Demo edge framing policy (only /login?preview=1 may be framed)
+        run: node --test demo/frame-policy.test.mjs
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 25

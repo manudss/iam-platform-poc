@@ -58,19 +58,19 @@ try {
   await page.waitForSelector('#authn-methods'); await noAlert('page'); await shot('1-empty-desktop');
 
   // ---- 2. build methods and chains in the console
-  await page.waitForSelector('tr:has(small:text-is("pin-keypad"))'); assert.equal(await page.locator('#authn-seeded').count(), 0, 'the examples are STORED by the demo seed, not a UI default');
+  await page.locator('.it[data-key="m:pin-keypad"]').waitFor(); assert.equal(await page.locator('#authn-seeded').count(), 0, 'the examples are STORED by the demo seed, not a UI default');
   const live0 = await (await call('GET', '/auth', undefined, 'aw-' + RUN)).json(); const dc = live0.working?.config?.defaultChain; assert.ok(live0.working?.config?.chains?.some((c) => c.id === 'password-then-authenticator') && live0.working?.seeded === false && (dc === null || dc === 'password-only'), 'stored seed (examples stored, not a UI default; no MFA chain selected): ' + JSON.stringify({ dc, seeded: live0.working?.seeded }));
-  assert.equal(await page.locator('tr:has(small:text-is("passkey"))').count(), 0, 'catalogue-only types are not seeded');
-  await page.waitForSelector('tr:has(small:text-is("pin-keypad"))');
-  // creating a new method and a new chain still works on top of the examples
-  await page.selectOption('select[name=newtype]', 'totp'); await page.fill('input[name=newname]', 'Backup authenticator'); await page.click('#authn-add-method');
-  await page.waitForSelector('tr:has(small:text-is("backup-authenticator"))');
-  const chainBox = (id) => page.locator(`.chain[data-chain="${id}"]`);
-  const c1 = chainBox('password-then-authenticator'), c2 = chainBox('e-mail-then-pin-keypad');
-  await c1.waitFor();
-  await c1.locator('input[type=radio]').check();
-  await page.waitForFunction(() => document.querySelectorAll('.analysis').length >= 3);
-  const a1 = await c1.locator('.analysis').innerText(), a2 = await c2.locator('.analysis').innerText();
+  assert.equal(await page.locator('.it[data-key="m:passkey"]').count(), 0, 'catalogue-only types are not seeded');
+  const item = (key) => page.locator(`.it[data-key="${key}"]`);
+  const editOf = async (key) => { await item(key).getByRole('button', { name: 'Edit', exact: true }).click(); await page.waitForSelector('#authn-edit'); };
+  const done = async () => { await page.locator('#authn-edit').getByRole('button', { name: 'Done', exact: true }).click(); await page.waitForSelector('#authn-edit', { state: 'detached' }); };
+  // a new instance through the single button and the type chooser
+  await page.click('#authn-new-instance'); await page.waitForSelector('#authn-type-chooser');
+  await page.click('#authn-type-chooser [data-type="totp"]'); await page.fill('input[name=newname]', 'Backup authenticator'); await page.click('#authn-create-instance');
+  await item('m:backup-authenticator').waitFor();
+  await editOf('c:password-then-authenticator'); await page.locator('#authn-edit [name=erec]').check();
+  await page.waitForSelector('#authn-edit .analysis'); const a1 = await page.locator('#authn-edit .analysis').innerText(); await done();
+  await editOf('c:e-mail-then-pin-keypad'); await page.waitForSelector('#authn-edit .analysis'); const a2 = await page.locator('#authn-edit .analysis').innerText(); await done();
   assert.match(a1, /Multi-factor/); assert.match(a2, /Not multi-factor/); assert.match(a2, /simulated/i);
   await shot('2-chains-desktop');
   await page.setViewportSize({ width: 390, height: 800 }); await shot('2b-chains-mobile'); await page.setViewportSize({ width: 1280, height: 1100 });
@@ -105,8 +105,8 @@ try {
   await page.waitForSelector('[name=globalBranch]');
   
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('aw2-' + RUN);
-  await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="e-mail-then-pin-keypad"]');
-  await page.locator('.chain[data-chain="e-mail-then-pin-keypad"] input[type=radio]').check();
+  await page.locator('nav a[data-nav="/auth-methods"]').click(); await item('c:e-mail-then-pin-keypad').waitFor();
+  await editOf('c:e-mail-then-pin-keypad'); await page.locator('#authn-edit [name=erec]').check(); await done();
   await page.click('#authn-save'); await page.waitForSelector('#authn-note');
   await shot('5-chain2-selected-desktop');
   const ap2 = await (await call('POST', '/workspace/apply', { confirm: true }, 'aw2-' + RUN)).json(); assert.equal(ap2.applied, true, JSON.stringify(ap2));
@@ -139,12 +139,12 @@ try {
   // leave the shared preview as we found it: classic password sign-in again (a restart does not reset the stored configuration)
   await page.waitForSelector('[name=globalBranch]');
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches', exact: true }).click(); await createBranch('aw3-' + RUN);
-  await page.locator('nav a[data-nav="/auth-methods"]').click(); await page.waitForSelector('.chain[data-chain="password-only"]');
-  await page.locator('.chain[data-chain="password-only"] input[type=radio]').check(); await page.click('#authn-save'); await page.waitForSelector('#authn-note');
+  await page.locator('nav a[data-nav="/auth-methods"]').click(); await item('m:password').waitFor();
+  await editOf('m:password'); await page.locator('#authn-edit [name=erec]').check(); await done(); await page.click('#authn-save'); await page.waitForSelector('#authn-note');
   const ap3 = await (await call('POST', '/workspace/apply', { confirm: true }, 'aw3-' + RUN)).json(); assert.equal(ap3.applied, true, JSON.stringify(ap3));
   assert.deepEqual(errors, []);
   console.log('HOSTED PASS authn: methods and chains built in the console, staged until Apply, chain 1 (password+TOTP) MFA claims, chain 2 (simulated e-mail + shuffled PIN keypad) not MFA');
 } catch (e) {
-  console.error('FAILED:', e.message); try { console.error((await browser?.contexts()[0]?.pages()[0]?.evaluate(() => [...document.querySelectorAll('.chain select')].map(e=>e.outerHTML).join('\n'))) ?? ''); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
+  console.error('FAILED:', e.message); try { console.error((await browser?.contexts()[0]?.pages()[0]?.evaluate(() => [...document.querySelectorAll('#authn-edit select')].map(e=>e.outerHTML).join('\n'))) ?? ''); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
   process.exitCode = 1;
 } finally { await browser?.close(); await stopAll(); }
