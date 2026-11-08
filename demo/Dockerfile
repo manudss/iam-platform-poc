@@ -20,7 +20,7 @@ COPY plugins/ plugins/
 # The plugins' controlled shared install (step 4): the root package.json is generated from their declarations.
 COPY package.json package-lock.json ./
 RUN cd apps/api && npm ci && npm run build && npm prune --omit=dev
-RUN npm ci --omit=dev && node scripts/plugin-deps.mjs --check
+RUN npm ci --omit=dev && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
 # Demo signing keys are generated AT BUILD (never committed): the plugins are signed here and only the PUBLIC
 # trust store reaches the final image. The private key (conf/plugin-dev-key.json) stays in this build stage.
 RUN node scripts/plugin-dev-setup.mjs

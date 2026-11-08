@@ -75,9 +75,12 @@ jobs:
           test -x "$PG_BIN/postgres"
       - name: Plugin dev signing keys (explicit dev setup, P0-3)
         run: node scripts/plugin-dev-setup.mjs
+      - name: Install the API dependencies (first - the host-provided plugin packages symlink into them)
+        run: npm ci
+        working-directory: apps/api
       - name: Plugin shared dependencies (step 4 - the controlled install the plugins resolve against)
         run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
-      - run: npm ci && npm test
+      - run: npm test
         working-directory: apps/api
       - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
         env:
@@ -117,15 +120,17 @@ jobs:
           sleep 15
       - name: Plugin dev signing keys (explicit dev setup, P0-3)
         run: node scripts/plugin-dev-setup.mjs
-      - name: Plugin shared dependencies (step 4)
-        run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
       - name: Build the Rust core (runs as a local process next to the containers, gRPC enabled by the test)
         run: cargo build -p iam-core --locked
         working-directory: core
+      - name: Install and build the API (first - the host-provided plugin packages symlink into its node_modules)
+        working-directory: apps/api
+        run: npm ci && npm run build
+      - name: Plugin shared dependencies (step 4)
+        run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
       - name: Run compose end-to-end suites (container checks, then the application path on the containers)
         working-directory: apps/api
         run: |
-          npm ci && npm run build
           COMPOSE_STACK=1 node --test dist/compose.e2e.spec.js
           COMPOSE_STACK=1 node --test dist/compose-app.e2e.spec.js
       - name: Logs on failure
