@@ -1,4 +1,5 @@
 import { APP_CONNECTOR_DDL, DEMO_APP_CONNECTORS, appConnectorConfig } from '../connectors/app-connector.js';
+import { demoProfileEmail } from './demo-email.js';
 import { Inject, Injectable, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { UsersService } from '../users/users.service.js';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -62,10 +63,19 @@ export class DemoDataService implements OnApplicationBootstrap {
     // The seeded sign-in chains use TOTP, e-mail code and PIN: their method plugins must be serving (step 2:
     // a method is usable only while its plugin is enabled on the slot).
     for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { try { await reg.install(tenant, id, {}); } catch { /* already installed */ } try { await reg.enable(tenant, id, {}); } catch (e) { console.warn('demo seed: cannot enable', id, (e as Error).message); } }
+    // The seeded e-mail OTP delivery is 'smtp': real codes only flow when a real notifier sits on the notify.default
+    // slot. Seed the shipped Resend notifier so a fresh deploy delivers immediately when RESEND_API_KEY is set on the
+    // server; without the key it degrades explicitly to the log transport (the page says DEMO ONLY, never a lie).
+    try { await reg.install(tenant, 'notify-resend', {}); } catch { /* already installed */ }
+    try { await reg.enable(tenant, 'notify-resend', {}); } catch (e) { console.warn('demo seed: cannot enable notify-resend', (e as Error).message); }
     await (await this.branches!.get('main')).putCoreSettings(tenant, CORE_PROFILE_SETTINGS_ID, { fields: { 'hr-attributes.job_title': { selfEdit: true, signup: 'optional' }, 'hr-attributes.phone': { selfEdit: true }, 'hr-attributes.language': { selfEdit: true, signup: 'optional' } }, signup: { open: true }, selfEditPolicy: 'immediate' });
     for (const a of ACCOUNTS) await this.store!.put(tenant, a.id, { 'hr-attributes.job_title': a.title, 'hr-attributes.phone': a.phone, 'hr-attributes.language': a.language, 'hr-attributes.employee_grade': a.grade }, 'live', 'demo-seed');
     await this.v.lock(() => this.v.at('main', async (c) => {
       for (const [id, name, dept, mail] of [['demo-alice', 'Alice Durand', 'it', 'alice.durand@example.invalid'], ['demo-bob', 'Bob Marchand', 'finance', 'bob.marchand@example.invalid']]) await c.query("update identities set display_name=?, department=?, email=? where id=? and (display_name is null or display_name='')", [name, dept, mail, id]);
+      // A hosted demo that wants real sign-in e-mails points IAM_DEMO_PROFILE_EMAIL at a mailbox it owns (the address
+      // lives only in the server environment, never in this repo). Empty/unset keeps the fictional example.invalid one.
+      const demoMail = demoProfileEmail(process.env.IAM_DEMO_PROFILE_EMAIL);
+      if (demoMail) await c.query("update identities set email=? where id='demo-alice' and (email is null or email='' or email like '%@example.invalid')", [demoMail]);
       await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('--allow-empty','-m','demo seed: names for the two sign-in accounts')");
     }));
     await this.store!.put(tenant, 'demo-alice', { 'hr-attributes.job_title': 'IAM administrator', 'hr-attributes.language': 'en', 'hr-attributes.employee_grade': 'G6' }, 'live', 'demo-seed');
