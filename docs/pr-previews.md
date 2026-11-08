@@ -83,6 +83,90 @@ comment explains why. The orchestration itself
 (`scripts/render-pr-previews.mjs`) is unit-tested with a mocked network by
 `.github/workflows/pr-previews-selftest.yml`.
 
+
+Every pull request that targets this repository's default branch can get its own
+hosted preview, the same way the demo at <https://iam-poc-demo.onrender.com> is
+hosted, without touching the two standing services (`iam-poc-demo` in
+`Production`, `iam-poc-explorer-test` in `dev`).
+
+## Prebuilt images: GitHub builds, Render only pulls
+
+Since 2026-11-08 the all-in-one demo image is **built on GitHub Actions** and
+pushed to **GHCR** (`ghcr.io/manudss/iam-platform-poc:<commit sha>`); Render
+services are **image-backed** and only pull and start it.
+
+Why: a Docker build of the all-in-one demo on Render costs roughly 10-20 of the
+**500 free build pipeline minutes/month** shared by the whole workspace
+(pricing: <https://render.com/pricing> - pipeline minutes meter *builds*, not
+deploys of prebuilt images), and exhaustion blocks *every* build until the
+monthly reset (observed 2026-10-30 on PR #7). GitHub-hosted runners are free
+and unlimited on a public repo, and GHCR storage/bandwidth are free for public
+images, so building there removes the bottleneck entirely:
+
+| | before (git-backed) | now (image-backed) |
+|---|---|---|
+| `/preview` latency | ~10-20 min Render build | ~1-3 min image pull + boot |
+| Render pipeline minutes | ~10-20 per deploy | 0 (no build) |
+| GitHub minutes | - | free on a public repo |
+
+`.github/workflows/demo-image.yml` builds `demo/Dockerfile` on every push to
+`main` and on every (same-repo) PR head, with the GitHub Actions build cache
+(`type=gha, mode=max`) and BuildKit cache mounts in the Dockerfile (cargo
+registry/target, npm cache), so rebuilds only redo what changed. Tags: the full
+commit SHA (immutable, the one previews deploy), `pr-<N>` (moving), and
+`latest` (main only). `workflow_dispatch` with an optional `ref` is the
+backstop when a commit's image is missing.
+
+Measured on PR #55 (2026-11-08, commit `b82cffd`): cold GitHub build +
+push 8 min 12 s, Render image pull + create + boot + live **~2 min**, versus
+~9 min for a git-backed Render build of the same tree the same evening - and
+those 9 minutes came out of the 500-minutes quota while the image deploy
+consumed **zero**.
+
+The GHCR package is readable anonymously from its first push (GitHub inherits
+the public repo's visibility): Render pulls it without a credential, nothing
+to toggle in the package settings.
+
+## Deploy on demand
+
+**A push on a PR branch never deploys anything.** The preview deploys only
+when someone actually wants to test the branch:
+
+- Comment `/preview` on the PR (works for the repository owner, members and
+  collaborators), or
+- Run **Actions > PR Previews > Run workflow** with the PR number.
+
+The first demand creates one free Render web service named `iam-pr<N>` in the
+**IAM POOC** project, `dev` environment, **image-backed**
+(`ghcr.io/manudss/iam-platform-poc:<head sha>`, health check `/healthz`,
+0.1 CPU / 512 MB, spins down after 15 min idle). Later demands repoint it at
+the latest commit's image and redeploy. The PR comment always carries the URL
+and the current state. Auto-deploy is OFF on the preview services: the
+workflow's explicit API deploy is the single trigger. A legacy git-backed
+`iam-pr<N>` service is deleted and recreated image-backed on the next
+`/preview` (the embedded Dolt data is fictional and disposable).
+
+If the image for the head commit is not on GHCR yet (its build usually started
+on the push itself), the refresh waits for the build run, and dispatches it as
+a last resort. If the build fails, the PR comment says so and Render is never
+touched.
+
+## What happens on PR events
+
+- **PR opened / updated** (`.github/workflows/pr-previews.yml`, job `ensure`):
+  no deploy, no service creation. The status comment on the PR is created or
+  refreshed (preview URL once it exists, how to deploy on demand).
+- **`/preview` comment or manual dispatch** (jobs `refresh-comment` /
+  `refresh-manual`): the service is created if needed, pointed at the head
+  image, and deployed.
+- **PR closed** (job `cleanup`): the service is deleted, and with it the
+  embedded Dolt data. The comment is updated.
+
+If the PR branch has no `demo/Dockerfile`, no service is created and the
+comment explains why. The orchestration itself
+(`scripts/render-pr-previews.mjs`) is unit-tested with a mocked network by
+`.github/workflows/pr-previews-selftest.yml`.
+
 ## Security model
 
 - `pull_request_target`, plus `issue_comment` and `workflow_dispatch` runs,
@@ -105,11 +189,9 @@ comment explains why. The orchestration itself
   addition to `issues: write` (measured: `issues: write` alone got a 403 on
   `POST /issues/<N>/comments`). The trusted `pull_request_target` flow is not
   affected.
-- `.github/workflows/prebuilt-image-trial.yml` is the temporary experiment
-  harness that proved this end to end on PR #55 (it deploys the PR's image
-  with the real secrets from a same-repo `pull_request` run, gated on the
-  migration branch name). It is inert on every other PR; delete it after the
-  migration merges.
+- The flow was proven end to end on PR #55 by a temporary `pull_request`
+  harness (`prebuilt-image-trial.yml`, since removed) that deployed the PR's
+  image with the real secrets, gated on the migration branch name.
 
 ## Setup (already done on this repository)
 
@@ -135,18 +217,45 @@ comment explains why. The orchestration itself
   free on a public repo); the preview workflows themselves run a small Node
   script (seconds, plus the deploy watch on demand).
 
-## Migrating the standing services (`iam-poc-demo`)
+## Production demo: auto-deploy from main
 
-The production demo still builds from git today; switching it is a one-time
-manual step, deliberately NOT automated here:
+`.github/workflows/demo-deploy.yml` runs after every successful `Demo image
+(GHCR)` build on `main` (`workflow_run`, plus a manual `workflow_dispatch`
+backstop) and deploys the standing production service `iam-poc-demo`
+(`iam-poc-demo.onrender.com` + the `lyam.dss.name` custom domain) **from the
+prebuilt image**: every push to main is live ~2-3 min later, with **zero**
+Render build minutes spent. `scripts/render-prod-deploy.mjs` does it: read the
+service, gate, `POST /services/{id}/deploys`, watch to live, fail the run on a
+failed deploy. Health checks on both public URLs close the job.
 
-1. Let the `Demo image (GHCR)` workflow build `main` (it runs on every push).
-2. In the Render dashboard, on `iam-poc-demo` (**Production**): switch the
-   service to a prebuilt image, URL `ghcr.io/manudss/iam-platform-poc:latest`
-   (or pin a SHA tag for reproducibility), keep plan/region/health check
-   (`/healthz`) and env vars.
-3. Trigger one deploy and verify `/healthz` and the sign-in flow.
+**Safety gate:** the script refuses to deploy while `iam-poc-demo` is still
+git-backed - a deploy then would build from source and burn pipeline minutes.
+Until the one-time switch below is done, every run ends green with a `skipped`
+note and touches nothing. The deploy hook URL stays out of this flow for the
+same reason: on a git-backed service it would trigger a paid build.
 
-After that, each push to `main` rebuilds `latest`; deploys stay manual
-(dashboard button or the service's deploy hook) so a merge never takes the
-demo down on its own. Rollback = redeploy the previous SHA tag (kept on GHCR).
+### One-time manual switch: git-backed -> image-backed (owner decision)
+
+Modify the EXISTING service - never recreate it - so the URL, the `lyam.dss.name`
+custom domain, the plan, the region, the health check and every env var
+(including `RESEND_API_KEY`, which stays in Render and in the vault, never in
+the repo or a workflow) carry over untouched:
+
+```sh
+curl -X PATCH https://api.render.com/v1/services/<SRV_ID> \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"image": {"ownerId": "<OWNER_ID>", "imagePath": "ghcr.io/manudss/iam-platform-poc:latest"},
+       "serviceDetails": {"runtime": "image"}}'
+```
+
+(`<SRV_ID>` and `<OWNER_ID>` are the service's own ids, visible in the dashboard
+URL / `GET /services?name=iam-poc-demo`; no registry credential is needed, the
+GHCR package is anonymously readable.) Then trigger one deploy from the
+dashboard, verify `/healthz` and the sign-in flow on both URLs, and the loop is
+closed: every push to `main` now rebuilds `latest` and auto-deploys it.
+
+**Rollback:** the dashboard keeps previous deploys - "Manual Deploy" a former
+deploy to go back instantly, or PATCH the service back to its git source
+(`repo`/`branch` + `serviceDetails.runtime: "docker"`). Old SHA tags stay on
+GHCR, so pinning the service to a specific `<sha>` tag is another rollback.
+The deploy history is the audit trail of what ran when.
