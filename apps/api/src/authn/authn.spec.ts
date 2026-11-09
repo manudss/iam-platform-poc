@@ -63,7 +63,7 @@ describe('authentication methods and chains', () => {
       assert.throws(() => validateConfig(cfg([m('a', 'password', 11)], [])), /1 to 10/);
       assert.throws(() => validateConfig(cfg([m('a', 'password', 2.5)], [])), /whole number/);
       assert.throws(() => validateConfig(cfg([m('a', 'nope', 3)], [])), /unknown type/);
-      assert.throws(() => validateConfig(cfg([m('a', 'passkey', 9)], [])), /catalogue only/);
+      assert.throws(() => validateConfig(cfg([m('a', 'recovery-code', 5)], [])), /catalogue only/);
       assert.throws(() => validateConfig(cfg([m('a', 'totp', 5, { evil: 1 })], [])), /unknown setting/);
       assert.throws(() => validateConfig(cfg([m('A_B', 'password', 3)], [])), /method id/);
       assert.throws(() => validateConfig(cfg([m('a', 'password', 3), m('a', 'password', 3)], [])), /duplicate method/);
@@ -106,7 +106,8 @@ describe('authentication methods and chains', () => {
       await http().put(`/tenants/${T}/auth`).send({ config: cfg([], []) }).expect(403);
       await put(cfg([m('a', 'password', 99)], [])).expect(400);
       const r = await http().get(`/tenants/${T}/auth`).expect(200);
-      assert.equal(r.body.catalogue.find((c: any) => c.id === 'passkey').maturity, 'catalogue');
+      assert.equal(r.body.catalogue.find((c: any) => c.id === 'webauthn').maturity, 'implemented');
+      assert.equal(r.body.catalogue.find((c: any) => c.id === 'recovery-code').maturity, 'catalogue');
       assert.equal(r.body.live.signInMode, 'base-password');
     });
     it('the catalogue lists the implemented method types, one of them simulated by default', async () => {
@@ -157,7 +158,7 @@ describe('authentication methods and chains', () => {
       await put(cfg([m('pw', 'password', 3), m('tp', 'totp', 7)], [{ id: 'mfa', name: 'Password + TOTP', steps: ['pw', 'tp'], level: 8 }], 'mfa')).expect(200);
       const tp = await provision('demo-alice', 'tp'); secrets.tp = tp.shownOnce.secret; assert.match(tp.shownOnce.otpauthUri, /^otpauth:\/\/totp\//);
       const tpStatus = (await http().get(`/tenants/${T}/auth/enrollments/demo-alice`).set(adm)).body.enrollments.tp;
-      assert.equal(tpStatus.totp, true); assert.equal(tpStatus.pin, false); assert.equal(tpStatus.email, null);
+      assert.equal(tpStatus.totp, true); assert.equal(tpStatus.pin, false); assert.equal(tpStatus.email, null); assert.equal(tpStatus.webauthn, false);
       assert.match(tpStatus.totpEnrolledAt, /^\d{4}-\d{2}-\d{2}T/, 'the enrolment date is reported'); assert.equal(tpStatus.totpLastUsedAt, null, 'never used yet');
       const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, chain: 'mfa' }).expect(200)).body;
       assert.equal(e.mode, 'chain'); assert.deepEqual(e.fields.map((f: any) => f.name), ['password']);
