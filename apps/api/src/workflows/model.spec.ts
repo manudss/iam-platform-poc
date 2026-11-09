@@ -63,7 +63,9 @@ describe('workflow start triggers', () => {
     assert.deepEqual(validateTrigger({ event: 'user.department-changed', match: { to: 'finance' } }), { event: 'user.department-changed', match: { to: 'finance' } });
     assert.throws(() => validateTrigger({ event: 'user.deleted' }), /unknown event/);
     assert.throws(() => validateTrigger({ event: 'user.created', match: { role: 'x' } }), /not a payload key/);
-    assert.throws(() => validateTrigger({ event: 'user.created', admin: true }), /only event and match/);
+    assert.throws(() => validateTrigger({ event: 'user.created', admin: true }), /only event, match, config/);
+    // config is reserved for contributed events that declare configFields; built-in events take none
+    assert.throws(() => validateTrigger({ event: 'user.created', config: { token: 'x' } }), /unknown key/);
   });
   it('accepts {{event.<key>}} placeholders in step configs, still refuses garbage', () => {
     const { graph } = validateGraph({ nodes: [node('a', 'assign-role', { identity: '{{event.subject}}', role: 'employee' })], edges: [] });
