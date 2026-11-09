@@ -3,7 +3,7 @@
 <app-theme-switch class="auth-theme" />
 <main class="login">
   <section class="card hero">
-    <div class="brand"><h1 class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>IAM next generation</span></h1></div>
+    <div class="brand"><h1 class="brand-title"><app-brand /></h1></div>
     @if (test(); as t) { <p class="msg test" id="branch-test-banner" role="status">Branch test: you are trying the sign-in of data branch <b>{{ t.branch }}</b>. Its unpublished configuration applies here; main is unchanged. <a href="/login">Back to the normal sign-in</a></p> }
     @if (s.expired()) { <p class="msg error" role="status">Session expired or invalid. Sign in again to continue. Your action was not retried; check its current state before trying again.</p> }
     @if (s.message()) { <p class="msg" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
@@ -57,6 +57,6 @@
       <div class="newhere"><span>New to the demo?</span></div>
       <a class="create" href="/signup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/><path d="M19 8v6M16 11h6"/></svg>Create an account</a>
     }
-    <p class="foot">Fictional demo data only. Do not enter real data. <a href="/privacy">Politique de confidentialité / Privacy</a> · <a href="/about">About this demo</a></p>
+    <p class="foot">{{branding.profile().footer}} <a href="/privacy">Politique de confidentialité / Privacy</a> · <a href="/about">About this demo</a></p>
   </section>
 </main>

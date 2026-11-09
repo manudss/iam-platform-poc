@@ -1,10 +1,11 @@
+import { Brand, Branding } from './branding';
 import { Component } from '@angular/core';
 import { ThemeSwitch } from './theme-switch';
 
 /** Public "about this demo" page (no sign-in): the explanations that used to sit on the sign-in page. English, like the rest of the console. */
 @Component({
   selector: 'app-about',
-  imports: [ThemeSwitch],
+  imports: [ThemeSwitch, Brand],
   styleUrl: './login.css',
   styles: [`
     .doc { width: min(46rem, 100%); padding: 2rem; }
@@ -26,7 +27,7 @@ import { ThemeSwitch } from './theme-switch';
   <app-theme-switch class="auth-theme" />
   <main class="login">
     <article class="card doc" id="about-page">
-      <div class="brand"><div class="brand-title"><picture class="brandlogo"><img class="for-light" src="/lyam-logo-horizontal-light.svg" alt="lyam"><img class="for-dark" src="/lyam-logo-horizontal-dark.svg" alt="" aria-hidden="true"></picture><span>IAM next generation</span></div></div>
+      <div class="brand"><div class="brand-title"><app-brand /></div></div>
       <h1 class="page-title">About this demo</h1>
       <p class="sub">iam.dss.name · Proof of concept</p>
 
