@@ -338,7 +338,7 @@ try {
   await nav('/users'); await page.waitForSelector('#users-table tbody tr');
   await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
+  await page.waitForFunction(() => { const t = document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? ''; return t.length > 10 && !t.includes('Loading...'); }, undefined, { timeout: 15000 });
   assert.match(await pinText(), /take effect immediately/, 'sheet PIN component: the immediate-effect note shows in manage mode');
   const pinProbe = await page.evaluate(async () => {
     const el = document.querySelector('iam-pin-profile');
@@ -358,12 +358,12 @@ try {
   await page.waitForSelector('#user-editor', { state: 'detached' });
   await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
+  await page.waitForFunction(() => { const t = document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? ''; return t.length > 10 && !t.includes('Loading...'); }, undefined, { timeout: 15000 });
   await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.waitForSelector('#user-editor', { state: 'detached' });
   await page.locator('#users-table tbody tr').nth(1).getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
+  await page.waitForFunction(() => { const t = document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? ''; return t.length > 10 && !t.includes('Loading...'); }, undefined, { timeout: 15000 });
   await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.waitForSelector('#user-editor', { state: 'detached' });
 
@@ -374,7 +374,7 @@ try {
   await nav('/users'); await page.waitForSelector('#users-table tbody tr');
   await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
+  await page.waitForFunction(() => { const t = document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? ''; return t.length > 10 && !t.includes('Loading...'); }, undefined, { timeout: 15000 });
   const roText = await pinText();
   assert.match(roText, /Set \(|Not set/, 'readonly PIN component: the method status still shows (got: ' + JSON.stringify(roText.slice(0, 300)) + ')');
   assert.ok(!/Set a new PIN|Revoke/.test(roText), 'readonly PIN component: no mutating label (got: ' + JSON.stringify(roText.slice(0, 200)) + ')');

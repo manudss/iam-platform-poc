@@ -24,7 +24,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 class PinProfile extends HTMLElement {
   connectedCallback() {
     this._ctx = this.context ?? { api: '', token: '', surface: 'self' };
-    this._insts = []; this._status = {}; this._edit = null; this._confirm = null;
+    this._insts = []; this._status = {}; this._edit = null; this._confirm = null; this._loaded = false;
     this.render(); void this.load();
   }
   h(admin) {
@@ -39,6 +39,7 @@ class PinProfile extends HTMLElement {
   }
   fail(r) {
     if (r.status < 400) return false;
+    this._loaded = true; // an answer came back: stop showing Loading
     this.say('', Array.isArray(r.data.message) ? r.data.message.join(' ') : (r.data.message ?? 'Refused'));
     return true;
   }
@@ -54,7 +55,7 @@ class PinProfile extends HTMLElement {
       const cfg = await this.call('GET', '/auth', undefined, true);
       if (!this.fail(cfg)) this._insts = (cfg.data.working?.config?.methods ?? cfg.data.live?.config?.methods ?? []).filter((m) => m.type === 'digit-code' && m.enabled).map((m) => ({ id: m.id, name: m.name, length: m.config?.length ?? 6 }));
     }
-    this.render();
+    this._loaded = true; this.render();
   }
   async set(inst, pin, current, admin) {
     const r = admin ? await this.call('POST', `/auth/enrollments/${encodeURIComponent(this._ctx.subject)}/${encodeURIComponent(inst)}`, { pin }, true)
@@ -90,7 +91,7 @@ class PinProfile extends HTMLElement {
       </div>`;
     }).join('');
     root.innerHTML = `<style>${css}</style><div class="ppf">
-      ${rows || '<p class="hint">No PIN method is enabled in the sign-in configuration.</p>'}
+      ${!this._loaded ? '<p class="hint">Loading...</p>' : rows || '<p class="hint">No PIN method is enabled in the sign-in configuration.</p>'}
       <p class="hint">A PIN is stored hashed and never shown anywhere${admin ? '; setting one for someone provisions the demo method' : ''}.</p>
       ${admin && !ro ? '<p class="immediate">Changes here take effect immediately. Save user and Cancel do not undo them.</p>' : ''}
       ${this._note ? `<p class="msg ok">${esc(this._note)}</p>` : ''}

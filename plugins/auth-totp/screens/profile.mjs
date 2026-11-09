@@ -40,6 +40,7 @@ class TotpProfile extends HTMLElement {
   }
   fail(r) {
     if (r.status < 400) return false;
+    this._loaded = true; // an answer came back: stop showing Loading
     this.say('', Array.isArray(r.data.message) ? r.data.message.join(' ') : (r.data.message ?? 'Refused'));
     return true;
   }
@@ -56,7 +57,7 @@ class TotpProfile extends HTMLElement {
       const cfg = await this.call('GET', '/auth', undefined, true);
       if (!this.fail(cfg)) this._insts = (cfg.data.working?.config?.methods ?? cfg.data.live?.config?.methods ?? []).filter((m) => m.type === 'totp' && m.enabled).map((m) => ({ id: m.id, name: m.name }));
     }
-    this.render();
+    this._loaded = true; this.render();
   }
   async enroll(inst) {
     const r = await this.call('POST', `/auth/me/enrollments/${encodeURIComponent(inst)}/totp`);
@@ -92,7 +93,7 @@ class TotpProfile extends HTMLElement {
       </div>`;
     }).join('');
     root.innerHTML = `<style>${css}</style><div class="tpf">
-      ${rows || '<p class="hint">No authenticator method is enabled in the sign-in configuration.</p>'}
+      ${!this._loaded ? '<p class="hint">Loading...</p>' : rows || '<p class="hint">No authenticator method is enabled in the sign-in configuration.</p>'}
       ${admin ? '<p class="hint">An administrator can see and revoke an enrollment, never create one: the secret must only ever be seen by the person.</p>' : ''}
       ${admin && !ro ? '<p class="immediate">Changes here take effect immediately. Save user and Cancel do not undo them.</p>' : ''}
       ${!ro && this._fresh ? `<div class="row" style="flex-direction:column;align-items:flex-start">
