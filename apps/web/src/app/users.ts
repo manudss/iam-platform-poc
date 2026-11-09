@@ -171,6 +171,7 @@ export class UsersPage {
   protected pfields = signal<any[]>([]); protected pvals = signal<Record<string, unknown>>({}); private pchanged: Record<string, unknown> = {};
   /** The picture plugin's value for the edited user, when the plugin is active (the avatar shows it, initials otherwise). */
   protected photo() { const v = this.pvals()['profile-picture.picture']; return typeof v === 'string' && v.startsWith('data:image/') ? v : ''; }
+  private pvalsFor: string | null = null; private profileRequest = 0;
   protected search = signal(''); protected fdept = signal(''); protected fstatus = signal<'' | UserStatus>('');
   protected sortKey = signal<SortKey>('name'); protected sortDir = signal<1 | -1>(1);
   protected menuFor = signal<string | null>(null);
@@ -197,12 +198,13 @@ export class UsersPage {
   @HostListener('document:click') closeMenu() { this.menuFor.set(null); }
 
   protected async load() { try { const r = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}); this.users.set(r.data.users); } catch (e) { this.note.set((e as Error).message); } }
-  protected start(u?: UserProfile) { this.menuFor.set(null); this.key = u?.id ?? null; this.form = { id: u?.id ?? '', display_name: u?.display_name ?? '', email: u?.email ?? '', department: u?.department ?? '', manager_id: u?.manager_id ?? '', login_enabled: u?.login_enabled ?? true }; this.password = ''; this.editing.set(true); this.pfields.set([]); this.pchanged = {}; if (u) void this.loadP(u.id); }
+  protected start(u?: UserProfile) { this.menuFor.set(null); this.key = u?.id ?? null; this.form = { id: u?.id ?? '', display_name: u?.display_name ?? '', email: u?.email ?? '', department: u?.department ?? '', manager_id: u?.manager_id ?? '', login_enabled: u?.login_enabled ?? true }; this.password = ''; this.editing.set(true); this.pfields.set([]); this.pvals.set({}); this.pchanged = {}; this.pvalsFor = u?.id ?? null; ++this.profileRequest; if (u) void this.loadP(u.id); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
-  private async loadP(id: string) { try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }
+  private async loadP(id: string) { const request = this.profileRequest, branch = this.s.branch(); try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400 && this.editing() && this.pvalsFor === id && this.key === id && request === this.profileRequest && branch === this.s.branch()) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }
   protected setP(k: string, v: unknown) { this.pvals.update((x) => ({ ...x, [k]: v })); this.pchanged[k] = v === '' ? null : v; }
   protected boolStr(k: string) { const v = this.pvals()[k]; return v === true ? 'true' : v === false ? 'false' : ''; }
-  protected cancel() { this.password = ''; this.editing.set(false); }
+  protected cancel() { this.password = ''; this.editing.set(false); this.pvals.set({}); this.pfields.set([]); this.pvalsFor = null; ++this.profileRequest; }
+  ngOnDestroy() { this.cancel(); }
   protected disableAndSave() { this.form.login_enabled = false; void this.save(); }
   protected async quickToggle(u: UserProfile) {
     this.menuFor.set(null); this.busy.set(true);
