@@ -53,6 +53,10 @@
       <p class="lead">Sign in with a fictional local user. You leave for the identity provider's login form and come back with a code; this app checks the state and the PKCE verifier.</p>
       <button type="button" id="signin-browser" class="primary" [disabled]="busy()" (click)="signIn()">Sign in</button>
     }
+    @if (test(); as t) {
+      <div class="newhere"><span>Testing the branch {{t.branch}}</span></div>
+      <a class="create" id="create-test-account" [href]="testSignupUrl()">Create a test account on this branch</a>
+    }
     @if (signupOpen()) {
       <div class="newhere"><span>New to the demo?</span></div>
       <a class="create" href="/signup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/><path d="M19 8v6M16 11h6"/></svg>Create an account</a>
