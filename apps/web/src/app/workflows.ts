@@ -21,11 +21,16 @@ export const workflowsEnabledGuard: CanActivateFn = async () => {
 // REAL data steps (assign-role/revoke-role/set-department) write on the run's own Dolt branch only;
 // publishing to main stays the human review/merge path.
 
-export type StepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department' | 'set-profile-field';
+// Step types are OPEN: plugins contribute blocks on the workflows.blocks surface (GET /workflow-blocks),
+// each with a family, form fields and documented outputs. The built-in types stay the Core family.
+export type StepType = string;
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
 export interface WfEdge { from: string; to: string }
-export interface WfTrigger { event: string; match?: Record<string, string> }
-export interface WfEvent { type: string; label: string; payload: string[] }
+export interface WfTrigger { event: string; match?: Record<string, string>; config?: Record<string, unknown> }
+export interface WfBlockField { key: string; label: string; type: 'string' | 'text' | 'number' | 'boolean' | 'select'; required?: boolean; default?: unknown; options?: string[]; help?: string }
+export interface WfEvent { type: string; label: string; payload: string[]; configFields?: WfBlockField[] }
+export interface WfBlock { type: string; family: string; label: string; simulated: boolean; description: string; fields?: WfBlockField[]; outputs?: { key: string; description: string }[]; provider: string | null; providerActive: boolean }
+export interface DemoSheet { name: string; simulated: boolean; note: string; columns: string[]; rows: { rowNumber: number; values: Record<string, string> }[] }
 export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; steps: number; simulatedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
 export interface RunSummary { id: string; definitionId: string; name: string; branch: string | null; status: string; error: string | null; startedBy: string; startedAt: string; finishedAt: string | null; hasDataSteps: boolean }
 export interface RunView { run: { id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[] }; steps: { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null }[] }
@@ -93,6 +98,10 @@ export class WorkflowClient {
   list() { return this.req<{ definitions: DefinitionSummary[] }>('GET', '/workflows'); }
   get(id: string) { return this.req<{ definition: { id: string; name: string; description: string; trigger: WfTrigger | null; graph: { nodes: WfNode[]; edges: WfEdge[] }; order: string[] } }>('GET', `/workflows/${id}`); }
   events() { return this.req<{ events: WfEvent[] }>('GET', '/workflows-events'); }
+  blocks() { return this.req<{ blocks: WfBlock[] }>('GET', '/workflow-blocks'); }
+  demoSheet() { return this.req<DemoSheet>('GET', '/plugins/workflow-connectors/demo-sheet'); }
+  demoSheetAdd(values: Record<string, string>) { return this.req('POST', '/plugins/workflow-connectors/demo-sheet/rows', values); }
+  demoSheetUpdate(row: number, column: string, value: string) { return this.req('PUT', `/plugins/workflow-connectors/demo-sheet/rows/${row}`, { column, value }); }
   create(name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null) { return this.req<{ definition: { id: string } }>('POST', '/workflows', trigger ? { name, description, graph, trigger } : { name, description, graph }); }
   update(id: string, name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null) { return this.req('PUT', `/workflows/${id}`, trigger ? { name, description, graph, trigger } : { name, description, graph }); }
   remove(id: string) { return this.req('DELETE', `/workflows/${id}`); }
@@ -137,6 +146,13 @@ const clientOf = (s: Session) => new WorkflowClient(s.api, () => s.adminToken())
 <td><button (click)="start(d)" [disabled]="busy()">Run</button> <a class="btn secondary" [routerLink]="['/workflows/edit', d.id]">Edit</a> <button class="secondary" (click)="remove(d)" [disabled]="busy()">Delete</button></td></tr>}
 @empty {<tr><td colspan="7">No workflow yet. Create one, or open the editor and load a sample.</td></tr>}
 </tbody></table></div></section>
+@if (sheet(); as sh) {<section class="card"><h3>Demo sheet - {{sh.name}} <span class="chip" data-status="simulated">SIMULATED</span></h3>
+<p class="hint">{{sh.note}}</p>
+<div class="scroll"><table><thead><tr><th>#</th>@for (c of sh.columns; track c) {<th>{{c}}</th>}</tr></thead><tbody>
+@for (r of sh.rows; track r.rowNumber) {<tr><td>{{r.rowNumber}}</td>@for (c of sh.columns; track c) {<td><input [attr.name]="'sh-'+r.rowNumber+'-'+c" [(ngModel)]="r.values[c]" /></td>}</tr>}
+</tbody></table></div>
+<div class="row" style="margin-top:.5rem"><button class="secondary" (click)="sheetAdd()" [disabled]="busy()">+ Add a candidate row</button><button (click)="sheetSave()" [disabled]="busy()">Save changes</button>@if (sheetNote()) {<span class="hint">{{sheetNote()}}</span>}</div>
+</section>}
 <section class="card"><h3>Recent runs</h3>
 <div class="scroll"><table><thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Branch</th><th>Started</th><th></th></tr></thead><tbody>
 @for (r of runs(); track r.id) {<tr><td>{{r.id}}</td><td>{{r.name}}</td><td><span class="chip" [attr.data-status]="r.status">{{r.status}}</span></td><td>{{r.branch || '-'}}</td><td>{{r.startedAt}}</td><td><a class="btn secondary" [routerLink]="['/workflows/run', r.id]">Open</a></td></tr>}
@@ -149,10 +165,33 @@ export class WorkflowsPage implements OnInit {
   protected defs = signal<DefinitionSummary[]>([]);
   protected runs = signal<RunSummary[]>([]);
   protected note = signal(''); protected busy = signal(false);
+  protected sheet = signal<DemoSheet | null>(null);
+  protected sheetNote = signal('');
+  private sheetSaved = '[]';
   ngOnInit() { void this.load(); }
   protected async load() {
     try { const c = clientOf(this.s); this.defs.set((await c.list()).definitions); this.runs.set((await c.runs()).runs.slice(0, 15)); }
     catch (e) { this.note.set((e as Error).message); }
+    try { const sh = await clientOf(this.s).demoSheet(); this.sheet.set(sh); this.sheetSaved = JSON.stringify(sh.rows.map((r) => r.values)); }
+    catch { this.sheet.set(null); } // the workflow-connectors plugin is disabled: no demo sheet section
+  }
+  protected async sheetSave() {
+    const sh = this.sheet(); if (!sh) return;
+    this.busy.set(true);
+    try {
+      const before1 = JSON.parse(this.sheetSaved) as Record<string, string>[];
+      let n = 0;
+      for (let i = 0; i < sh.rows.length; i++)
+        for (const col of sh.columns)
+          if ((before1[i]?.[col] ?? '') !== (sh.rows[i].values[col] ?? '')) { await clientOf(this.s).demoSheetUpdate(sh.rows[i].rowNumber, col, sh.rows[i].values[col] ?? ''); n++; }
+      this.sheetSaved = JSON.stringify(sh.rows.map((r) => r.values));
+      this.sheetNote.set(n ? `${n} cell(s) saved. A row with process = OK is picked up by the watcher within a minute.` : 'No change.');
+    } catch (e) { this.sheetNote.set((e as Error).message); } finally { this.busy.set(false); }
+  }
+  protected async sheetAdd() {
+    this.busy.set(true);
+    try { await clientOf(this.s).demoSheetAdd({ nom: 'Nouveau', prenom: 'Candidat', departement: 'engineering', role: 'employee', process: 'En cours', cree: '' }); await this.load(); }
+    catch (e) { this.sheetNote.set((e as Error).message); } finally { this.busy.set(false); }
   }
   protected async start(d: DefinitionSummary) {
     this.busy.set(true);
@@ -190,6 +229,16 @@ export const SAMPLE_WORKFLOWS: { name: string; description: string; trigger?: Wf
       { id: 'move', type: 'set-department', name: 'Move demo-bob to alumni', config: { identity: 'demo-bob', department: 'alumni' } },
       { id: 'tell', type: 'notify', name: 'Confirm to HR (simulated)', config: { recipient: 'hr', message: 'Offboarding done' } },
     ], edges: [{ from: 'revoke', to: 'move' }, { from: 'move', to: 'tell' }] },
+    { name: 'Sample: HR onboarding (demo sheet)', trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } }, description: 'The watcher polls the SIMULATED candidates sheet: a row with process = OK builds nom.prenom@lyam.demo, creates the user (run branch), grants the row role, marks cree=ok', nodes: [
+      { id: 'join', type: 'text-transform', name: 'Join nom.prenom', config: { operation: 'concat', values: '{{event.nom}}\n.\n{{event.prenom}}', separator: '' } },
+      { id: 'clean', type: 'text-transform', name: 'Strip accents', config: { operation: 'unaccent', text: '{{steps.join.value}}' } },
+      { id: 'lower', type: 'text-transform', name: 'Lowercase the login', config: { operation: 'lower', text: '{{steps.clean.value}}' } },
+      { id: 'email', type: 'text-transform', name: 'Build the e-mail', config: { operation: 'concat', values: '{{steps.lower.value}}\n@lyam.demo', separator: '' } },
+      { id: 'create', type: 'lyam-create-user', name: 'Create the user (lyam connector)', config: { identity: '{{steps.lower.value}}', displayName: '{{event.prenom}} {{event.nom}}', email: '{{steps.email.value}}', department: '{{event.departement}}' } },
+      { id: 'role', type: 'assign-role', name: 'Grant the row role', config: { identity: '{{steps.lower.value}}', role: '{{event.role}}' } },
+      { id: 'mark', type: 'google-sheets-update', name: 'Mark cree=ok', config: { source: 'demo-sheet', rowNumber: '{{event.rownumber}}', column: 'cree', value: 'ok' } },
+      { id: 'tell', type: 'notify', name: 'Inform HR (simulated)', config: { recipient: 'hr', message: '{{event.prenom}} {{event.nom}} onboarded: user {{steps.lower.value}} created with role {{event.role}}, pending branch review' } },
+    ], edges: [{ from: 'join', to: 'clean' }, { from: 'clean', to: 'lower' }, { from: 'lower', to: 'email' }, { from: 'email', to: 'create' }, { from: 'create', to: 'role' }, { from: 'role', to: 'mark' }, { from: 'mark', to: 'tell' }] },
     { name: 'Sample: SoD blocked', description: 'A grant that breaks segregation of duties: run completes, merge is refused at review', nodes: [
       { id: 'grant', type: 'assign-role', name: 'Give payment-approver to demo-bob', config: { identity: 'demo-bob', role: 'payment-approver' } },
       { id: 'oops', type: 'fail', name: 'External ticket fails (simulated)', config: { message: 'ticket system unreachable (demo)' } },
@@ -204,12 +253,21 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 <section class="card"><div class="row wf-head">
 <label>Name<input name="wfName" [(ngModel)]="name" maxlength="80" /></label>
 <label>Description<input name="wfDesc" [(ngModel)]="description" maxlength="500" /></label>
-<label>Start trigger<select name="wfTrigger" [(ngModel)]="triggerEvent" (ngModelChange)="match.set({})">
+<label>Start trigger<select name="wfTrigger" [(ngModel)]="triggerEvent" (ngModelChange)="match.set({}); triggerCfg.set({})">
 <option value="">Manual start only</option>
 @for (ev of events(); track ev.type) {<option [value]="ev.type">{{ev.label}}</option>}
 </select></label>
 @if (triggerEvent) {<span class="hint">Starts by itself on this event. Step fields may use placeholders: {{placeholderHint()}}</span>
-@for (k of payloadKeys(); track k) {<label>only if {{k}} =<input [attr.name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
+@for (k of payloadKeys(); track k) {@if (k !== '*') {<label>only if {{k}} =<input [attr.name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
+@for (f of triggerFields(); track f.key) {
+@switch (f.type) {
+@case ('boolean') {<label><input type="checkbox" [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default ?? false" (ngModelChange)="setTriggerCfg(f.key, $event)" /> {{f.label}}</label>}
+@case ('number') {<label>{{f.label}}<input type="number" [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default" (ngModelChange)="setTriggerCfg(f.key, +$event)" /></label>}
+@case ('select') {<label>{{f.label}}<select [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default ?? ''" (ngModelChange)="setTriggerCfg(f.key, $event)">@for (o of f.options ?? []; track o) {<option [value]="o">{{o}}</option>}</select>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+@default {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<input [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default ?? ''" (ngModelChange)="setTriggerCfg(f.key, $event)" maxlength="200" />@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+}
+}
+}
 <button (click)="save()" [disabled]="busy()">Save</button>
 <a class="btn secondary" routerLink="/workflows">Back</a>
 @for (sm of samples; track sm.name) {<button class="secondary" (click)="loadSample(sm)">{{sm.name}}</button>}
@@ -217,7 +275,8 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 <div class="wf-grid">
 <section class="card"><h3>Steps</h3>
 <p class="hint">Click to add a step. Connect handles in the canvas. Select a step to edit it.</p>
-@for (t of types; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{t.simulated ? 'SIMULATED' : 'REAL'}}</small><br /><small>{{t.hint}}</small></button>}
+@for (g of palette(); track g.family) {<div class="wf-family">{{g.family}}</div>
+@for (t of g.blocks; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{t.simulated ? 'SIMULATED' : 'REAL'}}</small>@if (t.provider && !t.providerActive) { <small class="req">(plugin disabled)</small>}<br /><small>{{t.description}}</small></button>}}
 </section>
 <section class="card wf-canvas">
 <vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [minZoom]="0.4" [maxZoom]="1.6" [background]="'var(--bg)'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
@@ -226,6 +285,20 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @if (selectedNode(); as nid) {@if (state.get(nid); as st) {
 <label>Step name<input name="stepName" [ngModel]="st.name" (ngModelChange)="rename(nid, $event)" maxlength="80" /></label>
 <p class="hint">{{typeOf(st.type).label}} — {{typeOf(st.type).simulated ? 'SIMULATED: demonstrates the flow, no external effect' : 'REAL: writes on the run branch only'}}</p>
+@if (blockOf(st.type)?.description) {<p class="hint">{{blockOf(st.type)!.description}}</p>}
+@if ((blockOf(st.type)?.fields?.length ?? 0) > 0) {
+@for (f of blockOf(st.type)!.fields!; track f.key) {
+@switch (f.type) {
+@case ('text') {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<textarea rows="3" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)"></textarea>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+@case ('boolean') {<label><input type="checkbox" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? false" (ngModelChange)="setCfg(nid, f.key, $event)" /> {{f.label}}</label>}
+@case ('number') {<label>{{f.label}}<input type="number" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default" (ngModelChange)="setCfg(nid, f.key, +$event)" />@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+@case ('select') {<label>{{f.label}}<select [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)">@for (o of f.options ?? []; track o) {<option [value]="o">{{o}}</option>}</select>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+@default {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<input [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)" maxlength="500" />@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+}
+}
+<p class="hint">Placeholders you can use here:</p>
+<div>@for (ph of placeholdersFor(nid); track ph) {<code class="ph-chip">{{ph}}</code>}@if (!placeholdersFor(nid).length) {<span class="hint">none yet: add a start trigger, or link an upstream step that has outputs</span>}</div>
+} @else {
 @switch (st.type) {
 @case ('wait') {<label>Seconds (0-60)<input name="waitSecs" type="number" min="0" max="60" [ngModel]="st.config['seconds']" (ngModelChange)="setCfg(nid,'seconds',$event)" /></label>}
 @case ('notify') {<label>Recipient (label only)<input name="notifTo" [ngModel]="st.config['recipient']" (ngModelChange)="setCfg(nid,'recipient',$event)" maxlength="80" /></label><label>Message<input name="notifMsg" [ngModel]="st.config['message']" (ngModelChange)="setCfg(nid,'message',$event)" maxlength="200" /></label>}
@@ -234,6 +307,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @case ('revoke-role') {<label>Identity<input name="rrId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Role<input name="rrRole" [ngModel]="st.config['role']" (ngModelChange)="setCfg(nid,'role',$event)" maxlength="32" /></label>}
 @case ('set-department') {<label>Identity<input name="sdId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Department<input name="sdDept" [ngModel]="st.config['department']" (ngModelChange)="setCfg(nid,'department',$event)" maxlength="40" /></label>}
 @case ('set-profile-field') {<label>Identity<input name="spfId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Profile field<input name="spfField" [ngModel]="st.config['field']" (ngModelChange)="setCfg(nid,'field',$event)" maxlength="80" placeholder="hr-attributes.employee_grade" /></label><label>Value<input name="spfValue" [ngModel]="st.config['value']" (ngModelChange)="setCfg(nid,'value',$event)" maxlength="200" /></label>}
+}
 }
 <button class="secondary" (click)="deleteNode(nid)">Delete step</button>
 }} @else if (selectedEdge(); as eid) {<p>Link {{eid}}</p><button class="secondary" (click)="deleteEdge(eid)">Delete link</button>}
@@ -251,12 +325,46 @@ export class WorkflowEditPage implements OnInit {
   protected readonly types = STEP_TYPES;
   protected readonly samples = SAMPLE_WORKFLOWS;
   protected events = signal<WfEvent[]>([]);
+  protected blocks = signal<WfBlock[]>([]);
   protected triggerEvent = '';
   protected match = signal<Record<string, string>>({});
+  protected triggerCfg = signal<Record<string, unknown>>({});
   protected payloadKeys() { return this.events().find((e) => e.type === this.triggerEvent)?.payload ?? []; }
-  protected placeholderHint() { return this.payloadKeys().map((k) => `{{event.${k}}}`).join('  '); }
+  protected placeholderHint() { return this.payloadKeys().includes('*') ? '{{event.<any key of the row/call>}}' : this.payloadKeys().map((k) => `{{event.${k}}}`).join('  '); }
+  protected triggerFields(): WfBlockField[] { return this.events().find((e) => e.type === this.triggerEvent)?.configFields ?? []; }
+  protected setTriggerCfg(k: string, v: unknown) { this.triggerCfg.update((c) => ({ ...c, [k]: v })); }
   protected setMatch(k: string, v: string) { this.match.update((m) => { const n = { ...m }; if (v) n[k] = v; else delete n[k]; return n; }); }
-  private triggerPayload(): WfTrigger | null { return this.triggerEvent ? { event: this.triggerEvent, ...(Object.keys(this.match()).length ? { match: this.match() } : {}) } : null; }
+  private triggerPayload(): WfTrigger | null {
+    if (!this.triggerEvent) return null;
+    const cfg = Object.fromEntries(Object.entries(this.triggerCfg()).filter(([, v]) => v !== '' && v !== undefined));
+    return { event: this.triggerEvent, ...(Object.keys(this.match()).length ? { match: this.match() } : {}), ...(Object.keys(cfg).length ? { config: cfg } : {}) };
+  }
+  /** The editor palette: the API block catalogue grouped by family (Core first), built-ins last-resort fallback. */
+  protected palette(): { family: string; blocks: WfBlock[] }[] {
+    const src: WfBlock[] = this.blocks().length ? this.blocks() : STEP_TYPES.map((t) => ({ type: t.type, family: 'Core', label: t.label, simulated: t.simulated, description: t.hint, provider: null, providerActive: true }));
+    const byFamily = new Map<string, WfBlock[]>();
+    for (const b of src) { const g = byFamily.get(b.family) ?? []; g.push(b); byFamily.set(b.family, g); }
+    return [...byFamily.entries()].sort((a, b) => (a[0] === 'Core' ? -1 : b[0] === 'Core' ? 1 : a[0].localeCompare(b[0]))).map(([family, blocks]) => ({ family, blocks }));
+  }
+  protected blockOf(t: string): WfBlock | undefined { return this.blocks().find((b) => b.type === t); }
+  /** Upstream steps of a node (transitive over the drawn links): their outputs are usable as placeholders. */
+  protected ancestorsOf(id: string): string[] {
+    const rev = new Map<string, string[]>();
+    for (const e of this.vfEdges()) { const g = rev.get(e.target) ?? []; g.push(e.source); rev.set(e.target, g); }
+    const out: string[] = []; const seen = new Set([id]); const queue = [id];
+    while (queue.length) { const c = queue.shift()!; for (const p of rev.get(c) ?? []) if (!seen.has(p)) { seen.add(p); out.push(p); queue.push(p); } }
+    return out;
+  }
+  protected placeholdersFor(nid: string): string[] {
+    const ev = this.events().find((e) => e.type === this.triggerEvent);
+    const out: string[] = (ev?.payload ?? []).filter((k) => k !== '*').map((k) => `{{event.${k}}}`);
+    if (ev?.payload?.includes('*')) out.push('{{event.<any key of the row/call>}}');
+    for (const aid of this.ancestorsOf(nid)) {
+      const st = this.state.get(aid); if (!st) continue;
+      for (const o of this.blockOf(st.type)?.outputs ?? []) out.push(`{{steps.${aid}.${o.key}}}`);
+    }
+    return out;
+  }
   protected vfNodes = signal<Node[]>([]);
   protected vfEdges = signal<Edge[]>([]);
   private readonly vflow = viewChild(VflowComponent);
@@ -311,9 +419,14 @@ export class WorkflowEditPage implements OnInit {
   ngOnInit() {
     this.id = this.route.snapshot.paramMap.get('id') ?? 'new';
     void clientOf(this.s).events().then((r) => this.events.set(r.events)).catch(() => this.events.set([]));
+    void clientOf(this.s).blocks().then((r) => this.blocks.set(r.blocks)).catch(() => this.blocks.set([]));
     if (this.id !== 'new') void this.load();
   }
-  protected typeOf(t: StepType) { return STEP_TYPES.find((x) => x.type === t)!; }
+  protected typeOf(t: StepType): { type: string; label: string; simulated: boolean; hint: string } {
+    const b = this.blockOf(t);
+    if (b) return { type: b.type, label: b.label, simulated: b.simulated, hint: b.description };
+    return STEP_TYPES.find((x) => x.type === t) ?? { type: t, label: t, simulated: true, hint: '' };
+  }
 
   private makeNode(id: string, st: NodeState, i: number): Node {
     return {
@@ -332,11 +445,13 @@ export class WorkflowEditPage implements OnInit {
 
   protected addNode(type: StepType) {
     const id = `step-${++this.seq}`;
-    const defaults: Record<StepType, Record<string, unknown>> = {
+    const defaults: Record<string, Record<string, unknown>> = {
       wait: { seconds: 2 }, notify: { recipient: '', message: '' }, fail: { message: 'step configured to fail' },
       'assign-role': { identity: 'demo-bob', role: 'accountant' }, 'revoke-role': { identity: 'demo-bob', role: 'payment-creator' }, 'set-department': { identity: 'demo-bob', department: '' }, 'set-profile-field': { identity: 'demo-bob', field: 'hr-attributes.employee_grade', value: '' },
     };
-    const st: NodeState = { type, name: this.typeOf(type).label, config: { ...defaults[type] } };
+    const blk = this.blockOf(type);
+    const fieldDefaults = Object.fromEntries((blk?.fields ?? []).filter((f) => f.default !== undefined).map((f) => [f.key, f.default as unknown]));
+    const st: NodeState = { type, name: this.typeOf(type).label, config: { ...fieldDefaults, ...defaults[type] } };
     this.state.set(id, st);
     for (const n of this.vfNodes()) n.selected?.set(false);
     const node = this.makeNode(id, st, this.vfNodes().length);
@@ -366,7 +481,7 @@ export class WorkflowEditPage implements OnInit {
   protected loadSample(sm: (typeof this.samples)[number]) {
     this.name = sm.name.replace('Sample: ', 'Demo: ');
     this.description = sm.description;
-    this.triggerEvent = sm.trigger?.event ?? ''; this.match.set({ ...(sm.trigger?.match ?? {}) });
+    this.triggerEvent = sm.trigger?.event ?? ''; this.match.set({ ...(sm.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(sm.trigger?.config ?? {}) });
     this.state.clear();
     const nodes: Node[] = [];
     sm.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); });
@@ -379,7 +494,7 @@ export class WorkflowEditPage implements OnInit {
     try {
       const { definition } = await clientOf(this.s).get(this.id);
       this.name = definition.name; this.description = definition.description;
-      this.triggerEvent = definition.trigger?.event ?? ''; this.match.set({ ...(definition.trigger?.match ?? {}) });
+      this.triggerEvent = definition.trigger?.event ?? ''; this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
       this.state.clear();
       const nodes: Node[] = [];
       definition.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });

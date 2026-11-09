@@ -124,3 +124,9 @@ h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px 
 /* Segments must not shrink and clip their words. The table scrolls within its own region on small screens. */
 #pf-components-table .seg { max-width: none; }
 #pf-components-table .seg-opt { flex-shrink: 0; }
+
+/* Contributed workflow blocks (plugin catalogue) */
+.wf-family { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: .8rem 0 .3rem; }
+.ph-chip { display: inline-block; background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; border-radius: .3rem; padding: 0 .3rem; font-size: .72rem; margin: .1rem .15rem 0 0; font-family: ui-monospace, monospace; }
+.req { color: #b91c1c; }
+td input { width: 100%; box-sizing: border-box; }
