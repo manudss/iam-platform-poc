@@ -52,7 +52,7 @@ class PinProfile extends HTMLElement {
     this._insts = (r.data.methods ?? []).filter((m) => m.type === 'digit-code');
     if (admin && !this._insts.length) {
       const cfg = await this.call('GET', '/auth', undefined, true);
-      if (!this.fail(cfg)) this._insts = (cfg.data.live?.config?.methods ?? []).filter((m) => m.type === 'digit-code' && m.enabled).map((m) => ({ id: m.id, name: m.name, length: m.config?.length ?? 6 }));
+      if (!this.fail(cfg)) this._insts = (cfg.data.working?.config?.methods ?? cfg.data.live?.config?.methods ?? []).filter((m) => m.type === 'digit-code' && m.enabled).map((m) => ({ id: m.id, name: m.name, length: m.config?.length ?? 6 }));
     }
     this.render();
   }

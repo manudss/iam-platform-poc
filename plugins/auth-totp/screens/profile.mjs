@@ -54,7 +54,7 @@ class TotpProfile extends HTMLElement {
     if (admin && !this._insts.length) {
       // The admin status endpoint does not list methods: fetch them from the shared auth configuration.
       const cfg = await this.call('GET', '/auth', undefined, true);
-      if (!this.fail(cfg)) this._insts = (cfg.data.live?.config?.methods ?? []).filter((m) => m.type === 'totp' && m.enabled).map((m) => ({ id: m.id, name: m.name }));
+      if (!this.fail(cfg)) this._insts = (cfg.data.working?.config?.methods ?? cfg.data.live?.config?.methods ?? []).filter((m) => m.type === 'totp' && m.enabled).map((m) => ({ id: m.id, name: m.name }));
     }
     this.render();
   }
