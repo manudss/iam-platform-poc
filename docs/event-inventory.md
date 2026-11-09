@@ -24,7 +24,7 @@ Production code: 39 points. Test code: 84 points.
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:39 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:48 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:141 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:200 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:206 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:65 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
