@@ -369,7 +369,13 @@ try {
 
   // Readonly mode (Profile fields -> component surfaces): status stays, every mutating control goes away.
   await nav('/profile-fields'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
-  await page.selectOption('select[name="caauth-digit-code:pin"]', 'readonly');
+  const pinRow = page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"]');
+  try {
+    await pinRow.locator('select').nth(1).selectOption('readonly', { timeout: 10000 }); // 0 = My profile, 1 = user sheet (admin)
+  } catch (e) {
+    console.log('DIAG pin row html:', await pinRow.innerHTML().catch(() => '<unreadable>'));
+    throw e;
+  }
   await Promise.all([page.waitForResponse((r) => r.url().includes('/profile-fields') && r.request().method() === 'PUT' && r.status() < 300), page.click('#pf-save')]);
   await nav('/users'); await page.waitForSelector('#users-table tbody tr');
   await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
@@ -384,7 +390,7 @@ try {
   await page.waitForSelector('#user-editor', { state: 'detached' });
   // Restore manage mode so the rest of the run and the screenshots stay in the default posture.
   await nav('/profile-fields'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
-  await page.selectOption('select[name="caauth-digit-code:pin"]', 'manage');
+  await page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"] select').nth(1).selectOption('manage');
   await Promise.all([page.waitForResponse((r) => r.url().includes('/profile-fields') && r.request().method() === 'PUT' && r.status() < 300), page.click('#pf-save')]);
   await noBanner('users page');
 
