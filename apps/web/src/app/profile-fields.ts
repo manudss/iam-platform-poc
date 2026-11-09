@@ -11,44 +11,119 @@ export interface ComponentInv { key: string; plugin: string; id: string; title: 
 export const lockedFor = (f: CatField) => f.klass === 'authority';
 export const SURFACES = ['manage', 'readonly', 'hidden'];
 
-/** Admin: which fields and components exist (base + plugins), where each is shown or editable, and in which order. Saved on the working branch, live after Apply. */
+type Tab = 'fields' | 'components' | 'preview' | 'publish';
+
+/**
+ * Admin: the user profile, as the validated mockup lays it out - three tabs.
+ * Fields: the grouped, draggable list of fields with a per-field side panel (surface matrix, lifecycle).
+ * Components: which plugin components show on which surface, plus the enrolment stats an administrator gets.
+ * Preview: the resulting forms, surface by surface, before saving. Saved on the working branch, live after Apply.
+ */
 @Component({
   selector: 'app-profile-fields', imports: [FormsModule], styleUrl: './pages.css',
   template: `
-  <p class="lead">Profile fields and components come from the core and from plugins. For each field choose where it appears and who can edit it; for each component, on which surfaces it shows. The preview shows the result before you save.</p>
+  <p class="lead">Profile fields and components come from the core and from plugins. Choose for each one where it appears and who can edit it; reorder them by drag and drop. Changes go live only after Apply.</p>
   <p class="hint">Fields marked <b>authority</b> (department, manager, grade...) decide what someone may be or do. They can never be asked at sign-up nor edited by the person; only an administrator changes them. Roles and organizations are assigned separately, never from a profile form. Fictional data only: history keeps every value.</p>
   @if (note()) { <p role="status" class="msg" id="pf-note">{{note()}}</p> }
   @if (problem()) { <p role="alert" class="msg bad" id="pf-problem">{{problem()}}</p> }
-  <section class="card"><h3>Fields</h3><div class="scroll"><table id="pf-table"><thead><tr><th>Field</th><th>Origin</th><th>Class</th><th>Shown</th><th>At sign-up</th><th>Person sees</th><th>Person edits</th><th>Admin sees</th><th>Admin edits</th><th>Section</th><th>Order</th></tr></thead><tbody>
-  @for (f of cat(); track f.fullKey) { @if (cfg()[f.fullKey]; as c) {
-    <tr [attr.data-key]="f.fullKey"><td>{{f.label}}<br><small>{{f.fullKey}}</small></td><td>{{f.plugin}}@if (f.storage==='table') { <br><small>owns its table</small> }</td>
-    <td>@if (locked(f)) { <span class="pill warn">authority</span> } @else { profile }@if (f.pii!=='none') { <br><small>PII: {{f.pii}}</small> }</td>
-    <td><input type="checkbox" [name]="'en'+f.fullKey" [(ngModel)]="c.enabled" (ngModelChange)="dirty.set(true)" [attr.aria-label]="'Show '+f.fullKey" /></td>
-    <td><select [name]="'su'+f.fullKey" [(ngModel)]="c.signup" (ngModelChange)="dirty.set(true)" [disabled]="locked(f)" [attr.aria-label]="'Sign-up '+f.fullKey"><option value="off">no</option><option value="optional">optional</option><option value="required">required</option></select></td>
-    <td><input type="checkbox" [name]="'sv'+f.fullKey" [(ngModel)]="c.selfView" (ngModelChange)="dirty.set(true)" [attr.aria-label]="'Person sees '+f.fullKey" /></td>
-    <td><input type="checkbox" [name]="'se'+f.fullKey" [(ngModel)]="c.selfEdit" (ngModelChange)="dirty.set(true)" [disabled]="locked(f) || f.storage==='identities'" [attr.aria-label]="'Person edits '+f.fullKey" />@if (f.storage==='identities' && !locked(f)) { <br><small>later (needs re-authentication)</small> }</td>
-    <td><input type="checkbox" [name]="'av'+f.fullKey" [(ngModel)]="c.adminView" (ngModelChange)="dirty.set(true)" [attr.aria-label]="'Admin sees '+f.fullKey" /></td>
-    <td><input type="checkbox" [name]="'ae'+f.fullKey" [(ngModel)]="c.adminEdit" (ngModelChange)="dirty.set(true)" [attr.aria-label]="'Admin edits '+f.fullKey" /></td>
-    <td><input class="pf-section" [name]="'sec'+f.fullKey" [(ngModel)]="c.section" (ngModelChange)="dirty.set(true)" [attr.aria-label]="'Section '+f.fullKey" [placeholder]="f.section ?? ''" list="pf-sections" /></td>
-    <td><input class="pf-order" type="number" min="0" max="999" [name]="'ord'+f.fullKey" [ngModel]="c.order ?? f.order ?? 500" (ngModelChange)="c.order=$event;dirty.set(true)" [attr.aria-label]="'Order '+f.fullKey" /></td></tr> } }
-  @empty { <tr><td colspan="11">{{loaded() ? 'No fields.' : 'Loading...'}}</td></tr> }
-  </tbody></table></div>
+
+  <nav class="pf-tabs" role="tablist" aria-label="Profile configuration">
+    <button role="tab" type="button" id="pf-tab-fields" [attr.aria-selected]="tab()==='fields'" [class.active]="tab()==='fields'" (click)="tab.set('fields')">Fields</button>
+    <button role="tab" type="button" id="pf-tab-components" [attr.aria-selected]="tab()==='components'" [class.active]="tab()==='components'" (click)="tab.set('components')">Components</button>
+    <button role="tab" type="button" id="pf-tab-preview" [attr.aria-selected]="tab()==='preview'" [class.active]="tab()==='preview'" (click)="tab.set('preview')">Preview</button>
+    <button role="tab" type="button" id="pf-tab-publish" [attr.aria-selected]="tab()==='publish'" [class.active]="tab()==='publish'" (click)="tab.set('publish')">Publish &amp; sign-up</button>
+  </nav>
+
+  @if (tab()==='fields') {
+  <section class="card" id="pf-table"><div class="pf-fields-grid">
+    <div class="pf-field-list" aria-label="Profile fields, grouped by section">
+      @for (g of groups(); track g.name) {
+        <h4 class="pf-group">{{g.name}} · {{g.fields.length}} field(s)</h4>
+        @for (f of g.fields; track f.fullKey) { @if (cfg()[f.fullKey]; as c) {
+          <div class="pf-field" [class.selected]="sel()===f.fullKey" [class.off]="!c.enabled" role="button" tabindex="0"
+               draggable="true" (dragstart)="dragStart(f.fullKey)" (dragover)="$event.preventDefault()" (drop)="drop(f)" (click)="sel.set(f.fullKey)" (keydown.enter)="sel.set(f.fullKey)">
+            <span class="pf-grip" aria-hidden="true">⋮⋮</span>
+            <span class="pf-field-main"><b>{{f.label}}</b><br><small>{{f.fullKey}} · {{f.plugin}}@if (f.storage==='table') { · owns its table }</small></span>
+            @if (f.plugin==='base') { <span class="pill">core</span> }
+            @if (locked(f)) { <span class="pill warn">authority</span> }
+            <span class="pill" [class.warn]="!c.enabled">{{c.enabled ? 'active' : 'hidden'}}</span>
+          </div> } }
+      } @empty { <p class="hint">{{loaded() ? 'No fields.' : 'Loading...'}}</p> }
+      <p class="hint">The directory core fields (name, e-mail) can be tuned but never disabled or hidden from administrators. Sections group the fields on My profile and in the user sheet; drag a row onto another to reorder, or onto another section to move it there.</p>
+    </div>
+    <aside class="pf-side" aria-label="Selected field">
+      @if (selected(); as f) { @if (cfg()[f.fullKey]; as c) {
+        <h3>{{f.label}}</h3>
+        <p class="hint">{{f.plugin}} · {{f.fullKey}}@if (f.help) { <br>{{f.help}} }</p>
+        <label class="inline"><input type="checkbox" name="pf-enabled" [ngModel]="c.enabled" (ngModelChange)="c.enabled=$event;dirty.set(true)" [disabled]="f.plugin==='base'" /> Field enabled</label>
+        <h4>Where it shows</h4>
+        <table class="pf-surface"><tbody>
+          <tr><td>Sign-up</td><td>
+            <select name="pf-su" [ngModel]="c.signup" (ngModelChange)="c.signup=$event;dirty.set(true)" [disabled]="locked(f) || !c.enabled" aria-label="At sign-up">
+              <option value="off">hidden</option><option value="optional">optional</option><option value="required">required</option></select>
+            @if (locked(f)) { <br><small>never at sign-up (authority)</small> }</td></tr>
+          <tr><td>My profile</td><td>
+            <select name="pf-self" [ngModel]="surfaceState(c.selfView, c.selfEdit)" (ngModelChange)="setSurface(c,'self',$event)" [disabled]="!c.enabled" aria-label="On My profile">
+              <option value="hidden">hidden</option><option value="visible">visible</option><option value="editable" [disabled]="locked(f) || f.storage==='identities'">editable</option></select>
+            @if (f.storage==='identities' && !locked(f)) { <br><small>edited later (needs re-authentication)</small> }</td></tr>
+          <tr><td>User sheet (admin)</td><td>
+            <select name="pf-admin" [ngModel]="surfaceState(c.adminView, c.adminEdit)" (ngModelChange)="setSurface(c,'admin',$event)" [disabled]="!c.enabled" aria-label="In the user sheet">
+              @if (f.plugin!=='base') { <option value="hidden">hidden</option> }<option value="visible">visible</option><option value="editable">editable</option></select>
+            @if (f.plugin==='base') { <br><small>always visible to administrators (core)</small> }</td></tr>
+        </tbody></table>
+        <h4>Placement</h4>
+        <label>Section <input class="pf-section" name="pf-sec" [ngModel]="c.section" (ngModelChange)="c.section=$event;dirty.set(true)" [placeholder]="f.section ?? ''" list="pf-sections" /></label>
+        <label>Order <input class="pf-order" type="number" min="0" max="999" name="pf-ord" [ngModel]="c.order ?? f.order ?? 500" (ngModelChange)="c.order=$event;dirty.set(true)" /></label>
+        @if (f.plugin!=='base') {
+          <h4>Plugin lifecycle</h4>
+          <p class="pf-lifecycle" aria-label="Lifecycle">
+            <span class="pf-step">installed</span> → <span class="pf-step" [class.on]="c.enabled">enabled</span> → <span class="pf-step" [class.on]="!c.enabled">disabled: values kept</span> → <span class="pf-step">uninstalled: table dropped</span>
+          </p>
+          <p class="hint">Disabling hides the field everywhere (sign-up, My profile, user sheet) without erasing anything. Uninstalling the plugin asks for confirmation and offers an export first.</p>
+        }
+      } } @else { <p class="hint">Select a field to tune where it shows.</p> }
+    </aside>
+  </div>
   <datalist id="pf-sections">@for (s of knownSections(); track s) { <option [value]="s"></option> }</datalist>
-  <p class="hint">Sections group the fields on My profile and in the user sheet; order sorts them (0 first, 999 last, 500 by default). The directory core fields (name, e-mail) can be tuned but never disabled or hidden from administrators.</p></section>
+  </section> }
+
+  @if (tab()==='components') {
   <section class="card" id="pf-components"><h3>Components</h3>
-    <p class="hint">Plugins contribute whole components to the profile surfaces (picture, authenticator, PIN, password). Choose where each shows: <b>manage</b> (view + the actions the role allows), <b>readonly</b>, <b>hidden</b>.</p>
+    <p class="hint">Plugins contribute whole components to the profile surfaces (picture, authenticator, PIN, password). Choose where each shows: <b>manage</b> (view + the actions the role allows), <b>readonly</b> (status only), <b>hidden</b>. The public sign-up form never loads a packaged component: plain fields only.</p>
     <div class="scroll"><table id="pf-components-table"><thead><tr><th>Component</th><th>Plugin</th><th>My profile</th><th>User sheet (admin)</th><th>Order</th></tr></thead><tbody>
     @for (c of comps(); track c.key) { <tr [attr.data-component]="c.key"><td>{{c.title}}<br><small>{{c.key}}</small></td><td>{{c.plugin}}</td>
       <td><select [name]="'cs'+c.key" [ngModel]="compsCfg()[c.key]?.self ?? c.defaults.self" (ngModelChange)="setComp(c.key,'self',$event)">@for (m of surfaces; track m) { <option [value]="m">{{m}}</option> }</select></td>
       <td><select [name]="'ca'+c.key" [ngModel]="compsCfg()[c.key]?.admin ?? c.defaults.admin" (ngModelChange)="setComp(c.key,'admin',$event)">@for (m of surfaces; track m) { <option [value]="m">{{m}}</option> }</select></td>
       <td><input class="pf-order" type="number" min="0" max="999" [name]="'co'+c.key" [ngModel]="compsCfg()[c.key]?.order ?? c.order" (ngModelChange)="setComp(c.key,'order',$event)" [attr.aria-label]="'Order '+c.key" /></td></tr> }
     @empty { <tr><td colspan="5">No plugin contributes a profile component on this branch.</td></tr> }
-    </tbody></table></div></section>
+    </tbody></table></div>
+    <h3>Enrolment statistics (admin view)</h3>
+    <div class="stats">
+      <p class="stat"><span class="n">{{totpEnrolled()}}</span><span class="l">authenticator apps enrolled</span></p>
+      <p class="stat"><span class="n">{{pinEnrolled()}}</span><span class="l">PINs set</span></p>
+      <p class="stat"><span class="n">{{emailEnrolled()}}</span><span class="l">e-mail addresses for codes</span></p>
+    </div>
+    <p class="hint">Counts over every enabled method instance. The detail stays with the person: an administrator sees statuses and can revoke, never a secret.</p>
+  </section> }
+
+  @if (tab()==='preview') {
   <section class="card" id="pf-preview"><h3>Preview (working branch)</h3>
-    <p class="hint">What the current draft shows on each surface, in display order. Live surfaces keep the applied configuration until Apply.</p>
+    <p class="hint">The forms the current draft produces on each surface. Live surfaces keep the applied configuration until Apply.</p>
     <div class="pf-preview-cols">
-      @for (p of preview(); track p.context) { <div class="pf-preview-col"><h4>{{p.title}}</h4><ul>@for (f of p.fields; track f.key) { <li>{{f.label}} <small>{{f.section ? '('+f.section+') ' : ''}}{{f.required ? '· required' : ''}}{{f.editable ? '' : '· read only'}}</small></li> } @empty { <li><small>No field.</small></li> }</ul></div> }
-    </div></section>
+      @for (p of preview(); track p.context) { <div class="pf-preview-col pf-form-preview"><h4>{{p.title}}</h4>
+        @for (sec of previewSections(p.fields); track sec.name) {
+          @if (sec.name) { <h5 class="pf-pv-section">{{sec.name}}</h5> }
+          @for (f of sec.fields; track f.key) {
+            <label class="pf-pv-field">{{f.label}}@if (f.required) { <b class="pf-req" title="required">*</b> }@if (!f.editable) { <small>(read only)</small> }
+              @if (f.type==='select') { <select disabled aria-hidden="true"><option>-</option>@for (o of f.options ?? []; track o.value) { <option>{{o.label}}</option> }</select> }
+              @else if (f.type==='image') { <span class="pf-pv-img">No picture</span> }
+              @else { <input disabled [placeholder]="f.help ?? f.label" aria-hidden="true" /> }
+            </label> }
+        } @empty { <p class="hint">No field on this surface.</p> }
+      </div> }
+    </div></section> }
+
+  @if (tab()==='publish') {
   <section class="card" id="pf-policy"><h3>How people's own edits are published</h3>
     <label>Policy <select name="selfEditPolicy" [(ngModel)]="policy" (ngModelChange)="dirty.set(true)" aria-label="Own-edit policy"><option value="immediate">Immediate: a person's edits go live at once (Dolt main)</option><option value="review">Validated: edits wait on a personal change set until a validator accepts them</option></select></label>
     <p class="hint">Live only after Save and Apply. With validation, each person's edits stay on an automatic personal Dolt branch (not a Git branch); a validator (an administrator other than the author) reviews the changes on the page Profile reviews, then accepts (merge into main) or refuses (the change set is deleted). Live policy: <b id="pf-livepolicy">{{livePolicy()}}</b>.</p>
@@ -61,7 +136,8 @@ export const SURFACES = ['manage', 'readonly', 'hidden'];
     @for (q of requests(); track q.id) { <tr><td>{{q.display_name}}<br><small>{{q.id}}</small></td><td>{{q.email}}</td><td>{{q.confirmed ? 'yes' : 'no'}}</td>
     <td><button class="secondary" (click)="decide(q.id, true)" [disabled]="!q.confirmed || s.branch()==='main'">Approve on this branch</button><button class="secondary" (click)="decide(q.id, false)">Reject</button></td></tr> }
     </tbody></table></div> } @else { <p class="hint">No pending request.</p> }
-  </section>
+  </section> }
+
   <section class="card"><div class="row"><button id="pf-save" (click)="save()" [disabled]="busy() || !loaded() || s.branch()==='main'">Save on this branch</button>
   @if (dirty()) { <span class="pill warn">Unsaved edits</span> }</div>
   @if (s.branch()==='main') { <p class="hint">Choose a working branch (not main) to save. Changes become live only after Apply.</p> }
@@ -71,13 +147,59 @@ export class ProfileFieldsPage {
   protected readonly s = inject(Session);
   protected cat = signal<CatField[]>([]); protected cfg = signal<Record<string, Setting>>({});
   protected comps = signal<ComponentInv[]>([]); protected compsCfg = signal<Record<string, { self?: string; admin?: string; order?: number }>>({});
-  protected preview = signal<{ context: string; title: string; fields: { key: string; label: string; section?: string; required?: boolean; editable: boolean }[] }[]>([]);
+  protected preview = signal<{ context: string; title: string; fields: EField[] }[]>([]);
   protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected dirty = signal(false); protected loaded = signal(false); protected signupOpen = false; protected policy: 'immediate' | 'review' = 'immediate'; protected livePolicy = signal('immediate'); protected liveOpen = signal(false); protected requests = signal<{ id: string; display_name: string; email: string; confirmed: boolean }[]>([]);
   protected readonly surfaces = SURFACES;
+  protected readonly tab = signal<Tab>('fields');
+  protected readonly sel = signal<string>('');
+  private dragKey = '';
+  private stats = signal<Record<string, { totp: number; pin: number; email: number }>>({});
   constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   protected locked = lockedFor;
-  protected knownSections() { return [...new Set(this.cat().map((f) => f.section).filter((x): x is string => !!x))].sort(); }
+  protected knownSections() { return [...new Set(this.cat().map((f) => this.sectionOf(f)).filter((x): x is string => !!x))].sort(); }
+  protected sectionOf(f: CatField) { return this.cfg()[f.fullKey]?.section || f.section || ''; }
+  private sorted() { return [...this.cat()].sort((a, b) => (this.cfg()[a.fullKey]?.order ?? a.order ?? 500) - (this.cfg()[b.fullKey]?.order ?? b.order ?? 500) || a.fullKey.localeCompare(b.fullKey)); }
+  protected groups() {
+    const out: { name: string; fields: CatField[] }[] = [];
+    for (const f of this.sorted()) {
+      const name = this.sectionOf(f) || 'Other';
+      const last = out[out.length - 1];
+      if (last && last.name === name) last.fields.push(f); else out.push({ name, fields: [f] });
+    }
+    return out;
+  }
+  protected selected() { return this.cat().find((f) => f.fullKey === this.sel()); }
+  protected surfaceState(view: boolean, edit: boolean) { return !view ? 'hidden' : edit ? 'editable' : 'visible'; }
+  protected setSurface(c: Setting, surface: 'self' | 'admin', v: string) {
+    const view = v !== 'hidden', edit = v === 'editable';
+    if (surface === 'self') { c.selfView = view; c.selfEdit = edit; } else { c.adminView = view; c.adminEdit = edit; }
+    this.dirty.set(true);
+  }
+  protected dragStart(key: string) { this.dragKey = key; }
+  /** Drop onto a row: move the dragged field just before it (adopting its section), then renumber 10 by 10. */
+  protected drop(target: CatField) {
+    const key = this.dragKey; this.dragKey = '';
+    if (!key || key === target.fullKey) return;
+    const flat = this.sorted().filter((f) => f.fullKey !== key);
+    const at = flat.findIndex((f) => f.fullKey === target.fullKey);
+    const moved = this.cat().find((f) => f.fullKey === key)!;
+    flat.splice(at < 0 ? flat.length : at, 0, moved);
+    flat.forEach((f, i) => { const c = this.cfg()[f.fullKey]; c.order = (i + 1) * 10; if (f.fullKey === key) c.section = this.sectionOf(target); });
+    this.cfg.update((m) => ({ ...m })); this.dirty.set(true);
+  }
+  protected totpEnrolled() { return Object.values(this.stats()).reduce((n, s) => n + s.totp, 0); }
+  protected pinEnrolled() { return Object.values(this.stats()).reduce((n, s) => n + s.pin, 0); }
+  protected emailEnrolled() { return Object.values(this.stats()).reduce((n, s) => n + s.email, 0); }
+  protected previewSections(fields: EField[]) {
+    const out: { name: string; fields: EField[] }[] = [];
+    for (const f of fields) {
+      const name = f.section ?? f.group ?? '';
+      const last = out[out.length - 1];
+      if (last && last.name === name) last.fields.push(f); else out.push({ name, fields: [f] });
+    }
+    return out;
+  }
   protected setComp(key: string, k: 'self' | 'admin' | 'order', v: string | number) { this.compsCfg.update((m) => ({ ...m, [key]: { ...m[key], [k]: v } })); this.dirty.set(true); }
   protected async load() {
     this.loaded.set(false);
@@ -89,12 +211,16 @@ export class ProfileFieldsPage {
       for (const f of r.data.catalogue as CatField[]) eff[f.fullKey] = { ...defaults(), ...(r.data.working.settings?.[f.fullKey] ?? {}) };
       this.signupOpen = !!r.data.working.config.signup?.open; this.policy = r.data.working.config.selfEditPolicy === 'review' ? 'review' : 'immediate'; this.livePolicy.set(r.data.live.config.selfEditPolicy === 'review' ? 'review' : 'immediate'); this.liveOpen.set(!!r.data.live.config.signup?.open); void this.loadRequests();
       this.cat.set(r.data.catalogue); this.cfg.set(eff); this.compsCfg.set({ ...(r.data.working.config.components ?? {}) });
+      if (!this.sel() && r.data.catalogue.length) this.sel.set((r.data.catalogue as CatField[])[0].fullKey);
       this.dirty.set(false); this.problem.set(''); this.loaded.set(true);
-      void this.loadComps(); void this.loadPreview();
+      void this.loadComps(); void this.loadPreview(); void this.loadStats();
     } catch (e) { this.problem.set((e as Error).message); }
   }
   protected async loadComps() {
     try { const r = await this.s.api.raw<any>('GET', '/profile-components-inventory', undefined, this.h()); if (r.status < 400) this.comps.set(r.data.components ?? []); } catch { this.comps.set([]); }
+  }
+  protected async loadStats() {
+    try { const r = await this.s.api.raw<any>('GET', '/auth/enrollment-stats', undefined, this.h()); if (r.status < 400) this.stats.set(r.data.instances ?? {}); } catch { /* stats stay at zero */ }
   }
   protected async loadPreview() {
     const titles: Record<string, string> = { signup: 'Sign-up form', self: 'My profile (person)', admin: 'User sheet (admin)' };
