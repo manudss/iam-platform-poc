@@ -13,7 +13,7 @@ const ctx = (over: Partial<WfBlockCtx> = {}): WfBlockCtx & { lines: string[] } =
   return {
     tenant: 'acme', config: {}, settings: {}, dryRun: false,
     log: (l) => lines.push(l), outputs: {},
-    branchWrite: async (fn) => { await fn({ query: async () => [[{ n: 0 }], undefined] as [unknown, unknown] }); },
+    branchWrite: async (fn) => { await fn({ query: async (sql: string) => sql.startsWith('show columns') ? [[{ Field: 'id' }, { Field: 'email' }, { Field: 'login_enabled' }, { Field: 'credential_revision' }], undefined] as [unknown, unknown] : [[{ n: 0 }], undefined] as [unknown, unknown] }); },
     lines,
     ...over,
   } as WfBlockCtx & { lines: string[] };
@@ -132,7 +132,7 @@ describe('contributed block runs (simulated contexts)', () => {
     const cfg = l.validate({ identity: 'martin.camille', displayName: 'Camille Martin', email: 'martin.camille@lyam.demo', department: 'finance' });
     const inserted: unknown[][] = [];
     let exists = 0;
-    const db = { query: async (sql: string, params?: unknown[]) => { if (sql.startsWith('select')) return [[{ n: exists }], undefined] as [unknown, unknown]; inserted.push(params ?? []); return [{}, undefined] as [unknown, unknown]; } };
+    const db = { query: async (sql: string, params?: unknown[]) => { if (sql.startsWith('show columns')) return [[{ Field: 'id' }], undefined] as [unknown, unknown]; if (sql.startsWith('select')) return [[{ n: exists }], undefined] as [unknown, unknown]; if (sql.startsWith('insert')) inserted.push(params ?? []); return [{}, undefined] as [unknown, unknown] } };
     const c = ctx({ config: cfg, branchWrite: async (fn) => { await fn(db); } });
     const out = await l.run(c);
     assert.equal(out!.identity, 'martin.camille');

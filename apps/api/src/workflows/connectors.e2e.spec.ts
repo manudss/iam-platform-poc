@@ -48,7 +48,8 @@ const waitRun = async (id: string, want: string[], timeoutMs = 20000): Promise<{
   for (;;) {
     const v = (await ok('GET', `/workflow-runs/${id}`)) as Awaited<ReturnType<typeof waitRun>>;
     if (want.includes(v.run.status)) return v;
-    if (Date.now() > until) throw new Error(`run ${id} still ${v.run.status}`);
+    if (Date.now() > until) throw new Error(`run ${id} still ${v.run.status}: ` + v.steps.map((s) => `${s.node_id}=${s.status} ${s.log.join(' | ')}`).join(' // '));
+    if (v.run.status === 'failed') throw new Error(`run ${id} failed: ` + v.steps.map((s) => `${s.node_id}=${s.status} ${s.log.join(' | ')}`).join(' // '));
     await new Promise((r) => setTimeout(r, 120));
   }
 };

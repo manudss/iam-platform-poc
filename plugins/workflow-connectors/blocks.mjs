@@ -424,6 +424,14 @@ const lyamCreateUser = {
     const c = ctx.config;
     if (!/^[a-z0-9][a-z0-9.-]{0,31}$/.test(c.identity)) bad(`lyam-create-user.identity: "${c.identity}" is not a valid user id (lowercase, digits, dots, hyphens)`);
     await ctx.branchWrite(async (db) => {
+      // A fresh database may lack the profile columns the users module adds lazily at boot (the
+      // connectors e2e boots only the workflows module). Ensure them here with the same DDL so the
+      // block does not depend on boot order; branch semantics are unchanged (committed with the run branch).
+      const [cols] = await db.query('show columns from identities');
+      const have = new Set(cols.map((x) => x.Field));
+      if (!have.has('email')) await db.query('alter table identities add column email varchar(254) null');
+      if (!have.has('login_enabled')) await db.query('alter table identities add column login_enabled boolean not null default true');
+      if (!have.has('credential_revision')) await db.query('alter table identities add column credential_revision varchar(40)');
       const [existing] = await db.query('select count(*) n from identities where id = ?', [c.identity]);
       if (Number(existing[0].n)) {
         // Idempotence: a retried step does not fail on an existing user, it adopts the branch state.
