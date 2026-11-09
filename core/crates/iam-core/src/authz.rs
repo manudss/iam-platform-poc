@@ -231,7 +231,7 @@ pub async fn wa_js() -> Response {
 
 /// Origin (scheme://host) of this sign-in page, from the proxy/host headers: passkey ceremonies are bound to it.
 fn page_origin(h: &HeaderMap) -> Option<String> {
-    let first = |v: Option<&HeaderValue>| v.and_then(|x| x.to_str().ok()).and_then(|s| s.split(',').next()).map(str::trim);
+    fn first(v: Option<&HeaderValue>) -> Option<&str> { v.and_then(|x| x.to_str().ok()).and_then(|s| s.split(',').next()).map(str::trim) }
     let host = first(h.get("x-forwarded-host")).filter(|s| !s.is_empty()).or_else(|| first(h.get(header::HOST)))?;
     if host.is_empty() || host.len() > 200 || !host.bytes().all(|b| b.is_ascii_alphanumeric() || b".:_-".contains(&b)) { return None; }
     let proto = first(h.get("x-forwarded-proto")).unwrap_or("http");
