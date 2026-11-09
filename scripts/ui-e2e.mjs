@@ -143,6 +143,7 @@ try {
   await page.waitForSelector('text=SoD: demo-bob has payment-creator and payment-approver');
   await shot('3-sod-violation');
   await page.getByRole('button', { name: 'Close assignment editor' }).click();
+  await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
   await page.click('#workspace-apply'); await status('Apply refused');
   // The refused change stays on its branch. A clean change goes from a fresh branch to main and is journaled as an activation.
@@ -153,6 +154,7 @@ try {
   await page.selectOption('select[name=assignmentRole]', 'accountant');
   await page.getByRole('button', { name: 'Stage assignment' }).click(); await status('Simulation OK');
   await page.getByRole('button', { name: 'Close assignment editor' }).click();
+  await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
   await page.click('#workspace-apply'); await status('Applied');
   await nav('/assignments'); await page.waitForSelector('#assignments .pill:text-is("accountant")');
