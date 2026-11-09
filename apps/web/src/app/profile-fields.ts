@@ -66,6 +66,9 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
             <span class="pill" [class.warn]="!c.enabled">{{c.enabled ? 'active' : 'hidden'}}</span>
           </div> } }
       } @empty { <p class="hint">{{loaded() ? 'No fields.' : 'Loading...'}}</p> }
+      @if (inactive().length) { <h4>Installed plugins, not enabled</h4>
+        @for (f of inactive(); track f.fullKey) { <div class="pf-field off" aria-disabled="true"><span class="pf-field-main"><b>{{f.label}}</b><br><small>{{f.fullKey}} · enable the plugin to configure this field</small></span><span class="pill">installed</span></div> }
+      }
       <p class="hint">The directory core fields (name, e-mail) can be tuned but never disabled or hidden from administrators. Sections group the fields on My profile and in the user sheet; drag a row onto another to reorder, or onto another section to move it there.</p>
     </div>
     <aside class="pf-side" aria-label="Selected field">
@@ -160,6 +163,7 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
 })
 export class ProfileFieldsPage {
   protected readonly s = inject(Session);
+  protected inactive = signal<CatField[]>([]);
   protected cat = signal<CatField[]>([]); protected cfg = signal<Record<string, Setting>>({});
   protected comps = signal<ComponentInv[]>([]); protected compsCfg = signal<Record<string, { self?: string; admin?: string; order?: number }>>({});
   protected preview = signal<{ context: string; title: string; fields: EField[] }[]>([]);
@@ -290,6 +294,7 @@ export class ProfileFieldsPage {
       for (const f of r.data.catalogue as CatField[]) eff[f.fullKey] = { ...defaults(), ...(r.data.working.settings?.[f.fullKey] ?? {}) };
       this.signupOpen = !!r.data.working.config.signup?.open; this.policy = r.data.working.config.selfEditPolicy === 'review' ? 'review' : 'immediate'; this.livePolicy.set(r.data.live.config.selfEditPolicy === 'review' ? 'review' : 'immediate'); this.liveOpen.set(!!r.data.live.config.signup?.open); void this.loadRequests();
       this.pending.set([...(r.data.working.config.sections ?? [])]);
+      this.inactive.set(r.data.inactiveCatalogue ?? []);
       this.cat.set(r.data.catalogue); this.cfg.set(eff); this.compsCfg.set({ ...(r.data.working.config.components ?? {}) });
       if (!this.sel() && r.data.catalogue.length) this.sel.set((r.data.catalogue as CatField[])[0].fullKey);
       this.dirty.set(false); this.problem.set(''); this.loaded.set(true);

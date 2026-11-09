@@ -202,6 +202,14 @@ export class PluginRegistry {
     return this.derive(`pf:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! })));
   }
 
+  /** Installed but inactive declarations are informational only: never included in an effective form. */
+  inactiveProfileFields(tenant: string) {
+    return [...this.impls.values()].filter((i) => {
+      const state = this.state.get(this.k(tenant, i.manifest.id));
+      return state?.installed && !this.isActive(tenant, i.manifest.id) && i.manifest.profileFields?.length;
+    }).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! }));
+  }
+
   /** Profile components declared by the plugins that are active for this tenant (My profile, the admin user sheet). */
   profileComponents(tenant: string): { plugin: string; components: import('./manifest.js').ProfileComponentDecl[] }[] {
     return this.derive(`pc:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileComponents?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, components: i.manifest.profileComponents! })));

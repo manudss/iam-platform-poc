@@ -16,7 +16,7 @@ Review checkpoint: 2026-11-10. Reference: the three validated boards (Profile co
 - The segmented radios make visibility choices directly comparable. Keep their labels readable rather than forcing a dense table to fit every viewport. A horizontal scroll region is acceptable on mobile only if every column can be reached and the page itself does not overflow.
 - Section operations must remain separate from field deletion. Dissolve moves fields to Other; it must never delete core fields or plugin values.
 - Sections now use an explicit ordered list in the branch-versioned profile configuration, including empty sections. Validation rejects duplicate or malformed names. Save/reload coverage has been added; deployed verification is still required.
-- The selected-field panel still lacks the board's per-plugin settings block and the installed-but-inactive field list. These are structural gaps, not cosmetic differences.
+- Installed-but-inactive fields now have an informational list, excluded from effective forms and editing. The selected-field panel still lacks the board's per-plugin settings block. This is a structural gap, not a cosmetic difference.
 - My profile still lacks the illustrated TOTP QR presentation and password lock-state block. Do not display invented enrollment or lock states to imitate the board.
 - All final layouts need side-by-side pixel inspection in light, dark, and 390px width. Screenshots from earlier revisions do not establish the last revision's fidelity.
 
