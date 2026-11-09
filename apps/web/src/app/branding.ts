@@ -1,4 +1,4 @@
-import { Component, DOCUMENT, Injectable, PendingTasks, TransferState, inject, makeStateKey, signal, input } from '@angular/core';
+import { afterNextRender, Component, DOCUMENT, Injectable, PendingTasks, TransferState, inject, makeStateKey, signal, input } from '@angular/core';
 import { apiUrl } from './api';
 export interface BrandProfile { productName: string; baseline: string; footer: string; version: string }
 const DEFAULT: BrandProfile = {productName:'lyam',baseline:'IAM next generation',footer:'Fictional demo data only. Do not enter real data.',version:''};
@@ -15,27 +15,29 @@ export class Branding {
   private pending = inject(PendingTasks);
   private query = '';
   constructor() {
-    if (typeof location !== 'undefined') {
-      const q=new URLSearchParams(location.search);
-      const branch=q.get('branch'),ticket=q.get('ticket');
-      if(branch && branch!=='main' && /^[a-z0-9-]{1,32}$/.test(branch) && ticket) this.query='?'+new URLSearchParams({branch,ticket});
-      if(q.get('preview')==='1' && typeof window!=='undefined' && window.parent!==window) return;
-    }
-    if(this.state.hasKey(KEY) && !this.query) { this.profile.set(this.state.get(KEY,DEFAULT));this.state.remove(KEY);this.stylesheet(); }
-    else void this.pending.run(()=>this.load());
+    // Do not mutate the hydrated DOM from a root-service constructor. Styles and
+    // profile load after the first render, with an independent SSR handoff.
+    if(typeof window==='undefined') { void this.pending.run(()=>this.load()); return; }
+    afterNextRender(()=>{
+      const q=new URLSearchParams(location.search),branch=q.get('branch'),ticket=q.get('ticket');
+      if(branch && branch!=='main' && /^[a-z0-9-]{1,32}$/.test(branch) && ticket)this.query='?'+new URLSearchParams({branch,ticket});
+      if(q.get('preview')==='1' && window.parent!==window)return;
+      if(this.state.hasKey(KEY)&&!this.query){this.profile.set(this.state.get(KEY,DEFAULT));this.state.remove(KEY);this.stylesheet();}
+      else void this.load();
+    });
   }
   private stylesheet() {
     let el=this.doc.getElementById('iam-branding-css') as HTMLLinkElement|null;
-    if(!el){el=this.doc.createElement('link');el.id='iam-branding-css';el.rel='stylesheet';this.doc.body.appendChild(el);}
+    if(!el){el=this.doc.createElement('link');el.id='iam-branding-css';el.rel='stylesheet';this.doc.head.appendChild(el);}
     el.href=BASE+'/theme.css'+this.query;
     const icon=this.doc.querySelector<HTMLLinkElement>('link[rel="icon"][type="image/svg+xml"]');if(icon)icon.href=BASE+'/favicon.svg'+this.query;
     this.doc.title=this.profile().productName;
   }
   async load() {
-    try { const r=await fetch(apiUrl(BASE+this.query));if(!r.ok)throw Error('branding');const p=await r.json();if(typeof p.productName==='string'&&typeof p.baseline==='string'&&typeof p.footer==='string')this.profile.set(p); }
+    try { const r=await fetch(apiUrl(BASE+this.query),{signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('branding');const p=await r.json();if(typeof p.productName==='string'&&typeof p.baseline==='string'&&typeof p.footer==='string')this.profile.set(p); }
     catch {/* Static brand remains readable if branding is temporarily unavailable. */}
     if(typeof window==='undefined')this.state.set(KEY,this.profile());
-    this.stylesheet();
+    else this.stylesheet();
   }
   logo(mode:'light'|'dark') {return this.logoOverride()[`logo-horizontal-${mode}.svg`] || BASE+`/logo-horizontal-${mode}.svg`+this.query;}
   preview(m: unknown): boolean {
@@ -57,5 +59,5 @@ export class Branding {
     return true;
   }
 }
-@Component({selector:'app-brand',template:`<picture class="brandlogo"><img class="for-light" [src]="brand.logo(forceDark()?'dark':'light')" [alt]="brand.profile().productName"><img class="for-dark" [src]="brand.logo('dark')" alt="" aria-hidden="true"></picture><span>{{brand.profile().productName === 'lyam' ? '' : brand.profile().productName}}</span><small>{{brand.profile().baseline}}</small>`,styles:[`:host{display:grid;gap:.2rem}.brandlogo{display:grid}.brandlogo img{height:2.6rem;max-width:100%;width:auto}small{font-size:.9rem;color:var(--brand-sub);font-weight:400}`]})
+@Component({selector:'app-brand',template:`<picture class="brandlogo"><img class="for-light" [src]="brand.logo(forceDark()?'dark':'light')" [alt]="brand.profile().productName"><img class="for-dark" [src]="brand.logo('dark')" alt="" aria-hidden="true"></picture><span>{{brand.profile().productName === 'lyam' ? '' : brand.profile().productName}}</span><small>{{brand.profile().baseline}}</small>`,styles:[`:host{display:grid;gap:.2rem}.brandlogo{display:grid}.brandlogo img{height:2.6rem;max-width:100%;width:auto}small{font-size:.9rem;color:var(--brand-sub);font-weight:400}:host-context(.side) small{color:var(--sidebar-muted)}`]})
 export class Brand {readonly brand=inject(Branding);readonly forceDark=input(false);}

@@ -133,7 +133,7 @@ export class LoginPage {
 }
 
 /** Return URL of the sign-in redirect (/callback): checks state + PKCE verifier, then goes back to the page the user came from. */
-@Component({ selector: 'app-callback', template: '<div class="wait"><p>Completing sign-in...</p></div>', styles: ['.wait { display:grid; place-items:center; min-height:100vh; color:#64748b }'] })
+@Component({ selector: 'app-callback', template: '<div class="wait"><p>Completing sign-in...</p></div>', styles: ['.wait { display:grid; place-items:center; min-height:100vh; color:var(--muted) }'] })
 export class CallbackPage {
   private readonly s = inject(Session);
   private readonly router = inject(Router);

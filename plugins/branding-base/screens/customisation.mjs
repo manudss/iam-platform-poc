@@ -53,11 +53,11 @@ class Customisation extends HTMLElement {
   values() { return Object.fromEntries(new FormData(this.form)); }
   status(text,error=false) {const s=this.querySelector('.status');s.textContent=text;s.classList.toggle('error',error);}
   async load() {try{const f=await this.call('/plugins/branding-base/form');for(const group of f.groups)for(const field of group.fields){const el=this.form.elements.namedItem(field.key);if(el)el.value=field.value??'';}await this.update();this.status('Draft loaded. Changes are not live until Apply.');}catch(e){this.status(e.message,true);}}
-  schedule() {clearTimeout(this.timer);this.timer=setTimeout(()=>this.update(),200);}
+  schedule() {clearTimeout(this.timer);this.timer=setTimeout(()=>this.update().catch(()=>{}),200);}
   async update() {
-    if(!this.form.checkValidity())return;
+    if(!this.form.checkValidity())throw Error('Complete the required fields before preview or save.');
     const seq=this.seq=(this.seq||0)+1;
-    try{const b=await this.call('/branding/preview','POST',this.values());if(seq!==this.seq||!this.isConnected)return;this.bundle=b;this.push();for(const p of this.querySelectorAll('[data-picker]'))p.value=this.form.elements.namedItem(p.dataset.picker).value;this.status('Preview updated. Unsaved changes stay in this editor.');}catch(e){if(seq===this.seq)this.status(e.message,true);}
+    try{const b=await this.call('/branding/preview','POST',this.values());if(seq!==this.seq||!this.isConnected)return;this.bundle=b;this.push();for(const p of this.querySelectorAll('[data-picker]'))p.value=this.form.elements.namedItem(p.dataset.picker).value;this.status('Preview updated. Unsaved changes stay in this editor.');}catch(e){if(seq===this.seq)this.status(e.message,true);throw e;}
   }
   push() {
     if(!this.bundle)return;const b=this.bundle;const mode=this.dark?'dark':'light';

@@ -106,7 +106,7 @@ export class Shell {
   constructor() {
     this.router.events.pipe(filter((e) => e instanceof NavigationEnd)).subscribe(() => { this.menu.set(false); this.title.set(this.leafTitle()); void this.loadChanges(); });
     // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
-    effect(() => { this.s.pluginsVersion(); void this.loadPluginMenu(); });
+    effect(() => { this.s.pluginsVersion(); this.s.branch(); this.s.branchEpoch(); void this.loadPluginMenu(); });
     this.title.set(this.leafTitle());
   }
   private leafTitle(): string {

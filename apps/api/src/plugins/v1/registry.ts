@@ -1,4 +1,5 @@
 import { HOOKS, HookHandler, PluginContext } from './hooks.js';
+import { sanitizeSvg } from '../../branding/svg.js';
 import { PluginManifest, validateManifest } from './manifest.js';
 import { settingsExtend, toFormModel, validateSettings, FormModel } from './settings.js';
 
@@ -238,6 +239,12 @@ export class PluginRegistry {
     for (const f of p.manifest.settings) if (f.type === 'secret' && merged[f.key] === undefined && stored[f.key] !== undefined) merged[f.key] = stored[f.key];
     const r = validateSettings(p.manifest.settings, merged);
     if (!r.ok) throw new PluginError('invalid-settings', r.errors.join('; '));
+    if(p.manifest.provides?.includes('branding')) {
+      try {
+        for(const key of ['logoSvg','faviconSvg'])if(r.values[key])r.values[key]=sanitizeSvg(String(r.values[key]));
+        if(r.values['logoMode']==='custom'&&!r.values['logoSvg'])throw Error('Custom logo requires SVG artwork');
+      } catch(e) {throw new PluginError('invalid-settings',(e as Error).message);}
+    }
     await this.settings.put(tenant, id, r.values);
     this.invalidateInventories();
     this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
