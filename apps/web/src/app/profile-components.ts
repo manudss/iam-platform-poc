@@ -12,6 +12,13 @@ export interface ProfileComponentInv { key: string; plugin: string; id: string; 
  */
 @Component({
   selector: 'app-profile-components',
+  // Scoped here (Angular encapsulation): these nodes are this component's template, no outer sheet reaches them.
+  styles: [`
+  .profile-plugin-section { margin: 0 0 .75rem; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: 8px; }
+  .profile-plugin-section-title { margin: 0 0 .3rem; font-size: .95rem; }
+  .profile-plugin-origin { color: var(--muted); font-weight: normal; margin-left: .35rem; }
+  .msg.bad { background: var(--bad-soft); color: var(--bad-ink); border-left: 4px solid var(--bad); padding: .6rem .9rem; border-radius: .5rem; }
+  `],
   template: `
   @if (problem()) { <p role="alert" class="msg bad" id="profile-components-problem">{{problem()}}</p> }
   @for (c of comps(); track c.key) {

@@ -1,24 +1,28 @@
 // Profile picture component, packaged with the plugin. The profile surfaces (My profile, the admin user sheet)
 // import this module through the plugin assets route and hand it the session context:
-//   { tenant, api, token, adminToken, branch, surface: 'self'|'admin', subject? (admin surface), readonly? }
+//   { tenant, api, token, adminToken, branch, surface: 'self'|'admin', subject? (admin surface), mode: 'manage'|'readonly' }
 // The value itself is an ordinary profile field (profile-picture.picture, type image): it flows through the
 // generic profile API, so an administrator's profile configuration (enabled / selfView / selfEdit) applies here.
+// mode 'readonly' forces the read-only rendering whatever the field configuration says (the server checks again).
 
 const css = `
+:host{color:var(--ink,#0f172a)}
 .ppf{display:flex;gap:1em;align-items:flex-start;flex-wrap:wrap}
-.ppf img{width:96px;height:96px;border-radius:50%;object-fit:cover;border:2px solid var(--ppf-border,#c9d4e3)}
-.ppf .empty{width:96px;height:96px;border-radius:50%;border:2px dashed var(--ppf-border,#c9d4e3);display:flex;align-items:center;justify-content:center;color:#7c8aa0;font-size:.8em;text-align:center}
+.ppf img{width:96px;height:96px;border-radius:50%;object-fit:cover;border:2px solid var(--field-line,#cbd5e1)}
+.ppf .empty{width:96px;height:96px;border-radius:50%;border:2px dashed var(--field-line,#cbd5e1);display:flex;align-items:center;justify-content:center;color:var(--muted,#64748b);font-size:.8em;text-align:center}
 .ppf .col{display:flex;flex-direction:column;gap:.4em}
-.ppf button,.ppf label.up{cursor:pointer;border:1px solid var(--ppf-border,#c9d4e3);background:transparent;border-radius:6px;padding:.35em .8em;font:inherit}
-.ppf label.up{display:inline-block}
+.ppf button,.ppf label.up{cursor:pointer;border:1px solid var(--field-line,#cbd5e1);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px}
+.ppf label.up{display:inline-flex;align-items:center}
 .ppf input[type=file]{display:none}
 .ppf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}
-.ppf .bad{background:#fdd;color:#900}
-.ppf .ok{background:#e7f6e7;color:#175c17}
-.ppf .hint{color:#666;font-size:.85em;max-width:32em}
+.ppf .bad{background:var(--bad-soft,#fee2e2);color:var(--bad-ink,#7f1d1d)}
+.ppf .ok{background:var(--ok-soft,#dcfce7);color:var(--ok,#15803d)}
+.ppf .hint{color:var(--label,#475569);font-size:.85em;max-width:32em}
 `;
 
 const FIELD = 'profile-picture.picture';
+/** Server messages land in innerHTML: escape them. */
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 class ProfilePicture extends HTMLElement {
   connectedCallback() {
@@ -42,7 +46,7 @@ class ProfilePicture extends HTMLElement {
       if (r.status >= 400) throw new Error(d.message ?? `HTTP ${r.status}`);
       this._value = d.values?.[FIELD] ?? null;
       const f = (d.fields ?? []).find((x) => x.key === FIELD);
-      this._editable = !admin && !!f?.editable;
+      this._editable = !admin && this._ctx.mode !== 'readonly' && !!f?.editable;
       this._visible = !!f; // the field is in the effective schema (enabled + visible for this surface)
     } catch (e) { this._error = e.message; }
     this._loaded = true;
@@ -79,20 +83,20 @@ class ProfilePicture extends HTMLElement {
     const admin = this._ctx.surface === 'admin';
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     const root = this.shadowRoot;
-    if (this._error) { root.innerHTML = `<style>${css}</style><p class="msg bad">${this._error}</p>`; return; }
+    if (this._error) { root.innerHTML = `<style>${css}</style><p class="msg bad">${esc(this._error)}</p>`; return; }
     if (!this._loaded) { root.innerHTML = `<style>${css}</style><p class="hint">Loading…</p>`; return; }
     if (this._visible === false) { root.innerHTML = `<style>${css}</style><p class="hint">The picture field is not shown on this surface (profile configuration).</p>`; return; }
     root.innerHTML = `<style>${css}</style>
       <div class="ppf">
-        ${this._value ? `<img alt="Profile picture" src="${this._value}">` : `<span class="empty">No picture</span>`}
+        ${this._value ? `<img alt="Profile picture" src="${esc(this._value)}">` : `<span class="empty">No picture</span>`}
         <span class="col">
           ${this._editable ? `
             <label class="up">Choose a picture…<input type="file" accept="image/png,image/jpeg,image/webp"></label>
             ${this._value ? `<button type="button" class="rm">Remove</button>` : ''}
             <span class="hint">Squared and resized to 256 px on your device before upload (png, jpeg or webp, 256 KB max). Fictional demo: do not use a real photo.</span>`
-          : `<span class="hint">${admin ? 'Administrators see the picture but cannot change it: it belongs to the person.' : 'Your administrator made this field read only.'}</span>`}
-          ${this._note ? `<span class="msg ok">${this._note}</span>` : ''}
-          ${this._problem ? `<span class="msg bad">${this._problem}</span>` : ''}
+          : `<span class="hint">${admin ? 'Administrators see the picture but cannot change it: it belongs to the person.' : 'This field is read only here.'}</span>`}
+          ${this._note ? `<span class="msg ok">${esc(this._note)}</span>` : ''}
+          ${this._problem ? `<span class="msg bad">${esc(this._problem)}</span>` : ''}
         </span>
       </div>`;
     const input = root.querySelector('input[type=file]');
@@ -101,5 +105,5 @@ class ProfilePicture extends HTMLElement {
     if (rm) rm.onclick = () => void this.save(null);
   }
 }
-customElements.define('iam-profile-picture', ProfilePicture);
+if (!customElements.get('iam-profile-picture')) customElements.define('iam-profile-picture', ProfilePicture);
 export default 'iam-profile-picture';

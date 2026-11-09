@@ -46,6 +46,3 @@
 h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px solid #dde4ee; padding-bottom: .15rem; }
 .profile-image-field { display: flex; align-items: center; gap: .6rem; margin: .3rem 0; }
 .profile-image-thumb { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid #c9d4e3; }
-.profile-plugin-section { margin: .8rem 0; }
-.profile-plugin-section-title { margin: 0 0 .3rem; font-size: .95rem; }
-.profile-plugin-origin { color: #66758c; font-weight: normal; margin-left: .35rem; }

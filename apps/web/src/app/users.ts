@@ -147,9 +147,14 @@ export function userStats(users: UserProfile[]): UserStats {
     @for (r of c.reports; track r.id) {<span class="node"><span class="av mini" [style.background]="deptColor(r.department)+'22'" [style.color]="deptColor(r.department)">{{initials(r.display_name)}}</span> {{r.display_name}}</span>}
   </div>}}
   @if (key && pfields().length) { <h4>Profile fields</h4><p class="hint">Fields the administrator configuration lets an administrator edit. Saved on the working branch like the rest.</p>
-  @for (f of pfields(); track f.key) { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
+  @for (f of pfields(); track f.key) {
+  @if (f.type==='image') { <div class="pf-image"><span class="pf-label">{{f.label}} <small>managed by the Profile picture section below</small></span>@if (pvals()[f.key]) {<img class="pf-thumb" [src]="pvals()[f.key]" alt="" />}@else {<span class="hint">No picture</span>}</div> }
+  @else { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
   @if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
-  @else {<input [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}</label> } }
+  @else if (f.type==='boolean') {<select [name]="'pf'+f.key" [ngModel]="boolStr(f.key)" (ngModelChange)="setP(f.key,$event===''?null:$event==='true')" [disabled]="!f.editable"><option value="">-</option><option value="true">Yes</option><option value="false">No</option></select>}
+  @else if (f.type==='number' || f.type==='date' || f.type==='email' || f.type==='url' || f.type==='phone') {<input [type]="f.type==='phone'?'tel':f.type" [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}
+  @else {<input type="text" [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}
+  </label> } } }
   @if (key) {<app-user-plugin-sections [userId]="key" />}
   <h4>Security</h4>
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
@@ -196,6 +201,7 @@ export class UsersPage {
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   private async loadP(id: string) { try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }
   protected setP(k: string, v: unknown) { this.pvals.update((x) => ({ ...x, [k]: v })); this.pchanged[k] = v === '' ? null : v; }
+  protected boolStr(k: string) { const v = this.pvals()[k]; return v === true ? 'true' : v === false ? 'false' : ''; }
   protected cancel() { this.password = ''; this.editing.set(false); }
   protected disableAndSave() { this.form.login_enabled = false; void this.save(); }
   protected async quickToggle(u: UserProfile) {

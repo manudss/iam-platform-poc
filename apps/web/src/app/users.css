@@ -98,3 +98,8 @@ button.danger:hover:not(:disabled) { background: var(--bad-soft); color: var(--b
   .rowmenu .pop { position: fixed; right: .8rem; left: .8rem; top: auto; bottom: 1rem; min-width: 0; }
   .rowmenu .pop button { min-height: 2.75rem; }
 }
+
+/* Profile fields typed rendering (profile-plugins) */
+.pf-image { display: flex; align-items: center; gap: .6rem; margin: .3rem 0; }
+.pf-image .pf-label { font-size: .92rem; }
+.pf-image .pf-thumb { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid var(--field-line); }

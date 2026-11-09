@@ -319,6 +319,63 @@ try {
   await shot('11-user-drawer');
   await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.waitForSelector('#user-editor', { state: 'detached' });
+
+  // ---- Profile plugin components in the user sheet (profile-plugins): the PIN plugin's packaged component ----
+  // renders inside the drawer. Enable it with its packaged-components grant (no install step, no sensitive hooks).
+  await nav('/plugins'); await page.locator('tr[data-plugin=auth-digit-code]').getByRole('button', { name: 'Manage' }).click();
+  await page.locator('#plugin-install, #plugin-enable, #plugin-disable').first().waitFor(); await page.waitForTimeout(500);
+  if (await page.locator('#plugin-install').count()) {
+    await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-digit-code/install')), page.click('#plugin-install')]);
+    await page.locator('#plugin-enable').waitFor();
+  }
+  await page.locator('input[name=gc]').check(); // allow its packaged UI components in the console
+  await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-digit-code/enable') && r.status() < 300), page.click('#plugin-enable')]);
+  await page.waitForSelector('#plugin-disable');
+
+  // The component shows in the sheet, in manage mode, with the immediate-effect note next to its controls.
+  const pinText = () => page.evaluate(() => document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '');
+  const pinButtons = () => page.evaluate(() => document.querySelector('iam-pin-profile')?.shadowRoot?.querySelectorAll('button').length ?? -1);
+  await nav('/users'); await page.waitForSelector('#users-table tbody tr');
+  await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.waitForSelector('#user-editor');
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  assert.match(await pinText(), /take effect immediately/, 'sheet PIN component: the immediate-effect note shows in manage mode');
+  assert.ok((await pinButtons()) > 0, 'sheet PIN component: manage mode offers its controls');
+  await shot('11b-user-drawer-pin-manage');
+
+  // Close and re-open the sheet on the SAME user, then on ANOTHER user: the packaged module must register and
+  // render every time (loader module cache + customElements.define guard - a re-define used to break re-opens).
+  await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForSelector('#user-editor', { state: 'detached' });
+  await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.waitForSelector('#user-editor');
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForSelector('#user-editor', { state: 'detached' });
+  await page.locator('#users-table tbody tr').nth(1).getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.waitForSelector('#user-editor');
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForSelector('#user-editor', { state: 'detached' });
+
+  // Readonly mode (Profile fields -> component surfaces): status stays, every mutating control goes away.
+  await nav('/profile-fields'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
+  await page.selectOption('select[name="caauth-digit-code:pin"]', 'readonly');
+  await Promise.all([page.waitForResponse((r) => r.url().includes('/profile-fields') && r.request().method() === 'PUT' && r.status() < 300), page.click('#pf-save')]);
+  await nav('/users'); await page.waitForSelector('#users-table tbody tr');
+  await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.waitForSelector('#user-editor');
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  const roText = await pinText();
+  assert.ok(!/Set a new PIN|Revoke/.test(roText), 'readonly PIN component: no mutating label (got: ' + JSON.stringify(roText.slice(0, 200)) + ')');
+  assert.equal(await pinButtons(), 0, 'readonly PIN component: no button at all');
+  await shot('11c-user-drawer-pin-readonly');
+  await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForSelector('#user-editor', { state: 'detached' });
+  // Restore manage mode so the rest of the run and the screenshots stay in the default posture.
+  await nav('/profile-fields'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
+  await page.selectOption('select[name="caauth-digit-code:pin"]', 'manage');
+  await Promise.all([page.waitForResponse((r) => r.url().includes('/profile-fields') && r.request().method() === 'PUT' && r.status() < 300), page.click('#pf-save')]);
   await noBanner('users page');
 
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----

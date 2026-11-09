@@ -24,7 +24,7 @@ import { ProfileComponents } from './profile-components';
       <label>{{f.label}} @if (!f.editable) { <small>(read only)</small> }
         @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals()[f.key] ?? ''" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
         @else if (f.type==='boolean') { <input type="checkbox" [name]="f.key" [ngModel]="!!vals()[f.key]" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable" /> }
-        @else { <input [type]="f.type==='number'?'number':'text'" [name]="f.key" [ngModel]="vals()[f.key] ?? ''" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable" [attr.aria-label]="f.label" /> }
+        @else { <input [type]="f.type==='number'?'number':f.type==='date'?'date':f.type==='email'?'email':f.type==='url'?'url':f.type==='phone'?'tel':'text'" [name]="f.key" [ngModel]="vals()[f.key] ?? ''" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable" [attr.aria-label]="f.label" /> }
         @if (f.help) { <small>{{f.help}}</small> }</label>
       }
     }
