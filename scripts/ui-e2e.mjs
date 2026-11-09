@@ -415,9 +415,10 @@ try {
   assert.ok((await page.locator('#sod').innerText()).includes('payment-approver'));
   await page.getByRole('button', { name: 'Close role editor' }).click();
   await nav('/assignments'); await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  await page.waitForSelector('#assignments tbody tr:has-text("demo-bob") button');
   assert.equal(await page.locator('#assignments tbody tr:has(button)').count(), 1);
   await page.getByRole('link', { name: 'Bulk edit matrix' }).click();
-  await page.waitForSelector('app-assignment-filters');
+  await page.waitForSelector('.selection-list input');
   await page.fill('input[name=assignmentSearch]', 'demo-bob');
   await page.getByLabel(/Bob.*demo-bob/).check();
   await page.fill('input[name=matrixRoleSearch]', 'payment-creator');
