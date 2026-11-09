@@ -29,7 +29,7 @@ describe('public sign-up: closed by default, request only, never grants access',
     const guard = { canActivate: (c: any) => { const r = c.switchToHttp().getRequest(); r.user = { sub: String(r.headers['x-test-sub'] ?? 'new-nora') }; return true; } };
     const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue(guard).overrideProvider(UsersService).useValue(usersStub).overrideProvider(SIGNUP_ALLOWED).useValue(() => true).compile();
     app = mod.createNestApplication(); await app.init();
-    const reg = app.get(PluginRegistry); await reg.install(T, 'hr-attributes', {}); await reg.enable(T, 'hr-attributes', {});
+    const reg = app.get(PluginRegistry); await reg.install(T, 'hr-attributes', { install: true }); await reg.enable(T, 'hr-attributes', {});
   });
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; await app.close(); });
   const api = () => request(app.getHttpServer()), adm = { 'x-api-admin-token': ADMIN }, u = (p: string) => `/tenants/${T}/${p}`;

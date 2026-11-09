@@ -39,6 +39,11 @@ export class PluginsAdminController {
   @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
   @Get('menu') async menu(@Param('tenant') t: string) { return { tenant: t, entries: (await this.registry()).menu(t) }; }
   @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
+  /** How much profile data a plugin holds for this tenant; the console shows it in the uninstall confirmation.
+   * Lives here, not on ProfileController: the plugin HTTP catch-all (@All(':id/{*path}')) is registered before it. */
+  @UseGuards(AdminGuard) @Get(':id/profile-values') async pluginValues(@Param('tenant') t: string, @Param('id') id: string) {
+    return { plugin: id, values: this.profile ? await this.profile.pluginValueCount(t, id) : 0 };
+  }
 
   /** Packaged component screens (constat 4): the console import()s a screen's .mjs straight from the plugin's
    * signed folder, so a screen's code ships with the plugin and disappears with it. Sign-in only (like the

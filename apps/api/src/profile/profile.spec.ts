@@ -109,7 +109,7 @@ describe('profile fields API: plugin fields, configuration, self-service and adm
   it('a plugin field exists only while its plugin is enabled', async () => {
     let r = await api().get(`/tenants/${T}/profile-fields`).set(adm); assert.equal(r.status, 200);
     assert.ok(!r.body.catalogue.some((f: any) => f.plugin === 'hr-attributes'));
-    await reg.install(T, 'hr-attributes', {}); await reg.enable(T, 'hr-attributes', {});
+    await reg.install(T, 'hr-attributes', { install: true }); await reg.enable(T, 'hr-attributes', {});
     r = await api().get(`/tenants/${T}/profile-fields`).set(adm);
     assert.ok(r.body.catalogue.some((f: any) => f.fullKey === 'hr-attributes.job_title'));
     assert.ok(r.body.catalogue.some((f: any) => f.fullKey === 'base.email'));

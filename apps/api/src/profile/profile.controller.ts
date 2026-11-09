@@ -39,10 +39,6 @@ export class ProfileController {
   @UseGuards(AdminGuard) @Get('profile-components-inventory') async componentsInventory(@Param('tenant') t: string, @Query('ref') ref?: string) {
     return { components: await this.p.componentsInventory(t, ref === 'live' ? 'live' : 'work') };
   }
-  /** How much profile data a plugin holds for this tenant; the console shows it in the uninstall confirmation. */
-  @UseGuards(AdminGuard) @Get('plugins/:id/profile-values') async pluginValues(@Param('tenant') t: string, @Param('id') id: string) {
-    return { plugin: id, values: await this.p.pluginValueCount(t, id) };
-  }
   /** The subject is the token's, never a value from the request. */
   /** A branch-test token (claim set by the core at sign-in) reads and edits its profile on the TESTED branch; every other token stays live. */
   private ref(req: { user?: { branch?: string } }): 'live' | 'work' { return req.user?.branch ? 'work' : 'live'; }
