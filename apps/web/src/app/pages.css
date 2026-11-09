@@ -120,3 +120,7 @@ h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px 
 #pf-components-table .seg-opt span { padding: 0 .5rem; font-size: .8rem; }
 #pf-components-table .pf-order { width: 4.5rem; }
 @media (max-width: 480px) { .pf-field { flex-wrap: wrap; } .pf-group-actions { width: 100%; } .pf-group-actions .icon { flex: 1; } }
+
+/* Segments must not shrink and clip their words. The table scrolls within its own region on small screens. */
+#pf-components-table .seg { max-width: none; }
+#pf-components-table .seg-opt { flex-shrink: 0; }
