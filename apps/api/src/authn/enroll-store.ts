@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
  * PIN: only a salted scrypt hash of the whole PIN is kept (no per-position verifiers, no pepper). A PIN has only 10^n values, so anyone who gets this
  * file can recover it by search; a real product would add a key held in an HSM/KMS or use one-time codes. Demo accounts and fictional PINs only.
  */
-interface UserRec { totp?: { secret: string; lastStep: number }; pin?: { length: number; salt: string; hash: string }; email?: string }
+interface UserRec { totp?: { secret: string; lastStep: number; enrolledAt?: string; lastUsedAt?: string }; pin?: { length: number; salt: string; hash: string; enrolledAt?: string; lastUsedAt?: string }; email?: string }
 interface FileShape { users: Record<string, Record<string, UserRec>> }
 
 export function defaultEnrollmentPath() {
@@ -43,7 +43,14 @@ export class EnrollmentStore {
 
   async status(tenant: string, user: string) {
     const d = await this.load(); const u = d.users[`${tenant}/${user}`] ?? {};
-    return Object.fromEntries(Object.entries(u).map(([inst, r]) => [inst, { totp: !!r.totp, pin: r.pin ? { length: r.pin.length } : false, email: r.email ?? null }]));
+    return Object.fromEntries(Object.entries(u).map(([inst, r]) => [inst, {
+      totp: !!r.totp,
+      // Enrolment dates for the profile surfaces ("enrolled on…", "last used…"); records from before this field existed report null.
+      totpEnrolledAt: r.totp?.enrolledAt ?? null,
+      totpLastUsedAt: r.totp?.lastUsedAt ?? null,
+      pin: r.pin ? { length: r.pin.length, enrolledAt: r.pin.enrolledAt ?? null, lastUsedAt: r.pin.lastUsedAt ?? null } : false,
+      email: r.email ?? null,
+    }]));
   }
   /** Counts per method instance and kind (admin overview of who enrolled what; secrets never leave the store). */
   async stats(tenant: string) {
@@ -61,11 +68,11 @@ export class EnrollmentStore {
   async remove(tenant: string, user: string, inst: string) { await this.mutate((d) => { const u = d.users[`${tenant}/${user}`]; if (u) delete u[inst]; }); }
 
   // TOTP
-  async setTotp(tenant: string, user: string, inst: string, secret: string) { await this.mutate((d) => { this.rec(d, tenant, user, inst).totp = { secret, lastStep: -1 }; }); }
+  async setTotp(tenant: string, user: string, inst: string, secret: string) { await this.mutate((d) => { this.rec(d, tenant, user, inst).totp = { secret, lastStep: -1, enrolledAt: new Date().toISOString() }; }); }
   async totp(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.totp; }
   /** Records the accepted step; refuses a step that was already used (replay). */
   async consumeTotpStep(tenant: string, user: string, inst: string, step: number): Promise<boolean> {
-    return this.mutate((d) => { const t = this.get(d, tenant, user, inst)?.totp; if (!t || step <= t.lastStep) return false; t.lastStep = step; return true; });
+    return this.mutate((d) => { const t = this.get(d, tenant, user, inst)?.totp; if (!t || step <= t.lastStep) return false; t.lastStep = step; t.lastUsedAt = new Date().toISOString(); return true; });
   }
 
   // PIN
@@ -73,7 +80,7 @@ export class EnrollmentStore {
     if (!/^\d{4,8}$/.test(pin)) throw new Error('PIN must be 4 to 8 digits');
     await this.mutate((d) => {
       const salt = randomBytes(16).toString('hex');
-      this.rec(d, tenant, user, inst).pin = { length: pin.length, salt, hash: scryptSync(pin, salt, 32).toString('hex') };
+      this.rec(d, tenant, user, inst).pin = { length: pin.length, salt, hash: scryptSync(pin, salt, 32).toString('hex'), enrolledAt: new Date().toISOString() };
     });
   }
   async pinLength(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.pin?.length; }
@@ -81,9 +88,16 @@ export class EnrollmentStore {
   async totpRecord(tenant: string, user: string, inst: string) { const t = this.get(await this.load(), tenant, user, inst)?.totp; return t ? { secret: t.secret, lastStep: t.lastStep ?? -1 } : undefined; }
   async pinRecord(tenant: string, user: string, inst: string) { const p = this.get(await this.load(), tenant, user, inst)?.pin; return p ? { length: p.length, salt: p.salt, hash: p.hash } : undefined; }
   async verifyPinFull(tenant: string, user: string, inst: string, pin: string): Promise<boolean> {
-    const p = this.get(await this.load(), tenant, user, inst)?.pin; if (!p || !/^\d{4,8}$/.test(pin)) return false;
-    const a = Buffer.from(p.hash, 'hex'), b = scryptSync(pin, p.salt, 32); return a.length === b.length && timingSafeEqual(a, b);
+    return this.mutate((d) => {
+      const p = this.get(d, tenant, user, inst)?.pin; if (!p || !/^\d{4,8}$/.test(pin)) return false;
+      const a = Buffer.from(p.hash, 'hex'), b = scryptSync(pin, p.salt, 32);
+      const ok = a.length === b.length && timingSafeEqual(a, b);
+      if (ok) p.lastUsedAt = new Date().toISOString();
+      return ok;
+    });
   }
+  /** Records a successful PIN sign-in (the method plugin verifies from a snapshot; the core applies the effect). */
+  async touchPinUsed(tenant: string, user: string, inst: string) { await this.mutate((d) => { const p = this.get(d, tenant, user, inst)?.pin; if (p) p.lastUsedAt = new Date().toISOString(); }); }
   // E-mail address of the recipient for code delivery
   async setEmail(tenant: string, user: string, inst: string, email: string) { await this.mutate((d) => { this.rec(d, tenant, user, inst).email = email; }); }
   async email(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.email; }
