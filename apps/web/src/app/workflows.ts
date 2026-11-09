@@ -1,3 +1,4 @@
+import { JsonPipe } from '@angular/common';
 import { Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, CanActivateFn, Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
@@ -33,7 +34,7 @@ export interface WfBlock { type: string; family: string; label: string; simulate
 export interface DemoSheet { name: string; simulated: boolean; note: string; columns: string[]; rows: { rowNumber: number; values: Record<string, string> }[] }
 export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; steps: number; simulatedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
 export interface RunSummary { id: string; definitionId: string; name: string; branch: string | null; status: string; error: string | null; startedBy: string; startedAt: string; finishedAt: string | null; hasDataSteps: boolean }
-export interface RunView { run: { id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[] }; steps: { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null }[] }
+export interface RunView { run: { id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[] }; steps: { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null; output?: Record<string, unknown> | null }[] }
 
 export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; hint: string }[] = [
   { type: 'wait', label: 'Wait', simulated: true, hint: 'Simulated delay (seconds)' },
@@ -248,7 +249,7 @@ export const SAMPLE_WORKFLOWS: { name: string; description: string; trigger?: Wf
 interface NodeState { type: StepType; name: string; config: Record<string, unknown> }
 
 @Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow], styleUrl: './pages.css', template: `
-<p class="lead">{{id === 'new' ? 'New workflow' : 'Edit workflow'}} — add steps, drag them, connect them in order. The graph must be acyclic; steps run in topological order.</p>
+<p class="lead">{{id === 'new' ? 'New workflow' : 'Edit workflow'}} - add steps, drag them, connect them in order. The graph must be acyclic; steps run in topological order.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <section class="card"><div class="row wf-head">
 <label>Name<input name="wfName" [(ngModel)]="name" maxlength="80" /></label>
@@ -274,6 +275,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 </div></section>
 <div class="wf-grid">
 <section class="card"><h3>Steps</h3>
+<label>Search blocks<input name="paletteSearch" [(ngModel)]="paletteQuery" placeholder="HTTP, Sheets, Jira, text..." /></label>
 <p class="hint">Click to add a step. Connect handles in the canvas. Select a step to edit it.</p>
 @for (g of palette(); track g.family) {<div class="wf-family">{{g.family}}</div>
 @for (t of g.blocks; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{t.simulated ? 'SIMULATED' : 'REAL'}}</small>@if (t.provider && !t.providerActive) { <small class="req">(plugin disabled)</small>}<br /><small>{{t.description}}</small></button>}}
@@ -284,7 +286,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 <section class="card"><h3>Selected</h3>
 @if (selectedNode(); as nid) {@if (state.get(nid); as st) {
 <label>Step name<input name="stepName" [ngModel]="st.name" (ngModelChange)="rename(nid, $event)" maxlength="80" /></label>
-<p class="hint">{{typeOf(st.type).label}} — {{typeOf(st.type).simulated ? 'SIMULATED: demonstrates the flow, no external effect' : 'REAL: writes on the run branch only'}}</p>
+<p class="hint">{{typeOf(st.type).label}} — {{typeOf(st.type).simulated ? 'SIMULATED: demonstrates the flow, no external effect' : 'REAL: data or external effect. Read the block description before running.'}}</p>
 @if (blockOf(st.type)?.description) {<p class="hint">{{blockOf(st.type)!.description}}</p>}
 @if ((blockOf(st.type)?.fields?.length ?? 0) > 0) {
 @for (f of blockOf(st.type)!.fields!; track f.key) {
@@ -309,11 +311,12 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @case ('set-profile-field') {<label>Identity<input name="spfId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Profile field<input name="spfField" [ngModel]="st.config['field']" (ngModelChange)="setCfg(nid,'field',$event)" maxlength="80" placeholder="hr-attributes.employee_grade" /></label><label>Value<input name="spfValue" [ngModel]="st.config['value']" (ngModelChange)="setCfg(nid,'value',$event)" maxlength="200" /></label>}
 }
 }
-<button class="secondary" (click)="deleteNode(nid)">Delete step</button>
+<button class="secondary" (click)="duplicateNode(nid)">Duplicate step</button> <button class="secondary" (click)="deleteNode(nid)">Delete step</button>
 }} @else if (selectedEdge(); as eid) {<p>Link {{eid}}</p><button class="secondary" (click)="deleteEdge(eid)">Delete link</button>}
 @else {<p class="hint">Nothing selected.</p>}
 </section>
 </div>
+<section class="card"><details><summary>Definition JSON (read-only)</summary><p class="hint">Inspect or copy this definition. Server validation still runs on Save. Do not put credentials in block fields.</p><textarea aria-label="Definition JSON" readonly rows="14" [value]="definitionJson()" style="width:100%;font-family:monospace"></textarea></details></section>
 ` })
 export class WorkflowEditPage implements OnInit {
   protected readonly s = inject(Session);
@@ -326,6 +329,7 @@ export class WorkflowEditPage implements OnInit {
   protected readonly samples = SAMPLE_WORKFLOWS;
   protected events = signal<WfEvent[]>([]);
   protected blocks = signal<WfBlock[]>([]);
+  protected paletteQuery = '';
   protected triggerEvent = '';
   protected match = signal<Record<string, string>>({});
   protected triggerCfg = signal<Record<string, unknown>>({});
@@ -343,7 +347,7 @@ export class WorkflowEditPage implements OnInit {
   protected palette(): { family: string; blocks: WfBlock[] }[] {
     const src: WfBlock[] = this.blocks().length ? this.blocks() : STEP_TYPES.map((t) => ({ type: t.type, family: 'Core', label: t.label, simulated: t.simulated, description: t.hint, provider: null, providerActive: true }));
     const byFamily = new Map<string, WfBlock[]>();
-    for (const b of src) { const g = byFamily.get(b.family) ?? []; g.push(b); byFamily.set(b.family, g); }
+    for (const b of src.filter((b) => `${b.label} ${b.family} ${b.type} ${b.description}`.toLowerCase().includes(this.paletteQuery.trim().toLowerCase()))) { const g = byFamily.get(b.family) ?? []; g.push(b); byFamily.set(b.family, g); }
     return [...byFamily.entries()].sort((a, b) => (a[0] === 'Core' ? -1 : b[0] === 'Core' ? 1 : a[0].localeCompare(b[0]))).map(([family, blocks]) => ({ family, blocks }));
   }
   protected blockOf(t: string): WfBlock | undefined { return this.blocks().find((b) => b.type === t); }
@@ -444,7 +448,8 @@ export class WorkflowEditPage implements OnInit {
   }
 
   protected addNode(type: StepType) {
-    const id = `step-${++this.seq}`;
+    let id: string;
+    do { id = `step-${++this.seq}`; } while (this.state.has(id));
     const defaults: Record<string, Record<string, unknown>> = {
       wait: { seconds: 2 }, notify: { recipient: '', message: '' }, fail: { message: 'step configured to fail' },
       'assign-role': { identity: 'demo-bob', role: 'accountant' }, 'revoke-role': { identity: 'demo-bob', role: 'payment-creator' }, 'set-department': { identity: 'demo-bob', department: '' }, 'set-profile-field': { identity: 'demo-bob', field: 'hr-attributes.employee_grade', value: '' },
@@ -470,6 +475,23 @@ export class WorkflowEditPage implements OnInit {
     const id = `${c.source}->${c.target}`;
     if (this.vfEdges().some((e) => e.id === id)) return;
     this.vfEdges.update((es) => [...es, this.makeEdge(id, c.source!, c.target!)]);
+  }
+  protected duplicateNode(id: string) {
+    const source = this.state.get(id); if (!source) return;
+    let copyId: string;
+    do { copyId = `step-${++this.seq}`; } while (this.state.has(copyId));
+    const copy = { ...source, name: `${source.name.slice(0, 70)} (copy)`, config: structuredClone(source.config) };
+    this.state.set(copyId, copy);
+    for (const n of this.vfNodes()) n.selected?.set(false);
+    const n = this.makeNode(copyId, copy, this.vfNodes().length); n.selected?.set(true);
+    this.vfNodes.update((ns) => [...ns, n]);
+    this.note.set('Step duplicated without links. Connect it where needed.');
+  }
+  protected definitionJson() {
+    return JSON.stringify({ name: this.name, description: this.description, trigger: this.triggerPayload(), graph: {
+      nodes: [...this.state.entries()].map(([id, st]) => ({ id, ...st })),
+      edges: this.vfEdges().map((e) => ({ from: e.source, to: e.target })),
+    } }, null, 2);
   }
   protected deleteNode(id: string) {
     this.state.delete(id);
@@ -519,7 +541,7 @@ export class WorkflowEditPage implements OnInit {
   }
 }
 
-@Component({ selector: 'app-workflow-run', imports: [RouterLink], styleUrl: './pages.css', template: `
+@Component({ selector: 'app-workflow-run', imports: [RouterLink, JsonPipe], styleUrl: './pages.css', template: `
 <p class="lead">Run {{view()?.run?.id}} — {{view()?.run?.name}}</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 @if (view(); as v) {<section class="card"><div class="row">
@@ -538,6 +560,7 @@ export class WorkflowEditPage implements OnInit {
 @for (st of v.steps; track st.node_id) {<div class="wf-step" [attr.data-status]="st.status">
 <div class="row"><span class="chip" [attr.data-status]="st.status">{{st.status}}</span><b>{{st.name}}</b><span class="chip" [attr.data-status]="st.simulated ? 'simulated' : 'real'">{{st.simulated ? 'SIMULATED' : 'REAL'}}</span><small>attempts: {{st.attempts}}</small></div>
 @if (st.error) {<p class="msg error">{{st.error}}</p>}
+<details open><summary>Output</summary><pre class="wf-log">{{st.output | json}}</pre></details>
 <details><summary>Log</summary><pre class="wf-log">@for (l of st.log; track l) {{{l}}
 }</pre></details>
 </div>}

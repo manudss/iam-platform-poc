@@ -77,7 +77,7 @@ describe('workflow-connectors spike + real Dolt', { skip: !have && 'dolt binary 
     }
     Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN });
     delete process.env.IAM_WORKSPACE_MODE;
-    const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
+    const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13442);
     await ok('POST', '/plugins/workflows-iga/install', {});
     await ok('POST', '/plugins/workflows-iga/enable', {});
@@ -129,15 +129,17 @@ describe('workflow-connectors spike + real Dolt', { skip: !have && 'dolt binary 
           { id: 'join', type: 'text-transform', name: 'join', config: { operation: 'concat', values: '{{event.nom}}\n.\n{{event.prenom}}', separator: '' } },
           { id: 'lower', type: 'text-transform', name: 'lower', config: { operation: 'lower', text: '{{steps.join.value}}' } },
           { id: 'create', type: 'lyam-create-user', name: 'create', config: { identity: '{{steps.lower.value}}', displayName: '{{event.prenom}} {{event.nom}}', email: '{{steps.lower.value}}@lyam.demo', department: '{{event.departement}}' } },
+          { id: 'role', type: 'assign-role', name: 'role', config: { identity: '{{steps.lower.value}}', role: '{{event.role}}' } },
           { id: 'mark', type: 'google-sheets-update', name: 'mark', config: { source: 'demo-sheet', rowNumber: '{{event.rownumber}}', column: 'cree', value: 'ok' } },
         ],
-        edges: [{ from: 'join', to: 'lower' }, { from: 'lower', to: 'create' }, { from: 'create', to: 'mark' }],
+        edges: [{ from: 'join', to: 'lower' }, { from: 'lower', to: 'create' }, { from: 'create', to: 'role' }, { from: 'role', to: 'mark' }],
       },
     })) as { definition: { id: string } };
     await app.get(WorkflowSheetPollerService).tick();
     const runs = (await ok('GET', `/workflow-runs?definition=${def.definition.id}`)) as { runs: { id: string; status: string }[] };
     assert.ok(runs.runs.length >= 2, `rows Martin + Dubois are ready, got ${runs.runs.length} run(s)`);
-    const v = await waitRun(runs.runs[0].id, ['completed']);
+    const completed = await Promise.all(runs.runs.map((r) => waitRun(r.id, ['completed'])));
+    const v = completed[0];
     const create = v.steps.find((s) => s.node_id === 'create')!;
     assert.ok(create.log.some((l) => l.includes('created on the run branch')), `lyam write on the run branch: ${create.log}`);
     const sheet = (await ok('GET', '/plugins/workflow-connectors/demo-sheet')) as { rows: { rowNumber: number; values: Record<string, string> }[] };
