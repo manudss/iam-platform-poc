@@ -29,7 +29,7 @@ export class BranchRegistries {
   }
   private async create(ref: string) {
     const ds=new DoltPluginStore(this.v,ref);
-    const base={...authPassword,handlers:{...authPassword.handlers,'auth.authenticate':async(p:any)=>(await this.users.authenticate(p.tenant,p.subject,p.credential.password))?{outcome:'allow',subject:p.subject,methods:['pwd']}:{outcome:'deny',reason:'bad-credentials'}}};
+    const base={...authPassword,handlers:{...authPassword.handlers,'auth.authenticate':async(p:any)=>(await this.users.authenticate(p.tenant,p.subject,p.credential.password,ref))?{outcome:'allow',subject:p.subject,methods:['pwd']}:{outcome:'deny',reason:'bad-credentials'}}};
     const r=new PluginRegistry(ds,ds,e=>console.log('[plugins]',JSON.stringify({...e,branch:ref})),ds);
     // The one shipped list (P1: catalogue partagé) - same set as the main registry, base override first.
     for(const p of [base,...shippedPlugins().slice(1)])r.register(p);

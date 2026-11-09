@@ -114,9 +114,10 @@ export class UsersService {
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} changed their password`]); }
     }));
   }
-  async authenticate(tenant: string, id: string, password: string) {
+  /** `ref` is the data branch whose directory answers: 'main' for live sign-in, the tested branch for a branch test sign-in (accounts created there exist only there). */
+  async authenticate(tenant: string, id: string, password: string, ref = 'main') {
     if (tenant !== 'acme-demo') return false;
-    const users = await this.list('main'); if (!users.some(x => x.id === id && x.login_enabled)) return false;
+    const users = await this.list(ref); if (!users.some(x => x.id === id && x.login_enabled)) return false;
     const s = (await this.credentials())[String(users.find(x => x.id === id)?.credential_revision)]; if (!s || (s.subject !== undefined && s.subject !== id)) return false;
     return timingSafeEqual(Buffer.from(s.hash, 'hex'), scryptSync(password, s.salt, 64));
   }
