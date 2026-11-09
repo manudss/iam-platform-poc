@@ -1,8 +1,12 @@
-import { Component, PLATFORM_ID, PendingTasks, inject, signal } from '@angular/core';
+import { Component, PLATFORM_ID, PendingTasks, TransferState, inject, makeStateKey, signal } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
 import { SigninChain, SigninOptions, apiUrl } from './api';
+
+/** Hydration handoff: the options the server fetched to render /login, so the browser does not refetch them (and flash "Loading...") on startup. */
+const OPTIONS_KEY = makeStateKey<SigninOptions>('iam-signin-options');
+const SIGNUP_KEY = makeStateKey<boolean>('iam-signup-open');
 import { Session } from './session';
 import { Theme } from './theme';
 import { ThemeSwitch } from './theme-switch';
@@ -49,6 +53,7 @@ export class LoginPage {
    *  the server render wait for the methods list, so the first HTML already carries it. */
   private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
   private readonly pending = inject(PendingTasks);
+  private readonly transfer = inject(TransferState);
 
   constructor() {
     if (this.preview()) {
@@ -79,12 +84,28 @@ export class LoginPage {
   protected stepKind(type: string): 'password' | 'code' | 'pin' | 'other' { return /pin|digit/i.test(type) ? 'pin' : /totp|authenticator|otp|mail/i.test(type) ? 'code' : /password/i.test(type) ? 'password' : 'other'; }
 
   protected async load() {
+    // Hydration: reuse what the server fetched to render this very page instead of refetching - the
+    // server-rendered list must not be replaced by a "Loading..." line while the same answer comes back.
+    // A branch-test link is bound to its own branch and always fetches live.
+    if (this.isBrowser && !this.test() && this.transfer.hasKey(OPTIONS_KEY)) {
+      this.options.set(this.transfer.get(OPTIONS_KEY, { mode: 'legacy', chains: [] }));
+      this.signupOpen.set(this.transfer.get(SIGNUP_KEY, false));
+      this.transfer.remove(OPTIONS_KEY); this.transfer.remove(SIGNUP_KEY);
+      this.state.set('ready');
+      return;
+    }
     this.state.set('loading');
     // The two startup calls run in parallel: the list no longer waits for the sign-up schema answer.
-    const signup = async () => { try { this.signupOpen.set(!this.test() && (await fetch(apiUrl('/api/tenants/acme-demo/signup/schema'))).ok); } catch { this.signupOpen.set(false); } };
+    const signup = async () => {
+      try { this.signupOpen.set(!this.test() && (await fetch(apiUrl('/api/tenants/acme-demo/signup/schema'))).ok); } catch { this.signupOpen.set(false); }
+      if (!this.isBrowser) this.transfer.set(SIGNUP_KEY, this.signupOpen());
+    };
     const options = async () => {
-      try { this.options.set(await this.s.api.signinOptions(this.test() ?? undefined)); this.state.set('ready'); }
-      catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
+      try {
+        const o = await this.s.api.signinOptions(this.test() ?? undefined);
+        this.options.set(o); this.state.set('ready');
+        if (!this.isBrowser && !this.test()) this.transfer.set(OPTIONS_KEY, o);
+      } catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
     };
     await Promise.all([signup(), options()]);
   }
