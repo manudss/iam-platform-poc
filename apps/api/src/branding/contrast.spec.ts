@@ -32,10 +32,10 @@ const PAIRS: [keyof ThemeVars, keyof ThemeVars, number][] = [
   ['--ink', '--code-bg', 4.5],
   ['--ink', '--accent-soft', 4.5], // .msg body
   ['--ink', '--sel', 4.5], // selected text
-  ['--muted', '--bg', 3], // secondary text (AA large): hints, footer
-  ['--muted', '--card', 3],
+  ['--muted', '--bg', 4.5], // secondary text (AA large): hints, footer
+  ['--muted', '--card', 4.5],
   ['--label', '--field-bg', 4.5],
-  ['--brand-sub', '--card', 3], // baseline under the logo (large/secondary)
+  ['--brand-sub', '--card', 4.5], // baseline under the logo (large/secondary)
   ['--th-ink', '--th-bg', 4.5],
   ['--link', '--bg', 4.5],
   ['--link', '--card', 4.5],

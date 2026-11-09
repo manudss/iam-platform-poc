@@ -67,7 +67,7 @@ function modeVars(pl: Palettes, dark: boolean): ThemeVars {
   return dark ? {
     '--bg': hex(N, 6), '--card': hex(N, 10), '--panel': hex(N, 15), '--code-bg': hex(N, 20),
     '--th-bg': hex(NV, 20), '--row-hover': hex(N, 17), '--field-bg': hex(N, 15), '--bar-off': hex(NV, 30),
-    '--veil': hexa(N, 6, .60), '--card-auth': hexa(N, 12, .70), '--auth-field': hexa(N, 8, .45),
+    '--veil': hexa(N, 6, .60), '--card-auth': hex(N, 12), '--auth-field': hex(N, 8),
     '--ink': hex(N, 90), '--muted': hex(NV, 75), '--label': hex(NV, 80), '--brand-sub': hex(NV, 75), '--th-ink': hex(NV, 75),
     '--line': hex(NV, 25), '--field-line': hex(NV, 35), '--focus': hex(P, 70),
     '--accent': hex(P, 80), '--accent-ink': hex(P, 20), '--accent-dark': hex(P, 70), '--accent-soft': hex(P, 25), '--link': hex(P, 80),
@@ -79,7 +79,7 @@ function modeVars(pl: Palettes, dark: boolean): ThemeVars {
   } : {
     '--bg': hex(N, 98), '--card': hex(N, 100), '--panel': hex(N, 96), '--code-bg': hex(N, 94),
     '--th-bg': hex(NV, 92), '--row-hover': hex(N, 95), '--field-bg': hex(N, 100), '--bar-off': hex(NV, 85),
-    '--veil': hexa(N, 98, .45), '--card-auth': hexa(N, 100, .78), '--auth-field': hexa(N, 100, .88),
+    '--veil': hexa(N, 98, .45), '--card-auth': hex(N, 100), '--auth-field': hex(N, 100),
     '--ink': hex(N, 10), '--muted': hex(NV, 45), '--label': hex(NV, 30), '--brand-sub': hex(NV, 45), '--th-ink': hex(NV, 40),
     '--line': hex(NV, 88), '--field-line': hex(NV, 80), '--focus': hex(P, 65),
     '--accent': hex(P, 40), '--accent-ink': hex(P, 100), '--accent-dark': hex(P, 30), '--accent-soft': hex(P, 92), '--link': hex(P, 40),

@@ -1,0 +1,55 @@
+import { BadRequestException, Inject, Injectable, Optional } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { PluginRegistry } from '../plugins/v1/registry.js';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { validateSettings } from '../plugins/v1/settings.js';
+import { workspaceMode } from '../workspace/context.js';
+import { generateTheme, themeCss, type BrandingColors } from './theme-engine.js';
+import { renderLogo } from './logo.js';
+import { sanitizeSvg } from './svg.js';
+
+export interface BrandingConfig { productName: string; baseline: string; footer: string; primaryColor: string; accentColor: string; logoMode: string; logoSvg: string; faviconSvg: string }
+export interface BrandingBundle { config: BrandingConfig; css: string; theme: ReturnType<typeof generateTheme>; version: string; logos: Record<string,string> }
+
+@Injectable()
+export class BrandingService {
+  private readonly cache = new Map<string, BrandingBundle>();
+  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
+  private async registry(branch: string) { return workspaceMode() ? this.branches!.get(branch) : this.reg; }
+  private config(reg: PluginRegistry, tenant: string, input: Record<string, unknown>): BrandingConfig {
+    const provider = reg.resolve(tenant, 'branding');
+    const checked = validateSettings(provider.manifest.settings, input);
+    if (!checked.ok) throw new BadRequestException(checked.errors.join('; '));
+    const c = checked.values as unknown as BrandingConfig;
+    // Rechecked on reads too: the generic settings editor and SQL cannot turn an SVG into executable content.
+    try {
+      if (c.logoSvg) c.logoSvg = sanitizeSvg(c.logoSvg);
+      if (c.faviconSvg) c.faviconSvg = sanitizeSvg(c.faviconSvg);
+      if (c.logoMode === 'custom' && !c.logoSvg) throw new Error('Custom logo requires SVG artwork');
+    } catch (e) { throw new BadRequestException((e as Error).message); }
+    return c;
+  }
+  private bundle(config: BrandingConfig): BrandingBundle {
+    const version = createHash('sha256').update('theme-v1|' + JSON.stringify(config)).digest('hex').slice(0,24);
+    const hit = this.cache.get(version); if (hit) return hit;
+    const colors: BrandingColors = { primary: config.primaryColor, accent: config.accentColor };
+    const theme = generateTheme(colors);
+    const logos: Record<string,string> = {};
+    for (const mode of ['light','dark'] as const) logos[`logo-horizontal-${mode}.svg`] = config.logoMode === 'custom' ? config.logoSvg : renderLogo(colors, mode);
+    logos['symbol.svg'] = renderLogo(colors, 'light', true);
+    logos['favicon.svg'] = config.faviconSvg || logos['symbol.svg'];
+    const value = { config, css: themeCss(theme, config), theme, logos, version };
+    // Content-addressed: an unrelated Dolt commit does NOT regenerate a theme; Apply reuses exactly the draft.
+    // Public and draft lookup is separately authorised by the controller; no draft identifiers are exposed here.
+    if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!);
+    this.cache.set(version, value); return value;
+  }
+  async get(tenant: string, branch = 'main') {
+    const reg = await this.registry(branch);
+    const id = reg.resolve(tenant, 'branding').manifest.id;
+    return this.bundle(this.config(reg, tenant, await reg.settingsFor(tenant,id) ?? {}));
+  }
+  async preview(tenant: string, input: Record<string,unknown>, branch: string) {
+    return this.bundle(this.config(await this.registry(branch), tenant, input));
+  }
+}
