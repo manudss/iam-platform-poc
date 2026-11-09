@@ -42,7 +42,10 @@ const server = http.createServer(async (req, res) => {
       if (process.env.IAM_API_ADMIN_TOKEN) req.headers['x-api-admin-token'] = process.env.IAM_API_ADMIN_TOKEN;
       return proxy(req, res, API, true);
     }
-    if (p === '/authorize' || p === '/authorize/login' || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false);
+    // /authorize and everything under it (login post, theme toggle, the passkey ceremony script
+    // /authorize/webauthn.js): an exact-match here once sent the ceremony script to the SPA, which
+    // answered HTML, the browser refused it as a script, and "Use my passkey" did nothing.
+    if (p === '/authorize' || p.startsWith('/authorize/') || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false);
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('method not allowed'); }
     // The SSR render waits for the API options; a cold Dolt can need ~30 s on the first hit, well over the default proxy timeout.
     return proxy(req, res, SSR, false, () => ({ 'cache-control': 'no-store', ...framingHeaders(p, url.search) }), 75000);
