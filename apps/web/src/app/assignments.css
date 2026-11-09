@@ -48,4 +48,4 @@
 .selection-list {max-height:18rem;overflow:auto;}
 .matrix-foot {display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;position:sticky;bottom:0;padding:.8rem;background:var(--card);border:1px solid var(--line);border-radius:.6rem;margin-top:1rem;z-index:5;}
 @media(max-width:700px){.selection-layout {grid-template-columns:1fr;}.facets label {flex-basis:calc(50% - .6rem);}.dtabs {gap:.2rem;}.dtabs button {font-size:.75rem;padding:.5rem .3rem;}.tcard td.roles {padding:.45rem 0;}.drawer.wide {width:100vw;}.matrix-foot button {flex:1;}.head .btn {flex:1;text-align:center;}}
-@media(max-width:700px){.head>a {flex:1 1 100%;display:block;white-space:normal;}.matrix-foot>.grow {flex:1 1 100%;}.matrix-foot {gap:.5rem;}}
+@media(max-width:700px){.head>a,.head>a.btn {flex:1 1 100%;display:block;white-space:normal;}.matrix-foot>.grow {flex:1 1 100%;}.matrix-foot {gap:.5rem;}}
