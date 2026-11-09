@@ -29,7 +29,7 @@ describe('ordinary valid token: no administration route answers', () => {
     ['post', 'changes'], ['post', 'connectors/csv'], ['post', 'connectors/scim'], ['post', 'changes/x/merge'], 
     ['post', 'activations'], ['post', 'activations/reconcile'], ['post', 'activation-workflows'],
     ['post', 'users'], ['put', 'users/demo-alice'], ['get', 'users'], ['put', 'profile-fields'], ['get', 'profile-fields'], ['patch', 'users/demo-alice/profile'],
-    ['post', 'workspace/assignment'], ['post', 'workspace/apply'], ['put', 'auth'], ['post', 'plugins/hr-attributes/enable'], ['post', 'organizations'], ['get', 'roles'], ['post', 'roles'], ['patch', 'roles/x'], ['delete', 'roles/x'], ['post', 'roles/sod-rules'], ['post', 'roles/sod-rules/remove'], ['get', 'signup/requests'], ['post', 'signup/requests/x/approve'],
+    ['post', 'workspace/assignment'], ['post', 'workspace/unassignment'], ['post', 'workspace/assignments'], ['post', 'workspace/apply'], ['put', 'auth'], ['post', 'plugins/hr-attributes/enable'], ['post', 'organizations'], ['get', 'roles'], ['post', 'roles'], ['patch', 'roles/x'], ['delete', 'roles/x'], ['post', 'roles/sod-rules'], ['post', 'roles/sod-rules/remove'], ['get', 'signup/requests'], ['post', 'signup/requests/x/approve'],
   ];
   for (const tenant of ['acme-demo', 'other-tenant'])
     it(`refuses ${routes.length} routes for tenant ${tenant} without the admin capability`, async () => {
