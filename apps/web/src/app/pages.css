@@ -113,3 +113,10 @@ h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px 
 .pf-add-section button { min-height: 44px; }
 .pf-err { color: var(--bad, #c0392b); flex-basis: 100%; }
 .pf-empty-section { border: 1px dashed var(--line); border-radius: .6rem; padding: .6rem .7rem; margin: 0 0 .45rem; }
+/* Review fixes: section header actions on their own row (same layout for every section), compact segmented controls inside tables, no overflow at 390px */
+.pf-group-head { flex-direction: column; align-items: flex-start; gap: .25rem; }
+.pf-fields-grid > * { min-width: 0; }
+.pf-field-main { overflow-wrap: anywhere; }
+#pf-components-table .seg-opt span { padding: 0 .5rem; font-size: .8rem; }
+#pf-components-table .pf-order { width: 4.5rem; }
+@media (max-width: 480px) { .pf-field { flex-wrap: wrap; } .pf-group-actions { width: 100%; } .pf-group-actions .icon { flex: 1; } }
