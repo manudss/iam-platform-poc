@@ -167,6 +167,8 @@ export interface PluginInfo {
   id: string; name: string; version: string; kinds: string[]; base: boolean; provides: string[]; extends?: string; enabled: boolean; installed: boolean; faulted?: boolean;
   requests: { install: boolean; sensitiveHooks: string[]; uiComponents: boolean };
   grants: { install?: boolean; hooks?: string[]; uiComponents?: boolean };
+  /** Profile field keys the plugin declares (drives the uninstall export offer). */
+  profileFields?: string[];
 }
 export interface FormField { key: string; type: string; label: string; help?: string; required?: boolean; options?: { value: string; label: string }[]; value: unknown; group?: string; visibleIf?: { key: string; equals: unknown }; min?: number; max?: number }
 export interface FormModel { groups: { name: string; fields: FormField[] }[] }
@@ -183,6 +185,9 @@ export class PluginAdminClient {
   save(id: string, values: Record<string, unknown>) { return this.admin('PUT', `/plugins/${id}/settings`, { values }); }
   enable(id: string, grants: GrantsInput) { return this.admin('POST', `/plugins/${id}/enable`, { grants }); }
   disable(id: string) { return this.admin('POST', `/plugins/${id}/disable`); }
+  uninstall(id: string) { return this.admin('POST', `/plugins/${id}/uninstall`); }
+  /** How much profile data the plugin holds for the tenant (shown in the uninstall confirmation). */
+  profileValues(id: string) { return this.admin<{ values: number }>('GET', `/plugins/${id}/profile-values`).then((r) => r.data); }
   /** Re-verify every shipped plugin and rebuild the catalogue + inventories (manual cache refresh). */
   refresh() { return this.admin<{ verified: string[] }>('POST', '/plugins/refresh'); }
 }

@@ -149,7 +149,7 @@ export function userStats(users: UserProfile[]): UserStats {
   </div>}}
   @if (key && pfields().length) { <h4>Profile fields</h4><p class="hint">Fields the administrator configuration lets an administrator edit. Saved on the working branch like the rest.</p>
   @for (f of pfields(); track f.key) {
-  @if (f.type==='image') { <div class="pf-image"><span class="pf-label">{{f.label}} <small>managed by the Profile picture section below</small></span>@if (pvals()[f.key]) {<img class="pf-thumb" [src]="pvals()[f.key]" alt="" />}@else {<span class="hint">No picture</span>}</div> }
+  @if (f.type==='image') { <div class="pf-image"><span class="pf-label">{{f.label}} <small>(read only) · plugin profile-picture</small></span>@if (pvals()[f.key]) {<img class="pf-thumb" [src]="pvals()[f.key]" alt="" />}@else {<span class="pf-thumb pf-nopic">No picture</span>}<small class="hint">Belongs to the person; administrators see it but cannot change it.</small></div> }
   @else { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
   @if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
   @else if (f.type==='boolean') {<select [name]="'pf'+f.key" [ngModel]="boolStr(f.key)" (ngModelChange)="setP(f.key,$event===''?null:$event==='true')" [disabled]="!f.editable"><option value="">-</option><option value="true">Yes</option><option value="false">No</option></select>}

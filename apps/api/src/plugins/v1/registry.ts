@@ -191,7 +191,9 @@ export class PluginRegistry {
       return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), installed: base ? true : !!s?.installed,
         /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
         requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') || !!i.manifest.profileComponents?.length },
-        grants: s?.grants ?? {} };
+        grants: s?.grants ?? {},
+        /** Declared profile field keys (the console's uninstall export offers a CSV of them). */
+        profileFields: i.manifest.profileFields?.map((f) => f.key) ?? [] };
     }));
   }
 
