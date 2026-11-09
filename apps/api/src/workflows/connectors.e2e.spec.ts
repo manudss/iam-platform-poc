@@ -2,7 +2,7 @@
 // Skipped if the dolt binary is missing (DOLT_BIN) - CI runs it with the real binary. The Google and Jira
 // sides stay on their simulated contexts here (demo sheet, dry-run): no external credential exists in tests.
 import 'reflect-metadata';
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -77,12 +77,16 @@ describe('workflow-connectors spike + real Dolt', { skip: !have && 'dolt binary 
     }
     Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN });
     delete process.env.IAM_WORKSPACE_MODE;
-    const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(AuthGuard).useValue(new FakeAuth()).compile();
+    // Guard decorators and the dynamic HTTP controller both use AuthGuard. Nest's
+    // overrideGuard and overrideProvider share a token map and overwrite one another.
+    // Mock the method in this isolated test process so both invocation paths use FakeAuth.
+    mock.method(AuthGuard.prototype, 'canActivate', (ctx: ExecutionContext) => new FakeAuth().canActivate(ctx));
+    const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13442);
     await ok('POST', '/plugins/workflows-iga/install', {});
     await ok('POST', '/plugins/workflows-iga/enable', {});
   });
-  after(async () => { await app?.close(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
+  after(async () => { await app?.close(); mock.restoreAll(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
   it('the block catalogue lists contributed blocks with their provider state', async () => {
     const before1 = (await ok('GET', '/workflow-blocks')) as { blocks: { type: string; provider: string | null; providerActive: boolean }[] };
