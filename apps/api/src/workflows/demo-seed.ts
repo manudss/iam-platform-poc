@@ -94,6 +94,25 @@ const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger
     ],
     edges: [{ from: 'join', to: 'clean' }, { from: 'clean', to: 'lower' }, { from: 'lower', to: 'email' }, { from: 'email', to: 'create' }, { from: 'create', to: 'role' }, { from: 'role', to: 'mark' }, { from: 'mark', to: 'tell' }],
   },
+  {
+    id: 'wf-leaver-jira', name: 'Leaver: a Jira ticket tracks the offboarding (spike)', description: 'SPIKE workflow-connectors: when an account is disabled, opens a Jira issue for the offboarding checklist (dryRun ON by default: simulated, only logged - turn dryRun off with the Jira sandbox settings for a real ticket) and informs security (simulated).',
+    trigger: { event: 'user.disabled' },
+    nodes: [
+      { id: 'ticket', type: 'jira-create-issue', name: 'Open the offboarding ticket (dry-run)', config: { dryRun: true, project: 'KAN', issueTypeId: '10001', summary: 'Offboard {{event.subject}}', description: 'Account disabled: revoke remaining roles, collect equipment, close the lyam account after branch review.' } },
+      { id: 'search', type: 'jira-search-issues', name: 'List open offboardings (dry-run)', config: { dryRun: true, jql: "project = KAN AND labels = offboarding AND status != Done", maxResults: 10 } },
+      { id: 'tell', type: 'notify', name: 'Inform security (simulated)', config: { recipient: 'security', message: 'offboarding ticket for {{event.subject}} requested (dry-run: nothing created)' } },
+    ],
+    edges: [{ from: 'ticket', to: 'search' }, { from: 'search', to: 'tell' }],
+  },
+  {
+    id: 'wf-candidate-intake', name: 'Intake: a webhook adds a candidate row (spike)', description: 'SPIKE workflow-connectors: POST JSON {nom, prenom, departement, role} to /tenants/<tenant>/workflow-hooks/wf-candidate-intake/demo-intake-token (demo token, change it) appends the candidate to the SIMULATED sheet with process "En cours"; set process = OK to onboard them. Shows the webhook trigger + the append-row block.',
+    trigger: { event: 'http.webhook-received', config: { token: 'demo-intake-token' } },
+    nodes: [
+      { id: 'add', type: 'google-sheets-add-row', name: 'Append the candidate to the demo sheet', config: { source: 'demo-sheet', values: 'nom = {{event.nom}}\nprenom = {{event.prenom}}\ndepartement = {{event.departement}}\nrole = {{event.role}}\nprocess = En cours\ncree = ' } },
+      { id: 'tell', type: 'notify', name: 'Inform HR (simulated)', config: { recipient: 'hr', message: 'candidate {{event.prenom}} {{event.nom}} received by webhook, appended at row {{steps.add.rowNumber}}: review and set process = OK' } },
+    ],
+    edges: [{ from: 'add', to: 'tell' }],
+  },
 ];
 
 @Injectable()

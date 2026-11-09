@@ -27,6 +27,8 @@ Each block is a workflow step type contributed on the `workflows.blocks` surface
 | `text-transform` | `@activepieces/piece-text-helper` (+ native `lower`/`unaccent`) | Pure computation. `concat`, `replace`, `slugify`, `find`, `split` run through the piece; the piece has no lowercase/unaccent, so those two are native additions. |
 | `google-sheets-read` | `@activepieces/piece-google-sheets` | Source `demo-sheet` reads the built-in **SIMULATED** sheet (no credential). Source `google` makes a **real API call** once a service account is configured. |
 | `google-sheets-update` | same piece | Writes one cell. On the demo sheet the write is simulated; with source `google` it is a **real external write, not reverted** by abandoning the run branch. |
+| `google-sheets-add-row` | same piece (`insert_row`) | Appends one row (`column = value` lines). **Not idempotent** (the piece says so itself): a retried step would append again — the engine only retries failed steps, and a done step never re-runs. |
+| `jira-search-issues` | `@activepieces/piece-jira-cloud` (`search_issues`) | Read-only JQL search. `dryRun` on (default) only logs the query; a real search needs the Jira settings. |
 | `jira-create-issue` | `@activepieces/piece-jira-cloud` | `dryRun` on (the default) only logs the issue it would create. With `dryRun` off and the Jira settings filled, a **real issue is created** — retrying creates another one. |
 | `lyam-create-user` | native (this platform) | **Real data write on the run branch only**: inserts the identity with login disabled. Idempotent: a retried step adopts the existing branch row. Publishing stays the human review/merge. |
 
@@ -56,6 +58,11 @@ watches the built-in **simulated** candidates sheet (*Candidats RH (démo simul�
 The run stops on its own `wf-<run>` branch; a human reviews and merges, like any workflow run. The demo
 sheet is readable and editable through the plugin routes `GET/POST/PUT /tenants/:t/plugins/workflow-connectors/demo-sheet*`
 (the console shows it in the workflow editor), and it resets to its seed rows on restart.
+
+Two more seeds show the other triggers: `wf-leaver-jira` (user.disabled → Jira ticket + search, both dry-run
+until a sandbox token is configured) and `wf-candidate-intake` (public webhook
+`/tenants/<tenant>/workflow-hooks/wf-candidate-intake/demo-intake-token` — a documented demo-only token, change
+it — appends the posted candidate to the simulated sheet with process "En cours").
 
 ## Settings (typed in the console, never in code)
 

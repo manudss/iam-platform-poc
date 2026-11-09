@@ -16,7 +16,7 @@ const EVENT_PAYLOADS: Record<string, string[]> = {
 };
 // Mirrors plugins/workflow-connectors/blocks.mjs: the contributed step types samples may use on top of the
 // built-in catalogue (drift between the two fails here).
-const CONTRIBUTED_TYPES = ['http-request', 'text-transform', 'google-sheets-read', 'google-sheets-update', 'jira-create-issue', 'lyam-create-user'];
+const CONTRIBUTED_TYPES = ['http-request', 'text-transform', 'google-sheets-read', 'google-sheets-update', 'google-sheets-add-row', 'jira-create-issue', 'jira-search-issues', 'lyam-create-user'];
 
 describe('workflow step types', () => {
   it('marks exactly wait/notify/fail as simulated; data steps are real', () => {

@@ -272,6 +272,45 @@ const sheetsUpdate = {
   },
 };
 
+const sheetsAddRow = {
+  type: 'google-sheets-add-row',
+  family: 'Google Sheets',
+  label: 'Append a sheet row (Activepieces)',
+  simulated: false,
+  description: 'Appends one row. On the demo sheet the append is SIMULATED; with source google it is a REAL append. NOT idempotent: a retried step appends another row (the piece says so itself) - the engine retry only re-runs a FAILED step, and a done step is never re-run.',
+  fields: [
+    ...sheetSourceFields,
+    { key: 'values', label: 'Row values (one "column = value" per line)', type: 'text', required: true, help: 'placeholders allowed; unknown columns are refused' },
+  ],
+  outputs: [{ key: 'rowNumber', description: 'The appended row number' }],
+  validate(cfg) {
+    const out = { ...sheetSource(cfg, false), values: str(cfg.values, 'values', 2000) };
+    return out;
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    const values = {};
+    for (const line of String(c.values).split('\n')) {
+      const m = /^\s*([A-Za-z][A-Za-z0-9_ ]{0,40}?)\s*=\s*(.*)$/.exec(line);
+      if (!m) { if (line.trim()) bad(`google-sheets-add-row.values: "${line.trim()}" is not "column = value"`); continue; }
+      values[m[1]] = m[2];
+    }
+    if (!Object.keys(values).length) bad('google-sheets-add-row.values: at least one "column = value" line');
+    if (c.source === 'demo-sheet') {
+      const added = demoSheet.addRow(values);
+      ctx.log(`DEMO sheet: row ${added.rowNumber} appended (simulated sheet, no Google call)`);
+      return { rowNumber: added.rowNumber };
+    }
+    const auth = googleAuth(ctx.settings);
+    if (!auth) bad('google-sheets-add-row: type the Google service account JSON key in the workflow-connectors plugin settings first (console)');
+    const result = await runPieceAction('@activepieces/piece-google-sheets', 'insert_row', {
+      auth, propsValue: { spreadsheetId: c.spreadsheetId, sheetId: c.sheetId, first_row_headers: true, includeTeamDrives: false, as_string: false, values },
+    });
+    ctx.log(`Google Sheets: row ${result?.row ?? '?'} appended (REAL external write, not reverted by the run branch, not idempotent)`);
+    return { rowNumber: Number(result?.row ?? 0) || undefined };
+  },
+};
+
 // --------------------------------------------------------------------------- Jira (piece-jira-cloud) ----
 const jiraCreateIssue = {
   type: 'jira-create-issue',
@@ -319,6 +358,46 @@ const jiraCreateIssue = {
   },
 };
 
+const jiraSearchIssues = {
+  type: 'jira-search-issues',
+  family: 'Jira',
+  label: 'Search Jira issues (Activepieces)',
+  simulated: false,
+  description: 'Runs a JQL search through the Activepieces jira-cloud piece (read-only, idempotent). dryRun on (default) = SIMULATED, only logs the query. Needs the Jira settings for a real search.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real search)', type: 'boolean', default: true },
+    { key: 'jql', label: 'JQL query', type: 'text', required: true, help: "e.g. project = KAN AND status = 'To Do'" },
+    { key: 'maxResults', label: 'Max results (1-100)', type: 'number', default: 10 },
+  ],
+  outputs: [
+    { key: 'count', description: 'Number of matching issues (0 in dry-run)' },
+    { key: 'issues', description: 'The issues as JSON, capped at 2000 chars (null in dry-run)' },
+    { key: 'firstKey', description: 'Key of the first match (null when none or dry-run)' },
+  ],
+  validate(cfg) {
+    const max = Math.min(100, Math.max(1, Number(cfg.maxResults ?? 10) || 10));
+    return { dryRun: bool(cfg.dryRun, true), jql: str(cfg.jql, 'jql', 500), maxResults: max };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) {
+      ctx.log(`DRY-RUN: would search Jira with JQL "${c.jql}" (max ${c.maxResults}, nothing called)`);
+      return { count: 0, issues: null, firstKey: null, dryRun: true };
+    }
+    const instanceUrl = str(ctx.settings?.jiraInstanceUrl, 'jira instance URL', 200, false);
+    const email = str(ctx.settings?.jiraEmail, 'jira email', 200, false);
+    const apiToken = str(ctx.settings?.jiraApiToken, 'jira api token', 500, false);
+    if (!instanceUrl || !email || !apiToken) bad('jira-search-issues: fill the Jira settings of the workflow-connectors plugin first (console), or keep dryRun on');
+    const result = await runPieceAction('@activepieces/piece-jira-cloud', 'search_issues', {
+      auth: { props: { instanceUrl, email, apiToken } },
+      propsValue: { jql: c.jql, maxResults: c.maxResults, mapNames: true, sanitizeJql: true },
+    });
+    const issues = Array.isArray(result?.issues) ? result.issues : Array.isArray(result) ? result : [];
+    ctx.log(`Jira search: ${issues.length} issue(s) (real API call, read-only)`);
+    return { count: issues.length, issues: JSON.stringify(issues).slice(0, 2000), firstKey: issues[0]?.key ?? null };
+  },
+};
+
 // ------------------------------------------------------------------- lyam connector: create a user ----
 const lyamCreateUser = {
   type: 'lyam-create-user',
@@ -358,7 +437,7 @@ const lyamCreateUser = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, jiraCreateIssue, lyamCreateUser];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

@@ -111,6 +111,22 @@ describe('contributed block runs (simulated contexts)', () => {
     assert.equal(out!.key, null);
     assert.ok(c.lines[0].startsWith('DRY-RUN'));
   });
+  it('google-sheets-add-row appends on the DEMO sheet and refuses bad lines', async () => {
+    const add = externalBlock('google-sheets-add-row')!;
+    const c = ctx({ config: add.validate({ source: 'demo-sheet', values: 'nom = Petit\nprenom = Zoé\nprocess = En cours' }) });
+    const out = await add.run(c);
+    assert.equal(out!.rowNumber, 5);
+    assert.ok(c.lines[0].includes('DEMO sheet'));
+    await assert.rejects(() => add.run(ctx({ config: add.validate({ source: 'demo-sheet', values: 'just text' }) })), /column = value/);
+  });
+  it('jira-search-issues: dryRun default logs the JQL instead of calling', async () => {
+    const j = externalBlock('jira-search-issues')!;
+    const c = ctx({ config: j.validate({ jql: 'project = KAN', maxResults: 5000 }) });
+    assert.equal(c.config.maxResults, 100, 'capped');
+    const out = await j.run(c);
+    assert.equal(out!.count, 0);
+    assert.ok(c.lines[0].startsWith('DRY-RUN'));
+  });
   it('lyam-create-user writes the identity on the run branch, idempotent on retry', async () => {
     const l = externalBlock('lyam-create-user')!;
     const cfg = l.validate({ identity: 'martin.camille', displayName: 'Camille Martin', email: 'martin.camille@lyam.demo', department: 'finance' });
