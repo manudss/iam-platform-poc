@@ -7,6 +7,11 @@ export const REDIRECT = `${ORIGIN}/callback`; // registered redirect_uri: the co
  *  locally and by demo/server.mjs in the hosted demo), so no loopback URL is ever exposed to the browser. */
 export const CORE_PUBLIC = `${ORIGIN}/core`;
 
+/** Server-side rendering has no same origin: it reaches the API through the local edge (IAM_WEB_API_ORIGIN).
+ *  In the browser every call stays relative, exactly as before. */
+const SSR_API = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.IAM_WEB_API_ORIGIN ?? '';
+export function apiUrl(path: string): string { return SSR_API && typeof location === 'undefined' ? `${SSR_API}${path}` : path; }
+
 export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
 export interface SigninOptions { mode: 'choice' | 'legacy'; chains: SigninChain[]; note?: string }
 export interface SsoRequest { app: { id: string; name: string; description: string }; scopes: string[]; user: { sub: string; name: string }; allowed: boolean }
@@ -101,7 +106,7 @@ export class ApiClient {
    *  A branch test passes the branch and its admin-issued ticket (docs/branch-test.md). */
   async signinOptions(branchTest?: { branch: string; ticket: string }): Promise<SigninOptions> {
     const q = branchTest ? `?branch=${encodeURIComponent(branchTest.branch)}&ticket=${encodeURIComponent(branchTest.ticket)}` : '';
-    const r = await this.f(`/api/tenants/${encodeURIComponent(this.tenant)}/signin/options${q}`);
+    const r = await this.f(apiUrl(`/api/tenants/${encodeURIComponent(this.tenant)}/signin/options${q}`));
     if (!r.ok) { const m = ((await r.json().catch(() => ({}))) as { message?: string }).message; throw new Error(m ?? 'cannot load the sign-in methods'); }
     return (await r.json()) as SigninOptions;
   }

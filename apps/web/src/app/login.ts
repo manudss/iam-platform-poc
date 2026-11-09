@@ -75,10 +75,15 @@ export class LoginPage {
 
   protected async load() {
     this.state.set('loading');
-    try { this.signupOpen.set(!this.test() && (await fetch('/api/tenants/acme-demo/signup/schema')).ok); } catch { this.signupOpen.set(false); }
-    try { this.options.set(await this.s.api.signinOptions(this.test() ?? undefined)); this.state.set('ready'); }
-    catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
+    // The two startup calls run in parallel: the list no longer waits for the sign-up schema answer.
+    const signup = async () => { try { this.signupOpen.set(!this.test() && (await fetch(apiUrl('/api/tenants/acme-demo/signup/schema'))).ok); } catch { this.signupOpen.set(false); } };
+    const options = async () => {
+      try { this.options.set(await this.s.api.signinOptions(this.test() ?? undefined)); this.state.set('ready'); }
+      catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
+    };
+    await Promise.all([signup(), options()]);
   }
+
   protected stepNames(c: SigninChain) { return c.steps.map((x) => x.name).join(' \u2192 '); }
 
   /** Leading icon of a chain from its step types: authenticator app, e-mail code, PIN keypad, else a plain password key. */
