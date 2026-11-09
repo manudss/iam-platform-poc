@@ -14,6 +14,7 @@ import { WorkflowsModule } from './workflows.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
 import { WorkflowSheetPollerService } from './sheet-poller.js';
+import { startTestBus, TestBus } from '../testing/test-bus.js';
 
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
@@ -51,6 +52,12 @@ const waitRun = async (id: string, want: string[], timeoutMs = 20000): Promise<{
     await new Promise((r) => setTimeout(r, 120));
   }
 };
+
+// Enabling a plugin requires the durable event bus (step 3, decision 6): the file-level bus boot mirrors
+// workflows.e2e.spec.ts (hook-fails loudly when the NATS/core binaries are missing, CI has them).
+let testBus: TestBus | undefined;
+before(async () => { testBus = await startTestBus(import.meta.url); });
+after(async () => { await testBus?.close(); });
 
 describe('workflow-connectors spike + real Dolt', { skip: !have && 'dolt binary missing' }, () => {
   let dolt: ChildProcess, app: INestApplication, dir: string;
