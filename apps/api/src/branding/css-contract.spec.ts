@@ -11,7 +11,7 @@ it('UI colors are semantic variables, not hardcoded literals',()=>{
   let s=readFileSync(p,'utf8').replace(/&#\d+;/g,'');
   // These are user-editable source-color presets, never CSS declarations.
   if(p.endsWith('branding-base/screens/customisation.mjs'))s=s.replace(/#[0-9a-f]{6}/gi,'');
-  assert.doesNotMatch(s,/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(/i,p);
+  assert.doesNotMatch(s,/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|(?:color|background)\s*:\s*(?:white|black|red|blue|gray|grey|green)\b/i,p);
  }
 });
 it('offline fallbacks are generated from the live engine',()=>{

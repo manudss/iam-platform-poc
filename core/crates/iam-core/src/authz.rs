@@ -18,7 +18,7 @@ fn pct(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"
 /// A method (password, code, keypad, ...) only contributes the inner HTML of the central card.
 /// No JavaScript by design (the CSP below forbids scripts): the theme selector is three plain links to
 /// /authorize/theme, which remembers the choice in the `iam_theme` cookie shared with the console.
-const CSS: &str = r#".brand-baseline,.brand-footer{font-size:0}.brand-baseline::after{content:var(--brand-baseline,"IAM next generation");font-size:.9rem}.brand-footer::after{content:var(--brand-footer,"Fictional demo data only. Do not enter real data.");font-size:.78rem}
+const CSS: &str = r#".brand-title .brand-baseline,.foot .brand-footer{font-size:0}.brand-baseline::after{content:var(--brand-baseline,"IAM next generation");font-size:.9rem}.brand-footer::after{content:var(--brand-footer,"Fictional demo data only. Do not enter real data.");font-size:.78rem}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;font:16px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--ink);background:var(--bg)}
 a{color:var(--link)}
