@@ -139,6 +139,7 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/authorize", post(authorize).get(authz::authorize_form))
         .route("/authorize/login", post(authz::login))
         .route("/authorize/theme", get(authz::set_theme))
+        .route("/authorize/webauthn.js", get(authz::wa_js))
         .route("/token", post(token))
         .route("/session/extend", post(session_extend))
         .with_state(engine)

@@ -106,13 +106,15 @@ pub async fn set_theme(Query(q): Query<HashMap<String, String>>) -> Response {
 }
 
 /// The whole page: common frame + the card inner HTML supplied by the sign-in step being rendered.
-fn frame(title: &str, card: &str, theme: &str, back: &str) -> String {
+/// `script` is true only for a passkey step: the page then loads the core's own /authorize/webauthn.js.
+fn frame(title: &str, card: &str, theme: &str, back: &str, script: bool) -> String {
     let query = back.split_once('?').map(|(_,q)| q).unwrap_or("");
     let parts: Vec<&str> = query.split('&').filter(|p|p.starts_with("branch=")||p.starts_with("ticket=")).collect();
     let suffix = if parts.len()==2 { format!("?{}",parts.join("&amp;")) } else { String::new() };
     let attr = if theme == "light" || theme == "dark" { format!(" data-theme=\"{theme}\"") } else { String::new() };
+    let wa = if script { "<script src=\"/authorize/webauthn.js\" defer></script>" } else { "" };
     format!("<!doctype html><html lang=\"en\"{attr}><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<title>{}</title><link rel=\"icon\" href=\"/api/tenants/acme-demo/branding/favicon.svg{suffix}\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{}{CSS}</style><link rel=\"stylesheet\" href=\"/api/tenants/acme-demo/branding/theme.css{suffix}\"></head>\
+<title>{}</title><link rel=\"icon\" href=\"/api/tenants/acme-demo/branding/favicon.svg{suffix}\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{}{CSS}</style><link rel=\"stylesheet\" href=\"/api/tenants/acme-demo/branding/theme.css{suffix}\">{wa}</head>\
 <body><div class=\"auth-bg\" aria-hidden=\"true\"><img src=\"https://picsum.photos/1920/1080\" alt=\"\"></div><div class=\"auth-veil\" aria-hidden=\"true\"></div>{}\
 <main class=\"login\"><section class=\"card\"><div class=\"brand\"><div class=\"brand-title\"><picture class=\"brandlogo\">\
 <img class=\"for-light\" src=\"/api/tenants/acme-demo/branding/logo-horizontal-light.svg{suffix}\" alt=\"lyam\"><img class=\"for-dark\" src=\"/api/tenants/acme-demo/branding/logo-horizontal-dark.svg{suffix}\" alt=\"\" aria-hidden=\"true\"></picture><span class=\"brand-baseline\">IAM next generation</span></div></div>\
@@ -120,19 +122,20 @@ fn frame(title: &str, card: &str, theme: &str, back: &str) -> String {
         esc(title), include_str!("branding-default.css"), theme_nav(theme, back), card)
 }
 
-fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response {
+fn page(status: StatusCode, body: String, form_target: Option<&str>, script: bool) -> Response {
     let mut r = (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     let h = r.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    // No scripts (keypad flows stay scriptless on purpose). Images: the same-origin brand assets and the
-    // picsum background (it redirects to fastly.picsum.photos, so both hosts are allowed).
+    // No scripts, except on a passkey step page where the core's own /authorize/webauthn.js runs the ceremony
+    // (script-src 'self' only there; the keypad flow stays scriptless on purpose). Images: the same-origin
+    // brand assets and the picsum background (it redirects to fastly.picsum.photos, so both hosts are allowed).
     // Browsers also apply form-action to the redirect that follows the POST: the (already validated, registered) redirect origin must be allowed.
-    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'self' 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
+    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'self' 'unsafe-inline'; form-action 'self'{}{}", if script { "; script-src 'self'" } else { "" }, form_target.map(|o| format!(" {o}")).unwrap_or_default());
     if let Ok(v) = HeaderValue::from_str(&csp) { h.insert(header::CONTENT_SECURITY_POLICY, v); }
     r
 }
-fn error_page(status: StatusCode, msg: &str, theme: &str) -> Response { page(status, frame("Sign-in error", &format!("<h1 class=\"page-title\">Sign-in error</h1><p class=\"err\">{}</p>", esc(msg)), theme, "/authorize"), None) }
+fn error_page(status: StatusCode, msg: &str, theme: &str) -> Response { page(status, frame("Sign-in error", &format!("<h1 class=\"page-title\">Sign-in error</h1><p class=\"err\">{}</p>", esc(msg)), theme, "/authorize", false), None, false) }
 
 
 fn hidden(p: &HashMap<String, String>) -> String {
@@ -158,6 +161,7 @@ fn input_html(f: &Value) -> Option<String> {
     let name = f["name"].as_str().filter(|n| !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))?;
     let label = f["label"].as_str().unwrap_or(name);
     if f["type"].as_str() == Some("keypad") { return keypad_html(f, label); }
+    if f["type"].as_str() == Some("webauthn") { return webauthn_html(f, label); }
     let max = f["maxLength"].as_u64().filter(|m| (1..=64).contains(m)).map(|m| format!(" maxlength=\"{m}\"")).unwrap_or_default();
     let hint = f["hint"].as_str().map(|h| format!(" placeholder=\"{}\"", esc(h))).unwrap_or_default();
     // A step named "password" keeps the classic field name so the classic form and scripts keep working; every other input is a_<name>.
@@ -187,6 +191,53 @@ fn keypad_html(f: &Value, label: &str) -> Option<String> {
     Some(format!("<div class=\"dots\" role=\"img\" aria-label=\"{got} of {len} digits entered\">{dots}</div><div class=\"pad\" aria-label=\"{}\">{cells}</div>", esc(label)))
 }
 
+/// True when one of the fields is a passkey ceremony: the page then loads the core's ceremony script.
+fn has_webauthn(fields: Option<&[Value]>) -> bool { fields.is_some_and(|fs| fs.iter().any(|f| f["type"].as_str() == Some("webauthn"))) }
+
+/// Passkey step (WebAuthn): the request options travel as JSON in a data attribute of this block; the core's own
+/// /authorize/webauthn.js (the only script these pages ever load, allowed by the CSP of this page only) runs the
+/// browser ceremony, writes the signed answer into the hidden field and submits the form. A malformed options
+/// object renders nothing (the description is not trusted as markup).
+fn webauthn_html(f: &Value, label: &str) -> Option<String> {
+    let opts = f.get("options")?.as_object()?;
+    let ch = opts.get("challenge")?.as_str()?;
+    if ch.is_empty() || ch.len() > 128 || !ch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') { return None; }
+    let json = serde_json::to_string(opts).ok()?;
+    if json.len() > 8192 { return None; }
+    Some(format!("<div class=\"wa\" data-wa-options=\"{}\"><input type=\"hidden\" name=\"a_webauthn\">\
+<button type=\"button\" class=\"wa-btn\" autofocus>Use my passkey</button>\
+<p class=\"wa-status\" role=\"alert\"></p>\
+<noscript><p class=\"err\">{} needs JavaScript (WebAuthn) in this browser.</p></noscript></div>", esc(&json), esc(label)))
+}
+
+/// The only script the sign-in pages ever serve: drives the passkey ceremony of a webauthn step. WebAuthn Level 3
+/// JSON serialization when the browser offers it, a manual base64url conversion otherwise. No dependency.
+pub const WA_JS: &str = r#"(function(){var root=document.querySelector('[data-wa-options]');if(!root)return;
+var btn=root.querySelector('.wa-btn'),out=root.querySelector('input[name="a_webauthn"]'),status=root.querySelector('.wa-status');
+var opts=JSON.parse(root.getAttribute('data-wa-options'));
+function b64u(s){var b=atob(String(s).replace(/-/g,'+').replace(/_/g,'/'));var u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u}
+function enc(buf){var s='';var u=new Uint8Array(buf);for(var i=0;i<u.length;i++)s+=String.fromCharCode(u[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function decode(o){o.challenge=b64u(o.challenge);(o.allowCredentials||[]).forEach(function(c){c.id=b64u(c.id)});return o}
+function serialize(c){if(c.toJSON)return c.toJSON();return{id:c.id,rawId:enc(c.rawId),type:c.type,authenticatorAttachment:c.authenticatorAttachment||undefined,clientExtensionResults:c.getClientExtensionResults(),response:{authenticatorData:enc(c.response.authenticatorData),clientDataJSON:enc(c.response.clientDataJSON),signature:enc(c.response.signature),userHandle:c.response.userHandle?enc(c.response.userHandle):null}}}
+btn.addEventListener('click',function(){status.textContent='';btn.disabled=true;
+var pk=(window.PublicKeyCredential&&PublicKeyCredential.parseRequestOptionsFromJSON)?PublicKeyCredential.parseRequestOptionsFromJSON(opts):decode(JSON.parse(JSON.stringify(opts)));
+navigator.credentials.get({publicKey:pk}).then(function(cred){out.value=JSON.stringify(serialize(cred));out.form.submit()}).catch(function(e){status.textContent=(e&&e.name==='NotAllowedError')?'The passkey ceremony was cancelled or timed out.':'No passkey could be used on this device.';btn.disabled=false})});
+})();"#;
+
+/// Serves the passkey ceremony script above (same origin, no-store).
+pub async fn wa_js() -> Response {
+    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-store")], WA_JS).into_response()
+}
+
+/// Origin (scheme://host) of this sign-in page, from the proxy/host headers: passkey ceremonies are bound to it.
+fn page_origin(h: &HeaderMap) -> Option<String> {
+    let first = |v: Option<&HeaderValue>| v.and_then(|x| x.to_str().ok()).and_then(|s| s.split(',').next()).map(str::trim);
+    let host = first(h.get("x-forwarded-host")).filter(|s| !s.is_empty()).or_else(|| first(h.get(header::HOST)))?;
+    if host.is_empty() || host.len() > 200 || !host.bytes().all(|b| b.is_ascii_alphanumeric() || b".:_-".contains(&b)) { return None; }
+    let proto = first(h.get("x-forwarded-proto")).unwrap_or("http");
+    Some(format!("{}://{}", if proto == "https" { "https" } else { "http" }, host))
+}
+
 /// First page. `fields` None = the classic user + password form (no chain is live). Some(fields) = user name plus the first step's inputs (possibly none).
 fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value]>, theme: &str) -> Response {
     let hid = hidden(p);
@@ -198,7 +249,8 @@ fn form(p: &HashMap<String, String>, error: Option<&str>, fields: Option<&[Value
     let button = if fields.is_some_and(|f| f.is_empty()) { "Continue" } else { "Sign in" };
     let card = format!("<h1 class=\"page-title\">Sign in</h1><p class=\"lead\">OAuth/OIDC-inspired authentication prototype, local demo accounts only.</p>{err}\
          <form method=\"post\" action=\"/authorize/login\">{hid}<label>User <input name=\"username\" autocomplete=\"username\"></label> {inputs}<button type=\"submit\">{button}</button></form>{}", back_link(p));
-    page(if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, frame("Sign in (local prototype)", &card, theme, &authorize_back(p)), Some(&origin_of(p)))
+    let script = has_webauthn(fields);
+    page(if error.is_some() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, frame("Sign in (local prototype)", &card, theme, &authorize_back(p), script), Some(&origin_of(p)), script)
 }
 
 /// The chains the live configuration offers: one link each (plain HTML, no script). The link only adds `chain=<id>`; the control plane re-checks the id at every step.
@@ -214,7 +266,7 @@ fn choice_page(p: &HashMap<String, String>, chains: &[Value], theme: &str) -> Re
         Some(format!("<li><a class=\"chain\" href=\"/authorize?{base}&amp;chain={}\"><b>{}</b>{rec}</a><br><small>{steps} &middot; declared level {lvl} of 10{sim}</small></li>", pct(id), esc(c["name"].as_str().unwrap_or(id))))
     }).collect::<String>();
     let card = format!("<h1 class=\"page-title\">Choose how to sign in</h1><p class=\"lead\">Pick one of the methods configured and enabled for this demo. Levels are declared by an administrator (10 = strongest), not measured. Fictional accounts only.</p><ul style=\"padding-left:1.1rem;line-height:1.7\">{items}</ul>");
-    page(StatusCode::OK, frame("Choose how to sign in", &card, theme, &authorize_back(p)), Some(&origin_of(p)))
+    page(StatusCode::OK, frame("Choose how to sign in", &card, theme, &authorize_back(p), false), Some(&origin_of(p)), false)
 }
 
 /// A later step of a chain: the opaque session id is the only link to the first page (the user name is not sent again).
@@ -225,11 +277,12 @@ fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>, theme:
     let msg = st["message"].as_str().map(|m| format!("<p{}>{}</p>", if m.starts_with("DEMO") { " class=\"demo\"" } else { "" }, esc(m))).unwrap_or_default();
     let err = error.or(v["error"].as_str()).map(|e| format!("<p class=\"err\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
     let inputs = st["fields"].as_array().map(|f| f.iter().filter_map(input_html).collect::<String>()).unwrap_or_default();
-    let cont = if inputs.contains("class=\"pad\"") { "" } else { "<button type=\"submit\">Continue</button>" };
+    let script = has_webauthn(st["fields"].as_array().map(Vec::as_slice));
+    let cont = if inputs.contains("class=\"pad\"") || script { "" } else { "<button type=\"submit\">Continue</button>" };
     let card = format!("<h1 class=\"page-title\">{}</h1><p class=\"lead\">Step {i} of {n}.</p>{msg}{err}\
          <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}{cont}</form>{}",
         esc(title), hidden(p), esc(v["session"].as_str().unwrap_or("")), back_link(p));
-    page(if error.is_some() || v["error"].is_string() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, frame(&format!("Sign in, step {i} of {n}"), &card, theme, &authorize_back(p)), Some(&origin_of(p)))
+    page(if error.is_some() || v["error"].is_string() { StatusCode::UNAUTHORIZED } else { StatusCode::OK }, frame(&format!("Sign in, step {i} of {n}"), &card, theme, &authorize_back(p), script), Some(&origin_of(p)), script)
 }
 
 /// Validates the authorization request parameters. Err = (status, message), never a redirect.
@@ -280,6 +333,7 @@ pub async fn login(State(c): State<Arc<Core>>, headers: HeaderMap, Form(p): Form
         let mut body = json!({"tenant": "acme-demo"});
         if !session.is_empty() { body["session"] = json!(session); } else { body["subject"] = json!(g("username")); if !g("password").is_empty() { body["password"] = json!(g("password")); } if !g("chain").is_empty() { body["chain"] = json!(g("chain")); } if !g("branch").is_empty() { body["branch"] = json!(g("branch")); body["ticket"] = json!(g("ticket")); } }
         if !answers.is_empty() { body["answers"] = Value::Object(answers); }
+        if let Some(o) = page_origin(&headers) { body["origin"] = json!(o); } // passkey ceremonies are bound to the page origin
         // A step page has no first-page inputs: after a failed first page, show the first page again.
         let first_page = || async { match crate::gate::entry(addr, tok, "acme-demo", p.get("chain").map(String::as_str), p.get("branch").map(String::as_str), p.get("ticket").map(String::as_str)).await { Some(v) if v["mode"] == "chain" => Some(v["fields"].as_array().cloned().unwrap_or_default()), _ => None } };
         match crate::gate::step(addr, tok, body).await {
@@ -432,6 +486,59 @@ mod tests {
             let o = out.to_string(); s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{o}", o.len()).as_bytes()).await.unwrap();
         } });
         addr
+    }
+    /// A gate whose second step is a passkey ceremony. It answers the challenge only when the core passed the page origin.
+    async fn fake_gate_webauthn() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let addr = l.local_addr().unwrap().to_string();
+        tokio::spawn(async move { loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut buf = Vec::new(); let mut tmp = [0u8; 4096];
+            loop { let n = s.read(&mut tmp).await.unwrap(); buf.extend_from_slice(&tmp[..n]); let t = String::from_utf8_lossy(&buf).to_string();
+                if let Some(h) = t.find("\r\n\r\n") { let cl = t[..h].lines().find_map(|l| l.to_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap())).unwrap_or(0); if buf.len() >= h + 4 + cl { break; } } if n == 0 { break; } }
+            let t = String::from_utf8_lossy(&buf).to_string(); let path = t.split_whitespace().nth(1).unwrap().to_string();
+            let body: Value = serde_json::from_str(t.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            let out = if path.ends_with("/entry") { json!({"mode":"chain","fields":[{"name":"password","label":"Password","type":"password"}]}) }
+            else if body["password"] == "pw" && body["subject"] == "demo-alice" && body["origin"].is_string() {
+                json!({"outcome":"challenge","session":"sess1","step":{"index":1,"total":2,"title":"Passkey","message":"Confirm on your device","fields":[{"name":"webauthn","label":"Passkey","type":"webauthn","options":{"challenge":"Y2hhbGxlbmdlLXZhbGlk","rpId":"localhost","timeout":60000,"userVerification":"preferred","allowCredentials":[{"id":"Y3JlZA","type":"public-key"}]}}]}})
+            } else { json!({"outcome":"deny","reason":"bad-credentials","message":"Sign-in failed. Check your details and try again."}) };
+            let o = out.to_string(); s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{o}", o.len()).as_bytes()).await.unwrap();
+        } });
+        addr
+    }
+    fn post_login_host(body: &str) -> Request<Body> {
+        Request::builder().method("POST").uri("/authorize/login").header("content-type", "application/x-www-form-urlencoded").header("host", "idp.test").body(Body::from(body.to_string())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn webauthn_step_loads_the_ceremony_script_and_allows_it_in_the_csp() {
+        let addr = fake_gate_webauthn().await;
+        let mut core = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test")); core.gate = Some((addr, "tok-12345678".into()));
+        let c = Arc::new(core);
+        let (st, h, body) = send(&c, post_login_host(&login_body("demo-alice", "pw"))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(body.contains("data-wa-options=") && body.contains("Y2hhbGxlbmdlLXZhbGlk") && body.contains("name=\"a_webauthn\""), "{body}");
+        assert!(body.contains("<script src=\"/authorize/webauthn.js\" defer>") && !body.contains("<button type=\"submit\">Continue</button>"), "{body}");
+        assert!(h[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("script-src 'self'"));
+    }
+    #[tokio::test]
+    async fn the_ceremony_script_is_served_same_origin_and_pages_without_passkey_have_no_script_src() {
+        let c = core();
+        let (st, h, body) = send(&c, Request::builder().uri("/authorize/webauthn.js").body(Body::empty()).unwrap()).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(h[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/javascript") && body.contains("navigator.credentials.get"), "{body}");
+        let (_, h, _) = send(&c, get(&q(""))).await;
+        assert!(!h[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("script-src"));
+    }
+    #[test]
+    fn malformed_webauthn_options_render_nothing() {
+        let bad = serde_json::json!({"name":"webauthn","label":"Passkey","type":"webauthn","options":{"challenge":"bad\"<script>"}});
+        assert!(super::input_html(&bad).is_none());
+        let none = serde_json::json!({"name":"webauthn","label":"Passkey","type":"webauthn"});
+        assert!(super::input_html(&none).is_none());
+        let good = serde_json::json!({"name":"webauthn","label":"Passkey","type":"webauthn","options":{"challenge":"Y2hhbGxlbmdl","rpId":"x.test"}});
+        let html = super::input_html(&good).unwrap();
+        assert!(html.contains("data-wa-options=") && !html.contains("<script>") && html.contains("&quot;challenge&quot;"), "{html}");
     }
     #[tokio::test]
     async fn two_step_sign_in_filters_claims_and_never_trusts_the_form_user_after_the_first_step() {
