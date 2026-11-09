@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { SEEDS } from './demo-seed.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { blockCatalogue, externalBlock, externalEvent, stepPlaceholderRefs, substituteStepOutputs, validateGraph, validateStepPlaceholders, validateTrigger, WfBlockCtx, WfNode } from './model.js';
+import { WF_EVENTS, blockCatalogue, externalBlock, externalEvent, stepPlaceholderRefs, substituteStepOutputs, validateGraph, validateStepPlaceholders, validateTrigger, WfBlockCtx, WfNode } from './model.js';
 
 // The workflow-connectors spike plugin: its block catalogue is merged into the workflow model at boot.
 // These tests exercise the REAL contributed blocks against their simulated contexts (demo sheet, dry-run,
@@ -38,6 +38,8 @@ describe('contributed block catalogue (workflow-connectors)', () => {
     }
     assert.equal(externalBlock('nope'), undefined);
     assert.ok(externalEvent('http.webhook-received'));
+    assert.ok(WF_EVENTS['http.webhook-received'].configFields?.some((f) => f.key === 'token'));
+    assert.ok(WF_EVENTS['google-sheets.row-ready'].configFields?.some((f) => f.key === 'source'));
     assert.ok(externalEvent('google-sheets.row-ready')!.poll, 'the sheet trigger carries its poll function');
   });
   it('exposes them in the editor catalogue after the built-ins', () => {

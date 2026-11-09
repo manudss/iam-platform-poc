@@ -105,7 +105,7 @@ export function registerExternalEvents(events) {
     for (const [event, d] of Object.entries(events ?? {})) {
         if (WF_EVENTS[event])
             throw new Error(`external trigger "${event}" collides with an existing event`);
-        WF_EVENTS[event] = { label: String(d.label ?? event), payload: Array.isArray(d.payload) ? d.payload : ['*'] };
+        WF_EVENTS[event] = { label: String(d.label ?? event), payload: Array.isArray(d.payload) ? d.payload : ['*'], configFields: Array.isArray(d.configFields) ? d.configFields : [] };
         EXTERNAL_EVENT_IMPL.set(event, d);
     }
 }
