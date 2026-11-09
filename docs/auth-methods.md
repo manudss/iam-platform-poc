@@ -50,10 +50,11 @@ The demo edge refuses framing everywhere (`X-Frame-Options: DENY`, `frame-ancest
 | Type | Factor | State |
 | --- | --- | --- |
 | Password | knowledge | real, through the base password slot (lockout still applies) |
-| Authenticator app (TOTP, RFC 6238) | possession | real verification (tested on RFC vectors, a used time step is refused again); demo enrollment by an admin |
+| Authenticator app (TOTP, RFC 6238) | possession | real verification (tested on RFC vectors, a used time step is refused again); self-enrollment from the person's profile shows the secret once, as a QR code drawn in the browser and as a text key |
 | One-time code by e-mail | possession | **simulated** (demo outbox) by default. **Real** only when the method's delivery is `SMTP` and the notifier chosen on the `notify.default` slot really delivers (the shipped `notify-resend` needs `RESEND_API_KEY` on the server); then it counts as a verified possession factor |
 | PIN on a shuffled keypad | knowledge | real verification of a whole PIN (scrypt hash) |
-| Passkey, recovery codes, external IdP | | catalogue entries only, cannot be created |
+| Passkey (WebAuthn / FIDO2) | possession | real, standards-based ceremonies through SimpleWebAuthn (challenge one-use and time-limited, signature and anti-clone counter checked server-side); self-enrollment from the person's own session |
+| Recovery codes, external IdP | | catalogue entries only, cannot be created |
 
 ### PIN on a shuffled keypad
 
@@ -64,6 +65,17 @@ Requirement from the product owner: a numeric PIN typed with on-screen buttons s
 - Only a salted scrypt hash of the whole PIN is stored, outside Dolt. No per-position verifiers, no pepper, no clear PIN, and the PIN is never returned by the API.
 - **This is obfuscation, not encryption.** It keeps digits out of simple form logs and screen scrapers of the posted data, nothing more: anyone who can read the page and the session (or malware on the device) sees the mapping. HTTPS is required. A 4 to 8 digit PIN can be brute forced offline by anyone who gets the hash file. This is a POC with fictional PINs, not a bank-grade authentication.
 - The page deliberately has no fingerprint button and no working "forgot" link: only what is implemented is shown.
+
+### Passkeys (WebAuthn / FIDO2)
+
+Real passkey sign-in and self-enrollment, through the `@simplewebauthn/server` library owned by the `auth-webauthn` plugin on the `auth.webauthn` slot (a refusing base plugin keeps the slot fail-closed).
+
+- **Ceremonies**: sign-in asks the API for request options bound to the sign-in page's **origin** (scheme + host, from the proxy headers), the core serves the only script its pages ever load (`/authorize/webauthn.js`, allowed by a `script-src 'self'` CSP on passkey step pages only) and submits the signed answer like any step; enrollment starts from the person's own profile (signed-in session), the browser creates the key pair, the server stores only the public key, counter and transports, outside Dolt.
+- **Server checks**: the challenge is random, single-use and expires after 5 minutes; the signature, RP id hash and user flags are verified by the library; the signature counter is enforced against cloning when the authenticator reports one (a credential that never advances its counter is not refused: several real authenticators behave that way).
+- **RP configuration** (plugin settings): `originMode` `host` (default: the origin and RP id come from the page's host, so every preview deployment and custom domain works with no setup) or `fixed` (production style: an explicit `rpId` and an allow-list of `origins`; an origin outside the list is refused). `userVerification`, resident keys and the ceremony timeout are settings; attestation stays `none` (no authenticator metadata service is wired).
+- **HTTPS** is required by the platform (WebAuthn is a secure-context API); `http://localhost` works for development.
+- **Limits**: no username-less flow (the user name is asked first, `allowCredentials` carries the person's passkeys), no conditional UI (passkey autofill), no cross-device QR sign-in screen, no attestation verification, no U2F `appid` fallback.
+- Tested: a software authenticator (real ECDSA P-256 keys and hand-built CBOR attestation) goes through enrollment and sign-in against the real verification path - challenge replay, counter rollback, wrong RP and tampered signatures are refused.
 
 ### E-mail codes
 
@@ -83,11 +95,11 @@ First step failure is a generic denial and an unknown user gets a decoy flow (no
 
 ## Known limits
 
-No SMS, no real e-mail until an SMTP provider is configured and tested, no passkeys, no service-level gating by `auth_level` yet, no self-service enrollment, a single `core-authn` document per tenant, mobile console layout reuses the existing shell.
+No SMS, no real e-mail until an SMTP provider is configured and tested, no service-level gating by `auth_level` yet, a single `core-authn` document per tenant, mobile console layout reuses the existing shell. Passkeys: no username-less flow, no conditional UI, no attestation verification (see above).
 
 ## Ready-to-try examples (seed)
 
-When nothing is stored yet on a branch, the console shows every executable method type (password, authenticator app, e-mail code, PIN keypad, a second PIN with 8 digits) and five example chains, so nothing has to be created by hand. This is a display default: nothing is written until an administrator presses "Save on this branch", and no chain is selected for sign-in, so live sign-in does not change until a chain is chosen, saved and applied. An existing stored configuration is never replaced. Catalogue-only types (passkey, recovery codes, external IdP) are not seeded. The e-mail step stays simulated unless SMTP is configured.
+When nothing is stored yet on a branch, the console shows every executable method type (password, authenticator app, e-mail code, PIN keypad, a second PIN with 8 digits, passkey) and example chains including a passkey-only and a password-then-passkey one, so nothing has to be created by hand. This is a display default: nothing is written until an administrator presses "Save on this branch", and no chain is selected for sign-in, so live sign-in does not change until a chain is chosen, saved and applied. An existing stored configuration is never replaced. Catalogue-only types (recovery codes, external IdP) are not seeded; the passkey method needs no seed either: it works as soon as it is enabled, only its credentials cannot be seeded (an authenticator must create them - enroll from the person's profile). The e-mail step stays simulated unless SMTP is configured.
 
 "Provision demo credentials for demo-alice" (after saving) enrolls the fictional demo user in every method that needs it: the authenticator secret and generated PINs are shown once on screen. Enrollments are never seeded or versioned and no real credential is created.
 

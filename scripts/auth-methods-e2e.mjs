@@ -87,7 +87,8 @@ try {
 
   // ---- 2. build methods and chains in the console
   await page.waitForSelector('#authn-seeded'); // examples are offered before anything is stored
-  assert.equal(await item('m:passkey').count(), 0, 'catalogue-only types are not seeded');
+  await item('m:passkey').waitFor(); // the passkey method is real and seeded now; catalogue-only types (recovery codes, external IdP) are not
+  assert.equal(await item('m:recovery-codes').count(), 0, 'catalogue-only types are not seeded');
   await item('m:pin-keypad').waitFor();
   assert.ok(await page.locator('#authn-used .it').count() >= 5, 'the seeded examples are in use, in one list');
   // a new instance: one button, a type chooser (no list of types in the page itself)

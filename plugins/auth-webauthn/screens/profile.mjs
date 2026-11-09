@@ -118,4 +118,5 @@ class PasskeysProfile extends HTMLElement {
     this.querySelectorAll('[data-delall]').forEach((b) => { b.onclick = () => void this.remove(b.getAttribute('data-delall'), ''); });
   }
 }
-customElements.define('iam-passkeys-profile', PasskeysProfile);
+if (!customElements.get('iam-passkeys-profile')) customElements.define('iam-passkeys-profile', PasskeysProfile);
+export default 'iam-passkeys-profile';
