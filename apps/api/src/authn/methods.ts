@@ -4,9 +4,11 @@ import type { HookHandler } from '../plugins/v1/hooks.js';
 
 export type Factor = 'knowledge' | 'possession' | 'inherence';
 export interface KeypadKey { id: string; digit: string; letters: string }
-export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits' | 'keypad'; maxLength?: number; hint?: string;
+export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits' | 'keypad' | 'webauthn'; maxLength?: number; hint?: string;
   /** keypad only: buttons in display order (opaque ids, valid for this page only), digits entered so far, digits needed. */
-  keys?: KeypadKey[]; entered?: number; length?: number }
+  keys?: KeypadKey[]; entered?: number; length?: number;
+  /** webauthn only: the PublicKeyCredentialRequestOptionsJSON the core-rendered ceremony feeds to the browser. */
+  options?: Record<string, unknown> }
 export interface Prompt { title: string; message?: string; fields: PromptField[] }
 
 /** One-time-code messages. The POC ships only the demo outbox: nothing leaves the process that way.
@@ -29,12 +31,14 @@ export class DemoOutbox implements MailAdapter {
 /** Bus contract of a sign-in method (step 2, review n:2): every method call goes through the registry (callSlot on
  * the auth.<type> slot - grants, deadlines, faults, audit). The handler is PURE: everything it needs travels in the
  * JSON payload, every effect it asks for comes back in the result for the core to apply.
- * Payload: { tenant, subject, known, instanceId, config, state, answers, now,
- *            enrollment?: { totp?: {secret,lastStep}, pin?: {length,salt,hash}, email?: string },
+ * Payload: { tenant, subject, known, instanceId, config, state, answers, now, origin?,
+ *            enrollment?: { totp?: {secret,lastStep}, pin?: {length,salt,hash}, email?: string, webauthn?: {credentials: [{id,publicKey,counter,transports?}]} },
  *            profileEmail?: string, notifyCapability?: {real, note?}, passwordOutcome?: 'allow'|'deny' }.
  * Results: auth.prepare  -> { prompt, state, notify?, mail? }  (the core sends via the notify.default slot / the outbox);
- *          auth.verify   -> { ok, consumeStep?, state? }       (the core applies the anti-replay consume / state patch);
- *          auth.interact -> { done:false, prompt, state } | { done:true, ok }.
+ *          auth.verify   -> { ok, consumeStep?, credentialCounter?: {id, counter}, state? }
+ *                           (the core applies the anti-replay consume / counter advance / state patch atomically);
+ *          auth.interact -> { done:false, prompt, state } | { done:true, ok };
+ *          auth.enroll   -> options/attestation check of a self-service enrollment (passkeys), orchestrated by the API.
  * Business failures are DATA ({ok:false} / {done:true, ok:false}), never a thrown error: a throw is a plugin FAULT
  * (persisted, audited, fail closed - the slot's replacement refuses every later call until an admin acts). */
 export interface AuthMethodType {
@@ -61,7 +65,6 @@ const planned = (id: string, name: string, description: string, factor: Factor, 
   inlineWithUsername: () => false, verification: () => ({ real: false, note: 'Not implemented.' }),
 });
 const PLANNED: AuthMethodType[] = [
-  planned('passkey', 'Passkey (WebAuthn)', 'Phishing-resistant public-key credential bound to a device. Needs a browser ceremony and a relying-party configuration: not built.', 'possession', 9, 'hwk'),
   planned('recovery-code', 'Recovery codes', 'One-time printed codes for account recovery. Not built.', 'knowledge', 5, 'otp'),
   planned('federation', 'External identity provider (OIDC/SAML)', 'Delegate sign-in to another IdP and map its claims. Not built.', 'other' as Factor, 6, 'fed'),
 ];

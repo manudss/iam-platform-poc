@@ -12,6 +12,7 @@ export const HOOKS = new Map<string, HookMode[]>([
   ['auth.verify', ['blocking']], // check the answers of a sign-in step
   ['auth.interact', ['blocking']], // interactive step (keypad): one call per button press
   ['auth.verification', ['blocking']], // what the method instance proves: { real, note }
+  ['auth.enroll', ['blocking']], // self-service enrollment ceremony of a method (passkey creation options + attestation check), orchestrated by the self-service controller
   ['profile.enrich', ['blocking', 'async']], // add attributes or claims; the blocking mode is a merged bus query (step 3)
   ['identity.changed', ['async']], // joiner / mover / leaver, role change
   ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM) - documented bus exception (decision 8)

@@ -1,0 +1,39 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-webauthn-base",
+  "version": "1.0.0",
+  "name": "Passkey / WebAuthn slot (refusing base)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "base": true,
+  "provides": [
+    "auth.webauthn"
+  ],
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verify",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.enroll",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

@@ -10,7 +10,9 @@ import { dirname, join } from 'node:path';
  * PIN: only a salted scrypt hash of the whole PIN is kept (no per-position verifiers, no pepper). A PIN has only 10^n values, so anyone who gets this
  * file can recover it by search; a real product would add a key held in an HSM/KMS or use one-time codes. Demo accounts and fictional PINs only.
  */
-interface UserRec { totp?: { secret: string; lastStep: number; enrolledAt?: string; lastUsedAt?: string }; pin?: { length: number; salt: string; hash: string; enrolledAt?: string; lastUsedAt?: string }; email?: string }
+/** One enrolled passkey (WebAuthn credential). The public key is not a secret; the private key never leaves the authenticator. */
+export interface WebAuthnCred { id: string; publicKey: string; counter: number; transports?: string[]; name?: string; aaguid?: string; deviceType?: string; backedUp?: boolean; createdAt: string }
+interface UserRec { totp?: { secret: string; lastStep: number; enrolledAt?: string; lastUsedAt?: string }; pin?: { length: number; salt: string; hash: string; enrolledAt?: string; lastUsedAt?: string }; email?: string; webauthn?: { credentials: WebAuthnCred[]; pending?: { challenge: string; origin: string; rpId: string; exp: number } } }
 interface FileShape { users: Record<string, Record<string, UserRec>> }
 
 export function defaultEnrollmentPath() {
@@ -50,17 +52,17 @@ export class EnrollmentStore {
       totpLastUsedAt: r.totp?.lastUsedAt ?? null,
       pin: r.pin ? { length: r.pin.length, enrolledAt: r.pin.enrolledAt ?? null, lastUsedAt: r.pin.lastUsedAt ?? null } : false,
       email: r.email ?? null,
-    }]));
+      webauthn: r.webauthn?.credentials?.length ? r.webauthn.credentials.map((c) => ({ id: c.id, name: c.name ?? null, createdAt: c.createdAt, backedUp: !!c.backedUp, deviceType: c.deviceType ?? null })) : false }]))
   }
   /** Counts per method instance and kind (admin overview of who enrolled what; secrets never leave the store). */
   async stats(tenant: string) {
     const d = await this.load();
-    const out: Record<string, { totp: number; pin: number; email: number }> = {};
+    const out: Record<string, { totp: number; pin: number; email: number; webauthn: number }> = {};
     for (const [k, insts] of Object.entries(d.users)) {
       if (!k.startsWith(tenant + '/')) continue;
       for (const [inst, r] of Object.entries(insts)) {
-        const s = (out[inst] ??= { totp: 0, pin: 0, email: 0 });
-        if (r.totp) s.totp++; if (r.pin) s.pin++; if (r.email) s.email++;
+        const s = (out[inst] ??= { totp: 0, pin: 0, email: 0, webauthn: 0 });
+        if (r.totp) s.totp++; if (r.pin) s.pin++; if (r.email) s.email++; if (r.webauthn?.credentials?.length) s.webauthn++;
       }
     }
     return out;
@@ -101,4 +103,44 @@ export class EnrollmentStore {
   // E-mail address of the recipient for code delivery
   async setEmail(tenant: string, user: string, inst: string, email: string) { await this.mutate((d) => { this.rec(d, tenant, user, inst).email = email; }); }
   async email(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.email; }
+
+  // Passkeys (WebAuthn). The pending enrollment challenge lives a few minutes and is spent at most once.
+  async setWebAuthnPending(tenant: string, user: string, inst: string, pending: { challenge: string; origin: string; rpId: string; exp: number }) { await this.mutate((d) => { this.rec(d, tenant, user, inst).webauthn ??= { credentials: [] }; this.rec(d, tenant, user, inst).webauthn!.pending = pending; }); }
+  async webAuthnPending(tenant: string, user: string, inst: string) { return this.get(await this.load(), tenant, user, inst)?.webauthn?.pending; }
+  async clearWebAuthnPending(tenant: string, user: string, inst: string) { await this.mutate((d) => { const w = this.get(d, tenant, user, inst)?.webauthn; if (w) delete w.pending; }); }
+  /** Adds (or replaces, same id) an enrolled credential. Refuses a duplicate id coming from a DIFFERENT key. */
+  async addWebAuthnCredential(tenant: string, user: string, inst: string, cred: WebAuthnCred): Promise<boolean> {
+    return this.mutate((d) => {
+      const w = (this.rec(d, tenant, user, inst).webauthn ??= { credentials: [] });
+      const i = w.credentials.findIndex((c) => c.id === cred.id);
+      if (i >= 0 && w.credentials[i].publicKey !== cred.publicKey) return false;
+      if (i >= 0) w.credentials[i] = { ...w.credentials[i], ...cred }; else w.credentials.push(cred);
+      delete w.pending;
+      return true;
+    });
+  }
+  async removeWebAuthnCredential(tenant: string, user: string, inst: string, credId: string): Promise<boolean> {
+    return this.mutate((d) => {
+      const w = this.get(d, tenant, user, inst)?.webauthn; if (!w) return false;
+      const n = w.credentials.length; w.credentials = w.credentials.filter((c) => c.id !== credId);
+      return w.credentials.length !== n;
+    });
+  }
+  /** Read-only snapshot for the method plugin's bus payload (step 2): the core reads, the plugin decides. */
+  async webauthnRecord(tenant: string, user: string, inst: string) {
+    const w = this.get(await this.load(), tenant, user, inst)?.webauthn;
+    return w?.credentials?.length ? { credentials: w.credentials.map((c) => ({ id: c.id, publicKey: c.publicKey, counter: c.counter, transports: c.transports })) } : undefined;
+  }
+  /** Anti-clone effect: the counter the plugin accepted is recorded ATOMICALLY, and a regressed counter
+   * (a cloned authenticator replaying an old value) refuses the sign-in here. Counters at 0 (most synced
+   * passkeys never increment) carry no signal and are not enforced. */
+  async advanceWebAuthnCounter(tenant: string, user: string, inst: string, credId: string, counter: number): Promise<boolean> {
+    return this.mutate((d) => {
+      const c = this.get(d, tenant, user, inst)?.webauthn?.credentials?.find((x) => x.id === credId);
+      if (!c) return false;
+      if (counter !== 0 && c.counter !== 0 && counter <= c.counter) return false;
+      c.counter = Math.max(c.counter, counter);
+      return true;
+    });
+  }
 }

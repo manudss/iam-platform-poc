@@ -47,7 +47,7 @@ export class AuthGateController {
   }
 
   @Post('authenticate') @HttpCode(200)
-  async authenticate(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string; subject?: string; password?: string; session?: string; chain?: string; branch?: string; ticket?: string; answers?: Record<string, string> }) {
+  async authenticate(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string; subject?: string; password?: string; session?: string; chain?: string; branch?: string; ticket?: string; origin?: string; answers?: Record<string, string> }) {
     const want = process.env.IAM_AUTH_GATE_TOKEN;
     if (!want || want.length < 8) throw new NotFoundException();
     const a = Buffer.from(tok ?? ''), w = Buffer.from(want);
@@ -57,7 +57,7 @@ export class AuthGateController {
       // A first page that names a branch needs its valid ticket; a running session is bound to its branch on the service side.
       if (typeof b.session !== 'string') { const refuse = await this.testRefusal(b); if (refuse) return { outcome: 'deny', reason: 'branch-test', message: refuse }; }
       try {
-        const r = await this.authn.authenticate({ tenant: b.tenant, subject: b.subject, session: b.session, chain: typeof b.chain === 'string' ? b.chain : undefined, branch: typeof b.branch === 'string' && b.branch ? b.branch : undefined, answers: b.answers && typeof b.answers === 'object' && !Array.isArray(b.answers) ? b.answers : typeof b.password === 'string' ? { password: b.password } : undefined });
+        const r = await this.authn.authenticate({ tenant: b.tenant, subject: b.subject, session: b.session, chain: typeof b.chain === 'string' ? b.chain : undefined, branch: typeof b.branch === 'string' && b.branch ? b.branch : undefined, origin: typeof b.origin === 'string' && /^https?:\/\/[\w.:-]{1,200}$/.test(b.origin) ? b.origin : undefined, answers: b.answers && typeof b.answers === 'object' && !Array.isArray(b.answers) ? b.answers : typeof b.password === 'string' ? { password: b.password } : undefined });
         if (r) return r;
       } catch (e) {
         if (typeof b.branch === 'string' && b.branch) return { outcome: 'deny', reason: 'branch-test', message: 'this data branch cannot be tested' };

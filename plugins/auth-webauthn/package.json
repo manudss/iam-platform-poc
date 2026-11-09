@@ -1,0 +1,9 @@
+{
+  "name": "@iam-plugin/auth-webauthn",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Passkey (WebAuthn / FIDO2) sign-in method - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {
+    "@simplewebauthn/server": "^14.1.0"
+  }
+}
