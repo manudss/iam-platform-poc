@@ -1,0 +1,100 @@
+/* Users page. Every color comes from the theme variables of styles.css (light and dark): no hard-coded light surface. */
+:host { display: block; color: var(--ink); }
+.lead { color: var(--label); margin: .15rem 0 0; font-size: .92rem; }
+.hint { color: var(--label); font-size: .84rem; margin: .3rem 0; }
+
+/* header */
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem .8rem; margin: .8rem 0 .9rem; }
+.head .grow { flex: 1 1 18rem; min-width: 0; }
+.head h2 { margin: 0; font-size: 1.25rem; }
+.head .cnt { color: var(--label); font-size: .88rem; }
+.head button { margin: 0; min-height: 2.5rem; }
+
+/* summary cards (same pattern as the dashboard) */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: .8rem 1rem; display: flex; flex-direction: column; gap: .1rem; }
+.stat .n { font-size: 1.7rem; font-weight: 700; color: var(--accent-dark); line-height: 1.1; }
+.stat .l { font-weight: 600; font-size: .85rem; color: var(--label); }
+
+/* toolbar */
+.toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: .9rem; }
+.toolbar .search { flex: 1 1 14rem; position: relative; }
+.toolbar .search input { width: 100%; box-sizing: border-box; min-height: 2.5rem; padding-left: 2.1rem; }
+.toolbar .search::before { content: "⌕"; position: absolute; left: .7rem; top: 50%; transform: translateY(-50%); color: var(--label); font-size: 1.05rem; }
+.toolbar select { min-height: 2.5rem; }
+
+/* table card */
+.tcard { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.twrap { overflow-x: auto; }
+.tcard table { font-size: .9rem; }
+.tcard th { position: sticky; top: 0; z-index: 1; }
+.tcard td { padding: .55rem .75rem; vertical-align: middle; }
+.thbtn { background: none; border: 0; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; padding: 0; margin: 0; cursor: pointer; white-space: nowrap; }
+.thbtn:hover:not(:disabled) { color: var(--ink); }
+.tuser { display: flex; align-items: center; gap: .6rem; }
+.tuser .tx { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.tuser .tx b { white-space: nowrap; }
+.tuser .tx small { color: var(--label); font-size: .76rem; }
+.av { border-radius: 50%; display: inline-grid; place-items: center; font-weight: 700; flex: none; width: 2.2rem; height: 2.2rem; font-size: .92rem; }
+.av.big { width: 2.8rem; height: 2.8rem; font-size: 1.15rem; }
+.av.mini { width: 1.4rem; height: 1.4rem; font-size: .6rem; }
+.tag { display: inline-block; font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; border-radius: 999px; padding: .12rem .55rem; white-space: nowrap; }
+.st { display: inline-flex; align-items: center; gap: .35rem; font-size: .78rem; font-weight: 600; border-radius: 999px; padding: .15rem .6rem; white-space: nowrap; }
+.st::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: currentColor; }
+.st.ok { background: var(--ok-soft); color: var(--ok); }
+.st.off { background: var(--code-bg); color: var(--label); }
+.st.bad { background: var(--bad-soft); color: var(--bad); }
+.acts { white-space: nowrap; text-align: right; }
+.rowbtn { margin: 0; min-height: 2.25rem; padding: .25rem .7rem; }
+.rowmenu { position: relative; display: inline-block; }
+.rowmenu .pop { position: absolute; right: 0; top: 2.4rem; z-index: 8; background: var(--card); border: 1px solid var(--line); border-radius: .6rem; box-shadow: 0 12px 30px #0f172a33; padding: .4rem; display: flex; flex-direction: column; gap: .2rem; min-width: 11rem; }
+.rowmenu .pop button { margin: 0; text-align: left; background: transparent; color: var(--ink); border: 0; min-height: 2.4rem; border-radius: .4rem; }
+.rowmenu .pop button:hover:not(:disabled) { background: var(--panel); }
+.rowmenu .pop button.danger { color: var(--bad); }
+.tfoot { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex-wrap: wrap; padding: .6rem .9rem; border-top: 1px solid var(--line); color: var(--label); font-size: .82rem; }
+
+/* drawer (same pattern as the Authentication page) */
+.scrim { position: fixed; inset: 0; background: rgba(2, 6, 23, .55); z-index: 30; }
+.drawer { position: fixed; z-index: 31; right: 0; top: 0; bottom: 0; width: min(34rem, 100vw); overflow: auto; background: var(--card); color: var(--ink); border-left: 1px solid var(--line); box-shadow: 0 20px 60px rgba(2, 6, 23, .4); padding: 0 1.25rem; display: flex; flex-direction: column; }
+.dhead { display: flex; align-items: center; gap: .8rem; padding: .9rem 0 .7rem; position: sticky; top: 0; background: var(--card); z-index: 2; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.dhead .tx { flex: 1 1 12rem; min-width: 0; display: flex; flex-direction: column; gap: .25rem; }
+.dhead h3 { margin: 0; font-size: 1.15rem; overflow-wrap: anywhere; }
+.dhead .sub { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; color: var(--label); font-size: .84rem; }
+.dhead .x { margin: 0; min-width: 2.5rem; min-height: 2.5rem; padding: 0; flex: none; }
+.drawer h4 { margin: 1.3rem 0 .2rem; font-size: .76rem; letter-spacing: .06em; text-transform: uppercase; color: var(--label); display: flex; align-items: center; gap: .4rem; }
+.drawer label { display: flex; flex-direction: column; gap: .3rem; margin: .8rem 0 0; font-size: .85rem; font-weight: 600; color: var(--label); }
+.drawer label small { font-weight: 400; color: var(--label); }
+.drawer input:not([type=checkbox]), .drawer select { width: 100%; box-sizing: border-box; min-height: 2.5rem; }
+.drawer label.inline { flex-direction: row; align-items: center; gap: .6rem; font-weight: 400; color: var(--ink); flex-wrap: wrap; }
+.drawer label.inline input[type=checkbox] { flex: none; width: 1.15rem; height: 1.15rem; }
+.chain { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; margin-top: .55rem; }
+.chain .node { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .6rem .2rem .25rem; font-size: .82rem; background: var(--panel); }
+.chain .node.me { border-color: var(--accent); }
+.chain .arr { color: var(--label); }
+.danger-zone { margin-top: 1.2rem; border: 1px solid var(--bad); border-radius: .6rem; padding: .7rem .9rem; }
+.danger-zone p { margin: 0 0 .5rem; font-size: .82rem; color: var(--label); }
+button.danger { background: var(--card); color: var(--bad); border: 1px solid var(--bad); margin: 0; }
+button.danger:hover:not(:disabled) { background: var(--bad-soft); color: var(--bad-ink); border-color: var(--bad); }
+.foot { position: sticky; bottom: 0; margin: auto -1.25rem 0; padding: .8rem 1.25rem calc(.8rem + env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--line); display: flex; gap: .5rem; z-index: 2; }
+.foot button { margin: 0; min-height: 2.5rem; }
+.foot .grow { flex: 1; }
+
+@media (max-width: 700px) {
+  .toolbar .search { flex-basis: 100%; }
+  /* the table becomes stacked cards */
+  .tcard table, .tcard tbody, .tcard tr, .tcard td { display: block; }
+  .tcard thead { display: none; }
+  .tcard tr { padding: .65rem .8rem; border-bottom: 1px solid var(--line); }
+  .tcard td { border: 0; padding: .15rem 0; }
+  .tcard td.mail, .tcard td.mgr { display: none; }
+  .tcard td.acts { padding-top: .45rem; white-space: normal; text-align: left; }
+  .tcard td.acts .rowbtn:first-child { width: 100%; min-height: 2.75rem; box-sizing: border-box; }
+}
+@media (max-width: 600px) {
+  .head button { flex: 1 1 auto; }
+  .drawer { width: 100vw; border-left: 0; }
+  .drawer input:not([type=checkbox]), .drawer select { font-size: 16px; min-height: 2.75rem; }
+  .foot button { flex: 1; min-height: 2.75rem; }
+  .rowmenu .pop { position: fixed; right: .8rem; left: .8rem; top: auto; bottom: 1rem; min-width: 0; }
+  .rowmenu .pop button { min-height: 2.75rem; }
+}
