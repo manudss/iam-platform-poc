@@ -340,7 +340,16 @@ try {
   await page.waitForSelector('#user-editor');
   await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
   assert.match(await pinText(), /take effect immediately/, 'sheet PIN component: the immediate-effect note shows in manage mode');
-  assert.ok((await pinButtons()) > 0, 'sheet PIN component: manage mode offers its controls');
+  const pinProbe = await page.evaluate(async () => {
+    const el = document.querySelector('iam-pin-profile');
+    const c = el?.context ?? {};
+    const h = { 'content-type': 'application/json', authorization: `Bearer ${c.token}`, 'x-api-admin-token': c.adminToken ?? '', ...(c.branch ? { 'x-iam-branch': c.branch } : {}) };
+    const enr = await fetch(`${c.api}/auth/enrollments/${encodeURIComponent(c.subject ?? '')}`, { headers: h }).catch((e) => ({ status: -1, message: String(e) }));
+    const auth = await fetch(`${c.api}/auth`, { headers: h }).catch((e) => ({ status: -1 }));
+    const aj = auth.status === 200 ? await auth.json().catch(() => ({})) : {};
+    return { ctx: { surface: c.surface, subject: c.subject, mode: c.mode, branch: c.branch, hasAdmin: !!c.adminToken, hasToken: !!c.token }, enrStatus: enr.status, authStatus: auth.status, seeded: aj?.working?.seeded, workMethods: (aj?.working?.config?.methods ?? []).map((m) => `${m.id}:${m.type}:${m.enabled}`), shadow: (el?.shadowRoot?.textContent ?? '').slice(0, 200) };
+  });
+  assert.ok((await pinButtons()) > 0, 'sheet PIN component: manage mode offers its controls (probe: ' + JSON.stringify(pinProbe) + ')');
   await shot('11b-user-drawer-pin-manage');
 
   // Close and re-open the sheet on the SAME user, then on ANOTHER user: the packaged module must register and
@@ -367,6 +376,7 @@ try {
   await page.waitForSelector('#user-editor');
   await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
   const roText = await pinText();
+  assert.match(roText, /Set \(|Not set/, 'readonly PIN component: the method status still shows (got: ' + JSON.stringify(roText.slice(0, 300)) + ')');
   assert.ok(!/Set a new PIN|Revoke/.test(roText), 'readonly PIN component: no mutating label (got: ' + JSON.stringify(roText.slice(0, 200)) + ')');
   assert.equal(await pinButtons(), 0, 'readonly PIN component: no button at all');
   await shot('11c-user-drawer-pin-readonly');
