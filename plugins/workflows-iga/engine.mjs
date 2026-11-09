@@ -104,6 +104,10 @@ export function createWorkflowEngine(deps) {
       say(`step started (${STEP_TYPES[node.type].simulated ? 'SIMULATED - no external effect' : 'REAL data change on branch ' + (run.branch ?? 'pending')})`);
     await store.patchStep(run.id, node.id, { status: 'running', started_at: step.started_at ?? now(), attempts: step.attempts + 1, log: logs, error: null });
     try {
+      // Outputs apply to every node, including built-ins such as assign-role and notify.
+      const outputs = {};
+      for (const s of await store.steps(run.id)) if (s.output !== null && s.output !== undefined) outputs[s.node_id] = s.output;
+      node = substituteStepOutputs(node, outputs);
       let output;
       if (STEP_TYPES[node.type].simulated && !externalBlock(node.type)) await simulated(run, node, step.attempts, say);
       else if (externalBlock(node.type)) output = await externalStep(run, node, say);
@@ -117,6 +121,9 @@ export function createWorkflowEngine(deps) {
         await store.updateRun(run.id, { status: 'canceled', error: null, finished_at: now() });
       } else {
         await store.patchStep(run.id, node.id, { status: 'failed', error: e.message.slice(0, 500), finished_at: now(), log: logs });
+        // Publish terminal run status only after all step statuses are terminal. Readers and retries
+        // must never see a failed run with pending steps still being finalized.
+        for (const s of await store.steps(run.id)) if (s.status === 'pending') await store.patchStep(run.id, s.node_id, { status: 'skipped' });
         await store.updateRun(run.id, { status: 'failed', error: `step "${node.name}" failed: ${e.message}`.slice(0, 500), finished_at: now() });
       }
       live.delete(run.id);
