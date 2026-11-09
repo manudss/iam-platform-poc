@@ -38,7 +38,7 @@ class PasswordProfile extends HTMLElement {
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     const root = this.shadowRoot;
     if (this._ctx.surface === 'admin') {
-      root.innerHTML = `<style>${css}</style><div class="pwf"><p class="hint">Passwords are reset from the Security section of this sheet: a reset needs no old password and the person changes it back here afterwards.</p></div>`;
+      root.innerHTML = `<style>${css}</style><div class="pwf"><h4>Password lock status</h4><p class="hint">Unavailable: the password plugin does not expose a per-user lock-status query. This is not an unlocked status.</p><p class="hint">Passwords are reset from the Security section of this sheet: a reset needs no old password and the person changes it back here afterwards.</p></div>`;
       return;
     }
     if (this._ctx.mode === 'readonly') {

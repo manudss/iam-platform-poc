@@ -22,7 +22,7 @@ export class ProfileController {
   @UseGuards(AdminGuard) @Get('profile-fields') async fields(@Param('tenant') t: string) {
     const [wc, lc, wcat, lcat] = [await this.p.config(t, 'work'), await this.p.config(t, 'live'), await this.p.catalogue(t, 'work'), await this.p.catalogue(t, 'live')];
     const eff = (cat: typeof wcat, cfg: typeof wc) => Object.fromEntries(cat.map((f) => [f.fullKey, settingFor(f, cfg)]));
-    return { tenant: t, catalogue: wcat, inactiveCatalogue: await this.p.inactiveCatalogue(t), working: { config: wc, settings: eff(wcat, wc) }, live: { config: lc, catalogue: lcat, settings: eff(lcat, lc) } };
+    return { tenant: t, catalogue: wcat, inactiveCatalogue: await this.p.inactiveCatalogue(t), pluginSettings: await this.p.pluginSettings(t), working: { config: wc, settings: eff(wcat, wc) }, live: { config: lc, catalogue: lcat, settings: eff(lcat, lc) } };
   }
   @UseGuards(AdminGuard) @Put('profile-fields') async put(@Param('tenant') t: string, @Body() b: { config?: unknown }) { return { saved: true, config: await this.p.saveConfig(t, b?.config) }; }
   @Get('profile-schema') async schema(@Param('tenant') t: string, @Query('context') c: string, @Query('ref') ref?: string) {

@@ -1,5 +1,6 @@
 import { Component, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { Session } from './session';
 
 export interface CatField { fullKey: string; plugin: string; label: string; type: string; klass: 'profile' | 'authority'; pii: string; storage: 'identities' | 'values' | 'table'; table?: string; section?: string; order?: number; help?: string }
@@ -20,7 +21,7 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
  * Preview: the resulting forms, surface by surface, before saving. Saved on the working branch, live after Apply.
  */
 @Component({
-  selector: 'app-profile-fields', imports: [FormsModule], styleUrl: './pages.css',
+  selector: 'app-profile-fields', imports: [FormsModule, RouterLink], styleUrl: './pages.css',
   template: `
   <p class="lead">Profile fields and components come from the core and from plugins. Choose for each one where it appears and who can edit it; reorder them by drag and drop. Changes go live only after Apply.</p>
   <p class="hint">Fields marked <b>authority</b> (department, manager, grade...) decide what someone may be or do. They can never be asked at sign-up nor edited by the person; only an administrator changes them. Roles and organizations are assigned separately, never from a profile form. Fictional data only: history keeps every value.</p>
@@ -92,6 +93,15 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
         <label>Section <input class="pf-section" name="pf-sec" [ngModel]="c.section" (ngModelChange)="c.section=$event;dirty.set(true)" [placeholder]="f.section ?? ''" list="pf-sections" /></label>
         <label>Order <input class="pf-order" type="number" min="0" max="999" name="pf-ord" [ngModel]="c.order ?? f.order ?? 500" (ngModelChange)="c.order=$event;dirty.set(true)" /></label>
         @if (f.plugin!=='base') {
+          <h4>Plugin settings</h4>
+          @for (group of pluginSettings()[f.plugin]?.groups ?? []; track group.name) {
+            @for (setting of group.fields; track setting.key) {
+              <label>{{setting.label}}<input [value]="setting.value ?? ''" disabled [attr.aria-label]="setting.label+' (read only)'" /></label>
+            }
+          } @empty { <p class="hint">This plugin declares no configurable settings.</p> }
+          @if (f.type==='image') { <p class="hint">Image formats: PNG, JPEG, WebP. Images are resized to 256 px and limited to 256 KB. These are fixed constraints, not editable settings.</p> }
+          <a [routerLink]="['/plugins', f.plugin]">Open plugin settings and lifecycle</a>
+          <p class="hint">Settings above are read only here. Edit them in the plugin page, then return; profile visibility edits use Save below.</p>
           <h4>Plugin lifecycle</h4>
           <p class="pf-lifecycle" aria-label="Lifecycle">
             <span class="pf-step">installed</span> → <span class="pf-step" [class.on]="c.enabled">enabled</span> → <span class="pf-step" [class.on]="!c.enabled">disabled: values kept</span> → <span class="pf-step">uninstalled: table dropped</span>
@@ -163,6 +173,7 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
 })
 export class ProfileFieldsPage {
   protected readonly s = inject(Session);
+  protected pluginSettings = signal<Record<string, { groups: { name: string; fields: { key: string; label: string; value: unknown }[] }[] }>>({});
   protected inactive = signal<CatField[]>([]);
   protected cat = signal<CatField[]>([]); protected cfg = signal<Record<string, Setting>>({});
   protected comps = signal<ComponentInv[]>([]); protected compsCfg = signal<Record<string, { self?: string; admin?: string; order?: number }>>({});
@@ -294,6 +305,7 @@ export class ProfileFieldsPage {
       for (const f of r.data.catalogue as CatField[]) eff[f.fullKey] = { ...defaults(), ...(r.data.working.settings?.[f.fullKey] ?? {}) };
       this.signupOpen = !!r.data.working.config.signup?.open; this.policy = r.data.working.config.selfEditPolicy === 'review' ? 'review' : 'immediate'; this.livePolicy.set(r.data.live.config.selfEditPolicy === 'review' ? 'review' : 'immediate'); this.liveOpen.set(!!r.data.live.config.signup?.open); void this.loadRequests();
       this.pending.set([...(r.data.working.config.sections ?? [])]);
+      this.pluginSettings.set(r.data.pluginSettings ?? {});
       this.inactive.set(r.data.inactiveCatalogue ?? []);
       this.cat.set(r.data.catalogue); this.cfg.set(eff); this.compsCfg.set({ ...(r.data.working.config.components ?? {}) });
       if (!this.sel() && r.data.catalogue.length) this.sel.set((r.data.catalogue as CatField[])[0].fullKey);

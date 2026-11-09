@@ -36,6 +36,13 @@ describe('packaged profile components (plugins/*/screens/*.mjs)', () => {
     expect(admin.shadowRoot!.querySelector('.qr')).toBeNull();
   });
 
+  it('does not turn an unavailable password lock status into an unlocked claim', async () => {
+    const el = await mount('iam-password-profile', ctx({ surface: 'admin', subject: 'u1' }), () => enrollments([]));
+    expect(el.shadowRoot!.textContent).toContain('Unavailable:');
+    expect(el.shadowRoot!.textContent).toContain('not an unlocked status');
+    expect(el.shadowRoot!.querySelector('input')).toBeNull();
+  });
+
   it('readonly mode shows the status but no mutating control (TOTP and PIN)', async () => {
     const totp = await mount('iam-totp-profile', ctx({ surface: 'admin', subject: 'u1', mode: 'readonly' }), (p) =>
       p.includes('/auth/enrollments/u1') ? enrollments([TOTP], { 'authenticator-app': { totp: { at: 'x' } } }) : enrollments([]));
