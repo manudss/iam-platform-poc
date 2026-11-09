@@ -47,56 +47,6 @@ export class OverviewPage implements OnInit {
   }
 }
 
-/** Current assignments, then the simulate -> review -> merge flow of a role change. */
-@Component({
-  selector: 'app-assignments', imports: [FormsModule], styleUrl: './pages.css',
-  template: `
-  <div class="cols">
-    <section class="card"><h3>Assignments on the working branch</h3>
-      <div class="scroll"><table class="grid" id="assignments"><thead><tr><th>Identity</th><th>Role</th></tr></thead><tbody>
-        @for (a of s.assignments(); track a.identity_id + a.role_id) { <tr><td>{{ a.identity_id }}</td><td>{{ a.role_id }}</td></tr> }
-        @empty { <tr><td colspan="2" class="empty">No assignment.</td></tr> }
-      </tbody></table></div>
-    </section>
-    <section class="card"><h3>Stage a change on the working branch</h3>
-      <p class="hint">Changes stay on the globally selected branch. Review & Apply publishes them to main after conflict and Separation-of-Duties checks.</p>
-      <div class="row">
-        <label>Identity <input name="identity" [(ngModel)]="identity" /></label>
-        <label>Role <input name="role" [(ngModel)]="role" /></label>
-        <button type="button" (click)="simulate()">Stage assignment</button>
-      </div>
-      @if (s.change(); as c) {
-        <div class="result" [class.bad]="!c.mergeable">
-          <p>Branch <code>{{ c.branch }}</code> <span class="chip" [class.ok]="c.mergeable" [class.ko]="!c.mergeable">{{ c.mergeable ? 'mergeable' : 'blocked' }}</span></p>
-          <ul>@for (v of c.violations; track v.roleA + v.roleB) { <li>SoD: {{ v.identity }} has {{ v.roleA }} and {{ v.roleB }}</li> }</ul>
-          <p>Use Review &amp; Apply in the global branch bar when ready.</p>
-        </div>
-      }
-    </section>
-  </div>`,
-})
-export class AssignmentsPage implements OnInit {
-  protected readonly s = inject(Session);
-  protected identity = 'demo-bob';
-  protected role = 'payment-approver';
-  async ngOnInit() { try { await this.s.refresh(); } catch (e) { this.s.say((e as Error).message, 'error'); } }
-  private async run(fn: () => Promise<void>) { try { await fn(); } catch (e) { this.s.say((e as Error).message, 'error'); } }
-  protected simulate() {
-    return this.run(async () => {
-      const r=await this.s.api.raw<any>('POST','/workspace/assignment',{identity:this.identity,role:this.role},this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{});if(r.status===409)throw new Error(r.data.message);const c={...r.data,mergeable:!r.data.violations.length};this.s.change.set(c);await this.s.refresh();
-      this.s.say(c.mergeable ? 'Simulation OK: no SoD violation, mergeable.' : `Simulation: ${c.violations.length} SoD violation(s), merge will be refused.`, c.mergeable ? 'info' : 'error');
-    });
-  }
-  protected merge() {
-    return this.run(async () => {
-      const r = await this.s.api.merge(this.s.change()!.branch);
-      this.s.say(r.status === 409 ? 'Merge refused (409): SoD violation.' : `Merged into main: ${r.data.commit}`, r.status === 409 ? 'error' : 'info');
-      if (r.status !== 409) this.s.change.set(null);
-      await this.s.refresh();
-    });
-  }
-}
-
 /** Explicit, journaled activation of the current Dolt main. */
 @Component({
   selector: 'app-activation', styleUrl: './pages.css',

@@ -1,7 +1,9 @@
 import { Routes, UrlMatcher, UrlSegment } from '@angular/router';
 import { authGuard } from './auth';
 import { CallbackPage, LoginPage } from './login';
-import { ActivationPage, AssignmentsPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
+import { ActivationPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
+import { AssignmentsPage } from './assignments';
+import { AssignmentMatrixPage } from './assignment-matrix';
 import { UsersPage } from './users';
 import { AuthMethodsPage } from './auth-methods';
 import { ProfileFieldsPage } from './profile-fields';
@@ -47,6 +49,7 @@ export const routes: Routes = [
       { path: 'roles', canActivate: [accessGuard], component: RolesAdminPage, title: 'Roles' },
       { path: 'my-profile', component: MyProfilePage, title: 'My profile' },
       { path: 'auth-methods', canActivate: [accessGuard], component: AuthMethodsPage, title: 'Authentication methods' },
+      { path: 'assignments/matrix', canActivate: [accessGuard], component: AssignmentMatrixPage, title: 'Bulk assignments' },
       { path: 'assignments', canActivate: [accessGuard], component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
