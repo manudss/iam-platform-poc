@@ -130,7 +130,10 @@ export class DoltProfileStore implements ProfileValueStore {
           [t, s, ...entries.map((e) => this.cell(e.route, e.val))]);
         touched.add(table);
       }
-      await this.commit(c, `profile: ${actor} edited ${s} (${Object.keys(changes).join(', ')})`, [...touched]);
+      // profile_field_values is always in the commit set: ensure() may have just created it on this branch, and
+      // leaving the CREATE uncommitted would block the next Apply ("uncommitted changes from another session").
+      // commit() only stages tables that actually appear in dolt_status, so an unchanged legacy table is a no-op.
+      await this.commit(c, `profile: ${actor} edited ${s} (${Object.keys(changes).join(', ')})`, [...new Set(['profile_field_values', ...touched])]);
     };
     if (ref === 'live') await this.v.lock(() => this.v.at('main', run));
     else await this.v.writeOn(this.workBranch(true), run);
