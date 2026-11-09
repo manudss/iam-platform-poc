@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { SEEDS } from './demo-seed.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { blockCatalogue, externalBlock, externalEvent, stepPlaceholderRefs, substituteStepOutputs, validateGraph, validateStepPlaceholders, validateTrigger, WfBlockCtx, WfNode } from './model.js';
@@ -20,6 +21,13 @@ const ctx = (over: Partial<WfBlockCtx> = {}): WfBlockCtx & { lines: string[] } =
 };
 
 describe('contributed block catalogue (workflow-connectors)', () => {
+  it('every shipped demo graph and trigger validates, including HR step-output identities', () => {
+    for (const seed of SEEDS) {
+      const { graph, order } = validateGraph({ nodes: seed.nodes, edges: seed.edges });
+      validateStepPlaceholders(graph, order);
+      validateTrigger(seed.trigger);
+    }
+  });
   it('merges the plugin blocks and trigger events into the workflow model', () => {
     for (const t of ['http-request', 'text-transform', 'google-sheets-read', 'google-sheets-update', 'jira-create-issue', 'lyam-create-user']) {
       const b = externalBlock(t);

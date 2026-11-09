@@ -7,7 +7,7 @@ import { DefinitionRow, WorkflowStore } from './store.js';
  * definitions so the feature is alive out of the box - a joiner, a mover and a leaver scenario that
  * start from durable application-bus events. Redelivery reuses the same run ID. Idempotent (fixed ids, never overwritten).
  */
-const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
+export const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
   {
     id: 'wf-joiner', name: 'Joiner: new hire baseline', description: 'Starts from user.created on the durable bus: grants the employee baseline role (real, on the run branch) and informs the manager (simulated).',
     trigger: { event: 'user.created' },
@@ -80,7 +80,7 @@ const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger
     edges: [],
   },
   {
-    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SPIKE workflow-connectors: the watcher polls the SIMULATED candidates sheet (source demo-sheet, no Google credential; switch source to google with a service account in the plugin settings). A row with process=OK builds the prenom.nom@lyam.demo e-mail (Activepieces text-helper + native lower/unaccent), creates the user via the lyam connector (real, on the run branch), grants the role named in the row (real, on the run branch) and marks the row cree=ok. A human still reviews and merges the run branch.',
+    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SPIKE workflow-connectors: the watcher polls the SIMULATED candidates sheet (source demo-sheet, no Google credential; switch source to google with a service account in the plugin settings). A row with process=OK builds the nom.prenom@lyam.demo e-mail (Activepieces text-helper + native lower/unaccent), creates the user via the lyam connector (real, on the run branch), grants the role named in the row (real, on the run branch) and marks the row cree=ok. A human still reviews and merges the run branch.',
     trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } },
     nodes: [
       { id: 'join', type: 'text-transform', name: 'Join nom.prenom', config: { operation: 'concat', values: '{{event.nom}}\n.\n{{event.prenom}}', separator: '' } },

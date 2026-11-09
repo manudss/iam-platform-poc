@@ -1,5 +1,7 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { branchContext, workspaceMode } from '../workspace/context.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { validateSettings } from '../plugins/v1/settings.js';
 import { externalEvent } from './model.js';
@@ -20,26 +22,37 @@ import { WorkflowsService } from './workflows.service.js';
 export class WorkflowSheetPollerService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('sheet-watcher');
   private timer?: NodeJS.Timeout;
-  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry) {}
+  private first?: NodeJS.Timeout;
+  private busy = false;
+  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
 
   onModuleInit() {
     this.timer = setInterval(() => void this.tick(), 60_000);
     this.timer.unref?.();
-    const first = setTimeout(() => void this.tick(), 12_000);
-    first.unref?.();
+    this.first = setTimeout(() => void this.tick(), 12_000);
+    this.first.unref?.();
   }
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
+  onModuleDestroy() { if (this.timer) clearInterval(this.timer); if (this.first) clearTimeout(this.first); }
 
   async tick() {
+    if (this.busy) return;
+    this.busy = true;
+    try { await branchContext.run({ branch: this.store.liveRef }, () => this.scan()); }
+    catch (e) { this.log.warn(`watch tick failed: ${(e as Error).message}`); }
+    finally { this.busy = false; }
+  }
+
+  private async scan() {
     const desc = externalEvent('google-sheets.row-ready');
     if (!desc?.poll) return;
     let defs;
     try { defs = await this.store.listAllDefinitions(this.store.liveRef); } catch (e) { this.log.warn(`watch scan failed: ${(e as Error).message}`); return; }
+    const registry = workspaceMode() && this.branches ? await this.branches.get(this.store.liveRef) : this.reg;
     for (const d of defs.filter((x) => x.trigger?.event === 'google-sheets.row-ready')) {
-      if (!this.reg.isActive(d.tenant, 'workflows-iga') || !this.reg.isActive(d.tenant, 'workflow-connectors')) continue;
-      const impl = this.reg.impl('workflow-connectors');
+      if (!registry.isActive(d.tenant, 'workflows-iga') || !registry.isActive(d.tenant, 'workflow-connectors')) continue;
+      const impl = registry.impl('workflow-connectors');
       if (!impl) continue;
-      const settings = validateSettings(impl.manifest.settings, (await this.reg.settingsFor(d.tenant, 'workflow-connectors')) ?? {}).values;
+      const settings = validateSettings(impl.manifest.settings, (await registry.settingsFor(d.tenant, 'workflow-connectors')) ?? {}).values;
       let rows;
       try {
         rows = await desc.poll(d.trigger?.config ?? {}, { settings, log: (m) => this.log.log(`${d.id}: ${m}`) });
