@@ -29,13 +29,13 @@ interface F { key: string; label: string; type: string; help?: string; options?:
   @else { <p class="hint">Fictional demo. Do not use real personal data. An administrator approves each request; signing up grants no access by itself.</p>
     @if (err()) { <p role="alert" id="su-error">{{err()}}</p> }
     <form id="su-form" (ngSubmit)="send()">
-      <label>User ID<input name="id" [(ngModel)]="id" required pattern="[a-z0-9-]{1,32}" /></label>
-      <label>Display name<input name="dn" [(ngModel)]="dn" required maxlength="80" /></label>
-      <label>E-mail<input name="em" [(ngModel)]="em" required maxlength="254" autocomplete="off" /></label>
-      <label>Password (12 to 128 characters)<input type="password" name="pw" [(ngModel)]="pw" required minlength="12" maxlength="128" autocomplete="new-password" /></label>
+      <label>User ID <b class="req" title="required">*</b><input name="id" [(ngModel)]="id" required pattern="[a-z0-9-]{1,32}" /></label>
+      <label>Display name <b class="req" title="required">*</b><input name="dn" [(ngModel)]="dn" required maxlength="80" /></label>
+      <label>E-mail <b class="req" title="required">*</b><input name="em" [(ngModel)]="em" required maxlength="254" autocomplete="off" /></label>
+      <label>Password (12 to 128 characters) <b class="req" title="required">*</b><input type="password" name="pw" [(ngModel)]="pw" required minlength="12" maxlength="128" autocomplete="new-password" /></label>
       @for (sec of sections(); track sec.name) {
         @if (sec.name) { <h3 class="profile-section">{{sec.name}}</h3> }
-        @for (f of sec.fields; track f.key) { <label>{{f.label}}@if (f.required) { * }
+        @for (f of sec.fields; track f.key) { <label>{{f.label}}@if (f.required) { <b class="req" title="required">*</b> }
           @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
           @else { <input [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event" /> }</label> }
       }

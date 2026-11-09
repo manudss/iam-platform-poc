@@ -120,6 +120,7 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
               @else { <input disabled [placeholder]="f.help ?? f.label" aria-hidden="true" /> }
             </label> }
         } @empty { <p class="hint">No field on this surface.</p> }
+        @if (p.context==='signup' && hiddenAtSignup(); as h) { <p class="hint">{{h}} is hidden at sign-up (the matrix).</p> }
       </div> }
     </div></section> }
 
@@ -191,6 +192,13 @@ export class ProfileFieldsPage {
   protected totpEnrolled() { return Object.values(this.stats()).reduce((n, s) => n + s.totp, 0); }
   protected pinEnrolled() { return Object.values(this.stats()).reduce((n, s) => n + s.pin, 0); }
   protected emailEnrolled() { return Object.values(this.stats()).reduce((n, s) => n + s.email, 0); }
+  /** The image field configured nowhere at sign-up gets the mockup's note in the sign-up preview. */
+  protected hiddenAtSignup() {
+    const img = this.cat().find((f) => f.type === 'image' && this.cfg()[f.fullKey]?.enabled);
+    if (!img || this.cfg()[img.fullKey]?.signup !== 'off') return '';
+    const inSignup = this.preview().find((p) => p.context === 'signup')?.fields.some((f) => f.key === img.fullKey);
+    return inSignup ? '' : img.label;
+  }
   protected previewSections(fields: EField[]) {
     const out: { name: string; fields: EField[] }[] = [];
     for (const f of fields) {
