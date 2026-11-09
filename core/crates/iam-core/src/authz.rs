@@ -18,22 +18,20 @@ fn pct(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"
 /// A method (password, code, keypad, ...) only contributes the inner HTML of the central card.
 /// No JavaScript by design (the CSP below forbids scripts): the theme selector is three plain links to
 /// /authorize/theme, which remembers the choice in the `iam_theme` cookie shared with the console.
-const CSS: &str = r#"*{box-sizing:border-box}
-:root{color-scheme:light;--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--accent:#4f46e5;--accent-soft:#eef2ff;--link:#4f46e5;--warn-soft:#fef3c7;--warn-line:#fcd34d;--warn-ink:#92400e;--bad:#b91c1c;--veil:rgba(246,248,252,.45);--card-auth:rgba(255,255,255,.78);--auth-field:rgba(255,255,255,.88);--chip-bg:#eef2ff;--chip-ink:#4f46e5;--brand-sub:#64748b}
-:root[data-theme='dark']{color-scheme:dark;--bg:#0b1220;--card:#101a2e;--ink:#e6ecf7;--muted:#94a3b8;--line:#27334e;--accent-soft:rgba(129,140,248,.16);--link:#a5b4fc;--warn-soft:rgba(251,191,36,.12);--warn-line:#92600e;--warn-ink:#fbbf24;--bad:#f87171;--veil:rgba(2,6,23,.60);--card-auth:rgba(13,20,38,.70);--auth-field:rgba(2,6,23,.45);--chip-bg:rgba(129,140,248,.18);--chip-ink:#a5b4fc;--brand-sub:#94a3b8}
-@media (prefers-color-scheme:dark){:root:not([data-theme='light']){color-scheme:dark;--bg:#0b1220;--card:#101a2e;--ink:#e6ecf7;--muted:#94a3b8;--line:#27334e;--accent-soft:rgba(129,140,248,.16);--link:#a5b4fc;--warn-soft:rgba(251,191,36,.12);--warn-line:#92600e;--warn-ink:#fbbf24;--bad:#f87171;--veil:rgba(2,6,23,.60);--card-auth:rgba(13,20,38,.70);--auth-field:rgba(2,6,23,.45);--chip-bg:rgba(129,140,248,.18);--chip-ink:#a5b4fc;--brand-sub:#94a3b8}}
+const CSS: &str = r#".brand-baseline,.brand-footer{font-size:0}.brand-baseline::after{content:var(--brand-baseline,"IAM next generation");font-size:.9rem}.brand-footer::after{content:var(--brand-footer,"Fictional demo data only. Do not enter real data.");font-size:.78rem}
+*{box-sizing:border-box}
 body{margin:0;min-height:100vh;font:16px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--ink);background:var(--bg)}
 a{color:var(--link)}
 .auth-bg{position:fixed;inset:0;z-index:-2;background:radial-gradient(1200px 600px at 10% -10%,var(--accent) 0,transparent 60%),linear-gradient(160deg,var(--bg),var(--card))}
 .auth-bg img{width:100%;height:100%;object-fit:cover;display:block}
 .auth-veil{position:fixed;inset:0;z-index:-1;background:var(--veil)}
-.seg{position:fixed;top:1rem;right:1rem;z-index:10;display:inline-flex;gap:.25rem;padding:.28rem;border-radius:999px;background:var(--card-auth);border:1px solid var(--line);box-shadow:0 1px 2px #0f172a0d,0 4px 14px #0f172a0a;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.seg{position:fixed;top:1rem;right:1rem;z-index:10;display:inline-flex;gap:.25rem;padding:.28rem;border-radius:999px;background:var(--card-auth);border:1px solid var(--line);box-shadow:0 1px 2px var(--shadow-color),0 4px 14px var(--shadow-color);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .seg a{display:inline-flex;align-items:center;gap:.35rem;padding:.32rem .7rem;border-radius:999px;color:var(--muted);font-size:.8rem;font-weight:600;text-decoration:none}
-.seg a.on{background:var(--accent);color:#fff}
+.seg a.on{background:var(--accent);color:var(--accent-ink)}
 .seg a svg{width:.85rem;height:.85rem}
 @media (max-width:480px){.seg a span{display:none}.seg a{padding:.32rem .55rem}}
 .login{min-height:100vh;display:grid;place-items:center;padding:1.5rem}
-.card{width:min(30rem,100%);background:var(--card-auth);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);border-radius:.9rem;box-shadow:0 24px 60px rgba(2,6,23,.30);padding:2rem}
+.card{width:min(30rem,100%);background:var(--card-auth);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);border-radius:.9rem;box-shadow:0 24px 60px var(--shadow-color);padding:2rem}
 .brand{margin-bottom:1rem}
 .brand-title{display:grid;gap:.2rem;justify-items:start}
 .brandlogo{display:grid}
@@ -49,7 +47,7 @@ p{margin:.4rem 0;color:var(--muted)}
 label{display:block;margin:.8rem 0 0;font-weight:600;color:var(--ink)}
 input{display:block;width:100%;margin-top:.25rem;padding:.65rem .75rem;font:inherit;border:1px solid var(--line);border-radius:.55rem;background:var(--auth-field);color:var(--ink)}
 input:focus{outline:2px solid var(--accent);border-color:var(--accent)}
-button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:.55rem;cursor:pointer}
+button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:var(--accent-ink);background:var(--accent);border:0;border-radius:.55rem;cursor:pointer}
 .err{color:var(--bad)}
 .back{display:inline-block;margin-top:1rem}
 .dots{display:flex;gap:.5rem;justify-content:center;margin:1rem 0}
@@ -60,7 +58,7 @@ button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;c
 .pad .k b{font-size:1.4rem}
 .pad .k small{font-size:.65rem;letter-spacing:.18em;color:var(--muted);min-height:.8rem}
 .pad .del{justify-content:center;font-size:1.3rem}
-.pad .go{grid-column:1/-1;background:var(--accent);color:#fff;min-height:0;padding:.75rem}
+.pad .go{grid-column:1/-1;background:var(--accent);color:var(--accent-ink);min-height:0;padding:.75rem}
 .pad .go:disabled{background:var(--line);color:var(--muted);cursor:default}
 .demo{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:.55rem;padding:.5rem .7rem;color:var(--warn-ink)}
 .foot{margin:1.2rem 0 0;font-size:.78rem;color:var(--muted)}
@@ -109,14 +107,17 @@ pub async fn set_theme(Query(q): Query<HashMap<String, String>>) -> Response {
 
 /// The whole page: common frame + the card inner HTML supplied by the sign-in step being rendered.
 fn frame(title: &str, card: &str, theme: &str, back: &str) -> String {
+    let query = back.split_once('?').map(|(_,q)| q).unwrap_or("");
+    let parts: Vec<&str> = query.split('&').filter(|p|p.starts_with("branch=")||p.starts_with("ticket=")).collect();
+    let suffix = if parts.len()==2 { format!("?{}",parts.join("&amp;")) } else { String::new() };
     let attr = if theme == "light" || theme == "dark" { format!(" data-theme=\"{theme}\"") } else { String::new() };
     format!("<!doctype html><html lang=\"en\"{attr}><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<title>{}</title><link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{CSS}</style></head>\
+<title>{}</title><link rel=\"icon\" href=\"/api/tenants/acme-demo/branding/favicon.svg{suffix}\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{}{CSS}</style><link rel=\"stylesheet\" href=\"/api/tenants/acme-demo/branding/theme.css{suffix}\"></head>\
 <body><div class=\"auth-bg\" aria-hidden=\"true\"><img src=\"https://picsum.photos/1920/1080\" alt=\"\"></div><div class=\"auth-veil\" aria-hidden=\"true\"></div>{}\
 <main class=\"login\"><section class=\"card\"><div class=\"brand\"><div class=\"brand-title\"><picture class=\"brandlogo\">\
-<img class=\"for-light\" src=\"/lyam-logo-horizontal-light.svg\" alt=\"lyam\"><img class=\"for-dark\" src=\"/lyam-logo-horizontal-dark.svg\" alt=\"\" aria-hidden=\"true\"></picture><span>IAM next generation</span></div></div>\
-{}<p class=\"foot\">Fictional demo data only. Do not enter real data. <a href=\"/privacy\">Politique de confidentialité / Privacy</a> &middot; <a href=\"/about\">About this demo</a></p></section></main></body></html>",
-        esc(title), theme_nav(theme, back), card)
+<img class=\"for-light\" src=\"/api/tenants/acme-demo/branding/logo-horizontal-light.svg{suffix}\" alt=\"lyam\"><img class=\"for-dark\" src=\"/api/tenants/acme-demo/branding/logo-horizontal-dark.svg{suffix}\" alt=\"\" aria-hidden=\"true\"></picture><span class=\"brand-baseline\">IAM next generation</span></div></div>\
+{}<p class=\"foot\"><span class=\"brand-footer\">Fictional demo data only. Do not enter real data.</span> <a href=\"/privacy\">Politique de confidentialité / Privacy</a> &middot; <a href=\"/about\">About this demo</a></p></section></main></body></html>",
+        esc(title), include_str!("branding-default.css"), theme_nav(theme, back), card)
 }
 
 fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response {
@@ -127,7 +128,7 @@ fn page(status: StatusCode, body: String, form_target: Option<&str>) -> Response
     // No scripts (keypad flows stay scriptless on purpose). Images: the same-origin brand assets and the
     // picsum background (it redirects to fastly.picsum.photos, so both hosts are allowed).
     // Browsers also apply form-action to the redirect that follows the POST: the (already validated, registered) redirect origin must be allowed.
-    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
+    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'self' 'unsafe-inline'; form-action 'self'{}", form_target.map(|o| format!(" {o}")).unwrap_or_default());
     if let Ok(v) = HeaderValue::from_str(&csp) { h.insert(header::CONTENT_SECURITY_POLICY, v); }
     r
 }
@@ -565,7 +566,7 @@ mod tests {
         assert!(body.contains("/authorize/theme?mode=light&amp;back=") && body.contains("/authorize/theme?mode=dark&amp;back="), "theme links");
         assert!(body.contains("aria-current=\"true\""));
         assert!(body.contains("IAM next generation"));
-        assert!(body.contains("lyam-logo-horizontal-light.svg") && body.contains("lyam-logo-horizontal-dark.svg"));
+        assert!(body.contains("branding/logo-horizontal-light.svg") && body.contains("branding/logo-horizontal-dark.svg") && body.contains("branding/theme.css"));
         assert!(!body.contains("<script"), "framed pages stay scriptless");
         let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
         assert!(csp.contains("img-src 'self' https://picsum.photos https://fastly.picsum.photos") && !csp.contains("script-src"), "{csp}");

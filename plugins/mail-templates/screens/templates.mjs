@@ -6,30 +6,30 @@
 
 const css = `
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1em;margin-top:.8em}
-.card{border:1px solid #ddd;border-radius:8px;padding:.9em;display:flex;flex-direction:column;gap:.5em;cursor:pointer}
-.card.layout{border-color:#94a3b8;background:#f8fafc}
-h3{margin:0;font-size:1em}.meta{color:#666;font-size:.82em}
-.badge{display:inline-block;font-size:.72em;padding:.15em .5em;border-radius:999px;background:#e2e8f0;color:#334155}
-.badge.custom{background:#dbeafe;color:#1d4ed8}
-iframe{width:100%;height:170px;border:1px solid #e2e8f0;border-radius:6px;background:#fff}
-.subject{font-size:.88em;color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card{border:1px solid var(--line);border-radius:8px;padding:.9em;display:flex;flex-direction:column;gap:.5em;cursor:pointer}
+.card.layout{border-color:var(--muted);background:var(--panel)}
+h3{margin:0;font-size:1em}.meta{color:var(--muted);font-size:.82em}
+.badge{display:inline-block;font-size:.72em;padding:.15em .5em;border-radius:999px;background:var(--line);color:var(--label)}
+.badge.custom{background:var(--accent-soft);color:var(--link)}
+iframe{width:100%;height:170px;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+.subject{font-size:.88em;color:var(--label);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row{display:flex;gap:.5em;align-items:center;flex-wrap:wrap}
 button{max-width:14em}button[disabled]{opacity:.5}
 input[type=email]{max-width:16em}
-.msg{padding:.4em .6em;border-radius:4px}.bad{background:#fdd;color:#900}
-.hint{color:#666;font-size:.85em}.lead{font-size:1.02em}
+.msg{padding:.4em .6em;border-radius:4px}.bad{background:var(--bad-soft);color:var(--bad)}
+.hint{color:var(--muted);font-size:.85em}.lead{font-size:1.02em}
 /* editor */
 .editor{display:grid;grid-template-columns:minmax(320px,1fr) minmax(320px,1fr);gap:1em;margin-top:.8em}
 @media(max-width:900px){.editor{grid-template-columns:1fr}}
 label.fl{display:flex;flex-direction:column;font-size:.85em;gap:.2em;margin-bottom:.6em}
-input[type=text],textarea{font:inherit;padding:.3em .45em;border:1px solid #cbd5e1;border-radius:6px}
+input[type=text],textarea{font:inherit;padding:.3em .45em;border:1px solid var(--field-line);border-radius:6px}
 textarea{min-height:12em;font-family:ui-monospace,monospace;font-size:.85em}
 .tabs{display:flex;gap:.3em;margin-bottom:.5em}
-.tabs button{border:1px solid #cbd5e1;background:#f1f5f9;border-radius:6px 6px 0 0;padding:.3em .9em}
-.tabs button.on{background:#fff;border-bottom-color:#fff}
+.tabs button{border:1px solid var(--field-line);background:var(--bg);border-radius:6px 6px 0 0;padding:.3em .9em}
+.tabs button.on{background:var(--card);border-bottom-color:var(--card)}
 iframe.big{height:100%;min-height:26em}
 .vars{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4em .8em;margin:.6em 0}
-.panel{border:1px solid #e2e8f0;border-radius:8px;padding:.8em}
+.panel{border:1px solid var(--line);border-radius:8px;padding:.8em}
 `;
 
 class MailTemplatesScreen extends HTMLElement {

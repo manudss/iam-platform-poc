@@ -38,10 +38,10 @@ export function clock(ms: number): string {
     .sess { display: inline-flex; flex-direction: column; gap: 3px; width: 6.5rem; font-size: .72rem; color: var(--th-ink); cursor: help; }
     .lbl { font-variant-numeric: tabular-nums; line-height: 1; }
     .track { display: block; height: 5px; border-radius: 3px; background: var(--bar-off); overflow: hidden; }
-    .fill { display: block; height: 100%; background: #4f46e5; transition: width 1s linear; }
-    .warn .fill { background: #d97706; } .warn { color: #b45309; font-weight: 600; }
-    .veil { position: fixed; inset: 0; background: #0f172a99; display: grid; place-items: center; z-index: 50; }
-    .dlg { background: var(--card); color: var(--ink); border-radius: .7rem; padding: 1.2rem 1.4rem; width: min(26rem, calc(100vw - 2rem)); box-shadow: 0 20px 50px #0f172a66; }
+    .fill { display: block; height: 100%; background: var(--accent); transition: width 1s linear; }
+    .warn .fill { background: var(--warn-ink); } .warn { color: var(--warn-ink); font-weight: 600; }
+    .veil { position: fixed; inset: 0; background: var(--scrim); display: grid; place-items: center; z-index: 50; }
+    .dlg { background: var(--card); color: var(--ink); border-radius: .7rem; padding: 1.2rem 1.4rem; width: min(26rem, calc(100vw - 2rem)); box-shadow: 0 20px 50px var(--shadow-color); }
     .dlg h3 { margin: 0 0 .5rem; } .dlg p { margin: 0 0 .8rem; } .bad { color: var(--bad); }
     .act { display: flex; gap: .6rem; flex-wrap: wrap; }
     @media (max-width: 600px) { .sess { width: 3.2rem; } .lbl { font-size: .65rem; } }

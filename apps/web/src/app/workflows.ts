@@ -59,23 +59,23 @@ export interface WfNodeData { name: string; simulated: boolean }
     :host { display: block; position: relative; }
     .wf-node {
       box-sizing: border-box; width: 190px; min-height: 64px; padding: 10px 12px;
-      background: #ffffff; border: 1.5px solid #b7c3d8; border-left: 5px solid #6b7fd7; border-radius: 10px;
-      box-shadow: 0 1px 3px rgba(20, 30, 60, .12); cursor: pointer;
+      background: var(--card); border: 1.5px solid var(--field-line); border-left: 5px solid var(--accent); border-radius: 10px;
+      box-shadow: 0 1px 3px var(--shadow-color); cursor: pointer;
       display: flex; flex-direction: column; gap: 6px;
     }
-    .wf-node.real { border-left-color: #2e9e6b; }
-    .wf-node.selected { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79, 70, 229, .25); }
+    .wf-node.real { border-left-color: var(--ok); }
+    .wf-node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--shadow-color); }
     .wf-node-name {
-      font-size: 14px; font-weight: 600; line-height: 1.35; color: #1c2440;
+      font-size: 14px; font-weight: 600; line-height: 1.35; color: var(--ink);
       overflow-wrap: anywhere; white-space: normal;
     }
     .wf-node-badge {
       align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .04em;
-      padding: 2px 7px; border-radius: 999px; background: #ece9fd; color: #5b4fd0;
+      padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
     }
-    .wf-node-badge.real { background: #dcf5e8; color: #177a4e; }
+    .wf-node-badge.real { background: var(--ok-soft); color: var(--ok); }
     handle { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
-      background: #ffffff; border: 2px solid #6b7fd7; transform: translateY(-50%); }
+      background: var(--card); border: 2px solid var(--accent); transform: translateY(-50%); }
     handle[position="left"] { left: -6px; }
     handle[position="right"] { right: -6px; }
   `],
@@ -220,7 +220,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @for (t of types; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{t.simulated ? 'SIMULATED' : 'REAL'}}</small><br /><small>{{t.hint}}</small></button>}
 </section>
 <section class="card wf-canvas">
-<vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [minZoom]="0.4" [maxZoom]="1.6" [background]="'#f2f5fb'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
+<vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [minZoom]="0.4" [maxZoom]="1.6" [background]="'var(--bg)'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
 </section>
 <section class="card"><h3>Selected</h3>
 @if (selectedNode(); as nid) {@if (state.get(nid); as st) {
@@ -326,7 +326,7 @@ export class WorkflowEditPage implements OnInit {
   private makeEdge(id: string, source: string, target: string): Edge {
     return {
       id, source, target, selected: signal(false),
-      markers: signal({ end: { type: 'arrow-closed', width: 16, height: 16, color: '#8a94ac' } }),
+      markers: signal({ end: { type: 'arrow-closed', width: 16, height: 16, color: 'var(--muted)' } }),
     } as Edge;
   }
 

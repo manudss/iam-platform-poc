@@ -4,7 +4,7 @@ import { BrandingColors, DEFAULT_COLORS, ThemeVars, generateTheme } from './them
 
 /**
  * Contrast battery (docs/branding.md step 2): every text/background pair of the theme contract must keep WCAG
- * AA (4.5:1 normal text, 3:1 for the secondary "muted" text and interactive boundaries) in BOTH modes, for a
+ * AA (4.5:1 normal text, 3:1 for interactive boundaries) in BOTH modes, for a
  * battery of source colors including extremes. The tone-based roles are what make this hold for any input;
  * this spec is the proof and the regression net (a tone change that breaks AA fails here).
  */
@@ -26,16 +26,17 @@ function ratio(a: string, b: string): number {
 
 /** [text variable, background variable, minimum ratio] */
 const PAIRS: [keyof ThemeVars, keyof ThemeVars, number][] = [
+ ['--field-line','--field-bg',3],['--focus','--field-bg',3],['--sidebar-ink','--sidebar-bg',4.5],['--sidebar-muted','--sidebar-bg',4.5],['--sidebar-ink','--sidebar-active',4.5],['--on-bad','--bad',4.5],['--ink','--card-auth',4.5],['--muted','--card-auth',4.5],
   ['--ink', '--bg', 4.5],
   ['--ink', '--card', 4.5],
   ['--ink', '--panel', 4.5],
   ['--ink', '--code-bg', 4.5],
   ['--ink', '--accent-soft', 4.5], // .msg body
   ['--ink', '--sel', 4.5], // selected text
-  ['--muted', '--bg', 4.5], // secondary text (AA large): hints, footer
+  ['--muted', '--bg', 4.5], // secondary text: hints, footer
   ['--muted', '--card', 4.5],
   ['--label', '--field-bg', 4.5],
-  ['--brand-sub', '--card', 4.5], // baseline under the logo (large/secondary)
+  ['--brand-sub', '--card', 4.5], // baseline under the logo
   ['--th-ink', '--th-bg', 4.5],
   ['--link', '--bg', 4.5],
   ['--link', '--card', 4.5],

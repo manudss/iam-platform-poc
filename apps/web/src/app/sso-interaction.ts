@@ -37,7 +37,7 @@ export const describeScopes = (scopes: string[]) => scopes.filter((s) => s in SC
       }
     }
   </main>`,
-  styles: ['.sso{max-width:34rem;margin:10vh auto;padding:1.5rem;font:16px system-ui;color:#1e293b}.row{display:flex;gap:.75rem;margin-top:1rem}.hint{color:#64748b;font-size:.9rem}button{padding:.6rem 1.2rem;border-radius:.5rem;border:0;background:#4f46e5;color:#fff;cursor:pointer}button.secondary{background:#e2e8f0;color:#1e293b}button[disabled]{opacity:.6}'],
+  styles: ['.sso{max-width:34rem;margin:10vh auto;padding:1.5rem;font:16px system-ui;color:var(--ink)}.row{display:flex;gap:.75rem;margin-top:1rem}.hint{color:var(--muted);font-size:.9rem}button{padding:.6rem 1.2rem;border-radius:.5rem;border:0;background:var(--accent);color:var(--card);cursor:pointer}button.secondary{background:var(--line);color:var(--ink)}button[disabled]{opacity:.6}'],
 })
 export class SsoInteractionPage {
   private readonly s = inject(Session);

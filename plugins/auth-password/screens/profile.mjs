@@ -5,13 +5,13 @@
 // mode 'readonly': the form is replaced by a note (the server checks every call again).
 
 const css = `
-:host{color:var(--ink,#0f172a)}
+:host{color:var(--ink)}
 .pwf{font:inherit}.pwf .row{display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin:.4em 0}
-.pwf button{cursor:pointer;border:1px solid var(--field-line,#cbd5e1);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px;min-width:44px}
-.pwf input{font:inherit;padding:.5em;min-width:16em;min-height:44px;box-sizing:border-box;background:var(--field-bg,#fff);color:inherit;border:1px solid var(--field-line,#cbd5e1);border-radius:6px}
-.pwf label{display:flex;flex-direction:column;font-size:.9em;gap:.15em;color:var(--label,#475569)}
-.pwf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}.pwf .bad{background:var(--bad-soft,#fee2e2);color:var(--bad-ink,#7f1d1d)}.pwf .ok{background:var(--ok-soft,#dcfce7);color:var(--ok,#15803d)}
-.pwf .hint{color:var(--label,#475569);font-size:.85em;max-width:36em}
+.pwf button{cursor:pointer;border:1px solid var(--field-line);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px;min-width:44px}
+.pwf input{font:inherit;padding:.5em;min-width:16em;min-height:44px;box-sizing:border-box;background:var(--field-bg);color:inherit;border:1px solid var(--field-line);border-radius:6px}
+.pwf label{display:flex;flex-direction:column;font-size:.9em;gap:.15em;color:var(--label)}
+.pwf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}.pwf .bad{background:var(--bad-soft);color:var(--bad-ink)}.pwf .ok{background:var(--ok-soft);color:var(--ok)}
+.pwf .hint{color:var(--label);font-size:.85em;max-width:36em}
 `;
 
 /** Server messages land in innerHTML: escape them. */

@@ -6,16 +6,16 @@
 // no mutating control. The server checks every call again; this is the display side of the contract.
 
 const css = `
-:host{color:var(--ink,#0f172a)}
+:host{color:var(--ink)}
 .ppf{font:inherit}.ppf .row{display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin:.4em 0}
-.ppf button{cursor:pointer;border:1px solid var(--field-line,#cbd5e1);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px;min-width:44px}
-.ppf button.danger{border-color:var(--bad,#b91c1c);color:var(--bad,#b91c1c)}
-.ppf input{font:inherit;padding:.5em;max-width:10em;min-height:44px;box-sizing:border-box;background:var(--field-bg,#fff);color:inherit;border:1px solid var(--field-line,#cbd5e1);border-radius:6px}
-.ppf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}.ppf .bad{background:var(--bad-soft,#fee2e2);color:var(--bad-ink,#7f1d1d)}.ppf .ok{background:var(--ok-soft,#dcfce7);color:var(--ok,#15803d)}
-.ppf .hint{color:var(--label,#475569);font-size:.85em;max-width:36em}
+.ppf button{cursor:pointer;border:1px solid var(--field-line);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px;min-width:44px}
+.ppf button.danger{border-color:var(--bad);color:var(--bad)}
+.ppf input{font:inherit;padding:.5em;max-width:10em;min-height:44px;box-sizing:border-box;background:var(--field-bg);color:inherit;border:1px solid var(--field-line);border-radius:6px}
+.ppf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}.ppf .bad{background:var(--bad-soft);color:var(--bad-ink)}.ppf .ok{background:var(--ok-soft);color:var(--ok)}
+.ppf .hint{color:var(--label);font-size:.85em;max-width:36em}
 .ppf .status{display:inline-block;border-radius:999px;padding:.15em .7em;font-size:.85em}
-.ppf .on{background:var(--ok-soft,#dcfce7);color:var(--ok,#15803d)}.ppf .off{background:var(--code-bg,#f1f5f9);color:var(--muted,#64748b)}
-.ppf .immediate{color:var(--warn-ink,#92400e);background:var(--warn-soft,#fef3c7);border:1px solid var(--warn-line,#fcd34d);border-radius:6px;padding:.4em .7em;font-size:.85em;margin:.5em 0}
+.ppf .on{background:var(--ok-soft);color:var(--ok)}.ppf .off{background:var(--code-bg);color:var(--muted)}
+.ppf .immediate{color:var(--warn-ink);background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:6px;padding:.4em .7em;font-size:.85em;margin:.5em 0}
 `;
 
 /** Text/attribute escaping: instance names and server messages land in innerHTML. */

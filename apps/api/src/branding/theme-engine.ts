@@ -27,7 +27,7 @@ export const THEME_VARIABLES = [
   '--chip-bg', '--chip-ink',
   '--ok', '--ok-soft', '--ok-line', '--bad', '--bad-soft', '--bad-ink', '--bad-line',
   '--warn-soft', '--warn-line', '--warn-ink',
-  '--sel',
+  '--sel', '--on-bad', '--sidebar-bg', '--sidebar-ink', '--sidebar-muted', '--sidebar-active', '--sidebar-hover', '--gradient-from', '--gradient-to', '--scrim', '--shadow-color',
 ] as const;
 export type ThemeVariable = (typeof THEME_VARIABLES)[number];
 export type ThemeVars = Record<ThemeVariable, string>;
@@ -69,25 +69,29 @@ function modeVars(pl: Palettes, dark: boolean): ThemeVars {
     '--th-bg': hex(NV, 20), '--row-hover': hex(N, 17), '--field-bg': hex(N, 15), '--bar-off': hex(NV, 30),
     '--veil': hexa(N, 6, .60), '--card-auth': hex(N, 12), '--auth-field': hex(N, 8),
     '--ink': hex(N, 90), '--muted': hex(NV, 75), '--label': hex(NV, 80), '--brand-sub': hex(NV, 75), '--th-ink': hex(NV, 75),
-    '--line': hex(NV, 25), '--field-line': hex(NV, 35), '--focus': hex(P, 70),
+    '--line': hex(NV, 25), '--field-line': hex(NV, 55), '--focus': hex(P, 70),
     '--accent': hex(P, 80), '--accent-ink': hex(P, 20), '--accent-dark': hex(P, 70), '--accent-soft': hex(P, 25), '--link': hex(P, 80),
     '--chip-bg': hex(S, 30), '--chip-ink': hex(S, 90),
     '--ok': hex(G, 80), '--ok-soft': hex(G, 25), '--ok-line': hex(G, 40),
     '--bad': hex(E, 80), '--bad-soft': hex(E, 25), '--bad-ink': hex(E, 90), '--bad-line': hex(E, 40),
     '--warn-soft': hex(W, 25), '--warn-line': hex(W, 45), '--warn-ink': hex(W, 90),
-    '--sel': hex(P, 30),
+    '--sel': hex(P, 30), '--on-bad': hex(E, 20),
+    '--sidebar-bg':hex(P,10),'--sidebar-ink':hex(N,95),'--sidebar-muted':hex(NV,80),'--sidebar-active':hex(P,30),'--sidebar-hover':hex(P,20),
+    '--gradient-from':hex(S,80),'--gradient-to':hex(P,55),'--scrim':hexa(N,0,.55),'--shadow-color':hexa(N,0,.25),
   } : {
     '--bg': hex(N, 98), '--card': hex(N, 100), '--panel': hex(N, 96), '--code-bg': hex(N, 94),
     '--th-bg': hex(NV, 92), '--row-hover': hex(N, 95), '--field-bg': hex(N, 100), '--bar-off': hex(NV, 85),
     '--veil': hexa(N, 98, .45), '--card-auth': hex(N, 100), '--auth-field': hex(N, 100),
     '--ink': hex(N, 10), '--muted': hex(NV, 45), '--label': hex(NV, 30), '--brand-sub': hex(NV, 45), '--th-ink': hex(NV, 40),
-    '--line': hex(NV, 88), '--field-line': hex(NV, 80), '--focus': hex(P, 65),
+    '--line': hex(NV, 88), '--field-line': hex(NV, 55), '--focus': hex(P, 45),
     '--accent': hex(P, 40), '--accent-ink': hex(P, 100), '--accent-dark': hex(P, 30), '--accent-soft': hex(P, 92), '--link': hex(P, 40),
     '--chip-bg': hex(S, 90), '--chip-ink': hex(S, 30),
     '--ok': hex(G, 40), '--ok-soft': hex(G, 90), '--ok-line': hex(G, 75),
     '--bad': hex(E, 40), '--bad-soft': hex(E, 90), '--bad-ink': hex(E, 30), '--bad-line': hex(E, 75),
     '--warn-soft': hex(W, 92), '--warn-line': hex(W, 70), '--warn-ink': hex(W, 25),
-    '--sel': hex(P, 85),
+    '--sel': hex(P, 85), '--on-bad': hex(E, 100),
+    '--sidebar-bg':hex(P,10),'--sidebar-ink':hex(N,95),'--sidebar-muted':hex(NV,80),'--sidebar-active':hex(P,30),'--sidebar-hover':hex(P,20),
+    '--gradient-from':hex(S,70),'--gradient-to':hex(P,40),'--scrim':hexa(N,0,.55),'--shadow-color':hexa(N,0,.15),
   };
 }
 

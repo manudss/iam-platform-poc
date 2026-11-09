@@ -6,7 +6,7 @@ export const LEVELS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 @Component({
   selector: 'app-level-gauge',
   template: `<span class="dots" aria-hidden="true">@for (i of bars; track i) { <i [class.on]="i < level()"></i> }</span>`,
-  styles: [`.dots { display: inline-flex; gap: 2.5px; vertical-align: middle } .dots i { width: 14px; height: 5px; border-radius: 3px; background: var(--bar-off, #dcdef0) } .dots i.on { background: var(--chip-ink, #4338ca) }`],
+  styles: [`.dots { display: inline-flex; gap: 2.5px; vertical-align: middle } .dots i { width: 14px; height: 5px; border-radius: 3px; background: var(--bar-off) } .dots i.on { background: var(--chip-ink) }`],
 })
 export class LevelGauge { readonly level = input.required<number>(); protected readonly bars = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; }
 

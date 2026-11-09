@@ -19,7 +19,7 @@ export const initials = (name: string): string => {
   return ((p[0]?.[0] ?? '?') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase();
 };
 
-const PALETTE = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+const PALETTE = ['var(--accent)', 'var(--link)', 'var(--ok)', 'var(--warn-ink)', 'var(--bad)', 'var(--accent)', 'var(--accent)', 'var(--ok)'];
 export const deptColor = (dept: string): string => {
   let h = 0;
   for (const c of dept || '') h = (h * 31 + (c.codePointAt(0) ?? 0)) >>> 0;
@@ -106,8 +106,8 @@ export function userStats(users: UserProfile[]): UserStats {
 </tr></thead>
 <tbody>
 @for (u of filtered(); track u.id) {<tr>
-  <td><span class="tuser"><span class="av" [style.background]="deptColor(u.department)+'22'" [style.color]="deptColor(u.department)" [style.border]="'1px solid '+deptColor(u.department)+'55'">{{initials(u.display_name)}}</span><span class="tx"><b>{{u.display_name}}</b><small>{{u.id}}</small></span></span></td>
-  <td><span class="tag" [style.background]="deptColor(u.department)+'1f'" [style.color]="deptColor(u.department)">{{u.department || '—'}}</span></td>
+  <td><span class="tuser"><span class="av" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)" [style.border]="'1px solid '+deptColor(u.department)">{{initials(u.display_name)}}</span><span class="tx"><b>{{u.display_name}}</b><small>{{u.id}}</small></span></span></td>
+  <td><span class="tag" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)">{{u.department || '—'}}</span></td>
   <td class="mail">{{u.email || '—'}}</td>
   <td class="mgr">{{managerName(u)}}</td>
   <td><span class="st" [class.ok]="userStatus(u)==='enabled'" [class.off]="userStatus(u)==='no-credential'" [class.bad]="userStatus(u)==='disabled'">{{statusLabel(userStatus(u))}}</span></td>
@@ -126,9 +126,9 @@ export function userStats(users: UserProfile[]): UserStats {
 <aside class="drawer" id="user-editor" role="dialog" [attr.aria-label]="key ? 'Edit '+key : 'Create user'">
   <div class="dhead">
     @if (photo()) {<img class="av big" id="drawer-photo" [src]="photo()" [style.object-fit]="'cover'" alt="">}
-    @else {<span class="av big" [style.background]="deptColor(form.department || 'user')+'22'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')+'55'">{{initials(form.display_name || form.id || '?')}}</span>}
+    @else {<span class="av big" [style.background]="'color-mix(in srgb, '+deptColor(form.department || 'user')+' 13%, transparent)'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')">{{initials(form.display_name || form.id || '?')}}</span>}
     <span class="tx"><h3>{{key ? (form.display_name || key) : 'Create user'}}</h3>
-      @if (key) {<span class="sub">{{key}} · <span class="tag" [style.background]="deptColor(form.department || 'user')+'1f'" [style.color]="deptColor(form.department || 'user')">{{form.department || '—'}}</span>
+      @if (key) {<span class="sub">{{key}} · <span class="tag" [style.background]="'color-mix(in srgb, '+deptColor(form.department || 'user')+' 13%, transparent)'" [style.color]="deptColor(form.department || 'user')">{{form.department || '—'}}</span>
         @if (current(); as cu) {<span class="st" [class.ok]="userStatus(cu)==='enabled'" [class.off]="userStatus(cu)==='no-credential'" [class.bad]="userStatus(cu)==='disabled'">{{statusLabel(userStatus(cu))}}</span>}</span>}
     </span>
     <button class="secondary x" type="button" (click)="cancel()" title="Close">✕</button>
@@ -142,10 +142,10 @@ export function userStats(users: UserProfile[]): UserStats {
   <label>Department<input name="department" [(ngModel)]="form.department" maxlength="40" /></label>
   <label>Manager<select name="manager" [(ngModel)]="form.manager_id"><option value="">None</option>@for(u of users();track u.id){@if(u.id!==form.id){<option [value]="u.id">{{u.display_name}} ({{u.id}})</option>}}</select></label>
   @if (key && chain(); as c) {@if (c.manager || c.reports.length) {<div class="chain">
-    @if (c.manager) {<span class="node"><span class="av mini" [style.background]="deptColor(c.manager.department)+'22'" [style.color]="deptColor(c.manager.department)">{{initials(c.manager.display_name)}}</span> {{c.manager.display_name}}</span><span class="arr">←</span>}
-    <span class="node me"><span class="av mini" [style.background]="deptColor(form.department || 'user')+'22'" [style.color]="deptColor(form.department || 'user')">{{initials(form.display_name || key || '?')}}</span> {{form.display_name || key}}</span>
+    @if (c.manager) {<span class="node"><span class="av mini" [style.background]="'color-mix(in srgb, '+deptColor(c.manager.department)+' 13%, transparent)'" [style.color]="deptColor(c.manager.department)">{{initials(c.manager.display_name)}}</span> {{c.manager.display_name}}</span><span class="arr">←</span>}
+    <span class="node me"><span class="av mini" [style.background]="'color-mix(in srgb, '+deptColor(form.department || 'user')+' 13%, transparent)'" [style.color]="deptColor(form.department || 'user')">{{initials(form.display_name || key || '?')}}</span> {{form.display_name || key}}</span>
     @if (c.reports.length) {<span class="arr">←</span>}
-    @for (r of c.reports; track r.id) {<span class="node"><span class="av mini" [style.background]="deptColor(r.department)+'22'" [style.color]="deptColor(r.department)">{{initials(r.display_name)}}</span> {{r.display_name}}</span>}
+    @for (r of c.reports; track r.id) {<span class="node"><span class="av mini" [style.background]="'color-mix(in srgb, '+deptColor(r.department)+' 13%, transparent)'" [style.color]="deptColor(r.department)">{{initials(r.display_name)}}</span> {{r.display_name}}</span>}
   </div>}}
   @if (key && pfields().length) { <h4>Profile fields</h4><p class="hint">Fields the administrator configuration lets an administrator edit. Saved on the working branch like the rest.</p>
   @for (f of pfields(); track f.key) {
