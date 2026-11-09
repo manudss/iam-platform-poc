@@ -43,7 +43,7 @@ export interface WfTriggerEvent {
 
 interface WfModelModule {
   STEP_TYPES: Record<StepType, { simulated: boolean; label: string }>;
-  WF_EVENTS: Record<string, { label: string; payload: string[] }>;
+  WF_EVENTS: Record<string, { label: string; payload: string[]; configFields?: WfBlockField[] }>;
   placeholderKeys: (value: unknown) => string[];
   stepPlaceholderRefs: (value: unknown) => { node: string; key: string }[];
   substituteStepOutputs: (node: WfNode, outputs: Record<string, Record<string, unknown>>) => WfNode;
