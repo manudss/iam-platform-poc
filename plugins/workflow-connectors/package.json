@@ -1,0 +1,13 @@
+{
+  "name": "@iam-plugin/workflow-connectors",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workflow block catalogue backed by Activepieces pieces - plugin package. Dependencies declared here are the ONLY external packages this plugin's code may import (scripts/plugin-deps.mjs --check enforces it).",
+  "dependencies": {
+    "@nestjs/common": "^12.3.2",
+    "@activepieces/piece-google-sheets": "0.19.5",
+    "@activepieces/piece-http": "0.13.2",
+    "@activepieces/piece-jira-cloud": "0.6.4",
+    "@activepieces/piece-text-helper": "0.6.7"
+  }
+}
