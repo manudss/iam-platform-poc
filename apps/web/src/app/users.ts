@@ -2,6 +2,7 @@ import { Component, HostListener, inject, signal, computed } from '@angular/core
 import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 import { UserProfile } from './api';
+import { RolesRights } from './roles-rights';
 import { UserPluginSections } from './user-plugin-sections';
 
 /* Pure helpers, exported for the unit tests (users.spec.ts). */
@@ -67,9 +68,9 @@ export function userStats(users: UserProfile[]): UserStats {
   };
 }
 
-@Component({ selector: 'app-users', imports: [FormsModule, UserPluginSections], styleUrl: './users.css', template: `
+@Component({ selector: 'app-users', imports: [FormsModule, RolesRights, UserPluginSections], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
-<p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one in Assignments; creating a user never grants access by itself.</p>
+<p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="head">
   <div class="grow"><h2>Users</h2><span class="cnt">{{stats().total}} users · {{stats().enabled}} can sign in · {{stats().depts}} departments</span></div>
@@ -156,6 +157,7 @@ export function userStats(users: UserProfile[]): UserStats {
   @else {<input type="text" [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}
   </label> } } }
   @if (key) {<app-user-plugin-sections [userId]="key" />}
+  @if(key){<h4>Roles &amp; rights</h4><app-roles-rights [userId]="key" />}
   <h4>Security</h4>
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
   <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>

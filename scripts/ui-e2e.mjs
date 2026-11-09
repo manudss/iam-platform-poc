@@ -130,26 +130,34 @@ try {
   // ---- IAM pages: assignments, SoD staging, refused then successful Review & Apply, activation journal ----
   await page.setViewportSize({ width: 1280, height: 900 });
   await nav('/assignments');
-  try { await page.waitForSelector('#assignments td:text-is("demo-bob")', { timeout: 30000 }); }
+  try { await page.waitForSelector('#assignments tr:has-text("demo-bob")', { timeout: 30000 }); }
   catch (e) { // diagnostics for CI: what the page really showed, so a failure is explainable from the log alone
     console.log('DIAG url', page.url(), '\nDIAG statuses', JSON.stringify(await page.evaluate(() => window.__statuses)), '\nDIAG body', (await page.evaluate(() => document.body.innerText)).slice(0, 1500));
     await shot('diag-assignments').catch(() => undefined); throw e;
   }
   assert.ok((await page.locator('#assignments tr', { hasText: 'demo-bob' }).first().innerText()).includes('payment-creator'));
+  await page.locator('#assignments tr', { hasText: 'demo-bob' }).first().getByRole('button', { name: 'Manage roles' }).click();
+  await page.selectOption('select[name=assignmentRole]', 'payment-approver');
   // Stage the SoD-conflicting assignment on the personal branch, then try to publish it: Apply must be refused with the violation.
   await page.getByRole('button', { name: 'Stage assignment' }).click();
   await page.waitForSelector('text=SoD: demo-bob has payment-creator and payment-approver');
   await shot('3-sod-violation');
+  await page.getByRole('button', { name: 'Close assignment editor' }).click();
+  await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
   await page.click('#workspace-apply'); await status('Apply refused');
   // The refused change stays on its branch. A clean change goes from a fresh branch to main and is journaled as an activation.
   await openManage(page); await page.fill('input[name=workspaceNewBranch]', 'ui-clean'); await page.getByRole('button', { name: 'Create & select' }).click();
   await status('Working on ui-clean');
-  await page.fill('input[name=identity]', 'demo-alice'); await page.fill('input[name=role]', 'accountant');
+  await page.waitForSelector('#assignments tr:has-text("demo-alice")');
+  await page.locator('#assignments tr', { hasText: 'demo-alice' }).first().getByRole('button', { name: 'Manage roles' }).click();
+  await page.selectOption('select[name=assignmentRole]', 'accountant');
   await page.getByRole('button', { name: 'Stage assignment' }).click(); await status('Simulation OK');
+  await page.getByRole('button', { name: 'Close assignment editor' }).click();
+  await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
   await page.click('#workspace-apply'); await status('Applied');
-  await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("accountant")');
+  await nav('/assignments'); await page.waitForSelector('#assignments .pill:text-is("accountant")');
   await nav('/activation'); await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
   await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');
 
@@ -316,6 +324,9 @@ try {
   await page.waitForSelector('#user-editor');
   const userSections = await page.locator('#user-editor h4').allTextContents();
   assert.ok(userSections.some((t) => /Identity/.test(t)) && userSections.some((t) => /Security/.test(t)), 'users: the drawer shows the Identity and Security sections (got: ' + JSON.stringify(userSections) + ')');
+  assert.ok(userSections.some(t => /Roles & rights/.test(t)), 'Users has the shared role editor');
+  await page.locator('#user-editor').getByRole('tab', { name: 'Resulting rights' }).click();
+  await page.waitForSelector('app-roles-rights a[href="/policies"]');
   await shot('11-user-drawer');
   await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.waitForSelector('#user-editor', { state: 'detached' });
@@ -394,9 +405,40 @@ try {
   await Promise.all([page.waitForResponse((r) => r.url().includes('/profile-fields') && r.request().method() === 'PUT' && r.status() < 300), page.click('#pf-save')]);
   await noBanner('users page');
 
+  // ---- Roles catalogue and tabbed drawer; search console and bulk matrix ----
+  await openManage(page); await page.fill('input[name=workspaceNewBranch]', 'ui-matrix'); await page.getByRole('button', { name: 'Create & select' }).click();
+  await status('Working on ui-matrix');
+  await nav('/roles'); await page.waitForSelector('#role-table tbody tr:has-text("payment-creator")');
+  await page.locator('#role-table tr', { hasText: 'payment-creator' }).getByRole('button', { name: 'Open role' }).click();
+  await page.getByRole('tab', { name: 'Grants', exact: true }).click(); await shot('12-role-grants');
+  await page.getByRole('tab', { name: 'SoD rules', exact: true }).click();
+  assert.ok((await page.locator('#sod').innerText()).includes('payment-approver'));
+  await page.getByRole('button', { name: 'Close role editor' }).click();
+  await nav('/assignments'); await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  await page.waitForSelector('#assignments tbody tr:has-text("demo-bob") button');
+  await page.waitForFunction(() => document.querySelectorAll('#assignments tbody tr:has(button)').length === 1);
+  assert.equal(await page.locator('#assignments tbody tr:has(button)').count(), 1);
+  await page.getByRole('link', { name: 'Bulk edit matrix' }).click();
+  await page.waitForSelector('.selection-list input');
+  await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  await page.waitForFunction(() => document.querySelectorAll('.selection-list input[type=checkbox]').length > 0 && [...document.querySelectorAll('.selection-layout > section:first-child .check-label')].length === 1);
+  await page.getByLabel(/Bob.*demo-bob/).check();
+  await page.fill('input[name=matrixRoleSearch]', 'payment-creator');
+  await page.getByLabel(/Payment creator.*payment-creator/).check();
+  await page.fill('input[name=matrixRoleSearch]', 'payment-approver');
+  await page.getByLabel(/Payment approver.*payment-approver/).check();
+  await page.getByRole('button', { name: 'Open matrix' }).click();
+  assert.equal(await page.getByRole('checkbox', { name: 'demo-bob / payment-approver', exact: true }).isDisabled(), true, 'SoD additions blocked even with existing roles');
+  await page.getByRole('checkbox', { name: 'demo-bob / payment-creator', exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Review changes' }).click();
+  await page.getByRole('button', { name: 'Stage 1 changes' }).click();
+  await page.waitForSelector('#matrix-review', { state: 'detached' });
+  assert.equal(await page.getByRole('checkbox', { name: 'demo-bob / payment-creator', exact: true }).isChecked(), false);
+  await shot('13-matrix-staged');
+
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
   await page.setViewportSize({ width: 390, height: 800 });
-  for (const p of ['/overview', '/users', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
+  for (const p of ['/overview', '/users', '/roles', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
     await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
     if (path() === '/login') { await coreLogin(); await page.waitForFunction(() => document.body.innerText.includes('admin capability')); await setToken(); await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }

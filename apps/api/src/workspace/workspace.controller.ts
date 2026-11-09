@@ -52,8 +52,20 @@ export class WorkspaceController {
   if(activation.state!=='applied')return {applied:false,merged:true,retryRequired:true,branch,commit:r.commit,activation,message:'Data merged into main, but permission activation failed. Retry Apply on this branch; no second merge is needed.'};
   this.pending.delete(branch);return {applied:true,branch,commit:r.commit,activation};
  }
- @Post('assignment') async assignment(@Body()b:{identity?:string;role?:string}){
-  const branch=currentBranch(true);if(!/^[a-z0-9-]{1,32}$/.test(b?.identity??'')||!/^[a-z0-9-]{1,32}$/.test(b?.role??''))throw new BadRequestException('invalid identity or role');
-  return this.v.writeOn(branch,async c=>{const [r]=await c.query('select (select count(*) from identities where id=?) i,(select count(*) from roles where id=?) r',[b.identity,b.role]);const k=(r as any[])[0];if(!k.i||!k.r)throw new BadRequestException('unknown identity or role');await c.query('insert ignore into assignments values (?,?)',[b.identity,b.role]);const [dirty]=await c.query('select * from dolt_status');if((dirty as any[]).length){await c.query("call dolt_add('assignments')");await c.query("call dolt_commit('-m',?)",[`assignment: ${b.identity} / ${b.role}`]);}const [violations]=await c.query(SOD_SQL);return {branch,violations,staged:true};});
+ /** Both single-person controls and the bulk matrix use the same branch-scoped write path. */
+ @Post('assignment') assignment(@Body() b:{identity?:string;role?:string}) { return this.assignments({ops:[{...b,assigned:true}]}); }
+ @Post('unassignment') unassignment(@Body() b:{identity?:string;role?:string}) { return this.assignments({ops:[{...b,assigned:false}]}); }
+ @Post('assignments') async assignments(@Body() b:{ops?:{identity?:string;role?:string;assigned?:boolean}[]}) {
+  const branch=currentBranch(true), ops=b?.ops;
+  if(!Array.isArray(ops)||!ops.length||ops.length>1000)throw new BadRequestException('Provide 1 to 1000 assignment changes');
+  for(const op of ops)if(!op||typeof op.identity!=='string'||typeof op.role!=='string'||!/^[a-z0-9-]{1,32}$/.test(op.identity??'')||!/^[a-z0-9-]{1,32}$/.test(op.role??'')||typeof op.assigned!=='boolean')throw new BadRequestException('invalid identity, role or assigned flag');
+  return this.v.writeOn(branch,async c=>{
+   // Validate the WHOLE batch before the first mutation: a bad row must never leave a partial matrix.
+   for(const op of ops){const [r]=await c.query('select (select count(*) from identities where id=?) i,(select count(*) from roles where id=?) r',[op.identity,op.role]);const k=(r as any[])[0];if(!k.i||!k.r)throw new BadRequestException('unknown identity or role');}
+   for(const op of ops)await c.query(op.assigned?'insert ignore into assignments values (?,?)':'delete from assignments where identity_id=? and role_id=?',[op.identity,op.role]);
+   const [dirty]=await c.query('select * from dolt_status');
+   if((dirty as any[]).some(x=>x.table_name==='assignments')){await c.query("call dolt_add('assignments')");await c.query("call dolt_commit('-m',?)",[`assignments: ${ops.length} staged change(s)`]);}
+   const [violations]=await c.query(SOD_SQL);return {branch,violations,staged:true};
+  });
  }
 }
