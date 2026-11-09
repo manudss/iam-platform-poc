@@ -7,7 +7,7 @@ import { DefinitionRow, WorkflowStore } from './store.js';
  * definitions so the feature is alive out of the box - a joiner, a mover and a leaver scenario that
  * start from durable application-bus events. Redelivery reuses the same run ID. Idempotent (fixed ids, never overwritten).
  */
-const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: 'assign-role' | 'revoke-role' | 'notify' | 'set-profile-field'; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
+const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
   {
     id: 'wf-joiner', name: 'Joiner: new hire baseline', description: 'Starts from user.created on the durable bus: grants the employee baseline role (real, on the run branch) and informs the manager (simulated).',
     trigger: { event: 'user.created' },
@@ -78,6 +78,21 @@ const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger
       { id: 'tell', type: 'notify', name: 'Inform the security office (simulated)', config: { recipient: 'security', message: '{{event.subject}} joined the security office: review access manually, nothing granted' } },
     ],
     edges: [],
+  },
+  {
+    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SPIKE workflow-connectors: the watcher polls the SIMULATED candidates sheet (source demo-sheet, no Google credential; switch source to google with a service account in the plugin settings). A row with process=OK builds the prenom.nom@lyam.demo e-mail (Activepieces text-helper + native lower/unaccent), creates the user via the lyam connector (real, on the run branch), grants the role named in the row (real, on the run branch) and marks the row cree=ok. A human still reviews and merges the run branch.',
+    trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } },
+    nodes: [
+      { id: 'join', type: 'text-transform', name: 'Join nom.prenom', config: { operation: 'concat', values: '{{event.nom}}\n.\n{{event.prenom}}', separator: '' } },
+      { id: 'clean', type: 'text-transform', name: 'Strip accents', config: { operation: 'unaccent', text: '{{steps.join.value}}' } },
+      { id: 'lower', type: 'text-transform', name: 'Lowercase the login', config: { operation: 'lower', text: '{{steps.clean.value}}' } },
+      { id: 'email', type: 'text-transform', name: 'Build the e-mail', config: { operation: 'concat', values: '{{steps.lower.value}}\n@lyam.demo', separator: '' } },
+      { id: 'create', type: 'lyam-create-user', name: 'Create the user (lyam connector)', config: { identity: '{{steps.lower.value}}', displayName: '{{event.prenom}} {{event.nom}}', email: '{{steps.email.value}}', department: '{{event.departement}}' } },
+      { id: 'role', type: 'assign-role', name: 'Grant the role named in the row', config: { identity: '{{steps.lower.value}}', role: '{{event.role}}' } },
+      { id: 'mark', type: 'google-sheets-update', name: 'Mark the row cree=ok', config: { source: 'demo-sheet', rowNumber: '{{event.rownumber}}', column: 'cree', value: 'ok' } },
+      { id: 'tell', type: 'notify', name: 'Inform HR (simulated)', config: { recipient: 'hr', message: '{{event.prenom}} {{event.nom}} onboarded from the candidates sheet: user {{steps.lower.value}} created with role {{event.role}}, pending branch review' } },
+    ],
+    edges: [{ from: 'join', to: 'clean' }, { from: 'clean', to: 'lower' }, { from: 'lower', to: 'email' }, { from: 'email', to: 'create' }, { from: 'create', to: 'role' }, { from: 'role', to: 'mark' }, { from: 'mark', to: 'tell' }],
   },
 ];
 
