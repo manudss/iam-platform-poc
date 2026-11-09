@@ -122,6 +122,18 @@ describe('PluginScreenLoader cache', () => {
     expect(fetches).toBe(1);
   });
 
+  it('the cache key includes the branch: the same URL on another branch is fetched again', async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return new Response('export default "x"', { status: 200 }); }) as never;
+    const loader = new PluginScreenLoader();
+    loader.importModule = async () => ({ default: 'x-tag' });
+    await loader.load('/api/t/plugins/p/assets/s.mjs', { 'x-iam-branch': 'wip-a' });
+    await loader.load('/api/t/plugins/p/assets/s.mjs', { 'x-iam-branch': 'wip-b' });
+    expect(fetches).toBe(2);
+    await loader.load('/api/t/plugins/p/assets/s.mjs', { 'x-iam-branch': 'wip-a' });
+    expect(fetches).toBe(2);
+  });
+
   it('a failed load is not cached: the next attempt retries', async () => {
     let fetches = 0;
     globalThis.fetch = (async () => { fetches++; return new Response('nope', { status: 500 }); }) as never;

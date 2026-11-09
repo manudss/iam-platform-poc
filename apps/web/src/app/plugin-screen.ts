@@ -9,16 +9,18 @@ interface ScreenInv { plugin: string; id: string; title: string; area: string; r
  * imported from a blob URL. The module is signed plugin code; it never sees the headers. */
 @Injectable({ providedIn: 'root' })
 export class PluginScreenLoader {
-  /** Imported modules are cached by asset URL. The code is immutable for a given deployment (a new plugin
-   * version ships with a new page load, which resets the cache) and the branch is part of the URL, so a
-   * branch switch gets its own entry. Re-importing the same module would re-run customElements.define for
+  /** Imported modules are cached by asset URL AND working branch: the branch travels in the x-iam-branch
+   * header, not in the URL, and the active plugin version can differ per branch, so a branch switch gets its
+   * own entry. The code is immutable for a given (branch, deployment): a new plugin version ships with a new
+   * page load, which resets the cache. Re-importing the same module would re-run customElements.define for
    * an already-registered tag; the cache (plus a guard in the modules) keeps re-opens working. */
   private readonly cache = new Map<string, Promise<{ default?: string }>>();
   /** Test seam: the module import itself. A blob import is a browser feature the unit-test runner cannot do,
    * so specs substitute this field (production keeps the native import). */
   importModule: (url: string) => Promise<{ default?: string }> = (url) => import(/* @vite-ignore */ url) as Promise<{ default?: string }>;
   async load(url: string, headers: Record<string, string>): Promise<{ default?: string }> {
-    let p = this.cache.get(url);
+    const key = `${headers['x-iam-branch'] ?? ''}|${url}`;
+    let p = this.cache.get(key);
     if (!p) {
       p = (async () => {
         const r = await fetch(url, { headers });
@@ -28,8 +30,8 @@ export class PluginScreenLoader {
         try { return await this.importModule(blob); }
         finally { URL.revokeObjectURL(blob); }
       })();
-      this.cache.set(url, p);
-      p.catch(() => this.cache.delete(url)); // a failed load may be retried
+      this.cache.set(key, p);
+      p.catch(() => this.cache.delete(key)); // a failed load may be retried
     }
     return p;
   }
