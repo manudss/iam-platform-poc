@@ -14,8 +14,12 @@ export class DoltPluginStore implements MigrationStore, SettingsStore, StateStor
     await this.commit(c, 'plugins: storage schema');
   })); }
   private async commit(c: Connection, msg: string) {
-    const [d] = await c.query('select * from dolt_status'); if (!(d as unknown[]).length) return;
-    for (const row of d as {table_name:string}[]) if (row.table_name.startsWith('plugin_runtime_') || row.table_name.startsWith('plg_')) await c.query('call dolt_add(?)', [row.table_name]); await c.query('call dolt_commit(\'-m\', ?)', [msg]);
+    const [d] = await c.query('select * from dolt_status');
+    // Only OUR tables: with none staged, dolt_commit fails with 'nothing to commit' (and would crash an un-awaited init).
+    const mine = (d as { table_name: string }[]).filter((row) => row.table_name.startsWith('plugin_runtime_') || row.table_name.startsWith('plg_'));
+    if (!mine.length) return;
+    for (const row of mine) await c.query('call dolt_add(?)', [row.table_name]);
+    await c.query('call dolt_commit(\'-m\', ?)', [msg]);
   }
   private async read<T>(fn: (c: Connection) => Promise<T>) { await this.init(); return this.v.at(this.ref, fn); }
   private async write(fn: (c: Connection) => Promise<void>, msg: string) { await this.init(); return this.v.lock(() => this.v.at(this.ref, async c => { await fn(c); await this.commit(c, msg); })); }

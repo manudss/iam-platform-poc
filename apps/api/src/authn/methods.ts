@@ -90,3 +90,14 @@ export function methodTypes(): AuthMethodType[] {
 /** No frozen catalogue (review n:3): the lookup runs at EVERY call, so a plugin imported at runtime appears
  * without a restart and a removed one disappears. */
 export const methodType = (id: string) => methodTypes().find((m) => m.id === id);
+
+/** The folder plugin that serves a method type (its `provides` slot), undefined for base/planned types. */
+export function methodPluginId(typeId: string): string | undefined {
+  return pluginCatalogue().impls().find((i) => i.manifest.authMethod && (i.manifest.provides ?? []).includes('auth.' + typeId))?.manifest.id;
+}
+/** The profile component through which a method type is managed, when the serving plugin declares one. */
+export function methodComponent(typeId: string): { plugin: string; id: string } | undefined {
+  const impl = pluginCatalogue().impls().find((i) => i.manifest.authMethod && (i.manifest.provides ?? []).includes('auth.' + typeId));
+  const c = impl?.manifest.profileComponents?.[0];
+  return impl && c ? { plugin: impl.manifest.id, id: c.id } : undefined;
+}

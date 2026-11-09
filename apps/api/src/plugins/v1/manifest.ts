@@ -147,8 +147,13 @@ export interface PluginManifest {
   install?: InstallSpec;
   settings: SettingField[];
   screens?: UiScreen[];
-  /** Profile fields this plugin adds (kind `profile`). Values live in the core profile value store; a plugin cannot add columns to the identities table. */
+  /** Profile fields this plugin adds (kind `profile`). Values live in a table the plugin owns (`storage` in the
+   * declaration, created by its install migrations and dropped by their inverse on uninstall); a declaration
+   * without `storage` keeps the legacy generic row store. A plugin can never add columns to the identities table. */
   profileFields?: ProfileFieldDecl[];
+  /** Components this plugin contributes to the profile surfaces (My profile, the admin user sheet). The admin
+   * tunes their visibility per surface in the profile configuration; the code ships in the signed package. */
+  profileComponents?: ProfileComponentDecl[];
   /** v2: custom event kinds (namespace `plg.<id>.*`) this plugin answers without a platform hook. Each needs a handler of the same name. */
   subscribes?: SubscribeDecl[];
   /** v2: custom event kinds (namespace `plg.<id>.*`) this plugin may emit on the bus. The core checks this grant before accepting an emission. */
@@ -168,6 +173,19 @@ export interface PluginManifest {
   mailTemplates?: MailTemplateDecl[];
   /** v3: package security. `signed` requires a valid signature.json verified at load against the trust store. */
   security?: { signed?: boolean };
+}
+
+/** A component contributed to the profile surfaces (kind `profile` or any plugin enriching the profile). */
+export interface ProfileComponentDecl {
+  /** Local id, lowercase-kebab. The full key is `<plugin>:<id>`. */
+  id: string;
+  title: string;
+  /** Packaged web component (.mjs in the signed folder), served by the plugin assets route. */
+  component: string;
+  /** Default visibility per surface: `manage` (view + the actions the role allows), `readonly`, `hidden`. */
+  surfaces: { self?: 'manage' | 'readonly' | 'hidden'; admin?: 'manage' | 'readonly' | 'hidden' };
+  /** Display order on the profile surfaces (0..999, default 500). */
+  order?: number;
 }
 
 export interface MailTemplateDecl {
@@ -299,6 +317,29 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     seenMenu.add(e.id);
   }
   errs.push(...validateFieldDecls(m.id, m.profileFields));
+  // A field stored in a plugin-owned table must be created by one of the plugin's own install migrations (the
+  // uninstall contract drops them through the declared inverses). Static check: a migration statement creates it.
+  for (const f of m.profileFields ?? []) {
+    if (!f?.storage?.table) continue;
+    const t = f.storage.table;
+    const created = (m.install?.migrations ?? []).some((mig) => mig.sql.some((s) => new RegExp(`create\\s+table\\s+(if\\s+not\\s+exists\\s+)?${t}\\b`, 'i').test(s)));
+    if (!created) errs.push(`profileFields ${f.key}: storage table ${t} is not created by any install migration`);
+  }
+  const seenComponents = new Set<string>();
+  for (const c of m.profileComponents ?? []) {
+    if (!/^[a-z][a-z0-9-]{0,31}$/.test(c?.id ?? '')) { errs.push(`profileComponents: invalid id ${c?.id ?? '?'}`); continue; }
+    if (seenComponents.has(c.id)) errs.push(`profileComponents: ${c.id} declared twice`);
+    seenComponents.add(c.id);
+    if (!c.title) errs.push(`profileComponents ${c.id}: title is required`);
+    if (typeof c.component !== 'string' || !c.component.endsWith('.mjs') || c.component.includes('..') || c.component.startsWith('/'))
+      errs.push(`profileComponents ${c.id}: component must be a .mjs path inside the package`);
+    const sf = c.surfaces ?? {};
+    for (const k of ['self', 'admin'] as const)
+      if (sf[k] !== undefined && !['manage', 'readonly', 'hidden'].includes(sf[k]!)) errs.push(`profileComponents ${c.id}: surfaces.${k} must be manage, readonly or hidden`);
+    if (Object.keys(sf).some((k) => k !== 'self' && k !== 'admin')) errs.push(`profileComponents ${c.id}: surfaces only knows self and admin`);
+    if ((sf.self ?? 'hidden') === 'hidden' && (sf.admin ?? 'hidden') === 'hidden') errs.push(`profileComponents ${c.id}: hidden on every surface is pointless`);
+    if (c.order !== undefined && (!Number.isInteger(c.order) || c.order < 0 || c.order > 999)) errs.push(`profileComponents ${c.id}: order is an integer 0..999`);
+  }
   const seenMails = new Set<string>();
   for (const d of m.mailTemplates ?? []) {
     if (!/^_?[a-z0-9][a-z0-9._-]{0,60}$/.test(d.key ?? '')) errs.push(`mailTemplates: invalid key ${d.key ?? '?'}`);

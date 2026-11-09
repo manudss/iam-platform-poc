@@ -9,6 +9,7 @@ import { AdminGuard } from '../../auth/admin.guard.js';
 import { Grants, PluginError, PluginRegistry } from './registry.js';
 import { installArchive, loadInstalledPlugin, removeInstalledPlugin } from './archive.js';
 import { defaultPluginsDir, refreshPluginCatalogue } from './loader.js';
+import { ProfileService } from '../../profile/profile.service.js';
 
 const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503, 'invalid-archive': 400, 'already-exists': 409, 'signature-invalid': 400 };
 function wrap<T>(f: () => Promise<T> | T): Promise<T> {
@@ -31,13 +32,18 @@ function grants(b: unknown): Grants {
 @UseGuards(AuthGuard)
 @Controller('tenants/:tenant/plugins')
 export class PluginsAdminController {
-  constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries) {}
+  constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries, @Optional() private readonly profile?: ProfileService) {}
   private async registry(write=false) { return workspaceMode() ? this.branches.get(currentBranch(write)) : this.reg; }
 
   @Get() async list(@Param('tenant') t: string) { return { tenant: t, plugins: (await this.registry()).list(t) }; }
   @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
   @Get('menu') async menu(@Param('tenant') t: string) { return { tenant: t, entries: (await this.registry()).menu(t) }; }
   @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
+  /** How much profile data a plugin holds for this tenant; the console shows it in the uninstall confirmation.
+   * Lives here, not on ProfileController: the plugin HTTP catch-all (@All(':id/{*path}')) is registered before it. */
+  @UseGuards(AdminGuard) @Get(':id/profile-values') async pluginValues(@Param('tenant') t: string, @Param('id') id: string) {
+    return { plugin: id, values: this.profile ? await this.profile.pluginValueCount(t, id) : 0 };
+  }
 
   /** Packaged component screens (constat 4): the console import()s a screen's .mjs straight from the plugin's
    * signed folder, so a screen's code ships with the plugin and disappears with it. Sign-in only (like the
@@ -50,7 +56,9 @@ export class PluginsAdminController {
     const impl = reg.impl(id);
     if (!impl) throw new NotFoundException(`unknown plugin ${id}`);
     if (!reg.isActive(t, id)) throw new ForbiddenException(`plugin ${id} is not enabled on this branch`);
-    if (!impl.manifest.screens?.some((sc) => sc.render === 'component' && sc.component === tail)) throw new NotFoundException(`${tail} is not a screen component of plugin ${id}`);
+    const isScreen = impl.manifest.screens?.some((sc) => sc.render === 'component' && sc.component === tail);
+    const isProfileComponent = impl.manifest.profileComponents?.some((pc) => pc.component === tail);
+    if (!isScreen && !isProfileComponent) throw new NotFoundException(`${tail} is not a declared component of plugin ${id}`);
     const base = resolve(defaultPluginsDir(), id);
     const file = resolve(base, tail);
     if (!file.startsWith(base + sep)) throw new BadRequestException('assets stay inside the plugin folder');
@@ -59,7 +67,7 @@ export class PluginsAdminController {
   }
 
   @UseGuards(AdminGuard) @Post(':id/install')
-  install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).install(t, id, grants(b)); return { installed: id }; }); }
+  install(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).install(t, id, grants(b)); const adopted = this.profile ? await this.profile.adoptPlugin(t, id) : 0; return { installed: id, ...(adopted ? { adoptedValues: adopted } : {}) }; }); }
 
   @UseGuards(AdminGuard) @Put(':id/settings')
   settings(@Param('tenant') t: string, @Param('id') id: string, @Body() b: { values?: Record<string, unknown> }) {
@@ -68,7 +76,7 @@ export class PluginsAdminController {
   }
 
   @UseGuards(AdminGuard) @Post(':id/enable')
-  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); return { enabled: id }; }); }
+  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); const adopted = this.profile ? await this.profile.adoptPlugin(t, id) : 0; return { enabled: id, ...(adopted ? { adoptedValues: adopted } : {}) }; }); }
 
   /** Plan step 8: imports a signed plugin archive (zip from scripts/plugin-pack.mjs --zip, base64 in { archive }).
    * The package is validated, verified against the trust store (Ed25519, decision 3), written into the plugins
@@ -109,7 +117,14 @@ export class PluginsAdminController {
   disable(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).disable(t, id); return { disabled: id }; }); }
 
   /** Plan D: destructive uninstall. The plugin must be disabled first; the tenant's rows go, and the down migrations
-   * drop the owned tables when no other tenant still has it installed. Refuses when an applied migration lacks an inverse. */
+   * drop the owned tables when no other tenant still has it installed. Refuses when an applied migration lacks an inverse.
+   * The profile configuration the plugin leaves behind (field settings, component overrides) is purged with it. */
   @UseGuards(AdminGuard) @Post(':id/uninstall')
-  uninstall(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => { await (await this.registry(true)).uninstall(t, id); return { uninstalled: id }; }); }
+  uninstall(@Param('tenant') t: string, @Param('id') id: string) {
+    return wrap(async () => {
+      await (await this.registry(true)).uninstall(t, id);
+      const purge = this.profile ? await this.profile.purgePlugin(t, id) : undefined;
+      return { uninstalled: id, profileConfig: purge };
+    });
+  }
 }

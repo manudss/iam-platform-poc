@@ -1,9 +1,10 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Put, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Optional, Param, Put, Post, Req, UseGuards } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
-import { methodType } from './methods.js';
+import { ProfileService } from '../profile/profile.service.js';
+import { methodType, methodComponent } from './methods.js';
 import { SEED_CONFIG, isEmptyConfig, validateConfig } from './config.js';
 import { newTotpSecret, otpauthUri } from './totp.js';
 
@@ -14,7 +15,15 @@ import { newTotpSecret, otpauthUri } from './totp.js';
 @UseGuards(AuthGuard)
 @Controller('tenants/:tenant/auth')
 export class AuthnAdminController {
-  constructor(private readonly authn: AuthnService) {}
+  constructor(private readonly authn: AuthnService, @Optional() private readonly profile?: ProfileService) {}
+
+  /** The console's readonly/hidden component configuration is enforced here too, not only in the UI (review). */
+  private async assertSurfaceAllows(t: string, typeId: string, surface: 'self' | 'admin') {
+    const c = methodComponent(typeId);
+    if (!c || !this.profile) return; // a type without a profile component has no surface configuration to enforce
+    const mode = await this.profile.componentMode(t, c.plugin, c.id, surface, surface === 'admin' ? 'work' : 'live');
+    if (mode !== 'manage') throw new ForbiddenException(`the profile configuration sets this component to ${mode} for ${surface === 'admin' ? 'administrators' : 'the person'}: enrollment changes are refused`);
+  }
 
   @Get() async get(@Param('tenant') t: string) {
     const stored = await this.authn.workingConfig(t), live = await this.authn.liveConfig(t), seeded = isEmptyConfig(stored), work = seeded ? validateConfig(SEED_CONFIG) : stored;
@@ -37,6 +46,9 @@ export class AuthnAdminController {
   }
   private user(u: string) { if (!/^[a-z0-9-]{1,32}$/.test(u)) throw new BadRequestException('invalid user id'); return u; }
 
+  /** Enrollment counts per method instance (the admin profile component's overview). Never the secrets. */
+  @UseGuards(AdminGuard) @Get('enrollment-stats') async enrollmentStats(@Param('tenant') t: string) { return { tenant: t, instances: await this.authn.enroll.stats(t) }; }
+
   @UseGuards(AdminGuard) @Get('enrollments/:user') async enrollments(@Param('tenant') t: string, @Param('user') u: string) { return { user: this.user(u), enrollments: await this.authn.enroll.status(t, this.user(u)) }; }
 
   /**
@@ -46,6 +58,7 @@ export class AuthnAdminController {
   @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number }, @Req() req: { user?: { branch?: string } }) {
     assertNotBranchTest(req); // enrollments are shared, unversioned secrets: never written from a branch-test session
     this.user(u); const { m, type } = await this.instance(t, inst);
+    await this.assertSurfaceAllows(t, type.id, 'admin');
     if (type.id === 'totp') {
       const secret = newTotpSecret(); await this.authn.enroll.setTotp(t, u, inst, secret);
       return { instance: inst, type: type.id, shownOnce: { secret, otpauthUri: otpauthUri(String(m.config.issuer ?? 'IAM POC'), u, secret, Number(m.config.periodSeconds ?? 30), Number(m.config.digits ?? 6)) }, note: 'Shown once. Demo provisioning only.' };
@@ -64,7 +77,7 @@ export class AuthnAdminController {
     throw new BadRequestException(`${type.id} needs no enrollment`);
   }
   @UseGuards(AdminGuard) @Delete('enrollments/:user/:instance') async unenroll(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Req() req: { user?: { branch?: string } }) {
-    assertNotBranchTest(req); await this.authn.enroll.remove(t, this.user(u), inst); return { removed: true }; }
+    assertNotBranchTest(req); const { type } = await this.instance(t, inst); await this.assertSurfaceAllows(t, type.id, 'admin'); await this.authn.enroll.remove(t, this.user(u), inst); return { removed: true }; }
 
   /** Demo outbox: what the simulated e-mail delivery wrote. Administrators only; contains one-time codes in clear. */
   @UseGuards(AdminGuard) @Get('outbox') outbox(@Param('tenant') t: string, @Req() req: { user?: { branch?: string } }) {

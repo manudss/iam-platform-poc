@@ -92,5 +92,17 @@
   "security": {
     "signed": true
   },
-  "extends": "auth-totp-base"
+  "extends": "auth-totp-base",
+  "profileComponents": [
+    {
+      "id": "totp",
+      "title": "Authenticator app (TOTP)",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 20
+    }
+  ]
 }

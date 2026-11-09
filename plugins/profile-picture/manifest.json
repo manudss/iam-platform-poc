@@ -1,0 +1,37 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "profile-picture",
+  "version": "1.0.0",
+  "name": "Profile picture",
+  "description": "Adds a profile picture to every account: the person manages it on My profile, administrators see it in the users list and the user sheet.",
+  "publisher": "iam-platform",
+  "kinds": ["profile"],
+  "hooks": [],
+  "settings": [],
+  "profileFields": [
+    {
+      "key": "picture",
+      "type": "image",
+      "label": "Profile picture",
+      "pii": "personal",
+      "section": "Identity",
+      "order": 5,
+      "storage": { "table": "plg_profile_picture_values", "column": "image", "sqlType": "mediumtext" },
+      "defaults": { "signup": "off", "selfView": true, "selfEdit": true, "adminView": true, "adminEdit": false },
+      "help": "A png, jpeg or webp image, resized to 256 px, at most 256 KB. Administrators see it but cannot change it: the picture belongs to the person."
+    }
+  ],
+  "profileComponents": [
+    { "id": "picture", "title": "Profile picture", "component": "screens/picture.mjs", "surfaces": { "self": "manage", "admin": "readonly" }, "order": 10 }
+  ],
+  "install": {
+    "migrations": [
+      {
+        "id": "001-picture-table",
+        "sql": ["create table plg_profile_picture_values (tenant text not null, subject varchar(32) not null, image mediumtext null, primary key (tenant, subject))"],
+        "down": ["drop table plg_profile_picture_values"]
+      }
+    ]
+  },
+  "security": { "signed": true }
+}

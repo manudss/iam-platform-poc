@@ -63,7 +63,7 @@ describe('sign-in methods are registry plugins (step 2 acceptance)', () => {
     const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
     app = mod.createNestApplication(); await app.init();
     svc = app.get(AuthnService); svc.now = () => clock; reg = app.get(PluginRegistry);
-    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, {}); }
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, { uiComponents: true }); }
   });
   after(async () => {
     await app.close();
@@ -86,7 +86,7 @@ describe('sign-in methods are registry plugins (step 2 acceptance)', () => {
     // A sign-in asking for the retired chain is refused, never silently rerouted to a laxer path.
     const denied = await svc.authenticate({ tenant: T, subject: 'demo-alice', chain: 'pw-totp' });
     assert.equal(denied?.outcome, 'deny');
-    await reg.enable(T, 'auth-totp', {});
+    await reg.enable(T, 'auth-totp', { uiComponents: true });
     opts = (await svc.options(T));
     assert.deepEqual(opts.chains.map((c) => c.id).sort(), ['pw-only', 'pw-totp']);
     await reg.disable(T, 'auth-totp'); // left disabled for test 2
@@ -133,7 +133,7 @@ describe('sign-in methods are registry plugins (step 2 acceptance)', () => {
       'every later call is refused until an admin acts',
     );
     await reg.disable(T, 'auth-totp-saboteur');
-    await reg.enable(T, 'auth-totp', {}); // restore a working slot for the next tests
+    await reg.enable(T, 'auth-totp', { uiComponents: true }); // restore a working slot for the next tests
   });
 
   it('3. a method plugin imported into the folder is usable without a restart', async () => {
