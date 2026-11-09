@@ -58,7 +58,7 @@ export class WorkspaceController {
  @Post('assignments') async assignments(@Body() b:{ops?:{identity?:string;role?:string;assigned?:boolean}[]}) {
   const branch=currentBranch(true), ops=b?.ops;
   if(!Array.isArray(ops)||!ops.length||ops.length>1000)throw new BadRequestException('Provide 1 to 1000 assignment changes');
-  for(const op of ops)if(!op||!/^[a-z0-9-]{1,32}$/.test(op.identity??'')||!/^[a-z0-9-]{1,32}$/.test(op.role??'')||typeof op.assigned!=='boolean')throw new BadRequestException('invalid identity, role or assigned flag');
+  for(const op of ops)if(!op||typeof op.identity!=='string'||typeof op.role!=='string'||!/^[a-z0-9-]{1,32}$/.test(op.identity??'')||!/^[a-z0-9-]{1,32}$/.test(op.role??'')||typeof op.assigned!=='boolean')throw new BadRequestException('invalid identity, role or assigned flag');
   return this.v.writeOn(branch,async c=>{
    // Validate the WHOLE batch before the first mutation: a bad row must never leave a partial matrix.
    for(const op of ops){const [r]=await c.query('select (select count(*) from identities where id=?) i,(select count(*) from roles where id=?) r',[op.identity,op.role]);const k=(r as any[])[0];if(!k.i||!k.r)throw new BadRequestException('unknown identity or role');}
