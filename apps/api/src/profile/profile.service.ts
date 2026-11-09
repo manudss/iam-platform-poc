@@ -193,6 +193,12 @@ export class ProfileService {
       }
     return out.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
   }
+  /** The effective surface mode of one plugin component. Enrollment endpoints enforce it server-side (review:
+   * readonly/hidden is not only a display control). 'manage' when the plugin declares no such component. */
+  async componentMode(tenant: string, plugin: string, id: string, surface: 'self' | 'admin', ref: 'live' | 'work'): Promise<string> {
+    const c = (await this.componentsInventory(tenant, ref)).find((x) => x.plugin === plugin && x.id === id);
+    return c ? c.effective[surface] : 'manage';
+  }
   /** Uninstall hygiene (plugin lifecycle contract): a plugin that goes away takes its profile configuration with it - field settings and component overrides. Written on the working branch like every configuration change. */
   async purgePlugin(tenant: string, pluginId: string) {
     const reg = await this.registry('work', true);

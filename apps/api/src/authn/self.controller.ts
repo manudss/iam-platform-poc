@@ -1,9 +1,10 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, NotFoundException, Optional, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
-import { methodType } from './methods.js';
+import { methodType, methodComponent } from './methods.js';
 import { newTotpSecret, otpauthUri, totpVerify } from './totp.js';
 import { UsersService } from '../users/users.service.js';
+import { ProfileService } from '../profile/profile.service.js';
 
 /**
  * Self-service enrollment (profile "Security" components): a signed-in person manages their OWN authenticator,
@@ -13,7 +14,16 @@ import { UsersService } from '../users/users.service.js';
 @UseGuards(AuthGuard)
 @Controller('tenants/:tenant/auth')
 export class AuthnSelfController {
-  constructor(private readonly authn: AuthnService, private readonly users: UsersService) {}
+  constructor(private readonly authn: AuthnService, private readonly users: UsersService, @Optional() private readonly profile?: ProfileService) {}
+
+  /** The readonly/hidden component configuration is enforced here too, not only in the UI (review). The self
+   * surface is the live one: the person's own page does not edit a working branch. */
+  private async assertSurfaceAllows(t: string, typeId: string) {
+    const c = methodComponent(typeId);
+    if (!c || !this.profile) return;
+    const mode = await this.profile.componentMode(t, c.plugin, c.id, 'self', 'live');
+    if (mode !== 'manage') throw new ForbiddenException(`the profile configuration sets this component to ${mode} for the person: enrollment changes are refused`);
+  }
 
   private async instance(t: string, id: string) {
     const m = (await this.authn.liveConfig(t)).methods.find((x) => x.id === id && x.enabled);
@@ -33,6 +43,7 @@ export class AuthnSelfController {
     assertNotBranchTest(req);
     const { m, type } = await this.instance(t, inst);
     if (type.id !== 'totp') throw new BadRequestException(`${inst} is not an authenticator method`);
+    await this.assertSurfaceAllows(t, type.id);
     if ((await this.authn.enroll.status(t, req.user.sub))[inst]?.totp) throw new ConflictException('an authenticator is already enrolled: remove it first');
     const secret = newTotpSecret();
     await this.authn.enroll.setTotp(t, req.user.sub, inst, secret);
@@ -57,6 +68,7 @@ export class AuthnSelfController {
     assertNotBranchTest(req);
     const { m, type } = await this.instance(t, inst);
     if (type.id !== 'digit-code') throw new BadRequestException(`${inst} is not a PIN method`);
+    await this.assertSurfaceAllows(t, type.id);
     const len = Number(m.config.length ?? 6);
     if (typeof b?.pin !== 'string' || !/^\d+$/.test(b.pin) || b.pin.length !== len) throw new BadRequestException(`PIN must be exactly ${len} digits (this method's setting)`);
     const existing = await this.authn.enroll.pinLength(t, req.user.sub, inst);
@@ -69,6 +81,8 @@ export class AuthnSelfController {
   /** Removes one of the person's own enrollments (any method type). */
   @Delete('me/enrollments/:instance') async remove(@Param('tenant') t: string, @Param('instance') inst: string, @Req() req: { user: { sub: string; branch?: string } }) {
     assertNotBranchTest(req);
+    const { type } = await this.instance(t, inst);
+    await this.assertSurfaceAllows(t, type.id);
     await this.authn.enroll.remove(t, req.user.sub, inst);
     return { removed: true };
   }
@@ -77,6 +91,7 @@ export class AuthnSelfController {
   @Post('me/password') async password(@Param('tenant') t: string, @Body() b: { current?: string; next?: string }, @Req() req: { user: { sub: string; branch?: string } }) {
     assertNotBranchTest(req);
     if (typeof b?.current !== 'string' || typeof b?.next !== 'string') throw new BadRequestException('current and next are required');
+    await this.assertSurfaceAllows(t, 'password');
     await this.users.changePassword(t, req.user.sub, b.current, b.next);
     return { changed: true };
   }
