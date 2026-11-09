@@ -3,6 +3,8 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import '../plugins/v1/plugins-v1.module.js'; // load order: the module graph initialises the users service before the controller needs it
 import { TestAccountController } from './test-account.controller.js';
+import { UsersService } from '../users/users.service.js';
+import { scryptSync } from 'node:crypto';
 import { branchContext } from '../workspace/context.js';
 
 // The test account route (docs/branch-test.md): created on the tested branch only, only with a valid ticket for that branch, never on main.
@@ -46,4 +48,17 @@ describe('test account from a branch test sign-in', () => {
     for (let i = 0; i < 20; i++) await c.create('acme-demo', { ...ok, id: `test-n${i}` });
     await assert.rejects(c.create('acme-demo', { ...ok, id: 'test-over' }), /maximum/);
   });
+});
+
+// Regression: a newly created branch-only account could not sign in because password auth read main.
+it('authenticates against the requested directory branch, with main as the live default', async () => {
+  const service = new UsersService(undefined as never);
+  const password = 'fictional-regression-password';
+  const reads: string[] = [];
+  service.list = async (ref = 'main') => { reads.push(ref); return (ref === 'feat-x' ? [{ id: 'test-nora', login_enabled: true, credential_revision: 'rev' }] : []) as never; };
+  Object.assign(service, { credentials: async () => ({ rev: { subject: 'test-nora', salt: 'fixture-salt', hash: scryptSync(password, 'fixture-salt', 64).toString('hex') } }) });
+  assert.equal(await service.authenticate('acme-demo', 'test-nora', password), false);
+  assert.equal(await service.authenticate('acme-demo', 'test-nora', password, 'feat-x'), true);
+  assert.equal(await service.authenticate('acme-demo', 'test-nora', 'wrong', 'feat-x'), false);
+  assert.deepEqual(reads, ['main', 'feat-x', 'feat-x']);
 });
