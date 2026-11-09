@@ -17,7 +17,7 @@ Review checkpoint: 2026-11-10. Reference: the three validated boards (Profile co
 - Section operations must remain separate from field deletion. Dissolve moves fields to Other; it must never delete core fields or plugin values.
 - Sections now use an explicit ordered list in the branch-versioned profile configuration, including empty sections. Validation rejects duplicate or malformed names. Save/reload coverage has been added; deployed verification is still required.
 - Installed-but-inactive fields now have an informational list, excluded from effective forms and editing. The selected-field panel still lacks the board's per-plugin settings block. This is a structural gap, not a cosmetic difference.
-- My profile still lacks the illustrated TOTP QR presentation and password lock-state block. Do not display invented enrollment or lock states to imitate the board.
+- The TOTP enrollment now renders its QR locally from the fresh URI, with no third-party request, only on the self-service surface. The password lock-state block is still missing. Do not display invented enrollment or lock states to imitate the board.
 - All final layouts need side-by-side pixel inspection in light, dark, and 390px width. Screenshots from earlier revisions do not establish the last revision's fidelity.
 
 ## Code and functional recommendations
