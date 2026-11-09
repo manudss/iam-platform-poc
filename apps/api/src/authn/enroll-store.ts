@@ -45,6 +45,19 @@ export class EnrollmentStore {
     const d = await this.load(); const u = d.users[`${tenant}/${user}`] ?? {};
     return Object.fromEntries(Object.entries(u).map(([inst, r]) => [inst, { totp: !!r.totp, pin: r.pin ? { length: r.pin.length } : false, email: r.email ?? null }]));
   }
+  /** Counts per method instance and kind (admin overview of who enrolled what; secrets never leave the store). */
+  async stats(tenant: string) {
+    const d = await this.load();
+    const out: Record<string, { totp: number; pin: number; email: number }> = {};
+    for (const [k, insts] of Object.entries(d.users)) {
+      if (!k.startsWith(tenant + '/')) continue;
+      for (const [inst, r] of Object.entries(insts)) {
+        const s = (out[inst] ??= { totp: 0, pin: 0, email: 0 });
+        if (r.totp) s.totp++; if (r.pin) s.pin++; if (r.email) s.email++;
+      }
+    }
+    return out;
+  }
   async remove(tenant: string, user: string, inst: string) { await this.mutate((d) => { const u = d.users[`${tenant}/${user}`]; if (u) delete u[inst]; }); }
 
   // TOTP

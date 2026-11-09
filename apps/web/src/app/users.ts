@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 import { UserProfile } from './api';
 import { RolesRights } from './roles-rights';
+import { UserPluginSections } from './user-plugin-sections';
 
 /* Pure helpers, exported for the unit tests (users.spec.ts). */
 
@@ -67,7 +68,7 @@ export function userStats(users: UserProfile[]): UserStats {
   };
 }
 
-@Component({ selector: 'app-users', imports: [FormsModule, RolesRights], styleUrl: './users.css', template: `
+@Component({ selector: 'app-users', imports: [FormsModule, RolesRights, UserPluginSections], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
 <p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
@@ -124,8 +125,8 @@ export function userStats(users: UserProfile[]): UserStats {
 @if (editing()) {<div class="scrim" (click)="cancel()"></div>
 <aside class="drawer" id="user-editor" role="dialog" [attr.aria-label]="key ? 'Edit '+key : 'Create user'">
   <div class="dhead">
-    <!-- PROFILE-PICTURE-SLOT: the profile-plugins PR enriches this avatar (photo when the picture plugin is active, initials otherwise). -->
-    <span class="av big" [style.background]="deptColor(form.department || 'user')+'22'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')+'55'">{{initials(form.display_name || form.id || '?')}}</span>
+    @if (photo()) {<img class="av big" id="drawer-photo" [src]="photo()" [style.object-fit]="'cover'" alt="">}
+    @else {<span class="av big" [style.background]="deptColor(form.department || 'user')+'22'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')+'55'">{{initials(form.display_name || form.id || '?')}}</span>}
     <span class="tx"><h3>{{key ? (form.display_name || key) : 'Create user'}}</h3>
       @if (key) {<span class="sub">{{key}} · <span class="tag" [style.background]="deptColor(form.department || 'user')+'1f'" [style.color]="deptColor(form.department || 'user')">{{form.department || '—'}}</span>
         @if (current(); as cu) {<span class="st" [class.ok]="userStatus(cu)==='enabled'" [class.off]="userStatus(cu)==='no-credential'" [class.bad]="userStatus(cu)==='disabled'">{{statusLabel(userStatus(cu))}}</span>}</span>}
@@ -147,10 +148,15 @@ export function userStats(users: UserProfile[]): UserStats {
     @for (r of c.reports; track r.id) {<span class="node"><span class="av mini" [style.background]="deptColor(r.department)+'22'" [style.color]="deptColor(r.department)">{{initials(r.display_name)}}</span> {{r.display_name}}</span>}
   </div>}}
   @if (key && pfields().length) { <h4>Profile fields</h4><p class="hint">Fields the administrator configuration lets an administrator edit. Saved on the working branch like the rest.</p>
-  @for (f of pfields(); track f.key) { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
+  @for (f of pfields(); track f.key) {
+  @if (f.type==='image') { <div class="pf-image"><span class="pf-label">{{f.label}} <small>managed by the Profile picture section below</small></span>@if (pvals()[f.key]) {<img class="pf-thumb" [src]="pvals()[f.key]" alt="" />}@else {<span class="hint">No picture</span>}</div> }
+  @else { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
   @if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
-  @else {<input [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}</label> } }
-  <!-- PROFILE-PLUGINS-SLOT: the profile-plugins PR mounts <app-user-plugin-sections [userId]="key"> here (TOTP, PIN, lockout), between Profile fields and Security. Single marked line, additive only. -->
+  @else if (f.type==='boolean') {<select [name]="'pf'+f.key" [ngModel]="boolStr(f.key)" (ngModelChange)="setP(f.key,$event===''?null:$event==='true')" [disabled]="!f.editable"><option value="">-</option><option value="true">Yes</option><option value="false">No</option></select>}
+  @else if (f.type==='number' || f.type==='date' || f.type==='email' || f.type==='url' || f.type==='phone') {<input [type]="f.type==='phone'?'tel':f.type" [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}
+  @else {<input type="text" [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable" />}
+  </label> } } }
+  @if (key) {<app-user-plugin-sections [userId]="key" />}
   @if(key){<h4>Roles &amp; rights</h4><app-roles-rights [userId]="key" />}
   <h4>Security</h4>
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
@@ -165,6 +171,8 @@ export class UsersPage {
   protected readonly s = inject(Session);
   protected users = signal<UserProfile[]>([]); protected note = signal(''); protected busy = signal(false); protected editing = signal(false);
   protected pfields = signal<any[]>([]); protected pvals = signal<Record<string, unknown>>({}); private pchanged: Record<string, unknown> = {};
+  /** The picture plugin's value for the edited user, when the plugin is active (the avatar shows it, initials otherwise). */
+  protected photo() { const v = this.pvals()['profile-picture.picture']; return typeof v === 'string' && v.startsWith('data:image/') ? v : ''; }
   private pvalsFor: string | null = null; private profileRequest = 0;
   protected search = signal(''); protected fdept = signal(''); protected fstatus = signal<'' | UserStatus>('');
   protected sortKey = signal<SortKey>('name'); protected sortDir = signal<1 | -1>(1);
@@ -196,6 +204,7 @@ export class UsersPage {
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   private async loadP(id: string) { const request = this.profileRequest, branch = this.s.branch(); try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400 && this.editing() && this.pvalsFor === id && this.key === id && request === this.profileRequest && branch === this.s.branch()) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }
   protected setP(k: string, v: unknown) { this.pvals.update((x) => ({ ...x, [k]: v })); this.pchanged[k] = v === '' ? null : v; }
+  protected boolStr(k: string) { const v = this.pvals()[k]; return v === true ? 'true' : v === false ? 'false' : ''; }
   protected cancel() { this.password = ''; this.editing.set(false); this.pvals.set({}); this.pfields.set([]); this.pvalsFor = null; ++this.profileRequest; }
   ngOnDestroy() { this.cancel(); }
   protected disableAndSave() { this.form.login_enabled = false; void this.save(); }

@@ -63,5 +63,17 @@
     "provisioning": "directory",
     "inlineWithUsername": true,
     "instances": "single"
-  }
+  },
+  "profileComponents": [
+    {
+      "id": "password",
+      "title": "Password",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "hidden"
+      },
+      "order": 10
+    }
+  ]
 }

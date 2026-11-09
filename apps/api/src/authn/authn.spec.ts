@@ -45,7 +45,7 @@ describe('authentication methods and chains', () => {
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService); svc.now = () => clock;
     // Step 2: a method is usable only while its plugin is enabled on the slot (the shipped plugins register disabled).
     const reg = app.get(PluginRegistry);
-    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, {}); }
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, { uiComponents: true }); }
   });
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; process.env.IAM_AUTH_GATE_TOKEN = env.g; process.env.IAM_AUTHN_FILE = env.f; await app.close(); });
   const http = () => request(app.getHttpServer());
@@ -362,5 +362,42 @@ describe('opt-in persistent demo seed', () => {
       assert.equal(await svc.seedDemo('mine'), false);
       assert.deepEqual((await svc.liveConfig('mine')).methods.map((x: any) => x.id), ['only']);
     } finally { process.env.IAM_AUTHN_FILE = f; await app.close(); }
+  });
+});
+
+describe('the readonly/hidden component configuration is enforced by the enrollment endpoints, not only displayed', () => {
+  let app: INestApplication; const env = { a: process.env.IAM_API_ADMIN_TOKEN, f: process.env.IAM_AUTHN_FILE };
+  before(async () => {
+    process.env.IAM_API_ADMIN_TOKEN = ADMIN; process.env.IAM_AUTHN_FILE = join(mkdtempSync(join(tmpdir(), 'authn-surf-')), 'e.json');
+    const guard = { canActivate: (c: any) => { const r = c.switchToHttp().getRequest(); r.user = { sub: String(r.headers['x-test-sub'] ?? 'demo-alice') }; return true; } };
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue(guard).compile();
+    app = mod.createNestApplication(); await app.init();
+    const reg = app.get(PluginRegistry);
+    for (const id of ['auth-totp', 'auth-digit-code']) { await reg.install(T, id, {}); await reg.enable(T, id, { uiComponents: true }); }
+  });
+  after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; process.env.IAM_AUTHN_FILE = env.f; await app.close(); });
+  const api = () => request(app.getHttpServer());
+  const adm = { 'x-api-admin-token': ADMIN };
+  const surfaces = (components: unknown) => api().put(`/tenants/${T}/profile-fields`).set(adm).send({ config: { fields: {}, components } });
+
+  it('self and admin enrollment mutations refuse what the configuration sets readonly or hidden on their surface', async () => {
+    assert.equal((await api().put(`/tenants/${T}/auth`).set(adm).send({ config: cfg([m('pin1', 'digit-code', 2, { length: 4 })], []) })).status, 200);
+    const setPin = (current?: string) => api().put(`/tenants/${T}/auth/me/enrollments/pin1/pin`).send({ pin: '1234', ...(current ? { current } : {}) });
+    assert.equal((await setPin()).status, 200, 'the manifest default is manage: self-service works');
+    // readonly on the self surface: the person keeps seeing the component but cannot change the enrollment.
+    assert.equal((await surfaces({ 'auth-digit-code:pin': { self: 'readonly' } })).status, 200);
+    assert.equal((await setPin()).status, 403);
+    assert.equal((await api().delete(`/tenants/${T}/auth/me/enrollments/pin1`)).status, 403);
+    assert.equal((await api().post(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm).send({ pin: '0000' })).status, 201, 'the admin surface keeps its own mode');
+    assert.equal((await api().delete(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm)).status, 200);
+    // hidden on the admin surface: administrators cannot provision or revoke, the person still can.
+    assert.equal((await surfaces({ 'auth-digit-code:pin': { admin: 'hidden' } })).status, 200);
+    assert.equal((await api().post(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm).send({ pin: '0000' })).status, 403);
+    assert.equal((await api().delete(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm)).status, 403);
+    assert.equal((await setPin('1234')).status, 200, 'the self surface keeps its own mode'); // the PIN is enrolled now, so the change re-authenticates with the current one
+    // back to manage: both surfaces work again.
+    assert.equal((await surfaces({ 'auth-digit-code:pin': { self: 'manage', admin: 'manage' } })).status, 200);
+    assert.equal((await setPin('1234')).status, 200);
+    assert.equal((await api().post(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm).send({ pin: '0000' })).status, 201);
   });
 });

@@ -2,10 +2,11 @@ import { Component, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 import { EField } from './profile-fields';
+import { ProfileComponents } from './profile-components';
 
 /** The signed-in person's own profile, as configured by the administrator. The subject is the token's: there is no user id to type. */
 @Component({
-  selector: 'app-my-profile', imports: [FormsModule], styleUrl: './pages.css',
+  selector: 'app-my-profile', imports: [FormsModule, ProfileComponents], styleUrl: './pages.css',
   template: `
   <p class="lead">Your profile. Only the fields your administrator allows can be changed here. Your roles, organizations, department and manager are assigned by administrators and cannot be edited from this page.</p>
   <p class="hint">Fictional demo only: do not enter real personal data.</p>
@@ -14,14 +15,22 @@ import { EField } from './profile-fields';
   @if (note()) { <p role="status" class="msg" id="mp-note">{{note()}}</p> }
   @if (problem()) { <p role="alert" class="msg bad" id="mp-problem">{{problem()}}</p> }
   <section class="card"><form id="mp-form" (ngSubmit)="save()">
-  @for (f of fields(); track f.key) {
-    <label>{{f.label}} @if (!f.editable) { <small>(read only)</small> }
-      @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals()[f.key] ?? ''" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
-      @else if (f.type==='boolean') { <input type="checkbox" [name]="f.key" [ngModel]="!!vals()[f.key]" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable" /> }
-      @else { <input [type]="f.type==='number'?'number':'text'" [name]="f.key" [ngModel]="vals()[f.key] ?? ''" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable" [attr.aria-label]="f.label" /> }
-      @if (f.help) { <small>{{f.help}}</small> }</label>
+  @for (sec of sections(); track sec.name) {
+    @if (sec.name) { <h3 class="profile-section">{{sec.name}}</h3> }
+    @for (f of sec.fields; track f.key) {
+      @if (f.type==='image') {
+        <div class="profile-image-field">@if (vals()[f.key]) { <img class="profile-image-thumb" [src]="vals()[f.key]" [alt]="f.label"> } <small>{{f.editable ? 'Managed by the component below.' : f.label + ' (read only)'}}</small></div>
+      } @else {
+      <label>{{f.label}} @if (!f.editable) { <small>(read only)</small> }
+        @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals()[f.key] ?? ''" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
+        @else if (f.type==='boolean') { <input type="checkbox" [name]="f.key" [ngModel]="!!vals()[f.key]" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable" /> }
+        @else { <input [type]="f.type==='number'?'number':f.type==='date'?'date':f.type==='email'?'email':f.type==='url'?'url':f.type==='phone'?'tel':'text'" [name]="f.key" [ngModel]="vals()[f.key] ?? ''" (ngModelChange)="set(f.key,$event)" [disabled]="!f.editable" [attr.aria-label]="f.label" /> }
+        @if (f.help) { <small>{{f.help}}</small> }</label>
+      }
+    }
   } @empty { <p>{{loaded() ? 'No profile field is shown to you.' : 'Loading...'}}</p> }
   <button id="mp-save" [disabled]="busy() || !editable()">Save my profile</button></form></section>
+  <app-profile-components surface="self" />
   <section class="card" id="mp-sections"><h3>Assigned by administrators (read only)</h3>
   @if (orgs() !== undefined) { <p id="mp-orgs"><b>Organizations:</b> {{orgs()!.length ? orgNames() : 'none'}}</p> }
   @if (roles() !== undefined) { <p id="mp-roles"><b>Roles:</b> {{roles()!.length ? roleNames() : 'none'}}</p> }</section>`,
@@ -33,6 +42,16 @@ export class MyProfilePage {
   protected orgNames() { return this.orgs()!.map((o) => o.name).join(', '); } protected roleNames() { return this.roles()!.map((r) => r.label || r.id).join(', '); }
   protected policy = signal('immediate'); protected pending = signal<string[]>([]); protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected loaded = signal(false);
   constructor() { effect(() => { this.s.branchEpoch(); void this.load(); }); }
+  /** Fields grouped by their configured section, in schema order (the server already sorts by order, key). */
+  protected sections() {
+    const out: { name: string; fields: EField[] }[] = [];
+    for (const f of this.fields()) {
+      const name = f.section ?? f.group ?? '';
+      const last = out[out.length - 1];
+      if (last && last.name === name) last.fields.push(f); else out.push({ name, fields: [f] });
+    }
+    return out;
+  }
   protected editable() { return this.fields().some((f) => f.editable); }
   protected set(k: string, v: unknown) { this.vals.update((x) => ({ ...x, [k]: v })); this.changed[k] = v === '' ? null : v; }
   protected async load() {

@@ -33,7 +33,7 @@ try {
   assert.equal((await fetch(BASE + '/api/tenants/acme-demo/signup/schema')).status, 404, 'sign-up is closed by default');
   log('1 sign-up closed by default: ok');
   // 2. plugins + configuration staged
-  for (const id of ['hr-attributes', 'organizations']) { ok(await alice('POST', `/plugins/${id}/install`, { grants: {} }, b1), 'install ' + id, [200, 201]); ok(await alice('POST', `/plugins/${id}/enable`, { grants: id === 'organizations' ? { uiComponents: true } : {} }, b1), 'enable ' + id, [200, 201]); }
+  for (const id of ['hr-attributes', 'organizations']) { ok(await alice('POST', `/plugins/${id}/install`, { grants: id === 'hr-attributes' ? { install: true } : {} }, b1), 'install ' + id, [200, 201]); ok(await alice('POST', `/plugins/${id}/enable`, { grants: id === 'organizations' ? { uiComponents: true } : {} }, b1), 'enable ' + id, [200, 201]); }
   ok(await alice('PUT', '/profile-fields', { config: { fields: { 'hr-attributes.job_title': { selfEdit: true, signup: 'required' }, 'hr-attributes.language': { selfEdit: true, signup: 'optional' }, 'hr-attributes.phone': { selfEdit: true } }, signup: { open: true } } }, b1), 'save config');
   const bad = await alice('PUT', '/profile-fields', { config: { fields: { 'hr-attributes.employee_grade': { selfEdit: true } } } }, b1); assert.equal(bad.s, 400, 'authority field refused by the API: ' + JSON.stringify(bad.j));
   assert.equal((await fetch(BASE + '/api/tenants/acme-demo/signup/schema')).status, 404, 'staged config does not open sign-up before Apply');

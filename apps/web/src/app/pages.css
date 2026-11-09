@@ -35,3 +35,14 @@
 .wf-head label { min-width: 0; }
 .wf-head select, .wf-head input { max-width: 100%; box-sizing: border-box; }
 @media (max-width:600px){ .wf-head label { width: 100%; } .wf-head select, .wf-head input { width: 100%; } }
+
+/* Profile fields v2 + My profile sections (profile-plugins) */
+.pf-section { width: 8em; }
+.pf-order { width: 4.5em; }
+.pf-preview-cols { display: flex; gap: 1rem; flex-wrap: wrap; }
+.pf-preview-col { flex: 1 1 14rem; }
+.pf-preview-col ul { margin: 0; padding-left: 1.1rem; }
+.pf-preview-col li small { color: #66758c; }
+h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px solid #dde4ee; padding-bottom: .15rem; }
+.profile-image-field { display: flex; align-items: center; gap: .6rem; margin: .3rem 0; }
+.profile-image-thumb { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid #c9d4e3; }

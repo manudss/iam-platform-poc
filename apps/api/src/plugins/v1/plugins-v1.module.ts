@@ -35,6 +35,7 @@ import { SigninOptionsController } from '../../authn/signin-options.controller.j
 import { MAIL_TEMPLATE_STORE, DoltMailTemplateStore, MemoryMailTemplateStore, MailTemplatesController, MailTemplatesService } from '../../mail/mail-templates.js';
 import { AuthnService } from '../../authn/flow.service.js';
 import { AuthnAdminController } from '../../authn/authn.controller.js';
+import { AuthnSelfController } from '../../authn/self.controller.js';
 import { SessionAdminController } from '../../authn/session.controller.js';
 
 /**
@@ -43,7 +44,7 @@ import { SessionAdminController } from '../../authn/session.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
-  controllers: [PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController, MailTemplatesController],
+  controllers: [PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController, MailTemplatesController],
   providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
     provide: MAIL_TEMPLATE_STORE,
     inject: [VersioningService],
@@ -62,8 +63,17 @@ import { SessionAdminController } from '../../authn/session.controller.js';
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltOrgStore(v, (w) => currentBranch(w)) : new MemoryOrgStore(),
   }, {
     provide: PROFILE_STORE,
-    inject: [VersioningService],
-    useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltProfileStore(v, (w) => currentBranch(w)) : new MemoryProfileStore(),
+    inject: [VersioningService, PluginRegistry, BranchRegistries],
+    useFactory: (v: VersioningService, reg: PluginRegistry, branches: BranchRegistries) => {
+      const store = process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltProfileStore(v, (w) => currentBranch(w)) : new MemoryProfileStore();
+      // Plugin-table routing (contract: a field's values live in the table its plugin owns). The catalogue comes
+      // from the registry of the requested side; the store never imports the registry itself.
+      if (store instanceof DoltProfileStore) store.setCatalogue(async (tenant, ref) => {
+        const r = process.env.IAM_WORKSPACE_MODE === '1' ? await branches.get(ref === 'live' ? 'main' : currentBranch(false)) : reg;
+        return r.profileFields(tenant).flatMap((p) => p.fields.filter((f) => f.storage?.table && f.storage?.column).map((f) => ({ fullKey: `${p.plugin}.${f.key}`, type: f.type, table: f.storage!.table, column: f.storage!.column })));
+      });
+      return store;
+    },
   }, {
     provide: PluginRegistry,
     inject: [VersioningService, UsersService, BranchRegistries, ApplicationBus, BusHostRef],

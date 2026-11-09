@@ -189,7 +189,7 @@ export class PluginRegistry {
       const base = !!i.manifest.base;
       return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), installed: base ? true : !!s?.installed,
         /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
-        requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') },
+        requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') || !!i.manifest.profileComponents?.length },
         grants: s?.grants ?? {} };
     }));
   }
@@ -197,6 +197,11 @@ export class PluginRegistry {
   /** Profile fields declared by the plugins that are active for this tenant. */
   profileFields(tenant: string): { plugin: string; fields: import('../../profile/fields.js').ProfileFieldDecl[] }[] {
     return this.derive(`pf:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! })));
+  }
+
+  /** Profile components declared by the plugins that are active for this tenant (My profile, the admin user sheet). */
+  profileComponents(tenant: string): { plugin: string; components: import('./manifest.js').ProfileComponentDecl[] }[] {
+    return this.derive(`pc:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileComponents?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, components: i.manifest.profileComponents! })));
   }
 
   /** Install: runs migrations once (checksum-checked), seeds, only if the admin granted `install`. */
@@ -245,7 +250,8 @@ export class PluginRegistry {
 
   private checkGrants(p: PluginImpl, g: Grants) {
     for (const h of p.manifest.hooks) if (SENSITIVE_HOOKS.has(h.name) && !g.hooks?.includes(h.name) && !p.manifest.base) throw new PluginError('grant-required', `hook ${h.name} is sensitive and was not granted`);
-    if (p.manifest.screens?.some((s) => s.render === 'component') && !g.uiComponents && !p.manifest.base) throw new PluginError('grant-required', 'component screens were not granted');
+    // Packaged UI (admin screens or profile components) runs plugin-supplied JS in the console: it takes the explicit uiComponents grant.
+    if ((p.manifest.screens?.some((s) => s.render === 'component') || !!p.manifest.profileComponents?.length) && !g.uiComponents && !p.manifest.base) throw new PluginError('grant-required', 'component screens were not granted');
   }
 
   async enable(tenant: string, id: string, grants: Grants = {}) {
