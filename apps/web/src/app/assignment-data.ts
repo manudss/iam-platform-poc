@@ -39,7 +39,7 @@ export class AssignmentData {
  readonly staged = signal<Set<string>>(new Set()); readonly stagedNote = signal('');
  readonly loading = signal(false); readonly busy = signal(false); readonly error = signal(''); readonly note = signal('');
  private generation = 0;
- constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
+ constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); this.note.set(''); void this.load(); }); }
  h(): Record<string,string> { return this.s.adminToken() ? {'x-api-admin-token':this.s.adminToken()} : {}; }
  async request<T>(method:string,path:string,body?:object):Promise<T> {
   const r=await this.s.api.raw<T & {message?:string|string[]}>(method,path,body,this.h());

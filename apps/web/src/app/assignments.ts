@@ -22,6 +22,7 @@ import { initials, deptColor, userStatus, statusLabel } from './users';
 @if(person();as u){<div class="scrim" (click)="close()"></div><aside class="drawer" role="dialog" aria-modal="true" [attr.aria-label]="'Roles for '+u.display_name" id="assignment-editor"><div class="dhead"><span class="av big" [style.background]="deptColor(u.department)+'22'" [style.color]="deptColor(u.department)">{{initials(u.display_name)}}</span><div class="tx"><h3>{{u.display_name}}</h3><span class="sub">{{u.id}} · {{u.department || '-'}}</span><span class="st" [class.ok]="userStatus(u)==='enabled'">{{statusLabel(userStatus(u))}}</span></div><button class="secondary x" (click)="close()" aria-label="Close assignment editor">✕</button></div><div class="dbody"><app-roles-rights [userId]="u.id" /></div><div class="foot"><button class="secondary grow" (click)="close()">Done</button><a routerLink="/users">Open Users</a></div></aside>}
 `})
 export class AssignmentsPage {
+ ngOnInit(){void this.d.load();}
  protected readonly d=inject(AssignmentData);protected filter=signal(emptyFilter());protected person=signal<UserProfile|null>(null);
  protected results=computed(()=>filterAssignments(this.d.users(),this.d.assignments(),this.d.rules(),this.d.members(),this.d.staged(),this.filter()));
  protected withoutRole=computed(()=>this.d.users().filter(u=>!this.d.ids(u.id).length).length);

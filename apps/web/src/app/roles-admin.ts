@@ -45,6 +45,7 @@ import { initials, deptColor } from './users';
 </aside>}
 `})
 export class RolesAdminPage {
+ ngOnInit(){void this.d.load();}
  protected readonly d=inject(AssignmentData);protected search=signal('');protected sensitivity=signal('');protected opened=signal(false);protected isNew=signal(false);protected key=signal('');protected tab=signal('members');
  protected memberSearch=signal('');protected memberDept=signal('');protected addSearch=signal('');protected newMember='';protected otherRole='';
  protected form={id:'',label:'',is_sensitive:false};protected readonly initials=initials;protected readonly deptColor=deptColor;protected readonly actions=referencedActions;

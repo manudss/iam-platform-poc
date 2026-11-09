@@ -28,6 +28,7 @@ import { AssignmentData, referencedActions } from './assignment-data';
 }
 `})
 export class RolesRights {
+ ngOnInit(){void this.d.load();}
  readonly userId=input.required<string>();protected readonly d=inject(AssignmentData);protected tab=signal<'roles'|'rights'>('roles');protected selected=signal('');
  protected available=computed(()=>this.d.roles().filter(r=>!this.d.ids(this.userId()).includes(r.id)));
  protected proposedConflict(){const id=this.selected();return !!id && this.d.rules().some(r=>r.role_a===id && this.d.ids(this.userId()).includes(r.role_b)||r.role_b===id && this.d.ids(this.userId()).includes(r.role_a));}
