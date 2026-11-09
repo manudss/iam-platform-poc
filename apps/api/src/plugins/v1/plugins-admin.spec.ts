@@ -49,7 +49,8 @@ describe('plugin admin API', () => {
     assert.equal(f.body.groups[0].fields[0].value, 4);
     await s().post('/tenants/t2/plugins/org-manager/enable').set(adm).send({}).expect(201);
     const sc = await s().get('/tenants/t2/plugins/screens').expect(200);
-    assert.equal(sc.body.screens.length, 2);
+    assert.equal(sc.body.screens.filter((x: any) => x.plugin !== 'branding-base').length, 2);
+    assert.ok(sc.body.screens.some((x: any) => x.plugin === 'branding-base' && x.id === 'customisation'));
     // menu (step 2): an entry appears only while its plugin is active, per tenant
     const before = await s().get('/tenants/t2/plugins/menu').expect(200);
     assert.equal(before.body.entries.filter((e: any) => e.plugin === 'organizations').length, 0);
@@ -65,7 +66,7 @@ describe('plugin admin API', () => {
     await s().get('/tenants/t3/plugins/org-manager/ping').expect(404); // not enabled on t3
     await s().post('/tenants/t2/plugins/org-manager/ping').expect(404); // method not declared
     // tenant isolation: t3 sees nothing enabled
-    assert.equal((await s().get('/tenants/t3/plugins/screens')).body.screens.length, 0);
+    assert.deepEqual((await s().get('/tenants/t3/plugins/screens')).body.screens.map((x: any) => x.plugin), ['branding-base']);
   });
   it('sensitive hooks are refused until granted; base plugin cannot be disabled; unknown is 404', async () => {
     await s().post('/tenants/t4/plugins/auth-password-lockout/install').set(adm).send({ grants: { install: true } }).expect(201);
