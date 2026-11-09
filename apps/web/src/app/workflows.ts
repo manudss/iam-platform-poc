@@ -2,7 +2,7 @@ import { JsonPipe } from '@angular/common';
 import { Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, CanActivateFn, Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
-import { Connection, CustomNodeComponent, Edge, HandleComponent, Node, Vflow, VflowComponent, ViewportState } from 'ngx-vflow';
+import { Connection, CustomNodeComponent, Edge, HandleComponent, Node, SelectableDirective, Vflow, VflowComponent, ViewportState } from 'ngx-vflow';
 import { Session } from './session';
 import { ApiClient } from './api';
 
@@ -52,9 +52,9 @@ export interface WfNodeData { name: string; simulated: boolean }
 
 @Component({
   selector: 'app-wf-node',
-  imports: [HandleComponent],
+  imports: [HandleComponent, SelectableDirective],
   template: `
-    <div class="wf-node" [class.real]="!data()?.simulated" [class.selected]="selected()">
+    <div selectable class="wf-node" [class.real]="!data()?.simulated" [class.selected]="selected()">
       <span class="wf-node-name">{{ data()?.name }}</span>
       <span class="wf-node-badge" [class.real]="!data()?.simulated">{{ data()?.simulated ? 'SIMULATED' : 'REAL' }}</span>
     </div>
