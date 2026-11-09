@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { WorkspaceController } from './workspace.controller.js';
 import { branchContext } from './context.js';
 function setup(unknown = '') {
+ process.env.IAM_WORKSPACE_MODE='1';
  const queries: {sql:string;args:unknown[]}[]=[];
  const c={query:async(sql:string,args:unknown[]=[])=>{queries.push({sql,args});return sql.startsWith('select (select')?[[{i:args[0]===unknown?0:1,r:1}]]:sql==='select * from dolt_status'?[[{table_name:'assignments'}]]:[[]];}};
  const v={writeOn:async(branch:string,fn:(c:unknown)=>unknown)=>{assert.equal(branch,'work');return fn(c);}};

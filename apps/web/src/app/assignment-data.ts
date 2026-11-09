@@ -6,7 +6,7 @@ import type { Rule } from './policies';
 export interface Role { id: string; label: string; is_sensitive: boolean; assigned: number }
 export interface SodRule { role_a: string; role_b: string }
 export interface AssignmentOp { identity: string; role: string; assigned: boolean }
-export interface Membership { identity_id: string; org_id: string }
+export interface Membership { subject: string; org_id: string }
 export type QuickView = 'all' | 'none' | 'conflicts' | 'staged';
 export interface AssignmentFilter { q: string; department: string; organization: string; role: string; status: string; view: QuickView }
 export const roleIds = (as: Assignment[], id: string) => as.filter(a => a.identity_id === id).map(a => a.role_id);
@@ -18,7 +18,7 @@ export function filterAssignments(users: UserProfile[], assignments: Assignment[
   const ids = roleIds(assignments,u.id);
   return (!q || [u.id,u.display_name,u.email ?? '',u.department,...ids].some(s => s.toLowerCase().includes(q)))
    && (!f.department || u.department === f.department)
-   && (!f.organization || members.some(m => m.identity_id === u.id && m.org_id === f.organization))
+   && (!f.organization || members.some(m => m.subject === u.id && m.org_id === f.organization))
    && (!f.role || ids.includes(f.role))
    && (!f.status || (f.status === 'no-credential' ? !u.hasCredential : f.status === 'enabled' ? u.hasCredential && u.login_enabled : u.hasCredential && !u.login_enabled))
    && (f.view === 'all' || f.view === 'none' && !ids.length || f.view === 'conflicts' && !!conflicts(ids,rules).length || f.view === 'staged' && staged.has(u.id));
@@ -78,7 +78,7 @@ export class AssignmentData {
   try {
    const r=await this.request<{branch:string;violations:{identity:string;roleA:string;roleB:string}[]}>('POST','/workspace/assignments',{ops});
    if(branch!==this.s.branch())return false;
-   this.s.change.set({...r,mergeable:!r.violations.length});
+
    this.note.set(`${ops.length} change(s) staged on ${branch}. Live only after Review & Apply.`);
    this.s.say(r.violations.length ? `Simulation: ${r.violations.length} SoD violation(s), Apply will be refused.`:'Simulation OK: no SoD violation, mergeable.',r.violations.length?'error':'info');
    await this.load();return true;

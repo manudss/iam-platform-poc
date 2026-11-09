@@ -3,7 +3,6 @@ import { authGuard } from './auth';
 import { CallbackPage, LoginPage } from './login';
 import { ActivationPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
 import { AssignmentsPage } from './assignments';
-import { AssignmentMatrixPage } from './assignment-matrix';
 import { UsersPage } from './users';
 import { AuthMethodsPage } from './auth-methods';
 import { ProfileFieldsPage } from './profile-fields';
@@ -15,7 +14,6 @@ import { SsoInteractionPage } from './sso-interaction';
 import { SsoSamlPage } from './sso-saml';
 import { ApplicationsPage } from './applications';
 import { PoliciesPage } from './policies';
-import { RolesAdminPage } from './roles-admin';
 import { ProfileReviewsPage } from './profile-reviews';
 import { BusObserverPage } from './bus-observer';
 import { McpPage } from './mcp';
@@ -46,10 +44,10 @@ export const routes: Routes = [
       { path: 'applications', component: ApplicationsPage, title: 'Applications', canActivate: [accessGuard, pluginGuard('app-connector')] },
       { path: 'policies', component: PoliciesPage, title: 'Policies', canActivate: [accessGuard, pluginGuard('policy-studio')] },
       { path: 'profile-reviews', component: ProfileReviewsPage, title: 'Profile reviews', canActivate: [accessGuard] },
-      { path: 'roles', canActivate: [accessGuard], component: RolesAdminPage, title: 'Roles' },
+      { path: 'roles', canActivate: [accessGuard], loadComponent: () => import('./roles-admin').then(m => m.RolesAdminPage), title: 'Roles' },
       { path: 'my-profile', component: MyProfilePage, title: 'My profile' },
       { path: 'auth-methods', canActivate: [accessGuard], component: AuthMethodsPage, title: 'Authentication methods' },
-      { path: 'assignments/matrix', canActivate: [accessGuard], component: AssignmentMatrixPage, title: 'Bulk assignments' },
+      { path: 'assignments/matrix', canActivate: [accessGuard], loadComponent: () => import('./assignment-matrix').then(m => m.AssignmentMatrixPage), title: 'Bulk assignments' },
       { path: 'assignments', canActivate: [accessGuard], component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
