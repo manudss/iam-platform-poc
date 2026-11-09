@@ -66,7 +66,7 @@ Production code: 40 points. Test code: 84 points.
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:70 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:81 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:88 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/authn.spec.ts:310 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/authn.spec.ts:311 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/branch-bus.e2e.spec.ts:56 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/branch-bus.e2e.spec.ts:57 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/plugins/v1/plugins-v1.spec.ts:26 |
