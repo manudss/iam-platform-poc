@@ -102,3 +102,17 @@ where — they never silently simulate.
   engine's usual retry.
 - The demo sheet is in-memory: a restart resets it.
 - No Activepieces connection testing ("test your settings" button) yet: a block tells you at run time.
+
+### Hosted demo / workspace mode
+
+The opt-in fictional-data seed enables `workflow-connectors` with the other demo plugins. Background
+sheet watches and public webhooks explicitly use the **main** branch registry and context, not a
+visitor's personal branch. To change the live configuration, edit it on your personal branch and use
+Review and apply changes. This is a Dolt data publication, not a GitHub merge.
+
+The hosted edge prefixes API routes with `/api`: the intake URL on a Render preview is
+`/api/tenants/acme-demo/workflow-hooks/wf-candidate-intake/demo-intake-token`.
+Never treat this public demo token as suitable for production. No Google/Jira credentials are seeded.
+
+Editor additions: block search, duplicate a step (without links), read-only definition JSON,
+and per-step outputs in the run view. Placeholder examples are reference chips, not automatic field insertion.
