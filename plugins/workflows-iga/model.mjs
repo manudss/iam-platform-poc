@@ -246,7 +246,7 @@ function configFor(type, cfg) {
         case 'revoke-role': {
             const identity = str(cfg.identity, `${type}.identity`, 64), role = str(cfg.role, `${type}.role`, 64);
             for (const [k, v] of [['identity', identity], ['role', role]])
-                if (!NAME32.test(v) && !placeholderKeys(v).length)
+                if (!NAME32.test(v) && !placeholderKeys(v).length && !stepPlaceholderRefs(v).length)
                     throw new BadRequestException(`${type}: ${k} uses lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders`);
             out.identity = identity;
             out.role = role;
@@ -254,7 +254,7 @@ function configFor(type, cfg) {
         }
         case 'set-department': {
             const identity = str(cfg.identity, 'set-department.identity', 64);
-            if (!NAME32.test(identity) && !placeholderKeys(identity).length)
+            if (!NAME32.test(identity) && !placeholderKeys(identity).length && !stepPlaceholderRefs(identity).length)
                 throw new BadRequestException('set-department.identity: lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders');
             out.identity = identity;
             out.department = str(cfg.department, 'set-department.department', 40);
@@ -262,7 +262,7 @@ function configFor(type, cfg) {
         }
         case 'set-profile-field': {
             const identity = str(cfg.identity, 'set-profile-field.identity', 64);
-            if (!NAME32.test(identity) && !placeholderKeys(identity).length)
+            if (!NAME32.test(identity) && !placeholderKeys(identity).length && !stepPlaceholderRefs(identity).length)
                 throw new BadRequestException('set-profile-field.identity: lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders');
             out.identity = identity;
             const field = str(cfg.field, 'set-profile-field.field', 80);
