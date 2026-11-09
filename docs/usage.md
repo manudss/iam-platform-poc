@@ -116,3 +116,54 @@ Agent demo: `POST /agent/delegations` (user bearer; JSON `agent_id`, `tools` amo
 `POST /access/check` decides as the token subject in tenant mode (body principal/tenant other than yours = 403; roles/sod_conflict are ignored). What-if decisions as another identity: `POST /access/simulate` with `x-api-admin-token` (set `IAM_API_ADMIN_TOKEN`, 16+ chars, local only).
 
 See also [docs/session.md](session.md): configurable session length, timer bar and "Stay signed in".
+
+## Roles and assignment management
+
+The **Roles** page is a searchable catalogue. Open a role to inspect its **Members**,
+**Grants**, **SoD rules** and **Settings** tabs. Members can be searched by name/id
+and department. Add or remove members on the selected working branch. Settings
+keep role IDs immutable; assigned roles and roles named in a SoD rule cannot be
+deleted. Removing a SoD rule requires confirmation because it loosens a control.
+
+The **Assignments** page is an access search console, not a second profile editor.
+Search people by name, id, e-mail, department or role. Combine department,
+organization membership, held role and sign-in status filters. Quick views show
+people without a role, people with SoD conflicts, or people whose assignments
+changed against the working branch's merge base with main. The staged view reports
+an unavailable or truncated diff instead of pretending the comparison is complete.
+Open **Manage roles** to use the shared role editor. The same editor is available
+under **Roles & rights** in an existing user's drawer. Assignment buttons stage
+immediately and separately from **Save user**. Creating a user does not grant a role.
+
+**Bulk edit matrix** is for an explicit scope: choose up to 100 people with the same
+search/facets and up to 20 role columns, then open the matrix. Selections survive
+filter changes; the page states how many selected people are hidden by the filters.
+Unselecting a person or column discards that part of the local edits. Unchanged
+cells are not written. Red cells flag existing SoD conflicts; conflicting additions
+are disabled, including conflicts with roles outside the chosen columns. Remove
+an incompatible role before adding its counterpart. Column actions skip conflicts
+and report the count. Review the exact additions/removals before staging. One
+batch (up to 1000 changed cells) is validated before any mutation and produces one
+assignment commit. A failed server write resets the working set through the
+existing versioning write guard. All paths are read-only on main. Switching data
+branches clears the matrix selection, local edits and open role/assignment drawers.
+
+**Grants / Resulting rights are policy references, not an authorization result.**
+The UI lists Cedar rules explicitly mentioning a role and preserves the effect,
+action identifiers, conditions and source. It does not evaluate Cedar, promise
+unconditional rights, or infer access from a role's label. Other rules can apply;
+forbid wins and resource/context conditions still matter. Use Policies to inspect
+and simulate, and Review & Apply to run the authoritative publication checks.
+
+Scope limits: the POC has no directory group model or assignment expiry field.
+There is no group facet, expiry quick view or temporary-access control. In
+particular it does **not** automatically remove a role on a date. Those need a
+separate model and permission-engine change, not a cosmetic date input. Organization
+and policy features are plugin-backed: when unavailable their controls or sections
+say so. All examples use the existing fictional demo seeds, never real identities.
+
+API: `POST /tenants/:tenant/workspace/assignment` and `/unassignment` accept
+`{identity,role}`. `POST /tenants/:tenant/workspace/assignments` accepts
+`{ops:[{identity,role,assigned:boolean}]}`. All three retain authentication, admin
+capability, working-branch validation, identity/role existence checks and the
+versioned write guard. Staging may contain SoD conflicts; Apply refuses them.
