@@ -23,7 +23,7 @@ Each block is a workflow step type contributed on the `workflows.blocks` surface
 
 | Step type | Backed by | What is real, what is simulated |
 |---|---|---|
-| `http-request` | `@activepieces/piece-http` | **Real HTTP call.** Private/loopback hosts refused unless allow-listed in the plugin settings (SSRF guard). In a dry-run step, logs the call and sends nothing. |
+| `http-request` | `@activepieces/piece-http` | **Real HTTP call.** Every destination host must be explicitly allow-listed in plugin settings. Redirects are not followed. In a dry-run step, logs the call and sends nothing. |
 | `text-transform` | `@activepieces/piece-text-helper` (+ native `lower`/`unaccent`) | Pure computation. `concat`, `replace`, `slugify`, `find`, `split` run through the piece; the piece has no lowercase/unaccent, so those two are native additions. |
 | `google-sheets-read` | `@activepieces/piece-google-sheets` | Source `demo-sheet` reads the built-in **SIMULATED** sheet (no credential). Source `google` makes a **real API call** once a service account is configured. |
 | `google-sheets-update` | same piece | Writes one cell. On the demo sheet the write is simulated; with source `google` it is a **real external write, not reverted** by abandoning the run branch. |
@@ -71,7 +71,7 @@ it — appends the posted candidate to the simulated sheet with process "En cour
 | Jira instance URL / e-mail / API token | token | Real `jira-create-issue` (a Jira sandbox site is enough) |
 | Google service account JSON key | yes | Real `google` sheet source; share the spreadsheet with the service account's e-mail |
 | Google user e-mail | no | Optional domain-wide delegation user |
-| HTTP block: extra allowed hosts | no | Comma-separated loopback/private hosts the SSRF guard should accept anyway |
+| HTTP block: allowed hosts | for HTTP calls | Exact destination hosts; empty refuses all calls. Add only trusted hosts, especially for local/private services |
 
 Secrets are plugin settings of type `password`: they never come back out of the API, and the block receives
 them at run time only. Without them the corresponding blocks fail with a message saying exactly what to type

@@ -16,9 +16,9 @@
     {
       "key": "httpAllowlist",
       "type": "string",
-      "label": "HTTP block: extra allowed hosts",
+      "label": "HTTP block: allowed hosts",
       "default": "",
-      "help": "Comma-separated host names the HTTP request block may call IN ADDITION to public internet hosts. Loopback and private ranges always require an entry here (SSRF guard).",
+      "help": "Exact destination host names this block may call. Empty refuses all outbound calls. Redirects are not followed. Only add hosts you trust; local/private hosts expose local services.",
       "group": "HTTP"
     },
     {
@@ -57,9 +57,21 @@
     }
   ],
   "httpRoutes": [
-    { "method": "GET", "path": "/demo-sheet", "auth": "admin" },
-    { "method": "POST", "path": "/demo-sheet/rows", "auth": "admin" },
-    { "method": "PUT", "path": "/demo-sheet/rows/:row", "auth": "admin" }
+    {
+      "method": "GET",
+      "path": "/demo-sheet",
+      "auth": "admin"
+    },
+    {
+      "method": "POST",
+      "path": "/demo-sheet/rows",
+      "auth": "admin"
+    },
+    {
+      "method": "PUT",
+      "path": "/demo-sheet/rows/:row",
+      "auth": "admin"
+    }
   ],
   "entrypoints": {
     "handlers": "handlers.mjs",

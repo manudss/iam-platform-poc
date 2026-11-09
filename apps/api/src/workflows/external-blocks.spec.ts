@@ -86,13 +86,15 @@ describe('contributed block runs (simulated contexts)', () => {
     const lower = await t.run(ctx({ config: t.validate({ operation: 'lower', text: String(clean!.value) }) }));
     assert.equal(lower!.value, 'marton.elodie');
   });
-  it('http-request: dry-run sends nothing, private hosts are refused (SSRF guard)', async () => {
+  it('http-request: dry-run sends nothing, explicit host allowlist is required', async () => {
     const h = externalBlock('http-request')!;
     const c = ctx({ dryRun: true });
-    const out = await h.run({ ...c, config: h.validate({ method: 'GET', url: 'https://example.com/x' }) });
+    const out = await h.run({ ...c, settings: { httpAllowlist: 'example.com' }, config: h.validate({ method: 'GET', url: 'https://example.com/x' }) });
     assert.equal(out!.status, 0);
     assert.ok(c.lines[0].startsWith('DRY-RUN'));
-    assert.throws(() => h.validate({ method: 'GET', url: 'http://127.0.0.1/admin' }), /SSRF|loopback/);
+    await assert.rejects(() => h.run(ctx({ dryRun: true, config: h.validate({ url: 'http://127.0.0.1/admin' }) })), /allowed hosts/);
+    await assert.rejects(() => h.run(ctx({ dryRun: true, config: h.validate({ url: 'https://example.com' }) })), /allowed hosts/);
+    assert.throws(() => h.validate({ url: 'https://user:password@example.com' }), /credentials in URLs/);
   });
   it('google-sheets read/update on the DEMO sheet, and the row watcher finds ready rows', async () => {
     const read = externalBlock('google-sheets-read')!;

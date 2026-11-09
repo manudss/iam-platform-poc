@@ -37,16 +37,16 @@ const str = (v, what, max, required = true) => {
 };
 const bool = (v, dflt) => (v === undefined || v === null || v === '' ? dflt : v === true || v === 'true');
 
-// ---- SSRF guard for the HTTP block: public hosts by default; loopback/private ranges only when allow-listed. ----
-const PRIVATE_HOST = /^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?)/i;
-function guardUrl(raw, settings) {
+// ---- HTTP egress policy: exact host allowlist; no redirects or embedded URL credentials. ----
+function guardUrl(raw, settings, checkAllowed = true) {
   let u;
   try { u = new URL(raw); } catch { bad(`http-request.url: not a URL (${raw})`); }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') bad(`http-request.url: http or https only (${u.protocol})`);
   const allow = String(settings?.httpAllowlist ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   const host = u.hostname.toLowerCase();
-  if (PRIVATE_HOST.test(host) && !allow.includes(host))
-    bad(`http-request: ${host} is a loopback/private host: add it to the plugin's "HTTP block: extra allowed hosts" setting to call it (SSRF guard)`);
+  if (u.username || u.password) bad('http-request.url: credentials in URLs are refused; use a managed connection');
+  if (checkAllowed && !allow.includes(host))
+    bad(`http-request: ${host} is not in the HTTP allowed hosts setting (explicit destination approval required)`);
   return u.toString();
 }
 
@@ -62,7 +62,7 @@ const httpRequest = {
   family: 'Connectors',
   label: 'HTTP request (Activepieces)',
   simulated: false,
-  description: 'Real HTTP call through the Activepieces http piece. Private/loopback hosts refused unless allow-listed. {{event.x}} / {{steps.x.y}} placeholders OK in url, headers, body.',
+  description: 'Real HTTP call through the Activepieces http piece. Every destination host must be explicitly allow-listed. Redirects are not followed. {{event.x}} / {{steps.x.y}} placeholders OK in url, headers, body.',
   fields: [
     { key: 'method', label: 'Method', type: 'select', options: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'GET', required: true },
     { key: 'url', label: 'URL', type: 'string', required: true, help: 'https://… (placeholders allowed)' },
@@ -85,7 +85,7 @@ const httpRequest = {
     };
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(out.method)) bad('http-request.method: GET, POST, PUT, PATCH or DELETE');
     if (out.headers && !out.headers.includes('{{')) { try { JSON.parse(out.headers); } catch { bad('http-request.headers: a JSON object (or placeholders)'); } }
-    if (!out.url.includes('{{')) guardUrl(out.url, {});
+    if (!out.url.includes('{{')) guardUrl(out.url, {}, false);
     return out;
   },
   async run(ctx) {
@@ -103,7 +103,7 @@ const httpRequest = {
         method: c.method, url, headers, queryParams: {},
         authType: 'none', body_type: 'raw', body: c.body || '',
         response_is_binary: false, use_proxy: false,
-        timeout: c.timeout, followRedirects: true, failureMode: 'retry_none',
+        timeout: c.timeout, followRedirects: false, failureMode: 'retry_none',
       },
     });
     const body = typeof result?.body === 'string' ? result.body.slice(0, 2000) : result?.body ?? null;
