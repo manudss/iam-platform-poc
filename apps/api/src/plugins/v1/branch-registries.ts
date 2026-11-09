@@ -19,6 +19,8 @@ export class BranchRegistries {
   private heads=new Map<string,string>();
   constructor(private readonly v: VersioningService, private readonly users: UsersService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly busRef?: BusHostRef) {}
   drop(ref: string) { this.registries.delete(ref);this.resolved.delete(ref);this.heads.delete(ref); }
+  /** Dolt head seen at the last get(ref): a cheap cache key for values derived from that branch (undefined before the first get). */
+  headOf(ref: string) { return this.heads.get(ref); }
   async get(ref: string) {
     const head=await this.v.at(ref,async c=>{const [r]=await c.query("select hashof('HEAD') h");return String((r as {h:string}[])[0].h);});
     if(this.heads.get(ref)!==head){this.drop(ref);this.heads.set(ref,head);}

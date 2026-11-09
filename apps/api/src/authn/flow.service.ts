@@ -176,9 +176,26 @@ export class AuthnService implements OnApplicationBootstrap {
   private async offered(cfg: AuthnConfig, reg: PluginRegistry, tenant: string) {
     return cfg.chains.filter((c) => c.enabled && c.steps.every((id) => { const m = cfg.methods.find((x) => x.id === id); return !!m?.enabled && !!this.provider(reg, tenant, m.type); }));
   }
+  /** Cache of the public sign-in options, keyed by tenant, branch and Dolt head: the list only depends on the
+   *  configuration and plugin state stored in Dolt, so one head check (a small query) replaces re-reading the
+   *  configuration and re-asking every method plugin over the bus on each visit. Outside workspace mode (specs)
+   *  there is no head to key on and nothing is cached. */
+  private readonly optionsCache = new Map<string, Awaited<ReturnType<AuthnService['computeOptions']>>>();
   /** Public description of what can be chosen on the sign-in page. No enrollment, user or secret information. */
   async options(tenant: string, branch?: string) {
     const reg = await this.signinRegistry(branch);
+    const head = this.branches?.headOf(branch ?? 'main');
+    const key = head ? `${tenant}|${branch ?? 'main'}|${head}` : null;
+    const hit = key ? this.optionsCache.get(key) : undefined;
+    if (hit) return hit;
+    const value = await this.computeOptions(reg, tenant, branch);
+    if (key) {
+      if (this.optionsCache.size >= 100) this.optionsCache.delete(this.optionsCache.keys().next().value as string);
+      this.optionsCache.set(key, value);
+    }
+    return value;
+  }
+  private async computeOptions(reg: PluginRegistry, tenant: string, branch?: string) {
     const cfg = await this.signinConfig(tenant, branch), list = await this.offered(cfg, reg, tenant);
     return {
       mode: list.length ? 'choice' as const : 'legacy' as const,

@@ -1,7 +1,12 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, PLATFORM_ID, PendingTasks, TransferState, inject, makeStateKey, signal } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
-import { SigninChain, SigninOptions } from './api';
+import { SigninChain, SigninOptions, apiUrl } from './api';
+
+/** Hydration handoff: the options the server fetched to render /login, so the browser does not refetch them (and flash "Loading...") on startup. */
+const OPTIONS_KEY = makeStateKey<SigninOptions>('iam-signin-options');
+const SIGNUP_KEY = makeStateKey<boolean>('iam-signup-open');
 import { Session } from './session';
 import { Theme } from './theme';
 import { ThemeSwitch } from './theme-switch';
@@ -44,6 +49,11 @@ export class LoginPage {
   protected readonly pstep = signal(0);
   protected readonly highlight = signal('');
   private readonly theme = inject(Theme);
+  /** SSR: the login page renders on the server. Browser globals stay behind this flag; the tracked load lets
+   *  the server render wait for the methods list, so the first HTML already carries it. */
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+  private readonly pending = inject(PendingTasks);
+  private readonly transfer = inject(TransferState);
 
   constructor() {
     if (this.preview()) {
@@ -52,15 +62,15 @@ export class LoginPage {
       parent.postMessage({ type: 'iam-preview-ready' }, location.origin);
       return;
     }
-    const t = testParams(new URLSearchParams(location.search));
+    const t = testParams(new URLSearchParams(this.isBrowser ? location.search : ''));
     if (t) {
       // A test link opens a fresh, branch-bound session: any current sign-in ends here, explicitly.
       this.test.set(t);
       try { sessionStorage.setItem(TEST_KEY, JSON.stringify(t)); } catch { /* storage blocked: the callback will stay on main */ }
       if (this.s.loggedIn()) this.s.signOut();
-      void this.load();
+      void this.pending.run(() => this.load());
     } else if (this.s.loggedIn()) void this.router.navigateByUrl('/overview');
-    else void this.load();
+    else void this.pending.run(() => this.load());
   }
 
   private onPreviewMessage(ev: MessageEvent) {
@@ -74,11 +84,32 @@ export class LoginPage {
   protected stepKind(type: string): 'password' | 'code' | 'pin' | 'other' { return /pin|digit/i.test(type) ? 'pin' : /totp|authenticator|otp|mail/i.test(type) ? 'code' : /password/i.test(type) ? 'password' : 'other'; }
 
   protected async load() {
+    // Hydration: reuse what the server fetched to render this very page instead of refetching - the
+    // server-rendered list must not be replaced by a "Loading..." line while the same answer comes back.
+    // A branch-test link is bound to its own branch and always fetches live.
+    if (this.isBrowser && !this.test() && this.transfer.hasKey(OPTIONS_KEY)) {
+      this.options.set(this.transfer.get(OPTIONS_KEY, { mode: 'legacy', chains: [] }));
+      this.signupOpen.set(this.transfer.get(SIGNUP_KEY, false));
+      this.transfer.remove(OPTIONS_KEY); this.transfer.remove(SIGNUP_KEY);
+      this.state.set('ready');
+      return;
+    }
     this.state.set('loading');
-    try { this.signupOpen.set(!this.test() && (await fetch('/api/tenants/acme-demo/signup/schema')).ok); } catch { this.signupOpen.set(false); }
-    try { this.options.set(await this.s.api.signinOptions(this.test() ?? undefined)); this.state.set('ready'); }
-    catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
+    // The two startup calls run in parallel: the list no longer waits for the sign-up schema answer.
+    const signup = async () => {
+      try { this.signupOpen.set(!this.test() && (await fetch(apiUrl('/api/tenants/acme-demo/signup/schema'))).ok); } catch { this.signupOpen.set(false); }
+      if (!this.isBrowser) this.transfer.set(SIGNUP_KEY, this.signupOpen());
+    };
+    const options = async () => {
+      try {
+        const o = await this.s.api.signinOptions(this.test() ?? undefined);
+        this.options.set(o); this.state.set('ready');
+        if (!this.isBrowser && !this.test()) this.transfer.set(OPTIONS_KEY, o);
+      } catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
+    };
+    await Promise.all([signup(), options()]);
   }
+
   protected stepNames(c: SigninChain) { return c.steps.map((x) => x.name).join(' \u2192 '); }
 
   /** Leading icon of a chain from its step types: authenticator app, e-mail code, PIN keypad, else a plain password key. */

@@ -20,16 +20,17 @@ export class Theme {
 
   constructor() {
     this.media?.addEventListener?.('change', (e) => this.systemDark.set(e.matches));
-    effect(() => { document.documentElement.dataset['theme'] = this.resolved(); });
+    effect(() => { if (typeof document !== 'undefined') document.documentElement.dataset['theme'] = this.resolved(); }); // SSR: no document on the server; the client applies the theme on hydration
   }
 
   set(mode: ThemeMode) {
     this.mode.set(mode);
     try { localStorage.setItem(KEY, mode); } catch { /* storage blocked: the choice only lives for this tab */ }
-    document.cookie = `${COOKIE}=${mode}; Path=/; Max-Age=31536000; SameSite=Lax`;
+    if (typeof document !== 'undefined') document.cookie = `${COOKIE}=${mode}; Path=/; Max-Age=31536000; SameSite=Lax`;
   }
 
   private static load(): ThemeMode {
+    if (typeof document === 'undefined') return 'auto'; // SSR: no storage or cookie; the client resolves on hydration
     try { const v = localStorage.getItem(KEY); if (v === 'auto' || v === 'light' || v === 'dark') return v; } catch { /* storage blocked */ }
     // first visit or cleared storage: the cookie (possibly set on a core sign-in page) wins
     const m = document.cookie.match(/(?:^|;\s*)iam_theme=(auto|light|dark)(?:;|$)/);
