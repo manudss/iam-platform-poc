@@ -382,7 +382,7 @@ describe('the readonly/hidden component configuration is enforced by the enrollm
 
   it('self and admin enrollment mutations refuse what the configuration sets readonly or hidden on their surface', async () => {
     assert.equal((await api().put(`/tenants/${T}/auth`).set(adm).send({ config: cfg([m('pin1', 'digit-code', 2, { length: 4 })], []) })).status, 200);
-    const setPin = () => api().put(`/tenants/${T}/auth/me/enrollments/pin1/pin`).send({ pin: '1234' });
+    const setPin = (current?: string) => api().put(`/tenants/${T}/auth/me/enrollments/pin1/pin`).send({ pin: '1234', ...(current ? { current } : {}) });
     assert.equal((await setPin()).status, 200, 'the manifest default is manage: self-service works');
     // readonly on the self surface: the person keeps seeing the component but cannot change the enrollment.
     assert.equal((await surfaces({ 'auth-digit-code:pin': { self: 'readonly' } })).status, 200);
@@ -394,10 +394,10 @@ describe('the readonly/hidden component configuration is enforced by the enrollm
     assert.equal((await surfaces({ 'auth-digit-code:pin': { admin: 'hidden' } })).status, 200);
     assert.equal((await api().post(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm).send({ pin: '0000' })).status, 403);
     assert.equal((await api().delete(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm)).status, 403);
-    assert.equal((await setPin()).status, 200, 'the self surface keeps its own mode');
+    assert.equal((await setPin('1234')).status, 200, 'the self surface keeps its own mode'); // the PIN is enrolled now, so the change re-authenticates with the current one
     // back to manage: both surfaces work again.
     assert.equal((await surfaces({ 'auth-digit-code:pin': { self: 'manage', admin: 'manage' } })).status, 200);
-    assert.equal((await setPin()).status, 200);
+    assert.equal((await setPin('1234')).status, 200);
     assert.equal((await api().post(`/tenants/${T}/auth/enrollments/demo-bob/pin1`).set(adm).send({ pin: '0000' })).status, 201);
   });
 });
