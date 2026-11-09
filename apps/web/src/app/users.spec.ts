@@ -1,4 +1,7 @@
-import { deptColor, filterUsers, initials, managerChain, sortUsers, userStats, userStatus } from './users';
+import { TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
+import { Session } from './session';
+import { UsersPage, deptColor, filterUsers, initials, managerChain, sortUsers, userStats, userStatus } from './users';
 import { UserProfile } from './api';
 
 const u = (id: string, name: string, dept = 'it', manager: string | null = null, enabled = true, cred = true): UserProfile =>
@@ -59,5 +62,42 @@ describe('users page helpers', () => {
   it('counts users, sign-in enabled, missing credentials and departments', () => {
     expect(userStats(USERS)).toEqual({ total: 5, enabled: 3, noCred: 1, depts: 3 });
     expect(userStats([])).toEqual({ total: 0, enabled: 0, noCred: 0, depts: 0 });
+  });
+});
+
+
+describe('users drawer profile request isolation', () => {
+  it('clears prior values and ignores closed, superseded and different-branch responses', async () => {
+    const pending: ((r: unknown) => void)[] = [];
+    const branch = signal('work-a');
+    TestBed.configureTestingModule({ providers: [{ provide: Session, useValue: {
+      branch, adminToken: () => '', api: { raw: () => new Promise((resolve) => pending.push(resolve)) },
+    } }] });
+    const page = TestBed.runInInjectionContext(() => new UsersPage()) as any;
+    const resolve = async (index: number, value: string) => {
+      pending[index]({ status: 200, data: { fields: [{ key: 'plugin.value' }], values: { 'plugin.value': value } } });
+      await Promise.resolve();
+    };
+    page.start(USERS[0]);
+    await resolve(0, 'Alice');
+    expect(page.pvals()).toEqual({ 'plugin.value': 'Alice' });
+    page.start(USERS[1]);
+    expect(page.pvals()).toEqual({});
+    page.cancel();
+    await resolve(1, 'late Bob');
+    expect(page.pvals()).toEqual({});
+    expect(page.pfields()).toEqual([]);
+    page.start(USERS[0]);
+    page.cancel();
+    page.start(USERS[0]); // same-user ABA: id alone is not enough
+    await resolve(2, 'stale Alice');
+    expect(page.pvals()).toEqual({});
+    await resolve(3, 'fresh Alice');
+    expect(page.pvals()).toEqual({ 'plugin.value': 'fresh Alice' });
+    page.start(USERS[1]);
+    branch.set('work-b');
+    await resolve(4, 'wrong branch');
+    expect(page.pvals()).toEqual({});
+    page.ngOnDestroy();
   });
 });
