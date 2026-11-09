@@ -72,3 +72,18 @@ h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px 
 .pf-pv-field { display: block; margin: .55rem 0; }
 .pf-req { color: var(--bad); margin-left: .15rem; }
 .pf-pv-img { display: inline-flex; width: 64px; height: 64px; border-radius: 50%; border: 2px dashed var(--line); align-items: center; justify-content: center; color: var(--muted); font-size: .75rem; margin-top: .3rem; }
+
+/* My profile: validated-mockup layout (identity header, two columns) */
+.mp-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.mp-id { display: flex; align-items: center; gap: 1rem; min-width: 0; }
+.mp-avatar { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; border: 2px solid var(--line); flex: none; }
+.mp-initials { display: inline-flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 700; color: #fff; background: var(--accent); }
+.mp-name { margin: 0; }
+.mp-chips { margin: .3rem 0 0; }
+.mp-chips .pill { margin-right: .35rem; }
+.mp-pic-actions { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; max-width: 22rem; }
+.mp-pic-actions .up { margin: 0; }
+.mp-cols { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 1.1rem; align-items: start; }
+.mp-cols .card { margin-bottom: 0; }
+.mp-side { display: flex; flex-direction: column; gap: 1.1rem; }
+@media (max-width: 900px) { .mp-cols { grid-template-columns: 1fr; } .mp-cols .card { margin-bottom: 1.1rem; } }

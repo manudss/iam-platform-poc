@@ -31,6 +31,8 @@ export interface ProfileComponentInv { key: string; plugin: string; id: string; 
 export class ProfileComponents {
   readonly surface = input.required<'self' | 'admin'>();
   readonly subject = input<string>('');
+  /** Component keys rendered elsewhere (e.g. the picture lives in the My profile header): skip them here. */
+  readonly exclude = input<string[]>([]);
   private readonly s = inject(Session);
   private readonly host = inject(ElementRef<HTMLElement>);
   private readonly loader = inject(PluginScreenLoader);
@@ -56,7 +58,7 @@ export class ProfileComponents {
       const r = await this.s.api.raw<{ components: ProfileComponentInv[]; message?: string }>('GET', `/profile-components?surface=${this.surface()}${this.surface() === 'admin' ? '&ref=work' : ''}`, undefined, cap);
       if (req !== this.request) return;
       if (r.status >= 400) throw new Error(r.data.message ?? 'Cannot load');
-      this.comps.set(r.data.components ?? []);
+      this.comps.set((r.data.components ?? []).filter((c) => !this.exclude().includes(c.key)));
       setTimeout(() => void this.mountAll(req));
     } catch (e) { if (req === this.request) { this.comps.set([]); this.problem.set((e as Error).message); } }
   }
