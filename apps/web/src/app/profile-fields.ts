@@ -59,16 +59,13 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
         <h4>Where it shows</h4>
         <table class="pf-surface"><tbody>
           <tr><td>Sign-up</td><td>
-            <select name="pf-su" [ngModel]="c.signup" (ngModelChange)="c.signup=$event;dirty.set(true)" [disabled]="locked(f) || !c.enabled" aria-label="At sign-up">
-              <option value="off">hidden</option><option value="optional">optional</option><option value="required">required</option></select>
+            <span class="seg" role="radiogroup" aria-label="At sign-up"><label class="seg-opt"><input type="radio" [name]="'su-'+f.fullKey" value="off" [ngModel]="c.signup" (ngModelChange)="c.signup=$event;dirty.set(true)" [disabled]="(locked(f) || !c.enabled)" /><span>hidden</span></label><label class="seg-opt"><input type="radio" [name]="'su-'+f.fullKey" value="optional" [ngModel]="c.signup" (ngModelChange)="c.signup=$event;dirty.set(true)" [disabled]="(locked(f) || !c.enabled)" /><span>optional</span></label><label class="seg-opt"><input type="radio" [name]="'su-'+f.fullKey" value="required" [ngModel]="c.signup" (ngModelChange)="c.signup=$event;dirty.set(true)" [disabled]="(locked(f) || !c.enabled)" /><span>required</span></label></span>
             @if (locked(f)) { <br><small>never at sign-up (authority)</small> }</td></tr>
           <tr><td>My profile</td><td>
-            <select name="pf-self" [ngModel]="surfaceState(c.selfView, c.selfEdit)" (ngModelChange)="setSurface(c,'self',$event)" [disabled]="!c.enabled" aria-label="On My profile">
-              <option value="hidden">hidden</option><option value="visible">visible</option><option value="editable" [disabled]="locked(f) || f.storage==='identities'">editable</option></select>
+            <span class="seg" role="radiogroup" aria-label="On My profile"><label class="seg-opt"><input type="radio" [name]="'sf-'+f.fullKey" value="hidden" [ngModel]="surfaceState(c.selfView, c.selfEdit)" (ngModelChange)="setSurface(c,'self',$event)" [disabled]="(!c.enabled)" /><span>hidden</span></label><label class="seg-opt"><input type="radio" [name]="'sf-'+f.fullKey" value="visible" [ngModel]="surfaceState(c.selfView, c.selfEdit)" (ngModelChange)="setSurface(c,'self',$event)" [disabled]="(!c.enabled)" /><span>visible</span></label><label class="seg-opt"><input type="radio" [name]="'sf-'+f.fullKey" value="editable" [ngModel]="surfaceState(c.selfView, c.selfEdit)" (ngModelChange)="setSurface(c,'self',$event)" [disabled]="(!c.enabled) || (locked(f) || f.storage==='identities')" /><span>editable</span></label></span>
             @if (f.storage==='identities' && !locked(f)) { <br><small>edited later (needs re-authentication)</small> }</td></tr>
           <tr><td>User sheet (admin)</td><td>
-            <select name="pf-admin" [ngModel]="surfaceState(c.adminView, c.adminEdit)" (ngModelChange)="setSurface(c,'admin',$event)" [disabled]="!c.enabled" aria-label="In the user sheet">
-              @if (f.plugin!=='base') { <option value="hidden">hidden</option> }<option value="visible">visible</option><option value="editable">editable</option></select>
+            <span class="seg" role="radiogroup" aria-label="In the user sheet"><label class="seg-opt"><input type="radio" [name]="'sa-'+f.fullKey" value="hidden" [ngModel]="surfaceState(c.adminView, c.adminEdit)" (ngModelChange)="setSurface(c,'admin',$event)" [disabled]="(!c.enabled) || (f.plugin==='base')" /><span>hidden</span></label><label class="seg-opt"><input type="radio" [name]="'sa-'+f.fullKey" value="visible" [ngModel]="surfaceState(c.adminView, c.adminEdit)" (ngModelChange)="setSurface(c,'admin',$event)" [disabled]="(!c.enabled)" /><span>visible</span></label><label class="seg-opt"><input type="radio" [name]="'sa-'+f.fullKey" value="editable" [ngModel]="surfaceState(c.adminView, c.adminEdit)" (ngModelChange)="setSurface(c,'admin',$event)" [disabled]="(!c.enabled)" /><span>editable</span></label></span>
             @if (f.plugin==='base') { <br><small>always visible to administrators (core)</small> }</td></tr>
         </tbody></table>
         <h4>Placement</h4>
@@ -92,8 +89,8 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
     <p class="hint">Plugins contribute whole components to the profile surfaces (picture, authenticator, PIN, password). Choose where each shows: <b>manage</b> (view + the actions the role allows), <b>readonly</b> (status only), <b>hidden</b>. The public sign-up form never loads a packaged component: plain fields only.</p>
     <div class="scroll"><table id="pf-components-table"><thead><tr><th>Component</th><th>Plugin</th><th>My profile</th><th>User sheet (admin)</th><th>Order</th></tr></thead><tbody>
     @for (c of comps(); track c.key) { <tr [attr.data-component]="c.key"><td>{{c.title}}<br><small>{{c.key}}</small></td><td>{{c.plugin}}</td>
-      <td><select [name]="'cs'+c.key" [ngModel]="compsCfg()[c.key]?.self ?? c.defaults.self" (ngModelChange)="setComp(c.key,'self',$event)">@for (m of surfaces; track m) { <option [value]="m">{{m}}</option> }</select></td>
-      <td><select [name]="'ca'+c.key" [ngModel]="compsCfg()[c.key]?.admin ?? c.defaults.admin" (ngModelChange)="setComp(c.key,'admin',$event)">@for (m of surfaces; track m) { <option [value]="m">{{m}}</option> }</select></td>
+      <td><span class="seg" role="radiogroup" [attr.aria-label]="'My profile '+c.title">@for (m of surfaces; track m) { <label class="seg-opt"><input type="radio" [name]="'cs'+c.key" [value]="m" [ngModel]="compsCfg()[c.key]?.self ?? c.defaults.self" (ngModelChange)="setComp(c.key,'self',$event)" /><span>{{surfaceLabel(m, 'self')}}</span></label> }</span></td>
+      <td><span class="seg" role="radiogroup" [attr.aria-label]="'User sheet '+c.title">@for (m of surfaces; track m) { <label class="seg-opt"><input type="radio" [name]="'ca'+c.key" [value]="m" [ngModel]="compsCfg()[c.key]?.admin ?? c.defaults.admin" (ngModelChange)="setComp(c.key,'admin',$event)" /><span>{{surfaceLabel(m, 'admin')}}</span></label> }</span></td>
       <td><input class="pf-order" type="number" min="0" max="999" [name]="'co'+c.key" [ngModel]="compsCfg()[c.key]?.order ?? c.order" (ngModelChange)="setComp(c.key,'order',$event)" [attr.aria-label]="'Order '+c.key" /></td></tr> }
     @empty { <tr><td colspan="5">No plugin contributes a profile component on this branch.</td></tr> }
     </tbody></table></div>
@@ -171,6 +168,7 @@ export class ProfileFieldsPage {
     return out;
   }
   protected selected() { return this.cat().find((f) => f.fullKey === this.sel()); }
+  protected surfaceLabel(m: string, who: 'self' | 'admin') { return m === 'manage' ? (who === 'admin' ? 'status + actions' : 'manage') : m === 'readonly' ? (who === 'admin' ? 'status only' : 'visible') : 'hidden'; }
   protected surfaceState(view: boolean, edit: boolean) { return !view ? 'hidden' : edit ? 'editable' : 'visible'; }
   protected setSurface(c: Setting, surface: 'self' | 'admin', v: string) {
     const view = v !== 'hidden', edit = v === 'editable';

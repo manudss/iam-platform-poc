@@ -382,7 +382,7 @@ try {
   await nav('/profile-fields'); await page.click('#pf-tab-components'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
   const pinRow = page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"]');
   try {
-    await pinRow.locator('select').nth(1).selectOption('readonly', { timeout: 10000 }); // 0 = My profile, 1 = user sheet (admin)
+    await pinRow.locator('.seg').nth(1).locator('label', { hasText: 'status only' }).click({ timeout: 10000 }); // 0 = My profile, 1 = user sheet (admin); segmented radios
   } catch (e) {
     console.log('DIAG pin row html:', await pinRow.innerHTML().catch(() => '<unreadable>'));
     throw e;
@@ -401,7 +401,7 @@ try {
   await page.waitForSelector('#user-editor', { state: 'detached' });
   // Restore manage mode so the rest of the run and the screenshots stay in the default posture.
   await nav('/profile-fields'); await page.click('#pf-tab-components'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
-  await page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"] select').nth(1).selectOption('manage');
+  await page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"] .seg').nth(1).locator('label', { hasText: 'status + actions' }).click();
   await Promise.all([page.waitForResponse((r) => r.url().includes('/profile-fields') && r.request().method() === 'PUT' && r.status() < 300), page.click('#pf-save')]);
   await noBanner('users page');
 
