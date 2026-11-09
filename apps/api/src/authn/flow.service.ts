@@ -81,7 +81,8 @@ export class AuthnService implements OnApplicationBootstrap {
     const cfg = validateConfig(SEED_CONFIG);
     await main.putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
     // The seeded chains use TOTP, e-mail code, PIN and passkey: their method plugins must serve the slots (step 2).
-    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code', 'auth-webauthn']) { try { await main.install(tenant, id, {}); } catch { /* already installed */ } try { await main.enable(tenant, id, {}); } catch (e) { console.warn('authn demo seed: cannot enable', id, (e as Error).message); } }
+    // The profile components they ship (passkey management, authenticator setup) run plugin JS in the console: the uiComponents grant.
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code', 'auth-webauthn']) { try { await main.install(tenant, id, {}); } catch { /* already installed */ } try { await main.enable(tenant, id, { uiComponents: true }); } catch (e) { console.warn('authn demo seed: cannot enable', id, (e as Error).message); } }
     const have = await this.enroll.status(tenant, 'demo-alice');
     if (!have['authenticator-app']) await this.enroll.setTotp(tenant, 'demo-alice', 'authenticator-app', DEMO_TOTP_SECRET);
     if (!have['pin-keypad']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad', DEMO_PIN);
