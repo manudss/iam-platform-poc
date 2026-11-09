@@ -21,6 +21,13 @@ const css = `
 
 /** Text/attribute escaping: instance names, the fresh enrollment and server messages land in innerHTML. */
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/** "3 Nov 2026" / "never": enrolment dates come back as ISO strings (null on older records). */
+const fmtDate = (iso) => { if (!iso) return 'never'; const d = new Date(iso); return Number.isNaN(+d) ? 'never' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); };
+const fmtAgo = (iso) => {
+  if (!iso) return 'never'; const d = new Date(iso); if (Number.isNaN(+d)) return 'never';
+  const days = Math.floor((Date.now() - +d) / 86400000);
+  if (days <= 0) return 'today'; if (days === 1) return 'yesterday'; return `${days} days ago`;
+};
 
 class TotpProfile extends HTMLElement {
   connectedCallback() {
@@ -65,6 +72,12 @@ class TotpProfile extends HTMLElement {
     this._fresh = { inst, secret: r.data.shownOnce.secret, uri: r.data.shownOnce.otpauthUri };
     this.say('', ''); await this.load();
   }
+  /** A fresh secret for the same instance: remove, then enroll again (the server refuses a second enrollment). */
+  async reenroll(inst) {
+    const rm = await this.call('DELETE', `/auth/me/enrollments/${encodeURIComponent(inst)}`);
+    if (this.fail(rm)) return;
+    await this.enroll(inst);
+  }
   async confirm(inst, code) {
     const r = await this.call('POST', `/auth/me/enrollments/${encodeURIComponent(inst)}/totp/confirm`, { code });
     if (this.fail(r)) return;
@@ -82,11 +95,14 @@ class TotpProfile extends HTMLElement {
     const ro = this._ctx.mode === 'readonly';
     const root = this.shadowRoot;
     const rows = this._insts.map((m) => {
-      const on = !!this._status[m.id]?.totp;
+      const st = this._status[m.id];
+      const on = !!st?.totp;
       const confirming = !ro && this._confirm === m.id;
       return `<div class="row" data-inst="${esc(m.id)}">
         <b>${esc(m.name ?? m.id)}</b> <span class="status ${on ? 'on' : 'off'}">${on ? 'Enrolled' : 'Not enrolled'}</span>
+        ${on ? `<span class="hint">enrolled on ${esc(fmtDate(st.totpEnrolledAt))} · last used ${esc(fmtAgo(st.totpLastUsedAt))}</span>` : ''}
         ${!ro && !admin && !on && !confirming ? `<button class="enroll">Set up an authenticator…</button>` : ''}
+        ${!ro && !admin && on && !confirming ? `<button class="reenroll">Re-enroll…</button>` : ''}
         ${!ro && on && !confirming ? `<button class="remove danger">${admin ? 'Revoke' : 'Remove'}</button>` : ''}
         ${confirming ? `<span class="hint">Really ${admin ? 'revoke this enrollment' : 'remove this authenticator'}? This takes effect immediately.</span>
           <button class="confirm-remove danger">Confirm</button><button class="cancel-remove">Cancel</button>` : ''}
@@ -108,6 +124,7 @@ class TotpProfile extends HTMLElement {
     root.querySelectorAll('.row[data-inst]').forEach((row) => {
       const inst = row.getAttribute('data-inst');
       row.querySelector('.enroll')?.addEventListener('click', () => void this.enroll(inst));
+      row.querySelector('.reenroll')?.addEventListener('click', () => void this.reenroll(inst));
       row.querySelector('.remove')?.addEventListener('click', () => { this._confirm = inst; this.render(); });
       row.querySelector('.cancel-remove')?.addEventListener('click', () => { this._confirm = null; this.render(); });
       row.querySelector('.confirm-remove')?.addEventListener('click', () => void this.remove(inst, admin));
