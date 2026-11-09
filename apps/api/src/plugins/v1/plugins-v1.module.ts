@@ -27,6 +27,7 @@ import { AuthGateController } from './auth-gate.controller.js';
 import { ProfileService, PROFILE_STORE, SIGNUP_ALLOWED, defaultSignupAllowed } from '../../profile/profile.service.js';
 import { SignupService } from '../../profile/signup.service.js';
 import { SignupController } from '../../profile/signup.controller.js';
+import { TestAccountController } from '../../profile/test-account.controller.js';
 import { OrgController, OrgService, ORG_STORE, DoltOrgStore, MemoryOrgStore } from '../../profile/orgs.js';
 import { RolesController, RolesService } from '../../profile/roles.js';
 import { ProfileController } from '../../profile/profile.controller.js';
@@ -46,7 +47,7 @@ import { SessionAdminController } from '../../authn/session.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
-  controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, ProfileController, SignupController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController, MailTemplatesController],
+  controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, ProfileController, SignupController, TestAccountController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, RolesController, SigninOptionsController, MailTemplatesController],
   providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BrandingService, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
     provide: MAIL_TEMPLATE_STORE,
     inject: [VersioningService],

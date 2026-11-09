@@ -6,7 +6,7 @@ An administrator can try the **full login experience as a visitor would see it o
 
 1. In the console top bar, select a branch in the branch pill, open the **⋯** menu and press **Test sign-in on this branch**.
 2. The server issues a **short-lived test ticket** (10 minutes, in memory) and a test link `/login?branch=<name>&ticket=<ticket>` opens in a new tab. For a long-lived pre-production branch the admin can instead create a **stable link** (no expiry, revocable — see below).
-3. The login page loads the branch's sign-in configuration (`GET /api/tenants/:tenant/signin/options?branch=&ticket=`): the chains, methods and branding of that branch, not `main`. The sign-up link is hidden in test mode.
+3. The login page loads the branch's sign-in configuration (`GET /api/tenants/:tenant/signin/options?branch=&ticket=`): the chains, methods and branding of that branch, not `main`. The regular sign-up link is hidden in test mode; a **Create a test account on this branch** link replaces it (see "Test accounts" below).
 4. Signing in runs the core IdP through the API gate with the branch parameters. The core sets a `branch` claim in the issued token (the claim is core-set only; the gate can never plant it, because `safe_auth_claims` does not whitelist it).
 5. After the callback, the app enters test mode: a banner shows the tested branch, navigation is reduced to the overview and the personal profile, and every business request carries `x-iam-branch: <name>`. **Exit test** or closing the tab ends it.
 
@@ -25,13 +25,26 @@ The public sign-in options endpoint answers for `main` without a ticket; for any
 Credentials, enrollments and the rest of the shared, unversioned state stay on the live deployment. A branch-test token is refused on:
 
 - enrollment writes and deletes (`POST/DELETE /tenants/:tenant/authn/enrollments/...`) — no test session ever creates or removes real credentials or secrets;
-- sign-up (`POST /tenants/:tenant/signup`, `confirm`, and the admin approval routes): sign-up stays live and shared for everyone, but a call presenting a branch-test token is refused — a test session never creates a real account, even by a manual API call;
+- sign-up (`POST /tenants/:tenant/signup`, `confirm`, and the admin approval routes): sign-up stays live and shared for everyone, but a call presenting a branch-test token is refused — a test session never creates a real account, even by a manual API call. The only exception is the dedicated test account route below, which never touches `main`;
 - the admin outbox (`GET/DELETE /tenants/:tenant/authn/outbox`);
 - personal working branches (`POST /workspace/personal`, `rename`, `release`) and **Apply** (`POST /workspace/apply`) — a test session can never merge anything into `main`;
 - profile reviews (the pending-review queue);
 - issuing further test tickets.
 
 In test mode the personal profile writes **directly to the tested branch** (the pending-review step is bypassed and the response says so): that is the point of the test — seeing the branch's own data flow — while the write itself stays on the branch and reaches `main` only through the normal Apply, done from a regular session.
+
+## Test accounts (create an account to test the sign-in)
+
+To try the whole sign-in with a fresh person, the test sign-in page offers **Create a test account on this branch** (`/signup?branch=&ticket=`). It calls `POST /api/tenants/:tenant/signup/test` with the test ticket, the branch, an id, a display name and a password (12 to 128 characters):
+
+- the ticket is the only authorization: it must be valid for exactly that branch (same check as the sign-in options); a branch-test *token* is not accepted here, only the ticket;
+- the account is written **on the tested branch only** (identity row, credential revision), never on `main`; the route refuses `main`;
+- the id must start with `test-` (letters, digits, dashes; 7 to 40 characters), so it can neither shadow nor be mistaken for a real person;
+- no e-mail confirmation, no administrator approval, **no role**; the account can sign in on that branch test and sees only what the branch gives it;
+- at most 20 test accounts per test link (in memory, per ticket); `IAM_BRANCH_TEST=0` turns the route off with the rest of branch testing;
+- the account disappears with the branch (deleted or never merged). If the branch is merged, the test account is merged with it: delete it from Users before Apply.
+
+The credential hash is stored in the shared credential file under an opaque revision that only the branch's identity row points to: on `main` nothing references it.
 
 ## Configuration and limits
 
