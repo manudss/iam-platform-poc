@@ -40,25 +40,138 @@ export function placeholderKeys(value) {
         return [];
     return [...value.matchAll(new RegExp(PLACEHOLDER.source, 'g'))].map((m) => m[1]);
 }
+const STEP_PLACEHOLDER = /\{\{steps\.([a-z0-9-]+)\.([a-zA-Z0-9_]+)\}\}/g;
+/** Upstream-output placeholders used in a config string, e.g. "{{steps.read.rowNumber}}" -> [{node, key}]. */
+export function stepPlaceholderRefs(value) {
+    if (typeof value !== 'string')
+        return [];
+    return [...value.matchAll(new RegExp(STEP_PLACEHOLDER.source, 'g'))].map((m) => ({ node: m[1], key: m[2] }));
+}
+/** Replaces {{steps.<node>.<key>}} placeholders from the outputs of already-finished steps (engine, at step time).
+ * A missing step or key refuses the step with a clear error. Objects are injected as JSON. */
+export function substituteStepOutputs(node, outputs) {
+    const config = {};
+    for (const [k, v] of Object.entries(node.config)) {
+        if (typeof v !== 'string') { config[k] = v; continue; }
+        config[k] = v.replace(new RegExp(STEP_PLACEHOLDER.source, 'g'), (_m, id, key) => {
+            const out = outputs[id];
+            if (out === undefined || out === null)
+                throw new BadRequestException(`step "${node.id}": {{steps.${id}.${key}}} cannot resolve: step "${id}" produced no output`);
+            const val = out[key];
+            if (val === undefined)
+                throw new BadRequestException(`step "${node.id}": {{steps.${id}.${key}}} cannot resolve: no key "${key}" in the output of "${id}" (has: ${Object.keys(out).join(', ') || 'none'})`);
+            return typeof val === 'object' ? JSON.stringify(val) : String(val);
+        });
+    }
+    return { ...node, config };
+}
+/** Save-time check: every {{steps.<id>.<key>}} must reference a step that comes EARLIER in the execution order. */
+export function validateStepPlaceholders(graph, order) {
+    const position = new Map(order.map((id, i) => [id, i]));
+    for (const n of graph.nodes) {
+        for (const v of Object.values(n.config)) {
+            for (const ref of stepPlaceholderRefs(v)) {
+                if (!position.has(ref.node))
+                    throw new BadRequestException(`step "${n.id}": {{steps.${ref.node}.${ref.key}}} references an unknown step "${ref.node}"`);
+                if (position.get(ref.node) >= position.get(n.id))
+                    throw new BadRequestException(`step "${n.id}": {{steps.${ref.node}.${ref.key}}} references "${ref.node}", which does not run before it (link the steps so the value exists)`);
+            }
+        }
+    }
+}
+
+// ---- External catalogue (workflows.blocks providers, e.g. the workflow-connectors plugin) ----
+// Blocks and trigger events contributed by other plugins are MERGED here at boot by the core adapter
+// (apps/api/src/workflows/model.ts): STEP_TYPES and WF_EVENTS are live objects so every importer sees
+// the merged catalogue. A contributed block carries validate(config) and run(ctx); its provider plugin
+// id is recorded so save/start/run can refuse it while the provider is disabled.
+const EXTERNAL_BLOCK_PROVIDER = new Map(); // type -> provider plugin id
+const EXTERNAL_BLOCK_IMPL = new Map();     // type -> descriptor { fields, outputs, validate, run, description }
+const EXTERNAL_EVENT_IMPL = new Map();     // event -> descriptor { configFields, poll }
+export function registerExternalBlocks(blocks) {
+    for (const b of blocks ?? []) {
+        if (!b || typeof b.type !== 'string' || !/^[a-z0-9][a-z0-9-]{0,38}$/.test(b.type))
+            throw new Error(`external block: invalid type ${b?.type}`);
+        if (STEP_TYPES[b.type])
+            throw new Error(`external block "${b.type}" collides with an existing step type`);
+        if (typeof b.validate !== 'function' || typeof b.run !== 'function')
+            throw new Error(`external block "${b.type}": validate and run functions are required`);
+        STEP_TYPES[b.type] = { simulated: !!b.simulated, label: String(b.label ?? b.type) };
+        EXTERNAL_BLOCK_PROVIDER.set(b.type, b.pluginId);
+        EXTERNAL_BLOCK_IMPL.set(b.type, b);
+    }
+}
+export function registerExternalEvents(events) {
+    for (const [event, d] of Object.entries(events ?? {})) {
+        if (WF_EVENTS[event])
+            throw new Error(`external trigger "${event}" collides with an existing event`);
+        WF_EVENTS[event] = { label: String(d.label ?? event), payload: Array.isArray(d.payload) ? d.payload : ['*'] };
+        EXTERNAL_EVENT_IMPL.set(event, d);
+    }
+}
+export const externalBlock = (type) => EXTERNAL_BLOCK_IMPL.get(type);
+export const externalBlockProvider = (type) => EXTERNAL_BLOCK_PROVIDER.get(type);
+export const externalEvent = (event) => EXTERNAL_EVENT_IMPL.get(event);
+export const isWildcardEvent = (event) => (WF_EVENTS[event]?.payload ?? []).includes('*');
+/** Validates the trigger-level `config` object of an external event against its declared configFields. */
+function validateTriggerConfig(event, config) {
+    const desc = EXTERNAL_EVENT_IMPL.get(event);
+    const fields = desc?.configFields ?? [];
+    if (config === undefined || config === null)
+        config = {};
+    if (typeof config !== 'object' || Array.isArray(config))
+        throw new BadRequestException('trigger.config must be an object');
+    const known = new Set(fields.map((f) => f.key));
+    for (const k of Object.keys(config))
+        if (!known.has(k))
+            throw new BadRequestException(`trigger.config: unknown key "${k}" for ${event} (known: ${[...known].join(', ') || 'none'})`);
+    const out = {};
+    for (const f of fields) {
+        let v = config[f.key] ?? f.default;
+        if (v === undefined || v === null || v === '') {
+            if (f.required)
+                throw new BadRequestException(`trigger.config.${f.key} is required for ${event}`);
+            continue;
+        }
+        if (f.type === 'number') {
+            v = Number(v);
+            if (!Number.isFinite(v))
+                throw new BadRequestException(`trigger.config.${f.key}: a number`);
+        }
+        else {
+            v = String(v);
+            if (v.length > 200)
+                throw new BadRequestException(`trigger.config.${f.key}: text up to 200 characters`);
+            if (f.options && !f.options.includes(v))
+                throw new BadRequestException(`trigger.config.${f.key}: one of ${f.options.join(', ')}`);
+            if (f.key === 'token' && v.length < 12 && !v.includes('{{'))
+                throw new BadRequestException('trigger.config.token: at least 12 characters (it is the webhook credential)');
+        }
+        out[f.key] = v;
+    }
+    return out;
+}
 /** Validates a trigger object (or null/undefined = manual start only). Match keys must exist in the event payload. */
 export function validateTrigger(input) {
     if (input === undefined || input === null)
         return null;
     if (typeof input !== 'object' || Array.isArray(input))
-        throw new BadRequestException('trigger must be an object {event, match?} or null');
+        throw new BadRequestException('trigger must be an object {event, match?, config?} or null');
     const t = input;
-    if (Object.keys(t).some((k) => !['event', 'match'].includes(k)))
-        throw new BadRequestException('trigger: only event and match are allowed');
+    if (Object.keys(t).some((k) => !TRIGGER_KEYS.includes(k)))
+        throw new BadRequestException(`trigger: only ${TRIGGER_KEYS.join(', ')} are allowed`);
     const event = String(t.event ?? '');
     if (!Object.hasOwn(WF_EVENTS, event))
         throw new BadRequestException(`trigger.event: unknown event "${event}" (known: ${Object.keys(WF_EVENTS).join(', ')})`);
     const out = { event };
+    if (t.config !== undefined || isWildcardEvent(event))
+        out.config = validateTriggerConfig(event, t.config);
     if (t.match !== undefined && t.match !== null) {
         if (typeof t.match !== 'object' || Array.isArray(t.match))
             throw new BadRequestException('trigger.match must be an object of payload filters');
         const match = {};
         for (const [k, v] of Object.entries(t.match)) {
-            if (!WF_EVENTS[event].payload.includes(k))
+            if (!isWildcardEvent(event) && !WF_EVENTS[event].payload.includes(k))
                 throw new BadRequestException(`trigger.match: "${k}" is not a payload key of ${event} (${WF_EVENTS[event].payload.join(', ')})`);
             if (typeof v !== 'string' || !v || v.length > 40)
                 throw new BadRequestException('trigger.match: values are texts of 1 to 40 characters');
@@ -69,6 +182,9 @@ export function validateTrigger(input) {
     }
     return out;
 }
+
+/** The keys allowed in a trigger object (event + match + config for external events). */
+export const TRIGGER_KEYS = ['event', 'match', 'config'];
 /** Resolves {{event.<key>}} placeholders in every config string of the graph. Unknown keys refuse the run start. */
 export function substituteEventPayload(graph, payload) {
     const nodes = graph.nodes.map((n) => {
@@ -154,6 +270,18 @@ function configFor(type, cfg) {
                 throw new BadRequestException('set-profile-field.field: a profile field key like "hr-attributes.employee_grade"');
             out.field = field;
             out.value = str(cfg.value, 'set-profile-field.value', 200);
+            break;
+        }
+        default: {
+            const external = EXTERNAL_BLOCK_IMPL.get(type);
+            if (external) {
+                const clean = external.validate(cfg);
+                const known = new Set(Object.keys(clean));
+                for (const k of Object.keys(cfg))
+                    if (!known.has(k))
+                        throw new BadRequestException(`${type}: unknown config key "${k}"`);
+                return clean;
+            }
             break;
         }
     }

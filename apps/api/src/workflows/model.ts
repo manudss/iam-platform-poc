@@ -1,4 +1,4 @@
-import { loadPluginModule } from '../plugins/v1/loader.js';
+import { loadPluginModule, pluginCatalogue } from '../plugins/v1/loader.js';
 
 /**
  * Workflow model: the graph/step types below are shared with the core, but every rule (step catalogue,
@@ -13,29 +13,101 @@ import { loadPluginModule } from '../plugins/v1/loader.js';
  *    the run's own Dolt branch (wf-<run id>), never on main. Publishing stays the existing explicit
  *    review/merge path (pull request / Apply), done by a human, not by the workflow.
  */
-export type StepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department' | 'set-profile-field';
+export type StepType = string;
+export type BuiltinStepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department' | 'set-profile-field';
 
-/** Start trigger of a definition: run automatically when `event` fires and every `match` key equals the payload value. */
-export interface WfTrigger { event: string; match?: Record<string, string> }
+/** Start trigger of a definition: run automatically when `event` fires and every `match` key equals the payload value. External events may carry a validated `config` (e.g. webhook token, watched sheet). */
+export interface WfTrigger { event: string; match?: Record<string, string>; config?: Record<string, unknown> }
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
 export interface WfEdge { from: string; to: string }
 export interface WfGraph { nodes: WfNode[]; edges: WfEdge[] }
+
+/** A workflow block contributed by a plugin on the `workflows.blocks` surface (its manifest entrypoints.blocks). */
+export interface WfBlockField { key: string; label: string; type: 'string' | 'text' | 'number' | 'boolean' | 'select'; required?: boolean; default?: unknown; options?: string[]; help?: string }
+export interface WfBlockCtx {
+  tenant: string; config: Record<string, unknown>; settings: Record<string, unknown>; dryRun: boolean;
+  log: (line: string) => void; outputs: Record<string, Record<string, unknown>>;
+  branchWrite: (fn: (db: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }) => Promise<void>, message?: string) => Promise<void>;
+}
+export interface WfBlock {
+  type: string; family: string; label: string; simulated: boolean; description: string;
+  fields: WfBlockField[]; outputs: { key: string; description: string }[];
+  validate: (cfg: Record<string, unknown>) => Record<string, unknown>;
+  run: (ctx: WfBlockCtx) => Promise<Record<string, unknown> | undefined>;
+  pluginId?: string;
+}
+export interface WfTriggerEvent {
+  label: string; payload: string[]; configFields?: WfBlockField[];
+  poll?: (config: Record<string, unknown>, deps: { settings: Record<string, unknown>; log?: (m: string) => void }) => Promise<{ rowNumber: number; values: Record<string, unknown> }[]>;
+}
 
 interface WfModelModule {
   STEP_TYPES: Record<StepType, { simulated: boolean; label: string }>;
   WF_EVENTS: Record<string, { label: string; payload: string[] }>;
   placeholderKeys: (value: unknown) => string[];
+  stepPlaceholderRefs: (value: unknown) => { node: string; key: string }[];
+  substituteStepOutputs: (node: WfNode, outputs: Record<string, Record<string, unknown>>) => WfNode;
+  validateStepPlaceholders: (graph: WfGraph, order: string[]) => void;
   validateTrigger: (input: unknown) => WfTrigger | null;
   substituteEventPayload: (graph: WfGraph, payload: Record<string, string>) => WfGraph;
   validateGraph: (input: unknown) => { graph: WfGraph; order: string[] };
   hasDataSteps: (g: WfGraph) => boolean;
+  registerExternalBlocks: (blocks: WfBlock[]) => void;
+  registerExternalEvents: (events: Record<string, WfTriggerEvent>) => void;
+  externalBlock: (type: string) => WfBlock | undefined;
+  externalBlockProvider: (type: string) => string | undefined;
+  externalEvent: (event: string) => WfTriggerEvent | undefined;
+  isWildcardEvent: (event: string) => boolean;
 }
 const plugin = loadPluginModule('workflows-iga', 'model.mjs') as WfModelModule;
+
+// ---- Block catalogue merge: every shipped plugin declaring a `blocks` entrypoint contributes its step
+// types and trigger events to the workflow model (the `workflows.blocks` surface). The catalogue is
+// process-wide (like the plugin code itself); whether a provider plugin is ENABLED is checked per tenant
+// and branch at save/start/run time through the registry.
+for (const impl of pluginCatalogue().impls()) {
+  const ep = impl.manifest.entrypoints?.['blocks'];
+  if (!ep) continue;
+  const mod = loadPluginModule(impl.manifest.id, ep) as { BLOCKS?: WfBlock[]; TRIGGER_EVENTS?: Record<string, WfTriggerEvent> };
+  plugin.registerExternalBlocks((mod.BLOCKS ?? []).map((b) => ({ ...b, pluginId: impl.manifest.id })));
+  plugin.registerExternalEvents(mod.TRIGGER_EVENTS ?? {});
+}
 
 export const STEP_TYPES = plugin.STEP_TYPES;
 export const WF_EVENTS = plugin.WF_EVENTS;
 export const placeholderKeys = plugin.placeholderKeys;
+export const stepPlaceholderRefs = plugin.stepPlaceholderRefs;
+export const substituteStepOutputs = plugin.substituteStepOutputs;
+export const validateStepPlaceholders = plugin.validateStepPlaceholders;
 export const validateTrigger = plugin.validateTrigger;
 export const substituteEventPayload = plugin.substituteEventPayload;
 export const validateGraph = plugin.validateGraph;
 export const hasDataSteps = plugin.hasDataSteps;
+export const externalBlock = plugin.externalBlock;
+export const externalBlockProvider = plugin.externalBlockProvider;
+export const externalEvent = plugin.externalEvent;
+export const isWildcardEvent = plugin.isWildcardEvent;
+
+/** The merged block catalogue for the editor palette: built-in step types first, then contributed blocks. */
+export function blockCatalogue(): { type: string; family: string; label: string; simulated: boolean; description: string; fields: WfBlockField[]; outputs: { key: string; description: string }[]; provider: string | null }[] {
+  const builtins: Record<string, { hint: string }> = {
+    wait: { hint: 'Simulated delay (seconds)' },
+    notify: { hint: 'Simulated: logged, never sent' },
+    fail: { hint: 'Simulated error: fails once, recovers on retry' },
+    'assign-role': { hint: 'Real, on the run branch' },
+    'revoke-role': { hint: 'Real, on the run branch' },
+    'set-department': { hint: 'Real, on the run branch' },
+    'set-profile-field': { hint: 'Real, on the run branch' },
+  };
+  const out = Object.entries(builtins).map(([type, b]) => ({ type, family: 'Core', label: STEP_TYPES[type].label, simulated: STEP_TYPES[type].simulated, description: b.hint, fields: [] as WfBlockField[], outputs: [] as { key: string; description: string }[], provider: null as string | null }));
+  const seen = new Set(out.map((b) => b.type));
+  for (const impl of pluginCatalogue().impls()) {
+    if (!impl.manifest.entrypoints?.['blocks']) continue;
+    for (const b of impl.manifest ? (loadPluginModule(impl.manifest.id, impl.manifest.entrypoints['blocks']) as { BLOCKS?: WfBlock[] }).BLOCKS ?? [] : []) {
+      if (seen.has(b.type)) continue;
+      seen.add(b.type);
+      out.push({ type: b.type, family: b.family, label: b.label, simulated: b.simulated, description: b.description, fields: b.fields ?? [], outputs: b.outputs ?? [], provider: impl.manifest.id });
+    }
+  }
+  return out;
+}

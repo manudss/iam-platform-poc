@@ -19,10 +19,18 @@
  *   versioning: { createBranch(branch, base), writeOn(branch, fn), defaultBranch }
  *   authorOf(actor)                -> Dolt commit author string
  *   branchRun(branch, fn)          -> run fn inside the workspace branch context
+ *   settingsFor(tenant, branch, pluginId) -> the validated settings (secrets resolved) of a block provider plugin
  *   log: { warn(msg), error(msg) }
  * }
+ *
+ * EXTERNAL blocks (type contributed by a workflows.blocks provider plugin, e.g. workflow-connectors):
+ *  - {{steps.<id>.<key>}} placeholders are resolved at step time from the outputs of finished steps;
+ *  - the block receives the provider plugin's console-typed settings (Jira / Google credentials live there);
+ *  - a block writing business data uses ctx.branchWrite(fn, message): same run branch, same per-step commit;
+ *  - an EXTERNAL effect (HTTP call, Jira ticket, real Google write) is NOT reverted by abandoning the branch:
+ *    the block's own log line says exactly what really happened outside (dry-run or real).
  */
-import { STEP_TYPES, validateGraph } from './model.mjs';
+import { STEP_TYPES, externalBlock, externalBlockProvider, substituteStepOutputs, validateGraph } from './model.mjs';
 
 const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
   from assignments a join assignments b on a.identity_id = b.identity_id
@@ -89,12 +97,18 @@ export function createWorkflowEngine(deps) {
   async function runStep(run, node, step) {
     const logs = [...step.log];
     const say = (line) => { logs.push(`${now()} ${line}`); };
-    say(`step started (${STEP_TYPES[node.type].simulated ? 'SIMULATED - no external effect' : 'REAL data change on branch ' + (run.branch ?? 'pending')})`);
+    const external = externalBlock(node.type);
+    if (external)
+      say(`step started (block "${external.label ?? node.type}" from the ${externalBlockProvider(node.type)} plugin${STEP_TYPES[node.type].simulated ? ' - SIMULATED, no external effect' : ' - REAL-capable: the lines below say exactly what really happened outside lyam'})`);
+    else
+      say(`step started (${STEP_TYPES[node.type].simulated ? 'SIMULATED - no external effect' : 'REAL data change on branch ' + (run.branch ?? 'pending')})`);
     await store.patchStep(run.id, node.id, { status: 'running', started_at: step.started_at ?? now(), attempts: step.attempts + 1, log: logs, error: null });
     try {
-      if (STEP_TYPES[node.type].simulated) await simulated(run, node, step.attempts, say);
-      else await dataStep(run, node, say);
-      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs });
+      let output;
+      if (STEP_TYPES[node.type].simulated && !externalBlock(node.type)) await simulated(run, node, step.attempts, say);
+      else if (externalBlock(node.type)) output = await externalStep(run, node, say);
+      else output = await dataStep(run, node, say);
+      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: output ?? null });
       return true;
     } catch (e) {
       say(`FAILED: ${e.message}`);
@@ -143,9 +157,8 @@ export function createWorkflowEngine(deps) {
     }
   }
 
-  /** Real data steps: lazily create the run branch, then write + SoD-check + commit on it. Never main. */
-  async function dataStep(run, node, say) {
-    const cfg = node.config;
+  /** The run branch, created lazily on the first data-writing step. Never main. */
+  async function ensureBranch(run, say) {
     if (!run.branch) {
       const branch = `wf-${run.id.replace(/^run-/, '').slice(0, 8)}`;
       const base = run.base_branch ?? deps.versioning.defaultBranch; // a triggered run branches from the branch its event happened on
@@ -154,8 +167,49 @@ export function createWorkflowEngine(deps) {
       run.branch = branch;
       say(`created Dolt branch ${branch} from ${base}: every data change of this run stays on it until a human review merges it`);
     }
-    const branch = run.branch;
+    return run.branch;
+  }
+
+  /** An external block (contributed by a workflows.blocks provider plugin): placeholders from upstream
+   * outputs, provider settings, and a branchWrite helper for blocks that write business data. */
+  async function externalStep(run, node, say) {
+    const block = externalBlock(node.type);
+    const provider = externalBlockProvider(node.type);
+    const outputs = {};
+    for (const s of await store.steps(run.id)) if (s.output) outputs[s.node_id] = s.output;
+    const resolved = substituteStepOutputs(node, outputs);
+    const settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
+    say(`block "${block.label ?? node.type}" provided by the ${provider} plugin`);
     const author = deps.authorOf(`wf-${run.started_by}`);
+    const ctx = {
+      tenant: run.tenant,
+      config: resolved.config,
+      settings,
+      dryRun: false,
+      log: say,
+      outputs,
+      branchWrite: async (fn, message) => {
+        const branch = await ensureBranch(run, say);
+        await deps.branchRun(branch, () => deps.versioning.writeOn(branch, async (c) => {
+          await fn(c);
+          const [dirty] = await c.query('select count(*) n from dolt_status');
+          if (!Number(dirty[0].n)) { say('no data change: nothing committed'); return; }
+          const hash = await commit(c, message ?? `workflow ${run.id}: step ${node.id}`, author);
+          say(`committed on ${branch} (commit ${hash.slice(0, 10)})`);
+        }));
+      },
+    };
+    const output = await block.run(ctx);
+    if (output !== undefined && output !== null && typeof output !== 'object') return { value: String(output) };
+    return output ?? {};
+  }
+
+  /** Real data steps: lazily create the run branch, then write + SoD-check + commit on it. Never main. */
+  async function dataStep(run, node, say) {
+    const cfg = node.config;
+    const branch = await ensureBranch(run, say);
+    const author = deps.authorOf(`wf-${run.started_by}`);
+    let output = {};
     await deps.branchRun(branch, () => deps.versioning.writeOn(branch, async (c) => {
       switch (node.type) {
         case 'assign-role': {
@@ -171,6 +225,7 @@ export function createWorkflowEngine(deps) {
           say(`assignment written and committed on ${branch} (commit ${hash.slice(0, 10)})`);
           if (viol.length) say(`warning: ${viol.length} SoD conflict(s) now present on this branch (e.g. ${viol[0].identity}: ${viol[0].roleA} + ${viol[0].roleB}); the review merge will refuse them`);
           else say('SoD check on the branch: no conflict');
+          output = { identity: String(cfg.identity), role: String(cfg.role) };
           break;
         }
         case 'revoke-role': {
@@ -178,6 +233,7 @@ export function createWorkflowEngine(deps) {
           if (!Number(res.affectedRows)) throw new Error(`${String(cfg.identity)} does not have role "${String(cfg.role)}" on this branch`);
           const hash = await commit(c, `workflow ${run.id}: revoke ${String(cfg.role)} from ${String(cfg.identity)}`, author);
           say(`assignment removed and committed on ${branch} (commit ${hash.slice(0, 10)})`);
+          output = { identity: String(cfg.identity), role: String(cfg.role) };
           break;
         }
         case 'set-department': {
@@ -190,6 +246,7 @@ export function createWorkflowEngine(deps) {
           }
           const hash = await commit(c, `workflow ${run.id}: ${String(cfg.identity)} moves to ${String(cfg.department)}`, author);
           say(`department updated and committed on ${branch} (commit ${hash.slice(0, 10)})`);
+          output = { identity: String(cfg.identity), department: String(cfg.department) };
           break;
         }
         case 'set-profile-field': {
@@ -201,10 +258,12 @@ export function createWorkflowEngine(deps) {
           if (!Number(dirty[0].n)) { say(`profile field "${String(cfg.field)}" already has this value: no change, nothing committed`); break; }
           const hash = await commit(c, `workflow ${run.id}: record ${String(cfg.field)} for ${String(cfg.identity)}`, author);
           say(`profile field "${String(cfg.field)}" recorded and committed on ${branch} (commit ${hash.slice(0, 10)})`);
+          output = { identity: String(cfg.identity), field: String(cfg.field), value: String(cfg.value) };
           break;
         }
       }
     }));
+    return output;
   }
 
   return { resume, kick, cancelFlag, forget };
