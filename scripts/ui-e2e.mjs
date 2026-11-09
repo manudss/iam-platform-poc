@@ -338,7 +338,7 @@ try {
   await nav('/users'); await page.waitForSelector('#users-table tbody tr');
   await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
   assert.match(await pinText(), /take effect immediately/, 'sheet PIN component: the immediate-effect note shows in manage mode');
   assert.ok((await pinButtons()) > 0, 'sheet PIN component: manage mode offers its controls');
   await shot('11b-user-drawer-pin-manage');
@@ -349,12 +349,12 @@ try {
   await page.waitForSelector('#user-editor', { state: 'detached' });
   await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
   await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.waitForSelector('#user-editor', { state: 'detached' });
   await page.locator('#users-table tbody tr').nth(1).getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
   await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.waitForSelector('#user-editor', { state: 'detached' });
 
@@ -365,7 +365,7 @@ try {
   await nav('/users'); await page.waitForSelector('#users-table tbody tr');
   await page.locator('#users-table tbody tr').first().getByRole('button', { name: 'Edit', exact: true }).click();
   await page.waitForSelector('#user-editor');
-  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, { timeout: 10000 });
+  await page.waitForFunction(() => (document.querySelector('iam-pin-profile')?.shadowRoot?.textContent ?? '').length > 10, undefined, { timeout: 15000 });
   const roText = await pinText();
   assert.ok(!/Set a new PIN|Revoke/.test(roText), 'readonly PIN component: no mutating label (got: ' + JSON.stringify(roText.slice(0, 200)) + ')');
   assert.equal(await pinButtons(), 0, 'readonly PIN component: no button at all');

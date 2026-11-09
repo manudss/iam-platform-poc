@@ -51,7 +51,9 @@ export class ProfileComponents {
     const req = ++this.request;
     this.problem.set('');
     try {
-      const r = await this.s.api.raw<{ components: ProfileComponentInv[]; message?: string }>('GET', `/profile-components?surface=${this.surface()}${this.surface() === 'admin' ? '&ref=work' : ''}`);
+      // The admin surface answers 403 without the capability: send it, like the other administration calls do.
+      const cap: Record<string, string> = this.surface() === 'admin' && this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {};
+      const r = await this.s.api.raw<{ components: ProfileComponentInv[]; message?: string }>('GET', `/profile-components?surface=${this.surface()}${this.surface() === 'admin' ? '&ref=work' : ''}`, undefined, cap);
       if (req !== this.request) return;
       if (r.status >= 400) throw new Error(r.data.message ?? 'Cannot load');
       this.comps.set(r.data.components ?? []);
