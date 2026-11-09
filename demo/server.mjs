@@ -15,9 +15,9 @@ const API = { host: '127.0.0.1', port: Number(process.env.API_PORT ?? 3000) };
 const SSR = { host: '127.0.0.1', port: Number(process.env.SSR_PORT ?? 4000) };
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain' };
 
-function proxy(req, res, target, strip, htmlHeaders) {
+function proxy(req, res, target, strip, htmlHeaders, timeoutMs = 15000) {
   const path = strip ? req.url.replace(/^\/(core|api)/, '') || '/' : req.url;
-  const upstream = http.request({ host: target.host, port: target.port, path, method: req.method, headers: { ...req.headers, host: `${target.host}:${target.port}`, 'x-forwarded-host': req.headers['x-forwarded-host'] ?? req.headers.host, 'x-forwarded-proto': req.headers['x-forwarded-proto'] ?? 'http' }, timeout: 15000 }, (u) => {
+  const upstream = http.request({ host: target.host, port: target.port, path, method: req.method, headers: { ...req.headers, host: `${target.host}:${target.port}`, 'x-forwarded-host': req.headers['x-forwarded-host'] ?? req.headers.host, 'x-forwarded-proto': req.headers['x-forwarded-proto'] ?? 'http' }, timeout: timeoutMs }, (u) => {
     const headers = { ...u.headers };
     // Page responses keep the edge's policy headers (frame rules, no HTML caching): they stay the edge's job.
     if (htmlHeaders && /text\/html/i.test(String(u.headers['content-type'] ?? ''))) Object.assign(headers, htmlHeaders());
@@ -44,7 +44,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/authorize' || p === '/authorize/login' || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false);
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('method not allowed'); }
-    return proxy(req, res, SSR, false, () => ({ 'cache-control': 'no-store', ...framingHeaders(p, url.search) }));
+    // The SSR render waits for the API options; a cold Dolt can need ~30 s on the first hit, well over the default proxy timeout.
+    return proxy(req, res, SSR, false, () => ({ 'cache-control': 'no-store', ...framingHeaders(p, url.search) }), 75000);
   } catch (e) {
     if (!res.headersSent) res.writeHead(500);
     res.end('demo server error');
