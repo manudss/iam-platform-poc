@@ -388,6 +388,11 @@ try {
   await page.getByRole('button', { name: 'Rename the section Emergency' }).click();
   await page.fill('input[name=pf-rn]', 'Urgence'); await page.getByRole('button', { name: 'Save name' }).click();
   await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
+  await page.getByRole('button', { name: 'Move the section Urgence up' }).click();
+  const sectionOrder = await page.locator('#pf-table .pf-group').allTextContents();
+  await page.click('#pf-save'); await page.waitForSelector('#pf-note');
+  await page.reload(); await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
+  assert.deepEqual(await page.locator('#pf-table .pf-group').allTextContents(), sectionOrder, 'empty sections and their order survive save/reload');
   await page.getByRole('button', { name: 'Remove the empty section Urgence' }).click();
   await page.waitForSelector('.pf-group:has-text("Urgence")', { state: 'detached' });
   const names = await page.locator('#pf-table .pf-group').allInnerTexts();

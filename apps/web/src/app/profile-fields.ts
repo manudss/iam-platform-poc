@@ -55,7 +55,7 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
             </span>
           }
         </div>
-        @if (!g.fields.length) { <p class="hint pf-empty-section">Empty section. Drag a field here, or pick it in the field's Section box. A section with no field is not saved.</p> }
+        @if (!g.fields.length) { <p class="hint pf-empty-section">Empty section. Drag a field here, or pick it in the field's Section box. Saved on this branch, including empty sections, after Save.</p> }
         @for (f of g.fields; track f.fullKey) { @if (cfg()[f.fullKey]; as c) {
           <div class="pf-field" [class.selected]="sel()===f.fullKey" [class.off]="!c.enabled" role="button" tabindex="0"
                draggable="true" (dragstart)="dragStart(f.fullKey)" (dragover)="$event.preventDefault()" (drop)="drop(f)" (click)="sel.set(f.fullKey)" (keydown.enter)="sel.set(f.fullKey)">
@@ -181,14 +181,14 @@ export class ProfileFieldsPage {
   protected newSection = '';
   protected readonly sectionErr = signal('');
   private fieldOrder(f: CatField) { return this.cfg()[f.fullKey]?.order ?? f.order ?? 500; }
-  /** A section is the name its fields carry. Every field of one name is ONE group (ranked by its first field), so a name can never show twice. Empty sections exist only until reload. */
+  /** A section is the name its fields carry. Every field of one name is ONE group (ranked by its first field), so a name can never show twice. Explicit section order and empty sections are stored in the versioned configuration. */
   protected groups() {
     const by = new Map<string, CatField[]>();
     for (const f of this.sorted()) { const name = this.sectionOf(f) || 'Other'; (by.get(name) ?? by.set(name, []).get(name)!).push(f); }
     const out = [...by.entries()].map(([name, fields]) => ({ name, fields, rank: this.fieldOrder(fields[0]) })).sort((x, y) => x.rank - y.rank || x.name.localeCompare(y.name));
     const res: { name: string; fields: CatField[] }[] = out.map(({ name, fields }) => ({ name, fields }));
     for (const n of this.pending()) if (!by.has(n)) res.push({ name: n, fields: [] });
-    return res;
+    return res.sort((a,b) => { const rank = (n: string) => { const i = this.pending().indexOf(n); return i < 0 ? 1000 : i; }; return rank(a.name) - rank(b.name); });
   }
   private sectionNames() { return this.groups().map((g) => g.name); }
   private validName(raw: string, except = ''): string | null {
@@ -198,7 +198,7 @@ export class ProfileFieldsPage {
     if (this.sectionNames().some((x) => x.toLowerCase() === n.toLowerCase() && x !== except)) { this.sectionErr.set(`The section "${n}" already exists.`); return null; }
     this.sectionErr.set(''); return n;
   }
-  protected addSection() { const n = this.validName(this.newSection); if (!n) return; this.pending.update((l) => [...l, n]); this.newSection = ''; }
+  protected addSection() { const n = this.validName(this.newSection); if (!n) return; this.pending.set([...this.sectionNames(), n]); this.dirty.set(true); this.newSection = ''; }
   protected startRename(name: string) { this.renaming.set(name); this.renameVal = name; this.sectionErr.set(''); }
   protected commitRename(old: string) {
     const n = this.validName(this.renameVal, old); if (!n) return;
@@ -214,14 +214,14 @@ export class ProfileFieldsPage {
     const fields = this.cat().filter((f) => (this.sectionOf(f) || 'Other') === name);
     if (fields.length && !confirm(`Dissolve the section "${name}"? Its ${fields.length} field(s) move to "Other"; nothing is deleted.`)) return;
     for (const f of fields) this.cfg()[f.fullKey].section = 'Other';
-    this.pending.update((l) => l.filter((x) => x !== name));
-    this.cfg.update((m) => ({ ...m })); if (fields.length) this.dirty.set(true);
+    this.pending.set(this.sectionNames().filter((x) => x !== name));
+    this.cfg.update((m) => ({ ...m })); this.dirty.set(true);
   }
   /** Move a whole section up or down, then renumber every field 10 by 10 in the new section order. */
   protected moveSection(name: string, dir: -1 | 1) {
     const names = this.sectionNames(), i = names.indexOf(name), j = i + dir;
     if (i < 0 || j < 0 || j >= names.length) return;
-    [names[i], names[j]] = [names[j], names[i]];
+    [names[i], names[j]] = [names[j], names[i]]; this.pending.set(names);
     let n = 0;
     for (const sec of names) for (const f of this.sorted().filter((x) => (this.sectionOf(x) || 'Other') === sec)) this.cfg()[f.fullKey].order = (++n) * 10;
     this.cfg.update((m) => ({ ...m })); this.dirty.set(true);
@@ -232,7 +232,7 @@ export class ProfileFieldsPage {
     const f = this.cat().find((x) => x.fullKey === key); if (!f) return;
     const order = this.sectionNames();
     this.cfg()[key].section = name;
-    this.pending.update((l) => l.filter((x) => x !== name));
+    this.pending.set(order);
     let n = 0;
     for (const sec of order) {
       for (const x of this.sorted().filter((y) => y.fullKey !== key && (this.sectionOf(y) || 'Other') === sec)) this.cfg()[x.fullKey].order = (++n) * 10;
@@ -289,6 +289,7 @@ export class ProfileFieldsPage {
       const eff: Record<string, Setting> = {};
       for (const f of r.data.catalogue as CatField[]) eff[f.fullKey] = { ...defaults(), ...(r.data.working.settings?.[f.fullKey] ?? {}) };
       this.signupOpen = !!r.data.working.config.signup?.open; this.policy = r.data.working.config.selfEditPolicy === 'review' ? 'review' : 'immediate'; this.livePolicy.set(r.data.live.config.selfEditPolicy === 'review' ? 'review' : 'immediate'); this.liveOpen.set(!!r.data.live.config.signup?.open); void this.loadRequests();
+      this.pending.set([...(r.data.working.config.sections ?? [])]);
       this.cat.set(r.data.catalogue); this.cfg.set(eff); this.compsCfg.set({ ...(r.data.working.config.components ?? {}) });
       if (!this.sel() && r.data.catalogue.length) this.sel.set((r.data.catalogue as CatField[])[0].fullKey);
       this.dirty.set(false); this.problem.set(''); this.loaded.set(true);
@@ -323,7 +324,7 @@ export class ProfileFieldsPage {
   protected async save() {
     this.busy.set(true);
     try {
-      const r = await this.s.api.raw<any>('PUT', '/profile-fields', { config: { fields: this.cfg(), signup: { open: this.signupOpen }, selfEditPolicy: this.policy, components: this.compsCfg() } }, this.h());
+      const r = await this.s.api.raw<any>('PUT', '/profile-fields', { config: { sections: this.sectionNames(), fields: this.cfg(), signup: { open: this.signupOpen }, selfEditPolicy: this.policy, components: this.compsCfg() } }, this.h());
       if (r.status >= 400) throw new Error(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused');
       this.note.set('Saved on the working branch. Nothing changes for people until Apply.'); this.problem.set(''); await this.load();
     } catch (e) { this.problem.set((e as Error).message); } finally { this.busy.set(false); }

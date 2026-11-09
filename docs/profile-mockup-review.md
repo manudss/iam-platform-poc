@@ -15,14 +15,14 @@ Review checkpoint: 2026-11-10. Reference: the three validated boards (Profile co
 
 - The segmented radios make visibility choices directly comparable. Keep their labels readable rather than forcing a dense table to fit every viewport. A horizontal scroll region is acceptable on mobile only if every column can be reached and the page itself does not overflow.
 - Section operations must remain separate from field deletion. Dissolve moves fields to Other; it must never delete core fields or plugin values.
-- Empty sections currently exist only in page state. This limitation is shown in the UI. A durable ordered section model is needed to preserve empty sections and their order through Save/reload. Do not describe the current implementation as complete section management.
+- Sections now use an explicit ordered list in the branch-versioned profile configuration, including empty sections. Validation rejects duplicate or malformed names. Save/reload coverage has been added; deployed verification is still required.
 - The selected-field panel still lacks the board's per-plugin settings block and the installed-but-inactive field list. These are structural gaps, not cosmetic differences.
 - My profile still lacks the illustrated TOTP QR presentation and password lock-state block. Do not display invented enrollment or lock states to imitate the board.
 - All final layouts need side-by-side pixel inspection in light, dark, and 390px width. Screenshots from earlier revisions do not establish the last revision's fidelity.
 
 ## Code and functional recommendations
 
-- Persist section metadata in a typed, branch-versioned profile configuration. Include empty sections, explicit section order, uniqueness checks, migrations, and reload tests. Do not rely on the first field's order as the sole section ordering source.
+- Section metadata is stored in the typed, branch-versioned profile configuration with explicit order, empty sections and uniqueness checks. Older configurations without sections retain their field-order fallback. Keep the reload and malformed-input tests in CI.
 - Add a full browser regression that creates a branch-only account, signs in to that branch, verifies the test banner and restricted navigation, and confirms that main rejects the account. A navigation element alone is not proof of successful authentication because the login layout has navigation too.
 - Test accounts are ordinary branch records and can be carried into main by Apply. Remove them before Apply. A future improvement should add an explicit temporary-account cleanup workflow rather than implying automatic expiry.
 - Existing component statistics are enrollment counts, not the full statistical breakdown pictured on the board. Keep that distinction visible.

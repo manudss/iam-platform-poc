@@ -116,6 +116,7 @@ export function parseProfileConfig(v) {
     const comps = v?.components;
     return { fields: f && typeof f === 'object' && !Array.isArray(f) ? f : {},
         ...(su && su.open === true ? { signup: { open: true } } : {}),
+        ...(Array.isArray(v?.sections) ? { sections: v.sections } : {}),
         ...(pol === 'review' ? { selfEditPolicy: 'review' } : {}),
         ...(comps && typeof comps === 'object' && !Array.isArray(comps) ? { components: comps } : {}) };
 }
@@ -140,7 +141,7 @@ export function validateProfileConfig(input, catalogue) {
     if (!input || typeof input !== 'object' || Array.isArray(input))
         return bad('configuration object required');
     const i = input;
-    if (Object.keys(i).some((k) => k !== 'fields' && k !== 'signup' && k !== 'selfEditPolicy' && k !== 'components'))
+    if (Object.keys(i).some((k) => k !== 'fields' && k !== 'signup' && k !== 'selfEditPolicy' && k !== 'components' && k !== 'sections'))
         bad('unknown configuration field');
     if (i.selfEditPolicy !== undefined && i.selfEditPolicy !== 'immediate' && i.selfEditPolicy !== 'review')
         bad('selfEditPolicy: immediate or review');
@@ -153,6 +154,16 @@ export function validateProfileConfig(input, catalogue) {
         const cerrs = validateComponentOverrides(i.components);
         if (cerrs.length)
             bad(cerrs.join('; '));
+    }
+    if (i.sections !== undefined) {
+        if (!Array.isArray(i.sections) || i.sections.length > 80) bad('sections: array of at most 80 names required');
+        const seen = new Set();
+        for (const name of i.sections) {
+            if (typeof name !== 'string' || !name.trim() || name.length > 80 || name !== name.trim().replace(/\s+/g, ' ')) bad('section: normalized name of 1 to 80 characters required');
+            const key = name.toLowerCase();
+            if (seen.has(key)) bad('section: duplicate name');
+            seen.add(key);
+        }
     }
     const fields = i.fields;
     if (!fields || typeof fields !== 'object' || Array.isArray(fields))
@@ -193,7 +204,7 @@ export function validateProfileConfig(input, catalogue) {
             bad(`${k}: the directory core fields always stay visible to an administrator`);
         out[k] = { ...r };
     }
-    return { fields: out, ...(su?.open ? { signup: { open: true } } : {}), ...(i.selfEditPolicy === 'review' ? { selfEditPolicy: 'review' } : {}), ...(i.components ? { components: i.components } : {}) };
+    return { fields: out, ...(i.sections ? { sections: [...i.sections] } : {}), ...(su?.open ? { signup: { open: true } } : {}), ...(i.selfEditPolicy === 'review' ? { selfEditPolicy: 'review' } : {}), ...(i.components ? { components: i.components } : {}) };
 }
 /** The one schema the screens and the server rules both use, per context. */
 export function effectiveSchema(catalogue, cfg, ctx) {
@@ -224,7 +235,8 @@ export function effectiveSchema(catalogue, cfg, ctx) {
         }
         out.push(e);
     }
-    return out.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
+    const rank = (f) => { const n = (cfg.sections ?? []).indexOf(f.section || 'Other'); return n < 0 ? 1000 : n; };
+    return out.sort((a, b) => rank(a) - rank(b) || a.order - b.order || a.key.localeCompare(b.key));
 }
 /** Decoded byte length of a data-URL payload. */
 function dataUrlBytes(v) {
