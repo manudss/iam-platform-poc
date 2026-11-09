@@ -1,7 +1,8 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, PLATFORM_ID, PendingTasks, inject, signal } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
-import { SigninChain, SigninOptions } from './api';
+import { SigninChain, SigninOptions, apiUrl } from './api';
 import { Session } from './session';
 import { Theme } from './theme';
 import { ThemeSwitch } from './theme-switch';
@@ -44,6 +45,10 @@ export class LoginPage {
   protected readonly pstep = signal(0);
   protected readonly highlight = signal('');
   private readonly theme = inject(Theme);
+  /** SSR: the login page renders on the server. Browser globals stay behind this flag; the tracked load lets
+   *  the server render wait for the methods list, so the first HTML already carries it. */
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+  private readonly pending = inject(PendingTasks);
 
   constructor() {
     if (this.preview()) {
@@ -52,15 +57,15 @@ export class LoginPage {
       parent.postMessage({ type: 'iam-preview-ready' }, location.origin);
       return;
     }
-    const t = testParams(new URLSearchParams(location.search));
+    const t = testParams(new URLSearchParams(this.isBrowser ? location.search : ''));
     if (t) {
       // A test link opens a fresh, branch-bound session: any current sign-in ends here, explicitly.
       this.test.set(t);
       try { sessionStorage.setItem(TEST_KEY, JSON.stringify(t)); } catch { /* storage blocked: the callback will stay on main */ }
       if (this.s.loggedIn()) this.s.signOut();
-      void this.load();
+      void this.pending.run(() => this.load());
     } else if (this.s.loggedIn()) void this.router.navigateByUrl('/overview');
-    else void this.load();
+    else void this.pending.run(() => this.load());
   }
 
   private onPreviewMessage(ev: MessageEvent) {

@@ -4,22 +4,24 @@
 //   /api/*      -> 127.0.0.1:3000 (prefix stripped)
 //   /authorize*, /token, /jwks.json, /.well-known/* -> 127.0.0.1:8081 (IdP form posts relatively)
 //   /healthz    -> 200 (platform health check)
-// Everything else falls back to index.html (Angular client routes, e.g. /callback).
+// Everything else goes to the Angular SSR server (127.0.0.1:4000): it serves the static assets and renders
+// /login server-side (the methods list is in the first HTML); the other routes stay client-rendered.
 import http from 'node:http';
 import { framingHeaders } from './frame-policy.mjs';
-import { readFile } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
 
 const PORT = Number(process.env.PORT ?? 8080);
-const WEB_ROOT = process.env.WEB_ROOT ?? '/app/web/dist/web/browser';
 const CORE = { host: '127.0.0.1', port: Number(process.env.IAM_CORE_PORT ?? 8081) };
 const API = { host: '127.0.0.1', port: Number(process.env.API_PORT ?? 3000) };
+const SSR = { host: '127.0.0.1', port: Number(process.env.SSR_PORT ?? 4000) };
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain' };
 
-function proxy(req, res, target, strip) {
+function proxy(req, res, target, strip, htmlHeaders) {
   const path = strip ? req.url.replace(/^\/(core|api)/, '') || '/' : req.url;
   const upstream = http.request({ host: target.host, port: target.port, path, method: req.method, headers: { ...req.headers, host: `${target.host}:${target.port}`, 'x-forwarded-host': req.headers['x-forwarded-host'] ?? req.headers.host, 'x-forwarded-proto': req.headers['x-forwarded-proto'] ?? 'http' }, timeout: 15000 }, (u) => {
-    res.writeHead(u.statusCode ?? 502, u.headers);
+    const headers = { ...u.headers };
+    // Page responses keep the edge's policy headers (frame rules, no HTML caching): they stay the edge's job.
+    if (htmlHeaders && /text\/html/i.test(String(u.headers['content-type'] ?? ''))) Object.assign(headers, htmlHeaders());
+    res.writeHead(u.statusCode ?? 502, headers);
     u.pipe(res);
   });
   upstream.on('timeout', () => { upstream.destroy(); if (!res.headersSent) res.writeHead(504); res.end('upstream timeout'); });
@@ -42,16 +44,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/authorize' || p === '/authorize/login' || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false);
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('method not allowed'); }
-    const safe = normalize(p).replace(/^(\.\.[/\\])+/, '');
-    const file = join(WEB_ROOT, safe === '/' ? 'index.html' : safe);
-    let data, ext = extname(file);
-    try { data = await readFile(file); }
-    catch { data = await readFile(join(WEB_ROOT, 'index.html')); ext = '.html'; } // SPA fallback
-    res.writeHead(200, { 'content-type': MIME[ext] ?? 'application/octet-stream', 'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=3600', ...(ext === '.html' ? framingHeaders(p, url.search) : {}) });
-    res.end(data);
+    return proxy(req, res, SSR, false, () => ({ 'cache-control': 'no-store', ...framingHeaders(p, url.search) }));
   } catch (e) {
     if (!res.headersSent) res.writeHead(500);
     res.end('demo server error');
   }
 });
-server.listen(PORT, '0.0.0.0', () => console.log(`demo edge listening on 0.0.0.0:${PORT} (web root ${WEB_ROOT})`));
+server.listen(PORT, '0.0.0.0', () => console.log(`demo edge listening on 0.0.0.0:${PORT} (SSR upstream ${SSR.host}:${SSR.port})`));

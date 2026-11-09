@@ -9,7 +9,7 @@ export const CORE_PUBLIC = `${ORIGIN}/core`;
 
 /** Server-side rendering has no same origin: it reaches the API through the local edge (IAM_WEB_API_ORIGIN).
  *  In the browser every call stays relative, exactly as before. */
-const SSR_API = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.IAM_WEB_API_ORIGIN ?? '';
+const SSR_API = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.['IAM_WEB_API_ORIGIN'] ?? '';
 export function apiUrl(path: string): string { return SSR_API && typeof location === 'undefined' ? `${SSR_API}${path}` : path; }
 
 export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
