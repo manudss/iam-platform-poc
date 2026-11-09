@@ -379,6 +379,19 @@ try {
   await page.waitForSelector('#user-editor', { state: 'detached' });
 
   // Readonly mode (Profile fields -> component surfaces): status stays, every mutating control goes away.
+  // Sections: add (empty, local), rename, remove; no duplicate name; a real section renames for all its fields (not saved: the next steps keep the saved configuration).
+  await nav('/profile-fields'); await page.waitForSelector('#pf-table .pf-group');
+  await page.fill('input[name=pf-ns]', 'Emergency'); await page.click('#pf-add-section');
+  await page.waitForSelector('.pf-group:has-text("Emergency · 0 field(s)")');
+  await page.fill('input[name=pf-ns]', 'emergency'); await page.click('#pf-add-section');
+  await page.waitForSelector('.pf-err:has-text("already exists")');
+  await page.getByRole('button', { name: 'Rename the section Emergency' }).click();
+  await page.fill('input[name=pf-rn]', 'Urgence'); await page.getByRole('button', { name: 'Save name' }).click();
+  await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
+  await page.getByRole('button', { name: 'Remove the empty section Urgence' }).click();
+  await page.waitForSelector('.pf-group:has-text("Urgence")', { state: 'detached' });
+  const names = await page.locator('#pf-table .pf-group').allInnerTexts();
+  assert.equal(new Set(names.map((x) => x.split(' · ')[0])).size, names.length, 'a section name shows once: ' + JSON.stringify(names));
   await nav('/profile-fields'); await page.click('#pf-tab-components'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
   const pinRow = page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"]');
   try {

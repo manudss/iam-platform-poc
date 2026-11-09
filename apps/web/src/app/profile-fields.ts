@@ -37,8 +37,25 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
   @if (tab()==='fields') {
   <section class="card" id="pf-table"><div class="pf-fields-grid">
     <div class="pf-field-list" aria-label="Profile fields, grouped by section">
+      <form class="pf-add-section" (ngSubmit)="addSection()"><label class="visually-labelled">New section <input name="pf-ns" [(ngModel)]="newSection" maxlength="80" placeholder="e.g. Emergency contact" /></label>
+        <button id="pf-add-section" type="submit" class="secondary" [disabled]="s.branch()==='main' || !newSection.trim()">Add section</button>
+        @if (sectionErr()) { <small role="alert" class="pf-err">{{sectionErr()}}</small> }</form>
       @for (g of groups(); track g.name) {
-        <h4 class="pf-group">{{g.name}} · {{g.fields.length}} field(s)</h4>
+        <div class="pf-group-head" (dragover)="$event.preventDefault()" (drop)="dropOnSection(g.name)">
+          @if (renaming()===g.name) {
+            <form class="pf-rename" (ngSubmit)="commitRename(g.name)"><input name="pf-rn" [(ngModel)]="renameVal" maxlength="80" [attr.aria-label]="'New name for the section '+g.name" autofocus />
+              <button type="submit" class="secondary">Save name</button><button type="button" class="secondary" (click)="renaming.set('')">Cancel</button></form>
+          } @else {
+            <h4 class="pf-group">{{g.name}} · {{g.fields.length}} field(s)</h4>
+            <span class="pf-group-actions" [attr.data-section]="g.name">
+              <button type="button" class="secondary icon" (click)="startRename(g.name)" [disabled]="s.branch()==='main'" [attr.aria-label]="'Rename the section '+g.name">Rename</button>
+              <button type="button" class="secondary icon" (click)="moveSection(g.name,-1)" [disabled]="s.branch()==='main' || $first" [attr.aria-label]="'Move the section '+g.name+' up'">↑</button>
+              <button type="button" class="secondary icon" (click)="moveSection(g.name,1)" [disabled]="s.branch()==='main' || $last" [attr.aria-label]="'Move the section '+g.name+' down'">↓</button>
+              <button type="button" class="secondary icon" (click)="removeSection(g.name)" [disabled]="s.branch()==='main' || g.name==='Other'" [attr.aria-label]="(g.fields.length ? 'Dissolve the section ' : 'Remove the empty section ')+g.name">{{g.fields.length ? 'Dissolve' : 'Remove'}}</button>
+            </span>
+          }
+        </div>
+        @if (!g.fields.length) { <p class="hint pf-empty-section">Empty section. Drag a field here, or pick it in the field's Section box. A section with no field is not saved.</p> }
         @for (f of g.fields; track f.fullKey) { @if (cfg()[f.fullKey]; as c) {
           <div class="pf-field" [class.selected]="sel()===f.fullKey" [class.off]="!c.enabled" role="button" tabindex="0"
                draggable="true" (dragstart)="dragStart(f.fullKey)" (dragover)="$event.preventDefault()" (drop)="drop(f)" (click)="sel.set(f.fullKey)" (keydown.enter)="sel.set(f.fullKey)">
@@ -155,17 +172,73 @@ export class ProfileFieldsPage {
   constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   protected locked = lockedFor;
-  protected knownSections() { return [...new Set(this.cat().map((f) => this.sectionOf(f)).filter((x): x is string => !!x))].sort(); }
+  protected knownSections() { return [...new Set([...this.cat().map((f) => this.sectionOf(f)), ...this.pending()].filter((x): x is string => !!x))].sort(); }
   protected sectionOf(f: CatField) { return this.cfg()[f.fullKey]?.section || f.section || ''; }
   private sorted() { return [...this.cat()].sort((a, b) => (this.cfg()[a.fullKey]?.order ?? a.order ?? 500) - (this.cfg()[b.fullKey]?.order ?? b.order ?? 500) || a.fullKey.localeCompare(b.fullKey)); }
+  protected readonly pending = signal<string[]>([]);
+  protected readonly renaming = signal('');
+  protected renameVal = '';
+  protected newSection = '';
+  protected readonly sectionErr = signal('');
+  private fieldOrder(f: CatField) { return this.cfg()[f.fullKey]?.order ?? f.order ?? 500; }
+  /** A section is the name its fields carry. Every field of one name is ONE group (ranked by its first field), so a name can never show twice. Empty sections exist only until reload. */
   protected groups() {
-    const out: { name: string; fields: CatField[] }[] = [];
-    for (const f of this.sorted()) {
-      const name = this.sectionOf(f) || 'Other';
-      const last = out[out.length - 1];
-      if (last && last.name === name) last.fields.push(f); else out.push({ name, fields: [f] });
+    const by = new Map<string, CatField[]>();
+    for (const f of this.sorted()) { const name = this.sectionOf(f) || 'Other'; (by.get(name) ?? by.set(name, []).get(name)!).push(f); }
+    const out = [...by.entries()].map(([name, fields]) => ({ name, fields, rank: this.fieldOrder(fields[0]) })).sort((x, y) => x.rank - y.rank || x.name.localeCompare(y.name));
+    const res: { name: string; fields: CatField[] }[] = out.map(({ name, fields }) => ({ name, fields }));
+    for (const n of this.pending()) if (!by.has(n)) res.push({ name: n, fields: [] });
+    return res;
+  }
+  private sectionNames() { return this.groups().map((g) => g.name); }
+  private validName(raw: string, except = ''): string | null {
+    const n = raw.trim().replace(/\s+/g, ' ');
+    if (!n) { this.sectionErr.set('A section needs a name.'); return null; }
+    if (n.length > 80) { this.sectionErr.set('80 characters at most.'); return null; }
+    if (this.sectionNames().some((x) => x.toLowerCase() === n.toLowerCase() && x !== except)) { this.sectionErr.set(`The section "${n}" already exists.`); return null; }
+    this.sectionErr.set(''); return n;
+  }
+  protected addSection() { const n = this.validName(this.newSection); if (!n) return; this.pending.update((l) => [...l, n]); this.newSection = ''; }
+  protected startRename(name: string) { this.renaming.set(name); this.renameVal = name; this.sectionErr.set(''); }
+  protected commitRename(old: string) {
+    const n = this.validName(this.renameVal, old); if (!n) return;
+    if (n !== old) {
+      for (const f of this.cat()) if ((this.sectionOf(f) || 'Other') === old) this.cfg()[f.fullKey].section = n;
+      this.pending.update((l) => l.map((x) => (x === old ? n : x)));
+      this.cfg.update((m) => ({ ...m })); this.dirty.set(true);
     }
-    return out;
+    this.renaming.set('');
+  }
+  /** Dissolve: the fields stay (never deleted), they move to "Other". An empty section is simply forgotten. */
+  protected removeSection(name: string) {
+    const fields = this.cat().filter((f) => (this.sectionOf(f) || 'Other') === name);
+    if (fields.length && !confirm(`Dissolve the section "${name}"? Its ${fields.length} field(s) move to "Other"; nothing is deleted.`)) return;
+    for (const f of fields) this.cfg()[f.fullKey].section = 'Other';
+    this.pending.update((l) => l.filter((x) => x !== name));
+    this.cfg.update((m) => ({ ...m })); if (fields.length) this.dirty.set(true);
+  }
+  /** Move a whole section up or down, then renumber every field 10 by 10 in the new section order. */
+  protected moveSection(name: string, dir: -1 | 1) {
+    const names = this.sectionNames(), i = names.indexOf(name), j = i + dir;
+    if (i < 0 || j < 0 || j >= names.length) return;
+    [names[i], names[j]] = [names[j], names[i]];
+    let n = 0;
+    for (const sec of names) for (const f of this.sorted().filter((x) => (this.sectionOf(x) || 'Other') === sec)) this.cfg()[f.fullKey].order = (++n) * 10;
+    this.cfg.update((m) => ({ ...m })); this.dirty.set(true);
+  }
+  /** Drop on a section header: the field joins that section, at its end; every field is renumbered 10 by 10 in the current section order. */
+  protected dropOnSection(name: string) {
+    const key = this.dragKey; this.dragKey = '';
+    const f = this.cat().find((x) => x.fullKey === key); if (!f) return;
+    const order = this.sectionNames();
+    this.cfg()[key].section = name;
+    this.pending.update((l) => l.filter((x) => x !== name));
+    let n = 0;
+    for (const sec of order) {
+      for (const x of this.sorted().filter((y) => y.fullKey !== key && (this.sectionOf(y) || 'Other') === sec)) this.cfg()[x.fullKey].order = (++n) * 10;
+      if (sec === name) this.cfg()[key].order = (++n) * 10;
+    }
+    this.cfg.update((m) => ({ ...m })); this.dirty.set(true);
   }
   protected selected() { return this.cat().find((f) => f.fullKey === this.sel()); }
   protected surfaceLabel(m: string, who: 'self' | 'admin') { return m === 'manage' ? (who === 'admin' ? 'status + actions' : 'manage') : m === 'readonly' ? (who === 'admin' ? 'status only' : 'visible') : 'hidden'; }
