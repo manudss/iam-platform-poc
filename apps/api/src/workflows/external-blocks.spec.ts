@@ -23,6 +23,8 @@ const ctx = (over: Partial<WfBlockCtx> = {}): WfBlockCtx & { lines: string[] } =
 describe('contributed block catalogue (workflow-connectors)', () => {
   it('every shipped demo graph and trigger validates, including HR step-output identities', () => {
     for (const seed of SEEDS) {
+      assert.ok(seed.name.length <= 80, `${seed.id}: name fits storage`);
+      assert.ok(seed.description.length <= 500, `${seed.id}: description fits storage`);
       const { graph, order } = validateGraph({ nodes: seed.nodes, edges: seed.edges });
       validateStepPlaceholders(graph, order);
       validateTrigger(seed.trigger);

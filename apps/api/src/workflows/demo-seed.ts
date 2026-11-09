@@ -80,7 +80,7 @@ export const SEEDS: { id: string; name: string; description: string; trigger: Wf
     edges: [],
   },
   {
-    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SPIKE workflow-connectors: the watcher polls the SIMULATED candidates sheet (source demo-sheet, no Google credential; switch source to google with a service account in the plugin settings). A row with process=OK builds the nom.prenom@lyam.demo e-mail (Activepieces text-helper + native lower/unaccent), creates the user via the lyam connector (real, on the run branch), grants the role named in the row (real, on the run branch) and marks the row cree=ok. A human still reviews and merges the run branch.',
+    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SIMULATED candidates sheet: process=OK builds nom.prenom@lyam.demo (without accents), creates a lyam account and grants the row role on a run branch, then marks cree=ok. Login stays disabled; a human reviews the branch. No Google credential is needed for the demo. For a real sheet, configure the service account in plugin settings and select source google.',
     trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } },
     nodes: [
       { id: 'join', type: 'text-transform', name: 'Join nom.prenom', config: { operation: 'concat', values: '{{event.nom}}\n.\n{{event.prenom}}', separator: '' } },
