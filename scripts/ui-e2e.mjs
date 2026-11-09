@@ -416,10 +416,12 @@ try {
   await page.getByRole('button', { name: 'Close role editor' }).click();
   await nav('/assignments'); await page.fill('input[name=assignmentSearch]', 'demo-bob');
   await page.waitForSelector('#assignments tbody tr:has-text("demo-bob") button');
+  await page.waitForFunction(() => document.querySelectorAll('#assignments tbody tr:has(button)').length === 1);
   assert.equal(await page.locator('#assignments tbody tr:has(button)').count(), 1);
   await page.getByRole('link', { name: 'Bulk edit matrix' }).click();
   await page.waitForSelector('.selection-list input');
   await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  await page.waitForFunction(() => document.querySelectorAll('.selection-list input[type=checkbox]').length > 0 && [...document.querySelectorAll('.selection-layout > section:first-child .check-label')].length === 1);
   await page.getByLabel(/Bob.*demo-bob/).check();
   await page.fill('input[name=matrixRoleSearch]', 'payment-creator');
   await page.getByLabel(/Payment creator.*payment-creator/).check();
