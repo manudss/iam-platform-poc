@@ -29,12 +29,14 @@ export function filterTemplates(templates: WfTemplate[], category: string, query
 .tpl-cats button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .tpl-main { flex: 1; min-width: 0; }
 .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: .8rem; margin-top: .8rem; }
-.tpl-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; }
+.tpl-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; height: 100%; }
+.tpl-grid > .tpl-card { margin: 0; }
 .tpl-card h4 { margin: 0; }
 .tpl-card p { margin: 0; font-size: .85rem; color: var(--muted); }
-.tpl-badges { display: flex; gap: .4rem; font-size: .75rem; color: var(--muted); align-items: center; }
-.tpl-actions { display: flex; gap: .35rem; margin-top: .3rem; }
-.tpl-actions button { flex: 1; }
+.tpl-badges { display: flex; gap: .4rem; font-size: .75rem; color: var(--muted); align-items: center; flex-wrap: wrap; }
+.tpl-badges .chip { flex: none; white-space: nowrap; }
+.tpl-actions { display: flex; gap: .35rem; margin-top: auto; padding-top: .3rem; }
+.tpl-actions button { flex: 1; margin: 0; }
 .tpl-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: var(--scrim); }
 .tpl-dialog { width: min(560px, 92vw); max-height: 86vh; overflow: auto; background: var(--card); border-radius: .8rem; padding: 1.1rem 1.3rem; box-shadow: 0 20px 60px var(--shadow-color); }
 .tpl-dialog h3 { margin-top: 0; }

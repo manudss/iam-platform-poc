@@ -44,8 +44,11 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-fchip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 1rem; padding: .2rem .8rem; cursor: pointer; min-height: 0; }
 .wlc-fchip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .wlc-fchip b { margin-left: .25rem; font-weight: 600; }
+.wlc-sort { display: inline-flex; flex-direction: row; align-items: center; gap: .3rem; margin: 0; }
 .wlc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: .8rem; margin-bottom: 1rem; }
-.wlc-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; }
+.wlc-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; height: 100%; }
+.wlc-grid > .wlc-card { margin: 0; }
+.wlc-chips button { margin: 0; }
 .wlc-card.paused { opacity: .72; }
 .wlc-title { display: flex; align-items: flex-start; gap: .5rem; }
 .wlc-title a { flex: 1; font-weight: 600; color: var(--ink); text-decoration: none; }
@@ -63,10 +66,10 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-stats .ok b { color: var(--ok); }
 .wlc-stats .ko b { color: var(--bad); }
 .wlc-last { font-size: .82rem; color: var(--muted); }
-.wlc-actions { display: flex; gap: .35rem; margin-top: .25rem; }
-.wlc-actions .btn, .wlc-actions button { flex: 1; text-align: center; }
-.wlc-menu { position: relative; flex: 0 0 auto; }
-.wlc-menu summary { list-style: none; cursor: pointer; padding: .45rem .7rem; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); }
+.wlc-actions { display: flex; gap: .35rem; margin-top: auto; padding-top: .3rem; align-items: stretch; }
+.wlc-actions .btn, .wlc-actions button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: .3rem; height: 36px; margin: 0; font-size: .9rem; line-height: 1; padding: .3rem .6rem; text-align: center; }
+.wlc-menu { position: relative; flex: 0 0 auto; display: inline-flex; }
+.wlc-menu summary { list-style: none; cursor: pointer; height: 36px; display: inline-flex; align-items: center; padding: .3rem .7rem; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); }
 .wlc-menu[open] summary { color: var(--ink); }
 .wlc-menu div { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .5rem; box-shadow: 0 6px 24px var(--shadow-color); min-width: 150px; }
 .wlc-menu div button { background: none; border: 0; border-radius: 0; text-align: left; padding: .45rem .8rem; min-height: 0; color: var(--ink); cursor: pointer; }
@@ -87,7 +90,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
     @for (f of filters; track f.key) {<button class="wlc-fchip" [class.on]="filter() === f.key" (click)="filter.set(f.key)">{{f.label}} <b>{{f.count()}}</b></button>}
   </span>
   <span class="spacer"></span>
-  <label class="hint">Sort: <select name="wlcSort" [(ngModel)]="sort">
+  <label class="hint wlc-sort">Sort: <select name="wlcSort" [(ngModel)]="sort">
     <option value="lastRun">last run</option><option value="name">name</option><option value="updated">updated</option>
   </select></label>
 </div>
@@ -106,8 +109,8 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
       @if (d.stats?.lastStatus) {<div class="wlc-last">Last run <span class="chip" [attr.data-status]="d.stats!.lastStatus">{{d.stats!.lastStatus}}</span> · {{agoOf(d)}}@if (d.stats!.lastDurationMs !== null) { · {{durOf(d)}}}</div>}
       <div class="wlc-actions">
         <button (click)="start(d)" [disabled]="busy()">▶ Run</button>
-        <a class="btn secondary" [routerLink]="['/workflows/edit', d.id]">Edit</a>
-        <a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ definition: d.id }">Runs</a>
+        <a class="btn secondary" [routerLink]="['/workflows/edit', d.id]">✎ Edit</a>
+        <a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ definition: d.id }">≡ Runs</a>
         <details class="wlc-menu"><summary title="More">⋯</summary><div>
           <button (click)="duplicate(d); $event.stopPropagation()">Duplicate</button>
           <button (click)="exportDef(d)">Export JSON</button>
