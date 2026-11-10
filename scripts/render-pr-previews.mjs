@@ -123,15 +123,20 @@ async function dispatchImageBuild(sha) {
     headers: { Authorization: `Bearer ${e.GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
     body: JSON.stringify({ ref: sha }),
   });
-  if (res.status === 404) return false; // workflow not on the default branch yet
+  if (res.status === 404 || res.status === 422) return false; // workflow not on the default branch, or the ref's workflow file has no workflow_dispatch trigger
   if (!res.ok) throw new Error(`GH POST dispatches -> ${res.status}`);
   return true;
 }
 
 async function imageRuns(sha, status) {
-  const q = `/actions/workflows/${IMAGE_WORKFLOW}/runs?head_sha=${sha}&per_page=10${status ? `&status=${status}` : ''}`;
+  // Fetch by head_sha only and filter client-side: GitHub's API silently
+  // returns 0 runs when `head_sha` and `status` filters are combined for a
+  // run its secondary index has not picked up yet (observed on 2026-11-10
+  // for a completed success run, >1h after completion).
+  const q = `/actions/workflows/${IMAGE_WORKFLOW}/runs?head_sha=${sha}&per_page=10`;
   const r = await gh('GET', q);
-  return r?.workflow_runs ?? [];
+  const runs = r?.workflow_runs ?? [];
+  return status ? runs.filter((x) => x.status === status) : runs;
 }
 
 // Wait until the demo-image workflow has successfully built+tagged the image for
