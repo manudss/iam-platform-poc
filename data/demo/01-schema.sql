@@ -19,9 +19,9 @@ CREATE TABLE IF NOT EXISTS policy_sets (name VARCHAR(32) PRIMARY KEY, descriptio
 CREATE TABLE IF NOT EXISTS policy_rules (set_name VARCHAR(32) NOT NULL, id VARCHAR(64) NOT NULL, cedar TEXT NOT NULL, PRIMARY KEY (set_name, id));
 CREATE TABLE IF NOT EXISTS policy_template_links (id VARCHAR(64) PRIMARY KEY, template_id VARCHAR(64) NOT NULL, principal_value VARCHAR(80) NULL, resource_value VARCHAR(80) NULL);
 INSERT IGNORE INTO identities VALUES ('demo-alice','Alice Demo',NULL,'finance'),('demo-bob','Bob Demo','demo-alice','finance');
-INSERT IGNORE INTO roles VALUES ('accountant','Accountant',FALSE),('payment-approver','Payment approver',TRUE),('payment-creator','Payment creator',TRUE),('mcp-operator','MCP operator (AI sessions)',TRUE);
+INSERT IGNORE INTO roles VALUES ('accountant','Accountant',FALSE),('payment-approver','Payment approver',TRUE),('payment-creator','Payment creator',TRUE),('mcp-operator','MCP operator (AI sessions)',TRUE),('branch-merger','Branch merger (merge into protected branches)',FALSE);
 INSERT IGNORE INTO assignments VALUES ('demo-bob','payment-creator');
-INSERT IGNORE INTO assignments VALUES ('demo-alice','mcp-operator');
+INSERT IGNORE INTO assignments VALUES ('demo-alice','mcp-operator'),('demo-alice','branch-merger');
 INSERT IGNORE INTO sod_rules VALUES ('payment-creator','payment-approver');
 -- Demo: demo-alice's AI sessions may READ the sandbox "fake" upstream (search/get), never write it (createIssue is not granted).
 INSERT IGNORE INTO delegation_grants VALUES ('acme-demo','demo-alice','fake','searchIssues',NULL,'demo-seed'),('acme-demo','demo-alice','fake','getIssue',NULL,'demo-seed'),
@@ -45,6 +45,7 @@ INSERT IGNORE INTO policy_rules VALUES
 ('default','approve-needs-payment-approver','@id("approve-needs-payment-approver")\n@description("A person holding the payment-approver role may approve.")\n@pillar("human")\npermit(principal, action == Action::"approve", resource) when { context has roles && context.roles.contains("payment-approver") };'),
 ('default','sod-blocks-approve','@id("sod-blocks-approve")\n@description("Separation of duties: nobody with a SoD conflict may approve, whatever other rules allow. The attribute is optional in the schema, so the rule guards its read with `has`.")\n@pillar("sod")\nforbid(principal, action == Action::"approve", resource) when { context has sod_conflict && context.sod_conflict == true };'),
 ('default','mcp-operator-read-write-lifecycle','@id("mcp-operator-read-write-lifecycle")\n@description("A person with the mcp-operator role may open MCP sessions that read, write and manage their own data branch.")\n@pillar("mcp")\npermit(principal, action in [Action::"mcp:read", Action::"mcp:write", Action::"mcp:lifecycle"], resource)\n  when { context has roles && context.roles.contains("mcp-operator") };'),
-('default','mcp-proxy-needs-delegation-grant','@id("mcp-proxy-needs-delegation-grant")\n@description("Relaying a tool through the MCP gateway requires the mcp-operator role and an active delegation grant on that exact tool.")\n@pillar("mcp")\npermit(principal, action == Action::"mcp:proxy", resource)\n  when { context has roles && context.roles.contains("mcp-operator")\n      && context has mcp_grants && context.mcp_grants.contains(resource) };');
+('default','mcp-proxy-needs-delegation-grant','@id("mcp-proxy-needs-delegation-grant")\n@description("Relaying a tool through the MCP gateway requires the mcp-operator role and an active delegation grant on that exact tool.")\n@pillar("mcp")\npermit(principal, action == Action::"mcp:proxy", resource)\n  when { context has roles && context.roles.contains("mcp-operator")\n      && context has mcp_grants && context.mcp_grants.contains(resource) };'),
+('default','merge-into-protected-needs-branch-merger','@id("merge-into-protected-needs-branch-merger")\n@description("A person holding the branch-merger role may merge a pull request into a protected branch such as main.")\n@pillar("versioning")\npermit(principal, action == Action::"branch:merge", resource)\n  when { context has roles && context.roles.contains("branch-merger") };');
 CALL DOLT_ADD('-A');
 CALL DOLT_COMMIT('-m','demo seed');
