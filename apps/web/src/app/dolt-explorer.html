@@ -329,12 +329,16 @@
         <button type="button" class="secondary swap" title="Swap base and compare" (click)="swapRefs()">⇄</button>
         <label>compare <select name="ct" [(ngModel)]="to" (ngModelChange)="compare()">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
         <span class="pills" role="group" aria-label="Diff mode">
-          <button type="button" class="pill" [class.on]="!three" (click)="three = false; compare()">2-dot</button>
-          <button type="button" class="pill" [class.on]="three" (click)="three = true; compare()">3-dot · merge base</button>
+          <button type="button" class="pill" [class.on]="three" (click)="three = true; compare()">Branch changes</button>
+          <button type="button" class="pill" [class.on]="!three" (click)="three = false; compare()">All changes</button>
         </span>
         <span class="spacer"></span>
         <button type="button" [disabled]="!canCreatePrFromCompare()" title="Open a pull request from these two branches" (click)="createPullFromCompare()">Create pull request &#x2192;</button>
       </div>
+      <p class="hint">Branch changes shows what {{ to }} changed since it diverged from {{ from }}; All changes shows every difference between the two refs.</p>
+      @if (three && compareBehind() > 0) {
+        <p class="msg">{{ from }} has moved ahead by {{ compareBehind() }} commit{{ compareBehind() === 1 ? '' : 's' }} since {{ to }} diverged. Branch changes hides them - switch to All changes to see every difference.</p>
+      }
       @if (diff(); as d) {
         @if (!d.tables.length && !d.schema.length) { <p class="hint">No differences.</p> } @else {
           <p class="cmp-summary">

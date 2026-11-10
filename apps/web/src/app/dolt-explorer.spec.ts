@@ -439,6 +439,25 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(el.querySelector('#pti-err')?.textContent).toContain('title is required');
   });
 
+  it('compare: named diff modes, and a banner when the base has moved ahead in Branch changes view', async () => {
+    const shared = { commit: 's'.repeat(32), author: 'demo-seed', date: new Date().toISOString(), message: 'seed', parents: [], refs: [], merge: false };
+    const { f, el, c } = await mount(routes({
+      'GET /versioning/log?ref=main': () => ({ data: { ref: 'main', hasMore: false, commits: [{ ...shared, commit: 'm'.repeat(32), message: 'main moved' }, shared] } }),
+      'GET /versioning/log?ref=feat-a': () => ({ data: { ref: 'feat-a', hasMore: false, commits: [shared] } }),
+    }));
+    f.componentRef.setInput('section', 'compare'); await f.whenStable(); f.detectChanges();
+    c['from'] = 'main'; c['to'] = 'feat-a'; await c['compare'](); f.detectChanges();
+    const pills = [...el.querySelectorAll('.pill')].map((x) => x.textContent?.trim());
+    expect(pills).toEqual(['Branch changes', 'All changes']);
+    expect((el.querySelector('.pill.on') as HTMLElement)?.textContent).toContain('Branch changes'); // three-dot default
+    expect(el.textContent).toContain('shows what feat-a changed since it diverged from main');
+    expect(c['compareBehind']()).toBe(1);
+    expect(el.querySelector('.msg')?.textContent).toContain('main has moved ahead by 1 commit');
+    // All changes shows everything, so the banner goes away
+    await click(f, el, 'All changes');
+    expect(el.querySelector('.msg')?.textContent ?? '').not.toContain('moved ahead');
+  });
+
   it('follows the route section, and announces its own jumps so the address can follow', async () => {
     const { api } = fakeApi(routes());
     const f = TestBed.createComponent(DoltExplorer); f.componentRef.setInput('api', api); f.componentRef.setInput('section', 'history');

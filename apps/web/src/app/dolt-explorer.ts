@@ -107,6 +107,8 @@ export class DoltExplorer {
   protected readonly compareTab = signal<'commits' | 'rows' | 'schema'>('rows');
   /** Commits of the compare side that the base does not have (walked from the logs, newest first). */
   protected readonly compareAhead = signal<CommitInfo[] | null>(null);
+  /** Commits the base ref has that the compare ref does not (drives the "base has moved ahead" banner). */
+  protected readonly compareBehind = signal<number>(0);
   /** Row-level diff per expanded table of the compare view. */
   protected readonly rowDiffs = signal<Record<string, RowDiffView | undefined>>({});
   protected readonly expandedDiffs = signal<ReadonlySet<string>>(new Set());
@@ -416,7 +418,7 @@ export class DoltExplorer {
 
   // compare
   protected async compare() {
-    if (this.from === this.to) { this.diff.set(null); this.compareAhead.set(null); return; }
+    if (this.from === this.to) { this.diff.set(null); this.compareAhead.set(null); this.compareBehind.set(0); return; }
     this.rowDiff.set(null); this.rowDiffs.set({}); this.expandedDiffs.set(new Set()); this.compareAhead.set(null);
     const r = await this.run(() => this.v.diff(this.from, this.to, this.three)); if (!r) return;
     this.diff.set(r);
@@ -441,6 +443,10 @@ export class DoltExplorer {
     const ahead: CommitInfo[] = [];
     for (const c of toLog.commits) { if (base.has(c.commit)) break; ahead.push(c); }
     this.compareAhead.set(ahead);
+    const toSet = new Set(toLog.commits.map((c) => c.commit));
+    let behind = 0;
+    for (const c of fromLog.commits) { if (toSet.has(c.commit)) break; behind++; }
+    this.compareBehind.set(behind);
   }
   protected canCreatePrFromCompare() {
     const names = this.branches().map((b) => b.name);
