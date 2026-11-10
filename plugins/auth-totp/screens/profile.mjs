@@ -2275,7 +2275,7 @@ const css = `
 .tpf .status{display:inline-block;border-radius:999px;padding:.15em .7em;font-size:.85em}
 .tpf .on{background:var(--ok-soft);color:var(--ok)}.tpf .off{background:var(--code-bg);color:var(--muted)}
 .tpf .immediate{color:var(--warn-ink);background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:6px;padding:.4em .7em;font-size:.85em;margin:.5em 0}
-.tpf .qr svg{display:block;width:180px;height:180px;background:#fff;border:1px solid var(--line);border-radius:8px;margin:.3em 0}
+.tpf .qr svg{display:block;width:180px;height:180px;border:1px solid var(--line);border-radius:8px;margin:.3em 0}
 `;
 
 /** Text/attribute escaping: instance names, the fresh enrollment and server messages land in innerHTML. */

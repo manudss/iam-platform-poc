@@ -7,20 +7,20 @@
 // base64url fallback: no front dependency.
 
 const css = `
-:host{color:var(--ink,#0f172a)}
+:host{color:var(--ink)}
 .wpf{font:inherit}.wpf .row{display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin:.4em 0}
-.wpf button{cursor:pointer;border:1px solid var(--field-line,#cbd5e1);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px;min-width:44px}
-.wpf button.primary{background:var(--accent,#4f46e5);border-color:var(--accent,#4f46e5);color:#fff}
-.wpf button.danger{border-color:var(--bad,#b91c1c);color:var(--bad,#b91c1c)}
+.wpf button{cursor:pointer;border:1px solid var(--field-line);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px;min-width:44px}
+.wpf button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.wpf button.danger{border-color:var(--bad);color:var(--bad)}
 .wpf button:disabled{opacity:.5;cursor:default}
-.wpf input{font:inherit;padding:.5em;min-height:44px;box-sizing:border-box;background:var(--field-bg,#fff);color:inherit;border:1px solid var(--field-line,#cbd5e1);border-radius:6px}
-.wpf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}.wpf .bad{background:var(--bad-soft,#fee2e2);color:var(--bad-ink,#7f1d1d)}.wpf .ok{background:var(--ok-soft,#dcfce7);color:var(--ok,#15803d)}
-.wpf .hint{color:var(--label,#475569);font-size:.85em;max-width:36em}
+.wpf input{font:inherit;padding:.5em;min-height:44px;box-sizing:border-box;background:var(--field-bg);color:inherit;border:1px solid var(--field-line);border-radius:6px}
+.wpf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}.wpf .bad{background:var(--bad-soft);color:var(--bad-ink)}.wpf .ok{background:var(--ok-soft);color:var(--ok)}
+.wpf .hint{color:var(--label);font-size:.85em;max-width:36em}
 .wpf ul{list-style:none;margin:.4em 0;padding:0}
-.wpf li{display:flex;gap:.6em;align-items:center;flex-wrap:wrap;padding:.5em .6em;border:1px solid var(--line,#e2e8f0);border-radius:8px;margin-bottom:.4em}
+.wpf li{display:flex;gap:.6em;align-items:center;flex-wrap:wrap;padding:.5em .6em;border:1px solid var(--line);border-radius:8px;margin-bottom:.4em}
 .wpf .pk-name{font-weight:600}
-.wpf .pk-meta{color:var(--muted,#64748b);font-size:.85em}
-.wpf .chip{border-radius:999px;padding:.1em .6em;font-size:.78em;background:var(--code-bg,#f1f5f9);color:var(--muted,#64748b)}
+.wpf .pk-meta{color:var(--muted);font-size:.85em}
+.wpf .chip{border-radius:999px;padding:.1em .6em;font-size:.78em;background:var(--code-bg);color:var(--muted)}
 `;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
