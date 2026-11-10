@@ -129,3 +129,5 @@ The real browser guard checks computed sidebar, body and header colors against t
 ## Color suggestions revision
 
 Native color wells are replaced by named, touch-size source swatches (Indigo, Teal, Sage, Blue, Plum, Copper, Terracotta, Slate), separate for primary and accent, plus validated hex entry. Presets remain. HCT chroma is limited to 48 for primary and 24 for accent; success and warning palettes use chroma 32 to avoid neon state fills. Contrast tone pairs remain tested in both themes. The computed color may therefore be calmer than the exact entered source color; the page explains this instead of silently claiming exact matching.
+
+Custom color pickers are also available for primary and accent, next to the named swatches and hex entry. They select source colors freely; the HCT chroma limits still soften the resulting UI palette and contrast-safe tones remain enforced. Picker, hex and swatch selection stay synchronized.

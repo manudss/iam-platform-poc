@@ -86,7 +86,9 @@ try {
   const frame=page.frameLocator('iframe[title="Live branding preview"]');
   await frame.locator('app-brand img').first().waitFor();
   const defaultSidebar=await page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue('--sidebar-bg').trim());
-  assert.equal(await page.locator('input[type=color]').count(),0,'mobile uses curated swatches, not native rainbow picker');
+  assert.equal(await page.locator('input[type=color]').count(),2,'both roles offer custom picking alongside curated swatches');
+  await page.locator('[data-picker=primaryColor]').fill('#5c6bc0');
+  await page.waitForFunction(()=>document.querySelector('input[name=primaryColor]').value==='#5c6bc0');
   await page.getByRole('button',{name:'Primary Sage',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('input[name=primaryColor]').value==='#527a59');
   await page.waitForFunction(()=>document.querySelector('iam-customisation .status')?.textContent.includes('Preview updated'));
