@@ -40,8 +40,8 @@ describe('app-connector validation', () => {
     assert.equal(build('a', { ...oidc, secret_ref: 'apps/wiki/client-secret' }).secret_ref, 'apps/wiki/client-secret');
   });
   it('the demo seed is valid and fictional', () => {
-    for (const d of DEMO_APP_CONNECTORS) { assert.deepEqual(build(d.id, d as never), d); assert.ok(JSON.stringify(d).includes('example.invalid') || JSON.stringify(d).includes('localhost')); }
-    assert.equal(DEMO_APP_CONNECTORS.length, 3);
+    for (const d of DEMO_APP_CONNECTORS) { assert.deepEqual(build(d.id, d as never), d); assert.ok(JSON.stringify(d).includes('example.invalid') || JSON.stringify(d).includes('localhost') || JSON.stringify(d).includes('apps.dss.name')); } // apps.dss.name: the owner's demo gallery domain, no real company
+    assert.equal(DEMO_APP_CONNECTORS.length, 13);
   });
 });
 
