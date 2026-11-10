@@ -45,6 +45,7 @@ export interface WfTriggerEvent {
 interface WfModelModule {
   STEP_TYPES: Record<StepType, { simulated: boolean; label: string; category?: StepCategory }>;
   WF_EVENTS: Record<string, { label: string; payload: string[]; configFields?: WfBlockField[] }>;
+  LOGIC_FIELDS: Record<string, WfBlockField[]>;
   placeholderKeys: (value: unknown) => string[];
   stepPlaceholderRefs: (value: unknown) => { node: string; key: string }[];
   substituteStepOutputs: (node: WfNode, outputs: Record<string, Record<string, unknown>>) => WfNode;
@@ -112,7 +113,7 @@ export function blockCatalogue(): { type: string; family: string; label: string;
     { type: 'loop', hint: 'Runs its body (links labeled each) once per item, then the done links', outputs: [{ key: 'item', description: 'the current item (per iteration)' }, { key: 'index', description: 'the current iteration, 0-based' }, { key: 'count', description: 'the number of items' }] },
     { type: 'merge', hint: 'Joins paths: runs as soon as one incoming link arrives', outputs: [{ key: 'arrived', description: 'the incoming steps that arrived' }] },
   ];
-  for (const b of logic) out.push({ type: b.type, family: 'Logic', label: STEP_TYPES[b.type].label, simulated: true, category: stepCategoryOf(b.type), description: b.hint, fields: [], outputs: b.outputs, provider: null });
+  for (const b of logic) out.push({ type: b.type, family: 'Logic', label: STEP_TYPES[b.type].label, simulated: true, category: stepCategoryOf(b.type), description: b.hint, fields: plugin.LOGIC_FIELDS?.[b.type] ?? [], outputs: b.outputs, provider: null });
   const seen = new Set(out.map((b) => b.type));
   for (const impl of pluginCatalogue().impls()) {
     if (!impl.manifest.entrypoints?.['blocks']) continue;

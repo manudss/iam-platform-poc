@@ -246,6 +246,24 @@ function str(v, what, max, required = true) {
 }
 /** Operators of the if step, evaluated on the RESOLVED strings (placeholders already substituted). */
 export const IF_OPERATORS = ['equals', 'not-equals', 'contains', 'not-contains', 'starts-with', 'ends-with', 'gt', 'lt', 'empty', 'not-empty'];
+/** Config form fields of the flow-control blocks, rendered by the editor's Settings drawer (keys must
+ *  match what the engine reads: if left/op/right, switch value/cases, loop items/maxItems, merge none). */
+export const LOGIC_FIELDS = {
+    if: [
+        { key: 'left', label: 'Left value', type: 'string', required: true, help: 'Placeholders allowed, e.g. {{event.department}} or {{steps.read.email}}' },
+        { key: 'op', label: 'Operator', type: 'select', required: true, default: 'equals', options: IF_OPERATORS },
+        { key: 'right', label: 'Right value', type: 'string', help: 'Not used by the empty / not-empty operators' },
+    ],
+    switch: [
+        { key: 'value', label: 'Value to branch on', type: 'string', required: true, help: 'Placeholders allowed, e.g. {{event.department}}' },
+        { key: 'cases', label: 'Cases (one per line or comma-separated)', type: 'text', required: true, help: 'Outgoing links carry a case label; an unmatched value takes the default link' },
+    ],
+    loop: [
+        { key: 'items', label: 'Items (JSON array or list)', type: 'text', required: true, help: 'A JSON array, or one item per line / comma-separated; placeholders allowed' },
+        { key: 'maxItems', label: 'Max items per run (safety cap)', type: 'number', default: 10 },
+    ],
+    merge: [],
+};
 const EDGE_LABEL = /^[a-z0-9][a-z0-9-]{0,30}$/;
 /** The case labels of a switch step, from its newline/comma-separated config list. */
 export function switchCases(raw) {
