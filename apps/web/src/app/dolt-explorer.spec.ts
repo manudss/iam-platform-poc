@@ -232,6 +232,7 @@ describe('DoltExplorer (rendering with a fake API)', () => {
   });
   it('row history: past versions from dolt_history_ joined with the commit log, with restore filling the editor as a new commit', async () => {
     const hist = { mode: 'read', columns: ['id', 'label', 'commit_hash', 'committer', 'commit_date', '_commit_message'], rows: [
+      { id: 'a', label: 'A2', commit_hash: 'unrelated'.padEnd(32, '0'), committer: 'demo-bob', commit_date: new Date().toISOString(), _commit_message: 'unrelated workflow change' },
       { id: 'a', label: 'A2', commit_hash: 'h2'.padEnd(32, '2'), committer: 'demo-alice', commit_date: new Date().toISOString(), _commit_message: 'roles: rename A' },
       { id: 'a', label: 'A1', commit_hash: 'h1'.padEnd(32, '1'), committer: 'demo-seed', commit_date: new Date(Date.now() - 864e5).toISOString(), _commit_message: 'seed: demo data' }] };
     const { f, el, c, calls } = await mount(routes({ 'POST /versioning/sql': () => ({ data: hist }) }));
@@ -243,7 +244,7 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(card?.textContent).toContain('label:'); expect(card?.textContent).toContain('A1'); expect(card?.textContent).toContain('A2');
     expect(card?.textContent).toContain('row created');
     // author and commit message come from the join with the commit log
-    expect(card?.textContent).toContain('demo-alice'); expect(card?.textContent).toContain('roles: rename A');
+    expect(card?.textContent).toContain('demo-alice'); expect(card?.textContent).toContain('roles: rename A'); expect(card?.textContent).not.toContain('unrelated workflow change');
     const histCall = calls.find((x) => x.path === '/versioning/sql');
     expect(JSON.stringify(histCall?.body)).toContain('dolt_commits');
     // restore an old version: a row tab opens with its values and a restore commit message

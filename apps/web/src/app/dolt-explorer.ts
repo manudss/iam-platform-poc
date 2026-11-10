@@ -8,7 +8,7 @@ import { ApiClient, BranchInfo, ColumnInfo, CommitInfo, DiffSummary, PullRequest
 export type Tab = 'home' | 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
 interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }
 /** One past version of a row: the commit that touched it, who wrote it and why, plus the column-level old -> new. */
-interface RowHistEntry { commit: string; author: string; date: string; message: string; changes: { col: string; from: unknown; to: unknown }[]; created: boolean; values: Record<string, unknown> }
+interface RowHistEntry { commit: string; author: string; date: string; message: string; changes: { col: string; from: unknown; to: unknown }[]; created: boolean; baseline?: boolean; values: Record<string, unknown> }
 /** A data workbench tab, bound to a branch for its whole life: a table tab shows rows of one (table, branch); a row tab edits one row (key null = a new row) of one (table, branch). */
 type DataTab =
   | { kind: 'table'; table: string; ref: string }
@@ -607,13 +607,13 @@ export class DoltExplorer {
     const keyVals = rt ? rt.key : row && pk?.length ? Object.fromEntries(pk.map((k) => [k, row[k]])) : null;
     if (!ref || !table || !pk?.length || !keyVals) return;
     const where = pk.map((k) => `h.\`${k}\` = '${String(keyVals[k]).replace(/'/g, "''")}'`).join(' and ');
-    const r = await this.run(() => this.v.sql({ ref, sql: `select h.*, c.message as _commit_message from \`dolt_history_${table}\` h left join \`dolt_commits\` c on c.commit_hash = h.commit_hash where ${where} order by h.commit_date desc limit 50`, mode: 'read' }), true);
+    const r = await this.run(() => this.v.sql({ ref, sql: `select h.*, c.message as _commit_message from \`dolt_history_${table}\` h left join \`dolt_commits\` c on c.commit_hash = h.commit_hash where ${where} order by h.commit_date desc limit 501`, mode: 'read' }), true);
     if (!r?.rows || this.activeRowTab() !== rt || this.data() !== d) return;
     this.rowHistory.set(r.rows.map((v, i) => {
       const older = r.rows![i + 1];
       const changes = cols.filter((c) => JSON.stringify(v[c] ?? null) !== JSON.stringify(older?.[c] ?? null)).map((c) => ({ col: c, from: older?.[c] ?? null, to: v[c] ?? null }));
-      return { commit: String(v['commit_hash'] ?? ''), author: String(v['committer'] ?? ''), date: String(v['commit_date'] ?? ''), message: String(v['_commit_message'] ?? ''), changes, created: !older, values: v };
-    }));
+      return { commit: String(v['commit_hash'] ?? ''), author: String(v['committer'] ?? ''), date: String(v['commit_date'] ?? ''), message: String(v['_commit_message'] ?? ''), changes, created: !older && !r.truncated, baseline: !older && !!r.truncated, values: v };
+    }).filter((h) => h.created || h.baseline || h.changes.length > 0));
   }
   /** Restore fills the row's editor tab with an old version: committing it is a new commit, nothing is rewritten. */
   protected restoreVersion(h: { commit: string; values: Record<string, unknown> }) {

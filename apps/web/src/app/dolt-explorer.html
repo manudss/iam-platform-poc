@@ -54,11 +54,11 @@
           <article class="row-version">
             <div class="version-meta"><span class="avatar" aria-hidden="true">{{ initials(h.author) }}</span> <b>{{ h.author }}</b> · <time [title]="h.date">{{ rel(h.date) }}</time> <code>{{ short(h.commit) }}</code></div>
             <p class="version-message">{{ h.message || '(no commit message)' }}</p>
-            @if (h.created) { <b>row created</b> } @else { @for (ch of h.changes; track ch.col) { <div class="version-change"><b>{{ ch.col }}:</b> <s>{{ cell(ch.from) }}</s> → {{ cell(ch.to) }}</div> } @empty { <div class="hint">no column change</div> } }
+            @if (h.baseline) { <span class="hint">Earlier versions exist. Oldest loaded snapshot, not necessarily the creation.</span> } @else if (h.created) { <b>row created</b> } @else { @for (ch of h.changes; track ch.col) { <div class="version-change"><b>{{ ch.col }}:</b> <s>{{ cell(ch.from) }}</s> → {{ cell(ch.to) }}</div> } @empty { <div class="hint">no column change</div> } }
             @if (histEditable() && !$first) { <button type="button" class="link" (click)="restoreVersion(h)">Restore</button> }
           </article>
         }
-        <p class="hint">Restore fills the editor with that version: committing it makes a new commit, nothing is rewritten.</p>
+        <p class="hint">Only row changes are shown, comparing up to 500 branch snapshots. Author is the recorded Dolt committer. Restore fills the editor with that version: committing it makes a new commit, nothing is rewritten.</p>
       </div>
     }
   </ng-template>
