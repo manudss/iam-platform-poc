@@ -362,6 +362,33 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(c['sqlMode']).toBe('write'); expect(el.textContent).toContain('Preview changes');
     vi.restoreAllMocks();
   });
+  it('sql console: branch and mode are per-tab and restored when switching tabs', async () => {
+    const { f, el, c } = await mount(routes());
+    f.componentRef.setInput('section', 'sql'); await f.whenStable(); f.detectChanges();
+    const branch = () => el.querySelector('select[name=sr]') as HTMLSelectElement;
+    const setBranch = (v: string) => { const s = branch(); s.value = v; s.dispatchEvent(new Event('change')); f.detectChanges(); };
+    // tab 1: pick feat-a, stay in read mode, run-less result stays empty
+    setBranch('feat-a');
+    expect(c['sqlRef']).toBe('feat-a');
+    // new tab inherits the active tab's branch and mode
+    c['addSqlTab'](); f.detectChanges();
+    expect(c['sqlRef']).toBe('feat-a'); expect(c['sqlMode']).toBe('read');
+    // switch this tab to main + write
+    setBranch('main');
+    const write = [...el.querySelectorAll('.pill')].find((b) => b.textContent?.trim() === 'Write') as HTMLButtonElement;
+    write.click(); f.detectChanges();
+    expect(c['sqlRef']).toBe('main'); expect(c['sqlMode']).toBe('write');
+    // back to tab 1: its own branch and mode are restored
+    c['switchSqlTab'](0); await f.whenStable(); f.detectChanges();
+    expect(c['sqlRef']).toBe('feat-a'); expect(c['sqlMode']).toBe('read');
+    expect(branch().value).toBe('feat-a');
+    // and forward again: tab 2 kept main + write
+    c['switchSqlTab'](1); f.detectChanges();
+    expect(c['sqlRef']).toBe('main'); expect(c['sqlMode']).toBe('write');
+    // closing the active tab restores the remaining tab's state
+    c['closeSqlTab'](1); f.detectChanges();
+    expect(c['sqlActiveTab']()).toBe(0); expect(c['sqlRef']).toBe('feat-a'); expect(c['sqlMode']).toBe('read');
+  });
   it('sql console: clicking an application table in the tree fills the editor like a system table', async () => {
     const { f, el, c } = await mount(routes());
     f.componentRef.setInput('section', 'sql'); await f.whenStable(); f.detectChanges();

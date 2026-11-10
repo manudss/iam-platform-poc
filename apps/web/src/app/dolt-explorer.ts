@@ -128,16 +128,18 @@ export class DoltExplorer {
   protected readonly editable = computed(() => { const d = this.data(); const b = this.branches().find((x) => x.name === d?.ref); return !!d && d.kind === 'branch' && !!b && !b.protected && !d.table.startsWith('plugin_runtime_'); });
 
   protected sqlRef = this.session.branch() || 'main'; protected sqlMode: 'read' | 'write' = 'read';
-  protected readonly sqlTabs = signal<{ name: string; text: string }[]>([{ name: 'Query 1', text: 'select * from assignments' }]);
+  protected readonly sqlTabs = signal<{ name: string; text: string; ref: string; mode: 'read' | 'write'; result: SqlResult | null }[]>([
+    { name: 'Query 1', text: 'select * from assignments', ref: this.sqlRef, mode: 'read', result: null }]);
   protected readonly sqlActiveTab = signal(0);
-  private stashSqlTab() { const tabs = [...this.sqlTabs()]; const cur = this.sqlActiveTab(); if (tabs[cur]) { tabs[cur] = { ...tabs[cur], text: this.sqlText }; this.sqlTabs.set(tabs); } }
-  protected switchSqlTab(i: number) { if (i === this.sqlActiveTab()) return; this.stashSqlTab(); this.sqlActiveTab.set(i); this.sqlText = this.sqlTabs()[i].text; this.sqlResult.set(null); }
-  protected addSqlTab() { this.stashSqlTab(); this.sqlTabs.update((t) => [...t, { name: `Query ${t.length + 1}`, text: '' }]); this.sqlActiveTab.set(this.sqlTabs().length - 1); this.sqlText = ''; this.sqlResult.set(null); }
+  private stashSqlTab() { const tabs = [...this.sqlTabs()]; const cur = this.sqlActiveTab(); if (tabs[cur]) { tabs[cur] = { ...tabs[cur], text: this.sqlText, ref: this.sqlRef, mode: this.sqlMode, result: this.sqlResult() }; this.sqlTabs.set(tabs); } }
+  private restoreSqlTab(i: number) { const t = this.sqlTabs()[i]; if (!t) return; this.sqlText = t.text; this.sqlRef = t.ref; this.sqlMode = t.mode; this.sqlResult.set(t.result); }
+  protected switchSqlTab(i: number) { if (i === this.sqlActiveTab()) return; this.stashSqlTab(); this.sqlActiveTab.set(i); this.restoreSqlTab(i); }
+  protected addSqlTab() { this.stashSqlTab(); this.sqlTabs.update((t) => [...t, { name: `Query ${t.length + 1}`, text: '', ref: this.sqlRef, mode: this.sqlMode, result: null }]); this.sqlActiveTab.set(this.sqlTabs().length - 1); this.sqlText = ''; this.sqlResult.set(null); }
   protected closeSqlTab(i: number) {
     if (this.sqlTabs().length <= 1) return;
     const wasActive = this.sqlActiveTab() === i;
     this.sqlTabs.update((t) => t.filter((_, j) => j !== i));
-    if (wasActive) { this.sqlActiveTab.set(0); this.sqlText = this.sqlTabs()[0].text; this.sqlResult.set(null); } else if (this.sqlActiveTab() > i) this.sqlActiveTab.update((x) => x - 1);
+    if (wasActive) { this.sqlActiveTab.set(0); this.restoreSqlTab(0); } else if (this.sqlActiveTab() > i) this.sqlActiveTab.update((x) => x - 1);
   }
   protected sqlLineNos() { return this.sqlText.split('\n').map((_, i) => i + 1); }
   protected saveQuery() {
