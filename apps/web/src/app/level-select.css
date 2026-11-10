@@ -3,8 +3,8 @@
 .ls-btn:hover:not(:disabled) { background: var(--field-bg); border-color: var(--accent); color: var(--ink); }
 .ls-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ls-btn b { color: var(--ink); min-width: 1.2rem; } .ls-btn .of { color: var(--label); font-size: .82rem; font-weight: 400; } .ls-btn .car { margin-left: auto; color: var(--label); }
-.ls-list { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: .3rem; list-style: none; background: var(--card); color: var(--ink); border: 1px solid var(--field-line); border-radius: .6rem; box-shadow: 0 10px 30px rgba(2, 6, 23, .35); max-height: 22rem; overflow: auto; }
+.ls-list { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: .3rem; list-style: none; background: var(--card); color: var(--ink); border: 1px solid var(--field-line); border-radius: .6rem; box-shadow: 0 10px 30px var(--shadow-color); max-height: 22rem; overflow: auto; }
 .ls-list li { display: flex; align-items: center; gap: .8rem; padding: .5rem .6rem; min-height: 2.25rem; border-radius: .4rem; cursor: pointer; }
 .ls-list li b { width: 1.4rem; text-align: right; color: var(--ink); }
-.ls-list li.act { background: var(--accent-soft); } .ls-list li.sel { background: var(--accent); } .ls-list li.sel b { color: #fff; }
+.ls-list li.act { background: var(--accent-soft); } .ls-list li.sel { background: var(--accent); } .ls-list li.sel b { color: var(--accent-ink); }
 @media (max-width: 600px) { .ls-list { position: static; margin-top: .4rem; max-height: none; } .ls-list li { min-height: 2.5rem; } }

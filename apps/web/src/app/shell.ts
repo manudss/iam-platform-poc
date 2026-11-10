@@ -1,4 +1,6 @@
+import { Brand, Branding } from './branding';
 import { Component, computed, effect, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
@@ -11,8 +13,18 @@ interface NavItem { path: string; label: string; icon: string; order?: number }
 interface NavGroup { title: string; items: NavItem[] }
 
 /** Administration layout: grouped sidebar, top bar with the signed-in identity, status bar and the page outlet. */
-@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer, ThemeSwitch], templateUrl: './shell.html', styleUrl: './shell.css' })
+@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer, ThemeSwitch, Brand], templateUrl: './shell.html', styleUrl: './shell.css' })
 export class Shell {
+  private readonly branding = inject(Branding);
+  private brandingRequest = 0;
+  private async loadBranding(){
+    const request=++this.brandingRequest;
+    try{const r=await this.s.api.raw<any>('GET','/branding/draft',undefined,this.headers());
+      if(request===this.brandingRequest&&r.status<400)this.branding.applyBundle(r.data);
+    }catch{/* keep last readable palette while a branch is loading */}
+  }
+  ngOnDestroy(){++this.brandingRequest;this.branding.clearDraft();}
+
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
   protected branches=signal<BranchInfo[]>([]);protected newBranch='';protected working='';protected review=signal<any>(null);protected workingBusy=signal(false);
@@ -103,9 +115,10 @@ export class Shell {
 
 
   constructor() {
-    this.router.events.pipe(filter((e) => e instanceof NavigationEnd)).subscribe(() => { this.menu.set(false); this.title.set(this.leafTitle()); void this.loadChanges(); });
+    this.router.events.pipe(filter((e) => e instanceof NavigationEnd),takeUntilDestroyed()).subscribe(() => { this.menu.set(false); this.title.set(this.leafTitle()); void this.loadChanges(); void this.loadBranding(); });
     // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
-    effect(() => { this.s.pluginsVersion(); void this.loadPluginMenu(); });
+    effect(() => { this.s.pluginsVersion(); this.s.branch(); this.s.branchEpoch(); void this.loadPluginMenu(); });
+    effect(()=>{this.s.branch();this.s.branchEpoch();this.s.adminToken();void this.loadBranding();});
     this.title.set(this.leafTitle());
   }
   private leafTitle(): string {

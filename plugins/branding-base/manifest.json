@@ -1,0 +1,113 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "branding-base",
+  "version": "1.0.0",
+  "name": "Product customisation (base)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "ui"
+  ],
+  "base": true,
+  "provides": [
+    "branding"
+  ],
+  "hooks": [],
+  "settings": [
+    {
+      "key": "productName",
+      "type": "string",
+      "label": "Product name",
+      "default": "lyam",
+      "pattern": "^[^<>\\x00-\\x1f]{1,80}$",
+      "group": "Branding"
+    },
+    {
+      "key": "baseline",
+      "type": "string",
+      "label": "Baseline",
+      "default": "IAM next generation",
+      "pattern": "^[^<>\\x00-\\x1f]{0,160}$",
+      "group": "Branding"
+    },
+    {
+      "key": "footer",
+      "type": "string",
+      "label": "Footer",
+      "default": "Fictional demo data only. Do not enter real data.",
+      "pattern": "^[^<>\\x00-\\x1f]{0,400}$",
+      "group": "Branding"
+    },
+    {
+      "key": "primaryColor",
+      "type": "string",
+      "label": "Primary color",
+      "default": "#4f46e5",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "group": "Branding"
+    },
+    {
+      "key": "accentColor",
+      "type": "string",
+      "label": "Accent color",
+      "default": "#818cf8",
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "group": "Branding"
+    },
+    {
+      "key": "logoSvg",
+      "type": "text",
+      "label": "Custom logo SVG",
+      "default": "",
+      "pattern": "^[\\s\\S]{0,50000}$",
+      "group": "Branding"
+    },
+    {
+      "key": "faviconSvg",
+      "type": "text",
+      "label": "Custom favicon SVG",
+      "default": "",
+      "pattern": "^[\\s\\S]{0,50000}$",
+      "group": "Branding"
+    },
+    {
+      "key": "logoMode",
+      "type": "select",
+      "label": "Logo",
+      "default": "default",
+      "options": [
+        {
+          "value": "default",
+          "label": "Themed lyam logo"
+        },
+        {
+          "value": "custom",
+          "label": "Custom SVG"
+        }
+      ],
+      "group": "Branding"
+    }
+  ],
+  "menu": [
+    {
+      "id": "customisation",
+      "title": "Customisation",
+      "area": "admin",
+      "group": "Extensions",
+      "icon": "\u25c8",
+      "order": 15,
+      "path": "/screens/branding-base/customisation"
+    }
+  ],
+  "screens": [
+    {
+      "id": "customisation",
+      "title": "Customisation",
+      "area": "admin",
+      "render": "component",
+      "component": "screens/customisation.mjs"
+    }
+  ],
+  "security": {
+    "signed": true
+  }
+}

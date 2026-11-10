@@ -1,0 +1,6 @@
+{
+  "name": "iam-plugin-branding-base",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module"
+}

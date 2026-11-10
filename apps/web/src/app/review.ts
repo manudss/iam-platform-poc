@@ -51,15 +51,15 @@ interface TableView { table: string; kind: string; rows: { added: number; modifi
     }
   </section>`,
   styles: [`
-    .add { color: #15803d; } .del { color: #b91c1c; } .mod { color: #b45309; } .bad { color: #b91c1c; }
-    .tbl { border: 1px solid var(--line, #e2e8f0); border-radius: .5rem; margin: .8rem 0; padding: .4rem .8rem; }
-    .tbl h3 { margin: .3rem 0; display: flex; gap: .6rem; align-items: center; } .tbl h3 small { color: #64748b; font-weight: 400; }
+    .add { color: var(--ok); } .del { color: var(--bad); } .mod { color: var(--warn-ink); } .bad { color: var(--bad); }
+    .tbl { border: 1px solid var(--line); border-radius: .5rem; margin: .8rem 0; padding: .4rem .8rem; }
+    .tbl h3 { margin: .3rem 0; display: flex; gap: .6rem; align-items: center; } .tbl h3 small { color: var(--muted); font-weight: 400; }
     .tog { padding: .1rem .5rem; } .scroll { overflow-x: auto; }
     table.rows { border-collapse: collapse; font-family: ui-monospace, monospace; font-size: .8rem; width: 100%; }
-    table.rows td, table.rows th { padding: .2rem .5rem; border-bottom: 1px solid #f1f5f9; text-align: left; white-space: nowrap; }
-    tr.add td { background: #f0fdf4; color: #14532d; } tr.del td { background: #fef2f2; color: #7f1d1d; }
+    table.rows td, table.rows th { padding: .2rem .5rem; border-bottom: 1px solid var(--bg); text-align: left; white-space: nowrap; }
+    tr.add td { background: var(--ok-soft); color: var(--ok); } tr.del td { background: var(--bad-soft); color: var(--bad-ink); }
     td.chg { font-weight: 700; text-decoration: underline; } td.sign { width: 1.2rem; font-weight: 700; }
-    .schema { background: #f8fafc; padding: .6rem; overflow-x: auto; font-size: .8rem; }
+    .schema { background: var(--panel); padding: .6rem; overflow-x: auto; font-size: .8rem; }
   `],
 })
 export class ReviewPage {

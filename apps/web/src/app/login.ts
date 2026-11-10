@@ -1,3 +1,4 @@
+import { Brand, Branding } from './branding';
 import { Component, PLATFORM_ID, PendingTasks, TransferState, inject, makeStateKey, signal } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -31,9 +32,10 @@ export function previewMessage(d: unknown): { chains: SigninChain[]; highlight: 
   return { chains, highlight: typeof x['highlight'] === 'string' ? x['highlight'] : '', view: x['view'] === 'step' ? 'step' : 'list', step: Math.max(0, Number(x['step']) || 0), dark: x['dark'] === true };
 }
 
-@Component({ selector: 'app-login', imports: [ThemeSwitch], templateUrl: './login.html', styleUrl: './login.css' })
+@Component({ selector: 'app-login', imports: [ThemeSwitch, Brand], templateUrl: './login.html', styleUrl: './login.css' })
 export class LoginPage {
   protected readonly s = inject(Session);
+  protected readonly branding = inject(Branding);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   protected readonly busy = signal(false);
@@ -75,6 +77,7 @@ export class LoginPage {
 
   private onPreviewMessage(ev: MessageEvent) {
     if (ev.origin !== location.origin || ev.source !== parent) return;
+    if (this.branding.preview(ev.data)) {this.theme.mode.set((ev.data as any).dark ? 'dark' : 'light'); if(!this.options().chains.length)this.options.set({mode:'legacy',chains:[]}); return;}
     const m = previewMessage(ev.data); if (!m) return;
     this.options.set({ mode: 'choice', chains: m.chains }); this.highlight.set(m.highlight); this.pview.set(m.view); this.pstep.set(m.step);
     this.theme.mode.set(m.dark ? 'dark' : 'light'); // not persisted: the admin theme is untouched
@@ -130,7 +133,7 @@ export class LoginPage {
 }
 
 /** Return URL of the sign-in redirect (/callback): checks state + PKCE verifier, then goes back to the page the user came from. */
-@Component({ selector: 'app-callback', template: '<div class="wait"><p>Completing sign-in...</p></div>', styles: ['.wait { display:grid; place-items:center; min-height:100vh; color:#64748b }'] })
+@Component({ selector: 'app-callback', template: '<div class="wait"><p>Completing sign-in...</p></div>', styles: ['.wait { display:grid; place-items:center; min-height:100vh; color:var(--muted) }'] })
 export class CallbackPage {
   private readonly s = inject(Session);
   private readonly router = inject(Router);

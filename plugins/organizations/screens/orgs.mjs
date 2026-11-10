@@ -3,11 +3,11 @@
 // context { tenant, api, token, adminToken, branch }. No framework: a signed, dependency-free custom element.
 
 const css = `
-table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left}
-input,select{max-width:22em}.msg{padding:.4em .6em;border-radius:4px}.bad{background:#fdd;color:#900}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left}
+input,select{max-width:22em}.msg{padding:.4em .6em;border-radius:4px}.bad{background:var(--bad-soft);color:var(--bad)}
 .row{display:flex;gap:.6em;align-items:end;flex-wrap:wrap;margin:.6em 0}.row label{display:flex;flex-direction:column;font-size:.85em}
-.inline{margin-right:1em}.hint{color:#666;font-size:.85em}.lead{font-size:1.02em}
-button[disabled]{opacity:.5}.card{border:1px solid #ddd;border-radius:6px;padding:.8em;margin:.8em 0}.scroll{overflow:auto}
+.inline{margin-right:1em}.hint{color:var(--muted);font-size:.85em}.lead{font-size:1.02em}
+button[disabled]{opacity:.5}.card{border:1px solid var(--line);border-radius:6px;padding:.8em;margin:.8em 0}.scroll{overflow:auto}
 `;
 
 class OrganizationsScreen extends HTMLElement {

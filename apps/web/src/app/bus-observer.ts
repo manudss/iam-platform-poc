@@ -71,7 +71,7 @@ export function stepTo(rs: BusRec[], cursor: number, dir: 1 | -1): number | unde
     <td>@for (q of queued(e); track q) { <span class="chip">queued: {{q}}</span> }@for (a of ans(e); track a) { <span class="chip ok">{{a}}</span> } @empty { <span class="chip warn">nobody</span> }@for (s of mute(e); track s) { <span class="chip mute" title="expected, did not answer">silent: {{s}}</span> }</td>
     <td>{{label(e)}}</td><td>{{e.elapsed_ms}} ms</td></tr> }
   @empty { <tr><td colspan="6">@if (list().length) { Press Play: exchanges appear as the playback reaches them. } @else { No exchange recorded yet. }</td></tr> }</tbody></table></div></section> }`,
-  styles: [`.chip.ok{background:#dcfce7}.chip.warn{background:#fef3c7}.chip.mute{background:#f1f5f9}.bo-now{background:#eef2ff}.bo-scrub{display:block;margin:.5rem 0}.bo-scrub input{width:100%}`],
+  styles: [`.chip.ok{background:var(--ok-soft)}.chip.warn{background:var(--warn-soft)}.chip.mute{background:var(--bg)}.bo-now{background:var(--accent-soft)}.bo-scrub{display:block;margin:.5rem 0}.bo-scrub input{width:100%}`],
 })
 export class BusObserverPage implements OnDestroy {
   protected readonly s = inject(Session);

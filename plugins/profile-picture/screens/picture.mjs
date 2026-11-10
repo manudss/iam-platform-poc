@@ -6,18 +6,18 @@
 // mode 'readonly' forces the read-only rendering whatever the field configuration says (the server checks again).
 
 const css = `
-:host{color:var(--ink,#0f172a)}
+:host{color:var(--ink)}
 .ppf{display:flex;gap:1em;align-items:flex-start;flex-wrap:wrap}
-.ppf img{width:96px;height:96px;border-radius:50%;object-fit:cover;border:2px solid var(--field-line,#cbd5e1)}
-.ppf .empty{width:96px;height:96px;border-radius:50%;border:2px dashed var(--field-line,#cbd5e1);display:flex;align-items:center;justify-content:center;color:var(--muted,#64748b);font-size:.8em;text-align:center}
+.ppf img{width:96px;height:96px;border-radius:50%;object-fit:cover;border:2px solid var(--field-line)}
+.ppf .empty{width:96px;height:96px;border-radius:50%;border:2px dashed var(--field-line);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.8em;text-align:center}
 .ppf .col{display:flex;flex-direction:column;gap:.4em}
-.ppf button,.ppf label.up{cursor:pointer;border:1px solid var(--field-line,#cbd5e1);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px}
+.ppf button,.ppf label.up{cursor:pointer;border:1px solid var(--field-line);background:transparent;color:inherit;border-radius:6px;padding:.5em 1em;font:inherit;min-height:44px}
 .ppf label.up{display:inline-flex;align-items:center}
 .ppf input[type=file]{display:none}
 .ppf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}
-.ppf .bad{background:var(--bad-soft,#fee2e2);color:var(--bad-ink,#7f1d1d)}
-.ppf .ok{background:var(--ok-soft,#dcfce7);color:var(--ok,#15803d)}
-.ppf .hint{color:var(--label,#475569);font-size:.85em;max-width:32em}
+.ppf .bad{background:var(--bad-soft);color:var(--bad-ink)}
+.ppf .ok{background:var(--ok-soft);color:var(--ok)}
+.ppf .hint{color:var(--label);font-size:.85em;max-width:32em}
 `;
 
 const FIELD = 'profile-picture.picture';

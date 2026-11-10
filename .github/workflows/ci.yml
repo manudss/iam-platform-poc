@@ -89,6 +89,10 @@ jobs:
           (cd apps/web && npm ci)
           mkdir /tmp/pw && (cd /tmp/pw && npm init -y >/dev/null && npm i playwright-core >/dev/null)
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/ui-e2e.mjs /tmp/ui-shots
+      - name: Branding browser end-to-end (production SSR, real Dolt and Apply)
+        run: |
+          (cd apps/web && npm run build)
+          CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/branding-e2e.mjs /tmp/branding-shots
       - name: Browser sign-in flow end-to-end (headless Chrome, real core, local client on localhost:4200)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/authz-browser-e2e.mjs /tmp/authz-shots
   web:

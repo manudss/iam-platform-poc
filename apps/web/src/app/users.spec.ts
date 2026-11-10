@@ -30,7 +30,7 @@ describe('users page helpers', () => {
   });
   it('colors departments deterministically and distinctly for close names', () => {
     expect(deptColor('finance')).toBe(deptColor('finance'));
-    expect(deptColor('finance')).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(deptColor('finance')).toMatch(/^var\(--[a-z0-9-]+\)$/i);
     expect(new Set(['it', 'hr', 'sales', 'finance', 'legal'].map(deptColor)).size).toBeGreaterThan(2);
   });
   it('filters by text, department and status together', () => {
