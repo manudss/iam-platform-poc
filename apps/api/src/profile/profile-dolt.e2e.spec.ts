@@ -195,7 +195,7 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
       assert.equal(reg.isActive(ST, 'organizations'), true); assert.equal(reg.isActive(ST, 'hr-attributes'), true);
       const list = await users.list('main'); assert.ok(list.length >= 10 && list.filter((u) => u.hasCredential && u.login_enabled).length >= 10);
       const orgs = await new DoltOrgStore(v, () => 'main').list(ST, 'live'); assert.ok(orgs.orgs.length >= 6 && orgs.members.length >= 10);
-      const apps = (await new DoltAppConnectorStore(v, () => 'main').list(ST, 'live')).apps; assert.deepEqual(apps.map((a) => a.id), ['crm', 'payroll', 'wiki']); assert.equal(reg.isActive(ST, 'app-connector'), true);
+      const apps = (await new DoltAppConnectorStore(v, () => 'main').list(ST, 'live')).apps; assert.deepEqual(apps.map((a) => a.id), ['clientdesk', 'crm', 'expenseflow', 'learnup', 'payroll', 'peoplehub', 'sso-config-oidc', 'sso-config-saml', 'stockroom', 'ticketly', 'timesheet', 'travelops', 'wiki']); assert.equal(reg.isActive(ST, 'app-connector'), true);
       assert.equal((await store.get(ST, 'camille-martin', 'live'))['hr-attributes.job_title'], 'Chief accountant');
       const cfg = await reg.coreSettings(ST, 'core-profile-fields') as { signup?: { open: boolean } }; assert.equal(cfg.signup?.open, true);
     } finally { await busRef.onModuleDestroy(); delete process.env.IAM_WORKSPACE_MODE; delete process.env.IAM_CREDENTIAL_FILE; }
