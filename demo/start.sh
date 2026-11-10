@@ -27,6 +27,8 @@ export IAM_API_ADMIN_TOKEN="$API_TOKEN"
 # The edge attaches the capability to every call, so the API also requires the verified subject to be a demo administrator.
 # Anyone else (including accounts created through public sign-up) is refused on admin routes.
 export IAM_API_ADMIN_SUBJECTS="${IAM_API_ADMIN_SUBJECTS:-demo-alice}"
+# Screen access: the policy engine (Cedar screen:open, roles of the active version) decides who opens which admin screen; the subject list above only applies before the first activation.
+export IAM_SCREEN_ACCESS="${IAM_SCREEN_ACCESS:-1}"
 export IAM_POLICY_FILE=/app/policies/demo.cedar
 export IAM_CORE_STATE_DIR="$HOME_DIR/core-state"
 # Every public origin the console is reachable on needs its /callback registered (the IdP exact-matches).

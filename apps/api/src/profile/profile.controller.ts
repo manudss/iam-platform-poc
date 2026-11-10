@@ -4,6 +4,8 @@ import { OrgService } from './orgs.js';
 import { currentBranch } from '../workspace/context.js';
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { screenAccessOn, askScreen } from '../auth/screen-decision.js';
+import { SCREENS } from '../auth/screens.js';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { ProfileService } from './profile.service.js';
 import { Context, settingFor } from './fields.js';
@@ -32,7 +34,7 @@ export class ProfileController {
   /** Components the active plugins contribute to a profile surface. surface=admin needs the admin capability (it feeds the administrator's user sheet). */
   @Get('profile-components') async components(@Param('tenant') t: string, @Query('surface') surface: string, @Query('ref') ref: string | undefined, @Req() req: { headers: Record<string, unknown> }) {
     if (!['self', 'admin'].includes(surface)) throw new BadRequestException('surface: self or admin');
-    if (surface === 'admin') new AdminGuard().canActivate({ switchToHttp: () => ({ getRequest: () => req }) } as never);
+    if (surface === 'admin') await new AdminGuard().canActivate({ switchToHttp: () => ({ getRequest: () => req }) } as never);
     return { surface, components: await this.p.components(t, surface as 'self' | 'admin', ref === 'work' ? 'work' : 'live') };
   }
   /** The administrator's configuration view: every component of every active plugin, defaults and effective surfaces. */
@@ -50,10 +52,17 @@ export class ProfileController {
   @UseGuards(AdminGuard) @Post('profile-reviews/:id/refuse') refuse(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); return this.p.resolveReview(t, id, false, req.user.sub); }
   /** What the console may show this person: whether they are an administrator, and which plugins are live. Display only: the server checks every call again. */
   @Get('me/access') async access(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string }; headers: Record<string, unknown> }) {
-    let admin = true; try { new AdminGuard().canActivate({ switchToHttp: () => ({ getRequest: () => req }) } as never); } catch { admin = false; }
     const plugins = Object.fromEntries((await this.p.activePlugins(t, req.user.branch ? 'work' : 'live')).map((id) => [id, true]));
     const restricted = (process.env.IAM_API_ADMIN_SUBJECTS ?? '').split(',').some((x) => x.trim());
-    return { subject: req.user.sub, admin, restricted, plugins };
+    // Screen access on: the policy engine lists the screens this person opens (display only; the API guard decides every call again).
+    if (screenAccessOn()) {
+      try {
+        const answers = await Promise.all(SCREENS.map(async (sc) => [sc, await askScreen(t, req.user.sub, sc)] as const));
+        if (answers.every(([, a]) => a.engine)) { const screens = answers.filter(([, a]) => a.allow).map(([sc]) => sc); return { subject: req.user.sub, admin: screens.some((x) => x !== 'my-profile'), restricted: true, plugins, screens, screenAccess: true }; }
+      } catch { /* the policy engine is unreachable: fall back to the capability below */ }
+    }
+    let admin = true; try { new AdminGuard().capability({ switchToHttp: () => ({ getRequest: () => req }) } as never); } catch { admin = false; }
+    return { subject: req.user.sub, admin, restricted, plugins, screenAccess: false };
   }
   @UseGuards(AdminGuard) @Get('users/:id/profile') async user(@Param('tenant') t: string, @Param('id') id: string) { return { ...(await this.p.admin(t, id)), sections: await this.sections(t, id, 'work') }; }
   @UseGuards(AdminGuard) @Patch('users/:id/profile') patchUser(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: unknown) { return this.p.patchAdmin(t, id, b, req.user.sub); }
