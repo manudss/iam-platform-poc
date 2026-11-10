@@ -51,3 +51,7 @@ Each protected branch also has:
 Loosening any of these on a protected branch needs the same `branch:merge` permission as merging into it.
 
 The policy engine also sees the folder: the `branch:merge` request carries `context.source` and `context.source_kind`. The seed ships the rule `merge-profile-branches-into-protected`: the `manager` role may merge `profile/` branches into a protected branch, and no other kind. Write more rules the same way, for example one that lets a role merge `workflow/` branches only.
+
+## Creating branches by hand
+
+The Explorer form takes a folder (`feature`, `custom`, or none) and a name; the `/` is added for you. `personal/`, `profile/`, `ai/` and `workflow/` are reserved for branches the platform creates: `POST /versioning/branches` refuses them with 400. "Create protected branch" creates the branch and turns protection on; the protection card then sets reviewers, self-merge, merge rule and allowed source folders.
