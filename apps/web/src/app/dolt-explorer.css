@@ -15,7 +15,7 @@
 .feed li{padding:.45rem 0;border-bottom:1px solid var(--line)}
 .feed li:last-child{border-bottom:0}
 .jump{margin-bottom:0}
-.home-cols{grid-template-columns:1fr}
+@media(max-width:800px){.home-cols{grid-template-columns:1fr}}
 /* branches: one card per branch, ahead/behind gauge, actions on the right */
 .branch-card{display:flex;gap:.9rem;align-items:flex-start}
 .branch-card.mine{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
@@ -32,9 +32,7 @@
 .menu-wrap{position:relative;display:inline-block}
 .menu{position:absolute;right:0;top:100%;z-index:5;background:var(--card);border:1px solid var(--line);border-radius:.5rem;box-shadow:var(--shadow);padding:.3rem;display:flex;flex-direction:column;min-width:9rem}
 .menu button{text-align:left}
-.branch-card{flex-wrap:wrap}
-.branch-act{max-width:100%;justify-content:flex-start}
-.branch-note{text-align:left}
+@media(max-width:700px){.branch-card{flex-wrap:wrap}.branch-act{max-width:100%;justify-content:flex-start}.branch-note{text-align:left}}
 .row{gap:.5rem}
 .panel label, .explorer > label{display:flex;margin:.4rem 0}
 tr.add td{background:var(--ok-soft)}
@@ -52,7 +50,7 @@ ol.log li .dot{width:.65rem;height:.65rem;border-radius:50%;border:2px solid var
 ol.log li.merge .dot{border-color:var(--accent)}
 ol.log li.sel{background:var(--panel)}
 .log-main{flex:1;min-width:0}
-.log-main .msg{font-weight:600;text-decoration:none;font-size:.95rem}
+.log-main .msg{font-weight:600;text-decoration:none;font-size:.95rem;text-align:left}
 .log-main .msg:hover{text-decoration:underline}
 .log-meta{color:var(--muted);font-size:.82rem;margin-top:.15rem;display:flex;align-items:center;gap:.3rem}
 .avatar{display:inline-flex;align-items:center;justify-content:center;width:1.3rem;height:1.3rem;border-radius:50%;background:var(--accent-soft);color:var(--accent-dark);font-size:.62rem;font-weight:700}
@@ -80,9 +78,7 @@ td.r{text-align:right}
 .row-detail pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .field-editor small{font-weight:400}
 .data-grid table{width:max-content;min-width:100%}
-.field-editor{grid-template-columns:1fr}
-.cell-value{max-width:220px}
-.panel{padding:.7rem}
+@media(max-width:500px){.field-editor{grid-template-columns:1fr}.cell-value{max-width:220px}.panel{padding:.7rem}}
 /* compare: selector bar, summary chips, result tabs */
 .compare-bar{display:flex;gap:.7rem;align-items:flex-end;flex-wrap:wrap;padding:.7rem 1rem}
 .compare-bar label{margin:0}
@@ -164,7 +160,7 @@ table.grid tr.mod td{background:var(--warn-soft)}
 .wb-empty{padding:2rem 0;text-align:center}
 .wb-status{display:flex;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);margin-top:.8rem;padding:.4rem .2rem 0;font-size:.82rem;color:var(--muted)}
 .wb-status .dot{display:inline-block;width:.5rem;height:.5rem;border-radius:999px;background:var(--ok);margin-right:.3rem}
-.wb{grid-template-columns:1fr}
+@media(max-width:900px){.wb{grid-template-columns:1fr}}
 /* row editor + row history */
 .wb-row{display:grid;grid-template-columns:1fr 320px;gap:1rem;align-items:start;margin-top:1rem}
 .wb-row-left{display:grid;gap:1rem}
@@ -173,7 +169,7 @@ table.grid tr.mod td{background:var(--warn-soft)}
 .row-history h4{margin-top:0}
 .row-history s{color:var(--bad)}
 .row-history b{color:var(--ink)}
-.wb-row{grid-template-columns:1fr}
+@media(max-width:900px){.wb-row{grid-template-columns:1fr}}
 /* sql console: mode pills, dark editor with line numbers, dry-run banner */
 .sql-bar{display:flex;gap:.7rem;align-items:center;margin-bottom:.6rem}
 .sql-editor{display:grid;grid-template-columns:auto 1fr;background:var(--code-bg);border:1px solid var(--line);border-radius:.5rem;overflow:hidden;margin-bottom:.6rem}
