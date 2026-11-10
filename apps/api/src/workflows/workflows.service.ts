@@ -11,7 +11,7 @@ import { currentBranch, workspaceMode } from '../workspace/context.js';
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
 
-export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean; order: string[] }; steps: (StepRow & { name: string; type: string; label: string; category: string })[] }
+export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean; order: string[]; edges: { from: string; to: string; label?: string }[] }; steps: (StepRow & { name: string; type: string; label: string; category: string })[] }
 
 /** API surface of the workflows feature. All state changes are validated here; the engine only executes. */
 @Injectable()
@@ -130,7 +130,7 @@ export class WorkflowsService {
     // so a definition that still needs placeholders cannot start manually: the error says which key is missing).
     const resolved = event ? substituteEventPayload(d.graph, event.payload) : substituteEventPayload(d.graph, {});
     const { order, graph } = validateGraph(resolved);
-    const run: RunRow = { id: runId, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: event?.branch ?? null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null };
+    const run: RunRow = { id: runId, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: event?.branch ?? null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null, test: false };
     const steps: StepRow[] = order.map((nodeId) => {
       const n = graph.nodes.find((x) => x.id === nodeId)!;
       return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null };
@@ -140,14 +140,76 @@ export class WorkflowsService {
     return this.runView(tenant, run.id);
   }
 
-  async listRuns(tenant: string, definitionId?: string) {
+  async listRuns(tenant: string, definitionId?: string, filters: { status?: string; tests?: boolean } = {}) {
     if (definitionId !== undefined) this.checkId(definitionId, 'workflow id');
-    const runs = await this.store.listRuns(tenant, definitionId, 50);
+    if (filters.status !== undefined && !['queued', 'running', 'completed', 'failed', 'canceled'].includes(filters.status)) throw new BadRequestException('status: queued, running, completed, failed or canceled');
+    const runs = (await this.store.listRuns(tenant, definitionId, 200))
+      .filter((r) => (filters.tests ? true : !r.test) && (!filters.status || r.status === filters.status))
+      .slice(0, 50);
     return { runs: runs.map((r) => this.publicRun(r)) };
   }
 
   private publicRun(r: RunRow) {
-    return { id: r.id, definitionId: r.definition_id, name: r.name, branch: r.branch, status: r.status, error: r.error, startedBy: r.started_by, startedAt: r.started_at, finishedAt: r.finished_at, hasDataSteps: hasDataSteps(r.graph) };
+    return { id: r.id, definitionId: r.definition_id, name: r.name, branch: r.branch, status: r.status, error: r.error, startedBy: r.started_by, startedAt: r.started_at, finishedAt: r.finished_at, hasDataSteps: hasDataSteps(r.graph), test: r.test };
+  }
+
+  /**
+   * TEST RUN from the editor: executes an AD-HOC graph (not necessarily saved) with a test event payload.
+   * Real steps write on a DISPOSABLE workflow/test-* branch, dropped when the run settles. Test runs are hidden
+   * from the default run list and can never be reviewed or merged.
+   */
+  async testRun(tenant: string, body: Record<string, unknown>, sub: unknown) {
+    if (Object.keys(body ?? {}).some((k) => !['graph', 'trigger', 'payload'].includes(k))) throw new BadRequestException('unknown field');
+    const trigger = validateTrigger(body?.trigger);
+    const { graph, order } = validateGraph(body?.graph);
+    validateStepPlaceholders(graph, order);
+    await this.checkProviders(tenant, graph);
+    for (const n of graph.nodes) for (const v of Object.values(n.config)) {
+      for (const key of placeholderKeys(v)) {
+        if (!trigger && !body?.payload) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the test has no trigger/payload`);
+        if (trigger && !isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event}`);
+      }
+    }
+    const eventPayload: Record<string, string> = {};
+    for (const [k, v] of Object.entries((body?.payload as Record<string, unknown>) ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) eventPayload[k] = String(v).slice(0, 200);
+    if (trigger) for (const key of WF_EVENTS[trigger.event]?.payload ?? []) if (!(key in eventPayload) && key !== '*') eventPayload[key] = `<${key}>`;
+    const resolved = substituteEventPayload(graph, eventPayload);
+    const checked = validateGraph(resolved);
+    const runId = `run-${randomBytes(6).toString('hex')}`;
+    const run: RunRow = { id: runId, tenant, definition_id: 'editor-test', name: 'Test run (editor)', graph: checked.graph, branch: null, base_branch: currentBranch(), status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null, test: true };
+    const steps: StepRow[] = checked.order.map((nodeId) => {
+      const n = checked.graph.nodes.find((x) => x.id === nodeId)!;
+      return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null };
+    });
+    await this.store.createRun(run, steps);
+    this.engine.kick(run.id);
+    return this.runView(tenant, run.id);
+  }
+
+  /** Re-runs a terminal run FROM a given step: that step and everything downstream are reset to pending. */
+  async rerunFrom(tenant: string, runId: unknown, nodeId: unknown) {
+    const view = await this.runView(tenant, runId);
+    const r = view.run;
+    if (!['completed', 'failed', 'canceled'].includes(r.status)) throw new ConflictException(`only a finished run can be re-run from a step (this one is ${r.status})`);
+    const nid = this.checkId(nodeId, 'step id');
+    if (!view.run.order.includes(nid)) throw new NotFoundException('unknown step in this run');
+    const down = new Set([nid]);
+    let grew = true;
+    while (grew) { grew = false; for (const e of view.run.edges) if (down.has(e.from) && !down.has(e.to)) { down.add(e.to); grew = true; } }
+    for (const s of view.steps) if (down.has(s.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, output: null, finished_at: null });
+    await this.store.updateRun(r.id, { status: 'queued', error: null, finished_at: null });
+    this.engine.kick(r.id);
+    return this.runView(tenant, r.id);
+  }
+
+  /** Duplicates a definition (same graph/trigger, new id, "(copy)" name). */
+  async duplicate(tenant: string, id: unknown, sub: unknown) {
+    const ref = currentBranch(true);
+    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), ref);
+    if (!d) throw new NotFoundException('unknown workflow');
+    const copy: DefinitionRow = { ...d, id: `wf-def-${randomBytes(4).toString('hex')}`, name: `${d.name.slice(0, 70)} (copy)`, created_by: String(sub ?? 'unknown'), created_at: now(), updated_at: now() };
+    await this.store.putDefinition(copy, ref);
+    return { definition: copy };
   }
 
   async runView(tenant: string, runId: unknown): Promise<RunView> {
@@ -157,7 +219,7 @@ export class WorkflowsService {
     const nodes = new Map(r.graph.nodes.map((n) => [n.id, n]));
     const { order } = validateGraph(r.graph);
     return {
-      run: { id: r.id, tenant: r.tenant, definition_id: r.definition_id, name: r.name, branch: r.branch, base_branch: r.base_branch, status: r.status, error: r.error, started_by: r.started_by, started_at: r.started_at, finished_at: r.finished_at, simulatedOnly: !hasDataSteps(r.graph), order },
+      run: { id: r.id, tenant: r.tenant, definition_id: r.definition_id, name: r.name, branch: r.branch, base_branch: r.base_branch, status: r.status, error: r.error, started_by: r.started_by, started_at: r.started_at, finished_at: r.finished_at, simulatedOnly: !hasDataSteps(r.graph), order, edges: r.graph.edges, test: r.test },
       steps: order.map((nodeId) => {
         const s = steps.find((x) => x.node_id === nodeId);
         const n = nodes.get(nodeId)!;
@@ -192,6 +254,7 @@ export class WorkflowsService {
   async review(tenant: string, runId: unknown, sub: unknown) {
     const view = await this.runView(tenant, runId);
     const r = view.run;
+    if (r.test) throw new BadRequestException('a test run cannot be reviewed: its branch is disposable and is dropped when the run settles');
     if (r.status !== 'completed') throw new ConflictException('only a completed run can be reviewed');
     if (!r.branch) throw new BadRequestException('this run only had simulated steps: there is no data branch to review');
     const open = await this.prs.list(tenant, 'open');

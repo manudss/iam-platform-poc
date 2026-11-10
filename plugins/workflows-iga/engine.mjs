@@ -61,7 +61,19 @@ export function createWorkflowEngine(deps) {
     void execute(runId).catch(async (e) => {
       log.error(`run ${runId} crashed: ${e.message}`);
       try { await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }); } catch { /* store gone */ }
-    });
+    }).finally(() => void disposeTestBranch(runId));
+  }
+
+  /** A test run's branch is DISPOSABLE: once the run is terminal, the branch is dropped so a test
+   *  leaves no residue (its steps' logs still say exactly what was written, and where). */
+  async function disposeTestBranch(runId) {
+    try {
+      const run = await store.getRunById(runId);
+      if (!run?.test || !run.branch || !deps.versioning.deleteBranch) return;
+      if (!['completed', 'failed', 'canceled'].includes(run.status)) return;
+      await deps.versioning.deleteBranch(run.branch);
+      await store.updateRun(runId, { branch: `${run.branch} (dropped: disposable test branch)` });
+    } catch (e) { log.warn(`test branch cleanup for run ${runId}: ${e.message}`); }
   }
   const cancelFlag = (runId) => { live.get(runId).cancel = true; };
   const forget = (runId) => { live.delete(runId); };
@@ -309,10 +321,11 @@ export function createWorkflowEngine(deps) {
     }
   }
 
-  /** The run branch, created lazily on the first data-writing step. Never main. */
+  /** The run branch, created lazily on the first data-writing step. Never main. A test run's branch is
+   *  named workflow/test-* and dropped when the run settles (disposable). */
   async function ensureBranch(run, say) {
     if (!run.branch) {
-      const branch = `workflow/${run.id.replace(/^run-/, '').slice(0, 8)}`;
+      const branch = `workflow/${run.test ? 'test-' : ''}${run.id.replace(/^run-/, '').slice(0, 8)}`;
       const base = run.base_branch ?? deps.versioning.defaultBranch; // a triggered run branches from the branch its event happened on
       await deps.versioning.createBranch(branch, base);
       await store.updateRun(run.id, { branch });
