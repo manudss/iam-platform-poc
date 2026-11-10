@@ -487,9 +487,27 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(el.querySelector('.sql-dryrun')?.textContent).toContain('Preview only');
     expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('X');
   });
+  it('creates a protected branch: the slash is added between folder and name, custom folders are free text, then protection is set', async () => {
+    const { f, el, calls, c } = await mount(routes({
+      'POST /versioning/branches': () => ({ status: 201, data: { branch: 'team/payroll', commit: 'c'.repeat(32) } }),
+      'PUT /versioning/branches/team%2Fpayroll/protection': () => ({ data: {} }),
+    }));
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    await click(f, el, '+ New branch');
+    expect(el.textContent).toContain('cannot be made by hand');
+    c['newFolder'] = 'custom'; c['customFolder'] = 'team'; c['newBranch'] = 'payroll'; f.detectChanges();
+    expect(c['fullName']()).toBe('team/payroll');
+    c['newFolder'] = 'feature'; expect(c['fullName']()).toBe('feature/payroll');
+    c['newFolder'] = 'custom';
+    await click(f, el, 'Create protected branch');
+    expect(calls.find((x) => x.method === 'POST' && x.path.endsWith('/versioning/branches'))?.body).toEqual({ name: 'team/payroll', from: 'main' });
+    expect(calls.some((x) => x.method === 'PUT' && x.path.endsWith('/versioning/branches/team%2Fpayroll/protection') && (x.body as { protected?: boolean }).protected === true)).toBe(true);
+  });
   it('allowed source folders: custom folders can be allowed all at once or one by one', async () => {
     const prot = { branch: 'main', protected: true, requirePullRequest: true, minReviews: 0, requireChecks: true, mergeRule: 'policy', selfMerge: true, sourceKinds: ['custom:team'], source: 'custom' };
     const { f, el, calls, c } = await mount(routes({ 'GET /versioning/protection': () => ({ data: { protections: [prot], policyAction: 'branch:merge' } }), 'PUT /versioning/branches/main/protection': () => ({ data: prot }) }));
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    c['protectOpen'].set('main'); f.detectChanges();
     expect(el.textContent).toContain('custom folders (all)'); expect(el.textContent).toContain('team/');
     c['addCustom'] = 'Squad/'; await click(f, el, 'Add folder');
     expect((calls.find((x) => x.method === 'PUT')?.body as { sourceKinds: string[] }).sourceKinds).toEqual(['custom:team', 'custom:squad']);
