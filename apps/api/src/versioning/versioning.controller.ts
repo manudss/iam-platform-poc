@@ -6,6 +6,9 @@ import { BranchProtectionService } from './branch-protection.service.js';
 import { PullRequestService } from './pull-requests.service.js';
 import { EditOp, VersioningService } from './versioning.service.js';
 
+const AUTO_FOLDERS = ['personal', 'profile', 'ai', 'workflow'] as const;
+const AUTO_FOLDER_HINT: Record<string, string> = { personal: 'one per administrator', profile: 'profile edits under review', ai: 'AI sessions', workflow: 'workflow runs' };
+
 type Req_ = { user?: { sub?: string } };
 const flag = (v: unknown) => v === true || v === 'true' || v === '1';
 
@@ -23,7 +26,12 @@ export class VersioningController {
 
   // branches and tags
   @Get('branches') branches() { return this.v.branches(); }
-  @Post('branches') createBranch(@Body() b: { name?: string; from?: string }) { return this.v.createBranch(b?.name as string, b?.from ?? this.v.defaultBranch); }
+  @Post('branches') createBranch(@Body() b: { name?: string; from?: string }) {
+    // Folders of automatically created branches (personal/, profile/, ai/, workflow/) are reserved: only the platform creates them.
+    const folder = typeof b?.name === 'string' && b.name.includes('/') ? b.name.slice(0, b.name.indexOf('/')) : '';
+    if ((AUTO_FOLDERS as readonly string[]).includes(folder)) throw new BadRequestException(`${folder}/ branches are created automatically (${AUTO_FOLDER_HINT[folder]}): choose feature/ or your own folder`);
+    return this.v.createBranch(b?.name as string, b?.from ?? this.v.defaultBranch);
+  }
   @Delete('branches/:name') deleteBranch(@Param('name') n: string) { return this.v.deleteBranch(n, (x) => this.prs.hasOpen(x)); }
   @Post('branches/:name/restore') restore(@Param('name') n: string, @Body() b: { commit?: string; confirm?: boolean }) { return this.v.resetBranch(n, b?.commit as string, b?.confirm === true); }
   // branch protection (a visible per-branch setting; who may merge is decided by the policy engine, action branch:merge)

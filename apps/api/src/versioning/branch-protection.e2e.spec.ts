@@ -14,6 +14,7 @@ import { INestApplication } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from './versioning.module.js';
 import { VersioningController } from './versioning.controller.js';
+import { VersioningService } from './versioning.service.js';
 import { BranchProtectionService } from './branch-protection.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
 
@@ -77,7 +78,8 @@ describe('branch protection and the merge policy + real Dolt', { skip: !have && 
 
   const as = (sub: string) => ({ token: `${T}:${sub}` });
   const openPr = async (name: string, title: string, sub = 'demo-alice') => {
-    await ok('POST', '/branches', { name, from: 'main' });
+    // auto-created folders are reserved for the platform: cut those branches the way it does (the HTTP route refuses them)
+    if (/^(personal|profile|ai|workflow)\//.test(name)) await app.get(VersioningService).createBranch(name, 'main'); else await ok('POST', '/branches', { name, from: 'main' });
     await ok('POST', '/sql', { mode: 'write', ref: name, sql: `insert into roles values ('${name.slice(0, 20)}','${title}',false)`, message: title });
     return (await ok('POST', '/pulls', { title, source: name, target: 'main' }, as(sub))).id as number;
   };
@@ -154,6 +156,8 @@ describe('branch protection and the merge policy + real Dolt', { skip: !have && 
     await ok('PUT', '/branches/feature%2Fslash-demo/protection', { protected: false }, as('demo-alice'));
     await ok('DELETE', '/branches/feature%2Fslash-demo');
     assert.equal((await call('POST', '/branches', { name: 'a/b/c', from: 'main' })).status, 400);
+    for (const f of ['personal', 'profile', 'ai', 'workflow']) { const r = await call('POST', '/branches', { name: `${f}/by-hand`, from: 'main' }); assert.equal(r.status, 400, f); assert.match(JSON.stringify(r.body), /created automatically/); }
+    assert.equal((await call('POST', '/branches', { name: 'team/by-hand', from: 'main' })).status, 201, 'a custom folder is fine');
   });
   it('per-kind merge: the policy sees the source folder (a manager may merge profile/ into main, nothing else); the refusal names it', async () => {
     const keep = decide; const seen: (string | undefined)[] = [];
