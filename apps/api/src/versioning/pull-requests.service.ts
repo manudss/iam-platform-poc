@@ -120,7 +120,7 @@ export class PullRequestService {
       } catch (e) { checks = { mergeable: false, reasons: [`cannot be evaluated: ${(e as Error).message}`], conflicts: 0, violations: [] }; }
     }
     const rule = this.protection.effective(pr.target);
-    const mayMerge = pr.status === 'open' ? await this.protection.mayMerge(pr.target, sub) : undefined;
+    const mayMerge = pr.status === 'open' ? await this.protection.mayMerge(pr.target, sub, pr.source, pr.author) : undefined;
     return { protection: rule, mayMerge, preventSelfApproval: this.preventSelfApproval, viewer: sub === undefined ? undefined : String(sub).replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64), pullRequest: pr, comments: comments.map((x) => ({ id: Number(x.id), author: x.author, kind: x.kind, body: x.body, createdAt: String(x.created_at) })), approvals: [...approvals], requiredApprovals: this.requiredFor(pr.target), commits, diff: summary, checks };
   }
 
@@ -156,6 +156,7 @@ export class PullRequestService {
     try {
       const pr = await this.row(m, tenant, id);
       if (pr.status !== 'open') throw new ConflictException(`pull request #${id} is already ${pr.status}`);
+      this.protection.assertSelfMerge(pr.target, sub, pr.author);
       const need = this.requiredFor(pr.target);
       const stored = this.protection.effective(pr.target);
       const nonAuthorOnly = this.preventSelfApproval || (stored.protected && stored.minReviews > 0);

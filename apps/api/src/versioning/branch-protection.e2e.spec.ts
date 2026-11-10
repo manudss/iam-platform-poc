@@ -37,7 +37,7 @@ class FakeAuth implements CanActivate {
   }
 }
 
-let decide: (i: { sub: string }) => Promise<{ allow: boolean; reasons: string[] }> = async (i) => ({ allow: i.sub === 'demo-alice', reasons: i.sub === 'demo-alice' ? ['merge-into-protected-needs-branch-merger'] : [] });
+let decide: (i: { sub: string; source?: string; sourceKind?: string }) => Promise<{ allow: boolean; reasons: string[] }> = async (i) => ({ allow: i.sub === 'demo-alice', reasons: i.sub === 'demo-alice' ? ['merge-into-protected-needs-branch-merger'] : [] });
 
 describe('branch protection and the merge policy + real Dolt', { skip: !have && 'dolt binary missing' }, () => {
   let dolt: ChildProcess, app: INestApplication, dir: string;
@@ -154,5 +154,37 @@ describe('branch protection and the merge policy + real Dolt', { skip: !have && 
     await ok('PUT', '/branches/feature%2Fslash-demo/protection', { protected: false }, as('demo-alice'));
     await ok('DELETE', '/branches/feature%2Fslash-demo');
     assert.equal((await call('POST', '/branches', { name: 'a/b/c', from: 'main' })).status, 400);
+  });
+  it('per-kind merge: the policy sees the source folder (a manager may merge profile/ into main, nothing else); the refusal names it', async () => {
+    const keep = decide; const seen: (string | undefined)[] = [];
+    decide = async (i) => { seen.push(i.sourceKind); const allow = i.sub === 'demo-alice' || (i.sub === 'demo-bob' && i.sourceKind === 'profile'); return { allow, reasons: [] }; };
+    try {
+      const prof = await openPr('profile/kind-a', 'Kind profile', 'demo-bob');
+      const feat = await openPr('feature/kind-b', 'Kind feature', 'demo-bob');
+      assert.equal((await ok('GET', `/pulls/${feat}`, undefined, as('demo-bob'))).mayMerge.allowed, false);
+      const r = await call('POST', `/pulls/${feat}/merge`, {}, as('demo-bob'));
+      assert.equal(r.status, 403); assert.match(r.body.message, /for a feature\/ branch \(feature\/kind-b\)/);
+      assert.equal((await ok('POST', `/pulls/${prof}/merge`, {}, as('demo-bob'))).pullRequest.status, 'merged');
+      assert.ok(seen.includes('feature') && seen.includes('profile'));
+    } finally { decide = keep; }
+  });
+  it('allowed source kinds and self-merge are branch settings enforced server-side', async () => {
+    await ok('PUT', '/branches/main/protection', { sourceKinds: ['profile', 'feature'], selfMerge: false }, as('demo-alice'));
+    try {
+      const own = await openPr('feature/sk-a', 'Own', 'demo-alice');
+      const r1 = await call('POST', `/pulls/${own}/merge`, {}, as('demo-alice'));
+      assert.equal(r1.status, 403); assert.equal(r1.body.code, 'self-merge-not-allowed');
+      const view = await ok('GET', `/pulls/${own}`, undefined, as('demo-alice'));
+      assert.equal(view.mayMerge.allowed, false);
+      const wf = await openPr('workflow/sk-b', 'WF', 'demo-bob');
+      const r2 = await call('POST', `/pulls/${wf}/merge`, {}, as('demo-alice'));
+      assert.equal(r2.status, 403); assert.equal(r2.body.code, 'source-kind-not-allowed'); assert.match(r2.body.message, /profile\/, feature\//);
+      assert.equal((await call('PUT', '/branches/main/protection', { sourceKinds: ['bogus'] }, as('demo-alice'))).status, 400);
+      assert.equal((await call('PUT', '/branches/main/protection', { selfMerge: true }, as('demo-bob'))).status, 403, 'loosening needs the policy');
+      const other = await openPr('feature/sk-c', 'Other', 'demo-bob');
+      assert.equal((await ok('POST', `/pulls/${other}/merge`, {}, as('demo-alice'))).pullRequest.status, 'merged');
+    } finally { await ok('PUT', '/branches/main/protection', { sourceKinds: [], selfMerge: true }, as('demo-alice')); }
+    const main = (await ok('GET', '/protection')).protections.find((x: any) => x.branch === 'main');
+    assert.deepEqual([main.selfMerge, main.sourceKinds], [true, []]);
   });
 });

@@ -39,3 +39,15 @@ Auto-created branches use one folder so merge policies can target a kind of bran
 | `feature/` | branches created by hand |
 
 Branches created before this convention (`demo-alice`, `profile-...`, `mcp-...`, `wf-...`) keep their name and are classified by `branchKind`. A name has at most one folder level.
+
+## Per-branch rules beyond roles
+
+Each protected branch also has:
+
+- `minReviews`: approvals from someone other than the author (0 by default, configurable).
+- `selfMerge`: may the author merge their own pull request (default yes). When off, the merge is refused with `self-merge-not-allowed`.
+- `sourceKinds`: the branch folders (`personal`, `profile`, `ai`, `workflow`, `feature`, `other`) that may be merged into it. Empty means every kind. A merge from another kind is refused with `source-kind-not-allowed`.
+
+Loosening any of these on a protected branch needs the same `branch:merge` permission as merging into it.
+
+The policy engine also sees the folder: the `branch:merge` request carries `context.source` and `context.source_kind`. The seed ships the rule `merge-profile-branches-into-protected`: the `manager` role may merge `profile/` branches into a protected branch, and no other kind. Write more rules the same way, for example one that lets a role merge `workflow/` branches only.
