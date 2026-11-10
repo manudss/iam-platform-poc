@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { TestBed } from '@angular/core/testing';
 import { ApiClient, VersioningClient, cellText, shortHash } from './api';
 import { DoltExplorer } from './dolt-explorer';
@@ -156,6 +157,17 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     // the close button clears the selection
     (el.querySelector('.insp-close') as HTMLButtonElement).click(); f.detectChanges();
     expect(el.querySelector('.hist-inspector')).toBeNull();
+  });
+
+  it('styles: flat buttons keep a readable text color, at rest and on hover', () => {
+    // regression guard for the unreadable workbench tabs and the hover of the 2-dot/3-dot toggle:
+    // a flat button that overrides the global background must also set its color (both come from theme variables)
+    const read = (f: string) => readFileSync(new URL(f, import.meta.url), 'utf8');
+    const css = read('./dolt-explorer.css') + read('./dolt-explorer-data.css');
+    const wbTab = css.match(/\.wb-tab button\{([^}]*)\}/)?.[1] ?? '';
+    expect(wbTab).toContain('background:none'); expect(wbTab).toContain('color:var(--ink)');
+    const hover = css.match(/\.pill:not\(\.on\):hover[^,{]*,[^{]*\{([^}]*)\}/)?.[1] ?? '';
+    expect(hover).toContain('background:var(--row-hover)'); expect(hover).toContain('color:var(--ink)');
   });
 
   it('offers row editing on an unprotected branch only, and read only on protected main', async () => {

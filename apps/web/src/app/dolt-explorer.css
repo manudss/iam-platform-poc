@@ -122,6 +122,8 @@ table.grid tr.mod td{background:var(--warn-soft)}
 .comment-box textarea{width:100%}
 .cnt.ok{background:var(--ok-soft);color:var(--ok)}
 .cnt.ko{background:var(--bad-soft);color:var(--bad-ink)}
-.diff-head{display:flex;gap:.5rem;align-items:center;width:100%;background:none;border:0;margin:0;padding:0;text-align:left}
+.diff-head{display:flex;gap:.5rem;align-items:center;width:100%;background:none;border:0;margin:0;padding:0;text-align:left;color:var(--ink)}
+/* flat buttons: the global button hover paints a dark accent background, so give them a readable hover of their own */
+.pill:not(.on):hover:not(:disabled),.tabs button:hover:not(:disabled),.menu button:hover:not(:disabled),.diff-head:hover:not(:disabled){background:var(--row-hover);color:var(--ink)}
 .caret{transition:transform .15s}
 .caret.open{transform:rotate(90deg)}
