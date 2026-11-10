@@ -45,7 +45,7 @@ export class WorkflowsService {
 
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant, currentBranch());
-    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
+    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -59,7 +59,7 @@ export class WorkflowsService {
     const name = String(body?.name ?? '').trim();
     if (!name || name.length > 80) throw new BadRequestException('a name is required (max 80)');
     const description = String(body?.description ?? '').slice(0, 500);
-    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger'].includes(k))) throw new BadRequestException('unknown field');
+    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger', 'active'].includes(k))) throw new BadRequestException('unknown field');
     const trigger = validateTrigger(body?.trigger);
     const { graph, order } = validateGraph(body?.graph);
     validateStepPlaceholders(graph, order);
@@ -74,7 +74,9 @@ export class WorkflowsService {
     const ref = currentBranch(true);
     const existing = create ? null : await this.store.getDefinition(tenant, wid, ref);
     if (!create && !existing) throw new NotFoundException('unknown workflow');
-    const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
+    // active defaults to true on create and is preserved on update unless the caller passes it (false = paused: event triggers skip it).
+    const active = body.active === undefined ? (existing?.active ?? true) : body.active === true || body.active === 'true';
+    const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, active, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
     await this.store.putDefinition(def, ref);
     return { definition: def };
   }

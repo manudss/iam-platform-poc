@@ -145,6 +145,23 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     assert.equal(run.startedBy, 'event:user.department-changed');
   });
 
+  it('a paused workflow (active=false) never starts from an event; a manual run still works and re-activating resumes triggers', async () => {
+    const graph = { nodes: [{ id: 'a', type: 'notify', name: 'a', config: { recipient: 'r', message: 'paused' } }], edges: [] };
+    const paused = ((await ok('POST', '/workflows', { name: 'Paused mover', description: '', active: false, trigger: { event: 'user.department-changed', match: { to: 'paused-dept' } }, graph })) as { definition: { id: string; active: boolean } }).definition;
+    assert.equal(paused.active, false);
+    await users.save('jane-doe', { department: 'paused-dept' }, false, undefined, T);
+    await new Promise((r) => setTimeout(r, 2000));
+    assert.equal((await runsOf(paused.id)).length, 0, 'the matching event must not start a paused workflow');
+    // manual Run is unaffected by the flag
+    await ok('POST', `/workflows/${paused.id}/runs`);
+    assert.equal((await waitForRun(paused.id, 1)).startedBy, 'demo-alice');
+    // flipping back to active makes the trigger live again
+    await ok('PUT', `/workflows/${paused.id}`, { name: 'Paused mover', description: '', active: true, trigger: { event: 'user.department-changed', match: { to: 'paused-dept' } }, graph });
+    await users.save('jane-doe', { department: 'sales' }, false, undefined, T);
+    await users.save('jane-doe', { department: 'paused-dept' }, false, undefined, T);
+    assert.equal((await waitForRun(paused.id, 2)).startedBy, 'event:user.department-changed');
+  });
+
   it('disabling an account starts the leaver workflow, which revokes for real on its branch', async () => {
     leaver = ((await ok('POST', '/workflows', { name: 'Leaver', description: '', trigger: { event: 'user.disabled' }, graph: { nodes: [
       { id: 'revoke', type: 'revoke-role', name: 'Revoke payment-creator', config: { identity: '{{event.subject}}', role: 'payment-creator' } },

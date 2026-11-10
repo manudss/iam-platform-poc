@@ -282,8 +282,18 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const def = (await ok('POST', '/workflows', { name: 'To edit', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] } })) as { definition: { id: string } };
     const updated = (await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }, { id: 'b', type: 'notify', name: 'b', config: { recipient: 'r', message: 'm' } }], edges: [{ from: 'a', to: 'b' }] } })) as { definition: { name: string } };
     assert.equal(updated.definition.name, 'Edited');
-    const list = (await ok('GET', '/workflows')) as { definitions: { id: string; steps: number }[] };
+    const list = (await ok('GET', '/workflows')) as { definitions: { id: string; steps: number; active: boolean }[] };
     assert.ok(list.definitions.some((d) => d.id === def.definition.id && d.steps === 2));
+    assert.ok(list.definitions.every((d) => d.active), 'definitions are active by default');
+    // active: persisted, preserved across an update that omits it, flippable back
+    const graph2 = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] };
+    await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: graph2, active: false });
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, false);
+    assert.equal(((await ok('GET', '/workflows')) as { definitions: { id: string; active: boolean }[] }).definitions.find((d) => d.id === def.definition.id)!.active, false);
+    await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: graph2 });
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, false, 'an update that omits active keeps the flag');
+    await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: graph2, active: true });
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, true);
     await ok('DELETE', `/workflows/${def.definition.id}`);
     assert.equal((await call('GET', `/workflows/${def.definition.id}`)).status, 404);
   });

@@ -11,7 +11,7 @@ import { WfGraph, WfTrigger } from './model.js';
  * (table workflow_definitions), so an edit prepared on a working branch only goes live through a reviewed
  * data pull request - the same circuit as roles, plugin settings and the sign-in configuration.
  */
-export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; trigger: WfTrigger | null; created_by: string; created_at: string; updated_at: string }
+export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; trigger: WfTrigger | null; /** false = paused: event triggers skip it (a manual Run still works). */ active: boolean; created_by: string; created_at: string; updated_at: string }
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
 export interface RunRow { id: string; tenant: string; definition_id: string; name: string; graph: WfGraph; branch: string | null; base_branch: string | null; status: RunStatus; error: string | null; started_by: string; started_at: string; finished_at: string | null; test: boolean }
 export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
@@ -57,7 +57,7 @@ export class WorkflowStore {
           try { const [r] = await m.query("select v from workflow_store_meta where k = 'defs_migrated'"); already = (r as unknown[]).length > 0; } finally { await m.end(); }
           if (!already) {
             await v.lock(() => v.at(v.defaultBranch, async (c) => {
-              await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
+              await WorkflowStore.ensureDefsTable(c);
               await c.query(`INSERT IGNORE INTO workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) SELECT tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at FROM \`${this.metaDb}\`.workflow_definitions`);
               const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
               if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
@@ -67,7 +67,7 @@ export class WorkflowStore {
           } else {
             // Marker set: still make sure the versioned table exists (fresh main after the marker db was kept).
             await v.lock(() => v.at(v.defaultBranch, async (c) => {
-              await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
+              await WorkflowStore.ensureDefsTable(c);
               const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
               if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
             }));
@@ -82,7 +82,7 @@ export class WorkflowStore {
   private static ts(v: unknown): string { return v instanceof Date ? v.toISOString().slice(0, 23).replace('T', ' ') : String(v); }
   private static def(r: Record<string, unknown>): DefinitionRow {
     const trig = typeof r.trigger_json === 'string' ? JSON.parse(r.trigger_json) : r.trigger_json;
-    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, created_by: String(r.created_by), created_at: WorkflowStore.ts(r.created_at), updated_at: WorkflowStore.ts(r.updated_at) };
+    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, active: r.active === undefined || r.active === null ? true : !!r.active, created_by: String(r.created_by), created_at: WorkflowStore.ts(r.created_at), updated_at: WorkflowStore.ts(r.updated_at) };
   }
   private static run(r: Record<string, unknown>): RunRow {
     return { id: String(r.id), tenant: String(r.tenant), definition_id: String(r.definition_id), name: String(r.name), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfRow_graph, branch: r.branch === null ? null : String(r.branch), base_branch: r.base_branch === null || r.base_branch === undefined ? null : String(r.base_branch), status: r.status as RunStatus, error: r.error === null ? null : String(r.error), started_by: String(r.started_by), started_at: String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at), test: !!r.test };
@@ -103,6 +103,12 @@ export class WorkflowStore {
     if (!this.v) throw new BadRequestException('no database');
     return workspaceMode() && ref !== this.v.defaultBranch ? this.v.writeOn(ref, fn) : this.v.lock(() => this.v!.at(ref, fn));
   }
+  /** The versioned definitions table, with every column added since (idempotent on existing databases). */
+  private static async ensureDefsTable(c: Connection) {
+    await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
+    const [cols] = await c.query("show columns from workflow_definitions like 'active'");
+    if (!(cols as unknown[]).length) await c.query('alter table workflow_definitions add column active BOOLEAN NOT NULL DEFAULT TRUE');
+  }
   private static async commitDefs(c: Connection, msg: string) {
     const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
     if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', ?)", [msg]); }
@@ -119,7 +125,7 @@ export class WorkflowStore {
   }
   async putDefinition(d: DefinitionRow, ref: string): Promise<void> {
     await this.defsWrite(ref, async (c) => {
-      await c.query('insert into workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), trigger_json=values(trigger_json), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.trigger ? JSON.stringify(d.trigger) : null, d.created_by, d.created_at, d.updated_at]);
+      await c.query('insert into workflow_definitions (tenant, id, name, description, graph, trigger_json, active, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), trigger_json=values(trigger_json), active=values(active), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.trigger ? JSON.stringify(d.trigger) : null, d.active ? 1 : 0, d.created_by, d.created_at, d.updated_at]);
       await WorkflowStore.commitDefs(c, `workflows: ${d.created_by} saved ${d.id}`);
     });
   }

@@ -48,7 +48,7 @@ export class WorkflowSheetPollerService implements OnModuleInit, OnModuleDestroy
     let defs;
     try { defs = await this.store.listAllDefinitions(this.store.liveRef); } catch (e) { this.log.warn(`watch scan failed: ${(e as Error).message}`); return; }
     const registry = workspaceMode() && this.branches ? await this.branches.get(this.store.liveRef) : this.reg;
-    for (const d of defs.filter((x) => x.trigger?.event === 'google-sheets.row-ready')) {
+    for (const d of defs.filter((x) => x.trigger?.event === 'google-sheets.row-ready' && x.active !== false)) {
       if (!registry.isActive(d.tenant, 'workflows-iga') || !registry.isActive(d.tenant, 'workflow-connectors')) continue;
       const impl = registry.impl('workflow-connectors');
       if (!impl) continue;
