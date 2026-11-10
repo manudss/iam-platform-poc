@@ -103,7 +103,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal(b.default, 'main'); assert.ok(b.branches.find((x: any) => x.name === 'main').protected);
       await branchOf('feat-a');
       assert.equal((await call('POST', '/branches', { name: 'feat-a' })).status, 409);
-      for (const n of ['a b', "x'; drop table roles; --", 'a/b', '', '..']) assert.equal((await call('POST', '/branches', { name: n })).status, 400, n);
+      for (const n of ['a b', 'a/b/c', "x'; drop table roles; --", '', '..']) assert.equal((await call('POST', '/branches', { name: n })).status, 400, n);
       assert.equal((await call('POST', '/branches', { name: 'zz', from: 'nope' })).status, 404);
       assert.equal((await ok('GET', '/branches')).branches.find((x: any) => x.name === 'feat-a').aheadOfDefault, 0);
     });

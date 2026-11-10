@@ -16,6 +16,7 @@ export interface ActivityEntry {
 type Row = Record<string, unknown>;
 
 const MIN_TTL = 60, MAX_TTL = 7 * 24 * 3600; // 1 minute .. 7 days
+import { autoBranchName } from '../versioning/branch-kinds.js';
 const ID = /^mcp-[0-9a-f]{12}$/;
 
 export const hashSecret = (secret: string) => createHash('sha256').update(secret).digest('hex');
@@ -75,15 +76,16 @@ export class McpSessionService {
     if (!name) throw new BadRequestException('label required (max 120 chars)');
     const ttl = Math.min(Math.max(Math.trunc(Number(ttlSeconds ?? 8 * 3600)) || 8 * 3600, MIN_TTL), MAX_TTL);
     const id = `mcp-${randomBytes(6).toString('hex')}`;
-    await this.v.createBranch(id, this.v.defaultBranch); // the session branch always starts from main
+    const branch = autoBranchName('ai', id);
+    await this.v.createBranch(branch, this.v.defaultBranch); // the session branch always starts from main
     const secret = randomBytes(32).toString('base64url');
     const now = new Date(), exp = new Date(now.getTime() + ttl * 1000);
     const m = await this.meta();
     try {
       await m.query('INSERT INTO mcp_sessions (id, tenant, owner_sub, label, branch, seq, secret_hash, created_at, expires_ms) VALUES (?,?,?,?,?,1,?,?,?)',
-        [id, tenant, owner.slice(0, 64), name, id, hashSecret(secret), now.toISOString().slice(0, 23), exp.getTime()]);
+        [id, tenant, owner.slice(0, 64), name, branch, hashSecret(secret), now.toISOString().slice(0, 23), exp.getTime()]);
     } finally { await m.end(); }
-    return { secret, session: { id, tenant, owner, label: name, branch: id, seq: 1, createdAt: now.toISOString(), expiresAt: exp.toISOString(), expiresMs: exp.getTime(), revoked: false, submitted: false, calls: 0 } };
+    return { secret, session: { id, tenant, owner, label: name, branch, seq: 1, createdAt: now.toISOString(), expiresAt: exp.toISOString(), expiresMs: exp.getTime(), revoked: false, submitted: false, calls: 0 } };
   }
 
   /** Resolves a bearer secret to a live session, or null (unknown, wrong tenant, revoked, expired). */
@@ -131,7 +133,7 @@ export class McpSessionService {
   /** Rotates the session to a FRESH branch cut from main (never from an arbitrary or caller-chosen branch). */
   async rotateBranch(tenant: string, id: string): Promise<McpSession> {
     const s = await this.owned(tenant, id);
-    const branch = `${id}-${s.seq + 1}`;
+    const branch = autoBranchName('ai', `${id}-${s.seq + 1}`);
     await this.v.createBranch(branch, this.v.defaultBranch);
     const m = await this.meta();
     try { await m.query('UPDATE mcp_sessions SET branch = ?, seq = seq + 1, submitted = FALSE WHERE id = ?', [branch, id]); } finally { await m.end(); }

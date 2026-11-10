@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createConnection, Connection } from 'mysql2/promise';
+import { autoBranchName } from '../versioning/branch-kinds.js';
 import { newBranchName } from '../versioning/guards.js';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -88,7 +89,7 @@ export class PersonalBranchService {
           }
         } else {
           const taken = new Set(branches.keys());
-          name = this.free(known ?? PersonalBranchService.slug(sub), taken);
+          name = this.free(known ?? autoBranchName('personal', PersonalBranchService.slug(sub)), taken);
           await this.v.createBranch(name, this.v.defaultBranch);
           status = known ? 'recreated' : 'created';
         }
@@ -105,7 +106,8 @@ export class PersonalBranchService {
 
   async rename(tenant: string, subIn: unknown, to: unknown): Promise<{ branch: string; was: string }> {
     const sub = this.subject(subIn);
-    const name = newBranchName(to);
+    // A renamed personal branch stays a personal/ branch (policies target the folder): the folder is added when missing, any other folder is refused.
+    const name = newBranchName(`personal/${newBranchName(typeof to === 'string' ? to.replace(/^personal\//, '') : to)}`);
     return this.serial(async () => {
       const m = await this.meta();
       try {

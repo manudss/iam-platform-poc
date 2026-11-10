@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 
 /** Names and refs reach SQL as parameters or as quoted identifiers, but every one is validated first: defense in depth. */
 export const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,62}$/;
-export const NEW_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/; // branches created here: no slash, one path segment
+export const NEW_BRANCH = /^(?:[a-z][a-z0-9-]{0,15}\/)?[A-Za-z0-9_][A-Za-z0-9._-]{0,62}$/; // one optional folder (feature/, profile/ ...) then one segment
 export const HASH = /^[0-9a-v]{32}$/;
 export const TABLE = /^[A-Za-z0-9_]{1,64}$/;
 export const TAG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
@@ -12,7 +12,7 @@ export function branchName(v: unknown, what = 'branch'): string {
   return v;
 }
 export function newBranchName(v: unknown): string {
-  if (typeof v !== 'string' || !NEW_BRANCH.test(v) || v.includes('..') || v.endsWith('.lock')) throw new BadRequestException('invalid branch name (letters, digits, . _ - ; max 63)');
+  if (typeof v !== 'string' || v.length > 63 || !NEW_BRANCH.test(v) || v.includes('..') || v.endsWith('.lock')) throw new BadRequestException('invalid branch name (letters, digits, . _ - and one optional folder such as feature/; max 63)');
   return v;
 }
 export function tableName(v: unknown): string {

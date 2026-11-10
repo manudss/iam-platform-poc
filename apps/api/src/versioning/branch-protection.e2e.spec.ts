@@ -146,4 +146,13 @@ describe('branch protection and the merge policy + real Dolt', { skip: !have && 
     assert.equal((await ok('GET', '/protection')).protections.find((x: any) => x.branch === 'main').source, 'custom');
     assert.equal((await call('POST', '/sql', { mode: 'write', ref: 'main', sql: "insert into roles values ('z','z',false)" })).status, 403);
   });
+  it('branch names may carry a folder (feature/x): create, protect, read, delete', async () => {
+    await ok('POST', '/branches', { name: 'feature/slash-demo', from: 'main' });
+    const p = await ok('PUT', '/branches/feature%2Fslash-demo/protection', { protected: true }, as('demo-alice'));
+    assert.equal(p.branch, 'feature/slash-demo'); assert.equal(p.protected, true);
+    assert.equal((await sql('feature/slash-demo', 'select count(*) n from roles')).rows.length, 1);
+    await ok('PUT', '/branches/feature%2Fslash-demo/protection', { protected: false }, as('demo-alice'));
+    await ok('DELETE', '/branches/feature%2Fslash-demo');
+    assert.equal((await call('POST', '/branches', { name: 'a/b/c', from: 'main' })).status, 400);
+  });
 });
