@@ -265,6 +265,35 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     c['prTab'].set('rows'); f.detectChanges();
     expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('B');
   });
+  it('sql console: query tabs keep their text, and save query stores to localStorage', async () => {
+    const { f, el, c } = await mount(routes());
+    f.componentRef.setInput('section', 'sql'); await f.whenStable(); f.detectChanges();
+    expect(el.querySelector('.wb-tab')?.textContent).toContain('Query 1');
+    c['sqlText'] = 'select * from roles';
+    c['addSqlTab'](); f.detectChanges();
+    expect(c['sqlText']).toBe(''); expect(el.textContent).toContain('Query 2');
+    c['sqlText'] = 'select * from dolt_log';
+    c['switchSqlTab'](0); f.detectChanges();
+    expect(c['sqlText']).toBe('select * from roles');
+    // save query
+    vi.spyOn(window, 'prompt').mockReturnValue('SoD conflicts');
+    c['saveQuery']();
+    expect(c['savedQueries']().map((q: { name: string }) => q.name)).toContain('SoD conflicts');
+    expect(localStorage.getItem('dolt-saved-queries')).toContain('select * from roles');
+    // mode pills switch read/write
+    const write = [...el.querySelectorAll('.pill')].find((b) => b.textContent?.trim() === 'Write') as HTMLButtonElement;
+    write.click(); f.detectChanges();
+    expect(c['sqlMode']).toBe('write'); expect(el.textContent).toContain('Preview changes');
+    vi.restoreAllMocks();
+  });
+  it('sql dry run: banner plus per-table row samples', async () => {
+    const res = { mode: 'write', dryRun: true, statements: 1, affectedRows: 1, changes: [{ table: 'roles', kind: 'modified', dataChange: true, schemaChange: false }], samples: { roles: { columns: ['id', 'label'], rows: [{ type: 'added', from: null, to: { id: 'x', label: 'X' } }] } } };
+    const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ data: res }) }));
+    f.componentRef.setInput('section', 'sql'); await f.whenStable(); f.detectChanges();
+    c['sqlMode'] = 'write'; c['sqlRef'] = 'feat-a'; c['sqlText'] = "insert into roles values ('x','X',false)"; await c['runSql'](true); f.detectChanges();
+    expect(el.querySelector('.sql-dryrun')?.textContent).toContain('Preview only');
+    expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('X');
+  });
   it('shows server errors in the status line instead of failing silently', async () => {
     const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ status: 403, data: { message: 'branch main is protected: open a pull request instead' } }) }));
     c['sqlMode'] = 'write'; c['sqlRef'] = 'main'; c['sqlText'] = "insert into roles values ('x','x',false)"; await c['runSql'](false); f.detectChanges();

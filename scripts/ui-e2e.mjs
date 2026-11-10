@@ -285,12 +285,12 @@ try {
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
   await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo');
   await page.waitForSelector('.cmp-summary'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
-  await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
+  await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await btn('Write').click();
   await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
   await page.waitForSelector('.explorer .msg:has-text("selected working branch")'); // workspace mode: SQL writes only on the selected working branch
   await page.selectOption('select[name=sr]', 'ui-demo'); await page.fill('textarea[name=sq]', "update roles set label = 'Internal auditor' where id = 'auditor'"); await btn('Preview changes').click();
   await page.waitForSelector('text=Preview only'); await shot('8-explorer-4-sql-preview');
-  await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
+  await btn('Read').click(); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
   await page.waitForSelector('.explorer .msg:has-text("not reachable")');
   await nav('/database/pulls'); await btn('+ New pull request').click(); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
   await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();

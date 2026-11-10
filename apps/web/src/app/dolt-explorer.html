@@ -24,6 +24,27 @@
     }
   </ng-template>
 
+  <ng-template #wbtree>
+    <aside class="wb-tree card">
+      <div class="tree-head">{{ dataRef }}@if (editableRef()) { (editable) }</div>
+      <input type="search" name="tableSearch" [(ngModel)]="tableSearch" placeholder="Filter tables" />
+      <h5>TABLES ({{ visibleTables().length }})</h5>
+      <ul class="tree-list">
+        @for (t of visibleTables(); track t.name) { <li><button type="button" class="tree-item" [class.on]="data()?.table === t.name" (click)="openTable(t.name)">{{ t.name }} <span class="cnt">{{ t.rows }}</span></button></li> }
+      </ul>
+      <h5>DOLT SYSTEM</h5>
+      <ul class="tree-list">
+        @for (s of systemTables; track s) { <li><button type="button" class="tree-item" (click)="openSystemTable(s)">{{ s }}</button></li> }
+      </ul>
+      @if (savedQueries().length) {
+        <h5>SAVED QUERIES</h5>
+        <ul class="tree-list">
+          @for (q of savedQueries(); track q.name) { <li><button type="button" class="tree-item" (click)="openSavedQuery(q)">&#x26A1; {{ q.name }}</button></li> }
+        </ul>
+      }
+    </aside>
+  </ng-template>
+
   @switch (tab()) {
     @case ('home') {
       <div class="page-head">
@@ -299,24 +320,7 @@
 
     @case ('data') {
       <div class="wb">
-        <aside class="wb-tree card">
-          <div class="tree-head">{{ dataRef }}@if (editableRef()) { (editable) }</div>
-          <input type="search" name="tableSearch" [(ngModel)]="tableSearch" placeholder="Filter tables" />
-          <h5>TABLES ({{ visibleTables().length }})</h5>
-          <ul class="tree-list">
-            @for (t of visibleTables(); track t.name) { <li><button type="button" class="tree-item" [class.on]="data()?.table === t.name" (click)="openTable(t.name)">{{ t.name }} <span class="cnt">{{ t.rows }}</span></button></li> }
-          </ul>
-          <h5>DOLT SYSTEM</h5>
-          <ul class="tree-list">
-            @for (s of systemTables; track s) { <li><button type="button" class="tree-item" (click)="openSystemTable(s)">{{ s }}</button></li> }
-          </ul>
-          @if (savedQueries().length) {
-            <h5>SAVED QUERIES</h5>
-            <ul class="tree-list">
-              @for (q of savedQueries(); track q.name) { <li><button type="button" class="tree-item" (click)="openSavedQuery(q)">&#x26A1; {{ q.name }}</button></li> }
-            </ul>
-          }
-        </aside>
+        <ng-container *ngTemplateOutlet="wbtree" />
         <div class="wb-main">
           <div class="wb-tabs">
             @for (t of openTables(); track t) { <span class="wb-tab" [class.on]="data()?.table === t"><button type="button" (click)="openTable(t)">&#x2637; {{ t }}</button><button type="button" class="x" [attr.aria-label]="'Close ' + t" (click)="closeTableTab(t)">&#x00D7;</button></span> }
@@ -396,35 +400,62 @@
     }
 
     @case ('sql') {
-      <h3>SQL console</h3>
-      <div class="row">
-        <label>Branch, tag or commit <select name="sr" [(ngModel)]="sqlRef">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
-        <label>Mode <select name="sm" [(ngModel)]="sqlMode"><option value="read">Read (SELECT, SHOW, EXPLAIN; changes nothing)</option><option value="write">Write (preview, then commit on the branch)</option></select></label>
-      </div>
-      <textarea name="sq" rows="6" [(ngModel)]="sqlText" spellcheck="false" aria-label="SQL"></textarea>
-      @if (sqlMode === 'read') {
-        <button type="button" (click)="runSql()">Run</button>
-        <p class="hint">One statement. Dolt system tables and diff functions can be read (<code>dolt_log</code>, <code>dolt_diff(...)</code>); commit, merge, reset and branch actions are refused here and live in the screens above.</p>
-      } @else {
-        <label>Commit message <input name="sg" [(ngModel)]="sqlMessage" autocomplete="off" /></label>
-        <label class="inline"><input name="sd" type="checkbox" [(ngModel)]="confirmDestructive" /> I confirm destructive statements (DROP, TRUNCATE, UPDATE or DELETE without WHERE)</label>
-        <button type="button" (click)="runSql(true)">Preview changes</button>
-        <button type="button" class="danger" (click)="runSql(false)">Apply and commit</button>
-        <p class="hint">Not allowed on protected branches. A failing statement undoes the whole run.</p>
-      }
-      @if (sqlResult(); as r) {
-        @if (r.mode === 'read') {
-          <p class="hint">{{ r.rowCount }} row(s) in {{ r.ms }} ms@if (r.truncated) { , first 500 shown }</p>
-          <div class="scroll"><table class="grid"><thead><tr>@for (c of sqlColumns(); track c) { <th>{{ c }}</th> }</tr></thead>
-            <tbody>@for (row of r.rows; track $index) { <tr>@for (c of sqlColumns(); track c) { <td>{{ cell(row[c]) }}</td> }</tr> }</tbody></table></div>
-        } @else {
-          <div class="panel">
-            <p>@if (r.committed) { Committed <code>{{ short(r.committed) }}</code>. } @else if (r.dryRun) { Preview only, nothing was kept. } @else { {{ r.note }} }
-              {{ r.statements }} statement(s), {{ r.affectedRows }} row(s) affected.@if (r.destructive) { <b> Destructive.</b> }</p>
-            <ul>@for (t of r.changes; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema) }</li> }</ul>
+      <div class="wb">
+        <ng-container *ngTemplateOutlet="wbtree" />
+        <div class="wb-main">
+          <div class="wb-tabs">
+            @for (t of sqlTabs(); track t.name; let i = $index) { <span class="wb-tab" [class.on]="sqlActiveTab() === i"><button type="button" (click)="switchSqlTab(i)">&#x29C9; {{ t.name }}</button>@if (sqlTabs().length > 1) { <button type="button" class="x" [attr.aria-label]="'Close ' + t.name" (click)="closeSqlTab(i)">&#x00D7;</button> }</span> }
+            <button type="button" class="link" (click)="addSqlTab()">+</button>
+            <span class="spacer"></span>
+            <select name="sr" [(ngModel)]="sqlRef" aria-label="Branch, tag or commit">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select>
           </div>
-        }
-      }
+          <div class="sql-bar">
+            <span class="pills" role="group" aria-label="Mode">
+              <button type="button" class="pill" [class.on]="sqlMode === 'read'" (click)="sqlMode = 'read'; sqlResult.set(null)">Read</button>
+              <button type="button" class="pill" [class.on]="sqlMode === 'write'" (click)="sqlMode = 'write'; sqlResult.set(null)">Write</button>
+            </span>
+            <span class="spacer"></span>
+            <button type="button" class="secondary" (click)="saveQuery()">Save query</button>
+          </div>
+          <div class="sql-editor">
+            <div class="gutter" #sqlGutter aria-hidden="true">@for (n of sqlLineNos(); track n) { <span>{{ n }}</span> }</div>
+            <textarea name="sq" rows="8" [(ngModel)]="sqlText" (scroll)="sqlGutter.scrollTop = $any($event.target).scrollTop" spellcheck="false" aria-label="SQL"></textarea>
+          </div>
+          @if (sqlMode === 'read') {
+            <button type="button" class="primary" (click)="runSql()">Run</button>
+            <p class="hint">One statement. Dolt system tables and diff functions can be read (<code>dolt_log</code>, <code>dolt_diff(...)</code>); commit, merge, reset and branch actions are refused here and live in the screens above.</p>
+          } @else {
+            <label>Commit message <input name="sg" [(ngModel)]="sqlMessage" autocomplete="off" /></label>
+            <label class="inline"><input name="sd" type="checkbox" [(ngModel)]="confirmDestructive" /> I confirm destructive statements (DROP, TRUNCATE, UPDATE or DELETE without WHERE)</label>
+            <button type="button" (click)="runSql(true)">Preview changes</button>
+            <button type="button" class="danger" (click)="runSql(false)">Apply and commit</button>
+            <p class="hint">Not allowed on protected branches. A failing statement undoes the whole run.</p>
+          }
+          @if (sqlResult(); as r) {
+            @if (r.mode === 'read') {
+              <p class="hint">{{ r.rowCount }} row(s) in {{ r.ms }} ms@if (r.truncated) { , first 500 shown }</p>
+              <div class="scroll"><table class="grid"><thead><tr>@for (c of sqlColumns(); track c) { <th>{{ c }}</th> }</tr></thead>
+                <tbody>@for (row of r.rows; track $index) { <tr>@for (c of sqlColumns(); track c) { <td>{{ cell(row[c]) }}</td> }</tr> }</tbody></table></div>
+            } @else {
+              @if (r.dryRun) { <p class="msg sql-dryrun">Preview only, nothing was kept. Apply and commit when it looks right.</p> }
+              <div class="panel">
+                <p>@if (r.committed) { Committed <code>{{ short(r.committed) }}</code>. } @else if (!r.dryRun) { {{ r.note }} }
+                  {{ r.statements }} statement(s), {{ r.affectedRows }} row(s) affected.@if (r.destructive) { <b> Destructive.</b> }</p>
+                <ul>@for (t of r.changes; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema) }</li> }</ul>
+              </div>
+              @for (k of sampleTables(r); track k) {
+                <div class="card table-diff">
+                  <ng-container *ngTemplateOutlet="rowdiff; context: { diff: sampleView(r, k) }" />
+                </div>
+              }
+            }
+          }
+          <div class="wb-status">
+            <span><span class="dot" aria-hidden="true"></span> branch: <b>{{ sqlRef }}</b> &nbsp; {{ sqlMode }} mode</span>
+            <span class="hint">reads change nothing · writes commit on the branch</span>
+          </div>
+        </div>
+      </div>
     }
 
     @case ('pulls') {
