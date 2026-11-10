@@ -106,19 +106,23 @@ pub async fn set_theme(Query(q): Query<HashMap<String, String>>) -> Response {
 }
 
 /// The whole page: common frame + the card inner HTML supplied by the sign-in step being rendered.
-/// `script` is true only for a passkey step: the page then loads the core's own /authorize/webauthn.js.
+/// `script` is true only for a passkey step: the page then carries the ceremony script INLINE after the
+/// card (pinned by a sha256 CSP hash, no 'unsafe-inline'). An external defer script proved unreliable
+/// through the hosted edge/CDN path: observed on Chrome, the script could download completely and never
+/// execute (no error, no CSP refusal), leaving "Use my passkey" dead. An inline script runs at parse,
+/// after the ceremony block above it, with nothing left to the network.
 fn frame(title: &str, card: &str, theme: &str, back: &str, script: bool) -> String {
     let query = back.split_once('?').map(|(_,q)| q).unwrap_or("");
     let parts: Vec<&str> = query.split('&').filter(|p|p.starts_with("branch=")||p.starts_with("ticket=")).collect();
     let suffix = if parts.len()==2 { format!("?{}",parts.join("&amp;")) } else { String::new() };
     let attr = if theme == "light" || theme == "dark" { format!(" data-theme=\"{theme}\"") } else { String::new() };
-    let wa = if script { "<script src=\"/authorize/webauthn.js\" defer></script>" } else { "" };
+    let wa = if script { format!("<script>{WA_JS}</script>") } else { String::new() };
     format!("<!doctype html><html lang=\"en\"{attr}><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<title>{}</title><link rel=\"icon\" href=\"/api/tenants/acme-demo/branding/favicon.svg{suffix}\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{}{CSS}</style><link rel=\"stylesheet\" href=\"/api/tenants/acme-demo/branding/theme.css{suffix}\">{wa}</head>\
+<title>{}</title><link rel=\"icon\" href=\"/api/tenants/acme-demo/branding/favicon.svg{suffix}\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{}{CSS}</style><link rel=\"stylesheet\" href=\"/api/tenants/acme-demo/branding/theme.css{suffix}\"></head>\
 <body><div class=\"auth-bg\" aria-hidden=\"true\"><img src=\"https://picsum.photos/1920/1080\" alt=\"\"></div><div class=\"auth-veil\" aria-hidden=\"true\"></div>{}\
 <main class=\"login\"><section class=\"card\"><div class=\"brand\"><div class=\"brand-title\"><picture class=\"brandlogo\">\
 <img class=\"for-light\" src=\"/api/tenants/acme-demo/branding/logo-horizontal-light.svg{suffix}\" alt=\"lyam\"><img class=\"for-dark\" src=\"/api/tenants/acme-demo/branding/logo-horizontal-dark.svg{suffix}\" alt=\"\" aria-hidden=\"true\"></picture><span class=\"brand-baseline\">IAM next generation</span></div></div>\
-{}<p class=\"foot\"><span class=\"brand-footer\">Fictional demo data only. Do not enter real data.</span> <a href=\"/privacy\">Politique de confidentialité / Privacy</a> &middot; <a href=\"/about\">About this demo</a></p></section></main></body></html>",
+{}<p class=\"foot\"><span class=\"brand-footer\">Fictional demo data only. Do not enter real data.</span> <a href=\"/privacy\">Politique de confidentialité / Privacy</a> &middot; <a href=\"/about\">About this demo</a></p></section></main>{wa}</body></html>",
         esc(title), include_str!("branding-default.css"), theme_nav(theme, back), card)
 }
 
@@ -127,11 +131,12 @@ fn page(status: StatusCode, body: String, form_target: Option<&str>, script: boo
     let h = r.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    // No scripts, except on a passkey step page where the core's own /authorize/webauthn.js runs the ceremony
-    // (script-src 'self' only there; the keypad flow stays scriptless on purpose). Images: the same-origin
+    // No scripts, except on a passkey step page where the ceremony script is inlined (pinned by its sha256
+    // hash; the keypad flow stays scriptless on purpose). Images: the same-origin
     // brand assets and the picsum background (it redirects to fastly.picsum.photos, so both hosts are allowed).
     // Browsers also apply form-action to the redirect that follows the POST: the (already validated, registered) redirect origin must be allowed.
-    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'self' 'unsafe-inline'; form-action 'self'{}{}", if script { "; script-src 'self'" } else { "" }, form_target.map(|o| format!(" {o}")).unwrap_or_default());
+    // The form target origin belongs to form-action; the script-src directive (passkey pages only) stays hash-only.
+    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'self' 'unsafe-inline'; form-action 'self'{}{}", form_target.map(|o| format!(" {o}")).unwrap_or_default(), if script { format!("; script-src '{}'", wa_script_hash()) } else { String::new() });
     if let Ok(v) = HeaderValue::from_str(&csp) { h.insert(header::CONTENT_SECURITY_POLICY, v); }
     r
 }
@@ -194,10 +199,10 @@ fn keypad_html(f: &Value, label: &str) -> Option<String> {
 /// True when one of the fields is a passkey ceremony: the page then loads the core's ceremony script.
 fn has_webauthn(fields: Option<&[Value]>) -> bool { fields.is_some_and(|fs| fs.iter().any(|f| f["type"].as_str() == Some("webauthn"))) }
 
-/// Passkey step (WebAuthn): the request options travel as JSON in a data attribute of this block; the core's own
-/// /authorize/webauthn.js (the only script these pages ever load, allowed by the CSP of this page only) runs the
-/// browser ceremony, writes the signed answer into the hidden field and submits the form. A malformed options
-/// object renders nothing (the description is not trusted as markup).
+/// Passkey step (WebAuthn): the request options travel as JSON in a data attribute of this block; the ceremony
+/// script (WA_JS, the only script these pages ever run, inlined and pinned by its CSP hash on this page only)
+/// runs the browser ceremony, writes the signed answer into the hidden field and submits the form. A malformed
+/// options object renders nothing (the description is not trusted as markup).
 fn webauthn_html(f: &Value, label: &str) -> Option<String> {
     let opts = f.get("options")?.as_object()?;
     let ch = opts.get("challenge")?.as_str()?;
@@ -224,7 +229,16 @@ var pk=(window.PublicKeyCredential&&PublicKeyCredential.parseRequestOptionsFromJ
 navigator.credentials.get({publicKey:pk}).then(function(cred){out.value=JSON.stringify(serialize(cred));out.form.submit()}).catch(function(e){status.textContent=(e&&e.name==='NotAllowedError')?'The passkey ceremony was cancelled or timed out.':'No passkey could be used on this device.';btn.disabled=false})});
 })();"#;
 
-/// Serves the passkey ceremony script above (same origin, no-store).
+/// The CSP hash source pinning the inline ceremony script: sha256 of its exact bytes, base64-encoded.
+fn wa_script_hash() -> &'static str {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| format!("sha256-{}", base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(WA_JS.as_bytes()))))
+}
+
+/// The passkey ceremony script, still served same-origin (compat + a cheap probe that the edge routes
+/// /authorize/* to the core). The sign-in pages no longer reference it: they carry the script inline.
 pub async fn wa_js() -> Response {
     ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-store")], WA_JS).into_response()
 }
@@ -511,18 +525,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn webauthn_step_loads_the_ceremony_script_and_allows_it_in_the_csp() {
+    async fn webauthn_step_carries_the_ceremony_script_inline_and_pins_it_in_the_csp() {
         let addr = fake_gate_webauthn().await;
         let mut core = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test")); core.gate = Some((addr, "tok-12345678".into()));
         let c = Arc::new(core);
         let (st, h, body) = send(&c, post_login_host(&login_body("demo-alice", "pw"))).await;
         assert_eq!(st, StatusCode::OK);
         assert!(body.contains("data-wa-options=") && body.contains("Y2hhbGxlbmdlLXZhbGlk") && body.contains("name=\"a_webauthn\""), "{body}");
-        assert!(body.contains("<script src=\"/authorize/webauthn.js\" defer>") && !body.contains("<button type=\"submit\">Continue</button>"), "{body}");
-        assert!(h[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("script-src 'self'"));
+        // The script is inline, AFTER the ceremony block, and the CSP pins its exact hash (no 'unsafe-inline').
+        let div = body.find("data-wa-options=").unwrap();
+        let tag = body.find("<script>").unwrap();
+        assert!(tag > div && body[tag..].contains("navigator.credentials.get"), "{body}");
+        assert!(!body.contains("<script src=") && !body.contains("<button type=\"submit\">Continue</button>"), "{body}");
+        let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+        // style-src keeps its pre-existing 'unsafe-inline'; the script-src directive must be hash-only.
+        let script_src = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src")).unwrap_or("").to_string();
+        assert!(script_src == format!("script-src '{}'", super::wa_script_hash()), "{csp}");
     }
     #[tokio::test]
-    async fn the_ceremony_script_is_served_same_origin_and_pages_without_passkey_have_no_script_src() {
+    async fn the_ceremony_script_is_still_served_same_origin_and_pages_without_passkey_have_no_script_src() {
         let c = core();
         let (st, h, body) = send(&c, Request::builder().uri("/authorize/webauthn.js").body(Body::empty()).unwrap()).await;
         assert_eq!(st, StatusCode::OK);
