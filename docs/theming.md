@@ -30,13 +30,15 @@ Design background: [branding.md](branding.md).
   borders and field outlines at least 3:1.
 - Images and icons that carry colour use the logo/branding endpoints or `currentColor`, not fixed fills.
 
-## Dark palette (validated 10 Nov 2026)
+## Dark palette (validated 10 Nov 2026, lightened after his review)
 
-Surfaces climb a visible lightness ladder (tone = L*): `--bg` 16, `--panel` 20, `--card` 25, `--field-bg` 28,
-`--code-bg` 30, `--row-hover` 32. Borders (`--line`, `--field-line`) sit at tone 60 to 61 so they read as 3:1 or more
-against cards. `--card` over `--bg` is at least 1.3:1. Muted text is tone 80, ink is tone 90. Sidebar and active
-states are deep shades of the primary colour. The surface tint comes from the primary hue at low chroma, so it
-follows Customisation.
+Surfaces climb a visible lightness ladder (tone = L*): `--bg` 18, `--panel` 23, `--card` 28, `--field-bg` 31,
+`--code-bg` / `--th-bg` 33, `--row-hover` 35. Never near-black: at Material's low neutral chroma a dark grey reads
+as black, so the dark neutrals use a higher chroma (`neutralDark` / `neutralVariantDark` in the engine) and the hue
+of the customisation colour stays visible on the surfaces. Borders (`--line` 62, `--field-line` 63) read as 3:1 or
+more against cards and fields. `--card` over `--bg` is at least 1.3:1. Muted text is tone 80, ink is tone 90.
+Sidebar and active states are deep shades of the primary colour. Every value is derived from the two
+customisation colours; nothing is hard-coded.
 
 `contrast.spec.ts` checks all of this for nine source-colour pairs (extremes included). If you change a tone,
 the spec tells you what broke.

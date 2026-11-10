@@ -43,10 +43,11 @@ function hexa(p: TonalPalette, tone: number, alpha: number): string {
   return `${hex(p, tone)}${a}`;
 }
 
-export interface Palettes { primary: TonalPalette; secondary: TonalPalette; neutral: TonalPalette; neutralVariant: TonalPalette; ok: TonalPalette; bad: TonalPalette; warn: TonalPalette }
+export interface Palettes { primary: TonalPalette; secondary: TonalPalette; neutral: TonalPalette; neutralVariant: TonalPalette; neutralDark: TonalPalette; neutralVariantDark: TonalPalette; ok: TonalPalette; bad: TonalPalette; warn: TonalPalette }
 
-/** The five palettes of a theme: primary/accent from the source colors, neutrals from the primary hue at
- * Material's low chromas, and the fixed semantic hues (green / Material error red / amber). */
+/** The palettes of a theme: primary/accent from the source colors, neutrals from the primary hue, and the fixed
+ * semantic hues (green / Material error red / amber). Light surfaces keep Material's low chromas; dark surfaces
+ * get a higher chroma so the customisation hue stays visible on them (a low-chroma dark grey reads as black). */
 export function palettesOf(colors: BrandingColors): Palettes {
   const p = Hct.fromInt(argbFromHex(colors.primary));
   const a = Hct.fromInt(argbFromHex(colors.accent));
@@ -55,6 +56,8 @@ export function palettesOf(colors: BrandingColors): Palettes {
     secondary: palette(a.hue, Math.min(a.chroma, 24)),
     neutral: palette(p.hue, Math.min(p.chroma / 12, 8)),
     neutralVariant: palette(p.hue, Math.min(p.chroma / 8 + 4, 24)),
+    neutralDark: palette(p.hue, Math.min(p.chroma / 6 + 6, 14)),
+    neutralVariantDark: palette(p.hue, Math.min(p.chroma / 8 + 6, 24)),
     ok: palette(145, 32),
     bad: palette(25, 84),
     warn: palette(80, 32),
@@ -63,13 +66,16 @@ export function palettesOf(colors: BrandingColors): Palettes {
 
 /** One mode of the theme: the variable contract filled from the palettes. */
 function modeVars(pl: Palettes, dark: boolean): ThemeVars {
-  const { primary: P, secondary: S, neutral: N, neutralVariant: NV, ok: G, bad: E, warn: W } = pl;
+  const { primary: P, secondary: S, ok: G, bad: E, warn: W } = pl;
+  // Dark surfaces use the higher-chroma neutrals: the hue of the customisation colour stays visible on them.
+  const N = dark ? pl.neutralDark : pl.neutral;
+  const NV = dark ? pl.neutralVariantDark : pl.neutralVariant;
   return dark ? {
-    '--bg': hex(N, 16), '--card': hex(N, 25), '--panel': hex(N, 20), '--code-bg': hex(N, 30),
-    '--th-bg': hex(NV, 30), '--row-hover': hex(N, 32), '--field-bg': hex(N, 28), '--bar-off': hex(NV, 45),
-    '--veil': hexa(N, 16, .60), '--card-auth': hex(N, 22), '--auth-field': hex(N, 28),
+    '--bg': hex(N, 18), '--card': hex(N, 28), '--panel': hex(N, 23), '--code-bg': hex(N, 33),
+    '--th-bg': hex(NV, 33), '--row-hover': hex(N, 35), '--field-bg': hex(N, 31), '--bar-off': hex(NV, 45),
+    '--veil': hexa(N, 18, .60), '--card-auth': hex(N, 23), '--auth-field': hex(N, 31),
     '--ink': hex(N, 90), '--muted': hex(NV, 80), '--label': hex(NV, 85), '--brand-sub': hex(NV, 80), '--th-ink': hex(NV, 80),
-    '--line': hex(NV, 60), '--field-line': hex(NV, 61), '--focus': hex(P, 70),
+    '--line': hex(NV, 62), '--field-line': hex(NV, 63), '--focus': hex(P, 70),
     '--accent': hex(P, 80), '--accent-ink': hex(P, 20), '--accent-dark': hex(P, 70), '--accent-soft': hex(P, 25), '--link': hex(P, 80),
     '--chip-bg': hex(S, 30), '--chip-ink': hex(S, 90),
     '--ok': hex(G, 80), '--ok-soft': hex(G, 25), '--ok-line': hex(G, 40),
