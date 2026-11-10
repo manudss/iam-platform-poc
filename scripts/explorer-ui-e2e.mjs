@@ -89,6 +89,10 @@ try {
   // main is read only
   await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('text=read only');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
+  // a wide table scrolls inside its grid, never the page
+  await page.click('button:has-text("workflow_definitions")'); await page.waitForSelector('th:has-text("graph")');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'page-level horizontal scrollbar');
+  await shot('2b-data-wide');
   // compare
   await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
   await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('3-compare');

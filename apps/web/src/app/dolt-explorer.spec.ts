@@ -186,6 +186,9 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(wbTab).toContain('background:none'); expect(wbTab).toContain('color:var(--ink)');
     const hover = css.match(/\.pill:not\(\.on\):hover[^,{]*,[^{]*\{([^}]*)\}/)?.[1] ?? '';
     expect(hover).toContain('background:var(--row-hover)'); expect(hover).toContain('color:var(--ink)');
+    // the data workbench: the grid is the scroll container, never the page (the 1fr column must be able to shrink)
+    expect(css.match(/\.wb\{([^}]*)\}/)?.[1]).toContain('minmax(0,1fr)');
+    expect(css.match(/\.data-grid\{([^}]*)\}/)?.[1]).toContain('overflow:auto');
   });
 
   it('offers row editing on an unprotected branch only, and read only on protected main', async () => {

@@ -1,5 +1,5 @@
 .panel label, .explorer > label{display:flex;margin:.4rem 0}
-.data-grid{max-height:60vh;border:1px solid var(--line);border-radius:.5rem}
+.data-grid{max-height:60vh;border:1px solid var(--line);border-radius:.5rem;overflow:auto}
 .data-grid th{position:sticky;top:0;z-index:1}
 .cell-value{min-width:130px;max-width:320px;max-height:120px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 
@@ -13,7 +13,8 @@
 .data-grid table{width:max-content;min-width:100%}
 @media(max-width:500px){.field-editor{grid-template-columns:1fr}.cell-value{max-width:220px}.panel{padding:.7rem}}
 /* data workbench: tree, object tabs, toolbar, status bar */
-.wb{display:grid;grid-template-columns:220px 1fr;gap:1rem;align-items:start}
+.wb{display:grid;grid-template-columns:220px minmax(0,1fr);gap:1rem;align-items:start}
+.wb-main{min-width:0}
 .wb-tree{padding:.7rem;max-height:70vh;overflow:auto}
 .tree-head{font-weight:700;color:var(--accent-dark);text-transform:uppercase;font-size:.8rem;margin-bottom:.5rem}
 .wb-tree h5{color:var(--label);font-size:.72rem;letter-spacing:.04em;margin:.8rem 0 .25rem}
