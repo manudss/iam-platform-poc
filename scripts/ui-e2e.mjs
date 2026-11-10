@@ -379,10 +379,48 @@ try {
   await page.waitForSelector('#user-editor', { state: 'detached' });
 
   // Readonly mode (Profile fields -> component surfaces): status stays, every mutating control goes away.
-  await nav('/profile-fields'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
+  // Sections: add (empty, local), rename, remove; no duplicate name; a real section renames for all its fields (not saved: the next steps keep the saved configuration).
+  await nav('/profile-fields'); await page.waitForSelector('#pf-table .pf-group');
+  await page.fill('input[name=pf-ns]', 'Emergency'); await page.click('#pf-add-section');
+  await page.waitForSelector('.pf-group:has-text("Emergency · 0 field(s)")');
+  await page.fill('input[name=pf-ns]', 'emergency'); await page.click('#pf-add-section');
+  await page.waitForSelector('.pf-err:has-text("already exists")');
+  await page.getByRole('button', { name: 'Rename the section Emergency' }).click();
+  await page.fill('input[name=pf-rn]', 'Urgence'); await page.getByRole('button', { name: 'Save name' }).click();
+  await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
+  await page.getByRole('button', { name: 'Move the section Urgence up' }).click();
+  const sectionBranch = await page.locator('select[name=globalBranch]').inputValue();
+  await page.waitForFunction(() => { const names = [...document.querySelectorAll('#pf-table .pf-group')].map(e=>e.textContent); return names.findIndex(n=>n.includes('Urgence')) < names.length - 1; });
+  const sectionOrder = await page.locator('#pf-table .pf-group').allTextContents();
+  const sectionSave = await Promise.all([
+    page.waitForResponse(r => r.url().includes('/profile-fields') && r.request().method() === 'PUT'),
+    page.click('#pf-save'),
+  ]);
+  assert.equal(sectionSave[0].status(), 200, await sectionSave[0].text());
+  assert.ok((await sectionSave[0].json()).config.sections.includes('Urgence'), 'server persisted empty section');
+  await page.waitForFunction(() => !document.querySelector('#pf-save')?.disabled && !document.body.innerText.includes('Unsaved edits'));
+  await page.reload(); await page.waitForSelector('#signin-browser');
+  await coreLogin();
+  await page.waitForSelector('details.token', { state: 'attached' });
+  await setToken();
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await status('personal branch');
+  await page.locator('select[name=globalBranch]').selectOption(sectionBranch);
+  const reloadFields = page.waitForResponse(r => r.url().includes('/profile-fields') && r.request().method() === 'GET' && r.status() === 200);
+  await nav('/profile-fields');
+  const reloadConfig = await (await reloadFields).json();
+  console.log('SECTION RELOAD', JSON.stringify({sections: reloadConfig.working?.config?.sections, branch: await page.locator('select[name=globalBranch]').inputValue()}));
+  try { await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")'); }
+  catch(e) { console.log('SECTION DOM', (await page.locator('body').innerText()).slice(-3500)); throw e; }
+  assert.deepEqual(await page.locator('#pf-table .pf-group').allTextContents(), sectionOrder, 'empty sections and their order survive save/reload');
+  await page.getByRole('button', { name: 'Remove the empty section Urgence' }).click();
+  await page.waitForSelector('.pf-group:has-text("Urgence")', { state: 'detached' });
+  const names = await page.locator('#pf-table .pf-group').allInnerTexts();
+  assert.equal(new Set(names.map((x) => x.split(' · ')[0])).size, names.length, 'a section name shows once: ' + JSON.stringify(names));
+  await nav('/profile-fields'); await page.click('#pf-tab-components'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
   const pinRow = page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"]');
   try {
-    await pinRow.locator('select').nth(1).selectOption('readonly', { timeout: 10000 }); // 0 = My profile, 1 = user sheet (admin)
+    await pinRow.locator('.seg').nth(1).locator('label', { hasText: 'status only' }).click({ timeout: 10000 }); // 0 = My profile, 1 = user sheet (admin); segmented radios
   } catch (e) {
     console.log('DIAG pin row html:', await pinRow.innerHTML().catch(() => '<unreadable>'));
     throw e;
@@ -400,8 +438,8 @@ try {
   await page.locator('#user-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.waitForSelector('#user-editor', { state: 'detached' });
   // Restore manage mode so the rest of the run and the screenshots stay in the default posture.
-  await nav('/profile-fields'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
-  await page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"] select').nth(1).selectOption('manage');
+  await nav('/profile-fields'); await page.click('#pf-tab-components'); await page.waitForSelector('#pf-components-table tr[data-component="auth-digit-code:pin"]');
+  await page.locator('#pf-components-table tr[data-component="auth-digit-code:pin"] .seg').nth(1).locator('label', { hasText: 'status + actions' }).click();
   await Promise.all([page.waitForResponse((r) => r.url().includes('/profile-fields') && r.request().method() === 'PUT' && r.status() < 300), page.click('#pf-save')]);
   await noBanner('users page');
 

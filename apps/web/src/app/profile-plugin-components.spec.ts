@@ -26,6 +26,23 @@ describe('packaged profile components (plugins/*/screens/*.mjs)', () => {
   const TOTP = { id: 'authenticator-app', type: 'totp', name: 'Authenticator app' };
   const PIN = { id: 'pin-keypad', type: 'digit-code', name: 'PIN keypad', config: { length: 6 } };
 
+  it('renders a local QR for a fresh self enrollment and never shows it to an administrator', async () => {
+    const el = await mount('iam-totp-profile', ctx({}), (p) => p.endsWith('/totp') ? { status: 200, data: { shownOnce: { secret: 'FICTIONAL', otpauthUri: 'otpauth://totp/Fixture?secret=JBSWY3DPEHPK3PXP&issuer=Fixture' } } } : enrollments([TOTP]));
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.enroll')!.click();
+    await new Promise(r => setTimeout(r, 20));
+    expect(el.shadowRoot!.querySelector('.qr svg')).not.toBeNull();
+    expect(el.shadowRoot!.querySelectorAll('img')).toHaveLength(0);
+    const admin = await mount('iam-totp-profile', ctx({ surface: 'admin', subject: 'u1' }), () => enrollments([TOTP]));
+    expect(admin.shadowRoot!.querySelector('.qr')).toBeNull();
+  });
+
+  it('does not turn an unavailable password lock status into an unlocked claim', async () => {
+    const el = await mount('iam-password-profile', ctx({ surface: 'admin', subject: 'u1' }), () => enrollments([]));
+    expect(el.shadowRoot!.textContent).toContain('Unavailable:');
+    expect(el.shadowRoot!.textContent).toContain('not an unlocked status');
+    expect(el.shadowRoot!.querySelector('input')).toBeNull();
+  });
+
   it('readonly mode shows the status but no mutating control (TOTP and PIN)', async () => {
     const totp = await mount('iam-totp-profile', ctx({ surface: 'admin', subject: 'u1', mode: 'readonly' }), (p) =>
       p.includes('/auth/enrollments/u1') ? enrollments([TOTP], { 'authenticator-app': { totp: { at: 'x' } } }) : enrollments([]));

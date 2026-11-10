@@ -46,3 +46,81 @@
 h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px solid var(--line); padding-bottom: .15rem; }
 .profile-image-field { display: flex; align-items: center; gap: .6rem; margin: .3rem 0; }
 .profile-image-thumb { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 2px solid var(--field-line); }
+
+/* Profile fields: validated-mockup tab layout (Fields / Components / Preview / Publish) */
+.pf-tabs { display: flex; gap: .25rem; border-bottom: 2px solid var(--line); margin: 0 0 1.1rem; flex-wrap: wrap; }
+.pf-tabs button { background: none; border: 0; border-bottom: 3px solid transparent; border-radius: 0; color: var(--muted); margin: 0; padding: .6rem 1rem; min-height: 44px; }
+.pf-tabs button:hover:not(:disabled):not(.active) { color: var(--ink); background: none; border-bottom-color: var(--line); }
+.pf-tabs button.active { color: var(--accent-dark); border-bottom-color: var(--accent); }
+.pf-fields-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1.1rem; align-items: start; }
+@media (max-width: 900px) { .pf-fields-grid { grid-template-columns: 1fr; } }
+.pf-group { margin: .9rem 0 .35rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.pf-field { display: flex; align-items: center; gap: .6rem; padding: .5rem .7rem; border: 1px solid var(--line); border-radius: .6rem; margin-bottom: .45rem; cursor: pointer; min-height: 44px; background: var(--card); }
+.pf-field:hover { border-color: var(--accent); }
+.pf-field.selected { border-color: var(--accent); background: var(--accent-soft); }
+.pf-field.off { opacity: .6; }
+.pf-grip { color: var(--muted); cursor: grab; letter-spacing: -.15em; }
+.pf-field-main { flex: 1; min-width: 0; }
+.pf-side h3 { margin-top: 0; }
+.pf-side h4 { margin: 1rem 0 .3rem; }
+.pf-surface { width: 100%; margin: .3rem 0 .8rem; }
+.pf-lifecycle { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; font-size: .82rem; color: var(--muted); }
+.pf-step { border: 1px solid var(--line); border-radius: 999px; padding: .1rem .55rem; }
+.pf-step.on { border-color: var(--accent); color: var(--accent-dark); background: var(--accent-soft); }
+.pf-form-preview { border: 1px solid var(--line); border-radius: .6rem; padding: .8rem 1rem; background: var(--panel, var(--card)); }
+.pf-pv-section { margin: .8rem 0 .3rem; font-size: .85rem; border-bottom: 1px solid var(--line); padding-bottom: .15rem; }
+.pf-pv-field { display: block; margin: .55rem 0; }
+.pf-req { color: var(--bad); margin-left: .15rem; }
+.pf-pv-img { display: inline-flex; width: 64px; height: 64px; border-radius: 50%; border: 2px dashed var(--line); align-items: center; justify-content: center; color: var(--muted); font-size: .75rem; margin-top: .3rem; }
+
+/* My profile: validated-mockup layout (identity header, two columns) */
+.mp-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.mp-id { display: flex; align-items: center; gap: 1rem; min-width: 0; }
+.mp-avatar { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; border: 2px solid var(--line); flex: none; }
+.mp-initials { display: inline-flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 700; color: var(--accent-ink); background: var(--accent); }
+.mp-name { margin: 0; }
+.mp-chips { margin: .3rem 0 0; }
+.mp-chips .pill { margin-right: .35rem; }
+.mp-pic-actions { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; max-width: 22rem; }
+.mp-pic-actions .up { margin: 0; }
+.mp-cols { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 1.1rem; align-items: start; }
+.mp-cols .card { margin-bottom: 0; }
+.mp-side { display: flex; flex-direction: column; gap: 1.1rem; }
+@media (max-width: 900px) { .mp-cols { grid-template-columns: 1fr; } .mp-cols .card { margin-bottom: 1.1rem; } }
+
+/* Segmented radio groups (validated mockup: hidden | visible | editable as one control). Native radios stay in the DOM for keyboard and screen readers. */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: .5rem; overflow: hidden; background: var(--surface, transparent); max-width: 100%; }
+.seg-opt { position: relative; margin: 0; display: inline-flex; }
+.seg-opt + .seg-opt { border-left: 1px solid var(--line); }
+.seg-opt input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; width: 100%; height: 100%; }
+.seg-opt span { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 .8rem; font-size: .85rem; color: var(--text-soft, inherit); white-space: nowrap; }
+.seg-opt input:checked + span { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.seg-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+.seg-opt input:disabled { cursor: not-allowed; }
+.seg-opt input:disabled + span { opacity: .45; }
+@media (max-width: 480px) { .seg-opt span { padding: 0 .55rem; font-size: .8rem; } }
+
+/* Section management in the Fields tab */
+.pf-group-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; margin: .9rem 0 .35rem; }
+.pf-group-head .pf-group { margin: 0; }
+.pf-group-actions { display: inline-flex; gap: .3rem; flex-wrap: wrap; }
+.pf-group-actions .icon, .pf-rename button { min-height: 44px; min-width: 44px; padding: 0 .7rem; font-size: .8rem; }
+.pf-rename { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; width: 100%; }
+.pf-rename input { flex: 1; min-width: 10rem; min-height: 44px; }
+.pf-add-section { display: flex; gap: .5rem; align-items: end; flex-wrap: wrap; margin-bottom: .6rem; }
+.pf-add-section label { flex: 1; min-width: 10rem; margin: 0; }
+.pf-add-section input { min-height: 44px; }
+.pf-add-section button { min-height: 44px; }
+.pf-err { color: var(--bad); flex-basis: 100%; }
+.pf-empty-section { border: 1px dashed var(--line); border-radius: .6rem; padding: .6rem .7rem; margin: 0 0 .45rem; }
+/* Review fixes: section header actions on their own row (same layout for every section), compact segmented controls inside tables, no overflow at 390px */
+.pf-group-head { flex-direction: column; align-items: flex-start; gap: .25rem; }
+.pf-fields-grid > * { min-width: 0; }
+.pf-field-main { overflow-wrap: anywhere; }
+#pf-components-table .seg-opt span { padding: 0 .5rem; font-size: .8rem; }
+#pf-components-table .pf-order { width: 4.5rem; }
+@media (max-width: 480px) { .pf-field { flex-wrap: wrap; } .pf-group-actions { width: 100%; } .pf-group-actions .icon { flex: 1; } }
+
+/* Segments must not shrink and clip their words. The table scrolls within its own region on small screens. */
+#pf-components-table .seg { max-width: none; }
+#pf-components-table .seg-opt { flex-shrink: 0; }

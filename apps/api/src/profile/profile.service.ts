@@ -27,6 +27,11 @@ export class ProfileService {
     const r = await this.registry(ref);
     return [...BASE_FIELDS, ...r.profileFields(tenant).flatMap((p) => toCatalog(p.plugin, p.fields))];
   }
+  async pluginSettings(tenant: string) {
+    const registry = await this.registry('work');
+    return Object.fromEntries(await Promise.all(registry.list(tenant).filter(p => p.enabled).map(async p => [p.id, await registry.form(tenant, p.id)])));
+  }
+  async inactiveCatalogue(tenant: string) { return (await this.registry('work')).inactiveProfileFields(tenant).flatMap(p => toCatalog(p.plugin, p.fields)); }
   async activePlugins(tenant: string, ref: 'live' | 'work' = 'live'): Promise<string[]> { return (await this.registry(ref)).list(tenant).filter((x: { id: string; enabled?: boolean; active?: boolean }) => x.enabled ?? x.active).map((x: { id: string }) => x.id); }
   async pluginActive(tenant: string, id: string, ref: 'live' | 'work') { return (await this.registry(ref)).isActive(tenant, id); }
   async config(tenant: string, ref: 'live' | 'work'): Promise<ProfileConfig> {

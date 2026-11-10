@@ -4,19 +4,11 @@ import { CallbackPage, LoginPage } from './login';
 import { ActivationPage, ExplorerPage, OverviewPage, PluginsPage } from './pages';
 import { AssignmentsPage } from './assignments';
 import { UsersPage } from './users';
-import { AuthMethodsPage } from './auth-methods';
-import { ProfileFieldsPage } from './profile-fields';
-import { MyProfilePage } from './my-profile';
 import { SignupPage } from './signup-page';
 import { PrivacyPage } from './privacy-page';
 import { AboutPage } from './about-page';
 import { SsoInteractionPage } from './sso-interaction';
 import { SsoSamlPage } from './sso-saml';
-import { ApplicationsPage } from './applications';
-import { PoliciesPage } from './policies';
-import { ProfileReviewsPage } from './profile-reviews';
-import { BusObserverPage } from './bus-observer';
-import { McpPage } from './mcp';
 import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard } from './workflows';
 import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
@@ -40,19 +32,19 @@ export const routes: Routes = [
       { path: '', pathMatch: 'full', redirectTo: 'overview' },
       { path: 'overview', component: OverviewPage, title: 'Dashboard', canActivate: [accessGuard] },
       { path: 'users', component: UsersPage, title: 'Users', canActivate: [accessGuard] },
-      { path: 'profile-fields', canActivate: [accessGuard], component: ProfileFieldsPage, title: 'Profile fields' },
-      { path: 'applications', component: ApplicationsPage, title: 'Applications', canActivate: [accessGuard, pluginGuard('app-connector')] },
-      { path: 'policies', component: PoliciesPage, title: 'Policies', canActivate: [accessGuard, pluginGuard('policy-studio')] },
-      { path: 'profile-reviews', component: ProfileReviewsPage, title: 'Profile reviews', canActivate: [accessGuard] },
+      { path: 'profile-fields', canActivate: [accessGuard], loadComponent: () => import('./profile-fields').then(m => m.ProfileFieldsPage), title: 'Profile fields' },
+      { path: 'applications', loadComponent: () => import('./applications').then(m => m.ApplicationsPage), title: 'Applications', canActivate: [accessGuard, pluginGuard('app-connector')] },
+      { path: 'policies', loadComponent: () => import('./policies').then(m => m.PoliciesPage), title: 'Policies', canActivate: [accessGuard, pluginGuard('policy-studio')] },
+      { path: 'profile-reviews', loadComponent: () => import('./profile-reviews').then(m => m.ProfileReviewsPage), title: 'Profile reviews', canActivate: [accessGuard] },
       { path: 'roles', canActivate: [accessGuard], loadComponent: () => import('./roles-admin').then(m => m.RolesAdminPage), title: 'Roles' },
-      { path: 'my-profile', component: MyProfilePage, title: 'My profile' },
-      { path: 'auth-methods', canActivate: [accessGuard], component: AuthMethodsPage, title: 'Authentication methods' },
+      { path: 'my-profile', loadComponent: () => import('./my-profile').then(m => m.MyProfilePage), title: 'My profile' },
+      { path: 'auth-methods', canActivate: [accessGuard], loadComponent: () => import('./auth-methods').then(m => m.AuthMethodsPage), title: 'Authentication methods' },
       { path: 'assignments/matrix', canActivate: [accessGuard], loadComponent: () => import('./assignment-matrix').then(m => m.AssignmentMatrixPage), title: 'Bulk assignments' },
       { path: 'assignments', canActivate: [accessGuard], component: AssignmentsPage, title: 'Assignments & changes' },
       { path: 'activation', canActivate: [accessGuard], component: ActivationPage, title: 'Activation' },
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
-      { path: 'event-bus', canActivate: [accessGuard], component: BusObserverPage, title: 'Event bus' },
-      { path: 'mcp', canActivate: [accessGuard], component: McpPage, title: 'MCP (AI access)' },
+      { path: 'event-bus', canActivate: [accessGuard], loadComponent: () => import('./bus-observer').then(m => m.BusObserverPage), title: 'Event bus' },
+      { path: 'mcp', canActivate: [accessGuard], loadComponent: () => import('./mcp').then(m => m.McpPage), title: 'MCP (AI access)' },
       { path: 'workflows', component: WorkflowsPage, title: 'Workflows', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [workflowsEnabledGuard] },

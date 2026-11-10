@@ -11,20 +11,20 @@ Production code: 39 points. Test code: 84 points.
 
 | Circuit | Role | Event / detail | Place |
 |---|---|---|---|
-| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:87 |
-| ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:112 |
-| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:120 |
+| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:92 |
+| ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:117 |
+| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:125 |
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:98 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:100 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:101 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:153 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:185 |
 | callSlot (blocking hook) | caller | notify.templates | apps/api/src/plugins/v1/mail-catalogue.ts:33 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:35 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:39 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:48 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:141 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:206 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:40 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:44 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:53 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:146 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:211 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:65 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
@@ -65,7 +65,7 @@ Production code: 39 points. Test code: 84 points.
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:70 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:81 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:88 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/authn.spec.ts:306 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/authn.spec.ts:310 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/branch-bus.e2e.spec.ts:56 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/branch-bus.e2e.spec.ts:57 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/plugins/v1/plugins-v1.spec.ts:26 |

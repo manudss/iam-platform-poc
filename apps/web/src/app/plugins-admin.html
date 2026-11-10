@@ -16,7 +16,15 @@
 
   @if (selected(); as p) {
     <div class="card detail">
-    <h3>{{ p.name }}</h3>
+    <h3>{{ p.name }} <small>v{{ p.version }}</small></h3>
+    @if (!p.base) {
+      <ol class="lifecycle" aria-label="Plugin lifecycle">
+        @for (step of lifecycle(p); track step.n) {
+          <li [class.on]="step.cur"><b>{{ step.n }} · {{ step.label }}</b><small>{{ step.help }}</small></li>
+        }
+      </ol>
+      <p class="hint">Transitions are staged on the working branch and become live after Apply; each one publishes an event on the bus (watch them in the event observer).</p>
+    }
     @if (!p.base && !p.installed) {
       <p>Installing runs this plugin's own migrations (tables prefixed with its id). Grant that explicitly.</p>
       @if (p.requests.install) { <label class="row"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> Allow its install migrations</label> }
@@ -55,6 +63,19 @@
         <button type="button" [disabled]="session.branch()==='main'" id="plugin-enable" (click)="enable()">Enable</button>
       } @else {
         <button type="button" [disabled]="session.branch()==='main'" id="plugin-disable" (click)="disable()">Disable and return to base</button>
+      }
+      @if (!p.enabled && !confirmingUninstall()) {
+        <button type="button" class="danger" id="plugin-uninstall" [disabled]="session.branch()==='main'" (click)="startUninstall()">Uninstall…</button>
+      }
+      @if (confirmingUninstall()) {
+        <div class="uninstall-confirm" role="alert">
+          <p><b>Uninstalling {{ p.id }} permanently removes its tables and the {{ heldValues() === null ? 'stored values' : heldValues() + ' stored value(s)' }} it holds. This cannot be undone.</b></p>
+          <div class="row">
+            @if (p.profileFields?.length) { <button type="button" class="secondary" id="plugin-export" (click)="exportCsv()" [disabled]="busyExport()">Export the values (CSV)</button> }
+            <button type="button" class="danger" id="plugin-uninstall-confirm" (click)="confirmUninstall()">Confirm the uninstall</button>
+            <button type="button" class="secondary" (click)="confirmingUninstall.set(false)">Cancel</button>
+          </div>
+        </div>
       }
     }
     <p class="msg" role="status" id="plugin-note">{{ note() }}</p>

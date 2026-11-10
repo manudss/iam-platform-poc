@@ -20,6 +20,8 @@ const css = `
 
 /** Text/attribute escaping: instance names and server messages land in innerHTML. */
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/** "3 Nov 2026" / "never": enrolment dates come back as ISO strings (null on older records). */
+const fmtDate = (iso) => { if (!iso) return 'never'; const d = new Date(iso); return Number.isNaN(+d) ? 'never' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); };
 
 class PinProfile extends HTMLElement {
   connectedCallback() {
@@ -81,6 +83,7 @@ class PinProfile extends HTMLElement {
       const confirming = !ro && this._confirm === m.id;
       return `<div class="row" data-inst="${esc(m.id)}" data-len="${esc(m.length ?? '')}">
         <b>${esc(m.name ?? m.id)}</b> <span class="status ${on ? 'on' : 'off'}">${on ? `Set (${st.length} digits)` : 'Not set'}</span>
+        ${on ? `<span class="hint">set on ${esc(fmtDate(st.enrolledAt))}${st.lastUsedAt ? ` · last used ${esc(fmtDate(st.lastUsedAt))}` : ''}</span>` : ''}
         ${!ro && !edit && !confirming ? `<button class="change">${on ? (admin ? 'Set a new PIN…' : 'Change…') : 'Set a PIN…'}</button>` : ''}
         ${!ro && on && !edit && !confirming ? `<button class="remove danger">${admin ? 'Revoke' : 'Remove'}</button>` : ''}
         ${confirming ? `<span class="hint">Really ${admin ? 'revoke this PIN' : 'remove this PIN'}? This takes effect immediately.</span>

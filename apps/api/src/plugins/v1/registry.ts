@@ -191,13 +191,23 @@ export class PluginRegistry {
       return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), installed: base ? true : !!s?.installed,
         /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
         requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') || !!i.manifest.profileComponents?.length },
-        grants: s?.grants ?? {} };
+        grants: s?.grants ?? {},
+        /** Declared profile field keys (the console's uninstall export offers a CSV of them). */
+        profileFields: i.manifest.profileFields?.map((f) => f.key) ?? [] };
     }));
   }
 
   /** Profile fields declared by the plugins that are active for this tenant. */
   profileFields(tenant: string): { plugin: string; fields: import('../../profile/fields.js').ProfileFieldDecl[] }[] {
     return this.derive(`pf:${tenant}`, () => [...this.impls.values()].filter((i) => i.manifest.profileFields?.length && this.isActive(tenant, i.manifest.id)).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! })));
+  }
+
+  /** Installed but inactive declarations are informational only: never included in an effective form. */
+  inactiveProfileFields(tenant: string) {
+    return [...this.impls.values()].filter((i) => {
+      const state = this.state.get(this.k(tenant, i.manifest.id));
+      return state?.installed && !this.isActive(tenant, i.manifest.id) && i.manifest.profileFields?.length;
+    }).map((i) => ({ plugin: i.manifest.id, fields: i.manifest.profileFields! }));
   }
 
   /** Profile components declared by the plugins that are active for this tenant (My profile, the admin user sheet). */

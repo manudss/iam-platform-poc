@@ -70,7 +70,7 @@ export type SelfEditPolicy = 'immediate' | 'review';
 /** Per-surface override of a profile component (`<plugin>:<component>`): who sees it, in which order. */
 export type ComponentSurface = 'manage' | 'readonly' | 'hidden';
 export interface ComponentSetting { self?: ComponentSurface; admin?: ComponentSurface; order?: number }
-export interface ProfileConfig { fields: Record<string, Partial<FieldSetting>>; signup?: { open: boolean }; selfEditPolicy?: SelfEditPolicy; components?: Record<string, ComponentSetting> }
+export interface ProfileConfig { sections?: string[]; fields: Record<string, Partial<FieldSetting>>; signup?: { open: boolean }; selfEditPolicy?: SelfEditPolicy; components?: Record<string, ComponentSetting> }
 export const EMPTY_PROFILE_CONFIG: ProfileConfig = { fields: {} };
 export const CORE_PROFILE_SETTINGS_ID = 'core-profile-fields';
 export type Context = 'signup' | 'self' | 'admin';

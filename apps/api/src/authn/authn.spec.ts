@@ -156,7 +156,9 @@ describe('authentication methods and chains', () => {
     it('password then authenticator code: wrong password ends at once, wrong code retries, replay is refused, claims are honest', async () => {
       await put(cfg([m('pw', 'password', 3), m('tp', 'totp', 7)], [{ id: 'mfa', name: 'Password + TOTP', steps: ['pw', 'tp'], level: 8 }], 'mfa')).expect(200);
       const tp = await provision('demo-alice', 'tp'); secrets.tp = tp.shownOnce.secret; assert.match(tp.shownOnce.otpauthUri, /^otpauth:\/\/totp\//);
-      assert.deepEqual((await http().get(`/tenants/${T}/auth/enrollments/demo-alice`).set(adm)).body.enrollments.tp, { totp: true, pin: false, email: null });
+      const tpStatus = (await http().get(`/tenants/${T}/auth/enrollments/demo-alice`).set(adm)).body.enrollments.tp;
+      assert.equal(tpStatus.totp, true); assert.equal(tpStatus.pin, false); assert.equal(tpStatus.email, null);
+      assert.match(tpStatus.totpEnrolledAt, /^\d{4}-\d{2}-\d{2}T/, 'the enrolment date is reported'); assert.equal(tpStatus.totpLastUsedAt, null, 'never used yet');
       const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, chain: 'mfa' }).expect(200)).body;
       assert.equal(e.mode, 'chain'); assert.deepEqual(e.fields.map((f: any) => f.name), ['password']);
       // wrong password: generic deny, nothing about the second step
@@ -169,6 +171,8 @@ describe('authentication methods and chains', () => {
       const ok = (await gate({ tenant: T, session: c1.session, answers: { code: code('tp') } }).expect(200)).body;
       assert.equal(ok.outcome, 'allow');
       assert.deepEqual(ok.claims.amr.sort(), ['otp', 'pwd']); assert.equal(ok.claims.auth_mfa, true); assert.equal(ok.claims.auth_level, 8); assert.equal(ok.claims.auth_level_basis, 'configured');
+      const tpUsed = (await http().get(`/tenants/${T}/auth/enrollments/demo-alice`).set(adm)).body.enrollments.tp;
+      assert.match(tpUsed.totpLastUsedAt, /^\d{4}-\d{2}-\d{2}T/, 'a successful sign-in stamps the last use');
       // the same code in a new sign-in is a replay
       const c2 = (await gate({ tenant: T, subject: 'demo-alice', password: PW }).expect(200)).body;
       assert.equal((await gate({ tenant: T, session: c2.session, answers: { code: code('tp') } })).body.outcome, 'challenge');

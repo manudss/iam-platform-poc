@@ -298,13 +298,14 @@ export class AuthnService implements OnApplicationBootstrap {
         const r = (await reg.callSlot<{ done: boolean; ok?: boolean; prompt?: Prompt; state?: Record<string, any> }>(s.tenant, `auth.${st.type}`, 'auth.interact', payload)).result;
         if (!r.done) { s.prepared = { prompt: r.prompt!, state: r.state! }; return this.challenge(s); }   // a button press: no attempt used yet
         ok = !!r.ok;
+        if (ok) await this.enroll.touchPinUsed(s.tenant, s.subject, st.id);   // the plugin verified from a snapshot: the core records the use
       } else {
         const r = (await reg.callSlot<{ ok: boolean; consumeStep?: number; state?: Record<string, any> }>(s.tenant, `auth.${st.type}`, 'auth.verify', payload)).result;
         ok = !!r?.ok;
         if (r?.state) s.prepared!.state = r.state;   // e.g. the e-mail code's single-use flag
         // Anti-replay effect: the step the plugin accepted is consumed ATOMICALLY by the store (a parallel attempt
         // that read the same lastStep loses the race and fails here).
-        if (ok && typeof r?.consumeStep === 'number') ok = await this.enroll.consumeTotpStep(s.tenant, s.subject, st.id, r.consumeStep);
+        if (ok && typeof r?.consumeStep === 'number') ok = await this.enroll.consumeTotpStep(s.tenant, s.subject, st.id, r.consumeStep);   // also stamps lastUsedAt
       }
     } catch (e) { this.sessions.delete(s.id); throw e; }
     if (!ok) {

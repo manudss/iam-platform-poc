@@ -2,3 +2,15 @@
 .detail { margin-top: 1.1rem; }
 .detail label { max-width: 32rem; }
 input[type=text], input[type=number], input[type=password], select { max-width: 28rem; }
+
+/* Plugin lifecycle + uninstall confirmation (validated mockup, sheet C) */
+.lifecycle { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; padding: 0; margin: .8rem 0; counter-reset: step; }
+.lifecycle li { border: 1px solid var(--line); border-radius: .6rem; padding: .55rem .7rem; color: var(--muted); }
+.lifecycle li b { display: block; font-size: .88rem; margin-bottom: .15rem; }
+.lifecycle li small { font-size: .76rem; }
+.lifecycle li.on { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
+.lifecycle li.on b { color: var(--accent-dark); }
+.uninstall-confirm { border: 1px solid var(--bad); border-left-width: 4px; border-radius: .6rem; background: var(--bad-soft); color: var(--bad-ink); padding: .8rem 1rem; margin-top: .8rem; }
+.uninstall-confirm .row { display: flex; gap: .5rem; flex-wrap: wrap; }
+button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
+button.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad); }

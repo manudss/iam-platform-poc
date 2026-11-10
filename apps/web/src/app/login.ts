@@ -44,6 +44,8 @@ export class LoginPage {
   protected readonly signupOpen = signal(false);
   protected readonly options = signal<SigninOptions>({ mode: 'legacy', chains: [] });
   protected readonly test = signal<{ branch: string; ticket: string } | null>(null);
+  /** A branch test can create its own test account (on that branch only): the same ticket, carried to the sign-up page. */
+  protected testSignupUrl() { const t = this.test(); return t ? `/signup?branch=${encodeURIComponent(t.branch)}&ticket=${encodeURIComponent(t.ticket)}` : '/signup'; }
 
   /** Preview mode: only when embedded in a frame (the admin "Preview"). Renders chains posted by the same origin; no API call, no sign-in, nothing sent. */
   protected readonly preview = signal(isPreview());
