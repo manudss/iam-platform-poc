@@ -244,9 +244,9 @@ mod tests {
     async fn catalogue_lists_every_demo_rule_with_a_readable_name() {
         let (st, v) = get(&demo_core(), Some(TOKEN)).await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(v["engine"], json!({"rules": 8, "sets": 1, "schema": true, "source": "boot"}));
+        assert_eq!(v["engine"], json!({"rules": 9, "sets": 1, "schema": true, "source": "boot"}));
         let rules = v["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 8);
+        assert_eq!(rules.len(), 9);
         for r in rules {
             assert!(!r["id"].as_str().unwrap().starts_with("policy"), "every demo rule is named: {r}");
             assert!(r["description"].is_string() && r["pillar"].is_string() && r["summary"].is_string(), "{r}");
@@ -272,7 +272,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../policies");
         let e = load_engine_with_schema(&root.join("demo.cedar"), Some(&root.join("demo.cedarschema"))).unwrap();
         assert!(e.validated());
-        assert_eq!(e.catalog().len(), 8);
+        assert_eq!(e.catalog().len(), 9);
         // And the convention finds the sibling schema by itself.
         assert!(default_schema_path(&root.join("demo.cedar")).exists());
     }
@@ -404,7 +404,7 @@ permit(principal == ?principal, action == Action::"approve", resource);
         assert_eq!((st, v["valid"].as_bool()), (StatusCode::BAD_REQUEST, Some(false)));
         assert!(v["error"].as_str().unwrap().contains("sod/typo"), "{v}");
         let (_, cat) = get(&c, Some(TOKEN)).await;
-        assert_eq!(cat["engine"]["rules"], json!(8), "validation never swaps the loaded rules");
+        assert_eq!(cat["engine"]["rules"], json!(9), "validation never swaps the loaded rules");
     }
 
     #[tokio::test]

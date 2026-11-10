@@ -11,6 +11,15 @@ Protection is a visible per-branch setting (Explorer > Branches). `main` is prot
 ## The merge policy
 The demo rule `merge-into-protected-needs-branch-merger` (set `default`, pillar `versioning`) permits `branch:merge` for a person holding the `iam-admin` or `branch-merger` role. Roles come from the ACTIVE version (main), so a role granted on a working branch changes nothing until a human merges and activates it. Demo seed: `demo-alice` holds `branch-merger`, `demo-bob` does not. The rule is business data: edit it in the Policies screen to use other roles or policies.
 
+### Demo cases (seeded)
+| Case | Rule | Who (demo) |
+| --- | --- | --- |
+| Merge into any protected branch needs a role | `merge-into-protected-needs-branch-merger` | `iam-admin`, `branch-merger` (demo-alice) |
+| Merge into `main` only | `merge-into-main-needs-main-merger` (`resource == Branch::"main"`) | role `main-merger` (not assigned by default) |
+| Merge `profile/` branches into a protected branch, nothing else | `merge-profile-branches-into-protected` (`source_kind == "profile"`) | role `manager`, user `demo-lucie` (demo data seed) |
+
+Protect an existing branch with the Protect button on its card (Branches tab); remove it with Remove protection in its panel (not offered on the default branch, whose protection is built in). Lowering protection needs the same merge policy.
+
 Refusal: HTTP 403, code `merge-not-permitted`, with a message naming the branch. The pull request page shows it before the click (Merge disabled, reason shown).
 
 ## Safety notes
