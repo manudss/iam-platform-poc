@@ -390,6 +390,7 @@ try {
   await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
   await page.getByRole('button', { name: 'Move the section Urgence up' }).click();
   const sectionBranch = await page.locator('select[name=globalBranch]').inputValue();
+  await page.waitForFunction(() => { const names = [...document.querySelectorAll('#pf-table .pf-group')].map(e=>e.textContent); return names.findIndex(n=>n.includes('Urgence')) < names.length - 1; });
   const sectionOrder = await page.locator('#pf-table .pf-group').allTextContents();
   const sectionSave = await Promise.all([
     page.waitForResponse(r => r.url().includes('/profile-fields') && r.request().method() === 'PUT'),
