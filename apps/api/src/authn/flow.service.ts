@@ -12,7 +12,7 @@ import { EnrollmentStore } from './enroll-store.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
-export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string> }
+export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string>; origin?: string }
 export type GateResponse =
   | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string }
   | { outcome: 'deny'; reason: string; message: string }
@@ -22,6 +22,8 @@ interface Session {
   id: string; tenant: string; subject: string; known: boolean; exp: number; index: number;
   /** Data branch under test (docs/branch-test.md): the whole attempt, its config and its directory lookups stay on it. */
   branch?: string;
+  /** Origin (scheme://host) of the sign-in page, passed by the core: passkey ceremonies are bound to it. */
+  origin?: string;
   chain: { id: string; name: string; level: number };
   steps: { id: string; type: string; name: string; level: number; config: Record<string, unknown>; real: boolean }[];
   declared: number;
@@ -78,8 +80,9 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!isEmptyConfig(parseStored(await main.coreSettings(tenant, CORE_SETTINGS_ID)))) return false;
     const cfg = validateConfig(SEED_CONFIG);
     await main.putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
-    // The seeded chains use TOTP, e-mail code and PIN: their method plugins must serve the slots (step 2).
-    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code']) { try { await main.install(tenant, id, {}); } catch { /* already installed */ } try { await main.enable(tenant, id, {}); } catch (e) { console.warn('authn demo seed: cannot enable', id, (e as Error).message); } }
+    // The seeded chains use TOTP, e-mail code, PIN and passkey: their method plugins must serve the slots (step 2).
+    // The profile components they ship (passkey management, authenticator setup) run plugin JS in the console: the uiComponents grant.
+    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code', 'auth-webauthn']) { try { await main.install(tenant, id, {}); } catch { /* already installed */ } try { await main.enable(tenant, id, { uiComponents: true }); } catch (e) { console.warn('authn demo seed: cannot enable', id, (e as Error).message); } }
     const have = await this.enroll.status(tenant, 'demo-alice');
     if (!have['authenticator-app']) await this.enroll.setTotp(tenant, 'demo-alice', 'authenticator-app', DEMO_TOTP_SECRET);
     if (!have['pin-keypad']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad', DEMO_PIN);
@@ -104,6 +107,33 @@ export class AuthnService implements OnApplicationBootstrap {
     return cfg;
   }
   analyses(cfg: AuthnConfig): ChainAnalysis[] { return cfg.chains.map((c) => analyzeChain(cfg, c)); }
+
+  /** Passkey self-enrollment, step 1: the creation options of the auth.enroll hook of the method plugin on the
+   * slot (the plugin owns the attestation logic; this service only orchestrates). The pending challenge is stored
+   * for a few minutes, spent at most once, and bound to the origin it was minted for. */
+  async webauthnEnrollOptions(tenant: string, subject: string, inst: string, config: Record<string, unknown>, origin: string) {
+    const reg = await this.registry('live');
+    const existing = (await this.enroll.webauthnRecord(tenant, subject, inst))?.credentials ?? [];
+    const r = (await reg.callSlot<{ ok: boolean; reason?: string; options?: Record<string, unknown>; challenge?: string; origin?: string; rpId?: string }>(tenant, 'auth.webauthn', 'auth.enroll',
+      { mode: 'options', tenant, subject, config, origin, now: this.now(), existing: existing.map(({ id, transports }) => ({ id, transports })) })).result;
+    if (!r.ok || !r.options || !r.challenge || !r.origin || !r.rpId) return { ok: false as const, reason: r.reason ?? 'the method plugin refused the enrollment' };
+    const pending = { challenge: r.challenge, origin: r.origin, rpId: r.rpId, exp: this.now() + 5 * 60_000 };
+    await this.enroll.setWebAuthnPending(tenant, subject, inst, pending);
+    return { ok: true as const, options: r.options };
+  }
+  /** Passkey self-enrollment, step 2: the attestation check against the pending challenge. */
+  async webauthnEnrollVerify(tenant: string, subject: string, inst: string, config: Record<string, unknown>, credential: Record<string, unknown>, name?: string) {
+    const pending = await this.enroll.webAuthnPending(tenant, subject, inst);
+    if (!pending || this.now() > pending.exp) return { ok: false as const, reason: 'the enrollment session expired: start again' };
+    await this.enroll.clearWebAuthnPending(tenant, subject, inst);   // one pending challenge, one attempt
+    const reg = await this.registry('live');
+    const r = (await reg.callSlot<{ ok: boolean; reason?: string; record?: { id: string; publicKey: string; counter: number; transports?: string[]; aaguid?: string; deviceType?: string; backedUp?: boolean } }>(tenant, 'auth.webauthn', 'auth.enroll',
+      { mode: 'verify', tenant, subject, config, challenge: pending.challenge, origin: pending.origin, rpId: pending.rpId, credential, now: this.now() })).result;
+    if (!r.ok || !r.record) return { ok: false as const, reason: r.reason ?? 'the authenticator answer was refused' };
+    const cred = { ...r.record, ...(name ? { name: name.slice(0, 60) } : {}), createdAt: new Date().toISOString() };
+    if (!(await this.enroll.addWebAuthnCredential(tenant, subject, inst, cred))) return { ok: false as const, reason: 'this credential id is already enrolled with a different key' };
+    return { ok: true as const, enrolled: { id: cred.id, name: cred.name ?? null } };
+  }
   catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, instances: t.instances, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
 
   /** Which instances and chains of a configuration are served right now by an ACTIVE plugin of the given registry (working branch or live).
@@ -145,6 +175,7 @@ export class AuthnService implements OnApplicationBootstrap {
     if (st.type === 'totp') { const t = await this.enroll.totpRecord(tenant, subject, st.id); return t ? { totp: t } : {}; }
     if (st.type === 'digit-code') { const p = await this.enroll.pinRecord(tenant, subject, st.id); return p ? { pin: p } : {}; }
     if (st.type === 'email-otp') { const email = await this.enroll.email(tenant, subject, st.id); return email ? { email } : {}; }
+    if (st.type === 'webauthn') { const w = await this.enroll.webauthnRecord(tenant, subject, st.id); return w ? { webauthn: w } : {}; }
     return {};
   }
   private async notifyCapability(reg: PluginRegistry, tenant: string) {
@@ -156,7 +187,7 @@ export class AuthnService implements OnApplicationBootstrap {
   private async methodPayload(reg: PluginRegistry, s: Session, st: Session['steps'][number], state: Record<string, any>, answers?: Record<string, string>) {
     return {
       tenant: s.tenant, subject: s.subject, known: s.known, instanceId: st.id, config: st.config as Record<string, any>,
-      state, answers, now: this.now(),
+      state, answers, now: this.now(), ...(s.origin ? { origin: s.origin } : {}),
       enrollment: await this.enrollment(s.tenant, s.subject, st),
       ...(st.type === 'email-otp' ? { profileEmail: await this.profileEmail(s.subject, s.branch), notifyCapability: await this.notifyCapability(reg, s.tenant) } : {}),
       ...(st.type === 'password' && answers ? { passwordOutcome: (await reg.callSlot<AuthenticateResult>(s.tenant, 'auth.password', 'auth.authenticate', { tenant: s.tenant, subject: s.subject, credential: { password: answers.password ?? '' } })).result.outcome } : {}),
@@ -247,7 +278,7 @@ export class AuthnService implements OnApplicationBootstrap {
     if (this.throttled(key) || this.tooManyStarts(key)) { this.audit({ tenant: b.tenant, subject, outcome: 'throttled' }); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
     const a = analyzeChain(cfg, chain);
     const steps = await Promise.all(chain.steps.map(async (id) => { const m = cfg.methods.find((x) => x.id === id)!; return { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: (await this.verification(reg, b.tenant, m)).real }; }));
-    const s: Session = { id: randomBytes(24).toString('base64url'), tenant: b.tenant, subject, branch: b.branch, known: await this.known(b.tenant, subject, b.branch), exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
+    const s: Session = { id: randomBytes(24).toString('base64url'), tenant: b.tenant, subject, branch: b.branch, origin: typeof b.origin === 'string' ? b.origin.slice(0, 200) : undefined, known: await this.known(b.tenant, subject, b.branch), exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
     this.sessions.set(s.id, s);
     await this.prepare(s);
     const first = steps[0], t = methodType(first.type)!;
@@ -289,7 +320,8 @@ export class AuthnService implements OnApplicationBootstrap {
   private async check(s: Session, answers: Record<string, string>): Promise<GateResponse> {
     const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
     const clean: Record<string, string> = {};
-    for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= 256 && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
+    // One answer value is at most 256 chars, except the passkey ceremony answer: a signed WebAuthn JSON of a few KB.
+    for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= (k === 'webauthn' ? 16384 : 256) && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
     const reg = await this.signinRegistry(s.branch);
     let ok = false;
     try {
@@ -300,12 +332,14 @@ export class AuthnService implements OnApplicationBootstrap {
         ok = !!r.ok;
         if (ok) await this.enroll.touchPinUsed(s.tenant, s.subject, st.id);   // the plugin verified from a snapshot: the core records the use
       } else {
-        const r = (await reg.callSlot<{ ok: boolean; consumeStep?: number; state?: Record<string, any> }>(s.tenant, `auth.${st.type}`, 'auth.verify', payload)).result;
+        const r = (await reg.callSlot<{ ok: boolean; consumeStep?: number; credentialCounter?: { id: string; counter: number }; state?: Record<string, any> }>(s.tenant, `auth.${st.type}`, 'auth.verify', payload)).result;
         ok = !!r?.ok;
-        if (r?.state) s.prepared!.state = r.state;   // e.g. the e-mail code's single-use flag
+        if (r?.state) s.prepared!.state = r.state;   // e.g. the e-mail code's single-use flag, the passkey's spent challenge
         // Anti-replay effect: the step the plugin accepted is consumed ATOMICALLY by the store (a parallel attempt
         // that read the same lastStep loses the race and fails here).
         if (ok && typeof r?.consumeStep === 'number') ok = await this.enroll.consumeTotpStep(s.tenant, s.subject, st.id, r.consumeStep);   // also stamps lastUsedAt
+        // Anti-clone effect (passkeys): the authenticator counter the plugin accepted must really advance.
+        if (ok && r?.credentialCounter) ok = await this.enroll.advanceWebAuthnCounter(s.tenant, s.subject, st.id, String(r.credentialCounter.id), Number(r.credentialCounter.counter));
       }
     } catch (e) { this.sessions.delete(s.id); throw e; }
     if (!ok) {

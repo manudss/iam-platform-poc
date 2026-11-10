@@ -106,6 +106,8 @@ jobs:
         working-directory: apps/web
       - name: Demo edge framing policy (only /login?preview=1 may be framed)
         run: node --test demo/frame-policy.test.mjs
+      - name: Demo edge routing (the whole /authorize surface, incl. the passkey script, reaches the core)
+        run: node --test demo/server.test.mjs
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 25

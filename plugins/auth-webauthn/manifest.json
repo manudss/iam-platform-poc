@@ -1,0 +1,171 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-webauthn",
+  "version": "1.0.0",
+  "name": "Passkey (WebAuthn / FIDO2)",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "provides": [
+    "auth.webauthn"
+  ],
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verify",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.enroll",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "rpName",
+      "type": "string",
+      "label": "Relying party name",
+      "default": "lyam IAM demo",
+      "group": "Relying party"
+    },
+    {
+      "key": "originMode",
+      "type": "select",
+      "label": "How the relying party id is chosen",
+      "default": "host",
+      "options": [
+        {
+          "value": "host",
+          "label": "From the page host (demos, previews, localhost)"
+        },
+        {
+          "value": "fixed",
+          "label": "Fixed RP id and origin list below"
+        }
+      ],
+      "group": "Relying party",
+      "help": "host: the RP id is the host of the sign-in page, so every preview and custom domain works with no setup. fixed: one RP id and an explicit list of allowed origins, the production-style setup."
+    },
+    {
+      "key": "rpId",
+      "type": "string",
+      "label": "Fixed RP id (a domain or parent domain of the origins)",
+      "default": "",
+      "group": "Relying party"
+    },
+    {
+      "key": "origins",
+      "type": "string",
+      "label": "Allowed origins (comma separated, fixed mode)",
+      "default": "",
+      "group": "Relying party",
+      "help": "Example: https://lyam.dss.name, https://iam.dss.name"
+    },
+    {
+      "key": "userVerification",
+      "type": "select",
+      "label": "User verification",
+      "default": "preferred",
+      "options": [
+        {
+          "value": "preferred",
+          "label": "preferred (biometric or PIN when available)"
+        },
+        {
+          "value": "required",
+          "label": "required (adds an inherence factor)"
+        },
+        {
+          "value": "discouraged",
+          "label": "discouraged"
+        }
+      ],
+      "group": "Ceremony"
+    },
+    {
+      "key": "residentKey",
+      "type": "select",
+      "label": "Discoverable credential (resident key)",
+      "default": "preferred",
+      "options": [
+        {
+          "value": "preferred",
+          "label": "preferred (a real passkey, synced by the device)"
+        },
+        {
+          "value": "required",
+          "label": "required"
+        },
+        {
+          "value": "discouraged",
+          "label": "discouraged (device-bound credential)"
+        }
+      ],
+      "group": "Ceremony"
+    },
+    {
+      "key": "attestation",
+      "type": "select",
+      "label": "Attestation at enrollment",
+      "default": "none",
+      "options": [
+        {
+          "value": "none",
+          "label": "none (what Apple and Google ask for)"
+        },
+        {
+          "value": "direct",
+          "label": "direct (authenticator proves its model)"
+        }
+      ],
+      "group": "Ceremony",
+      "help": "Attestation statements are not checked against the FIDO metadata service in this POC."
+    },
+    {
+      "key": "timeoutSeconds",
+      "type": "number",
+      "label": "Ceremony timeout (seconds)",
+      "default": 60,
+      "min": 15,
+      "max": 300,
+      "group": "Ceremony"
+    }
+  ],
+  "authMethod": {
+    "name": "Passkey (WebAuthn / FIDO2)",
+    "description": "Phishing-resistant public-key credential (passkey): the device or security key signs a per-attempt challenge bound to this origin. Enrollment from the person's own profile; credentials are never stored in Dolt.",
+    "factor": "possession",
+    "amr": "hwk",
+    "maturity": "implemented",
+    "suggestedLevel": 9,
+    "provisioning": "none",
+    "inlineWithUsername": false
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  },
+  "extends": "auth-webauthn-base",
+  "profileComponents": [
+    {
+      "id": "passkeys",
+      "title": "Passkeys",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 15
+    }
+  ]
+}

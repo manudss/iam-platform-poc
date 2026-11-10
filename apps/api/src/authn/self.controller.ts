@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, NotFoundException, Optional, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, Headers, NotFoundException, Optional, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
 import { methodType, methodComponent } from './methods.js';
@@ -76,6 +76,54 @@ export class AuthnSelfController {
       throw new ForbiddenException('the current PIN does not match');
     await this.authn.enroll.setPin(t, req.user.sub, inst, b.pin);
     return { instance: inst, type: type.id, changed: true, note: 'The PIN is never shown anywhere.' };
+  }
+
+  /** Origin of the page that calls (behind the demo edge): passkey ceremonies are bound to it. */
+  private pageOrigin(h: Record<string, string | string[] | undefined>) {
+    const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
+    const proto = first(h['x-forwarded-proto']).split(',')[0].trim() || 'http';
+    const host = first(h['x-forwarded-host']).split(',')[0].trim() || first(h['host']).split(',')[0].trim();
+    if (!/^[\w.:-]{1,200}$/.test(host)) throw new BadRequestException('the page origin is missing or invalid');
+    return `${proto === 'https' ? 'https' : 'http'}://${host}`;
+  }
+
+  /** Passkey self-service, step 1: creation options for the authenticator (the challenge lives 5 minutes server-side). */
+  @Post('me/enrollments/:instance/passkey/options') async passkeyOptions(@Param('tenant') t: string, @Param('instance') inst: string, @Headers() h: Record<string, string | string[] | undefined>, @Req() req: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(req);
+    const { m, type } = await this.instance(t, inst);
+    if (type.id !== 'webauthn') throw new BadRequestException(`${inst} is not a passkey method`);
+    await this.assertSurfaceAllows(t, type.id);
+    const status = await this.authn.enroll.status(t, req.user.sub);
+    const existing = status[inst]?.webauthn;
+    if (Array.isArray(existing) && existing.length >= 10) throw new ConflictException('at most 10 passkeys per method: remove one first');
+    const r = await this.authn.webauthnEnrollOptions(t, req.user.sub, inst, m.config, this.pageOrigin(h));
+    if (!r.ok) throw new BadRequestException(r.reason);
+    return { instance: inst, type: type.id, options: r.options };
+  }
+
+  /** Passkey self-service, step 2: the attestation is checked by the method plugin, then the credential is stored. */
+  @Post('me/enrollments/:instance/passkey') async passkeyFinish(@Param('tenant') t: string, @Param('instance') inst: string, @Body() b: { name?: string; credential?: Record<string, unknown> }, @Req() req: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(req);
+    const { m, type } = await this.instance(t, inst);
+    if (type.id !== 'webauthn') throw new BadRequestException(`${inst} is not a passkey method`);
+    await this.assertSurfaceAllows(t, type.id);
+    if (!b?.credential || typeof b.credential !== 'object') throw new BadRequestException('credential: the attestation answer of the authenticator');
+    if (JSON.stringify(b.credential).length > 16384) throw new BadRequestException('credential: too large');
+    if (b.name !== undefined && (typeof b.name !== 'string' || b.name.length > 60)) throw new BadRequestException('name: at most 60 characters');
+    const r = await this.authn.webauthnEnrollVerify(t, req.user.sub, inst, m.config, b.credential, typeof b.name === 'string' && b.name.trim() ? b.name.trim() : undefined);
+    if (!r.ok) throw new ForbiddenException(r.reason);
+    return { instance: inst, type: type.id, ...r };
+  }
+
+  /** Removes one of the person's own passkeys. */
+  @Delete('me/enrollments/:instance/passkey/:cred') async removePasskey(@Param('tenant') t: string, @Param('instance') inst: string, @Param('cred') cred: string, @Req() req: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(req);
+    const { type } = await this.instance(t, inst);
+    if (type.id !== 'webauthn') throw new BadRequestException(`${inst} is not a passkey method`);
+    await this.assertSurfaceAllows(t, type.id);
+    if (!/^[A-Za-z0-9_-]{1,256}$/.test(cred)) throw new BadRequestException('unknown credential id');
+    if (!(await this.authn.enroll.removeWebAuthnCredential(t, req.user.sub, inst, cred))) throw new NotFoundException('no such passkey');
+    return { removed: true };
   }
 
   /** Removes one of the person's own enrollments (any method type). */

@@ -20,6 +20,8 @@ iam-plugin-runtime = { path = "../iam-plugin-runtime" }
 iam-bus = { path = "../iam-bus" }
 async-nats = "0.51"
 async-trait = "0.1"
+sha2 = "0.10"
+base64 = "0.22"
 tokio-stream = { version = "0.1", features = ["net"] }
 
 [dependencies.wat]

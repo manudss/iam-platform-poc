@@ -23,6 +23,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { connect, AckPolicy, ConsumerMessages, JsMsg, JSONCodec, KV, Msg, NatsConnection, Subscription, JetStreamClient, nanos } from 'nats';
 import { AppEvent, ApplicationBus, APP_EVENT_KINDS } from '../../events/application-bus.service.js';
 import { HOOKS, PluginContext } from './hooks.js';
+import { BUS_CONTROL_KINDS, BUS_QUERY_KINDS } from './bus-kinds.js';
 import { BusBridge, PluginRegistry } from './registry.js';
 import { validateSettings } from './settings.js';
 
@@ -38,19 +39,9 @@ const EVENTS_STREAM = 'IAM_BUS_EVENTS'; // owned by the core (step 3)
 export const AUDIT_EVENT_KIND = 'audit.event';
 const EFFECTS_BUCKET = 'iam-effects'; // KV effect ledger, created by the core (decision 3)
 
-/** Blocking kinds that travel on the bus as mandatory controls (step 3, auth migration): the serving plugin
- * answers `plugin.<id>.call`, the core merges the verdict, a silent mandatory subscriber denies (fail closed)
- * and the caller refuses when nobody answered at all. ui.screens and access.decide stay in process (decision 8). */
-export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge', 'risk.score', 'notify.capability',
-  // The mail renderer (mail-templates): slot-targeted blocking call before a delivery (docs/mail-templates.md).
-  'notify.render',
-  // The sign-in method hooks (step 2): slot-targeted blocking calls (callSlot wraps the slot in the payload).
-  'auth.prepare', 'auth.verify', 'auth.interact', 'auth.verification',
-  'directory.user.validate', 'directory.fields.validateDecls', 'directory.fields.catalogue', 'directory.fields.parseConfig',
-  'directory.fields.validateConfig', 'directory.fields.effectiveSchema', 'directory.fields.checkValue', 'directory.effects.compute']);
-/** Blocking kinds that travel on the bus as merged QUERIES (step 3): every active plugin answers with the
- * fields it owns, the core merges the objects; a silent or disabled plugin simply does not appear. */
-export const BUS_QUERY_KINDS = new Set(['profile.enrich']);
+// The bus-routed blocking kinds live in bus-kinds.ts (dependency-free, so the coverage spec can import them
+// without the NATS host). Re-exported here for the existing callers.
+export { BUS_CONTROL_KINDS, BUS_QUERY_KINDS } from './bus-kinds.js';
 
 /** Hash the full tuple: KV-safe, bounded, and no collisions from punctuation or truncated IDs. */
 function ledgerKey(tenant: string, id: string, kind: string, effectKey: string): string {
