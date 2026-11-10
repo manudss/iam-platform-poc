@@ -58,6 +58,12 @@ permit(principal, action == Action::"branch:merge", resource == Branch::"main")
 permit(principal, action == Action::"branch:merge", resource == Branch::"main")
   when { context has roles && context.roles.contains("main-merger") };
 
+@id("main-scoped-assignments-merger")
+@description("A manager or an organisation admin may merge into main a change that only touches assignments of people in their scope (checked row by row from the real diff).")
+@pillar("access")
+permit(principal, action == Action::"branch:merge", resource == Branch::"main")
+  when { context has roles && (context.roles.contains("manager") || context.roles.contains("org-admin")) && context has change_scope && context.change_scope == "assignments-in-scope" };
+
 // Screen access and people scopes (access pillar): who opens which admin screen, and which people a manager or an organisation admin may read, manage or assign roles to.
 
 @id("screen-iam-admin")

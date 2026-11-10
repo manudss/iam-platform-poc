@@ -3,6 +3,7 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { OrgService } from './orgs.js';
 import { currentBranch } from '../workspace/context.js';
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { assertPerson, filterPeople } from '../access/scope.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { screenAccessOn, askScreen } from '../auth/screen-decision.js';
 import { SCREENS } from '../auth/screens.js';
@@ -47,9 +48,9 @@ export class ProfileController {
   @Get('me/profile') async me(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string } }) { return { ...(await this.p.self(t, req.user.sub, this.ref(req))), sections: await this.sections(t, req.user.sub, this.ref(req)) }; }
   @Patch('me/profile') patchMe(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string } }, @Body() b: unknown) { return this.p.patchSelf(t, req.user.sub, b, this.ref(req)); }
   /** Validators (administrators for now; finer roles come with the permission model). */
-  @UseGuards(AdminGuard) @Get('profile-reviews') reviews(@Param('tenant') t: string, @Req() req: { user?: { branch?: string } }) { assertNotBranchTest(req); return this.p.reviews(t); }
-  @UseGuards(AdminGuard) @Post('profile-reviews/:id/accept') accept(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); return this.p.resolveReview(t, id, true, req.user.sub); }
-  @UseGuards(AdminGuard) @Post('profile-reviews/:id/refuse') refuse(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); return this.p.resolveReview(t, id, false, req.user.sub); }
+  @UseGuards(AdminGuard) @Get('profile-reviews') async reviews(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); const r = await this.p.reviews(t); return { ...r, reviews: await filterPeople(t, req.user.sub, 'user:manage', r.reviews, (x) => String(x.subject)) }; }
+  @UseGuards(AdminGuard) @Post('profile-reviews/:id/accept') async accept(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); await assertPerson(t, req.user.sub, 'user:manage', id.split(';')[0]); return this.p.resolveReview(t, id, true, req.user.sub); }
+  @UseGuards(AdminGuard) @Post('profile-reviews/:id/refuse') async refuse(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string; branch?: string } }) { assertNotBranchTest(req); await assertPerson(t, req.user.sub, 'user:manage', id.split(';')[0]); return this.p.resolveReview(t, id, false, req.user.sub); }
   /** What the console may show this person: whether they are an administrator, and which plugins are live. Display only: the server checks every call again. */
   @Get('me/access') async access(@Param('tenant') t: string, @Req() req: { user: { sub: string; branch?: string }; headers: Record<string, unknown> }) {
     const plugins = Object.fromEntries((await this.p.activePlugins(t, req.user.branch ? 'work' : 'live')).map((id) => [id, true]));
@@ -64,6 +65,6 @@ export class ProfileController {
     let admin = true; try { new AdminGuard().capability({ switchToHttp: () => ({ getRequest: () => req }) } as never); } catch { admin = false; }
     return { subject: req.user.sub, admin, restricted, plugins, screenAccess: false };
   }
-  @UseGuards(AdminGuard) @Get('users/:id/profile') async user(@Param('tenant') t: string, @Param('id') id: string) { return { ...(await this.p.admin(t, id)), sections: await this.sections(t, id, 'work') }; }
-  @UseGuards(AdminGuard) @Patch('users/:id/profile') patchUser(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: unknown) { return this.p.patchAdmin(t, id, b, req.user.sub); }
+  @UseGuards(AdminGuard) @Get('users/:id/profile') async user(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }) { await assertPerson(t, req.user.sub, 'user:read', id); return { ...(await this.p.admin(t, id)), sections: await this.sections(t, id, 'work') }; }
+  @UseGuards(AdminGuard) @Patch('users/:id/profile') async patchUser(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: unknown) { await assertPerson(t, req.user.sub, 'user:manage', id); return this.p.patchAdmin(t, id, b, req.user.sub); }
 }

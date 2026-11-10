@@ -78,6 +78,8 @@ action "branch:merge" appliesTo {
     source_kind?: String,
     // The folder of the source branch (team for team/x), empty without one: lets a rule target one custom folder.
     source_folder?: String,
+    // assignments-in-scope when the real diff main...source touches only assignments and every row passes assignment:change for the caller.
+    change_scope?: String,
   }
 };
 

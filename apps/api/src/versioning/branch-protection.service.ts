@@ -16,7 +16,7 @@ export interface BranchProtection {
   source: 'default' | 'custom';
 }
 export interface MergeDecision { allowed: boolean; reasons: string[]; checked: boolean; message?: string }
-type Decide = (input: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string }) => Promise<{ allow: boolean; reasons: string[] }>;
+type Decide = (input: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string }) => Promise<{ allow: boolean; reasons: string[] }>;
 type Row = Record<string, unknown>;
 
 /**
@@ -156,22 +156,44 @@ export class BranchProtectionService implements OnModuleInit {
     const who = typeof sub === 'string' ? sub.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64) : '';
     if (!who) throw this.refusal(branch, verb, ['no-identity']);
     let out: { allow: boolean; reasons: string[] };
-    try { out = await this.decide({ tenant: this.tenant, sub: who, branch, source, sourceKind: kind }); }
+    // Scoped assignments merge: computed from the REAL diff main...source, never from what the caller says.
+    let scope: { scope?: string; offending?: string } = {};
+    if (source && branch === this.v.defaultBranch && process.env.IAM_SCREEN_ACCESS === '1') { try { scope = await this.assignmentsScope(branch, source, who); } catch { scope = {}; } }
+    try { out = await this.decide({ tenant: this.tenant, sub: who, branch, source, sourceKind: kind, changeScope: scope.scope }); }
     catch (e) { throw this.refusal(branch, verb, ['policy-engine-unreachable'], `the policy engine could not be reached (${(e as Error).message}); refused to stay on the safe side`); }
     // Bootstrap: before the very first activation no policy exists anywhere, and that first Apply is what creates the active version.
     if (!out.allow && out.reasons.length === 1 && out.reasons[0] === 'no-active-version') return;
+    if (!out.allow && scope.offending) throw this.refusal(branch, verb, out.reasons, scope.offending);
     if (!out.allow) throw this.refusal(branch, verb, out.reasons, undefined, source, kind);
+  }
+
+  /** Only the `assignments` table changed and every added or removed row passes assignment:change for the caller: scope `assignments-in-scope`. A foreign row is named. */
+  private async assignmentsScope(target: string, source: string, who: string): Promise<{ scope?: string; offending?: string }> {
+    const sum = await this.v.diffSummary(target, source, true);
+    const names = sum.tables.map((t) => String((t as Row).table));
+    if (!names.length || names.some((n) => n !== 'assignments')) return names.length ? { offending: `this change also touches ${names.filter((n) => n !== 'assignments').join(', ')}: only a change limited to role assignments can be merged by a manager` } : {};
+    const d = await this.v.diffTable(target, source, 'assignments', true, 1000);
+    const { readHierarchy, askPerson } = await import('../access/scope.js');
+    const hMain = await readHierarchy(this.tenant, target);
+    const rows = (d as unknown as { rows?: { type?: string; from?: Row; to?: Row }[] }).rows ?? [];
+    for (const r of rows) {
+      const row = (r.to ?? r.from ?? {}) as Row; const who2 = String(row.identity_id ?? ''), role = String(row.role_id ?? '');
+      if (!who2 || !role) return { offending: 'an assignment row could not be read' };
+      const a = await askPerson(this.tenant, hMain, who, 'assignment:change', who2, role);
+      if (!a.allow) return { offending: `${r.type === 'removed' || r.type === 'delete' ? 'removing' : 'giving'} the role ${role} ${r.type === 'removed' || r.type === 'delete' ? 'from' : 'to'} ${who2} is outside what you may change (either ${who2} is not one of the people you manage, or ${role} can only be given by an administrator)` };
+    }
+    return { scope: 'assignments-in-scope' };
   }
   private refusal(branch: string, verb: string, reasons: string[], detail?: string, source?: string, kind?: string) {
     const why = detail ?? (reasons.length ? `no rule allows it (${reasons.join(', ')})` : 'no policy rule allows it' + (source ? ` for a ${kind}/ branch (${source})` : '') + ': you need a role that a branch:merge policy accepts (for example iam-admin or branch-merger)');
     return new ForbiddenException({ code: 'merge-not-permitted', message: `You are not allowed to ${verb} protected branch ${branch}: ${why}`, branch, action: 'branch:merge', reasons });
   }
 
-  private async askCore(i: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string }) {
+  private async askCore(i: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string }) {
     const core = process.env.IAM_CORE_URL;
     if (!core) throw new Error('IAM_CORE_URL is not set');
     const res = await fetch(`${core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(4000),
-      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { source: i.source, source_kind: i.sourceKind ?? 'other', source_folder: branchFolder(i.source) } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
+      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { ...(i.changeScope ? { change_scope: i.changeScope } : {}), source: i.source, source_kind: i.sourceKind ?? 'other', source_folder: branchFolder(i.source) } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
     if (!res.ok) throw new Error(`core answered ${res.status}`);
     const out = (await res.json()) as { allow?: boolean; reasons?: string[]; errors?: string[] };
     return { allow: out.allow === true, reasons: [...(out.reasons ?? []), ...(out.errors ?? [])] };
