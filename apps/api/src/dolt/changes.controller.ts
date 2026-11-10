@@ -5,7 +5,8 @@ import { SOD_SQL } from './dolt.service.js';
 import { BadRequestException } from '@nestjs/common';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { VersioningService } from '../versioning/versioning.service.js';
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { filterPeople } from '../access/scope.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { scimToRows } from '../connectors/scim.connector.js';
 import { csvToRows } from '../connectors/csv.connector.js';
@@ -32,7 +33,11 @@ export class ChangesController {
   }
   private async branchRegistry(): Promise<EngineRegistry> { return workspaceMode() && this.branches ? this.branches.get(branchContext.getStore()?.branch ?? 'main') : this.reg!; }
 
-  @Get('assignments') assignments() { return workspaceMode() ? this.v.tableRows(currentBranch(),'assignments').then(x=>x.rows) : this.dolt.assignments(); }
+  @Get('assignments') async assignments(@Param('tenant') t: string, @Req() req: { user?: { sub?: string } }) {
+    const rows = (workspaceMode() ? await this.v.tableRows(currentBranch(), 'assignments').then((x) => x.rows) : await this.dolt.assignments()) as Record<string, unknown>[];
+    // Per person: only the assignments of people the caller may read (administrators: all).
+    return req.user?.sub ? filterPeople(t, req.user.sub, 'user:read', rows, (r) => String(r.identity_id)) : rows;
+  }
 
   @UseGuards(AdminGuard)
   @Post('changes') simulate(@Body() b: { identity: string; role: string }) { if(workspaceMode())throw new ForbiddenException('Use workspace assignment staging');return this.dolt.simulate(b?.identity, b?.role); }

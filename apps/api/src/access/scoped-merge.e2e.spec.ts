@@ -12,6 +12,7 @@ import { Test } from '@nestjs/testing';
 import { ActivationService } from '../activation/activation.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
+import { filterPeople } from './scope.js';
 import { BranchProtectionService } from '../versioning/branch-protection.service.js';
 
 const root = resolve(process.cwd(), '../..');
@@ -87,5 +88,12 @@ describe('scoped assignments merge: real Dolt + real core', { skip: !have && 'do
     await prot.assertMayMerge('main', 'noemie-t', 'merge into', 'feature/foreign'); // main-merger rule: any source into main
     assert.match(await refusal(prot.assertMayMerge('main', 'bob-t', 'merge into', 'feature/ok')), /not allowed/i);
     await prot.assertMayMerge('main', 'alice-t', 'merge into', 'feature/foreign');
+  });
+  it('lists are filtered per person: Lucie sees her chain only, Alice sees everyone, Bob nobody', async () => {
+    const rows = ['lucie-t', 'yanis-t', 'camille-t', 'noemie-t'].map((id) => ({ identity_id: id }));
+    const ids = async (who: string) => (await filterPeople(T, who, 'user:read', rows, (r) => r.identity_id)).map((r) => r.identity_id);
+    assert.deepEqual(await ids('lucie-t'), ['yanis-t']);
+    assert.equal((await ids('alice-t')).length, 4);
+    assert.deepEqual(await ids('bob-t'), []);
   });
 });
