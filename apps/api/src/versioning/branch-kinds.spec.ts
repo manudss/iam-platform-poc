@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { autoBranchName, branchKind } from './branch-kinds.js';
+import { autoBranchName, branchKind, sourceAllowed } from './branch-kinds.js';
 import { newBranchName } from './guards.js';
 
 describe('branch kinds (folder naming convention)', () => {
@@ -14,6 +14,12 @@ describe('branch kinds (folder naming convention)', () => {
     assert.equal(branchKind('mcp-0123456789ab'), 'ai');
     assert.equal(branchKind('wf-0a1b2c3d'), 'workflow');
     assert.equal(branchKind('demo-alice'), 'other');
+    assert.equal(branchKind('team/x'), 'custom');
+    assert.equal(sourceAllowed(['custom:team'], 'team/x'), true);
+    assert.equal(sourceAllowed(['custom:team'], 'squad/x'), false);
+    assert.equal(sourceAllowed(['custom'], 'squad/x'), true);
+    assert.equal(sourceAllowed(['feature'], 'team/x'), false);
+    assert.equal(sourceAllowed([], 'anything'), true);
   });
   it('builds valid names and refuses a second folder level', () => {
     assert.equal(autoBranchName('personal', 'a b'), 'personal/a-b');

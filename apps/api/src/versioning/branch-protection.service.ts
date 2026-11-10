@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, HttpException, Injectable, OnModuleInit } from '@nestjs/common';
 import { createConnection, Connection } from 'mysql2/promise';
-import { BRANCH_KINDS, branchKind } from './branch-kinds.js';
+import { SOURCE_ENTRY, branchFolder, branchKind, describeEntry, sourceAllowed } from './branch-kinds.js';
 import { branchName } from './guards.js';
 import { VersioningService } from './versioning.service.js';
 
@@ -10,7 +10,7 @@ export interface BranchProtection {
   branch: string; protected: boolean; requirePullRequest: boolean; minReviews: number; requireChecks: boolean; mergeRule: MergeRule;
   /** May the author of a pull request merge it themselves? (checked when a pull request is merged) */
   selfMerge: boolean;
-  /** Folders of the branches that may be merged here (personal, profile, ai, workflow, feature, other); empty = every kind. */
+  /** Folders of the branches that may be merged here (personal, profile, ai, workflow, feature, other), `custom` (every custom folder) or `custom:<folder>`; empty = every kind. */
   sourceKinds: string[];
   /** `default` while nobody changed it (the built-in rule for the default branch), `custom` once stored. */
   source: 'default' | 'custom';
@@ -104,7 +104,8 @@ export class BranchProtectionService implements OnModuleInit {
     if (input.selfMerge !== undefined) { if (typeof input.selfMerge !== 'boolean') throw new BadRequestException('selfMerge must be true or false'); next.selfMerge = input.selfMerge; }
     if (input.sourceKinds !== undefined) {
       const k = input.sourceKinds;
-      if (!Array.isArray(k) || k.some((x) => typeof x !== 'string' || ![...BRANCH_KINDS, 'other'].includes(x))) throw new BadRequestException(`sourceKinds must be a list of: ${[...BRANCH_KINDS, 'other'].join(', ')}`);
+      if (!Array.isArray(k) || k.some((x) => typeof x !== 'string' || !SOURCE_ENTRY.test(x))) throw new BadRequestException('sourceKinds must be a list of: personal, profile, ai, workflow, feature, other, custom, or custom:<folder> (for example custom:team)');
+      if (k.join(',').length > 120) throw new BadRequestException('sourceKinds is too long (120 characters at most)');
       next.sourceKinds = [...new Set(k as string[])];
     }
     // Lowering protection of the default branch or the merge rule of a protected branch is itself a merge-level act: it needs the same policy.
@@ -145,8 +146,8 @@ export class BranchProtectionService implements OnModuleInit {
     if (!s.protected) return;
     const kind = source ? branchKind(source) : undefined;
     // Branch-level rules that do not depend on roles: they hold whatever the merge rule is.
-    if (source && s.sourceKinds.length > 0 && kind && !s.sourceKinds.includes(kind)) {
-      throw new ForbiddenException({ code: 'source-kind-not-allowed', message: `${branch} accepts merges only from ${s.sourceKinds.map((x) => x + '/').join(', ')} branches; ${source} is a ${kind === 'other' ? 'branch without folder' : kind + '/ branch'}`, branch, source, sourceKind: kind, reasons: ['source-kind-not-allowed'] });
+    if (source && !sourceAllowed(s.sourceKinds, source)) {
+      throw new ForbiddenException({ code: 'source-kind-not-allowed', message: `${branch} accepts merges only from ${s.sourceKinds.map(describeEntry).join(', ')}; ${source} is ${kind === 'custom' ? `in the custom folder ${branchFolder(source)}/` : kind === 'other' ? 'a branch without folder' : `a ${kind}/ branch`}`, branch, source, sourceKind: kind, reasons: ['source-kind-not-allowed'] });
     }
     if (author !== undefined && !s.selfMerge && typeof sub === 'string' && sub === author) {
       throw new ForbiddenException({ code: 'self-merge-not-allowed', message: `${branch} does not let the author merge their own pull request: ask someone else with merge rights`, branch, reasons: ['self-merge-not-allowed'] });
@@ -170,7 +171,7 @@ export class BranchProtectionService implements OnModuleInit {
     const core = process.env.IAM_CORE_URL;
     if (!core) throw new Error('IAM_CORE_URL is not set');
     const res = await fetch(`${core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(4000),
-      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { source: i.source, source_kind: i.sourceKind ?? 'other' } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
+      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { source: i.source, source_kind: i.sourceKind ?? 'other', source_folder: branchFolder(i.source) } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
     if (!res.ok) throw new Error(`core answered ${res.status}`);
     const out = (await res.json()) as { allow?: boolean; reasons?: string[]; errors?: string[] };
     return { allow: out.allow === true, reasons: [...(out.reasons ?? []), ...(out.errors ?? [])] };
