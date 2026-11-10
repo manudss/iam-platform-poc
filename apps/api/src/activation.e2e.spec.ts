@@ -169,9 +169,10 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
       body: JSON.stringify({ tenant: T, principal: `User::"${id}"`, action: 'Action::"branch:merge"', resource: `Branch::"${target}"`, context: source ? { source, source_kind: kind } : {} }),
     })).json()) as { allow: boolean; reasons: string[] };
     const p = await merge('mgr-x', 'profile/pend-dan', 'profile');
-    assert.equal(p.allow, true); assert.deepEqual(p.reasons, ['merge-profile-branches-into-protected']);
+    assert.equal(p.allow, true); assert.deepEqual(p.reasons, ['main-profile-merger']);
     assert.equal((await merge('mgr-x', 'feature/x', 'feature')).allow, false, 'a manager may not merge a feature/ branch');
     assert.equal((await merge('mgr-x', 'personal/mgr-x', 'personal')).allow, false);
+    assert.equal((await merge('mgr-x', 'profile/pend-dan', 'profile', 'release')).allow, false, 'the manager rule is scoped to main');
     assert.equal((await merge('mgr-x')).allow, false, 'no source given: the manager rule does not apply');
     assert.equal((await merge('merger-y', 'feature/x', 'feature')).allow, true);
     assert.equal((await merge('nobody', 'profile/x', 'profile')).allow, false);

@@ -15,8 +15,8 @@ The demo rule `merge-into-protected-needs-branch-merger` (set `default`, pillar 
 | Case | Rule | Who (demo) |
 | --- | --- | --- |
 | Merge into any protected branch needs a role | `merge-into-protected-needs-branch-merger` | `iam-admin`, `branch-merger` (demo-alice) |
-| Merge into `main` only | `merge-into-main-needs-main-merger` (`resource == Branch::"main"`) | role `main-merger` (not assigned by default) |
-| Merge `profile/` branches into a protected branch, nothing else | `merge-profile-branches-into-protected` (`source_kind == "profile"`) | role `manager`, user `demo-lucie` (demo data seed) |
+| Merge into `main` only | `merge-into-main-needs-main-merger` (`resource == Branch::"main"`) | role `main-merger`, user `demo-noemie` (IT administrator; holds this role only, not `iam-admin` or `branch-merger`) |
+| Merge `profile/` branches into `main`, nothing else | `main-profile-merger` (`source_kind == "profile"`) | role `manager`, user `demo-lucie` (demo data seed) |
 
 Protect an existing branch with the Protect button on its card (Branches tab); remove it with Remove protection in its panel (not offered on the default branch, whose protection is built in). Lowering protection needs the same merge policy.
 
@@ -59,7 +59,7 @@ Each protected branch also has:
 
 Loosening any of these on a protected branch needs the same `branch:merge` permission as merging into it.
 
-The policy engine also sees the folder: the `branch:merge` request carries `context.source`, `context.source_kind` (`custom` for a folder of your own) and `context.source_folder` (e.g. `team`). The seed ships the rule `merge-profile-branches-into-protected`: the `manager` role may merge `profile/` branches into a protected branch, and no other kind. Write more rules the same way, for example one that lets a role merge `workflow/` branches only.
+The policy engine also sees the folder: the `branch:merge` request carries `context.source`, `context.source_kind` (`custom` for a folder of your own) and `context.source_folder` (e.g. `team`). The seed ships the rule `main-profile-merger`: the `manager` role may merge `profile/` branches into a protected branch, and no other kind. Write more rules the same way, for example one that lets a role merge `workflow/` branches only.
 
 ## Creating branches by hand
 

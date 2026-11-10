@@ -46,10 +46,10 @@ permit(principal, action == Action::"mcp:proxy", resource)
 permit(principal, action == Action::"branch:merge", resource)
   when { context has roles && (context.roles.contains("branch-merger") || context.roles.contains("iam-admin")) };
 
-@id("merge-profile-branches-into-protected")
-@description("A manager may merge profile/ branches (profile changes) into a protected branch such as main, and no other kind of branch.")
+@id("main-profile-merger")
+@description("A manager may merge profile/ branches (profile changes) into main, and no other kind of branch.")
 @pillar("versioning")
-permit(principal, action == Action::"branch:merge", resource)
+permit(principal, action == Action::"branch:merge", resource == Branch::"main")
   when { context has roles && context.roles.contains("manager") && context has source_kind && context.source_kind == "profile" };
 
 @id("merge-into-main-needs-main-merger")
