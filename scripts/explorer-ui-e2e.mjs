@@ -89,6 +89,10 @@ try {
   // main is read only
   await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('text=read only');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
+  // a wide table scrolls inside its grid, never the page
+  await page.click('button:has-text("workflow_definitions")'); await page.waitForSelector('th:has-text("graph")');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true, 'page-level horizontal scrollbar');
+  await shot('2b-data-wide');
   // compare
   await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
   await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('3-compare');
@@ -112,6 +116,13 @@ try {
   // history on main shows the merge commit
   await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('6-history');
   const text = await page.locator('.explorer ol.log').innerText(); assert.match(text, /Merge pull request #1: Add auditor role/);
+  // the Rows button of a commit opens the inspector beside the log, with the row changes of that commit
+  await btn('Rows').click();
+  await page.waitForSelector('.hist-cols.with-inspector .hist-inspector:has-text("Row changes in roles")');
+  await page.waitForSelector('.hist-inspector:has-text("auditor")');
+  await shot('7-history-rows');
+  await page.locator('.insp-close').click();
+  assert.equal(await page.locator('.hist-inspector').count(), 0);
   console.log('UI e2e OK; screenshots in', out);
 } catch (e) { console.error('UI e2e FAILED:', e); process.exitCode = 1; try { await (await browser?.contexts()[0]?.pages()[0])?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {} }
 finally { await cleanup(); }

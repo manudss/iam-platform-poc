@@ -24,7 +24,7 @@ try {
   await btn('Add a row').click(); await page.fill('[data-edit-field="id"] textarea', 'auditor-' + br); await page.locator('[data-edit-field="label"] input[type=checkbox]').uncheck(); await page.fill('[data-edit-field="label"] textarea','Auditor'); await page.locator('[data-edit-field="is_sensitive"] input[type=checkbox]').uncheck(); await page.fill('[data-edit-field="is_sensitive"] textarea','0');
   await page.fill('input[name=em]', 'add role'); await btn('Commit change').click(); await page.waitForSelector('td:has-text("Auditor")');
   await nav('/database/pulls'); await page.selectOption('select[name=ps]', br); await page.fill('input[name=pti]', 'Hosted check ' + br); await btn('Open pull request').click();
-  await page.waitForSelector('text=Can be merged'); assert.equal(await btn('Approve').isDisabled(), true); await shot('h2-pull-request');
+  await page.waitForSelector('text=Able to merge'); assert.equal(await btn('Approve').isDisabled(), true); await shot('h2-pull-request');
   await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")'); await page.waitForTimeout(2500); await shot('h3-merged');
   await nav('/assignments'); await page.waitForSelector('#assignments td:text-is("demo-bob")'); await nav('/plugins'); await page.waitForSelector('#plugins table');
   assert.equal(await page.locator('[role=alert]').count(), 0);

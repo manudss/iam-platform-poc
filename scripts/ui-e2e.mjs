@@ -268,39 +268,43 @@ try {
 
   // ---- database explorer, section by section (one component instance across the sections) ----
   await page.setViewportSize({ width: 1280, height: 1100 });
-  const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name}$`) }).first();
+  const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).first();
   await nav('/database/branches'); await page.waitForSelector('text=protected'); await shot('8-explorer-1-branches');
-  await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
+  await btn('+ New branch').click(); await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('.branch-card:has-text("ui-demo")');
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); // the explorer created ui-demo behind the shell's back: reload the branch list before selecting it
   await page.selectOption('select[name=globalBranch]', 'ui-demo'); await status('Working on ui-demo'); // explorer edits and SQL writes must run on the selected working branch
   await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
   await btn('Add a row').click(); await page.waitForSelector('.explorer .panel textarea');
+  await page.waitForSelector('.commit-box'); // the commit step is its own section, not one of the column fields
   await page.fill('label[data-edit-field=id] textarea', 'auditor');
   for (const f of ['label', 'is_sensitive']) await page.locator(`label[data-edit-field=${f}] input[type=checkbox]`).uncheck(); // nullable columns start as NULL (field disabled)
   await page.fill('label[data-edit-field=label] textarea', 'Auditor'); await page.fill('label[data-edit-field=is_sensitive] textarea', '0');
-  await page.fill('input[name=em]', 'add auditor role'); await btn('Commit change').click();
-  await page.waitForSelector('td:has-text("Auditor")'); await shot('8-explorer-2-data-edit');
-  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('.explorer .chip.lock:text("read only")');
+  await page.fill('input[name=em]', 'add auditor role'); await btn('Commit & close tab').click(); // commit & close: back to the table tab, refreshed
+  await page.waitForSelector('td:has-text("Auditor")');
+  assert.equal(await page.locator('.explorer .wb-tab').count(), 1, 'the row tab closed on commit, only the table tab remains'); await shot('8-explorer-2-data-edit');
+  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); // same table on another branch = a second tab, the ui-demo tab stays open
+  await page.waitForSelector('.explorer .chip.lock:text("read only")');
+  assert.equal(await page.locator('.explorer .wb-tab').count(), 2, 'roles on main opened as its own tab next to roles on ui-demo');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
-  await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
-  await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
-  await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
+  await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo');
+  await page.waitForSelector('.cmp-summary'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
+  await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await btn('Write').click();
   await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
   await page.waitForSelector('.explorer .msg:has-text("selected working branch")'); // workspace mode: SQL writes only on the selected working branch
   await page.selectOption('select[name=sr]', 'ui-demo'); await page.fill('textarea[name=sq]', "update roles set label = 'Internal auditor' where id = 'auditor'"); await btn('Preview changes').click();
   await page.waitForSelector('text=Preview only'); await shot('8-explorer-4-sql-preview');
-  await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
+  await btn('Read').click(); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
   await page.waitForSelector('.explorer .msg:has-text("not reachable")');
-  await nav('/database/pulls'); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
+  await nav('/database/pulls'); await btn('+ New pull request').click(); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
   await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();
-  await page.waitForSelector('text=Can be merged');
+  await page.waitForSelector('text=Able to merge');
   assert.equal(await btn('Approve').isDisabled(), false); // author approval allowed by default
   await btn('Approve').click(); await page.waitForSelector('text=approved');
   assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
   await shot('8-explorer-5-pull-request');
   // Human Merge now uses the same checked publication path as Review & Apply.
-  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
+  await btn('Merge pull request').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
   assert.equal(await page.locator('.explorer .msg:has-text("Use the global Apply")').count(), 0);
   await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
   assert.match(await page.locator('.explorer ol.log').innerText(), /Apply workspace ui-demo/);

@@ -50,7 +50,7 @@ export const routes: Routes = [
       { path: 'workflows', component: WorkflowsPage, title: 'Workflows', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [workflowsEnabledGuard] },
-      { path: 'database', pathMatch: 'full', redirectTo: 'database/branches' },
+      { path: 'database', pathMatch: 'full', redirectTo: 'database/home' },
       { path: 'review', canActivate: [accessGuard], component: ReviewPage, title: 'Review changes' },
       { path: 'database/:tab', canActivate: [accessGuard], component: ExplorerPage, title: 'Database (Dolt)' },
       // Packaged plugin screens (constat 4): one generic route; the host reads the tenant's screen inventory and

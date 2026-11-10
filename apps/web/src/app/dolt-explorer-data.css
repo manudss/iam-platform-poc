@@ -1,0 +1,82 @@
+.panel label, .explorer > label{display:flex;margin:.4rem 0}
+.data-grid{max-height:60vh;border:1px solid var(--line);border-radius:.5rem;overflow:auto}
+.data-grid th{position:sticky;top:0;z-index:1}
+.cell-value{min-width:130px;max-width:320px;max-height:120px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+
+.field-editor{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:.8rem}
+.field-editor label{margin:0;min-width:0}
+.row-detail dl>div{border-bottom:1px solid var(--line);padding:.5rem 0}
+.row-detail dt{font-weight:600}
+.row-detail dd{margin:.3rem 0}
+.row-detail pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.field-editor small{font-weight:400}
+.data-grid table{width:max-content;min-width:100%}
+@media(max-width:500px){.field-editor{grid-template-columns:1fr}.cell-value{max-width:220px}.panel{padding:.7rem}}
+/* data workbench: tree, object tabs, toolbar, status bar */
+.wb{display:grid;grid-template-columns:220px minmax(0,1fr);gap:1rem;align-items:start}
+.wb-main{min-width:0}
+.wb-tree{padding:.7rem;max-height:70vh;overflow:auto}
+.tree-branch{width:100%;margin-bottom:.3rem}
+.tree-hint{font-size:.75rem;margin-bottom:.6rem}
+.wb-tree h5{color:var(--label);font-size:.72rem;letter-spacing:.04em;margin:.8rem 0 .25rem}
+.tree-list{list-style:none;margin:0;padding:0}
+.tree-item{display:flex;justify-content:space-between;gap:.5rem;width:100%;background:none;border:0;border-radius:.4rem;margin:0;padding:.3rem .5rem;text-align:left;font-size:.88rem;color:var(--ink)}
+.tree-item:hover{background:var(--row-hover)}
+.tree-item.on{background:var(--accent-soft);color:var(--accent-dark);font-weight:600}
+.tree-item .cnt{color:var(--muted);font-size:.78rem}
+.wb-tabs{display:flex;gap:.3rem;align-items:center;border-bottom:1px solid var(--line);margin-bottom:.8rem;flex-wrap:wrap}
+.wb-tab{display:inline-flex;align-items:center;border:1px solid var(--line);border-bottom:0;border-radius:.5rem .5rem 0 0;background:var(--panel)}
+.wb-tab.on{background:var(--card);box-shadow:inset 0 -2px 0 var(--card)}
+.wb-tab button{background:none;border:0;margin:0;padding:.35rem .3rem .35rem .7rem;font-size:.88rem;color:var(--ink)}
+.wb-tab.on button{font-weight:700}
+.wb-tab button:hover:not(:disabled),.tree-item:not(.on):hover:not(:disabled){background:var(--row-hover);color:var(--ink)}
+.tree-item.on:hover:not(:disabled){background:var(--accent-soft);color:var(--accent-dark)}
+.wb-tab .x{padding:.35rem .6rem .35rem .2rem;color:var(--muted)}
+.wb-tab .ref{background:var(--chip-bg);color:var(--chip-ink);border-radius:.3rem;padding:0 .35rem;font-size:.7rem;font-weight:600;margin-left:.3rem}
+.wb-tabs select{width:auto;margin-left:auto;margin-bottom:.3rem}
+.wb-card{padding:.8rem 1rem}
+.wb-card-head{display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem}
+.wb-card-head h4{margin:0}
+.wb-toolbar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-bottom:.6rem}
+.wb-toolbar input[type=search]{min-width:200px}
+.wb-toolbar select{width:auto}
+.col-chooser{position:relative}
+.col-chooser summary{list-style:none;cursor:pointer;border:1px solid var(--field-line);border-radius:.4rem;padding:.35rem .7rem;color:var(--label);background:var(--card)}
+.col-menu{position:absolute;z-index:5;background:var(--card);border:1px solid var(--line);border-radius:.5rem;box-shadow:var(--shadow);padding:.5rem .8rem;display:grid;gap:.2rem;min-width:160px}
+.chip.pk{background:var(--accent-soft);color:var(--accent-dark);font-size:.68rem;padding:0 .4rem;margin-left:.3rem}
+.wb-foot{margin:.5rem 0 0}
+.wb-empty{padding:2rem 0;text-align:center}
+.wb-status{display:flex;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);margin-top:.8rem;padding:.4rem .2rem 0;font-size:.82rem;color:var(--muted)}
+.wb-status .dot{display:inline-block;width:.5rem;height:.5rem;border-radius:999px;background:var(--ok);margin-right:.3rem}
+@media(max-width:900px){.wb{grid-template-columns:1fr}}
+/* row editor + row history */
+.wb-row{display:grid;grid-template-columns:1fr 320px;gap:1rem;align-items:start;margin-top:1rem}
+.wb-row-left{display:grid;gap:1rem}
+.wb-edit{position:sticky;top:1rem}
+.field-editor.one-col{grid-template-columns:1fr}
+.row-history h4{margin-top:0}
+.row-history s{color:var(--bad)}
+.row-history b{color:var(--ink)}
+@media(max-width:900px){.wb-row{grid-template-columns:1fr}}
+/* row editor tab: form on the left, row history beside it, commit step as its own section */
+.wb-rowedit{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:1rem;align-items:start}
+.rowedit-form h4{margin-top:0}
+.commit-box{background:var(--panel);border:1px solid var(--line);border-radius:.5rem;padding:.8rem 1rem;margin-top:1rem}
+.commit-title{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-dark);border-bottom:1px solid var(--line);padding-bottom:.4rem;margin-bottom:.6rem}
+.commit-msg{display:flex;flex-direction:column;gap:.3rem;font-weight:600;font-size:.85rem;color:var(--label)}
+.commit-acts{display:flex;gap:.6rem;align-items:center;margin-top:.7rem;flex-wrap:wrap}
+@media(max-width:900px){.wb-rowedit{grid-template-columns:1fr}}
+/* sql console: mode pills, dark editor with line numbers, dry-run banner */
+.sql-bar{display:flex;gap:.7rem;align-items:center;margin-bottom:.6rem}
+.sql-editor{display:grid;grid-template-columns:auto 1fr;background:var(--sidebar-bg);border:1px solid var(--line);border-radius:.5rem;overflow:hidden;margin-bottom:.6rem}
+.sql-editor .gutter{display:flex;flex-direction:column;padding:.6rem .5rem;text-align:right;color:var(--sidebar-muted);font-family:monospace;font-size:.85rem;line-height:1.45;overflow:hidden;user-select:none;border-right:1px solid var(--line)}
+.sql-editor textarea{border:0;border-radius:0;background:transparent;color:var(--sidebar-ink);font-family:monospace;font-size:.85rem;line-height:1.45;padding:.6rem .8rem;resize:vertical}
+.sql-editor textarea:focus{outline:none;box-shadow:none}
+.msg.sql-dryrun{border:1px solid var(--warn-line);background:var(--warn-soft);color:var(--warn-ink);border-radius:.5rem;padding:.5rem .8rem}
+
+.row-version{border-top:1px solid var(--line);padding:.7rem 0;overflow-wrap:anywhere}
+.version-meta{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:var(--muted)}
+.version-meta code{margin-left:auto}
+.version-message{margin:.3rem 0;font-size:.85rem}
+.version-change{font-family:monospace;font-size:.8rem;white-space:pre-wrap}
+.rowedit-form .field-editor>label{display:flex;flex-direction:column;align-items:stretch}
