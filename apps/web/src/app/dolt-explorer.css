@@ -172,8 +172,8 @@ table.grid tr.mod td{background:var(--warn-soft)}
 @media(max-width:900px){.wb-row{grid-template-columns:1fr}}
 /* sql console: mode pills, dark editor with line numbers, dry-run banner */
 .sql-bar{display:flex;gap:.7rem;align-items:center;margin-bottom:.6rem}
-.sql-editor{display:grid;grid-template-columns:auto 1fr;background:var(--code-bg);border:1px solid var(--line);border-radius:.5rem;overflow:hidden;margin-bottom:.6rem}
-.sql-editor .gutter{display:flex;flex-direction:column;padding:.6rem .5rem;text-align:right;color:var(--muted);font-family:monospace;font-size:.85rem;line-height:1.45;overflow:hidden;user-select:none;border-right:1px solid var(--line)}
-.sql-editor textarea{border:0;border-radius:0;background:transparent;color:var(--ink);font-family:monospace;font-size:.85rem;line-height:1.45;padding:.6rem .8rem;resize:vertical}
+.sql-editor{display:grid;grid-template-columns:auto 1fr;background:var(--sidebar-bg);border:1px solid var(--line);border-radius:.5rem;overflow:hidden;margin-bottom:.6rem}
+.sql-editor .gutter{display:flex;flex-direction:column;padding:.6rem .5rem;text-align:right;color:var(--sidebar-muted);font-family:monospace;font-size:.85rem;line-height:1.45;overflow:hidden;user-select:none;border-right:1px solid var(--line)}
+.sql-editor textarea{border:0;border-radius:0;background:transparent;color:var(--sidebar-ink);font-family:monospace;font-size:.85rem;line-height:1.45;padding:.6rem .8rem;resize:vertical}
 .sql-editor textarea:focus{outline:none;box-shadow:none}
 .msg.sql-dryrun{border:1px solid var(--warn-line);background:var(--warn-soft);color:var(--warn-ink);border-radius:.5rem;padding:.5rem .8rem}
