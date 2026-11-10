@@ -1,0 +1,54 @@
+<div class="layout">
+  <aside class="side" aria-label="Mock navigation">
+    <div class="brandcell"><app-brand [forceDark]="true" /></div>
+    <nav>
+      <p class="group">Directory</p>
+      <a class="active"><span class="ico" aria-hidden="true">▦</span>Overview</a>
+      <a><span class="ico" aria-hidden="true">👥</span>Users</a>
+      <a><span class="ico" aria-hidden="true">⇄</span>Assignments</a>
+      <p class="group">Administration</p>
+      <a><span class="ico" aria-hidden="true">⬡</span>Plugins</a>
+      <a><span class="ico" aria-hidden="true">🛡</span>Policies</a>
+      <a><span class="ico" aria-hidden="true">🗄</span>Database</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <h1>Overview</h1>
+      <span class="spacer"></span>
+      <span class="who">demo-alice</span>
+      <span class="pillwrap" title="Data branch"><span class="dot on"></span><span class="pill">demo-alice</span></span>
+      <button type="button" class="secondary" tabindex="-1">Sign out</button>
+    </header>
+    <p class="msg bar">Back on your personal branch demo-alice. Your work in progress is kept.</p>
+    <main class="content">
+      <div class="kpis">
+        <section class="card kpi"><small>Users</small><strong>128</strong><span class="ok">+6 this week</span></section>
+        <section class="card kpi"><small>Applications</small><strong>14</strong><span class="hint">2 to review</span></section>
+        <section class="card kpi"><small>Open changes</small><strong>3</strong><span class="ko">1 SoD conflict</span></section>
+      </div>
+      <section class="card">
+        <h3>Latest changes <span class="chip ok">applied</span><span class="chip ko">SoD conflict</span></h3>
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Change</th><th>Person</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td>Role Finance analyst added</td><td>ada.lovelace</td><td><span class="chip ok">applied</span></td></tr>
+              <tr><td>Application Jira connected</td><td>alan.turing</td><td><span class="chip">pending</span></td></tr>
+              <tr><td>Role Payments approver refused</td><td>grace.hopper</td><td><span class="chip ko">conflict</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="card">
+        <h3>New user</h3>
+        <div class="row">
+          <label>First name<input value="Ada" aria-label="First name"></label>
+          <label>Department<select aria-label="Department"><option>Finance</option><option>Engineering</option></select></label>
+        </div>
+        <div class="row"><button type="button" tabindex="-1">Create</button><button type="button" class="secondary" tabindex="-1">Cancel</button><button type="button" class="link" tabindex="-1">Advanced options</button></div>
+        <p class="hint">Fictional demo data only. This mock never saves anything.</p>
+      </section>
+    </main>
+  </div>
+</div>

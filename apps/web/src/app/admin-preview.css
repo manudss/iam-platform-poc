@@ -1,0 +1,37 @@
+/* Console mock for the Customisation live preview: the same layout roles as the real shell, theme variables only. */
+:host { display: block; }
+.layout { display: grid; grid-template-columns: 15rem 1fr; min-height: 100vh; }
+.side { background: var(--sidebar-bg); color: var(--sidebar-ink); padding: 1rem .8rem; box-sizing: border-box; }
+.brandcell { display: grid; justify-items: start; padding: .3rem .4rem 1rem; }
+.group { margin: 1.1rem .5rem .3rem; font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--sidebar-muted); }
+nav a { display: flex; align-items: center; gap: .65rem; padding: .5rem .65rem; border-radius: .5rem; color: var(--sidebar-ink); font-size: .92rem; }
+nav a:hover { background: var(--sidebar-hover); }
+nav a.active { background: var(--sidebar-active); box-shadow: inset 3px 0 0 var(--accent); }
+.ico { width: 1.2rem; text-align: center; opacity: .85; }
+.main { min-width: 0; }
+.top { display: flex; align-items: center; gap: .8rem; padding: .8rem 1.5rem; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; }
+.top h1 { font-size: 1.15rem; margin: 0; }
+.spacer { flex: 1; }
+.who { background: var(--accent-soft); color: var(--chip-ink); border-radius: 999px; padding: .2rem .7rem; font-size: .85rem; font-weight: 600; }
+.pillwrap { display: inline-flex; align-items: center; gap: .4rem; background: var(--code-bg); border-radius: 999px; padding: .25rem .7rem; }
+.dot { width: .6rem; height: .6rem; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: var(--ok); }
+.pill { font-weight: 600; font-size: .85rem; }
+.bar { margin: 1rem 1.5rem 0; }
+.content { padding: 1.25rem 1.5rem 3rem; }
+.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.kpi { display: grid; gap: .15rem; }
+.kpi strong { font-size: 1.5rem; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .side { display: flex; gap: .4rem; align-items: center; overflow-x: auto; padding: .6rem; }
+  .brandcell { padding: 0 .6rem 0 0; }
+  .side nav { display: flex; gap: .2rem; }
+  .group { display: none; }
+  nav a { white-space: nowrap; }
+  .kpis { grid-template-columns: 1fr; }
+  .top { padding: .7rem 1rem; gap: .5rem; }
+  .content { padding: 1rem; }
+  .bar { margin: .8rem 1rem 0; }
+  .who { max-width: 5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
