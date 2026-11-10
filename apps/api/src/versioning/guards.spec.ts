@@ -68,7 +68,7 @@ describe('names', () => {
   it('validates branch, table and author names', () => {
     for (const n of ['main', 'change-0a1b2c3d', 'feature.x_y-1', 'team/a']) assert.equal(branchName(n), n);
     for (const n of ['', '-x', 'a b', 'a..b', "a'; drop", 'x/', 'a.lock', 'é', 'a'.repeat(64), 5, null]) assert.throws(() => branchName(n), /./s, String(n));
-    assert.throws(() => newBranchName('team/a'));
+    assert.equal(newBranchName('team/a'), 'team/a'); assert.throws(() => newBranchName('a/b/c')); assert.throws(() => newBranchName('/a'));
     assert.equal(newBranchName('fix-1'), 'fix-1');
     assert.throws(() => tableName('a;b')); assert.throws(() => tableName('`x`')); assert.equal(tableName('plugin_config'), 'plugin_config');
     assert.equal(authorOf('demo-alice'), 'demo-alice <demo-alice@iam-poc.invalid>');

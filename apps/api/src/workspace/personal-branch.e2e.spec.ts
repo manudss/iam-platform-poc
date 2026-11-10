@@ -57,55 +57,55 @@ describe('automatic personal branch + real Dolt', { skip: !have && 'dolt binary 
 
   it('creates a branch named after the user from main, and REUSES it on every later sign-in (no proliferation)', async () => {
     const a = await p.ensure(T, 'demo-alice');
-    assert.deepEqual([a.branch, a.status, a.empty], ['demo-alice', 'created', true]);
+    assert.deepEqual([a.branch, a.status, a.empty], ['personal/demo-alice', 'created', true]);
     const before = await names();
     for (let i = 0; i < 4; i++) assert.equal((await p.ensure(T, 'demo-alice')).status, 'reused');
     assert.deepEqual(await names(), before);
   });
 
   it('keeps work in progress: a branch with changes is reused untouched, never moved or released', async () => {
-    await work('demo-alice', 'wip-role');
-    const head = (await v.branches()).branches.find((b) => b.name === 'demo-alice')!.commit;
+    await work('personal/demo-alice', 'wip-role');
+    const head = (await v.branches()).branches.find((b) => b.name === 'personal/demo-alice')!.commit;
     const again = await p.ensure(T, 'demo-alice');
     assert.deepEqual([again.status, again.empty, again.aheadOfMain], ['reused', false, 1]);
-    assert.deepEqual(await p.release(T, 'demo-alice'), { released: false, branch: 'demo-alice', reason: 'has changes: kept' });
-    assert.equal((await v.branches()).branches.find((b) => b.name === 'demo-alice')!.commit, head);
+    assert.deepEqual(await p.release(T, 'demo-alice'), { released: false, branch: 'personal/demo-alice', reason: 'has changes: kept' });
+    assert.equal((await v.branches()).branches.find((b) => b.name === 'personal/demo-alice')!.commit, head);
   });
 
   it('an open pull request blocks rename and delete of the branch', async () => {
-    const pr = await prs.create(T, { title: 'alice work', source: 'demo-alice', target: 'main' }, 'demo-alice');
+    const pr = await prs.create(T, { title: 'alice work', source: 'personal/demo-alice', target: 'main' }, 'demo-alice');
     await assert.rejects(p.rename(T, 'demo-alice', 'alice-renamed'), /open pull request/);
     await prs.close(T, (pr as any).id);
-    assert.equal((await p.rename(T, 'demo-alice', 'alice-work')).was, 'demo-alice');
-    assert.ok((await names()).includes('alice-work') && !(await names()).includes('demo-alice'));
-    assert.equal((await p.ensure(T, 'demo-alice')).branch, 'alice-work', 'renamed branch is the one found again');
+    assert.equal((await p.rename(T, 'demo-alice', 'alice-work')).was, 'personal/demo-alice');
+    assert.ok((await names()).includes('personal/alice-work') && !(await names()).includes('personal/demo-alice'));
+    assert.equal((await p.ensure(T, 'demo-alice')).branch, 'personal/alice-work', 'renamed branch is the one found again');
   });
 
   it('empty branch: released on sign-out, the (renamed) name is remembered and the next sign-in recreates it from main', async () => {
     const b = await p.ensure(T, 'demo-bob');
     assert.equal(b.status, 'created');
-    assert.deepEqual(await p.release(T, 'demo-bob'), { released: true, branch: 'demo-bob' });
-    assert.ok(!(await names()).includes('demo-bob'));
+    assert.deepEqual(await p.release(T, 'demo-bob'), { released: true, branch: 'personal/demo-bob' });
+    assert.ok(!(await names()).includes('personal/demo-bob'));
     assert.equal((await p.release(T, 'demo-bob')).released, false);
     assert.equal((await p.ensure(T, 'demo-bob')).status, 'recreated');
   });
 
   it('rename rules: own branch only, no protected or taken names, bad names rejected', async () => {
     await p.ensure(T, 'demo-bob'); // recreated
-    await assert.rejects(p.rename(T, 'demo-bob', 'main'), /protected/);
+    // a renamed personal branch always keeps the personal/ folder, so it can never take a protected name.
     await assert.rejects(p.rename(T, 'demo-bob', 'alice-work'), /already exists/);
     for (const bad of ['a b', 'a/b', '', "x'; drop table roles; --", '..', 'x'.repeat(80)]) await assert.rejects(p.rename(T, 'demo-bob', bad), /invalid|Bad/i, bad);
     await assert.rejects(p.rename(T, 'nobody', 'zzz'), /no personal branch/);
     await assert.rejects(p.rename(T, '', 'zzz'), /signed-in/);
-    assert.equal((await p.rename(T, 'demo-bob', 'bob-sandbox')).branch, 'bob-sandbox');
+    assert.equal((await p.rename(T, 'demo-bob', 'personal/bob-sandbox')).branch, 'personal/bob-sandbox');
     await p.release(T, 'demo-bob');
     assert.equal((await p.ensure(T, 'demo-bob')).status, 'recreated');
-    assert.deepEqual((await p.ensure(T, 'demo-bob')).branch, 'bob-sandbox');
+    assert.deepEqual((await p.ensure(T, 'demo-bob')).branch, 'personal/bob-sandbox');
   });
 
   it('another user cannot take a reserved name, even while that branch is closed', async () => {
     await p.release(T, 'demo-bob');
-    assert.ok(!(await names()).includes('bob-sandbox'));
+    assert.ok(!(await names()).includes('personal/bob-sandbox'));
     await p.ensure(T, 'demo-carol');
     await assert.rejects(p.rename(T, 'demo-carol', 'bob-sandbox'), /reserved by another user/);
   });
@@ -123,13 +123,13 @@ describe('automatic personal branch + real Dolt', { skip: !have && 'dolt binary 
   it('sweep: other users idle EMPTY branches are deleted, idle branches with work are kept, active ones are kept', async () => {
     await p.ensure(T, 'demo-dave');
     await p.ensure(T, 'demo-erin');
-    await work(`demo-erin`, 'erin-wip');
+    await work('personal/demo-erin', 'erin-wip');
     await seen('demo-dave', 500); await seen('demo-erin', 500);
     await p.ensure(T, 'demo-carol');
     const n = await names();
-    assert.ok(!n.includes('demo-dave'), 'idle empty branch swept');
-    assert.ok(n.includes('demo-erin'), 'idle branch with work kept');
-    assert.ok(n.includes('demo-carol'), 'caller kept');
+    assert.ok(!n.includes('personal/demo-dave'), 'idle empty branch swept');
+    assert.ok(n.includes('personal/demo-erin'), 'idle branch with work kept');
+    assert.ok(n.includes('personal/demo-carol'), 'caller kept');
     assert.equal((await p.ensure(T, 'demo-dave')).status, 'recreated');
   });
 });

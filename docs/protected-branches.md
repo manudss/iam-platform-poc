@@ -25,3 +25,17 @@ Refusal: HTTP 403, code `merge-not-permitted`, with a message naming the branch.
 - `GET .../pulls/:id` adds `protection` and `mayMerge` (`allowed`, `message`) for the signed-in person.
 
 Settings live in the unversioned `<db>_meta` database next to pull requests (never merged). Not built yet: per-role merge matrix, per-table ownership, protection by branch pattern (`release/*`), a required-checks list.
+
+## Branch folders
+
+Auto-created branches use one folder so merge policies can target a kind of branch:
+
+| Folder | Created by |
+| --- | --- |
+| `personal/` | the personal admin branch of each user |
+| `profile/` | profile edits that wait for review |
+| `ai/` | AI / MCP sessions (the session id itself stays `mcp-...`) |
+| `workflow/` | workflow runs that change data |
+| `feature/` | branches created by hand |
+
+Branches created before this convention (`demo-alice`, `profile-...`, `mcp-...`, `wf-...`) keep their name and are classified by `branchKind`. A name has at most one folder level.

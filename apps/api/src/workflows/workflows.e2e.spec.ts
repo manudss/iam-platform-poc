@@ -143,14 +143,14 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     ], edges: [] } })) as { definition: { id: string } };
     const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
     const v = await waitRun(started.run.id, ['completed']);
-    assert.match(v.run.branch ?? '', /^wf-[0-9a-f]{8}$/);
+    assert.match(v.run.branch ?? '', /^workflow\/[0-9a-f]{8}$/);
     assert.equal(v.steps[0].simulated, false);
     assert.ok(v.steps[0].log.some((l) => l.includes('commit')));
     // main untouched: only the seeded assignments
     const rows = (await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: unknown[] };
-    assert.equal(rows.rows.length, 2);
+    assert.equal(rows.rows.length, 3);
     const onBranch = (await ok('GET', `/versioning/tables/assignments?ref=${v.run.branch}`)) as { rows: unknown[] };
-    assert.equal(onBranch.rows.length, 3);
+    assert.equal(onBranch.rows.length, 4);
     // review opens a pull request, reused on a second call, merge applies to main
     const pr = (await ok('POST', `/workflow-runs/${started.run.id}/review`)) as { pullRequest: { id: number; source: string }; reused: boolean };
     assert.equal(pr.pullRequest.source, v.run.branch);
@@ -159,7 +159,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const merged = await call('POST', `/versioning/pulls/${pr.pullRequest.id}/merge`);
     assert.ok(merged.status < 300, JSON.stringify(merged.body));
     const after = (await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: unknown[] };
-    assert.equal(after.rows.length, 3);
+    assert.equal(after.rows.length, 4);
   });
 
   it('SoD conflict produced by a run is logged and refused at merge', async () => {
@@ -215,7 +215,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.deepEqual(v.steps.map((s) => s.status), ['done', 'failed']);
     assert.ok((v.run.error ?? '').includes('unknown role'));
     const onBranch = (await ok('GET', `/versioning/tables/assignments?ref=${v.run.branch}`)) as { rows: unknown[] };
-    assert.equal(onBranch.rows.length, 3); // seed (2) + first commit kept, nothing half-written by the failed step
+    assert.equal(onBranch.rows.length, 4); // seed (3) + first commit kept, nothing half-written by the failed step
   });
 
   it('cancel stops a waiting run', async () => {

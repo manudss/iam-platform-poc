@@ -133,7 +133,7 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.equal(res.status, 201);
     const body = (await res.json()) as { id: string; secret: string; branch: string };
     secret = body.secret; sessionId = body.id; branch = body.branch;
-    assert.match(sessionId, /^mcp-[0-9a-f]{12}$/); assert.equal(branch, sessionId);
+    assert.match(sessionId, /^mcp-[0-9a-f]{12}$/); assert.equal(branch, 'ai/' + sessionId);
     const branches = (await (await fetch(`${API}/tenants/acme-demo/versioning/branches`, { headers: { authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN } })).json()) as { branches: { name: string }[] };
     assert.ok(branches.branches.some((x) => x.name === branch));
     // the secret is not retrievable afterwards
@@ -338,7 +338,7 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     const runs = JSON.parse(textOf(await callTool(secret, 'list_workflow_runs', { definition: id }))) as { runs: unknown[] };
     assert.equal(runs.runs.length, 0);
     const branches = JSON.parse(textOf(await callTool(secret, 'list_branches'))) as { branches: { name: string }[] };
-    assert.ok(!branches.branches.some((x) => x.name.startsWith('wf-')));
+    assert.ok(!branches.branches.some((x) => x.name.startsWith('workflow/')));
     assert.notEqual((await callTool(secret, 'delete_workflow', { id })).result?.isError, true);
   });
 

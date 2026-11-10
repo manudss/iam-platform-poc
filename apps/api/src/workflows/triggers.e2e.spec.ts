@@ -122,7 +122,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     const run = await waitForRun(joiner, 1);
     assert.equal(run.status, 'completed', JSON.stringify(run));
     assert.equal(run.startedBy, 'event:user.created');
-    assert.ok(run.branch?.startsWith('wf-'), 'a data run gets its own branch');
+    assert.ok(run.branch?.startsWith('workflow/'), 'a data run gets its own branch');
     const view = (await ok('GET', `/workflow-runs/${run.id}`)) as { run: { base_branch: string | null }; steps: { node_id: string; log: string[] }[] };
     assert.equal(view.run.base_branch, 'main'); // non-workspace mode: the write happened on main
     assert.ok(view.steps.find((s) => s.node_id === 'tell')!.log.some((l) => l.includes('Jane Doe joined')), 'placeholder in the message resolved');
