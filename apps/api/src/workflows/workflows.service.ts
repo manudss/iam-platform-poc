@@ -6,7 +6,7 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
 import { DefinitionRow, RunRow, StepRow, TemplateRow, WorkflowStore } from './store.js';
-import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
+import { COMMUNITY_TEMPLATES, OFFICIAL_TEMPLATES } from './templates-catalog.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
@@ -108,6 +108,7 @@ export class WorkflowsService {
     return {
       templates: [
         ...OFFICIAL_TEMPLATES.map((t) => ({ ...t, createdBy: null as string | null, createdAt: null as string | null })),
+        ...COMMUNITY_TEMPLATES.map((t) => ({ ...t, createdBy: t.author ?? null as string | null, createdAt: null as string | null })),
         ...user.map((t) => ({ id: t.id, name: t.name, description: t.description, category: t.category, source: 'user' as const, trigger: t.trigger ?? undefined, nodes: t.graph.nodes, edges: t.graph.edges, createdBy: t.created_by, createdAt: t.created_at })),
       ],
     };

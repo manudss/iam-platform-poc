@@ -385,9 +385,13 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
   });
 
   it('templates: save from a definition or a canvas, gallery merges official + user, only user templates deletable', async () => {
-    const all0 = (await ok('GET', '/workflow-templates')) as { templates: { id: string; source: string }[] };
-    assert.ok(all0.templates.length >= 8, 'the official catalog is served by the API');
-    assert.ok(all0.templates.every((t) => t.source === 'official'), 'only official entries before any save');
+    const all0 = (await ok('GET', '/workflow-templates')) as { templates: { id: string; source: string; createdBy?: string | null; trigger?: { cron?: string } }[] };
+    assert.ok(all0.templates.filter((t) => t.source === 'official').length >= 8, 'the official catalog is served by the API');
+    const community0 = all0.templates.filter((t) => t.source === 'community');
+    assert.ok(community0.length >= 3, 'community picks are served too');
+    assert.ok(community0.every((t) => t.createdBy), 'community picks carry their author');
+    assert.ok(community0.some((t) => t.trigger?.cron), 'a community pick shows a cron trigger');
+    assert.ok(!all0.templates.some((t) => t.source === 'user'), 'no user template before any save');
     const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }, { id: 'b', type: 'notify', name: 'b', config: { recipient: 'hr', message: 'hi' } }], edges: [{ from: 'a', to: 'b' }] };
     const def = (await ok('POST', '/workflows', { name: 'Tpl source', description: 'to template', graph: g })) as { definition: { id: string } };
     const t1 = (await ok('POST', '/workflow-templates', { name: 'My first template', description: 'from a definition', category: 'Tests', fromDefinition: def.definition.id })) as { template: { id: string; source: string; nodes: unknown[]; category: string } };
@@ -401,6 +405,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal((await call('POST', '/workflow-templates', { name: 'bad', graph: { nodes: [{ id: 'a', type: 'teleport', name: 'a', config: {} }], edges: [] } })).status, 400);
     assert.equal((await call('POST', '/workflow-templates', { name: 'bad', graph: { nodes: [{ id: 'a', type: 'assign-role', name: 'a', config: { identity: '{{event.subject}}', role: 'employee' } }], edges: [] } })).status, 400, 'an event placeholder without a trigger is refused');
     assert.equal((await call('DELETE', `/workflow-templates/${all0.templates[0].id}`)).status, 400, 'an official template cannot be deleted');
+    assert.equal((await call('DELETE', `/workflow-templates/${community0[0].id}`)).status, 400, 'a community template cannot be deleted');
     await ok('DELETE', `/workflow-templates/${t1.template.id}`);
     await ok('DELETE', `/workflow-templates/${t2.template.id}`);
     assert.equal((await call('DELETE', `/workflow-templates/${t1.template.id}`)).status, 404);

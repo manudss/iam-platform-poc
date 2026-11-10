@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { hasDataSteps, nextCronFire, placeholderKeys, substituteEventPayload, validateCronExpression, validateGraph, validateStepPlaceholders, validateTrigger } from './model.js';
-import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
+import { COMMUNITY_TEMPLATES, OFFICIAL_TEMPLATES } from './templates-catalog.js';
 
 const node = (id: string, type: string, config: object = {}, name = id) => ({ id, type, name, config });
 const seq = (...ids: string[]) => ids.slice(1).map((to, i) => ({ from: ids[i], to }));
@@ -118,11 +118,15 @@ describe('cron triggers (phase 3)', () => {
   });
 });
 
-describe('official templates catalog (phase 3)', () => {
-  it('every official template is categorized, unique and instantiable: valid graph, placeholders and trigger', () => {
+describe('templates catalog (phase 3)', () => {
+  it('every official or community template is categorized, unique and instantiable: valid graph, placeholders and trigger', () => {
+    const all = [...OFFICIAL_TEMPLATES, ...COMMUNITY_TEMPLATES];
     assert.ok(OFFICIAL_TEMPLATES.length >= 8);
-    assert.equal(new Set(OFFICIAL_TEMPLATES.map((t) => t.id)).size, OFFICIAL_TEMPLATES.length, 'unique ids');
-    for (const t of OFFICIAL_TEMPLATES) {
+    assert.ok(COMMUNITY_TEMPLATES.length >= 3);
+    assert.ok(COMMUNITY_TEMPLATES.every((t) => t.author), 'community picks are attributed');
+    assert.ok(COMMUNITY_TEMPLATES.some((t) => t.trigger?.cron), 'a community pick shows a cron trigger');
+    assert.equal(new Set(all.map((t) => t.id)).size, all.length, 'unique ids');
+    for (const t of all) {
       assert.ok(t.category.length > 0 && t.nodes.length > 0, `${t.id}: categorized with blocks`);
       const { graph, order } = validateGraph({ nodes: t.nodes, edges: t.edges });
       validateStepPlaceholders(graph, order);

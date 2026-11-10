@@ -17,10 +17,20 @@ export function templateCategories(templates: WfTemplate[]): { name: string; cou
   for (const t of templates) counts.set(t.category, (counts.get(t.category) ?? 0) + 1);
   return [...counts.entries()].map(([name, count]) => ({ name, count }));
 }
-/** Gallery cards: category + free-text filter over name, description and node types. */
-export function filterTemplates(templates: WfTemplate[], category: string, query: string): WfTemplate[] {
+/** Gallery cards: source + category + free-text filter over name, description and node types. */
+export function filterTemplates(templates: WfTemplate[], category: string, query: string, source: 'all' | WfTemplate['source'] = 'all'): WfTemplate[] {
   const q = query.trim().toLowerCase();
-  return templates.filter((t) => (category === 'all' || t.category === category) && (!q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q) || t.nodes.some((n) => n.type.includes(q))));
+  return templates.filter((t) => (source === 'all' || t.source === source) && (category === 'all' || t.category === category) && (!q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q) || t.nodes.some((n) => n.type.includes(q))));
+}
+/** Sidebar source filter: one entry per source present in the gallery, in a fixed order. */
+export function templateSources(templates: WfTemplate[]): { key: 'all' | WfTemplate['source']; label: string; count: number }[] {
+  const labels: Record<WfTemplate['source'], string> = { official: 'Official', user: 'Yours', community: 'Community' };
+  const out: { key: 'all' | WfTemplate['source']; label: string; count: number }[] = [{ key: 'all', label: 'All sources', count: templates.length }];
+  for (const s of ['official', 'user', 'community'] as const) {
+    const count = templates.filter((t) => t.source === s).length;
+    if (count) out.push({ key: s, label: labels[s], count });
+  }
+  return out;
 }
 /** Source badge of a card: OFFICIAL catalog, a template you saved, or a community pick. */
 export function templateBadge(source: WfTemplate['source']): { text: string; status: string } {
@@ -51,8 +61,10 @@ export function templateBadge(source: WfTemplate['source']): { text: string; sta
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="tpl">
   <div class="tpl-cats card" style="padding:.5rem">
+    <b style="padding:.3rem .6rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted)">Sources</b>
+    @for (s of sources(); track s.key) {<button [class.on]="source() === s.key" (click)="source.set(s.key)">{{s.label}} <b>{{s.count}}</b></button>}
     <b style="padding:.3rem .6rem; font-size:.8rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted)">Categories</b>
-    <button [class.on]="category() === 'all'" (click)="category.set('all')">All <b>{{templates.length}}</b></button>
+    <button [class.on]="category() === 'all'" (click)="category.set('all')">All <b>{{visibleBySource().length}}</b></button>
     @for (c of categories(); track c.name) {<button [class.on]="category() === c.name" (click)="category.set(c.name)">{{c.name}} <b>{{c.count}}</b></button>}
     <a class="btn secondary" routerLink="/workflows" style="margin-top:.5rem">← Back to workflows</a>
   </div>
@@ -67,7 +79,7 @@ export function templateBadge(source: WfTemplate['source']): { text: string; sta
             @for (e of mini(t).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
             @for (n of mini(t).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
           </svg>
-          <div class="tpl-badges"><span class="chip" [attr.data-status]="badgeOf(t).status">{{badgeOf(t).text}}</span><span>{{t.nodes.length}} blocks</span>@if (t.trigger) {<span>· trigger {{triggerText(t)}}</span>} @else {<span>· manual</span>}</div>
+          <div class="tpl-badges"><span class="chip" [attr.data-status]="badgeOf(t).status">{{badgeOf(t).text}}</span>@if (t.createdBy) {<span>by {{t.createdBy}} ·</span>}<span>{{t.nodes.length}} blocks</span>@if (t.trigger) {<span>· trigger {{triggerText(t)}}</span>} @else {<span>· manual</span>}</div>
           <div class="tpl-actions"><button class="secondary" (click)="open(t)">Preview</button><button (click)="open(t)">Use template</button>@if (t.source === 'user') {<button class="secondary" style="flex:0 0 auto" (click)="removeTpl(t)" [disabled]="busy()" title="Delete this template">🗑</button>}</div>
         </section>
       }
@@ -102,6 +114,7 @@ export class WorkflowTemplatesPage implements OnInit {
   protected note = signal(''); protected busy = signal(false);
   protected query = '';
   protected category = signal('all');
+  protected source = signal<'all' | WfTemplate['source']>('all');
   protected using = signal<WfTemplate | null>(null);
   protected newName = '';
 
@@ -111,10 +124,13 @@ export class WorkflowTemplatesPage implements OnInit {
     catch (e) { this.note.set(`${(e as Error).message} - showing the built-in official templates only.`); }
   }
 
-  protected categories = computed(() => templateCategories(this.templates()));
+  protected categories = computed(() => templateCategories(this.visibleBySource()));
+  protected sources = computed(() => templateSources(this.templates()));
+  /** Cards of the selected source, before the category filter: drives both sidebars' counts. */
+  protected visibleBySource = computed(() => filterTemplates(this.templates(), 'all', '', this.source()));
   /** Trigger line of a template card / modal: the event, or the cron schedule. */
   protected triggerText(t: WfTemplate): string { return t.trigger?.cron ? `cron: ${t.trigger.cron}` : (t.trigger?.event ?? ''); }
-  protected visible = computed(() => filterTemplates(this.templates(), this.category(), this.query));
+  protected visible = computed(() => filterTemplates(this.templates(), this.category(), this.query, this.source()));
   protected badgeOf(t: WfTemplate): { text: string; status: string } { return templateBadge(t.source); }
   protected async removeTpl(t: WfTemplate) {
     this.busy.set(true);

@@ -9,7 +9,7 @@ import { WfNode, WfEdge, WfTrigger } from './model.js';
  * its "start from a sample" section; the gallery below is the API-driven catalog. The duplication is
  * accepted for the POC: the palette needs the graphs synchronously at module load.
  */
-export interface CatalogTemplate { id: string; name: string; description: string; category: string; source: 'official' | 'community'; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[] }
+export interface CatalogTemplate { id: string; name: string; description: string; category: string; source: 'official' | 'community'; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[]; /** Community picks carry their author's handle. */ author?: string }
 
 export const OFFICIAL_TEMPLATES: CatalogTemplate[] = [
   { id: 'joiner-on-user-created', name: 'joiner on user.created', category: 'Joiner · Mover · Leaver', source: 'official', trigger: { event: 'user.created' }, description: 'Starts BY ITSELF when a user is created: baseline role for the newcomer, manager informed (simulated)', nodes: [
@@ -60,4 +60,25 @@ export const OFFICIAL_TEMPLATES: CatalogTemplate[] = [
     { id: 'grant', type: 'assign-role', name: 'Grant the role', config: { identity: '{{event.subject}}', role: '{{steps.each.item}}' } },
     { id: 'tell', type: 'notify', name: 'Summary to HR (simulated)', config: { recipient: 'hr', message: '{{steps.each.count}} role(s) processed' } },
   ], edges: [{ from: 'each', to: 'grant', label: 'each' }, { from: 'each', to: 'tell', label: 'done' }] },
+];
+
+/**
+ * COMMUNITY picks (phase 3): a static, curated list of templates attributed to their authors, served next
+ * to the official catalog. Static on purpose for the POC - there is no submission/moderation flow yet.
+ */
+export const COMMUNITY_TEMPLATES: CatalogTemplate[] = [
+  { id: 'community-weekly-access-review', name: 'Weekly access review reminder', category: 'Governance', source: 'community', author: '@claire-iam', trigger: { cron: '0 9 * * 1' }, description: 'Every Monday at 09:00 (Europe/Paris): remind HR to review the access changes of the week (simulated notification)', nodes: [
+    { id: 'tell', type: 'notify', name: 'Remind HR (simulated)', config: { recipient: 'hr', message: 'Weekly access review: check the pull requests opened by workflows' } },
+  ], edges: [] },
+  { id: 'community-newcomer-welcome', name: 'Newcomer welcome notes', category: 'Joiner · Mover · Leaver', source: 'community', author: '@hr-ops', trigger: { event: 'user.created' }, description: 'When a user is created: two simulated notes, one to the manager, one to the welcome channel', nodes: [
+    { id: 'mgr', type: 'notify', name: 'Note to the manager (simulated)', config: { recipient: 'manager-of:{{event.subject}}', message: '{{event.displayName}} starts in {{event.department}}' } },
+    { id: 'all', type: 'notify', name: 'Note to the welcome channel (simulated)', config: { recipient: 'welcome', message: 'Say hi to {{event.displayName}} ({{event.department}})' } },
+  ], edges: [{ from: 'mgr', to: 'all' }] },
+  { id: 'community-leaver-access-audit', name: 'Leaver access audit', category: 'Governance', source: 'community', author: '@sec-anna', trigger: { event: 'user.disabled' }, description: 'When an account is disabled: the baseline role is revoked (real, run branch) and the audit team gets a simulated summary', nodes: [
+    { id: 'revoke', type: 'revoke-role', name: 'Revoke employee', config: { identity: '{{event.subject}}', role: 'employee' } },
+    { id: 'audit', type: 'notify', name: 'Audit summary (simulated)', config: { recipient: 'audit', message: 'Leaver {{event.subject}}: baseline access revoked, pending branch review' } },
+  ], edges: [{ from: 'revoke', to: 'audit' }] },
+  { id: 'community-nightly-orphan-check', name: 'Nightly orphan-account check', category: 'Governance', source: 'community', author: '@claire-iam', trigger: { cron: '0 2 * * *' }, description: 'Every night at 02:00 (Europe/Paris): a simulated nudge to look at accounts without a manager', nodes: [
+    { id: 'tell', type: 'notify', name: 'Nudge the ops channel (simulated)', config: { recipient: 'ops', message: 'Nightly check: review orphan accounts (no manager) before the morning' } },
+  ], edges: [] },
 ];
