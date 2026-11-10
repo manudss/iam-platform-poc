@@ -204,8 +204,9 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(el.querySelector('.wb-tree')?.textContent).toContain('TABLES (1)');
     expect(el.querySelector('.wb-tree')?.textContent).toContain('DOLT SYSTEM');
     await c['openTable']('roles'); f.detectChanges();
-    expect(c['openTables']()).toContain('roles');
+    expect(c['dataTabs']().length).toBe(1); expect(c['dataTabs']()[0]).toMatchObject({ kind: 'table', table: 'roles', ref: 'main' });
     expect(el.querySelector('.wb-tab')?.textContent).toContain('roles');
+    expect(el.querySelector('.wb-tab')?.textContent).toContain('main');
     expect(el.querySelector('.wb-status')?.textContent).toContain('branch:');
     expect(el.querySelector('.wb-status')?.textContent).toContain('each edit is one commit');
     // filter rows
@@ -226,14 +227,14 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(a.download).toBe('roles-main.csv');
     vi.restoreAllMocks(); vi.unstubAllGlobals();
     // closing the active tab clears the grid
-    c['closeTableTab']('roles'); f.detectChanges();
-    expect(c['data']()).toBeNull(); expect(el.textContent).toContain('Pick a table on the left');
+    c['closeDataTab'](0); f.detectChanges();
+    expect(c['data']()).toBeNull(); expect(c['dataTabs']().length).toBe(0); expect(el.textContent).toContain('Pick a table on the left');
   });
-  it('row history: past versions from dolt_history_, with restore filling the editor as a new commit', async () => {
-    const hist = { mode: 'read', columns: ['id', 'label', 'commit_hash', 'committer', 'commit_date'], rows: [
-      { id: 'a', label: 'A2', commit_hash: 'h2'.padEnd(32, '2'), committer: 'demo-alice', commit_date: new Date().toISOString() },
-      { id: 'a', label: 'A1', commit_hash: 'h1'.padEnd(32, '1'), committer: 'demo-seed', commit_date: new Date(Date.now() - 864e5).toISOString() }] };
-    const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ data: hist }) }));
+  it('row history: past versions from dolt_history_ joined with the commit log, with restore filling the editor as a new commit', async () => {
+    const hist = { mode: 'read', columns: ['id', 'label', 'commit_hash', 'committer', 'commit_date', '_commit_message'], rows: [
+      { id: 'a', label: 'A2', commit_hash: 'h2'.padEnd(32, '2'), committer: 'demo-alice', commit_date: new Date().toISOString(), _commit_message: 'roles: rename A' },
+      { id: 'a', label: 'A1', commit_hash: 'h1'.padEnd(32, '1'), committer: 'demo-seed', commit_date: new Date(Date.now() - 864e5).toISOString(), _commit_message: 'seed: demo data' }] };
+    const { f, el, c, calls } = await mount(routes({ 'POST /versioning/sql': () => ({ data: hist }) }));
     f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges();
     c['dataRef'] = 'feat-a'; await c['openTable']('roles'); f.detectChanges();
     c['openRow']({ id: 'a', label: 'A2' }); await f.whenStable(); f.detectChanges();
@@ -241,11 +242,68 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(card?.textContent).toContain('every past version of a'); expect(card?.textContent).toContain('dolt_history_roles');
     expect(card?.textContent).toContain('label:'); expect(card?.textContent).toContain('A1'); expect(card?.textContent).toContain('A2');
     expect(card?.textContent).toContain('row created');
-    // restore an old version: the editor opens with its values and a restore commit message
+    // author and commit message come from the join with the commit log
+    expect(card?.textContent).toContain('demo-alice'); expect(card?.textContent).toContain('roles: rename A');
+    const histCall = calls.find((x) => x.path === '/versioning/sql');
+    expect(JSON.stringify(histCall?.body)).toContain('dolt_commits');
+    // restore an old version: a row tab opens with its values and a restore commit message
     const restore = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Restore') as HTMLButtonElement;
     restore.click(); await f.whenStable(); f.detectChanges();
-    expect(c['editKey']).toEqual({ id: 'a' }); expect(c['formFields']['label']).toBe('A1');
+    expect(c['activeRowTab']()?.key).toEqual({ id: 'a' }); expect(c['formFields']['label']).toBe('A1');
     expect(el.querySelector<HTMLInputElement>('input[name=em]')?.value).toContain('restore a to');
+  });
+  it('data workbench: the tree branch selector reloads only the tables list - open tabs keep their own branch', async () => {
+    const { f, el, c } = await mount(routes({
+      'GET /versioning/tables?ref=feat-a': () => ({ data: { ref: 'feat-a', kind: 'branch', tables: [{ name: 'roles', rows: 5 }] } }),
+    }));
+    f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges();
+    await c['openTable']('roles'); f.detectChanges();
+    expect(c['dataTabs']().length).toBe(1);
+    // switch the tree branch: the tables list reloads, the open tab is untouched and still bound to main
+    const sel = el.querySelector('select[name=dr]') as HTMLSelectElement;
+    expect(sel).toBeTruthy(); // the branch selector lives in the tree now
+    sel.value = 'feat-a'; sel.dispatchEvent(new Event('change')); await f.whenStable(); f.detectChanges();
+    expect(c['dataRef']).toBe('feat-a');
+    expect(c['dataTabs']().length).toBe(1); expect(c['dataTabs']()[0]).toMatchObject({ kind: 'table', table: 'roles', ref: 'main' });
+    expect(el.querySelector('.wb-tab')?.textContent).toContain('main');
+    // opening the same table on the new branch makes a SECOND tab; switching between them loads each branch's rows
+    await c['openTable']('roles'); f.detectChanges();
+    expect(c['dataTabs']().length).toBe(2);
+    expect(c['dataTabs']()[1]).toMatchObject({ kind: 'table', table: 'roles', ref: 'feat-a' });
+    expect(c['data']()?.ref).toBe('feat-a');
+    c['switchDataTab'](0); await f.whenStable(); f.detectChanges();
+    expect(c['data']()?.ref).toBe('main');
+    expect(el.querySelector('.wb-tab.on')?.textContent).toContain('main');
+  });
+  it('row edit: opens its own tab with a separated commit section, and committing closes it back to a refreshed table tab', async () => {
+    const hist = { mode: 'read', columns: ['id', 'label', 'commit_hash', 'committer', 'commit_date', '_commit_message'], rows: [
+      { id: 'a', label: 'A', commit_hash: 'h1'.padEnd(32, '1'), committer: 'demo-seed', commit_date: new Date().toISOString(), _commit_message: 'seed' }] };
+    const { f, el, c, calls } = await mount(routes({
+      'POST /versioning/sql': () => ({ data: hist }),
+      'POST /versioning/tables/roles/edit': () => ({ data: { commit: 'c'.repeat(32) } }),
+    }));
+    f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges();
+    c['dataRef'] = 'feat-a'; await c['openTable']('roles'); f.detectChanges();
+    // Edit on a grid row opens a row tab next to the table tab
+    const edit = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Edit') as HTMLButtonElement;
+    edit.click(); await f.whenStable(); f.detectChanges();
+    expect(c['dataTabs']().length).toBe(2);
+    expect(c['activeRowTab']()).toMatchObject({ table: 'roles', ref: 'feat-a', key: { id: 'a' } });
+    expect(el.querySelector('.wb-tab.on')?.textContent).toContain('a');
+    // the commit message is a separated section, not one of the column fields
+    const box = el.querySelector('.commit-box');
+    expect(box?.textContent).toContain('Commit on feat-a');
+    expect(box?.querySelector('input[name=em]')).toBeTruthy();
+    expect(el.querySelector('[data-edit-field=label]')).toBeTruthy();
+    expect(el.querySelector('.row-history')?.textContent).toContain('demo-seed');
+    // commit & close: the row tab goes away, the table tab is back and refreshed
+    c['formFields']['label'] = 'A2'; c['editMessage'] = 'roles: fix label';
+    await c['saveEdit'](); await f.whenStable(); f.detectChanges();
+    expect(c['dataTabs']().length).toBe(1); expect(c['activeRowTab']()).toBeNull();
+    expect(c['data']()?.ref).toBe('feat-a');
+    expect(c['note']()).toContain('Committed');
+    const editCall = calls.find((x) => x.path === '/versioning/tables/roles/edit');
+    expect(JSON.stringify(editCall?.body)).toContain('roles: fix label');
   });
   it('compare: summary chips, per-table row diffs and a column-level schema diff', async () => {
     const diff = { from: 'main', to: 'feat-a', three: true, rows: { added: 1, modified: 1, removed: 1, total: 3 },

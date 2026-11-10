@@ -16,7 +16,8 @@
 .wb{display:grid;grid-template-columns:220px minmax(0,1fr);gap:1rem;align-items:start}
 .wb-main{min-width:0}
 .wb-tree{padding:.7rem;max-height:70vh;overflow:auto}
-.tree-head{font-weight:700;color:var(--accent-dark);text-transform:uppercase;font-size:.8rem;margin-bottom:.5rem}
+.tree-branch{width:100%;margin-bottom:.3rem}
+.tree-hint{font-size:.75rem;margin-bottom:.6rem}
 .wb-tree h5{color:var(--label);font-size:.72rem;letter-spacing:.04em;margin:.8rem 0 .25rem}
 .tree-list{list-style:none;margin:0;padding:0}
 .tree-item{display:flex;justify-content:space-between;gap:.5rem;width:100%;background:none;border:0;border-radius:.4rem;margin:0;padding:.3rem .5rem;text-align:left;font-size:.88rem;color:var(--ink)}
@@ -31,6 +32,7 @@
 .wb-tab button:hover:not(:disabled),.tree-item:not(.on):hover:not(:disabled){background:var(--row-hover);color:var(--ink)}
 .tree-item.on:hover:not(:disabled){background:var(--accent-soft);color:var(--accent-dark)}
 .wb-tab .x{padding:.35rem .6rem .35rem .2rem;color:var(--muted)}
+.wb-tab .ref{background:var(--chip-bg);color:var(--chip-ink);border-radius:.3rem;padding:0 .35rem;font-size:.7rem;font-weight:600;margin-left:.3rem}
 .wb-tabs select{width:auto;margin-left:auto;margin-bottom:.3rem}
 .wb-card{padding:.8rem 1rem}
 .wb-card-head{display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem}
@@ -56,6 +58,14 @@
 .row-history s{color:var(--bad)}
 .row-history b{color:var(--ink)}
 @media(max-width:900px){.wb-row{grid-template-columns:1fr}}
+/* row editor tab: form on the left, row history beside it, commit step as its own section */
+.wb-rowedit{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:1rem;align-items:start}
+.rowedit-form h4{margin-top:0}
+.commit-box{background:var(--panel);border:1px solid var(--line);border-radius:.5rem;padding:.8rem 1rem;margin-top:1rem}
+.commit-title{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-dark);border-bottom:1px solid var(--line);padding-bottom:.4rem;margin-bottom:.6rem}
+.commit-msg{display:flex;flex-direction:column;gap:.3rem;font-weight:600;font-size:.85rem;color:var(--label)}
+.commit-acts{display:flex;gap:.6rem;align-items:center;margin-top:.7rem;flex-wrap:wrap}
+@media(max-width:900px){.wb-rowedit{grid-template-columns:1fr}}
 /* sql console: mode pills, dark editor with line numbers, dry-run banner */
 .sql-bar{display:flex;gap:.7rem;align-items:center;margin-bottom:.6rem}
 .sql-editor{display:grid;grid-template-columns:auto 1fr;background:var(--sidebar-bg);border:1px solid var(--line);border-radius:.5rem;overflow:hidden;margin-bottom:.6rem}

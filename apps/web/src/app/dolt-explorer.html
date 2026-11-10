@@ -26,7 +26,8 @@
 
   <ng-template #wbtree>
     <aside class="wb-tree card">
-      <div class="tree-head">{{ dataRef }}@if (editableRef()) { (editable) }</div>
+      <select class="tree-branch" name="dr" [ngModel]="dataRef" (ngModelChange)="dataRef = $event; loadTables()" aria-label="Branch, tag or commit">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select>
+      <div class="hint tree-hint">Switching branch reloads this tables list - open tabs keep their own branch.</div>
       <input type="search" name="tableSearch" [(ngModel)]="tableSearch" placeholder="Filter tables" />
       <h5>TABLES ({{ visibleTables().length }})</h5>
       <ul class="tree-list">
@@ -43,6 +44,28 @@
         </ul>
       }
     </aside>
+  </ng-template>
+
+  <ng-template #rowhist>
+    @if (rowHistory().length) {
+      <div class="card row-history">
+        <h4>Row history <span class="hint">· every past version of {{ pkLabel() }} (dolt_history_{{ histTable() }} joined with the commit log)</span></h4>
+        <table class="grid">
+          <thead><tr><th>COMMIT</th><th>AUTHOR</th><th>MESSAGE</th><th>CHANGE</th><th>WHEN</th><th></th></tr></thead>
+          <tbody>@for (h of rowHistory(); track h.commit + h.date) {
+            <tr>
+              <td><code>{{ short(h.commit) }}</code></td>
+              <td><span class="avatar" aria-hidden="true">{{ initials(h.author) }}</span> {{ h.author }}</td>
+              <td>{{ h.message || '&#x2014;' }}</td>
+              <td>@if (h.created) { <b>row created</b> } @else { @for (ch of h.changes; track ch.col) { <div><b>{{ ch.col }}:</b> <s>{{ cell(ch.from) }}</s> {{ cell(ch.to) }}</div> } @empty { <div class="hint">no column change</div> } }</td>
+              <td>{{ rel(h.date) }}</td>
+              <td>@if (histEditable() && !$first) { <button type="button" class="link" (click)="restoreVersion(h)">Restore</button> }</td>
+            </tr>
+          }</tbody>
+        </table>
+        <p class="hint">Restore fills the editor with that version: committing it makes a new commit, nothing is rewritten.</p>
+      </div>
+    }
   </ng-template>
 
   @switch (tab()) {
@@ -408,11 +431,27 @@
         <ng-container *ngTemplateOutlet="wbtree" />
         <div class="wb-main">
           <div class="wb-tabs">
-            @for (t of openTables(); track t) { <span class="wb-tab" [class.on]="data()?.table === t"><button type="button" (click)="openTable(t)">&#x2637; {{ t }}</button><button type="button" class="x" [attr.aria-label]="'Close ' + t" (click)="closeTableTab(t)">&#x00D7;</button></span> }
-            <span class="spacer"></span>
-            <select name="dr" [ngModel]="dataRef" (ngModelChange)="dataRef = $event; loadTables()" aria-label="Branch, tag or commit">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select>
+            @for (t of dataTabs(); track dataTabId(t); let i = $index) { <span class="wb-tab" [class.on]="dataActiveTab() === i"><button type="button" (click)="switchDataTab(i)">@if (t.kind === 'table') { &#x2637; } @else { &#x270E; } {{ dataTabLabel(t) }} <span class="ref">{{ t.ref }}</span></button><button type="button" class="x" [attr.aria-label]="'Close ' + dataTabLabel(t)" (click)="closeDataTab(i)">&#x00D7;</button></span> }
           </div>
-          @if (data(); as d) {
+          @if (activeRowTab(); as rt) {
+            <div class="wb-rowedit">
+              <div class="panel rowedit-form">
+                <h4>@if (rt.key) { Edit row } @else { Add a row } <code>{{ rt.table }}@if (rt.key) { / {{ pkLabel() }} }</code> <span class="chip">{{ rt.ref }}</span></h4>
+                <p class="hint">This tab edits one row of {{ rt.table }} on {{ rt.ref }}. Open as many row tabs as you need; each commits on its own branch.</p>
+                <div class="field-editor">@for (c of rt.columns; track c.name) {@if (c.name !== 'credential_revision') {<label [attr.data-edit-field]="c.name">{{ c.name }} <small>{{ c.type }}{{ c.key === 'PRI' ? ' · primary key' : '' }}</small><textarea rows="2" [name]="'field-' + c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if (c.nullable) {<span class="inline"><input type="checkbox" [name]="'null-' + c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
+                <div class="commit-box">
+                  <div class="commit-title">Commit on {{ rt.ref }}</div>
+                  <label class="commit-msg">Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" [placeholder]="'e.g. ' + rt.table + ': update this row'" /></label>
+                  <div class="commit-acts">
+                    <button type="button" class="primary" (click)="saveEdit()" [disabled]="busy()">Commit &amp; close tab</button>
+                    <button type="button" class="secondary" (click)="cancelEdit()">Discard &amp; close</button>
+                    <span class="hint">Committing saves the row on {{ rt.ref }} and closes this tab - back to the table tab, refreshed.</span>
+                  </div>
+                </div>
+              </div>
+              <ng-container *ngTemplateOutlet="rowhist" />
+            </div>
+          } @else if (data(); as d) {
             <div class="card wb-card">
               <div class="wb-card-head"><h4>{{ d.table }}</h4> <span class="chip">{{ d.ref }}</span> @if (!editable()) { <span class="chip lock">read only</span> }</div>
               <div class="wb-toolbar">
@@ -442,42 +481,18 @@
                 @if (d.hasMore) { <button type="button" class="link" (click)="openTable(d.table, d.offset + d.rows.length)">next</button> }
               </p>
             </div>
-            @if (rowView() || editorOpen) {
+            @if (rowView()) {
               <div class="wb-row">
                 <div class="wb-row-left">
                   @if(rowView();as row){<section class="panel row-detail"><h4>All fields · {{d.table}}</h4><dl>@for(c of d.columns;track c.name){<div><dt>{{c.name}} <small>{{c.type}}</small></dt><dd><pre>{{cell(row[c.name])}}</pre></dd></div>}</dl><button type="button" class="secondary" (click)="rowView.set(null)">Close row</button>@if(editable()){<button (click)="startEdit(row)">Edit this row</button>}</section>}
-                  @if (rowHistory().length) {
-                    <div class="card row-history">
-                      <h4>Row history <span class="hint">· every past version of {{ pkLabel() }} (dolt_history_{{ d.table }})</span></h4>
-                      <table class="grid">
-                        <thead><tr><th>COMMIT</th><th>CHANGE</th><th>WHEN</th><th></th></tr></thead>
-                        <tbody>@for (h of rowHistory(); track h.commit + h.date) {
-                          <tr>
-                            <td><code>{{ short(h.commit) }}</code></td>
-                            <td>@if (h.created) { <b>row created</b> } @else { @for (ch of h.changes; track ch.col) { <div><b>{{ ch.col }}:</b> <s>{{ cell(ch.from) }}</s> {{ cell(ch.to) }}</div> } @empty { <div class="hint">no column change</div> } }</td>
-                            <td>{{ rel(h.date) }}</td>
-                            <td>@if (editable() && !$first) { <button type="button" class="link" (click)="restoreVersion(h)">Restore</button> }</td>
-                          </tr>
-                        }</tbody>
-                      </table>
-                      <p class="hint">Restore a version: it becomes a new commit, nothing is rewritten.</p>
-                    </div>
-                  }
+                  <ng-container *ngTemplateOutlet="rowhist" />
                 </div>
-                @if (editable() && editorOpen) {
-                  <div class="panel wb-edit">
-                    <h4>{{editKey ? 'Edit row ' + pkLabel() : 'Add a row'}} <span class="chip">{{d.ref}}</span></h4>
-                    <div class="field-editor one-col">@for(c of d.columns;track c.name){@if(c.name!=='credential_revision'){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
-                    <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
-                    <button type="button" class="primary" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
-                  </div>
-                }
               </div>
             }
             <details><summary>Table definition</summary><pre>{{ d.createStatement }}</pre></details>
           } @else { <p class="hint wb-empty">Pick a table on the left. Branches can be edited unless protected; tags are read only snapshots.</p> }
           <div class="wb-status">
-            <span><span class="dot" aria-hidden="true"></span> branch: <b>{{ dataRef }}</b>@if (data(); as d) { &nbsp; table: <b>{{ d.table }}</b> &nbsp; {{ d.total }} rows }</span>
+            <span><span class="dot" aria-hidden="true"></span> branch: <b>{{ wbRef() }}</b>@if (data(); as d) { &nbsp; table: <b>{{ d.table }}</b> &nbsp; {{ d.total }} rows }</span>
             <span class="hint">each edit is one commit, author = you</span>
           </div>
         </div>
