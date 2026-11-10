@@ -38,7 +38,11 @@ manual change). The workflow itself never merges.
 
 ## Editor
 
-The console page **Workflows** (`/workflows`) lists definitions and recent runs. The editor (`/workflows/edit/:id`)
+The console page **Workflows** (`/workflows`) shows the definitions as **cards**: mini graph thumbnail, step
+count, run stats (runs, ok %, last run), a pause switch, search, Active / Paused / Failed-last-run filter chips,
+sorting, and Run / Edit / Runs / more (duplicate, export, delete, import JSON) actions, then recent runs.
+The **Templates** gallery (`/workflows/templates`) offers the sample workflows by category with the same
+thumbnails; **Use template** creates a copy as a new, **paused** workflow and opens it in the editor. The editor (`/workflows/edit/:id`)
 uses **ngx-vflow** (MIT, Angular-native node-graph editor — <https://github.com/artem-mangilev/ngx-vflow>).
 When the workflow starts on an event, the trigger is drawn as the **first canvas node** (dashed amber look,
 TRIGGER badge, no incoming handle), automatically linked to every root step; it is a visual node only — the
@@ -147,9 +151,12 @@ adds what is missing):
 - **Retry** (failed or canceled run): re-runs from the failed step; earlier `done` steps are NOT re-executed. A simulated `fail` step recovers on retry, so a retry normally unblocks the run.
 - **Re-run from a step**: on a terminal run, any non-skipped step offers "Re-run from here" - that step and
   everything downstream reset to pending and the run restarts from there.
-- The **Executions** screen (`/workflows/runs`) lists every run with workflow / status / test-run filters and
-  durations; the run page replays the graph colored by step status and shows each step's recorded **input**,
-  output and log.
+- The **Executions** screen (`/workflows/runs`) lists every run with status quick-filter chips
+  (All / Completed / Failed / Running / Canceled), a workflow filter (preselected from a card's **Runs** link),
+  a test-run filter, durations, and an optional **auto-refresh every 5 s**; the run page replays the graph
+  colored by step status and shows each step's recorded **input**, output and log.
+- On a terminal run: **Re-run** starts a fresh run of the same workflow, **Export log** downloads the run view
+  as JSON, and **Delete run** removes the run record (with its branch) after a confirmation.
 - **Cancel**: stops a running run (a simulated wait ends at the next tick).
 - The run's data branch appears on the run; its commits are visible in Database → History, and the review opens the
   pull request. Deleting definitions while a run is active is refused.
@@ -170,13 +177,14 @@ as Temporal.
 
 ```
 GET    /tenants/:t/workflows-events               start-trigger catalog (events + payload keys)
-GET    /tenants/:t/workflows                      list definitions (+ trigger)
+GET    /tenants/:t/workflows                      list definitions (+ trigger, graph summary, run stats, active flag)
 POST   /tenants/:t/workflows                      create {name, description, graph, trigger?}
 GET    /tenants/:t/workflows/:id                  one definition (+ execution order)
 PUT    /tenants/:t/workflows/:id                  replace
 DELETE /tenants/:t/workflows/:id                  delete (refused while a run is active)
 POST   /tenants/:t/workflows/:id/runs             start a run
 POST   /tenants/:t/workflows/:id/duplicate        copy the definition as "<name> (copy)"
+POST   /tenants/:t/workflows/:id/active           pause/unpause {active: bool} (start triggers only fire when active)
 POST   /tenants/:t/workflows/test-run             run an ad-hoc graph + test payload on a disposable branch
 GET    /tenants/:t/workflow-runs[?definition=&status=&tests=1]  list runs (test runs hidden by default)
 GET    /tenants/:t/workflow-runs/:runId           run + steps (input/output/log) + graph edges
@@ -184,6 +192,7 @@ POST   /tenants/:t/workflow-runs/:runId/retry     retry from the failed step
 POST   /tenants/:t/workflow-runs/:runId/rerun-from/:nodeId  re-run a terminal run from any step
 POST   /tenants/:t/workflow-runs/:runId/cancel    cancel
 POST   /tenants/:t/workflow-runs/:runId/review    open (or reuse) the Dolt pull request for the run branch
+DELETE /tenants/:t/workflow-runs/:runId           delete a terminal run and its branch
 ```
 
 A graph has 1-20 steps, unique ids, typed configs with no unknown keys, and must be acyclic (validated with Kahn's
