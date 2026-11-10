@@ -51,6 +51,11 @@ th { background: var(--th-bg); color: var(--th-ink); font-size: .75rem; text-tra
 /* Pages without cards keep visible levels: a table sits in a bordered container with its header band, and rows
    alternate card/panel (zebra). The hover rule stays AFTER the zebra so it always wins. */
 .scroll:has(> table) { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 .7rem; margin-bottom: var(--panel-gap); }
+/* Adjacent surfaces never touch: any two surface blocks stacked in flow keep at least --panel-gap between them,
+   whatever their component classes (sibling vertical margins collapse, so this never doubles the per-block
+   margin-bottom above). Horizontal stacks (stat grids, .row) manage their own gap and keep theirs at 0. */
+:is(.card, .panel, .zone, .scroll:has(> table)) + :is(.card, .panel, .zone, .scroll:has(> table)) { margin-top: var(--panel-gap); }
+:is(.kpis, .stats, .row) > :is(.card, .panel, .zone) { margin-top: 0; }
 tbody tr:nth-child(even) td { background: var(--panel); }
 tbody tr:hover td { background: var(--row-hover); }
 table.grid th, table.grid td { border: 0; border-bottom: 1px solid var(--line); }

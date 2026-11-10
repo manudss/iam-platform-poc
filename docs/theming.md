@@ -53,6 +53,9 @@ A page must never be flat elements on the background. Tables sit in a bordered c
 `--row-hover`. Form sections and grouped content use `.panel` (`--panel`). Adjacent surfaces never touch: cards,
 panels and table containers are separated by the spacing token `--panel-gap` (styles.css), never a magic number.
 All of this is global in styles.css and holds in light and dark.
+The separation is enforced by a class-agnostic sibling rule (`:is(.card, .panel, .zone, .scroll:has(> table)) +
+…` gets `margin-top: var(--panel-gap)`), so any new surface block is spaced without per-page CSS; horizontal
+stacks (stat grids, `.row`) keep their own gap.
 
 ## Checklist for a UI change
 

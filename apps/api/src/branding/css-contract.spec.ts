@@ -14,6 +14,12 @@ it('UI colors are semantic variables, not hardcoded literals',()=>{
   assert.doesNotMatch(s,/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|(?:color|background)\s*:\s*(?:white|black|red|blue|gray|grey|green)\b/i,p);
  }
 });
+it('adjacent surfaces are separated by the --panel-gap token, generically',()=>{
+ const css=readFileSync('../web/src/styles.css','utf8');
+ assert.match(css,/--panel-gap:\s*[\d.]+rem/);
+ // A class-agnostic sibling rule, so surfaces like the Authentication zones get the gap without per-page CSS.
+ assert.ok(css.includes(':is(.card, .panel, .zone, .scroll:has(> table)) + :is(.card, .panel, .zone, .scroll:has(> table)) { margin-top: var(--panel-gap); }'));
+});
 it('offline fallbacks are generated from the live engine',()=>{
  const css=themeCss(generateTheme(DEFAULT_COLORS),{baseline:'IAM next generation',footer:'Fictional demo data only. Do not enter real data.'});
  assert.equal(readFileSync('../../core/crates/iam-core/src/branding-default.css','utf8'),css);
