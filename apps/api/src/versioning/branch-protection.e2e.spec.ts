@@ -182,7 +182,7 @@ describe('branch protection and the merge policy + real Dolt', { skip: !have && 
       assert.equal(view.mayMerge.allowed, false);
       const wf = await openPr('workflow/sk-b', 'WF', 'demo-bob');
       const r2 = await call('POST', `/pulls/${wf}/merge`, {}, as('demo-alice'));
-      assert.equal(r2.status, 403); assert.equal(r2.body.code, 'source-kind-not-allowed'); assert.match(r2.body.message, /profile\/, feature\//);
+      assert.equal(r2.status, 403); assert.equal(r2.body.code, 'source-kind-not-allowed'); assert.match(r2.body.message, /profile\/ branches, feature\/ branches/);
       assert.equal((await call('PUT', '/branches/main/protection', { sourceKinds: ['bogus'] }, as('demo-alice'))).status, 400);
       assert.equal((await call('PUT', '/branches/main/protection', { selfMerge: true }, as('demo-bob'))).status, 403, 'loosening needs the policy');
       const other = await openPr('feature/sk-c', 'Other', 'demo-bob');
@@ -190,5 +190,19 @@ describe('branch protection and the merge policy + real Dolt', { skip: !have && 
     } finally { await ok('PUT', '/branches/main/protection', { sourceKinds: [], selfMerge: true }, as('demo-alice')); }
     const main = (await ok('GET', '/protection')).protections.find((x: any) => x.branch === 'main');
     assert.deepEqual([main.selfMerge, main.sourceKinds], [true, []]);
+  });
+  it('custom folders: all of them with "custom", or one with "custom:<folder>"; validated', async () => {
+    try {
+      await ok('PUT', '/branches/main/protection', { sourceKinds: ['custom:team'], selfMerge: true }, as('demo-alice'));
+      const mine = await openPr('team/cf-a', 'Team', 'demo-bob'); const other = await openPr('squad/cf-b', 'Squad', 'demo-bob');
+      const r = await call('POST', `/pulls/${other}/merge`, {}, as('demo-alice'));
+      assert.equal(r.status, 403); assert.equal(r.body.code, 'source-kind-not-allowed'); assert.match(r.body.message, /only from team\/ branches.*custom folder squad\//);
+      assert.equal((await ok('POST', `/pulls/${mine}/merge`, {}, as('demo-alice'))).pullRequest.status, 'merged');
+      await ok('PUT', '/branches/main/protection', { sourceKinds: ['custom'] }, as('demo-alice'));
+      assert.equal((await ok('POST', `/pulls/${other}/merge`, {}, as('demo-alice'))).pullRequest.status, 'merged', 'custom = every custom folder');
+      const plain = await openPr('plainbranch', 'Plain', 'demo-bob');
+      assert.equal((await call('POST', `/pulls/${plain}/merge`, {}, as('demo-alice'))).status, 403, 'a branch without folder is "other", not custom');
+      for (const bad of ['custom:', 'custom:Team', 'custom:a/b', 'team']) assert.equal((await call('PUT', '/branches/main/protection', { sourceKinds: [bad] }, as('demo-alice'))).status, 400, bad);
+    } finally { await ok('PUT', '/branches/main/protection', { sourceKinds: [] }, as('demo-alice')); }
   });
 });

@@ -487,6 +487,13 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(el.querySelector('.sql-dryrun')?.textContent).toContain('Preview only');
     expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('X');
   });
+  it('allowed source folders: custom folders can be allowed all at once or one by one', async () => {
+    const prot = { branch: 'main', protected: true, requirePullRequest: true, minReviews: 0, requireChecks: true, mergeRule: 'policy', selfMerge: true, sourceKinds: ['custom:team'], source: 'custom' };
+    const { f, el, calls, c } = await mount(routes({ 'GET /versioning/protection': () => ({ data: { protections: [prot], policyAction: 'branch:merge' } }), 'PUT /versioning/branches/main/protection': () => ({ data: prot }) }));
+    expect(el.textContent).toContain('custom folders (all)'); expect(el.textContent).toContain('team/');
+    c['addCustom'] = 'Squad/'; await click(f, el, 'Add folder');
+    expect((calls.find((x) => x.method === 'PUT')?.body as { sourceKinds: string[] }).sourceKinds).toEqual(['custom:team', 'custom:squad']);
+  });
   it('shows server errors in the status line instead of failing silently', async () => {
     const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ status: 403, data: { message: 'branch main is protected: open a pull request instead' } }) }));
     c['sqlMode'] = 'write'; c['sqlRef'] = 'main'; c['sqlText'] = "insert into roles values ('x','x',false)"; await c['runSql'](false); f.detectChanges();
