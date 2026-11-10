@@ -9,7 +9,7 @@ import { PrivacyPage } from './privacy-page';
 import { AboutPage } from './about-page';
 import { SsoInteractionPage } from './sso-interaction';
 import { SsoSamlPage } from './sso-saml';
-import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard } from './workflows';
+import { WorkflowEditPage, WorkflowExecutionsPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard } from './workflows';
 import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
 import { ReviewPage } from './review';
@@ -50,6 +50,7 @@ export const routes: Routes = [
       { path: 'mcp', canActivate: [accessGuard], loadComponent: () => import('./mcp').then(m => m.McpPage), title: 'MCP (AI access)' },
       { path: 'workflows', component: WorkflowsPage, title: 'Workflows', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
+      { path: 'workflows/runs', component: WorkflowExecutionsPage, title: 'Workflow executions', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [workflowsEnabledGuard] },
       { path: 'database', pathMatch: 'full', redirectTo: 'database/home' },
       { path: 'review', canActivate: [accessGuard], component: ReviewPage, title: 'Review changes' },
