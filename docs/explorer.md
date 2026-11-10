@@ -1,14 +1,15 @@
 # Dolt database explorer
 
-The "Database (Dolt)" section of the administration (six pages, see [Administration layout](#administration-layout)), backed by `apps/api/src/versioning/` (routes `tenants/:tenant/versioning/*`, 22 routes, all behind `AuthGuard` + `AdminGuard`).
+The "Database (Dolt)" section of the administration (seven pages: home, branches, history, compare, data, SQL, pull requests - see [Administration layout](#administration-layout)). The screens follow the validated explorer redesign (PR #69): home dashboard, branch cards, commit-feed history, compare bar with tabs, pull request list/detail with checks, and the data + SQL workbenches (left tree, object tabs, row editor panel with row history)., backed by `apps/api/src/versioning/` (routes `tenants/:tenant/versioning/*`, 22 routes, all behind `AuthGuard` + `AdminGuard`).
 
 ## What you can do
-- **Branches**: list (ahead/behind vs main), create, delete, tags.
-- **History**: commit log with parents and refs, commit detail, restore a branch to an earlier commit (needs confirmation), revert a commit onto a new branch.
-- **Compare**: table summary and row-level diff between any two branches/commits/tags, 2-dot or 3-dot (since common ancestor, like a PR).
-- **Data**: browse tables and rows at any ref; edit rows on a branch (one commit per edit, author = signed-in user). Commits and tags are read-only.
-- **SQL**: read queries (READ ONLY transaction) and write statements (dry-run preview, then commit; destructive statements need confirmation).
-- **Pull requests**: open, comment, approve, close, merge a branch into another. Merge re-checks conflicts, constraint violations and separation of duties. An author cannot approve their own PR.
+- **Home**: database overview (branches, open PRs, tables, recent activity, your workspace).
+- **Branches**: cards (ahead/behind vs main), create, delete, tags.
+- **History**: commit feed grouped by day, commit detail, restore a branch to an earlier commit (needs confirmation), revert a commit onto a new branch.
+- **Compare**: table summary and row-level diff between any two branches/commits/tags, 2-dot or 3-dot (since common ancestor, like a PR), column-level schema diff, open a PR from the bar.
+- **Data**: workbench - table tree, object tabs, row filter/sort/columns/CSV; edit rows on a branch (one commit per edit, author = signed-in user); row history from `dolt_history_<table>` with restore-as-new-commit. Commits and tags are read-only.
+- **SQL**: workbench - query tabs, read queries (READ ONLY transaction) and write statements (dry-run preview with row samples, then commit; destructive statements need confirmation); saved queries in the tree (localStorage).
+- **Pull requests**: list with status pills, search and per-PR check/approval badges; open, comment, approve, close, merge a branch into another. Merge re-checks conflicts, constraint violations and separation of duties. An author cannot approve their own PR.
 
 ## Protections and their real scope
 - `main` (Dolt) is protected **on the explorer's routes only**: direct writes there are refused, changes go through a PR. Override: `IAM_VERSIONING_ALLOW_PROTECTED_WRITE=1`.
@@ -49,7 +50,7 @@ The web app is an Angular multi-page administration (router, sidebar, one page p
 | `/assignments` | assignments on Dolt main, simulate a role change on a branch, merge (refused on a Separation-of-Duties conflict) |
 | `/activation` | activate the current main, journal |
 | `/plugins`, `/plugins/:id` | plugin list; the second form opens the settings/grants of one plugin |
-| `/database/branches`, `history`, `compare`, `data`, `sql`, `pulls` | the Dolt explorer, one section per page (one component instance: branch, comparison and form state survive moving between sections) |
+| `/database/home`, `branches`, `history`, `compare`, `data`, `sql`, `pulls` | the Dolt explorer, one section per page (one component instance: branch, comparison and form state survive moving between sections); `/database` redirects to `/database/home` |
 
 - The token is in memory only. A reload or a pasted link therefore goes to `/login` first and comes back to the same page after sign-in (only local app paths are accepted as return target).
 - The admin capability token field (local setups only; empty on the hosted demo, where the edge adds it) is in the sidebar and shared by the plugin and database pages.
