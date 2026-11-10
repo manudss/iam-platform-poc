@@ -39,6 +39,10 @@ export class DoltExplorer {
   protected readonly defaultBranch = signal('main');
   protected readonly refs = computed(() => [...this.branches().map((b) => b.name), ...this.tags().map((t) => t.name)]);
   protected newBranch = ''; protected newBranchFrom = 'main';
+  protected readonly branchSearch = signal(''); protected createOpen = false;
+  protected readonly menuFor = signal('');
+  /** Changed rows vs the default branch, loaded lazily for the working branch only (one diff call). */
+  protected readonly rowsChangedOn = signal<Record<string, number>>({});
 
   protected histRef = 'main';
   protected readonly commits = signal<CommitInfo[]>([]);
@@ -63,6 +67,7 @@ export class DoltExplorer {
   protected readonly sqlResult = signal<SqlResult | null>(null);
 
   protected prFilter = 'open';
+  protected prCreateOpen = false;
   protected readonly prs = signal<PullRequestInfo[]>([]);
   protected readonly pr = signal<PullRequestDetail | null>(null);
   protected prForm = { title: '', body: '', source: '', target: 'main' };
@@ -83,7 +88,7 @@ export class DoltExplorer {
   protected async open(t: Tab) {
     this.go(t); this.note.set('');
     if (t === 'home') await this.loadHome();
-    if (t === 'branches') await this.refreshRefs();
+    if (t === 'branches') { await this.refreshRefs(); await this.loadRowsChanged(); }
     if (t === 'history') await this.loadLog(true);
     if (t === 'data') await this.loadTables();
     if (t === 'pulls') { await this.refreshRefs(); await this.loadPulls(); }
@@ -154,7 +159,35 @@ export class DoltExplorer {
   }
   protected async createBranch() {
     const r = await this.run(() => this.v.createBranch(this.newBranch, this.newBranchFrom));
-    if (r) { this.note.set(`Branch ${r.branch} created at ${shortHash(r.commit)}.`); this.newBranch = ''; await this.refreshRefs(); }
+    if (r) { this.note.set(`Branch ${r.branch} created at ${shortHash(r.commit)}.`); this.newBranch = ''; this.createOpen = false; await this.refreshRefs(); }
+  }
+  /** The signed-in user's working branch (the shell selection), or the default branch when none is selected. */
+  protected sessionBranch() { return this.session.branch() || this.defaultBranch(); }
+  /** Branch cards: the default branch first, then the ones matching the search (name or last commit message). */
+  protected filteredBranches() {
+    const q = this.branchSearch().trim().toLowerCase();
+    const list = this.branches().filter((b) => !q || b.name.toLowerCase().includes(q) || b.message.toLowerCase().includes(q));
+    return [...list.filter((b) => b.default), ...list.filter((b) => !b.default)];
+  }
+  /** Ahead/behind gauge shares, in percent of the larger side (both visible, GitHub style). */
+  protected gaugePct(b: BranchInfo, ahead: boolean) {
+    const max = Math.max(b.aheadOfDefault, b.behindDefault, 1);
+    return Math.round(((ahead ? b.aheadOfDefault : b.behindDefault) / max) * 100);
+  }
+  /** Rows changed vs the default branch, for the working branch card (skip when nothing is ahead). */
+  private async loadRowsChanged() {
+    const cur = this.session.branch();
+    if (!cur) return;
+    const wb = this.branches().find((x) => x.name === cur);
+    if (!wb || wb.default || wb.aheadOfDefault === 0 || this.rowsChangedOn()[cur] !== undefined) return;
+    const d = await this.run(() => this.v.diff(this.defaultBranch(), cur, true), true);
+    if (d) this.rowsChangedOn.update((m) => ({ ...m, [cur]: d.rows?.total ?? 0 }));
+  }
+  /** Shortcut from a branch card to a prefilled pull-request form. */
+  protected newPullFrom(source: string) {
+    this.prForm = { title: '', body: '', source, target: this.defaultBranch() };
+    this.prCreateOpen = true;
+    this.go('pulls');
   }
   protected async deleteBranch(b: BranchInfo) {
     if (!confirm(`Delete branch ${b.name}? Its commits stay reachable only by hash.`)) return;

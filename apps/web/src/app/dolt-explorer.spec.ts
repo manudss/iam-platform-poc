@@ -93,10 +93,26 @@ describe('DoltExplorer (rendering with a fake API)', () => {
   it('lists branches; main is marked protected and cannot be deleted from the screen, others can', async () => {
     const { f, el } = await mount(routes());
     f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
-    const rows = [...el.querySelectorAll('tbody tr')];
-    expect(rows.length).toBe(2);
-    expect(rows[0].textContent).toContain('protected'); expect(rows[0].textContent).not.toContain('Delete');
-    expect(rows[1].textContent).toContain('2 ahead, 1 behind'); expect(rows[1].textContent).toContain('Delete');
+    const cards = [...el.querySelectorAll('.branch-card')];
+    expect(cards.length).toBe(2);
+    expect(cards[0].textContent).toContain('protected'); expect(cards[0].textContent).not.toContain('Delete');
+    expect(cards[0].textContent).toContain('Direct writes refused');
+    expect(cards[1].textContent).toContain('2 ahead, 1 behind');
+    // destructive actions live behind the overflow menu of the card
+    const dots = [...cards[1].querySelectorAll('button')].find((b) => b.textContent?.trim() === '⋯') as HTMLButtonElement;
+    expect(cards[1].textContent).not.toContain('Delete');
+    dots.click(); f.detectChanges();
+    expect(cards[1].textContent).toContain('Delete');
+  });
+  it('branches: the search filters the cards by name or last commit message', async () => {
+    const { f, el, c } = await mount(routes());
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    c['branchSearch'].set('feat'); f.detectChanges();
+    expect(el.querySelectorAll('.branch-card').length).toBe(1);
+    c['branchSearch'].set('seed'); f.detectChanges();
+    expect(el.querySelectorAll('.branch-card').length).toBe(1); // main, by its commit message
+    c['branchSearch'].set(''); f.detectChanges();
+    expect(el.querySelectorAll('.branch-card').length).toBe(2);
   });
   it('offers row editing on an unprotected branch only, and read only on protected main', async () => {
     const { f, el, c } = await mount(routes());

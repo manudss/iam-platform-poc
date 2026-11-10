@@ -85,30 +85,62 @@
     }
 
     @case ('branches') {
-      <h3>Branches</h3>
-      <div class="scroll"><table class="grid">
-        <thead><tr><th>Branch</th><th>Head</th><th>Last change</th><th>Vs {{ defaultBranch() }}</th><th></th></tr></thead>
-        <tbody>
-        @for (b of branches(); track b.name) {
-          <tr>
-            <td><b>{{ b.name }}</b>@if (b.default) { <span class="chip">default</span> }@if (b.protected) { <span class="chip lock">protected</span> }</td>
-            <td><code>{{ short(b.commit) }}</code></td>
-            <td>{{ b.message }} <span class="hint">({{ b.committer }})</span></td>
-            <td>@if (!b.default) { {{ b.aheadOfDefault }} ahead, {{ b.behindDefault }} behind }</td>
-            <td class="act">
-              <button type="button" (click)="showHistory(b.name)">History</button>
-              @if (!b.default) { <button type="button" (click)="compareWithDefault(b.name)">Compare</button> }
-              @if (!b.protected) { <button type="button" class="danger" (click)="deleteBranch(b)">Delete</button> }
-            </td>
-          </tr>
-        }
-        </tbody>
-      </table></div>
-      <form class="row" (ngSubmit)="createBranch()">
-        <label>New branch <input name="nb" [(ngModel)]="newBranch" placeholder="my-change" autocomplete="off" /></label>
-        <label>From <select name="nf" [(ngModel)]="newBranchFrom">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
-        <button type="submit">Create branch</button>
-      </form>
+      <div class="page-head">
+        <div>
+          <h3 class="page-title">Branches</h3>
+          <p class="page-sub">Isolated copies of the data. Work on yours, then merge through a pull request.</p>
+        </div>
+        <div class="page-actions">
+          <input name="branchSearch" [ngModel]="branchSearch()" (ngModelChange)="branchSearch.set($event)" placeholder="Search branches..." autocomplete="off" />
+          <button type="button" (click)="createOpen = !createOpen">+ New branch</button>
+        </div>
+      </div>
+      @if (createOpen) {
+        <form class="card row" (ngSubmit)="createBranch()">
+          <label>New branch <input name="nb" [(ngModel)]="newBranch" placeholder="my-change" autocomplete="off" /></label>
+          <label>From <select name="nf" [(ngModel)]="newBranchFrom">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+          <button type="submit">Create branch</button>
+        </form>
+      }
+      @for (b of filteredBranches(); track b.name) {
+        <div class="card branch-card" [class.mine]="b.name === sessionBranch()">
+          <span class="branch-ico">&#x2372;</span>
+          <div class="branch-main">
+            <div class="branch-name">
+              <b>{{ b.name }}</b>
+              @if (b.default) { <span class="chip">default</span> }
+              @if (b.protected) { <span class="chip lock">protected</span> }
+              @if (b.name === sessionBranch()) { <span class="chip ok">your workspace</span> }
+            </div>
+            <div class="branch-meta"><code>{{ short(b.commit) }}</code> · {{ b.message }} · {{ b.committer }}@if (b.date) { · {{ rel(b.date) }} }</div>
+            @if (!b.default) {
+              <div class="gauge" role="img" [attr.aria-label]="b.aheadOfDefault + ' ahead, ' + b.behindDefault + ' behind'"><span class="ahead" [style.width.%]="gaugePct(b, true)"></span><span class="behind" [style.width.%]="gaugePct(b, false)"></span></div>
+              <div class="branch-meta">{{ b.aheadOfDefault }} ahead, {{ b.behindDefault }} behind@if (rowsChangedOn()[b.name] !== undefined) { · {{ rowsChangedOn()[b.name] }} rows changed }</div>
+            }
+          </div>
+          <div class="branch-act">
+            @if (b.default) {
+              <span class="hint branch-note">Direct writes refused here; every change lands through review.</span>
+            } @else {
+              @if (b.name === sessionBranch()) { <button type="button" (click)="goReview()">Review &amp; apply ⇥</button> }
+              @else { <button type="button" class="secondary" (click)="newPullFrom(b.name)">New pull request</button> }
+              <button type="button" class="secondary" (click)="compareWithDefault(b.name)">Compare</button>
+              @if (b.name === sessionBranch()) { <button type="button" class="secondary" (click)="showHistory(b.name)">History</button> }
+              @else {
+                <span class="menu-wrap">
+                  <button type="button" class="secondary" [attr.aria-expanded]="menuFor() === b.name" (click)="menuFor.set(menuFor() === b.name ? '' : b.name)">&#x22EF;</button>
+                  @if (menuFor() === b.name) {
+                    <span class="menu">
+                      <button type="button" (click)="menuFor.set(''); showHistory(b.name)">History</button>
+                      @if (!b.protected) { <button type="button" class="danger" (click)="menuFor.set(''); deleteBranch(b)">Delete</button> }
+                    </span>
+                  }
+                </span>
+              }
+            }
+          </div>
+        </div>
+      }
       @if (tags().length) { <p class="hint">Tags: @for (t of tags(); track t.name) { <span class="chip">{{ t.name }} <code>{{ short(t.commit) }}</code></span> }</p> }
     }
 

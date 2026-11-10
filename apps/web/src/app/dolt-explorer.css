@@ -18,6 +18,24 @@
 .feed li:last-child { border-bottom: 0; }
 .jump { margin-bottom: 0; }
 @media (max-width: 800px) { .home-cols { grid-template-columns: 1fr; } }
+
+/* branches: one card per branch, ahead/behind gauge, actions on the right */
+.branch-card { display: flex; gap: .9rem; align-items: flex-start; }
+.branch-card.mine { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.branch-ico { color: var(--muted); font-size: 1.1rem; line-height: 1.4; }
+.branch-main { flex: 1; min-width: 0; }
+.branch-name { font-size: 1.05rem; display: flex; align-items: center; flex-wrap: wrap; gap: .1rem; }
+.branch-meta { color: var(--muted); font-size: .84rem; margin-top: .15rem; overflow-wrap: anywhere; }
+.branch-act { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; justify-content: flex-end; max-width: 40%; }
+.branch-act button { margin: 0; }
+.branch-note { max-width: 16rem; text-align: right; }
+.gauge { height: .45rem; border-radius: 999px; background: var(--bar-off); display: flex; overflow: hidden; margin-top: .45rem; max-width: 22rem; }
+.gauge .ahead { background: var(--ok); }
+.gauge .behind { background: var(--bad); }
+.menu-wrap { position: relative; display: inline-block; }
+.menu { position: absolute; right: 0; top: 100%; z-index: 5; background: var(--card); border: 1px solid var(--line); border-radius: .5rem; box-shadow: var(--shadow); padding: .3rem; display: flex; flex-direction: column; min-width: 9rem; }
+.menu button { text-align: left; }
+@media (max-width: 700px) { .branch-card { flex-wrap: wrap; } .branch-act { max-width: 100%; justify-content: flex-start; } .branch-note { text-align: left; } }
 .row { gap: .5rem; }
 .panel label, .explorer > label { display: flex; margin: .4rem 0; }
 tr.add td { background: var(--ok-soft); } tr.del td { background: var(--bad-soft); } tr.mod td.chg { background: var(--warn-soft); }
