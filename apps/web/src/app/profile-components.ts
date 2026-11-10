@@ -1,4 +1,4 @@
-import { Component, ElementRef, inject, input, signal } from '@angular/core';
+import { ChangeDetectorRef, Component, ElementRef, inject, input, signal } from '@angular/core';
 import { Session } from './session';
 import { PluginScreenLoader } from './plugin-screen';
 
@@ -34,6 +34,7 @@ export class ProfileComponents {
   /** Component keys rendered elsewhere (e.g. the picture lives in the My profile header): skip them here. */
   readonly exclude = input<string[]>([]);
   private readonly s = inject(Session);
+  private readonly cd = inject(ChangeDetectorRef);
   private readonly host = inject(ElementRef<HTMLElement>);
   private readonly loader = inject(PluginScreenLoader);
   protected comps = signal<ProfileComponentInv[]>([]);
@@ -59,7 +60,8 @@ export class ProfileComponents {
       if (req !== this.request) return;
       if (r.status >= 400) throw new Error(r.data.message ?? 'Cannot load');
       this.comps.set((r.data.components ?? []).filter((c) => !this.exclude().includes(c.key)));
-      setTimeout(() => void this.mountAll(req));
+      this.cd.detectChanges(); // mount containers must exist before the async module loop starts
+      void this.mountAll(req);
     } catch (e) { if (req === this.request) { this.comps.set([]); this.problem.set((e as Error).message); } }
   }
 

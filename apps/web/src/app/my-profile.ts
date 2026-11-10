@@ -56,7 +56,7 @@ const PICTURE = 'profile-picture.picture';
   <div class="mp-side">
   <section class="card" id="mp-security"><h3>Security</h3>
     <p class="hint">Only the fields your administrator allows can be changed on this page.</p>
-    <app-profile-components surface="self" [exclude]="[pictureKey]" />
+    <app-profile-components surface="self" [exclude]="['profile-picture:picture']" />
   </section>
   <section class="card" id="mp-sections"><h3>Assigned by administrators (read only)</h3>
   @if (orgs() !== undefined) { <p id="mp-orgs"><b>Organizations:</b> {{orgs()!.length ? orgNames() : 'none'}}</p> }
@@ -77,8 +77,8 @@ export class MyProfilePage {
     const out: { name: string; fields: EField[] }[] = [];
     for (const f of this.fields()) {
       const name = f.section ?? f.group ?? '';
-      const last = out[out.length - 1];
-      if (last && last.name === name) last.fields.push(f); else out.push({ name, fields: [f] });
+      const section = out.find(s => s.name === name);
+      if (section) section.fields.push(f); else out.push({ name, fields: [f] });
     }
     return out;
   }
