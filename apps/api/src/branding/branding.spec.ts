@@ -21,6 +21,13 @@ describe('branding cache and validation', () => {
     assert.notEqual(changed.version,first.version); assert.notEqual(changed.css,first.css);
     set({}); assert.equal(await service.get('demo'),first);
   });
+  it('versions the generated css bytes, not only the settings', async () => {
+    // Regression: a theme-engine change with unchanged settings must change the version, so clients
+    // revalidating a cached theme.css get 200 with the new bytes instead of 304 keeping the old ones.
+    const {createHash} = await import('node:crypto');
+    const b = await setup().service.get('demo');
+    assert.equal(b.version, createHash('sha256').update(JSON.stringify(b.config) + '|' + b.css).digest('hex').slice(0,24));
+  });
   it('preview never modifies stored settings and Apply can reuse identical compiled output', async () => {
     const {service,set} = setup(); const before = await service.get('demo');
     const draft = await service.preview('demo',{productName:'Acme'},'draft');
@@ -49,6 +56,15 @@ describe('branding public boundary', () => {
     const p=await c.profile('demo','','',res);assert.deepEqual(Object.keys(p).sort(),['baseline','footer','productName','version']);
     assert.equal(headers['Cache-Control'],'public, max-age=0, must-revalidate');
     await c.profile('demo','draft','exact',res);assert.equal(headers['Cache-Control'],'no-store');
+  });
+  it('theme.css revalidation returns 304 only for the current version and fresh bytes otherwise', async () => {
+    const {service}=setup(); const c=new BrandingController(service,{check:async()=>true} as any);
+    const b=await service.get('demo');
+    const make=()=>{const r:any={headers:{},statusCode:200,body:undefined,setHeader(k:string,v:string){r.headers[k]=v;},type(){return r;},send(x:any){r.body=x;},status(s:number){r.statusCode=s;return r;},end(){r.ended=true;}};return r;};
+    const stale=make(); await c.css('demo','','',{headers:{'if-none-match':'"outdated-version"'}} as any,stale);
+    assert.equal(stale.statusCode,200); assert.equal(stale.body,b.css); assert.equal(stale.headers['ETag'],`"${b.version}"`);
+    const fresh=make(); await c.css('demo','','',{headers:{'if-none-match':`"${b.version}"`}} as any,fresh);
+    assert.equal(fresh.statusCode,304); assert.equal(fresh.body,undefined);
   });
 });
 describe('branding SVG security',()=>{
