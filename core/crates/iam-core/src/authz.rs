@@ -310,7 +310,8 @@ fn validate(c: &Core, p: &HashMap<String, String>, theme: &str) -> Result<(), Re
     // Branch test (docs/branch-test.md): a non-main Dolt data branch plus the short-lived ticket the console issued to an administrator.
     let (b, t) = (g("branch"), g("ticket"));
     if !b.is_empty() {
-        let ok = b.len() <= 32 && b.bytes().all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'-');
+        // one optional folder (personal/, profile/ ...) then the name: the branch naming convention of the data repository
+        let ok = b.len() <= 63 && b.matches('/').count() <= 1 && !b.starts_with('/') && !b.ends_with('/') && b.bytes().all(|x| x.is_ascii_lowercase() || x.is_ascii_digit() || x == b'-' || x == b'/');
         if !ok || b == "main" { return Err(error_page(StatusCode::BAD_REQUEST, "invalid data branch", &theme)); }
         if t.len() < 10 || t.len() > 64 || !t.bytes().all(|x| x.is_ascii_alphanumeric() || x == b'-' || x == b'_') { return Err(error_page(StatusCode::BAD_REQUEST, "a branch test needs the ticket of the test link", &theme)); }
     } else if !t.is_empty() {
