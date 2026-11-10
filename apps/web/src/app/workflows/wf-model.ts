@@ -34,7 +34,7 @@ export const categoryLabel = (c: StepCategory): string => (c === 'computed' ? 'C
 export const categoryOf = (x: { simulated: boolean; category?: StepCategory }): StepCategory => x.category ?? (x.simulated ? 'simulated' : 'real');
 export interface WfBlock { type: string; family: string; label: string; simulated: boolean; category?: StepCategory; description: string; fields?: WfBlockField[]; outputs?: { key: string; description: string }[]; provider: string | null; providerActive: boolean }
 export interface DemoSheet { name: string; simulated: boolean; note: string; columns: string[]; rows: { rowNumber: number; values: Record<string, string> }[] }
-export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; steps: number; simulatedSteps: number; computedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
+export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; active: boolean; steps: number; simulatedSteps: number; computedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
 export interface RunSummary { id: string; definitionId: string; name: string; branch: string | null; status: string; error: string | null; startedBy: string; startedAt: string; finishedAt: string | null; hasDataSteps: boolean; test?: boolean }
 export interface RunStepView { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; category?: StepCategory; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null; input?: Record<string, unknown> | null; output?: Record<string, unknown> | null }
 export interface RunView { run: { id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[]; edges: WfEdge[]; test?: boolean }; steps: RunStepView[] }
@@ -150,14 +150,14 @@ export class WorkflowClient {
     });
   }
   list() { return this.req<{ definitions: DefinitionSummary[] }>('GET', '/workflows'); }
-  get(id: string) { return this.req<{ definition: { id: string; name: string; description: string; trigger: WfTrigger | null; graph: { nodes: WfNode[]; edges: WfEdge[] }; order: string[] } }>('GET', `/workflows/${id}`); }
+  get(id: string) { return this.req<{ definition: { id: string; name: string; description: string; trigger: WfTrigger | null; active: boolean; graph: { nodes: WfNode[]; edges: WfEdge[] }; order: string[] } }>('GET', `/workflows/${id}`); }
   events() { return this.req<{ events: WfEvent[] }>('GET', '/workflows-events'); }
   blocks() { return this.req<{ blocks: WfBlock[] }>('GET', '/workflow-blocks'); }
   demoSheet() { return this.req<DemoSheet>('GET', '/plugins/workflow-connectors/demo-sheet'); }
   demoSheetAdd(values: Record<string, string>) { return this.req('POST', '/plugins/workflow-connectors/demo-sheet/rows', values); }
   demoSheetUpdate(row: number, column: string, value: string) { return this.req('PUT', `/plugins/workflow-connectors/demo-sheet/rows/${row}`, { column, value }); }
-  create(name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null) { return this.req<{ definition: { id: string } }>('POST', '/workflows', trigger ? { name, description, graph, trigger } : { name, description, graph }); }
-  update(id: string, name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null) { return this.req('PUT', `/workflows/${id}`, trigger ? { name, description, graph, trigger } : { name, description, graph }); }
+  create(name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null, active = true) { return this.req<{ definition: { id: string } }>('POST', '/workflows', trigger ? { name, description, graph, trigger, active } : { name, description, graph, active }); }
+  update(id: string, name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null, active = true) { return this.req('PUT', `/workflows/${id}`, trigger ? { name, description, graph, trigger, active } : { name, description, graph, active }); }
   remove(id: string) { return this.req('DELETE', `/workflows/${id}`); }
   duplicate(id: string) { return this.req<{ definition: { id: string; name: string } }>('POST', `/workflows/${id}/duplicate`, {}); }
   start(id: string) { return this.req<RunView>('POST', `/workflows/${id}/runs`, {}); }

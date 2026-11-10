@@ -9,6 +9,8 @@ import {
   anchorViewport, categoryLabel, categoryOf, clientOf, rectsWithin, SAMPLE_WORKFLOWS,
 } from './wf-model';
 import { ValidationIssue, autoLayout, defaultLabel, edgeLabelChoices, outgoingLabels, validateGraph } from './graph-utils';
+import { WbTabs, WbTabsBar } from './workbench-tabs';
+import { filterPlaceholders, insertPlaceholder, phTokenAt } from './placeholder-pick';
 
 interface NodeState { type: StepType; name: string; config: Record<string, unknown> }
 
@@ -21,9 +23,15 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 // canvas with minimap / zoom / insert-on-link, right config drawer (Settings / Input / Output), bottom
 // status bar with live validation, and a test bar that runs the graph on a disposable branch. ----
 
-@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent], styleUrl: '../pages.css', template: `
+@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrl: '../pages.css', styles: [
+  '.wb-active { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 600; } .wb-active.paused { color: var(--bad); }',
+  '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px rgba(0,0,0,.18); overflow: hidden; }',
+  '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
+  '.ph-popup button.on, .ph-popup button:hover { background: var(--accent-soft); color: var(--accent-dark); }',
+], template: `
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="wb">
+  <app-wb-tabs />
   <div class="wb-top card">
     <a class="btn secondary" routerLink="/workflows" title="Back to the list">←</a>
     <input class="wb-name" name="wfName" [(ngModel)]="name" maxlength="80" placeholder="Workflow name" aria-label="Workflow name" />
@@ -57,6 +65,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
     <label class="btn secondary wb-import" title="Load a definition JSON into the canvas">Import<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
     @if (id !== 'new') {<button class="secondary" (click)="duplicateWorkflow()" [disabled]="busy()">Duplicate</button>}
     <button class="secondary" (click)="testOpen.set(!testOpen())" [class.active-tool]="testOpen()">Test</button>
+    <label class="wb-active" [class.paused]="!active" title="A paused workflow never starts from an event; Run still works"><input type="checkbox" name="wfActive" [(ngModel)]="active" /> Active</label>
     <button (click)="save()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save'">Save</button>
   </div>
 
@@ -115,7 +124,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       </div>}
     </div>
 
-    <aside class="wb-drawer card">
+    <aside class="wb-drawer card" (focusin)="phFocus($event)" (input)="phInput($event)" (keydown)="phKey($event)">
       @if (selectedIds().length > 1) {
         <h3>{{selectedIds().length}} steps selected</h3>
         <button class="secondary" (click)="copySelection()">Copy</button>
@@ -148,11 +157,15 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
             @case ('set-profile-field') {<label>Identity<input name="spfId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Profile field<input name="spfField" [ngModel]="st.config['field']" (ngModelChange)="setCfg(nid,'field',$event)" maxlength="80" placeholder="hr-attributes.employee_grade" /></label><label>Value<input name="spfValue" [ngModel]="st.config['value']" (ngModelChange)="setCfg(nid,'value',$event)" maxlength="200" /></label>}
             }
           }
+          @if (placeholdersFor(nid).length) {
+            <p class="hint">Insert a placeholder:</p>
+            <div>@for (ph of placeholdersFor(nid); track ph) {<button class="ph-chip" (mousedown)="$event.preventDefault(); insertIntoField(ph)">{{ph}}</button>}</div>
+          }
           <div class="row"><button class="secondary" (click)="duplicateNode(nid)">Duplicate step</button> <button class="secondary" (click)="deleteNode(nid)">Delete step</button></div>
         }
         @if (drawerTab() === 'input') {
-          <p class="hint">Placeholders available in this step's fields. Click one to copy it.</p>
-          @for (ph of placeholdersFor(nid); track ph) {<button class="ph-chip" (click)="copyPlaceholder(ph)">{{ph}}</button>}
+          <p class="hint">Placeholders available in this step's fields. Click one to insert it into the last field you edited (copied otherwise).</p>
+          @for (ph of placeholdersFor(nid); track ph) {<button class="ph-chip" (click)="insertIntoField(ph)">{{ph}}</button>}
           @if (!placeholdersFor(nid).length) {<p class="hint">None yet: add a start trigger, or link an upstream step that has outputs.</p>}
           @if (testStepFor(nid); as ts) {<h4>Input of the last test run</h4><pre class="wf-log">{{json(ts.input)}}</pre>}
         }
@@ -183,14 +196,21 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
   @if (issues().length) {<div class="wb-issues card">
     @for (i of issues(); track i.message) {<button class="wb-issue" [class.err]="i.level === 'error'" (click)="focusIssue(i)"><b>{{i.level === 'error' ? 'Error' : 'Warning'}}</b> {{i.message}}</button>}
   </div>}
+  @if (phPopup(); as pp) {
+    <div class="ph-popup" role="listbox" [style.top.px]="pp.top" [style.left.px]="pp.left" [style.minWidth.px]="pp.width">
+      @for (sugg of pp.list; track sugg; let i = $index) {<button type="button" role="option" [attr.aria-selected]="i === pp.index" [class.on]="i === pp.index" (mousedown)="$event.preventDefault(); pickPlaceholder(sugg)">{{sugg}}</button>}
+    </div>
+  }
 </div>
 ` })
 export class WorkflowEditPage implements OnInit, OnDestroy {
   protected readonly s = inject(Session);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly tabs = inject(WbTabs);
   protected id = 'new';
   protected name = ''; protected description = '';
+  protected active = true;
   protected note = signal(''); protected busy = signal(false);
   protected readonly samples = SAMPLE_WORKFLOWS;
   protected events = signal<WfEvent[]>([]);
@@ -364,6 +384,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     void clientOf(this.s).events().then((r) => this.events.set(r.events)).catch(() => this.events.set([]));
     void clientOf(this.s).blocks().then((r) => this.blocks.set(r.blocks)).catch(() => this.blocks.set([]));
     if (this.id !== 'new') void this.load();
+    else this.tabs.open('workflow', 'new', 'New workflow');
     this.keyHandler = (ev: KeyboardEvent) => this.onKey(ev);
     window.addEventListener('keydown', this.keyHandler);
   }
@@ -577,6 +598,72 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   }
   protected copyPlaceholder(ph: string) { void navigator.clipboard?.writeText(ph).then(() => this.note.set(`${ph} copied - paste it in a field.`)).catch(() => this.note.set(ph)); }
 
+  // ---- Placeholder picker: autocomplete while typing `{{` in a step field of the drawer; the chips of the
+  // Settings/Input tabs insert into the last edited field (fallback: copy). ----
+  private phTarget: HTMLInputElement | HTMLTextAreaElement | null = null;
+  protected phPopup = signal<{ list: string[]; index: number; top: number; left: number; width: number } | null>(null);
+
+  /** Text fields a placeholder is valid in: the step config fields (generic g-* and the per-type ones), not the step name. */
+  private static phField(el: EventTarget | null): (HTMLInputElement | HTMLTextAreaElement) | null {
+    const okType = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !['checkbox', 'radio', 'number', 'file', 'range', 'button', 'submit', 'hidden'].includes(el.type));
+    if (!okType) return null;
+    const f = el as HTMLInputElement | HTMLTextAreaElement;
+    const okName = f.name.startsWith('g-') || ['notifTo', 'notifMsg', 'failMsg', 'arId', 'arRole', 'rrId', 'rrRole', 'sdId', 'sdDept', 'spfId', 'spfField', 'spfValue'].includes(f.name);
+    return okName ? f : null;
+  }
+  private static caretOf(f: HTMLInputElement | HTMLTextAreaElement): number { try { return f.selectionStart ?? f.value.length; } catch { return f.value.length; } }
+
+  protected phFocus(ev: FocusEvent) {
+    const f = WorkflowEditPage.phField(ev.target);
+    if (f) this.phTarget = f;
+    this.phPopup.set(null);
+  }
+
+  protected phInput(ev: Event) {
+    const f = WorkflowEditPage.phField(ev.target);
+    if (!f) return;
+    this.phTarget = f;
+    const nid = this.selectedNode();
+    const token = phTokenAt(f.value, WorkflowEditPage.caretOf(f));
+    const list = token && nid ? filterPlaceholders(this.placeholdersFor(nid), token.text) : [];
+    if (!token || !list.length) { this.phPopup.set(null); return; }
+    const r = f.getBoundingClientRect();
+    this.phPopup.set({ list, index: 0, top: r.bottom + 4, left: r.left, width: r.width });
+  }
+
+  protected phKey(ev: KeyboardEvent) {
+    const pp = this.phPopup();
+    if (!pp) return;
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); const d = ev.key === 'ArrowDown' ? 1 : -1; this.phPopup.set({ ...pp, index: (pp.index + d + pp.list.length) % pp.list.length }); }
+    else if (ev.key === 'Enter' || ev.key === 'Tab') { ev.preventDefault(); this.pickPlaceholder(pp.list[pp.index]); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); this.phPopup.set(null); }
+  }
+
+  /** Writes the picked placeholder into the target field and re-fires input so ngModel picks it up. */
+  protected pickPlaceholder(ph: string) {
+    const f = this.phTarget;
+    if (!f) { this.phPopup.set(null); return; }
+    const caret = WorkflowEditPage.caretOf(f);
+    const token = phTokenAt(f.value, caret);
+    const r = token ? insertPlaceholder(f.value, caret, token.start, ph) : insertPlaceholder(f.value, caret, caret, ph);
+    f.value = r.value;
+    f.dispatchEvent(new Event('input', { bubbles: true }));
+    try { f.focus(); f.setSelectionRange(r.caret, r.caret); } catch { /* number-like fields */ }
+    this.phPopup.set(null);
+  }
+
+  /** A placeholder chip inserts into the last drawer field edited; without one it falls back to copy. */
+  protected insertIntoField(ph: string) {
+    const f = this.phTarget;
+    if (!f || !f.isConnected) { this.copyPlaceholder(ph); return; }
+    const caret = WorkflowEditPage.caretOf(f);
+    const r = insertPlaceholder(f.value, caret, caret, ph);
+    f.value = r.value;
+    f.dispatchEvent(new Event('input', { bubbles: true }));
+    try { f.focus(); f.setSelectionRange(r.caret, r.caret); } catch { /* ok */ }
+    this.note.set(`${ph} inserted.`);
+  }
+
   protected loadSample(sm: (typeof this.samples)[number]) {
     this.pushHistory();
     this.name = sm.name.replace('Sample: ', 'Demo: ');
@@ -595,6 +682,8 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     try {
       const { definition } = await clientOf(this.s).get(this.id);
       this.name = definition.name; this.description = definition.description;
+      this.active = definition.active !== false;
+      this.tabs.open('workflow', this.id, this.name || this.id);
       this.triggerEvent.set(definition.trigger?.event ?? ''); this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
       this.state.clear();
       const nodes: Node[] = [];
@@ -618,8 +707,13 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     try {
       const c = clientOf(this.s);
       const trigger = this.triggerPayload();
-      if (this.id === 'new') { const r = await c.create(this.name, this.description, this.graph(), trigger); this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`); }
-      else { await c.update(this.id, this.name, this.description, this.graph(), trigger); this.note.set('Workflow saved.'); }
+      if (this.id === 'new') {
+        const r = await c.create(this.name, this.description, this.graph(), trigger, this.active);
+        this.tabs.replace({ kind: 'workflow', id: 'new', label: 'New workflow' }, { kind: 'workflow', id: r.definition.id, label: this.name || r.definition.id });
+        this.id = r.definition.id;
+        this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`);
+      }
+      else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
 

@@ -8,6 +8,7 @@ import {
   DefinitionSummary, RunSummary, RunStepView, RunView, WfNodeComponent, WfNodeData,
   categoryLabel, categoryOf, clientOf,
 } from './wf-model';
+import { WbTabs, WbTabsBar } from './workbench-tabs';
 
 // ---- Executions screen: every run with filters (workflow, status, test runs), durations, and a detail
 // page that replays the graph colored by step status with per-step Input / Output / Log and re-run from
@@ -51,7 +52,8 @@ export class WorkflowExecutionsPage implements OnInit {
   }
 }
 
-@Component({ selector: 'app-workflow-run', imports: [RouterLink, JsonPipe, FormsModule, Vflow], styleUrl: '../pages.css', template: `
+@Component({ selector: 'app-workflow-run', imports: [RouterLink, JsonPipe, FormsModule, Vflow, WbTabsBar], styleUrl: '../pages.css', template: `
+<app-wb-tabs />
 <p class="lead">Run {{view()?.run?.id}} — {{view()?.run?.name}} @if (view()?.run?.test) {<span class="chip" data-status="simulated">test run, disposable branch</span>}</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 @if (view(); as v) {<section class="card"><div class="row">
@@ -84,6 +86,7 @@ export class WorkflowExecutionsPage implements OnInit {
 export class WorkflowRunPage implements OnInit, OnDestroy {
   protected readonly s = inject(Session);
   private readonly route = inject(ActivatedRoute);
+  private readonly tabs = inject(WbTabs);
   protected readonly categoryLabel = categoryLabel;
   protected readonly categoryOf = categoryOf;
   protected readonly dur = duration;
@@ -97,7 +100,13 @@ export class WorkflowRunPage implements OnInit, OnDestroy {
   }
   ngOnDestroy() { clearInterval(this.timer); }
   protected noop(_e: unknown) {}
-  protected async refresh() { try { this.view.set(await clientOf(this.s).run(this.id)); } catch (e) { this.note.set((e as Error).message); } }
+  protected async refresh() {
+    try {
+      const v = await clientOf(this.s).run(this.id);
+      this.view.set(v);
+      this.tabs.open('run', this.id, v.run.name || this.id);
+    } catch (e) { this.note.set((e as Error).message); if ((e as Error).message.includes('unknown run')) this.tabs.drop('run', this.id); }
+  }
   protected async retry() { try { this.view.set(await clientOf(this.s).retry(this.id)); } catch (e) { this.note.set((e as Error).message); } }
   protected async rerunFrom(nodeId: string) { try { this.view.set(await clientOf(this.s).rerunFrom(this.id, nodeId)); this.note.set(`Re-running from ${nodeId}.`); } catch (e) { this.note.set((e as Error).message); } }
   protected async cancel() { try { this.view.set(await clientOf(this.s).cancel(this.id)); } catch (e) { this.note.set((e as Error).message); } }
