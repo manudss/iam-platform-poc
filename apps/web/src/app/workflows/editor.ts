@@ -25,7 +25,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 
 @Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrl: '../pages.css', styles: [
   '.wb-active { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 600; } .wb-active.paused { color: var(--bad); }',
-  '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px rgba(0,0,0,.18); overflow: hidden; }',
+  '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
   '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
   '.ph-popup button.on, .ph-popup button:hover { background: var(--accent-soft); color: var(--accent-dark); }',
 ], template: `
