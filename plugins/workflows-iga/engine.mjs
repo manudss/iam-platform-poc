@@ -30,7 +30,7 @@
  *  - an EXTERNAL effect (HTTP call, Jira ticket, real Google write) is NOT reverted by abandoning the branch:
  *    the block's own log line says exactly what really happened outside (dry-run or real).
  */
-import { STEP_TYPES, externalBlock, externalBlockProvider, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
+import { STEP_TYPES, externalBlock, externalBlockProvider, loopBody, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
 
 const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
   from assignments a join assignments b on a.identity_id = b.identity_id
@@ -61,10 +61,25 @@ export function createWorkflowEngine(deps) {
     void execute(runId).catch(async (e) => {
       log.error(`run ${runId} crashed: ${e.message}`);
       try { await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }); } catch { /* store gone */ }
-    });
+    }).finally(() => void disposeTestBranch(runId));
+  }
+
+  /** A test run's branch is DISPOSABLE: once the run is terminal, the branch is dropped so a test
+   *  leaves no residue (its steps' logs still say exactly what was written, and where). */
+  async function disposeTestBranch(runId) {
+    try {
+      const run = await store.getRunById(runId);
+      if (!run?.test || !run.branch || !deps.versioning.deleteBranch) return;
+      if (!['completed', 'failed', 'canceled'].includes(run.status)) return;
+      await deps.versioning.deleteBranch(run.branch);
+      await store.updateRun(runId, { branch: `${run.branch} (dropped: disposable test branch)` });
+    } catch (e) { log.warn(`test branch cleanup for run ${runId}: ${e.message}`); }
   }
   const cancelFlag = (runId) => { live.get(runId).cancel = true; };
   const forget = (runId) => { live.delete(runId); };
+
+  /** Steps whose type branches: after they succeed, only their outgoing link carrying the chosen label is taken. */
+  const BRANCHERS = new Set(['if', 'switch', 'loop']);
 
   async function execute(runId) {
     const run = await store.getRunById(runId);
@@ -72,31 +87,175 @@ export function createWorkflowEngine(deps) {
     await store.updateRun(runId, { status: 'running', error: null });
     const { order } = validateGraph(run.graph);
     const nodes = new Map(run.graph.nodes.map((n) => [n.id, n]));
+    const edges = run.graph.edges;
+    // Loop bodies run inside their loop step, not in the main pass.
+    const inBody = new Map();
+    for (const n of run.graph.nodes) if (n.type === 'loop') for (const id of loopBody(run.graph, n.id)) inBody.set(id, n.id);
+    // The branch label each branching step chose (rebuilt from stored outputs on a resumed run).
+    const chosen = new Map();
+
+    const canceled = async () => {
+      await store.updateRun(runId, { status: 'canceled', finished_at: now() });
+      live.delete(runId);
+    };
+
+    /** Is this link taken, given the current step rows? `loopId` makes the loop's `each` links read as taken while its body runs. */
+    const edgeTaken = (e, stepsById, bodyOf = null) => {
+      const p = stepsById.get(e.from);
+      if (!p) return false;
+      if (e.label === 'error') return p.status === 'failed';
+      if (bodyOf && e.from === bodyOf) return e.label === 'each';
+      if (p.status !== 'done') return false;
+      const fromType = nodes.get(e.from)?.type;
+      if (BRANCHERS.has(fromType)) return chosen.get(e.from) === e.label;
+      return e.label === undefined; // a plain step: only its unlabeled links are taken on success
+    };
+    /** A merge runs as soon as ONE incoming link arrives; any other step needs ALL of them. */
+    const arrival = (nodeId, stepsById, bodyOf = null) => {
+      const incoming = edges.filter((e) => e.to === nodeId);
+      if (!incoming.length) return 'run';
+      const taken = incoming.map((e) => edgeTaken(e, stepsById, bodyOf));
+      return (nodes.get(nodeId)?.type === 'merge' ? taken.some(Boolean) : taken.every(Boolean)) ? 'run' : 'skip';
+    };
+    /** A failure ends the run UNLESS the step has an error link: then that path continues instead. */
+    const failOrBranch = async (node, message) => {
+      if (edges.some((e) => e.from === node.id && e.label === 'error')) {
+        for (const s of await store.steps(runId)) if (s.output?.branch) chosen.set(s.node_id, s.output.branch);
+        return true; // error links read taken from the step's failed status; the walk continues
+      }
+      for (const s of await store.steps(runId)) if (s.status === 'pending') await store.patchStep(runId, s.node_id, { status: 'skipped' });
+      await store.updateRun(runId, { status: 'failed', error: `step "${node.name}" failed: ${message}`.slice(0, 500), finished_at: now() });
+      live.delete(runId);
+      return false;
+    };
 
     for (const nodeId of order) {
+      if (inBody.has(nodeId)) continue; // runs inside its loop step
       const flag = live.get(runId);
-      if (flag?.cancel) { await store.updateRun(runId, { status: 'canceled', finished_at: now() }); return; }
+      if (flag?.cancel) { await canceled(); return; }
       const step = await store.step(runId, nodeId);
-      if (!step || step.status !== 'pending') continue; // done/failed handled elsewhere; skipped stays skipped
-      const node = nodes.get(nodeId);
-      const ok = await runStep(run, node, step);
-      if (!ok) {
-        const after = await store.getRunById(runId);
-        if (after?.status === 'failed') {
-          // Mark everything still pending as skipped so the failure is visible end to end.
-          for (const s of await store.steps(runId)) if (s.status === 'pending') await store.patchStep(runId, s.node_id, { status: 'skipped' });
-        }
-        return; // run status already set by runStep (failed or canceled)
+      if (!step) continue;
+      if (step.status !== 'pending') { // resumed run: fold stored results back into the walk
+        if (step.status === 'done' && step.output?.branch) chosen.set(nodeId, step.output.branch);
+        continue;
       }
+      const stepsById = new Map((await store.steps(runId)).map((s) => [s.node_id, s]));
+      if (arrival(nodeId, stepsById) === 'skip') { await store.patchStep(runId, nodeId, { status: 'skipped' }); continue; }
+      const node = nodes.get(nodeId);
+      const arrived = edges.filter((e) => e.to === nodeId && edgeTaken(e, stepsById)).map((e) => e.from);
+      const res = node.type === 'loop' ? await runLoop(run, node, step, edgeTaken) : await runStep(run, node, step, '', arrived);
+      if (res.canceled) { await canceled(); return; }
+      if (!res.ok) { if (!(await failOrBranch(node, res.error))) return; continue; }
+      if (res.output?.branch) chosen.set(nodeId, res.output.branch);
+      if (node.type === 'loop') chosen.set(nodeId, 'done');
     }
     await store.updateRun(runId, { status: 'completed', finished_at: now() });
     live.delete(runId);
   }
 
-  /** Runs ONE step. On failure: step failed + run failed, returns false. */
-  async function runStep(run, node, step) {
+  /** A loop step: resolves its items, then runs its body subgraph once per item (the loop step's own
+   *  output carries the current {item, index, count}, so {{steps.<loop>.item}} resolves per iteration).
+   *  Body step rows keep the LAST iteration's status/output; every iteration appends to their logs. */
+  async function runLoop(run, node, step, edgeTaken) {
     const logs = [...step.log];
     const say = (line) => { logs.push(`${now()} ${line}`); };
+    say('loop step started (COMPUTED - really iterates, no external effect by itself)');
+    await store.patchStep(run.id, node.id, { status: 'running', started_at: step.started_at ?? now(), attempts: step.attempts + 1, log: logs, error: null });
+    try {
+      const outputs = {};
+      for (const s of await store.steps(run.id)) if (s.output !== null && s.output !== undefined) outputs[s.node_id] = s.output;
+      const resolved = substituteStepOutputs(node, outputs);
+      await store.patchStep(run.id, node.id, { input: resolved.config });
+      const max = Number(resolved.config.maxItems ?? 10);
+      const items = parseItems(resolved.config.items, say);
+      const capped = items.slice(0, max);
+      if (capped.length < items.length) say(`item list truncated to the configured cap of ${max}`);
+      say(`loop over ${capped.length} item(s)`);
+      const body = validateGraph(run.graph).order.filter((id) => loopBody(run.graph, node.id).has(id));
+      for (let i = 0; i < capped.length; i++) {
+        if (live.get(run.id)?.cancel) throw new Canceled();
+        say(`iteration ${i + 1}/${capped.length}`);
+        await store.patchStep(run.id, node.id, { log: logs, output: { item: capped[i], index: i, count: capped.length } });
+        for (const bid of body) {
+          const bs = await store.step(run.id, bid);
+          if (!bs) continue;
+          const stepsById = new Map((await store.steps(run.id)).map((s) => [s.node_id, s]));
+          const incoming = run.graph.edges.filter((e) => e.to === bid);
+          const taken = incoming.map((e) => edgeTaken(e, stepsById, node.id));
+          const go = !incoming.length ? true : (run.graph.nodes.find((n) => n.id === bid)?.type === 'merge' ? taken.some(Boolean) : taken.every(Boolean));
+          if (!go) { await store.patchStep(run.id, bid, { status: 'skipped', log: [...bs.log, `${now()} iteration ${i + 1}: path not taken`] }); continue; }
+          await store.patchStep(run.id, bid, { status: 'pending', error: null });
+          const arrived = run.graph.edges.filter((e) => e.to === bid && edgeTaken(e, stepsById, node.id)).map((e) => e.from);
+          const res = await runStep(run, run.graph.nodes.find((n) => n.id === bid), await store.step(run.id, bid), `iteration ${i + 1}: `, arrived);
+          if (res.canceled) throw new Canceled();
+          if (!res.ok) throw new Error(`body step "${bs.node_id}" failed on iteration ${i + 1}: ${res.error}`);
+        }
+      }
+      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: { count: capped.length } });
+      return { ok: true, output: { count: capped.length } };
+    } catch (e) {
+      if (e instanceof Canceled) { await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs }); return { canceled: true }; }
+      say(`FAILED: ${e.message}`);
+      await store.patchStep(run.id, node.id, { status: 'failed', error: e.message.slice(0, 500), finished_at: now(), log: logs });
+      return { ok: false, error: e.message };
+    }
+  }
+
+  /** The items of a loop step: a JSON array, or a newline/comma-separated list of texts. */
+  function parseItems(raw, say) {
+    const v = String(raw ?? '').trim();
+    if (!v) return [];
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed)) return parsed.slice(0, 500);
+      if (parsed && typeof parsed === 'object') { say('the items value is an object, not a list: looping over its values'); return Object.values(parsed).slice(0, 500); }
+      return [parsed];
+    } catch {
+      return v.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).slice(0, 500);
+    }
+  }
+
+  /** The if/switch/merge steps: really evaluate their condition at run time, no external effect. */
+  function logicStep(node, arrived, say) {
+    const cfg = node.config;
+    switch (node.type) {
+      case 'if': {
+        const l = String(cfg.left ?? ''), r = String(cfg.right ?? '');
+        const ops = {
+          equals: () => l === r, 'not-equals': () => l !== r,
+          contains: () => l.includes(r), 'not-contains': () => !l.includes(r),
+          'starts-with': () => l.startsWith(r), 'ends-with': () => l.endsWith(r),
+          gt: () => Number(l) > Number(r), lt: () => Number(l) < Number(r),
+          empty: () => l.trim() === '', 'not-empty': () => l.trim() !== '',
+        };
+        const fn = ops[cfg.op];
+        if (!fn) throw new Error(`if: unknown operator "${String(cfg.op)}"`);
+        if ((cfg.op === 'gt' || cfg.op === 'lt') && (!Number.isFinite(Number(l)) || !Number.isFinite(Number(r))))
+          throw new Error(`if: "${cfg.op}" compares numbers, got "${l}" and "${r}"`);
+        const result = fn();
+        say(`condition ${cfg.op}: "${l}" ${cfg.op} "${r}" -> ${result}`);
+        return { result, branch: result ? 'true' : 'false' };
+      }
+      case 'switch': {
+        const v = String(cfg.value ?? '');
+        const cases = String(cfg.cases ?? '').split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
+        const matched = cases.includes(v) ? v : 'default';
+        say(`switch on "${v}": ${matched === 'default' ? 'no case matched, taking default' : `case "${matched}" matched`}`);
+        return { matched, branch: matched };
+      }
+      case 'merge':
+        say(`joining paths: ${arrived.length} incoming link(s) arrived (${arrived.join(', ') || 'none'})`);
+        return { arrived };
+    }
+    return {};
+  }
+
+  /** Runs ONE step. Returns {ok, output} | {ok: false, error} | {canceled: true}; the caller decides the
+   *  run's fate (an error link can catch a failure and keep the run going). The resolved config is
+   *  recorded as the step's INPUT, so a run can be audited placeholder by placeholder. */
+  async function runStep(run, node, step, logPrefix = '', arrived = null) {
+    const logs = [...step.log];
+    const say = (line) => { logs.push(`${now()} ${logPrefix}${line}`); };
     const external = externalBlock(node.type);
     const cat = stepCategory(node.type);
     const effect = cat === 'computed' ? 'COMPUTED - really runs and computes its output, no external effect' : cat === 'simulated' ? 'SIMULATED, no external effect' : null;
@@ -110,26 +269,22 @@ export function createWorkflowEngine(deps) {
       const outputs = {};
       for (const s of await store.steps(run.id)) if (s.output !== null && s.output !== undefined) outputs[s.node_id] = s.output;
       node = substituteStepOutputs(node, outputs);
+      await store.patchStep(run.id, node.id, { input: node.config });
       let output;
-      if (STEP_TYPES[node.type].simulated && !externalBlock(node.type)) await simulated(run, node, step.attempts, say);
+      if (node.type === 'if' || node.type === 'switch' || node.type === 'merge') output = logicStep(node, arrived ?? [], say);
+      else if (STEP_TYPES[node.type].simulated && !externalBlock(node.type)) await simulated(run, node, step.attempts, say);
       else if (externalBlock(node.type)) output = await externalStep(run, node, say);
       else output = await dataStep(run, node, say);
       await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: output ?? null });
-      return true;
+      return { ok: true, output: output ?? null };
     } catch (e) {
-      say(`FAILED: ${e.message}`);
       if (e instanceof Canceled) {
         await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs });
-        await store.updateRun(run.id, { status: 'canceled', error: null, finished_at: now() });
-      } else {
-        await store.patchStep(run.id, node.id, { status: 'failed', error: e.message.slice(0, 500), finished_at: now(), log: logs });
-        // Publish terminal run status only after all step statuses are terminal. Readers and retries
-        // must never see a failed run with pending steps still being finalized.
-        for (const s of await store.steps(run.id)) if (s.status === 'pending') await store.patchStep(run.id, s.node_id, { status: 'skipped' });
-        await store.updateRun(run.id, { status: 'failed', error: `step "${node.name}" failed: ${e.message}`.slice(0, 500), finished_at: now() });
+        return { canceled: true };
       }
-      live.delete(run.id);
-      return false;
+      say(`FAILED: ${e.message}`);
+      await store.patchStep(run.id, node.id, { status: 'failed', error: e.message.slice(0, 500), finished_at: now(), log: logs });
+      return { ok: false, error: e.message };
     }
   }
 
@@ -166,10 +321,11 @@ export function createWorkflowEngine(deps) {
     }
   }
 
-  /** The run branch, created lazily on the first data-writing step. Never main. */
+  /** The run branch, created lazily on the first data-writing step. Never main. A test run's branch is
+   *  named workflow/test-* and dropped when the run settles (disposable). */
   async function ensureBranch(run, say) {
     if (!run.branch) {
-      const branch = `workflow/${run.id.replace(/^run-/, '').slice(0, 8)}`;
+      const branch = `workflow/${run.test ? 'test-' : ''}${run.id.replace(/^run-/, '').slice(0, 8)}`;
       const base = run.base_branch ?? deps.versioning.defaultBranch; // a triggered run branches from the branch its event happened on
       await deps.versioning.createBranch(branch, base);
       await store.updateRun(run.id, { branch });

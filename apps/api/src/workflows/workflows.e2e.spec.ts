@@ -40,7 +40,7 @@ class FakeAuth implements CanActivate {
   }
 }
 
-interface RunView { run: { id: string; status: string; branch: string | null; error: string | null; simulatedOnly: boolean }; steps: { node_id: string; status: string; simulated: boolean; attempts: number; log: string[] }[] }
+interface RunView { run: { id: string; status: string; branch: string | null; error: string | null; simulatedOnly: boolean; test?: boolean }; steps: { node_id: string; status: string; simulated: boolean; attempts: number; log: string[]; input?: Record<string, unknown> | null }[] }
 
 const call = async (method: string, path: string, body?: object, o: { token?: string | null; admin?: string | null } = {}) => {
   const token = o.token === undefined ? `${T}:demo-alice` : o.token;
@@ -92,7 +92,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 13);
+    assert.equal(routes.length, 18);
   });
 
   it('refuses an invalid graph (cycle, unknown type) and an unknown field', async () => {
@@ -115,6 +115,54 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(v.steps.every((s) => s.simulated));
     assert.ok(v.steps[1].log.some((l) => l.includes('nothing was sent')));
     assert.equal((await call('POST', `/workflow-runs/${started.run.id}/review`)).status, 400); // no data branch to review
+  });
+
+  it('test-run from the editor: ad-hoc branching graph, disposable branch, hidden from the default list', async () => {
+    const started = (await ok('POST', '/workflows/test-run', { graph: { nodes: [
+      { id: 'cond', type: 'if', name: 'Department is finance?', config: { left: '{{event.to}}', op: 'equals', right: 'finance' } },
+      { id: 't', type: 'notify', name: 'finance path', config: { recipient: 'fin', message: 'yes' } },
+      { id: 'f', type: 'notify', name: 'other path', config: { recipient: 'hr', message: 'no' } },
+    ], edges: [{ from: 'cond', to: 't', label: 'true' }, { from: 'cond', to: 'f', label: 'false' }] }, trigger: { event: 'user.department-changed' }, payload: { subject: 'demo-bob', to: 'finance' } })) as RunView;
+    assert.equal(started.run.test, true);
+    const v = await waitRun(started.run.id, ['completed']);
+    const byId = Object.fromEntries(v.steps.map((s) => [s.node_id, s]));
+    assert.equal(byId['t'].status, 'done');
+    assert.equal(byId['f'].status, 'skipped');
+    assert.equal((byId['cond'] as { input?: { left?: string } }).input?.left, 'finance'); // the resolved input is recorded
+    assert.ok(!((await ok('GET', '/workflow-runs')) as { runs: { id: string }[] }).runs.some((r) => r.id === started.run.id), 'test runs are hidden by default');
+    assert.ok(((await ok('GET', '/workflow-runs?tests=1')) as { runs: { id: string }[] }).runs.some((r) => r.id === started.run.id));
+    assert.equal((await call('POST', `/workflow-runs/${started.run.id}/review`)).status, 400); // a test run is never reviewed
+  });
+
+  it('error link: a failing step routes to its error path, the run completes', async () => {
+    const started = (await ok('POST', '/workflows/test-run', { graph: { nodes: [
+      { id: 'risky', type: 'fail', name: 'always fails', config: { mode: 'always', message: 'boom' } },
+      { id: 'rescue', type: 'notify', name: 'caught', config: { recipient: 'hr', message: 'handled' } },
+    ], edges: [{ from: 'risky', to: 'rescue', label: 'error' }] } })) as RunView;
+    const v = await waitRun(started.run.id, ['completed']);
+    const byId = Object.fromEntries(v.steps.map((s) => [s.node_id, s]));
+    assert.equal(byId['risky'].status, 'failed');
+    assert.equal(byId['rescue'].status, 'done');
+  });
+
+  it('duplicate + re-run from a step', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Rerun source', graph: { nodes: [
+      { id: 'w', type: 'wait', name: 'w', config: { seconds: 0 } },
+      { id: 'o', type: 'fail', name: 'fails once', config: {} },
+      { id: 'n', type: 'notify', name: 'n', config: { recipient: 'hr', message: 'done' } },
+    ], edges: [{ from: 'w', to: 'o' }, { from: 'o', to: 'n' }] } })) as { definition: { id: string } };
+    const dup = (await ok('POST', `/workflows/${def.definition.id}/duplicate`)) as { definition: { id: string; name: string } };
+    assert.match(dup.definition.name, /\(copy\)$/);
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    const v1 = await waitRun(started.run.id, ['failed']); // fail step fails on its first attempt
+    assert.equal((await call('POST', `/workflow-runs/${started.run.id}/rerun-from/ghost`)).status, 404); // unknown step: not found
+    await ok('POST', `/workflow-runs/${started.run.id}/rerun-from/o`);
+    const v2 = await waitRun(started.run.id, ['completed']); // fail recovers on retry (demo convention)
+    const byId = Object.fromEntries(v2.steps.map((s) => [s.node_id, s]));
+    assert.equal(byId['w'].attempts, 1); // upstream of the re-run point: untouched
+    assert.equal(byId['o'].attempts, 2);
+    assert.equal(byId['n'].status, 'done');
+    void v1;
   });
 
   it('plugin disabled mid-run: the run in flight finishes, every route answers 403 until re-enabled', async () => {
@@ -234,10 +282,40 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const def = (await ok('POST', '/workflows', { name: 'To edit', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] } })) as { definition: { id: string } };
     const updated = (await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }, { id: 'b', type: 'notify', name: 'b', config: { recipient: 'r', message: 'm' } }], edges: [{ from: 'a', to: 'b' }] } })) as { definition: { name: string } };
     assert.equal(updated.definition.name, 'Edited');
-    const list = (await ok('GET', '/workflows')) as { definitions: { id: string; steps: number }[] };
+    const list = (await ok('GET', '/workflows')) as { definitions: { id: string; steps: number; active: boolean }[] };
     assert.ok(list.definitions.some((d) => d.id === def.definition.id && d.steps === 2));
+    assert.ok(list.definitions.every((d) => d.active), 'definitions are active by default');
+    // active: persisted, preserved across an update that omits it, flippable back
+    const graph2 = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] };
+    await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: graph2, active: false });
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, false);
+    assert.equal(((await ok('GET', '/workflows')) as { definitions: { id: string; active: boolean }[] }).definitions.find((d) => d.id === def.definition.id)!.active, false);
+    await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: graph2 });
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, false, 'an update that omits active keeps the flag');
+    await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: graph2, active: true });
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, true);
     await ok('DELETE', `/workflows/${def.definition.id}`);
     assert.equal((await call('GET', `/workflows/${def.definition.id}`)).status, 404);
+  });
+
+  it('list cards: run stats per definition, the pause switch endpoint, deleting a finished run', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Stats', description: '', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['completed']);
+    const row = ((await ok('GET', '/workflows')) as { definitions: { id: string; stats: { runs: number; okPct: number; lastStatus: string } | null }[] }).definitions.find((d) => d.id === def.definition.id)!;
+    assert.ok(row.stats && row.stats.runs === 1 && row.stats.okPct === 100 && row.stats.lastStatus === 'completed', JSON.stringify(row.stats));
+    // the cards' pause switch flips only the flag
+    assert.equal(((await ok('POST', `/workflows/${def.definition.id}/active`, { active: false })) as { definition: { active: boolean } }).definition.active, false);
+    assert.equal((await call('POST', `/workflows/${def.definition.id}/active`, {})).status, 400);
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, false);
+    // a finished run can be deleted (and stops counting), a missing one 404s
+    assert.equal(((await ok('DELETE', `/workflow-runs/${started.run.id}`)) as { deleted: string }).deleted, started.run.id);
+    assert.equal((await call('GET', `/workflow-runs/${started.run.id}`)).status, 404);
+    assert.equal((await call('DELETE', `/workflow-runs/${started.run.id}`)).status, 404);
+    const second = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(second.run.id, ['completed']);
+    const row2 = ((await ok('GET', '/workflows')) as { definitions: { id: string; stats: { runs: number } | null }[] }).definitions.find((d) => d.id === def.definition.id)!;
+    assert.equal(row2.stats!.runs, 1, 'the deleted run no longer counts');
   });
 
   it('meta->main migration runs ONCE: a definition deleted afterwards is not resurrected at the next startup', async () => {

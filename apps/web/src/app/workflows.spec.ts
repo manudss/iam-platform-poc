@@ -48,7 +48,9 @@ describe('sample workflows', () => {
     return seen;
   };
   it('use known types, unique ids and acyclic graphs with edges that reference real nodes', () => {
-    const known = new Set([...STEP_TYPES.map((t) => t.type), ...CONTRIBUTED_TYPES]);
+    // LOGIC_TYPES mirrors the Logic family of the server block catalogue (apps/api/src/workflows/model.ts).
+    const LOGIC_TYPES = ['if', 'switch', 'loop', 'merge'];
+    const known = new Set([...STEP_TYPES.map((t) => t.type), ...LOGIC_TYPES, ...CONTRIBUTED_TYPES]);
     expect(SAMPLE_WORKFLOWS.length).toBeGreaterThanOrEqual(3);
     for (const s of SAMPLE_WORKFLOWS) {
       expect(s.name.startsWith('Sample: ')).toBe(true);
@@ -68,7 +70,7 @@ describe('sample workflows', () => {
       expect(payload, `unknown event ${t.event}`).toBeDefined();
       for (const k of Object.keys(t.match ?? {})) expect(payload).toContain(k);
       const keys = [...JSON.stringify(s.nodes).matchAll(/\{\{event\.([a-zA-Z]+)\}\}/g)].map((m) => m[1]);
-      expect(keys.length).toBeGreaterThan(0);
+      expect(keys.length, s.name).toBeGreaterThan(0);
       if (!payload.includes('*')) for (const k of keys) expect(payload, `${s.name}: {{event.${k}}}`).toContain(k); // wildcard payloads (webhook, sheet row) allow any key
     }
   });
@@ -111,7 +113,7 @@ describe('WorkflowClient', () => {
     const h = (i: number) => (calls[i].init.headers as Record<string, string>)['x-api-admin-token'];
     expect(calls[0].url).toBe('/api/tenants/acme-demo/workflows'); expect(calls[0].init.method).toBe('GET');
     expect(calls[1].url).toBe('/api/tenants/acme-demo/workflows'); expect(calls[1].init.method).toBe('POST');
-    expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] } });
+    expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, active: true });
     expect(calls[2].url).toBe('/api/tenants/acme-demo/workflow-runs');
     expect(calls[3].url).toBe('/api/tenants/acme-demo/workflow-runs/r1/retry');
     expect(calls[4].url).toBe('/api/tenants/acme-demo/workflow-runs/r1/cancel');
@@ -125,9 +127,11 @@ describe('WorkflowClient', () => {
     expect(calls[0].url).toBe('/api/tenants/acme-demo/workflows-events');
     const trigger = { event: 'user.created', match: { department: 'finance' } };
     await c.create('n', 'd', { nodes: [], edges: [] }, trigger);
-    expect(JSON.parse(calls[1].init.body as string).trigger).toEqual(trigger);
+    expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, trigger, active: true });
     await c.update('w1', 'n', 'd', { nodes: [], edges: [] }, trigger);
-    expect(JSON.parse(calls[2].init.body as string).trigger).toEqual(trigger);
+    expect(JSON.parse(calls[2].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, trigger, active: true });
+    await c.update('w1', 'n', 'd', { nodes: [], edges: [] }, null, false);
+    expect(JSON.parse(calls[3].init.body as string).active).toBe(false);
   });
   it('surfaces the API error message', async () => {
     const fail = (async () => ({ ok: false, status: 403, json: async () => ({ message: 'admin only' }) }) as Response) as unknown as typeof fetch;

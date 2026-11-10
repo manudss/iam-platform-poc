@@ -9,7 +9,7 @@ import { PrivacyPage } from './privacy-page';
 import { AboutPage } from './about-page';
 import { SsoInteractionPage } from './sso-interaction';
 import { SsoSamlPage } from './sso-saml';
-import { WorkflowEditPage, WorkflowRunPage, WorkflowsPage, workflowsEnabledGuard } from './workflows';
+import { workflowsEnabledGuard } from './workflows/guard';
 import { accessGuard, pluginGuard } from './access';
 import { Shell } from './shell';
 import { ReviewPage } from './review';
@@ -48,9 +48,11 @@ export const routes: Routes = [
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
       { path: 'event-bus', canActivate: [accessGuard], loadComponent: () => import('./bus-observer').then(m => m.BusObserverPage), title: 'Event bus' },
       { path: 'mcp', canActivate: [accessGuard], loadComponent: () => import('./mcp').then(m => m.McpPage), title: 'MCP (AI access)' },
-      { path: 'workflows', component: WorkflowsPage, title: 'Workflows', canActivate: [workflowsEnabledGuard] },
-      { path: 'workflows/edit/:id', component: WorkflowEditPage, title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
-      { path: 'workflows/run/:id', component: WorkflowRunPage, title: 'Workflow run', canActivate: [workflowsEnabledGuard] },
+      { path: 'workflows', loadComponent: () => import('./workflows').then(m => m.WorkflowsPage), title: 'Workflows', canActivate: [workflowsEnabledGuard] },
+      { path: 'workflows/templates', loadComponent: () => import('./workflows').then(m => m.WorkflowTemplatesPage), title: 'Workflow templates', canActivate: [workflowsEnabledGuard] },
+      { path: 'workflows/edit/:id', loadComponent: () => import('./workflows').then(m => m.WorkflowEditPage), title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
+      { path: 'workflows/runs', loadComponent: () => import('./workflows').then(m => m.WorkflowExecutionsPage), title: 'Workflow executions', canActivate: [workflowsEnabledGuard] },
+      { path: 'workflows/run/:id', loadComponent: () => import('./workflows').then(m => m.WorkflowRunPage), title: 'Workflow run', canActivate: [workflowsEnabledGuard] },
       { path: 'database', pathMatch: 'full', redirectTo: 'database/home' },
       { path: 'review', canActivate: [accessGuard], component: ReviewPage, title: 'Review changes' },
       { path: 'database/:tab', canActivate: [accessGuard], component: ExplorerPage, title: 'Database (Dolt)' },

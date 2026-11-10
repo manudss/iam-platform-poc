@@ -170,3 +170,20 @@ describe('contributed block runs (simulated contexts)', () => {
     assert.throws(() => l.validate({ identity: 'Bad Id', displayName: 'x' }), /lowercase/);
   });
 });
+
+describe('flow-control block fields (Logic family)', () => {
+  it('if/switch/loop expose editable config fields, merge has none', () => {
+    const cat = blockCatalogue();
+    const byType = new Map(cat.map((b) => [b.type, b]));
+    const iff = byType.get('if')!;
+    assert.deepEqual(iff.fields.map((f) => f.key), ['left', 'op', 'right']);
+    const op = iff.fields.find((f) => f.key === 'op')!;
+    assert.equal(op.type, 'select');
+    assert.ok(op.options!.includes('equals') && op.options!.includes('not-empty'));
+    const sw = byType.get('switch')!;
+    assert.deepEqual(sw.fields.map((f) => f.key), ['value', 'cases']);
+    const loop = byType.get('loop')!;
+    assert.deepEqual(loop.fields.map((f) => f.key), ['items', 'maxItems']);
+    assert.deepEqual(byType.get('merge')!.fields, []);
+  });
+});

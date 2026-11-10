@@ -11,8 +11,23 @@ export const STEP_CATEGORIES = ['simulated', 'computed', 'real'];
  * `simulated` (the boolean) keeps its engine meaning: no external effect, no write. The category refines the badge.
  */
 export const stepCategory = (type) => STEP_TYPES[type]?.category ?? (STEP_TYPES[type]?.simulated ? 'simulated' : 'real');
+/**
+ * Flow-control ("Logic") step types: they really evaluate something at run time but have no external
+ * effect (category computed) and never write data, so `simulated` stays true for the engine's branch
+ * creation rules. Their outgoing links carry a `label` the run follows:
+ *  - if:     labels true / false, from the condition result
+ *  - switch: labels = one of its cases, or default
+ *  - loop:   labels each (the body, run once per item) / done (the continuation after the loop)
+ *  - merge:  joins paths: runs as soon as ONE incoming link arrives (other steps need ALL of them)
+ * Every step type may also have an `error` link: taken when the step fails, instead of failing the run.
+ */
+export const LOGIC_TYPES = ['if', 'switch', 'loop', 'merge'];
 export const STEP_TYPES = {
     wait: { simulated: true, category: 'simulated', label: 'Wait (simulated delay)' },
+    if: { simulated: true, category: 'computed', label: 'If (condition)' },
+    switch: { simulated: true, category: 'computed', label: 'Switch (multi-branch)' },
+    loop: { simulated: true, category: 'computed', label: 'Loop (for each item)' },
+    merge: { simulated: true, category: 'computed', label: 'Merge (join paths)' },
     notify: { simulated: true, category: 'simulated', label: 'Notify (simulated, nothing sent)' },
     fail: { simulated: true, category: 'simulated', label: 'Fail on purpose (simulated error)' },
     'assign-role': { simulated: false, category: 'real', label: 'Assign a role (real, on the run branch)' },
@@ -229,12 +244,74 @@ function str(v, what, max, required = true) {
         throw new BadRequestException(`${what}: text up to ${max} characters`);
     return v;
 }
+/** Operators of the if step, evaluated on the RESOLVED strings (placeholders already substituted). */
+export const IF_OPERATORS = ['equals', 'not-equals', 'contains', 'not-contains', 'starts-with', 'ends-with', 'gt', 'lt', 'empty', 'not-empty'];
+/** Config form fields of the flow-control blocks, rendered by the editor's Settings drawer (keys must
+ *  match what the engine reads: if left/op/right, switch value/cases, loop items/maxItems, merge none). */
+export const LOGIC_FIELDS = {
+    if: [
+        { key: 'left', label: 'Left value', type: 'string', required: true, help: 'Placeholders allowed, e.g. {{event.department}} or {{steps.read.email}}' },
+        { key: 'op', label: 'Operator', type: 'select', required: true, default: 'equals', options: IF_OPERATORS },
+        { key: 'right', label: 'Right value', type: 'string', help: 'Not used by the empty / not-empty operators' },
+    ],
+    switch: [
+        { key: 'value', label: 'Value to branch on', type: 'string', required: true, help: 'Placeholders allowed, e.g. {{event.department}}' },
+        { key: 'cases', label: 'Cases (one per line or comma-separated)', type: 'text', required: true, help: 'Outgoing links carry a case label; an unmatched value takes the default link' },
+    ],
+    loop: [
+        { key: 'items', label: 'Items (JSON array or list)', type: 'text', required: true, help: 'A JSON array, or one item per line / comma-separated; placeholders allowed' },
+        { key: 'maxItems', label: 'Max items per run (safety cap)', type: 'number', default: 10 },
+    ],
+    merge: [],
+};
+const EDGE_LABEL = /^[a-z0-9][a-z0-9-]{0,30}$/;
+/** The case labels of a switch step, from its newline/comma-separated config list. */
+export function switchCases(raw) {
+    const out = [];
+    for (const part of String(raw ?? '').split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)) {
+        if (!EDGE_LABEL.test(part))
+            throw new BadRequestException(`switch.cases: "${part}" is not a usable link label (lowercase letters, digits, hyphens)`);
+        if (part === 'default' || part === 'error' || part === 'each' || part === 'done' || part === 'true' || part === 'false')
+            throw new BadRequestException(`switch.cases: "${part}" is a reserved label`);
+        if (!out.includes(part))
+            out.push(part);
+    }
+    if (!out.length || out.length > 10)
+        throw new BadRequestException('switch.cases: 1 to 10 case labels (newline or comma separated)');
+    return out;
+}
+
 /** Validates one node's config for its type. Unknown keys are rejected so a definition cannot smuggle behavior. */
 function configFor(type, cfg) {
     if (typeof cfg !== 'object' || cfg === null || Array.isArray(cfg))
         throw new BadRequestException('config must be an object');
     const out = {};
     switch (type) {
+        case 'if': {
+            out.left = str(cfg.left, 'if.left', 200);
+            const op = str(cfg.op, 'if.op', 20);
+            if (!IF_OPERATORS.includes(op))
+                throw new BadRequestException(`if.op: one of ${IF_OPERATORS.join(', ')}`);
+            out.op = op;
+            if (op !== 'empty' && op !== 'not-empty')
+                out.right = str(cfg.right, 'if.right', 200);
+            break;
+        }
+        case 'switch': {
+            out.value = str(cfg.value, 'switch.value', 200);
+            out.cases = switchCases(cfg.cases).join('\n');
+            break;
+        }
+        case 'loop': {
+            out.items = str(cfg.items, 'loop.items', 500);
+            const max = cfg.maxItems === undefined || cfg.maxItems === '' ? 10 : Number(cfg.maxItems);
+            if (!Number.isFinite(max) || max < 1 || max > 50)
+                throw new BadRequestException('loop.maxItems: 1 to 50');
+            out.maxItems = Math.floor(max);
+            break;
+        }
+        case 'merge':
+            break;
         case 'wait': {
             const seconds = cfg.seconds === undefined ? 2 : Number(cfg.seconds);
             if (!Number.isFinite(seconds) || seconds < 0 || seconds > 60)
@@ -343,13 +420,55 @@ export function validateGraph(input) {
             throw new BadRequestException(`link ${from} -> ${to} references an unknown step`);
         if (from === to)
             throw new BadRequestException(`step "${from}" cannot link to itself`);
-        const key = `${from}->${to}`;
+        const label = e?.label === undefined || e?.label === null || e?.label === '' ? undefined : String(e.label);
+        if (label !== undefined) {
+            if (!EDGE_LABEL.test(label))
+                throw new BadRequestException(`link label "${label}": lowercase letters, digits, hyphens (max 31)`);
+            if (label !== 'error') {
+                const fromType = byId.get(from).type;
+                if (fromType === 'if') {
+                    if (label !== 'true' && label !== 'false')
+                        throw new BadRequestException(`an if step only branches on links labeled true or false (got "${label}")`);
+                }
+                else if (fromType === 'switch') {
+                    const cases = switchCases(byId.get(from).config.cases);
+                    if (label !== 'default' && !cases.includes(label))
+                        throw new BadRequestException(`link label "${label}" is not a case of the switch step (cases: ${cases.join(', ')}, or default)`);
+                }
+                else if (fromType === 'loop') {
+                    if (label !== 'each' && label !== 'done')
+                        throw new BadRequestException(`a loop step only branches on links labeled each (the body) or done (after the loop) (got "${label}")`);
+                }
+                else
+                    throw new BadRequestException(`link labels are only meaningful on if/switch/loop steps; other steps only support the "error" label (got "${label}" on a ${fromType} step)`);
+            }
+        }
+        const key = `${from}->${to}:${label ?? ''}`;
         if (seen.has(key))
             continue; // duplicate link: harmless, kept once
         seen.add(key);
         out.get(from).push(to);
         indeg.set(to, indeg.get(to) + 1);
-        cleanEdges.push({ from, to });
+        cleanEdges.push(label === undefined ? { from, to } : { from, to, label });
+    }
+    // Flow-control shape: each logic step needs its branch links; loops cannot nest. An unlabeled link
+    // leaving an if/switch/loop step would never be taken (the step chooses a branch label), so refuse it.
+    for (const n of clean) {
+        if (LOGIC_TYPES.includes(n.type) && n.type !== 'merge')
+            for (const e of cleanEdges)
+                if (e.from === n.id && e.label === undefined)
+                    throw new BadRequestException(`step "${n.id}" (${n.type}) chooses a branch: every outgoing link needs a label (${n.type === 'if' ? 'true or false' : n.type === 'switch' ? 'a case or default' : 'each or done'}, or error)`);
+        const outLabels = cleanEdges.filter((e) => e.from === n.id && e.label !== 'error').map((e) => e.label);
+        if (n.type === 'if' && !outLabels.some((l) => l === 'true' || l === 'false'))
+            throw new BadRequestException(`if step "${n.id}" needs at least one outgoing link labeled true or false`);
+        if (n.type === 'switch' && !outLabels.some((l) => l !== undefined))
+            throw new BadRequestException(`switch step "${n.id}" needs at least one outgoing link labeled with a case or default`);
+        if (n.type === 'loop') {
+            if (!outLabels.some((l) => l === 'each'))
+                throw new BadRequestException(`loop step "${n.id}" needs an outgoing link labeled each (the body run per item)`);
+            if ([...loopBody({ nodes: clean, edges: cleanEdges }, n.id)].some((id) => byId.get(id).type === 'loop'))
+                throw new BadRequestException(`loop step "${n.id}": nested loops are not supported`);
+        }
     }
     const queue = clean.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
     const order = [];
@@ -369,4 +488,27 @@ export function validateGraph(input) {
 }
 export function hasDataSteps(g) {
     return g.nodes.some((n) => !STEP_TYPES[n.type].simulated);
+}
+
+/** The body of a loop step: every node reachable through its `each` links that is NOT also reachable
+ * through its `done` links (the continuation). Returned as a Set of node ids (order comes from validateGraph). */
+export function loopBody(graph, loopId) {
+    const descendantsFrom = (startIds) => {
+        const seen = new Set(startIds);
+        const queue = [...startIds];
+        while (queue.length) {
+            const id = queue.shift();
+            for (const e of graph.edges)
+                if (e.from === id && !seen.has(e.to)) { seen.add(e.to); queue.push(e.to); }
+        }
+        return seen;
+    };
+    const eachStarts = graph.edges.filter((e) => e.from === loopId && e.label === 'each').map((e) => e.to);
+    const doneStarts = graph.edges.filter((e) => e.from === loopId && e.label === 'done').map((e) => e.to);
+    const throughDone = descendantsFrom(doneStarts);
+    const body = new Set();
+    for (const id of descendantsFrom(eachStarts))
+        if (id !== loopId && !throughDone.has(id))
+            body.add(id);
+    return body;
 }

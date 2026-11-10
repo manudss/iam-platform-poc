@@ -26,7 +26,7 @@ export { hasDataSteps } from './model.js';
  */
 interface EngineDeps {
   store: WorkflowStore;
-  versioning: { createBranch: (branch: string, base: string) => Promise<unknown>; writeOn: <T>(branch: string, fn: (c: unknown) => Promise<T>) => Promise<T>; defaultBranch: string };
+  versioning: { createBranch: (branch: string, base: string) => Promise<unknown>; writeOn: <T>(branch: string, fn: (c: unknown) => Promise<T>) => Promise<T>; defaultBranch: string; deleteBranch?: (branch: string) => Promise<unknown> };
   authorOf: (actor: string) => string;
   branchRun: <T>(branch: string, fn: () => Promise<T>) => Promise<T>;
   settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
@@ -47,7 +47,7 @@ export class WorkflowEngine implements OnModuleInit {
   constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {
     this.deps = {
       store,
-      versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch },
+      versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
       authorOf,
       branchRun: (b, fn) => branchContext.run({ branch: b }, fn),
       settingsFor: (tenant, branch, pluginId) => this.settingsFor(tenant, branch, pluginId),

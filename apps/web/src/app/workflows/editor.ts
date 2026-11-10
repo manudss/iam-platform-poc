@@ -1,0 +1,793 @@
+import { Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { FormsModule } from '@angular/forms';
+import { Connection, Edge, MiniMapComponent, Node, Vflow, VflowComponent } from 'ngx-vflow';
+import { Session } from '../session';
+import {
+  RunView, StepCategory, StepType, STEP_TYPES, TRIGGER_NODE_ID, WfBlock, WfBlockField, WfEdge, WfEvent,
+  WfNodeComponent, WfNodeData, WfTrigger, WfTriggerNodeComponent, WfTriggerNodeData,
+  anchorViewport, categoryLabel, categoryOf, clientOf, rectsWithin, SAMPLE_WORKFLOWS,
+} from './wf-model';
+import { ValidationIssue, autoLayout, defaultLabel, edgeLabelChoices, outgoingLabels, validateGraph } from './graph-utils';
+import { WbTabs, WbTabsBar } from './workbench-tabs';
+import { filterPlaceholders, insertPlaceholder, phTokenAt } from './placeholder-pick';
+
+interface NodeState { type: StepType; name: string; config: Record<string, unknown> }
+
+/** Branch label carried on a vflow edge's data bag. */
+export const edgeLabelOf = (e: Edge): string | undefined => (e.data?.() as Record<string, unknown> | undefined)?.['label'] as string | undefined;
+interface SnapshotNode { id: string; type: StepType; name: string; config: Record<string, unknown>; x: number; y: number }
+interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
+
+// ---- Workflow editor, design direction C "workbench": left rail palette (search + drag & drop), light
+// canvas with minimap / zoom / insert-on-link, right config drawer (Settings / Input / Output), bottom
+// status bar with live validation, and a test bar that runs the graph on a disposable branch. ----
+
+@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrl: '../pages.css', styles: [
+  '.wb-active { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 600; } .wb-active.paused { color: var(--bad); }',
+  '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
+  '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
+  '.ph-popup button.on, .ph-popup button:hover { background: var(--accent-soft); color: var(--accent-dark); }',
+], template: `
+@if (note()) { <p role="status" class="msg">{{note()}}</p> }
+<div class="wb">
+  <app-wb-tabs />
+  <div class="wb-top card">
+    <a class="btn secondary" routerLink="/workflows" title="Back to the list">←</a>
+    <input class="wb-name" name="wfName" [(ngModel)]="name" maxlength="80" placeholder="Workflow name" aria-label="Workflow name" />
+    <details class="wb-trigger"><summary>Start trigger: {{triggerEvent() ? triggerLabel() : 'manual'}}</summary>
+      <div class="wb-trigger-body">
+      <label>Event<select name="wfTrigger" [ngModel]="triggerEvent()" (ngModelChange)="onTriggerChange($event)">
+        <option value="">Manual start only</option>
+        @for (ev of events(); track ev.type) {<option [value]="ev.type">{{ev.label}}</option>}
+      </select></label>
+      @if (triggerEvent()) {
+        @for (k of payloadKeys(); track k) {@if (k !== '*') {<label>only if {{k}} =<input [attr.name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
+        @for (f of triggerFields(); track f.key) {
+        @switch (f.type) {
+        @case ('boolean') {<label><input type="checkbox" [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default ?? false" (ngModelChange)="setTriggerCfg(f.key, $event)" /> {{f.label}}</label>}
+        @case ('number') {<label>{{f.label}}<input type="number" [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default" (ngModelChange)="setTriggerCfg(f.key, +$event)" /></label>}
+        @case ('select') {<label>{{f.label}}<select [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default ?? ''" (ngModelChange)="setTriggerCfg(f.key, $event)">@for (o of f.options ?? []; track o) {<option [value]="o">{{o}}</option>}</select></label>}
+        @default {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<input [attr.name]="'tc-'+f.key" [ngModel]="triggerCfg()[f.key] ?? f.default ?? ''" (ngModelChange)="setTriggerCfg(f.key, $event)" maxlength="200" />@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+        }
+        }
+      }
+      </div>
+    </details>
+    <input class="wb-desc" name="wfDesc" [(ngModel)]="description" maxlength="500" placeholder="Description" aria-label="Description" />
+    <span class="spacer"></span>
+    <button class="secondary" (click)="undo()" [disabled]="!undoStack.length" title="Undo (Ctrl+Z)">↺</button>
+    <button class="secondary" (click)="redo()" [disabled]="!redoStack.length" title="Redo (Ctrl+Shift+Z)">↻</button>
+    <button class="secondary" (click)="copySelection()" [disabled]="!selectedIds().length" title="Copy selection (Ctrl+C)">Copy</button>
+    <button class="secondary" (click)="paste()" [disabled]="!clipboard.nodes.length" title="Paste (Ctrl+V)">Paste</button>
+    <button class="secondary" (click)="doAutoLayout()" title="Re-arrange the graph left to right">Auto-layout</button>
+    <button class="secondary" (click)="exportDef()" title="Download the definition as JSON">Export</button>
+    <label class="btn secondary wb-import" title="Load a definition JSON into the canvas">Import<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
+    @if (id !== 'new') {<button class="secondary" (click)="duplicateWorkflow()" [disabled]="busy()">Duplicate</button>}
+    <button class="secondary" (click)="testOpen.set(!testOpen())" [class.active-tool]="testOpen()">Test</button>
+    <label class="wb-active" [class.paused]="!active" title="A paused workflow never starts from an event; Run still works"><input type="checkbox" name="wfActive" [(ngModel)]="active" /> Active</label>
+    <button (click)="save()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save'">Save</button>
+  </div>
+
+  @if (testOpen()) {<div class="wb-test card">
+    <b>Test run</b><span class="hint">Runs the CURRENT canvas (unsaved changes included) with a test event. Real steps write on a disposable branch, dropped when the run ends.</span>
+    @if (triggerEvent()) {<label>Event payload (JSON)<textarea class="wb-payload" name="testPayload" rows="3" [(ngModel)]="testPayload"></textarea></label>}
+    <button (click)="runTest()" [disabled]="testRunning()">{{testRunning() ? 'Running…' : 'Run test'}}</button>
+    @if (testView(); as tv) {
+      <span class="chip" [attr.data-status]="tv.run.status">{{tv.run.status}}</span>
+      <small>{{tv.run.branch}} (disposable)</small>
+      @if (tv.run.error) {<span class="msg error">{{tv.run.error}}</span>}
+      <a class="btn secondary" [routerLink]="['/workflows/run', tv.run.id]">Open the run</a>
+    }
+    @if (testError()) {<span class="msg error">{{testError()}}</span>}
+  </div>}
+
+  <div class="wb-main">
+    <aside class="wb-rail card">
+      <input name="paletteSearch" [(ngModel)]="paletteQuery" placeholder="Search blocks…" aria-label="Search blocks" />
+      <p class="hint">Drag a block onto the canvas, or click it. Draw links between handles. The + on a link inserts a block.</p>
+      @for (g of palette(); track g.family) {<div class="wf-family">{{g.family}}</div>
+        @for (t of g.blocks; track t.type) {<button class="secondary wf-pal" draggable="true" (dragstart)="onPaletteDrag($event, t.type)" (click)="addNode(t.type)"><b>{{t.label}}</b> <small>{{categoryLabel(categoryOf(t))}}</small>@if (t.provider && !t.providerActive) { <small class="req">(plugin disabled)</small>}<br /><small>{{t.description}}</small></button>}
+      }
+      <div class="wf-family">Samples</div>
+      @for (sm of samples; track sm.name) {<button class="secondary wf-pal" (click)="loadSample(sm)">{{sm.name}}</button>}
+    </aside>
+
+    <div class="wb-canvas card" (dragover)="$event.preventDefault()" (drop)="onCanvasDrop($event)">
+      <vflow [nodes]="allNodes()" [edges]="allEdges()" [view]="'auto'" [minZoom]="0.3" [maxZoom]="1.8" [background]="'var(--bg)'"
+             [keyboardShortcuts]="{ multiSelection: ['Shift', 'Control', 'Meta'] }" [selectionBox]="{ mode: 'partial' }"
+             (connect)="onConnect($event)" (componentNodeEvent)="noop($event)">
+        <ng-template edgeLabelHtml let-ctx>
+          <div class="wb-edge" (click)="$event.stopPropagation()" (mousedown)="$event.stopPropagation()">
+            @if (labelChoices(ctx.edge).length > 1 || edgeLabelOf(ctx.edge)) {
+              <select class="wb-edge-label" [attr.aria-label]="'Branch of link ' + ctx.edge.id" [ngModel]="edgeLabelOf(ctx.edge) ?? ''" (ngModelChange)="setEdgeLabel(ctx.edge.id, $event)" (click)="$event.stopPropagation()">
+                @for (c of labelChoices(ctx.edge); track c.value) {<option [value]="c.value">{{c.text}}</option>}
+              </select>
+            }
+            <button class="wb-edge-add" title="Insert a block on this link" (click)="openInsert(ctx.edge); $event.stopPropagation()">+</button>
+          </div>
+        </ng-template>
+        <mini-map />
+      </vflow>
+      <div class="wb-zoom">
+        <button class="secondary" (click)="zoom(1.25)" title="Zoom in">+</button>
+        <button class="secondary" (click)="zoom(0.8)" title="Zoom out">−</button>
+        <button class="secondary" (click)="fitCanvas()" title="Fit the whole graph">Fit</button>
+      </div>
+      @if (insertEdge(); as ie) {<div class="wb-insert card">
+        <b>Insert a block on {{ie.source}} → {{ie.target}}</b>
+        <input name="insertSearch" [(ngModel)]="insertQuery" placeholder="Search…" aria-label="Search blocks to insert" />
+        <div class="wb-insert-list">
+        @for (t of insertBlocks(); track t.type) {<button class="secondary" (click)="insertOnEdge(t.type)">{{t.label}} <small>{{categoryLabel(categoryOf(t))}}</small></button>}
+        </div>
+        <button class="secondary" (click)="insertEdge.set(null)">Cancel</button>
+      </div>}
+    </div>
+
+    <aside class="wb-drawer card" (focusin)="phFocus($event)" (input)="phInput($event)" (keydown)="phKey($event)">
+      @if (selectedIds().length > 1) {
+        <h3>{{selectedIds().length}} steps selected</h3>
+        <button class="secondary" (click)="copySelection()">Copy</button>
+        <button class="secondary" (click)="deleteSelection()">Delete</button>
+      } @else if (selectedNode(); as nid) {@if (state.get(nid); as st) {
+        <div class="wb-tabs">
+          @for (tab of ['settings', 'input', 'output']; track tab) {<button class="wb-tab" [class.on]="drawerTab() === tab" (click)="drawerTab.set($any(tab))">{{tab === 'settings' ? 'Settings' : tab === 'input' ? 'Input' : 'Output'}}</button>}
+        </div>
+        @if (drawerTab() === 'settings') {
+          <label>Step name<input name="stepName" [ngModel]="st.name" (ngModelChange)="rename(nid, $event)" maxlength="80" /></label>
+          <p class="hint">{{typeOf(st.type).label}} — {{typeOf(st.type).category === 'computed' ? 'COMPUTED: really runs and computes its output, but has no external effect.' : typeOf(st.type).category === 'real' ? 'REAL: data or external effect. Read the block description before running.' : 'SIMULATED: demonstrates the flow, no external effect.'}}</p>
+          @if (blockOf(st.type)?.description) {<p class="hint">{{blockOf(st.type)!.description}}</p>}
+          @for (f of blockOf(st.type)?.fields ?? []; track f.key) {
+            @switch (f.type) {
+            @case ('text') {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<textarea rows="3" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)"></textarea>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+            @case ('boolean') {<label><input type="checkbox" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? false" (ngModelChange)="setCfg(nid, f.key, $event)" /> {{f.label}}</label>}
+            @case ('number') {<label>{{f.label}}<input type="number" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default" (ngModelChange)="setCfg(nid, f.key, +$event)" />@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+            @case ('select') {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<select [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)">@for (o of f.options ?? []; track o) {<option [value]="o">{{o}}</option>}</select>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+            @default {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<input [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)" maxlength="500" />@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
+            }
+          }
+          @if (!(blockOf(st.type)?.fields?.length)) {
+            @switch (st.type) {
+            @case ('wait') {<label>Seconds (0-60)<input name="waitSecs" type="number" min="0" max="60" [ngModel]="st.config['seconds']" (ngModelChange)="setCfg(nid,'seconds',$event)" /></label>}
+            @case ('notify') {<label>Recipient (label only)<input name="notifTo" [ngModel]="st.config['recipient']" (ngModelChange)="setCfg(nid,'recipient',$event)" maxlength="80" /></label><label>Message<input name="notifMsg" [ngModel]="st.config['message']" (ngModelChange)="setCfg(nid,'message',$event)" maxlength="200" /></label>}
+            @case ('fail') {<label>Error message<input name="failMsg" [ngModel]="st.config['message']" (ngModelChange)="setCfg(nid,'message',$event)" maxlength="200" /></label>}
+            @case ('assign-role') {<label>Identity<input name="arId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Role<input name="arRole" [ngModel]="st.config['role']" (ngModelChange)="setCfg(nid,'role',$event)" maxlength="32" /></label>}
+            @case ('revoke-role') {<label>Identity<input name="rrId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Role<input name="rrRole" [ngModel]="st.config['role']" (ngModelChange)="setCfg(nid,'role',$event)" maxlength="32" /></label>}
+            @case ('set-department') {<label>Identity<input name="sdId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Department<input name="sdDept" [ngModel]="st.config['department']" (ngModelChange)="setCfg(nid,'department',$event)" maxlength="40" /></label>}
+            @case ('set-profile-field') {<label>Identity<input name="spfId" [ngModel]="st.config['identity']" (ngModelChange)="setCfg(nid,'identity',$event)" maxlength="32" /></label><label>Profile field<input name="spfField" [ngModel]="st.config['field']" (ngModelChange)="setCfg(nid,'field',$event)" maxlength="80" placeholder="hr-attributes.employee_grade" /></label><label>Value<input name="spfValue" [ngModel]="st.config['value']" (ngModelChange)="setCfg(nid,'value',$event)" maxlength="200" /></label>}
+            }
+          }
+          @if (placeholdersFor(nid).length) {
+            <p class="hint">Insert a placeholder:</p>
+            <div>@for (ph of placeholdersFor(nid); track ph) {<button class="ph-chip" (mousedown)="$event.preventDefault(); insertIntoField(ph)">{{ph}}</button>}</div>
+          }
+          <div class="row"><button class="secondary" (click)="duplicateNode(nid)">Duplicate step</button> <button class="secondary" (click)="deleteNode(nid)">Delete step</button></div>
+        }
+        @if (drawerTab() === 'input') {
+          <p class="hint">Placeholders available in this step's fields. Click one to insert it into the last field you edited (copied otherwise).</p>
+          @for (ph of placeholdersFor(nid); track ph) {<button class="ph-chip" (click)="insertIntoField(ph)">{{ph}}</button>}
+          @if (!placeholdersFor(nid).length) {<p class="hint">None yet: add a start trigger, or link an upstream step that has outputs.</p>}
+          @if (testStepFor(nid); as ts) {<h4>Input of the last test run</h4><pre class="wf-log">{{json(ts.input)}}</pre>}
+        }
+        @if (drawerTab() === 'output') {
+          @if ((blockOf(st.type)?.outputs?.length ?? 0) > 0) {
+            <p class="hint">Declared outputs of this block:</p>
+            @for (o of blockOf(st.type)!.outputs!; track o.key) {<div><code>{{o.key}}</code> <small>{{o.description}}</small></div>}
+          } @else {<p class="hint">This block declares no output.</p>}
+          @if (testStepFor(nid); as ts) {<h4>Output of the last test run</h4><pre class="wf-log">{{json(ts.output)}}</pre><h4>Log</h4><pre class="wf-log">@for (l of ts.log; track l) {{{l}}
+}</pre>}
+        }
+      }} @else if (selectedEdge(); as eid) {
+        <h3>Link</h3>
+        <p class="hint">{{eid}}</p>
+        <button class="secondary" (click)="deleteEdge(eid)">Delete link</button>
+      } @else {<p class="hint">Select a step on the canvas to edit it. Shift-click or drag a box for multi-selection.</p>}
+    </aside>
+  </div>
+
+  <div class="wb-status card">
+    <span>{{state.size}} step(s), {{vfEdges().length}} link(s)</span>
+    @if (errorCount()) {<span class="wb-err">{{errorCount()}} error(s)</span>}
+    @if (warnCount()) {<span class="wb-warn">{{warnCount()}} warning(s)</span>}
+    @if (!errorCount() && !warnCount()) {<span class="hint">Validation OK</span>}
+    <span class="spacer"></span>
+    <span class="hint">Real steps write on the run branch - the merge stays a human review.</span>
+  </div>
+  @if (issues().length) {<div class="wb-issues card">
+    @for (i of issues(); track i.message) {<button class="wb-issue" [class.err]="i.level === 'error'" (click)="focusIssue(i)"><b>{{i.level === 'error' ? 'Error' : 'Warning'}}</b> {{i.message}}</button>}
+  </div>}
+  @if (phPopup(); as pp) {
+    <div class="ph-popup" role="listbox" [style.top.px]="pp.top" [style.left.px]="pp.left" [style.minWidth.px]="pp.width">
+      @for (sugg of pp.list; track sugg; let i = $index) {<button type="button" role="option" [attr.aria-selected]="i === pp.index" [class.on]="i === pp.index" (mousedown)="$event.preventDefault(); pickPlaceholder(sugg)">{{sugg}}</button>}
+    </div>
+  }
+</div>
+` })
+export class WorkflowEditPage implements OnInit, OnDestroy {
+  protected readonly s = inject(Session);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly tabs = inject(WbTabs);
+  protected id = 'new';
+  protected name = ''; protected description = '';
+  protected active = true;
+  protected note = signal(''); protected busy = signal(false);
+  protected readonly samples = SAMPLE_WORKFLOWS;
+  protected events = signal<WfEvent[]>([]);
+  protected blocks = signal<WfBlock[]>([]);
+  protected paletteQuery = '';
+  protected insertQuery = '';
+  protected insertEdge = signal<Edge | null>(null);
+  protected triggerEvent = signal('');
+  protected match = signal<Record<string, string>>({});
+  protected triggerCfg = signal<Record<string, unknown>>({});
+  protected drawerTab = signal<'settings' | 'input' | 'output'>('settings');
+  protected readonly categoryLabel = categoryLabel;
+  protected readonly categoryOf = categoryOf;
+  protected readonly edgeLabelOf = edgeLabelOf;
+  protected readonly json = (v: unknown) => JSON.stringify(v ?? null, null, 2);
+  protected onTriggerChange(v: string) { this.triggerEvent.set(v); this.match.set({}); this.triggerCfg.set({}); }
+  protected payloadKeys() { return this.events().find((e) => e.type === this.triggerEvent())?.payload ?? []; }
+  protected triggerFields(): WfBlockField[] { return this.events().find((e) => e.type === this.triggerEvent())?.configFields ?? []; }
+  protected setTriggerCfg(k: string, v: unknown) { this.triggerCfg.update((c) => ({ ...c, [k]: v })); }
+  protected setMatch(k: string, v: string) { this.match.update((m) => { const n = { ...m }; if (v) n[k] = v; else delete n[k]; return n; }); }
+  private triggerPayload(): WfTrigger | null {
+    const event = this.triggerEvent();
+    if (!event) return null;
+    const cfg = Object.fromEntries(Object.entries(this.triggerCfg()).filter(([, v]) => v !== '' && v !== undefined));
+    return { event, ...(Object.keys(this.match()).length ? { match: this.match() } : {}), ...(Object.keys(cfg).length ? { config: cfg } : {}) };
+  }
+  /** The editor palette: the API block catalogue grouped by family (Core first), built-ins last-resort fallback. */
+  protected palette(): { family: string; blocks: WfBlock[] }[] {
+    const src: WfBlock[] = this.blocks().length ? this.blocks() : STEP_TYPES.map((t) => ({ type: t.type, family: 'Core', label: t.label, simulated: t.simulated, description: t.hint, provider: null, providerActive: true }));
+    const byFamily = new Map<string, WfBlock[]>();
+    for (const b of src.filter((b) => `${b.label} ${b.family} ${b.type} ${b.description}`.toLowerCase().includes(this.paletteQuery.trim().toLowerCase()))) { const g = byFamily.get(b.family) ?? []; g.push(b); byFamily.set(b.family, g); }
+    return [...byFamily.entries()].sort((a, b) => (a[0] === 'Core' ? -1 : b[0] === 'Core' ? 1 : a[0].localeCompare(b[0]))).map(([family, blocks]) => ({ family, blocks }));
+  }
+  protected blockOf(t: string): WfBlock | undefined { return this.blocks().find((b) => b.type === t); }
+  /** Blocks offered by the insert-on-link picker (logic blocks excluded: they need branch labels, add them from the palette). */
+  protected insertBlocks(): WfBlock[] {
+    const q = this.insertQuery.trim().toLowerCase();
+    return (this.blocks().length ? this.blocks() : []).filter((b) => !outgoingLabels(b.type, {}).length && (!q || `${b.label} ${b.type}`.toLowerCase().includes(q)));
+  }
+
+  protected vfNodes = signal<Node[]>([]);
+  protected vfEdges = signal<Edge[]>([]);
+  private readonly vflow = viewChild(VflowComponent);
+  private readonly host = inject(ElementRef<HTMLElement>);
+
+  // ---- Live validation (status bar + issue list). Errors block Save. ----
+  protected issues = computed<ValidationIssue[]>(() => {
+    this.vfNodes(); this.vfEdges(); this.blocks(); this.events(); this.triggerEvent(); this.stateVersion();
+    return validateGraph(
+      [...this.state.entries()].map(([id, st]) => ({ id, type: st.type, name: st.name, config: st.config })),
+      this.vfEdges().map((e) => ({ from: e.source, to: e.target, ...(edgeLabelOf(e) ? { label: edgeLabelOf(e)! } : {}) })),
+      this.blocks(), this.events(), this.triggerEvent(),
+    );
+  });
+  protected errorCount = computed(() => this.issues().filter((i) => i.level === 'error').length);
+  protected warnCount = computed(() => this.issues().filter((i) => i.level === 'warning').length);
+  private stateVersion = signal(0); // bumped on config/name edits so the validation recomputes
+  protected focusIssue(i: ValidationIssue) {
+    if (!i.nodeId) return;
+    for (const n of this.vfNodes()) n.selected?.set(n.id === i.nodeId);
+    const v = this.vflow(); const node = this.vfNodes().find((n) => n.id === i.nodeId);
+    if (v && node) { const p = node.point(); v.viewportTo({ zoom: Math.max(v.viewport().zoom, 0.9), x: 320 - p.x, y: 180 - p.y }); }
+  }
+
+  // ---- Undo / redo: snapshots of nodes (with positions) and links, taken before each mutation. ----
+  protected undoStack: Snapshot[] = [];
+  protected redoStack: Snapshot[] = [];
+  private snapshot(): Snapshot {
+    return {
+      nodes: this.vfNodes().map((n) => { const st = this.state.get(n.id)!; return { id: n.id, type: st.type, name: st.name, config: structuredClone(st.config), x: n.point().x, y: n.point().y }; }),
+      edges: this.vfEdges().map((e) => ({ from: e.source, to: e.target, ...(edgeLabelOf(e) ? { label: edgeLabelOf(e)! } : {}) })),
+    };
+  }
+  private pushHistory() { this.undoStack.push(this.snapshot()); if (this.undoStack.length > 60) this.undoStack.shift(); this.redoStack = []; }
+  protected undo() { const s = this.undoStack.pop(); if (!s) return; this.redoStack.push(this.snapshot()); this.restore(s); }
+  protected redo() { const s = this.redoStack.pop(); if (!s) return; this.undoStack.push(this.snapshot()); this.restore(s); }
+  private restore(s: Snapshot) {
+    this.state.clear();
+    const nodes: Node[] = [];
+    for (const n of s.nodes) { const st = { type: n.type, name: n.name, config: structuredClone(n.config) }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, 0, { x: n.x, y: n.y })); }
+    this.vfNodes.set(nodes);
+    this.vfEdges.set(s.edges.map((e) => this.makeEdge(`${e.from}->${e.to}${e.label ? `#${e.label}` : ''}`, e.from, e.to, undefined, e.label)));
+    this.stateVersion.update((v) => v + 1);
+  }
+
+  // ---- Clipboard: copy/paste of the selected nodes and the links between them. ----
+  protected clipboard: { nodes: SnapshotNode[]; edges: WfEdge[] } = { nodes: [], edges: [] };
+  protected copySelection() {
+    const ids = new Set(this.selectedIds());
+    if (!ids.size) return;
+    this.clipboard = {
+      nodes: this.vfNodes().filter((n) => ids.has(n.id)).map((n) => { const st = this.state.get(n.id)!; return { id: n.id, type: st.type, name: st.name, config: structuredClone(st.config), x: n.point().x, y: n.point().y }; }),
+      edges: this.vfEdges().filter((e) => ids.has(e.source) && ids.has(e.target)).map((e) => ({ from: e.source, to: e.target, ...(edgeLabelOf(e) ? { label: edgeLabelOf(e)! } : {}) })),
+    };
+    this.note.set(`${ids.size} step(s) copied.`);
+  }
+  protected paste() {
+    if (!this.clipboard.nodes.length) return;
+    this.pushHistory();
+    const remap = new Map<string, string>();
+    for (const n of this.clipboard.nodes) { let id: string; do { id = `step-${++this.seq}`; } while (this.state.has(id)); remap.set(n.id, id); }
+    for (const n of this.clipboard.nodes) {
+      const id = remap.get(n.id)!;
+      const st: NodeState = { type: n.type, name: `${n.name.slice(0, 70)} (copy)`, config: structuredClone(n.config) };
+      this.state.set(id, st);
+      this.vfNodes.update((ns) => [...ns, this.makeNode(id, st, 0, { x: n.x + 40, y: n.y + 40 })]);
+    }
+    for (const e of this.clipboard.edges) {
+      const from = remap.get(e.from)!, to = remap.get(e.to)!;
+      this.vfEdges.update((es) => [...es, this.makeEdge(`${from}->${to}${e.label ? `#${e.label}` : ''}`, from, to, undefined, e.label)]);
+    }
+    for (const n of this.vfNodes()) n.selected?.set(remap.has(n.id) ? true : false);
+    this.stateVersion.update((v) => v + 1);
+  }
+  protected deleteSelection() {
+    const ids = new Set(this.selectedIds());
+    if (!ids.size) return;
+    this.pushHistory();
+    for (const id of ids) this.state.delete(id);
+    this.vfNodes.set(this.vfNodes().filter((n) => !ids.has(n.id)));
+    this.vfEdges.set(this.vfEdges().filter((e) => !ids.has(e.source) && !ids.has(e.target)));
+    this.stateVersion.update((v) => v + 1);
+  }
+
+  private fitCanvas() {
+    // Deterministic initial framing (no blind fixed timeouts): wait until the canvas is initialized and
+    // every node is really measured in the DOM, fit the whole graph, then verify the visible result.
+    this.frameWhenReady(1, 0);
+  }
+  private nodeRects(): DOMRect[] {
+    return [...this.host.nativeElement.querySelectorAll('.wf-node')].map((el) => el.getBoundingClientRect());
+  }
+  private frameWhenReady(attempt: number, waitedFrames: number) {
+    const v = this.vflow();
+    const canvas = this.host.nativeElement.querySelector('vflow');
+    if (!v || !canvas) return; // the page was left before the framing finished
+    const rects = this.nodeRects();
+    const ready = v.initialized() && canvas.clientWidth > 0 && rects.length === this.allNodes().length && rects.every((r) => r.width > 0 && r.height > 0);
+    if (!ready) {
+      if (waitedFrames < 600) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt, waitedFrames + 1)));
+      else v.fitView({ padding: 0.14, duration: 120 }); // last-resort best effort, same as the old behavior
+      return;
+    }
+    v.fitView({ padding: 0.14, duration: 120 });
+    this.verifyFraming(attempt, performance.now());
+  }
+  private verifyFraming(attempt: number, fitAt: number) {
+    const v = this.vflow();
+    const canvas = this.host.nativeElement.querySelector('vflow');
+    if (!v || !canvas) return;
+    if (performance.now() - fitAt < 200) { requestAnimationFrame(() => this.verifyFraming(attempt, fitAt)); return; } // let the fit animation finish and the DOM catch up
+    if (!rectsWithin(this.nodeRects(), canvas.getBoundingClientRect())) {
+      // The fit ran on stale sizes: retry from the readiness gate, bounded, until the framing is right.
+      if (attempt < 12) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt + 1, 0)));
+      return;
+    }
+    // Fit everything first so the shape of the graph is visible; if the fit had to shrink the nodes
+    // below comfortable reading size, zoom back toward 1:1 anchored on the leftmost node (the user pans).
+    const anchor = v.viewport().zoom < 0.9 ? anchorViewport(this.vfNodes()) : null;
+    if (anchor) v.viewportTo(anchor);
+  }
+  protected state = new Map<string, NodeState>();
+  /** Selection is tracked by the library on each entity's own `selected` signal. */
+  protected selectedIds = computed(() => this.vfNodes().filter((n) => n.selected?.()).map((n) => n.id));
+  protected selectedNode = computed(() => { const ids = this.selectedIds(); return ids.length === 1 ? ids[0] : null; });
+  protected selectedEdge = computed(() => (this.selectedNode() ? null : this.vfEdges().find((e) => e.selected?.())?.id ?? null));
+  private seq = 0;
+
+  ngOnInit() {
+    this.id = this.route.snapshot.paramMap.get('id') ?? 'new';
+    void clientOf(this.s).events().then((r) => this.events.set(r.events)).catch(() => this.events.set([]));
+    void clientOf(this.s).blocks().then((r) => this.blocks.set(r.blocks)).catch(() => this.blocks.set([]));
+    if (this.id !== 'new') void this.load();
+    else this.tabs.open('workflow', 'new', 'New workflow');
+    this.keyHandler = (ev: KeyboardEvent) => this.onKey(ev);
+    window.addEventListener('keydown', this.keyHandler);
+  }
+  ngOnDestroy() { window.removeEventListener('keydown', this.keyHandler); clearInterval(this.testTimer); }
+  private keyHandler!: (ev: KeyboardEvent) => void;
+  private onKey(ev: KeyboardEvent) {
+    const tag = (ev.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return; // typing in a field
+    const mod = ev.ctrlKey || ev.metaKey;
+    if (mod && ev.key.toLowerCase() === 'z' && !ev.shiftKey) { ev.preventDefault(); this.undo(); }
+    else if (mod && (ev.key.toLowerCase() === 'y' || (ev.key.toLowerCase() === 'z' && ev.shiftKey))) { ev.preventDefault(); this.redo(); }
+    else if (mod && ev.key.toLowerCase() === 'c') { ev.preventDefault(); this.copySelection(); }
+    else if (mod && ev.key.toLowerCase() === 'v') { ev.preventDefault(); this.paste(); }
+    else if ((ev.key === 'Delete' || ev.key === 'Backspace') && this.selectedIds().length) { ev.preventDefault(); this.deleteSelection(); }
+  }
+
+  protected typeOf(t: StepType): { type: string; label: string; simulated: boolean; category: StepCategory; hint: string } {
+    const b = this.blockOf(t);
+    if (b) return { type: b.type, label: b.label, simulated: b.simulated, category: categoryOf(b), hint: b.description };
+    return STEP_TYPES.find((x) => x.type === t) ?? { type: t, label: t, simulated: true, category: 'simulated', hint: '' };
+  }
+
+  // ---- Trigger as the first canvas node: a computed visual node (never in the saved graph) linked to every
+  // root step, so a workflow that starts on an event reads left-to-right: TRIGGER -> steps. ----
+  protected triggerLabel = computed(() => {
+    const t = this.triggerEvent();
+    if (!t) return '';
+    return this.events().find((e) => e.type === t)?.label ?? t;
+  });
+  private triggerNode = computed<Node | null>(() => {
+    const label = this.triggerLabel();
+    if (!label) return null;
+    return {
+      id: TRIGGER_NODE_ID, type: WfTriggerNodeComponent,
+      data: signal<WfTriggerNodeData>({ name: label }),
+      point: signal({ x: 20, y: 60 }),
+      selected: signal(false),
+    } as Node;
+  });
+  protected allNodes = computed(() => { const t = this.triggerNode(); return t ? [t, ...this.vfNodes()] : this.vfNodes(); });
+  /** Visual links from the trigger node to every root step (no incoming link). Never saved in the graph. */
+  protected triggerEdges = computed<Edge[]>(() => {
+    if (!this.triggerNode()) return [];
+    const incoming = new Set(this.vfEdges().map((e) => e.target));
+    return this.vfNodes().filter((n) => !incoming.has(n.id)).map((n) => this.makeEdge(`${TRIGGER_NODE_ID}->${n.id}`, TRIGGER_NODE_ID, n.id, 'var(--warn-line)'));
+  });
+  protected allEdges = computed(() => [...this.triggerEdges(), ...this.vfEdges()]);
+
+  private makeNode(id: string, st: NodeState, i: number, at?: { x: number; y: number }): Node {
+    return {
+      id, type: WfNodeComponent,
+      data: signal<WfNodeData>({ name: st.name, category: this.typeOf(st.type).category, runStatus: this.testStatusOf(id) }),
+      point: signal(at ?? { x: 320 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
+      selected: signal(false),
+    } as Node;
+  }
+  private makeEdge(id: string, source: string, target: string, color?: string, label?: string): Edge {
+    const branch = label === 'error' ? 'var(--warn-line)' : label ? 'var(--accent)' : undefined;
+    return {
+      id, source, target, selected: signal(false),
+      data: signal<Record<string, unknown>>(label ? { label } : {}),
+      edgeLabels: signal(label || source !== TRIGGER_NODE_ID ? { center: { type: 'html-template', data: { edgeId: id } } } : {}),
+      markers: signal({ end: { type: 'arrow-closed', width: 16, height: 16, color: color ?? branch ?? 'var(--muted)' } }),
+    } as Edge;
+  }
+
+  protected addNode(type: StepType, at?: { x: number; y: number }) {
+    this.pushHistory();
+    const id = this.newNodeId();
+    const st: NodeState = { type, name: this.typeOf(type).label, config: this.defaultConfig(type) };
+    this.state.set(id, st);
+    for (const n of this.vfNodes()) n.selected?.set(false);
+    const node = this.makeNode(id, st, this.vfNodes().length, at);
+    node.selected?.set(true);
+    this.vfNodes.update((ns) => [...ns, node]);
+    this.stateVersion.update((v) => v + 1);
+  }
+  private newNodeId(): string { let id: string; do { id = `step-${++this.seq}`; } while (this.state.has(id)); return id; }
+  private defaultConfig(type: StepType): Record<string, unknown> {
+    const defaults: Record<string, Record<string, unknown>> = {
+      wait: { seconds: 2 }, notify: { recipient: '', message: '' }, fail: { message: 'step configured to fail' },
+      'assign-role': { identity: 'demo-bob', role: 'accountant' }, 'revoke-role': { identity: 'demo-bob', role: 'payment-creator' }, 'set-department': { identity: 'demo-bob', department: '' }, 'set-profile-field': { identity: 'demo-bob', field: 'hr-attributes.employee_grade', value: '' },
+      if: { left: '{{event.subject}}', op: 'equals', right: '' }, switch: { value: '{{event.subject}}', cases: '' }, loop: { items: '', maxItems: 10 }, merge: {},
+    };
+    const blk = this.blockOf(type);
+    const fieldDefaults = Object.fromEntries((blk?.fields ?? []).filter((f) => f.default !== undefined).map((f) => [f.key, f.default as unknown]));
+    return { ...fieldDefaults, ...defaults[type] };
+  }
+
+  // ---- Drag & drop from the palette ----
+  protected onPaletteDrag(ev: DragEvent, type: StepType) { ev.dataTransfer?.setData('text/wf-block', type); }
+  protected onCanvasDrop(ev: DragEvent) {
+    const type = ev.dataTransfer?.getData('text/wf-block');
+    if (!type) return;
+    ev.preventDefault();
+    const v = this.vflow();
+    const canvas = this.host.nativeElement.querySelector('vflow');
+    if (!v || !canvas) { this.addNode(type); return; }
+    const rect = canvas.getBoundingClientRect();
+    const vp = v.viewport();
+    this.addNode(type, { x: (ev.clientX - rect.left - vp.x) / vp.zoom - 95, y: (ev.clientY - rect.top - vp.y) / vp.zoom - 32 });
+  }
+
+  // ---- Links: branch labels for logic steps, insert-on-link. ----
+  protected labelChoices(edge: Edge): { value: string; text: string }[] {
+    const st = this.state.get(edge.source);
+    if (!st) return [];
+    return edgeLabelChoices(st.type, st.config);
+  }
+  protected setEdgeLabel(edgeId: string, label: string) {
+    const e = this.vfEdges().find((x) => x.id === edgeId);
+    if (!e) return;
+    this.pushHistory();
+    e.data?.set(label ? { label } : {});
+    this.stateVersion.update((v) => v + 1);
+  }
+  protected openInsert(edge: Edge) { if (edge.source === TRIGGER_NODE_ID) return; this.insertQuery = ''; this.insertEdge.set(edge); }
+  protected insertOnEdge(type: StepType) {
+    const edge = this.insertEdge();
+    if (!edge) return;
+    this.pushHistory();
+    const id = this.newNodeId();
+    const st: NodeState = { type, name: this.typeOf(type).label, config: this.defaultConfig(type) };
+    this.state.set(id, st);
+    // Place the new block halfway between its neighbors when their positions are known.
+    const a = this.vfNodes().find((n) => n.id === edge.source)?.point() ?? { x: 100, y: 100 };
+    const b = this.vfNodes().find((n) => n.id === edge.target)?.point() ?? { x: a.x + 260, y: a.y };
+    this.vfNodes.update((ns) => [...ns, this.makeNode(id, st, 0, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })]);
+    const label = edgeLabelOf(edge);
+    this.vfEdges.set(this.vfEdges().filter((e) => e.id !== edge.id));
+    this.vfEdges.update((es) => [...es,
+      this.makeEdge(`${edge.source}->${id}${label ? `#${label}` : ''}`, edge.source, id, undefined, label),
+      this.makeEdge(`${id}->${edge.target}`, id, edge.target),
+    ]);
+    this.insertEdge.set(null);
+    this.stateVersion.update((v) => v + 1);
+  }
+
+  protected rename(id: string, v: string) {
+    const st = this.state.get(id)!; st.name = v;
+    const n = this.vfNodes().find((x) => x.id === id);
+    if (n) this.tintNode(n);
+    this.stateVersion.update((v) => v + 1);
+  }
+  protected setCfg(id: string, k: string, v: unknown) { this.state.get(id)!.config[k] = k === 'seconds' || k === 'maxItems' ? Number(v) : v; this.stateVersion.update((x) => x + 1); }
+  protected noop(_e: unknown) {}
+  protected onConnect(c: Connection) {
+    if (!c.source || !c.target) return;
+    if (c.source === TRIGGER_NODE_ID || c.target === TRIGGER_NODE_ID) return; // trigger links are drawn automatically to the root steps
+    const st = this.state.get(c.source);
+    const used = this.vfEdges().filter((e) => e.source === c.source).map((e) => edgeLabelOf(e));
+    const label = st ? defaultLabel(st.type, st.config, used) : undefined;
+    const id = `${c.source}->${c.target}${label ? `#${label}` : ''}`;
+    if (this.vfEdges().some((e) => e.id === id)) return;
+    this.pushHistory();
+    this.vfEdges.update((es) => [...es, this.makeEdge(id, c.source!, c.target!, undefined, label)]);
+    this.stateVersion.update((v) => v + 1);
+  }
+  protected duplicateNode(id: string) {
+    const source = this.state.get(id); if (!source) return;
+    this.pushHistory();
+    const copyId = this.newNodeId();
+    const copy = { ...source, name: `${source.name.slice(0, 70)} (copy)`, config: structuredClone(source.config) };
+    this.state.set(copyId, copy);
+    for (const n of this.vfNodes()) n.selected?.set(false);
+    const n = this.makeNode(copyId, copy, this.vfNodes().length); n.selected?.set(true);
+    this.vfNodes.update((ns) => [...ns, n]);
+    this.note.set('Step duplicated without links. Connect it where needed.');
+    this.stateVersion.update((v) => v + 1);
+  }
+  protected deleteNode(id: string) {
+    this.pushHistory();
+    this.state.delete(id);
+    this.vfNodes.set(this.vfNodes().filter((n) => n.id !== id));
+    this.vfEdges.set(this.vfEdges().filter((e) => e.source !== id && e.target !== id));
+    this.stateVersion.update((v) => v + 1);
+  }
+  protected deleteEdge(id: string) {
+    this.pushHistory();
+    this.vfEdges.set(this.vfEdges().filter((e) => e.id !== id));
+    this.stateVersion.update((v) => v + 1);
+  }
+  protected doAutoLayout() {
+    this.pushHistory();
+    const pos = autoLayout(
+      [...this.state.entries()].map(([id, st]) => ({ id, type: st.type, name: st.name, config: st.config })),
+      this.vfEdges().map((e) => ({ from: e.source, to: e.target })),
+    );
+    for (const n of this.vfNodes()) { const p = pos.get(n.id); if (p) n.point.set(p); }
+    this.fitCanvas();
+  }
+  protected zoom(factor: number) { const v = this.vflow(); if (v) v.zoomTo(Math.min(1.8, Math.max(0.3, v.viewport().zoom * factor))); }
+
+  /** Upstream steps of a node (transitive over the drawn links): their outputs are usable as placeholders. */
+  protected ancestorsOfNode(id: string): string[] {
+    const rev = new Map<string, string[]>();
+    for (const e of this.vfEdges()) { const g = rev.get(e.target) ?? []; g.push(e.source); rev.set(e.target, g); }
+    const out: string[] = []; const seen = new Set([id]); const queue = [id];
+    while (queue.length) { const c = queue.shift()!; for (const p of rev.get(c) ?? []) if (!seen.has(p)) { seen.add(p); out.push(p); queue.push(p); } }
+    return out;
+  }
+  protected placeholdersFor(nid: string): string[] {
+    const ev = this.events().find((e) => e.type === this.triggerEvent());
+    const out: string[] = (ev?.payload ?? []).filter((k) => k !== '*').map((k) => `{{event.${k}}}`);
+    if (ev?.payload?.includes('*')) out.push('{{event.<any key of the row/call>}}');
+    for (const aid of this.ancestorsOfNode(nid)) {
+      const st = this.state.get(aid); if (!st) continue;
+      for (const o of this.blockOf(st.type)?.outputs ?? []) out.push(`{{steps.${aid}.${o.key}}}`);
+    }
+    return out;
+  }
+  protected copyPlaceholder(ph: string) { void navigator.clipboard?.writeText(ph).then(() => this.note.set(`${ph} copied - paste it in a field.`)).catch(() => this.note.set(ph)); }
+
+  // ---- Placeholder picker: autocomplete while typing `{{` in a step field of the drawer; the chips of the
+  // Settings/Input tabs insert into the last edited field (fallback: copy). ----
+  private phTarget: HTMLInputElement | HTMLTextAreaElement | null = null;
+  protected phPopup = signal<{ list: string[]; index: number; top: number; left: number; width: number } | null>(null);
+
+  /** Text fields a placeholder is valid in: the step config fields (generic g-* and the per-type ones), not the step name. */
+  private static phField(el: EventTarget | null): (HTMLInputElement | HTMLTextAreaElement) | null {
+    const okType = el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !['checkbox', 'radio', 'number', 'file', 'range', 'button', 'submit', 'hidden'].includes(el.type));
+    if (!okType) return null;
+    const f = el as HTMLInputElement | HTMLTextAreaElement;
+    const okName = f.name.startsWith('g-') || ['notifTo', 'notifMsg', 'failMsg', 'arId', 'arRole', 'rrId', 'rrRole', 'sdId', 'sdDept', 'spfId', 'spfField', 'spfValue'].includes(f.name);
+    return okName ? f : null;
+  }
+  private static caretOf(f: HTMLInputElement | HTMLTextAreaElement): number { try { return f.selectionStart ?? f.value.length; } catch { return f.value.length; } }
+
+  protected phFocus(ev: FocusEvent) {
+    const f = WorkflowEditPage.phField(ev.target);
+    if (f) this.phTarget = f;
+    this.phPopup.set(null);
+  }
+
+  protected phInput(ev: Event) {
+    const f = WorkflowEditPage.phField(ev.target);
+    if (!f) return;
+    this.phTarget = f;
+    const nid = this.selectedNode();
+    const token = phTokenAt(f.value, WorkflowEditPage.caretOf(f));
+    const list = token && nid ? filterPlaceholders(this.placeholdersFor(nid), token.text) : [];
+    if (!token || !list.length) { this.phPopup.set(null); return; }
+    const r = f.getBoundingClientRect();
+    this.phPopup.set({ list, index: 0, top: r.bottom + 4, left: r.left, width: r.width });
+  }
+
+  protected phKey(ev: KeyboardEvent) {
+    const pp = this.phPopup();
+    if (!pp) return;
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') { ev.preventDefault(); const d = ev.key === 'ArrowDown' ? 1 : -1; this.phPopup.set({ ...pp, index: (pp.index + d + pp.list.length) % pp.list.length }); }
+    else if (ev.key === 'Enter' || ev.key === 'Tab') { ev.preventDefault(); this.pickPlaceholder(pp.list[pp.index]); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); this.phPopup.set(null); }
+  }
+
+  /** Writes the picked placeholder into the target field and re-fires input so ngModel picks it up. */
+  protected pickPlaceholder(ph: string) {
+    const f = this.phTarget;
+    if (!f) { this.phPopup.set(null); return; }
+    const caret = WorkflowEditPage.caretOf(f);
+    const token = phTokenAt(f.value, caret);
+    const r = token ? insertPlaceholder(f.value, caret, token.start, ph) : insertPlaceholder(f.value, caret, caret, ph);
+    f.value = r.value;
+    f.dispatchEvent(new Event('input', { bubbles: true }));
+    try { f.focus(); f.setSelectionRange(r.caret, r.caret); } catch { /* number-like fields */ }
+    this.phPopup.set(null);
+  }
+
+  /** A placeholder chip inserts into the last drawer field edited; without one it falls back to copy. */
+  protected insertIntoField(ph: string) {
+    const f = this.phTarget;
+    if (!f || !f.isConnected) { this.copyPlaceholder(ph); return; }
+    const caret = WorkflowEditPage.caretOf(f);
+    const r = insertPlaceholder(f.value, caret, caret, ph);
+    f.value = r.value;
+    f.dispatchEvent(new Event('input', { bubbles: true }));
+    try { f.focus(); f.setSelectionRange(r.caret, r.caret); } catch { /* ok */ }
+    this.note.set(`${ph} inserted.`);
+  }
+
+  protected loadSample(sm: (typeof this.samples)[number]) {
+    this.pushHistory();
+    this.name = sm.name.replace('Sample: ', 'Demo: ');
+    this.description = sm.description;
+    this.triggerEvent.set(sm.trigger?.event ?? ''); this.match.set({ ...(sm.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(sm.trigger?.config ?? {}) });
+    this.state.clear();
+    const nodes: Node[] = [];
+    sm.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); });
+    this.vfNodes.set(nodes);
+    this.vfEdges.set(sm.edges.map((e) => this.makeEdge(`${e.from}->${e.to}${e.label ? `#${e.label}` : ''}`, e.from, e.to, undefined, e.label)));
+    this.stateVersion.update((v) => v + 1);
+    this.fitCanvas();
+  }
+
+  private async load() {
+    try {
+      const { definition } = await clientOf(this.s).get(this.id);
+      this.name = definition.name; this.description = definition.description;
+      this.active = definition.active !== false;
+      this.tabs.open('workflow', this.id, this.name || this.id);
+      this.triggerEvent.set(definition.trigger?.event ?? ''); this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
+      this.state.clear();
+      const nodes: Node[] = [];
+      definition.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });
+      this.vfNodes.set(nodes);
+      this.vfEdges.set(definition.graph.edges.map((e) => this.makeEdge(`${e.from}->${e.to}${e.label ? `#${e.label}` : ''}`, e.from, e.to, undefined, e.label)));
+      this.stateVersion.update((v) => v + 1);
+      this.fitCanvas();
+    } catch (e) { this.note.set((e as Error).message); }
+  }
+
+  private graph() {
+    return {
+      nodes: [...this.state.entries()].map(([id, st]) => ({ id, type: st.type, name: st.name, config: st.config })),
+      edges: this.vfEdges().map((e) => ({ from: e.source, to: e.target, ...(edgeLabelOf(e) ? { label: edgeLabelOf(e)! } : {}) })),
+    };
+  }
+
+  protected async save() {
+    this.busy.set(true);
+    try {
+      const c = clientOf(this.s);
+      const trigger = this.triggerPayload();
+      if (this.id === 'new') {
+        const r = await c.create(this.name, this.description, this.graph(), trigger, this.active);
+        this.tabs.replace({ kind: 'workflow', id: 'new', label: 'New workflow' }, { kind: 'workflow', id: r.definition.id, label: this.name || r.definition.id });
+        this.id = r.definition.id;
+        this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`);
+      }
+      else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
+    } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
+  }
+
+  // ---- Duplicate / export / import ----
+  protected async duplicateWorkflow() {
+    this.busy.set(true);
+    try { const r = await clientOf(this.s).duplicate(this.id); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`); }
+    catch (e) { this.note.set((e as Error).message); this.busy.set(false); }
+  }
+  protected exportDef() {
+    const def = JSON.stringify({ name: this.name, description: this.description, trigger: this.triggerPayload(), graph: this.graph() }, null, 2);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([def], { type: 'application/json' }));
+    a.download = `${(this.name || 'workflow').replace(/[^a-z0-9-]+/gi, '-').toLowerCase()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  protected importDef(ev: Event) {
+    const file = (ev.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    void file.text().then((text) => {
+      try {
+        const d = JSON.parse(text) as { name?: string; description?: string; trigger?: WfTrigger; graph?: { nodes?: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges?: WfEdge[] } };
+        if (!d.graph?.nodes) throw new Error('No graph.nodes in this file.');
+        this.pushHistory();
+        this.id = 'new';
+        this.name = d.name ?? 'Imported workflow'; this.description = d.description ?? '';
+        this.triggerEvent.set(d.trigger?.event ?? ''); this.match.set({ ...(d.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(d.trigger?.config ?? {}) });
+        this.state.clear();
+        const nodes: Node[] = [];
+        d.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });
+        this.vfNodes.set(nodes);
+        this.vfEdges.set((d.graph.edges ?? []).map((e) => this.makeEdge(`${e.from}->${e.to}${e.label ? `#${e.label}` : ''}`, e.from, e.to, undefined, e.label)));
+        this.stateVersion.update((v) => v + 1);
+        this.note.set('Definition imported - Save creates it as a new workflow.');
+        this.fitCanvas();
+      } catch (e) { this.note.set(`Import failed: ${(e as Error).message}`); }
+    });
+    (ev.target as HTMLInputElement).value = '';
+  }
+
+  // ---- Test run from the editor: POST /workflows/test-run on the current canvas, poll, tint the nodes. ----
+  protected testOpen = signal(false);
+  protected testPayload = '{}';
+  protected testRunning = signal(false);
+  protected testView = signal<RunView | null>(null);
+  protected testError = signal('');
+  private testTimer?: ReturnType<typeof setInterval>;
+  protected testStatusOf(nodeId: string): string | null { return this.testView()?.steps.find((s) => s.node_id === nodeId)?.status ?? null; }
+  protected testStepFor(nodeId: string) { return this.testView()?.steps.find((s) => s.node_id === nodeId) ?? null; }
+  private refreshTestTints() {
+    for (const n of this.vfNodes()) this.tintNode(n);
+  }
+  private tintNode(n: Node) {
+    if (n.type !== WfNodeComponent) return;
+    const st = this.state.get(n.id); if (!st) return;
+    (n.data as { set(v: WfNodeData): void } | undefined)?.set({ name: st.name, category: this.typeOf(st.type).category, runStatus: this.testStatusOf(n.id) });
+  }
+  protected async runTest() {
+    let payload: Record<string, unknown> = {};
+    try { payload = this.testPayload.trim() ? JSON.parse(this.testPayload) : {}; } catch { this.testError.set('The payload is not valid JSON.'); return; }
+    this.testError.set(''); this.testRunning.set(true);
+    try {
+      const v = await clientOf(this.s).testRun(this.graph(), this.triggerPayload(), payload);
+      this.testView.set(v); this.refreshTestTints();
+      clearInterval(this.testTimer);
+      this.testTimer = setInterval(() => void this.pollTest(v.run.id), 700);
+    } catch (e) { this.testError.set((e as Error).message); this.testRunning.set(false); }
+  }
+  private async pollTest(id: string) {
+    try {
+      const v = await clientOf(this.s).run(id);
+      this.testView.set(v); this.refreshTestTints();
+      if (v.run.status !== 'running' && v.run.status !== 'queued') { clearInterval(this.testTimer); this.testRunning.set(false); }
+    } catch { clearInterval(this.testTimer); this.testRunning.set(false); }
+  }
+}

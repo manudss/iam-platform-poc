@@ -131,3 +131,41 @@ h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px 
 .ph-chip { display: inline-block; background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent-dark); border-radius: .3rem; padding: 0 .3rem; font-size: .72rem; margin: .1rem .15rem 0 0; font-family: ui-monospace, monospace; }
 .req { color: var(--bad); }
 td input { width: 100%; box-sizing: border-box; }
+
+/* ---- Workflow editor workbench (direction C) ---- */
+.wb { display: flex; flex-direction: column; gap: .6rem; }
+.wb-top { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .6rem .8rem; }
+.wb-name { width: 220px; font-weight: 600; }
+.wb-desc { flex: 1; min-width: 160px; }
+.wb-trigger { position: relative; }
+.wb-trigger summary { cursor: pointer; color: var(--accent); }
+.wb-trigger-body { position: absolute; z-index: 30; background: var(--card); border: 1px solid var(--line); border-radius: .6rem; padding: .8rem; display: flex; flex-direction: column; gap: .5rem; min-width: 280px; box-shadow: 0 6px 24px var(--shadow-color); }
+.wb-import { cursor: pointer; }
+.wb-main { display: grid; grid-template-columns: 250px 1fr 300px; gap: .6rem; align-items: stretch; }
+.wb-rail { padding: .7rem; overflow: auto; max-height: 640px; }
+.wb-canvas { height: 640px; padding: 0; overflow: hidden; position: relative; }
+.wb-canvas vflow { display: block; width: 100%; height: 100%; }
+.wb-canvas mini-map { position: absolute; right: 10px; bottom: 10px; z-index: 5; }
+.wb-zoom { position: absolute; left: 10px; bottom: 10px; z-index: 5; display: flex; gap: .3rem; }
+.wb-edge { display: flex; align-items: center; gap: 3px; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px; }
+.wb-edge-label { border: none; background: transparent; font-size: 11px; color: var(--accent); max-width: 90px; }
+.wb-edge-add { border: none; background: var(--accent-soft); color: var(--accent); border-radius: 50%; width: 16px; height: 16px; font-size: 12px; line-height: 1; cursor: pointer; padding: 0; }
+.wb-insert { position: absolute; z-index: 20; left: 50%; top: 40%; transform: translate(-50%, -50%); padding: .8rem; display: flex; flex-direction: column; gap: .5rem; min-width: 260px; box-shadow: 0 6px 24px var(--shadow-color); }
+.wb-insert-list { display: flex; flex-direction: column; gap: .3rem; max-height: 260px; overflow: auto; }
+.wb-drawer { padding: .7rem; overflow: auto; max-height: 640px; }
+.wb-tabs { display: flex; gap: .3rem; margin-bottom: .6rem; }
+.wb-tab { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: .4rem; padding: .25rem .7rem; cursor: pointer; }
+.wb-tab.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.wb-test { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; padding: .6rem .8rem; }
+.wb-payload { font-family: monospace; min-width: 280px; }
+.wb-status { display: flex; align-items: center; gap: .9rem; padding: .4rem .8rem; font-size: .85rem; }
+.wb-err { color: var(--bad-ink); font-weight: 600; }
+.wb-warn { color: var(--warn-ink); }
+.wb-issues { padding: .5rem .8rem; display: flex; flex-direction: column; gap: .25rem; max-height: 180px; overflow: auto; }
+.wb-issue { text-align: left; border: none; background: transparent; color: var(--warn-ink); cursor: pointer; padding: .15rem 0; }
+.wb-issue.err { color: var(--bad-ink); }
+.wb-issue b { text-transform: uppercase; font-size: .72rem; margin-right: .4rem; }
+.active-tool { outline: 2px solid var(--accent); }
+.wb-replay { height: 320px; }
+.wb-replay vflow { display: block; width: 100%; height: calc(100% - 2rem); }
+@media (max-width: 1100px) { .wb-main { grid-template-columns: 1fr; } .wb-rail, .wb-drawer { max-height: none; } .wb-canvas { height: 420px; } }

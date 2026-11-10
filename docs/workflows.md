@@ -38,7 +38,11 @@ manual change). The workflow itself never merges.
 
 ## Editor
 
-The console page **Workflows** (`/workflows`) lists definitions and recent runs. The editor (`/workflows/edit/:id`)
+The console page **Workflows** (`/workflows`) shows the definitions as **cards**: mini graph thumbnail, step
+count, run stats (runs, ok %, last run), a pause switch, search, Active / Paused / Failed-last-run filter chips,
+sorting, and Run / Edit / Runs / more (duplicate, export, delete, import JSON) actions, then recent runs.
+The **Templates** gallery (`/workflows/templates`) offers the sample workflows by category with the same
+thumbnails; **Use template** creates a copy as a new, **paused** workflow and opens it in the editor. The editor (`/workflows/edit/:id`)
 uses **ngx-vflow** (MIT, Angular-native node-graph editor — <https://github.com/artem-mangilev/ngx-vflow>).
 When the workflow starts on an event, the trigger is drawn as the **first canvas node** (dashed amber look,
 TRIGGER badge, no incoming handle), automatically linked to every root step; it is a visual node only — the
@@ -49,9 +53,38 @@ read-only observability); community Temporal graph editors are experimental. Reu
 framework-native graph library (ngx-vflow, peer dependency Angular >= 19.2.17, this repo uses Angular 22) covers the
 n8n-style editing experience without rebuilding one.
 
-Six sample scenarios can be loaded from the editor: three start manually (onboarding, offboarding, an SoD-blocked
-grant whose merge is refused at review) and three start by themselves on application events (joiner on
-`user.created`, mover into finance on `user.department-changed` with a match filter, leaver on `user.disabled`).
+Eight sample scenarios can be loaded from the editor: three start manually (onboarding, offboarding, an SoD-blocked
+grant whose merge is refused at review), three start by themselves on application events (joiner on
+`user.created`, mover into finance on `user.department-changed` with a match filter, leaver on `user.disabled`), and
+two show the logic blocks (an If/Merge branch on the department, a Loop over the roles of a sheet row).
+
+### Editor workbench (direction C)
+
+The editor is a workbench: a left rail with the searchable block palette (drag & drop onto the canvas, or click),
+a light canvas with minimap, zoom controls and auto-layout (topological layers), a right config drawer with
+**Settings / Input / Output** tabs, and a bottom status bar. Ergonomics:
+
+- **Workbench tabs**: the workflows and runs you open live in a tab bar on top of the editor and run pages
+  (persisted in the browser). Closing the current tab switches to the previous one; `+` goes back to the list.
+- **Active toggle**: the header switch maps to the definition's `active` flag. A paused (inactive) workflow never
+  starts from an event — its triggers are skipped by the dispatch and the sheets poller — but a manual **Run**
+  still works. The flag is kept as-is on a save that does not touch it.
+- **Placeholder picker**: typing `{{` in a step field opens an autocomplete of the placeholders valid there
+  (event payload keys, outputs of upstream steps); arrows + Enter pick, Escape closes. The placeholder chips of
+  the Settings/Input tabs insert into the last edited field (they only copied before).
+- **Insert on link**: every link carries a small `+` that inserts a block rewired between its two ends (the branch
+  label, if any, stays on the upstream half).
+- **Branch links**: logic steps (If / Switch / Loop) label their outgoing links (`true/false`, case keys +
+  `default`, `each/done`); any step can have an `on error` link that catches its failure and lets the run complete.
+  A label editor sits directly on the link.
+- **Undo/redo** (Ctrl+Z / Ctrl+Shift+Z), **copy/paste** of a multi-selection (Ctrl+C/V, selection box, Delete key),
+  workflow **duplicate**, definition **export/import** as JSON.
+- **Live validation** (status bar + clickable issue list): required fields, placeholder references (event keys and
+  upstream step outputs), branch-label rules, cycles, nested loops, disconnected steps. Errors block Save.
+- **Test run**: the Test bar executes the current canvas (unsaved changes included) via `POST /workflows/test-run`
+  with a JSON event payload. Real steps write on a **disposable** `wf-test-<id>` branch dropped when the run ends;
+  test runs are hidden from the default executions list and can never be reviewed. The canvas tints each node with
+  its live outcome.
 
 Initial canvas framing: custom component nodes only report their real size after Angular renders them, so the editor
 does not fit the view on a fixed timer (which raced the measurement and sometimes framed the graph half-clipped or
@@ -116,6 +149,14 @@ adds what is missing):
 - Follow: the run page shows every step in execution order with its status (`pending/running/done/failed/skipped`),
   attempts, and its log; the page auto-refreshes while the run is active.
 - **Retry** (failed or canceled run): re-runs from the failed step; earlier `done` steps are NOT re-executed. A simulated `fail` step recovers on retry, so a retry normally unblocks the run.
+- **Re-run from a step**: on a terminal run, any non-skipped step offers "Re-run from here" - that step and
+  everything downstream reset to pending and the run restarts from there.
+- The **Executions** screen (`/workflows/runs`) lists every run with status quick-filter chips
+  (All / Completed / Failed / Running / Canceled), a workflow filter (preselected from a card's **Runs** link),
+  a test-run filter, durations, and an optional **auto-refresh every 5 s**; the run page replays the graph
+  colored by step status and shows each step's recorded **input**, output and log.
+- On a terminal run: **Re-run** starts a fresh run of the same workflow, **Export log** downloads the run view
+  as JSON, and **Delete run** removes the run record (with its branch) after a confirmation.
 - **Cancel**: stops a running run (a simulated wait ends at the next tick).
 - The run's data branch appears on the run; its commits are visible in Database → History, and the review opens the
   pull request. Deleting definitions while a run is active is refused.
@@ -136,28 +177,40 @@ as Temporal.
 
 ```
 GET    /tenants/:t/workflows-events               start-trigger catalog (events + payload keys)
-GET    /tenants/:t/workflows                      list definitions (+ trigger)
+GET    /tenants/:t/workflows                      list definitions (+ trigger, graph summary, run stats, active flag)
 POST   /tenants/:t/workflows                      create {name, description, graph, trigger?}
 GET    /tenants/:t/workflows/:id                  one definition (+ execution order)
 PUT    /tenants/:t/workflows/:id                  replace
 DELETE /tenants/:t/workflows/:id                  delete (refused while a run is active)
 POST   /tenants/:t/workflows/:id/runs             start a run
-GET    /tenants/:t/workflow-runs[?definition=]    list runs
-GET    /tenants/:t/workflow-runs/:runId           run + steps + logs
+POST   /tenants/:t/workflows/:id/duplicate        copy the definition as "<name> (copy)"
+POST   /tenants/:t/workflows/:id/active           pause/unpause {active: bool} (start triggers only fire when active)
+POST   /tenants/:t/workflows/test-run             run an ad-hoc graph + test payload on a disposable branch
+GET    /tenants/:t/workflow-runs[?definition=&status=&tests=1]  list runs (test runs hidden by default)
+GET    /tenants/:t/workflow-runs/:runId           run + steps (input/output/log) + graph edges
 POST   /tenants/:t/workflow-runs/:runId/retry     retry from the failed step
+POST   /tenants/:t/workflow-runs/:runId/rerun-from/:nodeId  re-run a terminal run from any step
 POST   /tenants/:t/workflow-runs/:runId/cancel    cancel
 POST   /tenants/:t/workflow-runs/:runId/review    open (or reuse) the Dolt pull request for the run branch
+DELETE /tenants/:t/workflow-runs/:runId           delete a terminal run and its branch
 ```
 
 A graph has 1-20 steps, unique ids, typed configs with no unknown keys, and must be acyclic (validated with Kahn's
-algorithm; `apps/api/src/workflows/model.ts`).
+algorithm; `apps/api/src/workflows/model.ts`). Logic steps (`if`, `switch`, `loop`, `merge` - COMPUTED family) add
+branch-label rules: every outgoing link of an if/switch/loop is labeled, an `if` needs a `true` and a `false` link, a
+`switch` a `default` link, a `loop` an `each` link (its body), loops cannot nest, and the `error` label is the only
+label a plain step may use.
 
 ## Tests
 
 - `src/workflows/model.spec.ts`: graph validation, trigger validation, placeholder extraction and substitution
   (10 unit tests, no server needed).
-- `src/workflows/workflows.e2e.spec.ts`: 9 end-to-end tests against a **real Dolt server** (set `DOLT_BIN`; the fake
+- `src/workflows/engine-branching.spec.ts`: 10 unit tests of the branching engine with an in-memory store: If/Switch
+  branch selection, loops (per-iteration body, maxItems cap), merge semantics, error links, step input capture.
+- `src/workflows/workflows.e2e.spec.ts`: 15 end-to-end tests against a **real Dolt server** (set `DOLT_BIN`; the fake
   auth mirrors the real guard's contract, the real AdminGuard is used): simulated run (nothing sent, no branch),
+  editor test-run on a disposable branch (hidden from the default list, never reviewable), error-link routing,
+  duplicate + re-run-from,
   data run on `wf-<run>` with main untouched until the human merge, SoD conflict logged then refused (409), failure
   + skip + retry with simulated recovery, fail mode "always", failed data step leaves earlier commits only, cancel, definition CRUD.
 - `src/workflows/triggers.e2e.spec.ts`: 6 end-to-end tests of the start triggers against a real Dolt server: the
