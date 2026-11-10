@@ -1,0 +1,22 @@
+/* home: workspace strip, overview header with the widgets menu, list widgets and the branch table */
+.ws-strip{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
+.ws-main{flex:1;min-width:14rem;display:flex;flex-direction:column;gap:.15rem}
+.ws-act{display:flex;gap:.5rem;flex-wrap:wrap}
+.ws-act button{margin:0}
+.ov-head{display:flex;align-items:center;gap:.8rem;margin:.4rem 0 .8rem}
+.ov-head h4{margin:0;flex:1}
+.w-head{display:flex;justify-content:space-between;align-items:flex-start;gap:.6rem;flex-wrap:wrap;margin-bottom:.4rem}
+.w-head h4{margin:0}
+.w-head p{margin:.1rem 0 0}
+.w-head select{width:auto}
+.widget{padding-bottom:.6rem}
+.w-row{display:flex;gap:.7rem;align-items:flex-start;width:100%;background:none;border:0;border-top:1px solid var(--line);border-radius:0;margin:0;padding:.6rem .2rem;text-align:left;color:var(--ink);font-weight:400}
+.w-row:hover:not(:disabled){background:var(--row-hover);color:var(--ink)}
+.w-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:.1rem}
+.w-main .hint{font-size:.8rem}
+.dot-o{width:.6rem;height:.6rem;border-radius:50%;border:2px solid var(--accent);margin-top:.35rem;flex:none}
+.chev{color:var(--muted);font-size:1.1rem;align-self:center}
+.w-foot{display:flex;justify-content:space-between;align-items:center;gap:.6rem;border-top:1px solid var(--line);padding-top:.5rem;margin-top:.3rem}
+.chip.merged{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-dark)}
+.hb-table .hint{margin:0}
+@media(max-width:700px){.hb-table .opt{display:none}}

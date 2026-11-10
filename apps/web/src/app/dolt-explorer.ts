@@ -13,7 +13,7 @@ interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; trunc
  * refs, tables and rows at any ref, a guarded SQL console and pull requests. Everything is read from the API; nothing here
  * decides what is allowed (the server enforces protected branches, SQL limits and merge checks).
  */
-@Component({ selector: 'app-dolt-explorer', imports: [FormsModule, NgTemplateOutlet, RouterLink], templateUrl: './dolt-explorer.html', styleUrls: ['./dolt-explorer.css', './dolt-explorer-data.css'] })
+@Component({ selector: 'app-dolt-explorer', imports: [FormsModule, NgTemplateOutlet, RouterLink], templateUrl: './dolt-explorer.html', styleUrls: ['./dolt-explorer.css', './dolt-explorer-data.css', './dolt-explorer-home.css'] })
 export class DoltExplorer {
   @Input({ required: true }) api!: ApiClient;
   /** The section shown, driven by the route (/database/:tab). Internal jumps (e.g. branch -> compare) are announced through `navigate`. */
@@ -25,10 +25,26 @@ export class DoltExplorer {
   protected v!: VersioningClient;
   protected readonly tab = signal<Tab>('home');
 
-  // home: database overview (stats, recent activity, workspace state). Read only: it only assembles what the other sections use.
-  protected readonly homeStats = signal<{ branches: number; defaultBranch: string; openPulls: number; commits: number; commitsMore: boolean; commitsThisWeek: number; tables: number; tableRows: number; onRef: string } | null>(null);
-  protected readonly activity = signal<{ kind: 'commit' | 'pr'; hash?: string; prId?: number; prState?: string; text: string; branch?: string; when: string }[]>([]);
+  // home: database overview (stat cards, workspace strip and the Latest pull requests / Latest changes / Recently active branches widgets). Read only: it only assembles what the other sections use.
+  protected readonly homeStats = signal<{ branches: number; protectedCount: number; defaultBranch: string; openPulls: number; prsToFix: number; commitsThisWeek: number; tables: number; tableRows: number; onRef: string } | null>(null);
   protected readonly workspace = signal<{ branch: string; protected: boolean; ahead: number; behind: number; changedRows: number | null; openPr: number | null } | null>(null);
+  protected readonly homeLimit = signal(5);
+  protected readonly changesRef = signal('');
+  protected readonly widgetMenu = signal(false);
+  protected readonly hiddenWidgets = signal<ReadonlySet<string>>(new Set());
+  protected readonly homePrs = signal<{ p: PullRequestInfo; line: string; ok: boolean; ko: boolean }[]>([]);
+  protected readonly homeChanges = signal<{ c: CommitInfo; branch: string; summary: string }[]>([]);
+  protected readonly homeBranches = signal<BranchInfo[]>([]);
+  protected readonly branchRows = signal<Record<string, number | null>>({});
+  protected readonly homeLoadedAt = signal<Date | null>(null);
+  protected readonly widgetDefs = [
+    { key: 'stats', label: 'Numbers' }, { key: 'workspace', label: 'Your workspace' },
+    { key: 'prs', label: 'Latest pull requests' }, { key: 'changes', label: 'Latest changes' }, { key: 'branches', label: 'Recently active branches' }];
+  private allHomePrs: PullRequestInfo[] = [];
+  private allHomeChanges: { c: CommitInfo; branch: string }[] = [];
+  private allHomeBranches: BranchInfo[] = [];
+  private prLines = new Map<number, { line: string; ok: boolean; ko: boolean }>();
+  private commitSummaries = new Map<string, string>();
   protected readonly note = signal('');
   protected readonly busy = signal(false);
   protected readonly short = shortHash;
@@ -140,6 +156,7 @@ export class DoltExplorer {
 
   async ngOnInit() {
     try { this.savedQueries.set(JSON.parse(localStorage.getItem('dolt-saved-queries') ?? '[]')); } catch { this.savedQueries.set([]); }
+    try { this.hiddenWidgets.set(new Set(JSON.parse(localStorage.getItem('dolt-home-widgets') ?? '[]'))); } catch { this.hiddenWidgets.set(new Set()); }
     this.v = new VersioningClient(this.api);
     // one admin capability token for the whole console (shell sidebar); read at each call, never stored anywhere else
     Object.defineProperty(this.v, 'adminToken', { get: () => this.session.adminToken(), set: () => {}, configurable: true });
@@ -162,40 +179,87 @@ export class DoltExplorer {
   }
 
   // ---- home ----
-  /** Assembles the overview: counts, the latest commits and pull-request events, and the state of the working branch. */
+  /** Assembles the overview: counts, workspace state, and the three widgets (pull requests, committed changes, active branches), newest first. */
   protected async loadHome() {
     await this.run(async () => {
       await this.refreshRefs();
       const def = this.defaultBranch(), current = this.session.branch() || def;
-      const pulls = await this.v.pulls();
-      const tbl = await this.v.tables(current);
-      const logR = await this.v.log(def, 0);
+      const bs = this.branches();
+      const [pulls, tbl, ...logs] = await Promise.all([this.v.pulls(), this.v.tables(current), ...bs.map((b) => this.v.log(b.name, 0))]);
       const weekAgo = Date.now() - 7 * 864e5;
+      // one union of every branch log, each commit tagged with the first (newest) branch that contains it
+      const seen = new Map<string, { c: CommitInfo; branch: string }>();
+      bs.forEach((b, i) => { for (const c of logs[i]?.commits ?? []) if (!seen.has(c.commit)) seen.set(c.commit, { c, branch: b.name }); });
+      this.allHomeChanges = [...seen.values()].sort((x, y) => Date.parse(y.c.date) - Date.parse(x.c.date));
+      const updated = (p: PullRequestInfo) => p.mergedAt ?? p.createdAt;
+      this.allHomePrs = [...pulls.pullRequests].sort((a, b) => Date.parse(updated(b)) - Date.parse(updated(a)));
+      this.allHomeBranches = [...bs].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+      // review state of every open pull request (drives the KPI sub-line and the widget status line)
+      this.prLines = new Map();
+      let prsToFix = 0;
+      for (const p of pulls.pullRequests.filter((x) => x.status === 'open')) {
+        const d = await this.v.pull(p.id);
+        const good = !!d.checks?.mergeable && !d.checks.violations.length;
+        if (!good) prsToFix++;
+        this.prLines.set(p.id, { line: `${good ? '\u2713 Checks passed' : '\u26A0 Checks to fix'} · ${d.approvals.length} of ${d.requiredApprovals} approval${d.requiredApprovals === 1 ? '' : 's'} · ${this.rel(p.createdAt)}`, ok: good, ko: !good });
+      }
       this.homeStats.set({
-        branches: this.branches().length, defaultBranch: def,
-        openPulls: pulls.pullRequests.filter((p) => p.status === 'open').length,
-        commits: logR.commits.length, commitsMore: logR.hasMore,
-        commitsThisWeek: logR.commits.filter((c) => Date.parse(c.date) >= weekAgo).length,
+        branches: bs.length, protectedCount: bs.filter((b) => b.protected).length, defaultBranch: def,
+        openPulls: pulls.pullRequests.filter((p) => p.status === 'open').length, prsToFix,
+        commitsThisWeek: this.allHomeChanges.filter((x) => Date.parse(x.c.date) >= weekAgo).length,
         tables: tbl.tables.length, tableRows: tbl.tables.reduce((n, t) => n + t.rows, 0), onRef: current,
       });
-      const commits = [...logR.commits];
-      if (current !== def) {
-        const mine = await this.v.log(current, 0, 10);
-        commits.push(...mine.commits.filter((c) => !commits.some((x) => x.commit === c.commit)));
-      }
-      const feed = [
-        ...commits.map((c) => ({ kind: 'commit' as const, hash: c.commit, text: c.message, branch: c.refs.find((r) => r === current) ?? c.refs.find((r) => r === def) ?? current, when: c.date })),
-        ...pulls.pullRequests.flatMap((p) => [
-          { kind: 'pr' as const, prId: p.id, prState: 'opened', text: `${p.author} opened PR #${p.id} "${p.title}"`, when: p.createdAt },
-          ...(p.mergedAt ? [{ kind: 'pr' as const, prId: p.id, prState: 'merged', text: `PR #${p.id} "${p.title}" merged into ${p.target}`, when: p.mergedAt }] : []),
-        ]),
-      ];
-      this.activity.set(feed.sort((x, y) => Date.parse(y.when) - Date.parse(x.when)).slice(0, 8));
-      const wb = this.branches().find((x) => x.name === current);
+      const wb = bs.find((x) => x.name === current);
       let changedRows: number | null = null;
       if (wb && !wb.default && wb.aheadOfDefault > 0) changedRows = (await this.v.diff(def, current, true)).rows?.total ?? null;
       this.workspace.set({ branch: current, protected: !!wb?.protected, ahead: wb?.aheadOfDefault ?? 0, behind: wb?.behindDefault ?? 0, changedRows, openPr: pulls.pullRequests.find((p) => p.status === 'open' && p.source === current)?.id ?? null });
+      await this.enrichHome();
+      this.homeLoadedAt.set(new Date());
     });
+  }
+  /** (Re)builds the visible slice of the three widgets after a limit/filter change; per-item details are cached. */
+  protected async enrichHome() {
+    const n = this.homeLimit(), def = this.defaultBranch();
+    this.homePrs.set(this.allHomePrs.slice(0, n).map((p) => {
+      const d = this.prLines.get(p.id);
+      const line = p.status === 'merged' ? `Merged · ${this.rel(p.mergedAt ?? p.createdAt)}` : p.status === 'closed' ? `Closed · ${this.rel(p.createdAt)}` : (d?.line ?? this.rel(p.createdAt));
+      return { p, line, ok: p.status === 'open' && (d?.ok ?? false), ko: p.status === 'open' && (d?.ko ?? false) };
+    }));
+    const changes = this.allHomeChanges.filter((x) => !this.changesRef() || x.branch === this.changesRef()).slice(0, n);
+    for (const x of changes) if (!this.commitSummaries.has(x.c.commit)) this.commitSummaries.set(x.c.commit, this.changeSummary(await this.v.commit(x.c.commit)));
+    this.homeChanges.set(changes.map((x) => ({ ...x, summary: this.commitSummaries.get(x.c.commit) ?? '' })));
+    const shown = this.allHomeBranches.slice(0, n);
+    for (const b of shown.filter((b) => !b.default && b.aheadOfDefault > 0 && this.branchRows()[b.name] === undefined)) {
+      this.branchRows.update((m) => ({ ...m, [b.name]: null }));
+      const d = await this.v.diff(def, b.name, true);
+      this.branchRows.update((m) => ({ ...m, [b.name]: d.rows?.total ?? 0 }));
+    }
+    this.homeBranches.set(shown);
+  }
+  /** "roles · 1 modified row +2 more" for a commit; "no data change" when it only carries schema or metadata. */
+  private changeSummary(d: { changes: DiffSummary['tables'] }): string {
+    const data = d.changes.filter((t) => t.dataChange);
+    if (!data.length) return d.changes.length ? 'schema change only' : 'no data change';
+    const t = data[0];
+    const parts = [t.rows?.added ? `+${t.rows.added}` : '', t.rows?.removed ? `\u2212${t.rows.removed}` : '', t.rows?.modified ? `${t.rows.modified} modified` : ''].filter(Boolean).join(', ');
+    return `${t.table} · ${parts || 'rows changed'}${data.length > 1 ? ` · +${data.length - 1} more table${data.length > 2 ? 's' : ''}` : ''}`;
+  }
+  protected shown(key: string) { return !this.hiddenWidgets().has(key); }
+  protected toggleWidget(key: string) {
+    const s = new Set(this.hiddenWidgets());
+    if (s.has(key)) s.delete(key); else s.add(key);
+    this.hiddenWidgets.set(s); localStorage.setItem('dolt-home-widgets', JSON.stringify([...s]));
+  }
+  protected async setHomeLimit(n: number) { this.homeLimit.set(n); await this.enrichHome(); }
+  protected async setChangesRef(r: string) { this.changesRef.set(r); await this.enrichHome(); }
+  /** Opens a committed change in the History inspector. */
+  protected openChange(x: { c: CommitInfo; branch: string }) { this.histRef = x.branch; void this.open('history').then(() => this.showCommit(x.c)); }
+  protected browseData(ref: string) { this.dataRef = ref; void this.open('data'); }
+  protected branchNote(b: BranchInfo): string {
+    if (b.name === this.sessionBranch()) { const pr = this.allHomePrs.find((p) => p.status === 'open' && p.source === b.name); return pr ? `Your workspace · PR #${pr.id} open` : 'Your workspace'; }
+    if (b.default) return `${b.protected ? 'Protected · ' : ''}default`;
+    const pr = this.allHomePrs.find((p) => p.status === 'open' && p.source === b.name);
+    return pr ? `PR #${pr.id} open` : 'No pull request';
   }
   protected goReview() { void this.router.navigateByUrl('/review'); }
   /** "2 h ago", "yesterday", "5 d ago": short relative dates for the activity feed and the cards. */

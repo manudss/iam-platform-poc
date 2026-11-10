@@ -47,27 +47,42 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     return mount(r);
   };
 
-  it('home: overview cards, activity feed and the workspace panel, all read from the API', async () => {
-    const { el } = await mountHome();
+  it('home: stat cards, the three widgets and the workspace strip, all read from the API', async () => {
+    const { f, el, c } = await mountHome({
+      'GET /versioning/commits/': () => ({ data: { commit: 'm'.repeat(32), message: 'seed: demo data', author: 'demo-seed', date: new Date().toISOString(), parents: [], changes: [{ table: 'roles', from: null, kind: 'modified', dataChange: true, schemaChange: false, rows: { added: 1, modified: 0, removed: 0 } }] } }),
+      'GET /versioning/pulls/3': () => ({ data: { pullRequest: { id: 3 }, comments: [], approvals: ['demo-bob'], requiredApprovals: 1, commits: [], diff: null, checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] } } }),
+      'GET /versioning/diff?from=main&to=feat-a': () => ({ data: { from: 'main', to: 'feat-a', three: true, rows: { added: 3, modified: 0, removed: 0, total: 3 }, tables: [], schema: [] } }),
+    });
     const stats = [...el.querySelectorAll('.stat')].map((x) => x.textContent ?? '');
-    expect(stats.some((t) => t.includes('Branches') && t.includes('main'))).toBe(true);
-    expect(stats.some((t) => t.includes('Open pull request') && t.includes('awaiting merge'))).toBe(true);
+    expect(stats.some((t) => t.includes('Branches') && t.includes('default main'))).toBe(true);
+    expect(stats.some((t) => t.includes('Open pull request') && t.includes('all checks pass'))).toBe(true);
+    expect(stats.some((t) => t.includes('Commits this week') && t.includes('Across all branches'))).toBe(true);
     expect(stats.some((t) => t.includes('Tables') && t.includes('main'))).toBe(true);
-    const feed = el.querySelector('.feed')?.textContent ?? '';
-    expect(feed).toContain('seed: demo data');
-    expect(feed).toContain('opened PR #3');
-    expect(feed).toContain('merged');
-    const ws = el.textContent ?? '';
-    expect(ws).toContain('Your workspace'); expect(ws).toContain('protected');
-    expect(ws).toContain('Jump to');
+    const text = el.textContent ?? '';
+    expect(text).toContain('Latest pull requests'); expect(text).toContain('Grant hr-partner'); expect(text).toContain('Checks passed');
+    expect(text).toContain('Latest changes'); expect(text).toContain('seed: demo data'); expect(text).toContain('roles · +1');
+    expect(text).toContain('Recently active branches'); expect(text).toContain('feat-a'); expect(text).toContain('2 ahead'); expect(text).toContain('3 rows');
+    expect(text).toContain('Your workspace');
+    // the widgets menu hides a section, and the choice survives a reload (localStorage)
+    (el.querySelector('.ov-head .menu-wrap > button') as HTMLButtonElement).click(); f.detectChanges();
+    const item = [...el.querySelectorAll('.ov-head .menu button')].find((b) => b.textContent?.includes('Recently active branches')) as HTMLButtonElement;
+    item.click(); f.detectChanges();
+    expect(el.textContent).not.toContain('Ordered by latest commit');
+    expect(c['hiddenWidgets']().has('branches')).toBe(true);
+    item.click(); f.detectChanges();
+    expect(el.textContent).toContain('Ordered by latest commit');
+    // a change row opens the commit in the History inspector
+    const row = [...el.querySelectorAll('.w-row')].find((b) => b.textContent?.includes('seed: demo data')) as HTMLButtonElement;
+    row.click(); await f.whenStable(); f.detectChanges();
+    expect(c['tab']()).toBe('history');
   });
-  it('home: the workspace panel offers the open pull request of the working branch', async () => {
+  it('home: the workspace strip offers the open pull request of the working branch', async () => {
     const { f, el, c } = await mountHome();
     c['workspace'].set({ branch: 'feat-a', protected: false, ahead: 2, behind: 1, changedRows: 3, openPr: 3 });
     f.detectChanges();
-    const text = el.textContent ?? '';
-    expect(text).toContain('feat-a'); expect(text).toContain('3 changed rows'); expect(text).toContain('Open PR #3');
-    expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('Review & apply to main'))).toBe(true);
+    const strip = el.querySelector('.ws-strip')?.textContent ?? '';
+    expect(strip).toContain('feat-a'); expect(strip).toContain('3 changed rows'); expect(strip).toContain('Open PR #3');
+    expect([...el.querySelectorAll('.ws-strip button')].some((b) => b.textContent?.includes('Review & apply'))).toBe(true);
   });
 
   const branches = { default: 'main', branches: [
@@ -80,6 +95,9 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     'GET /versioning/tables?': () => ({ data: { ref: 'main', kind: 'branch', tables: [{ name: 'roles', rows: 1 }] } }),
     'GET /versioning/tables/roles?ref=main': () => ({ data: tableOf('main') }), 'GET /versioning/tables/roles?ref=feat-a': () => ({ data: tableOf('feat-a') }),
     'GET /versioning/log': () => ({ data: { ref: 'main', commits: [{ commit: 'm'.repeat(32), author: 'demo-seed', date: new Date().toISOString(), message: 'seed: demo data', parents: [], refs: ['main'], merge: false }], hasMore: false } }),
+    'GET /versioning/commits/': () => ({ data: { commit: 'm'.repeat(32), message: 'seed: demo data', author: 'demo-seed', date: new Date().toISOString(), parents: [], changes: [] } }),
+    'GET /versioning/pulls/': () => ({ data: { pullRequest: {}, comments: [], approvals: [], requiredApprovals: 1, commits: [], diff: null, checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] } } }),
+    'GET /versioning/diff?': () => ({ data: { from: 'main', to: 'feat-a', three: true, rows: { added: 0, modified: 0, removed: 0, total: 0 }, tables: [], schema: [] } }),
     'GET /versioning/pulls': () => ({ data: { pullRequests: [] } }), ...extra });
   const mount = async (r: ReturnType<typeof routes>) => {
     const { api, calls } = fakeApi(r);
@@ -274,7 +292,8 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     const detail3 = { pullRequest: list.pullRequests[0], comments: [], approvals: ['demo-bob'], requiredApprovals: 1, commits: [], checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] }, diff: { from: 'main', to: 'feat-a', three: true, rows: { added: 9, modified: 0, removed: 1, total: 10 }, tables: [], schema: [] } };
     const detail2 = { pullRequest: list.pullRequests[1], comments: [], approvals: [], requiredApprovals: 1, commits: [], checks: null, diff: null };
     const { f, el, c } = await mount(routes({
-      'GET /versioning/pulls': (cc) => cc.path.includes('/pulls/3') ? ({ data: detail3 }) : cc.path.includes('/pulls/2') ? ({ data: detail2 }) : ({ data: list }) }));
+      'GET /versioning/pulls/': (cc) => cc.path.includes('/pulls/3') ? ({ data: detail3 }) : ({ data: detail2 }),
+      'GET /versioning/pulls': () => ({ data: list }) }));
     f.componentRef.setInput('section', 'pulls'); await f.whenStable(); await new Promise((r) => setTimeout(r, 0)); f.detectChanges();
     const text = el.textContent ?? '';
     expect(text).toContain('Open 1'); expect(text).toContain('Merged 1');

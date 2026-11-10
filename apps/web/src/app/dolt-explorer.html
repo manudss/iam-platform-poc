@@ -50,7 +50,7 @@
       <div class="page-head">
         <div>
           <h3 class="page-title">Database</h3>
-          <p class="page-sub">Versioned with Dolt: every change is a commit on a branch, merged through review.</p>
+          <p class="page-sub">Versioned data, recent changes and reviews in one place.</p>
         </div>
         <div class="page-actions">
           <button type="button" class="secondary" (click)="go('sql')">Open SQL console</button>
@@ -58,49 +58,105 @@
         </div>
       </div>
       @if (homeStats(); as st) {
-        <div class="stats">
-          <div class="stat"><span class="n">{{ st.branches }}</span><span class="l">Branches · default <b>{{ st.defaultBranch }}</b></span></div>
-          <div class="stat"><span class="n">{{ st.openPulls }}</span><span class="l">Open pull request{{ st.openPulls === 1 ? '' : 's' }} · awaiting merge</span></div>
-          <div class="stat"><span class="n">{{ st.commits }}{{ st.commitsMore ? '+' : '' }}</span><span class="l">Commits · {{ st.commitsThisWeek }} this week</span></div>
-          <div class="stat"><span class="n">{{ st.tables }}</span><span class="l">Tables · {{ st.tableRows }} rows on {{ st.onRef }}</span></div>
+        @if (shown('stats')) {
+          <div class="stats">
+            <div class="stat"><span class="n">{{ st.branches }}</span><span class="l">Branches</span><span class="hint">{{ st.protectedCount }} protected · default {{ st.defaultBranch }}</span></div>
+            <div class="stat"><span class="n">{{ st.openPulls }}</span><span class="l">Open pull request{{ st.openPulls === 1 ? '' : 's' }}</span><span class="hint">{{ st.prsToFix ? st.prsToFix + ' with checks to fix' : 'all checks pass' }}</span></div>
+            <div class="stat"><span class="n">{{ st.commitsThisWeek }}</span><span class="l">Commits this week</span><span class="hint">Across all branches</span></div>
+            <div class="stat"><span class="n">{{ st.tables }}</span><span class="l">Tables</span><span class="hint">{{ st.tableRows }} rows on {{ st.onRef }}</span></div>
+          </div>
+        }
+        @if (shown('workspace') && workspace(); as w) {
+          <div class="card ws-strip">
+            <span class="branch-ico" aria-hidden="true">&#x2372;</span>
+            <div class="ws-main">
+              <b>Your workspace</b> <span class="chip" [class.lock]="w.protected">{{ w.branch }}</span>
+              <span class="hint">@if (w.protected) { Protected: direct writes refused, every change lands through review. } @else { {{ w.ahead }} commit{{ w.ahead === 1 ? '' : 's' }} ahead of {{ st.defaultBranch }}@if (w.changedRows !== null) { · {{ w.changedRows }} changed row{{ w.changedRows === 1 ? '' : 's' }} }@if (w.openPr !== null) { · PR #{{ w.openPr }} open } }</span>
+            </div>
+            <div class="ws-act">
+              @if (w.openPr !== null) { <button type="button" class="secondary" (click)="showPull(w.openPr); go('pulls')">Open PR #{{ w.openPr }}</button> }
+              @if (!w.protected) { <button type="button" (click)="goReview()">Review &amp; apply ⇥</button> }
+            </div>
+          </div>
+        }
+        <div class="ov-head">
+          <h4>Overview</h4>
+          <span class="hint">Updated {{ homeLoadedAt() ? rel(homeLoadedAt()!.toISOString()) : '...' }}</span>
+          <span class="menu-wrap">
+            <button type="button" class="secondary" [attr.aria-expanded]="widgetMenu()" (click)="widgetMenu.set(!widgetMenu())">&#x2699; Widgets</button>
+            @if (widgetMenu()) {
+              <span class="menu">
+                @for (wd of widgetDefs; track wd.key) { <button type="button" (click)="toggleWidget(wd.key)">@if (shown(wd.key)) { &#x2713; } @else { &#x25CB; } {{ wd.label }}</button> }
+              </span>
+            }
+          </span>
         </div>
         <div class="home-cols">
-          <div class="card">
-            <h4>Recent activity</h4>
-            <ul class="feed">
-              @for (a of activity(); track $index) {
-                <li>
-                  @if (a.kind === 'commit') { <code>{{ short(a.hash) }}</code> {{ a.text }} on <b>{{ a.branch }}</b> }
-                  @else { <span class="chip" [class.ok]="a.prState === 'merged'">{{ a.prState }}</span> {{ a.text }} }
-                  <span class="hint">· {{ rel(a.when) }}</span>
-                </li>
-              }
-              @empty { <li class="hint">Nothing yet: commits and pull requests will appear here.</li> }
-            </ul>
-          </div>
-          <div class="card">
-            @if (workspace(); as w) {
-              <h4>Your workspace</h4>
-              <p>You are on <b class="chip" [class.lock]="w.protected">{{ w.branch }}</b>
-                @if (w.protected) { (protected): direct writes refused, every change lands through review. }
-                @else { , {{ w.ahead }} ahead of {{ homeStats()?.defaultBranch }}@if (w.changedRows !== null) { , {{ w.changedRows }} changed row{{ w.changedRows === 1 ? '' : 's' }} waiting }. }
-              </p>
-              <div class="row">
-                @if (!w.protected) { <button type="button" (click)="goReview()">Review &amp; apply to main ⇥</button> }
-                @if (w.openPr !== null) { <button type="button" class="secondary" (click)="showPull(w.openPr); go('pulls')">Open PR #{{ w.openPr }}</button> }
+          @if (shown('prs')) {
+            <div class="card widget">
+              <div class="w-head">
+                <div><h4>Latest pull requests</h4><p class="hint">All branches · newest updated first</p></div>
+                <select name="hlp" [ngModel]="homeLimit()" (ngModelChange)="setHomeLimit(+$event)" aria-label="How many pull requests to show">@for (n of [5, 10, 20]; track n) { <option [value]="n">Show {{ n }}</option> }</select>
               </div>
-            }
-            <h4>Jump to</h4>
-            <p class="jump">
-              <button type="button" class="link" (click)="go('branches')">Branches</button> ·
-              <button type="button" class="link" (click)="go('history')">History</button> ·
-              <button type="button" class="link" (click)="go('compare')">Compare</button> ·
-              <button type="button" class="link" (click)="go('data')">Data</button> ·
-              <button type="button" class="link" (click)="go('sql')">SQL</button> ·
-              <button type="button" class="link" (click)="go('pulls')">Pull requests</button>
-            </p>
-          </div>
+              @for (x of homePrs(); track x.p.id) {
+                <button type="button" class="w-row" (click)="showPull(x.p.id); go('pulls')">
+                  <span class="branch-ico" aria-hidden="true">&#x2372;</span>
+                  <span class="w-main">
+                    <b>{{ x.p.title }} <span class="hint">#{{ x.p.id }}</span></b>
+                    <span class="hint">{{ x.p.source }} &#x2192; {{ x.p.target }}</span>
+                    <span class="hint" [class.ok]="x.ok" [class.ko]="x.ko">{{ x.line }}</span>
+                  </span>
+                  <span class="chip" [class.ok]="x.p.status === 'open'" [class.merged]="x.p.status === 'merged'">{{ x.p.status }}</span>
+                </button>
+              } @empty { <p class="hint">No pull request yet.</p> }
+              <div class="w-foot"><span class="hint">{{ prCount('all') }} pull request{{ prCount('all') === 1 ? '' : 's' }}</span><button type="button" class="link" (click)="go('pulls')">View all pull requests &#x2192;</button></div>
+            </div>
+          }
+          @if (shown('changes')) {
+            <div class="card widget">
+              <div class="w-head">
+                <div><h4>Latest changes</h4><p class="hint">Committed changes</p></div>
+                <select name="hlc" [ngModel]="homeLimit()" (ngModelChange)="setHomeLimit(+$event)" aria-label="How many commits to show">@for (n of [5, 10, 20]; track n) { <option [value]="n">Show {{ n }}</option> }</select>
+                <select name="hcb" [ngModel]="changesRef()" (ngModelChange)="setChangesRef($event)" aria-label="Branch"><option value="">All branches</option>@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select>
+              </div>
+              @for (x of homeChanges(); track x.c.commit) {
+                <button type="button" class="w-row" (click)="openChange(x)">
+                  <span class="dot-o" aria-hidden="true"></span>
+                  <span class="w-main">
+                    <b>{{ x.c.message }}</b>
+                    <span class="hint">{{ x.summary }}</span>
+                    <span class="hint"><span class="chip">{{ x.branch }}</span> {{ x.c.author }} · {{ rel(x.c.date) }}</span>
+                  </span>
+                  <span class="chev" aria-hidden="true">&#x203A;</span>
+                </button>
+              } @empty { <p class="hint">No commit on this branch yet.</p> }
+              <div class="w-foot"><span class="hint">Last {{ homeChanges().length }} commits</span><button type="button" class="link" (click)="go('history')">View history &#x2192;</button></div>
+            </div>
+          }
         </div>
+        @if (shown('branches')) {
+          <div class="card widget">
+            <div class="w-head">
+              <div><h4>Recently active branches</h4><p class="hint">Ordered by latest commit, not creation date</p></div>
+              <select name="hlb" [ngModel]="homeLimit()" (ngModelChange)="setHomeLimit(+$event)" aria-label="How many branches to show">@for (n of [5, 10, 20]; track n) { <option [value]="n">Show {{ n }}</option> }</select>
+            </div>
+            <div class="scroll"><table class="grid hb-table">
+              <thead><tr><th>Branch</th><th class="opt">Last commit</th><th>Compared with {{ st.defaultBranch }}</th><th class="opt">Changed</th><th></th></tr></thead>
+              <tbody>
+                @for (b of homeBranches(); track b.name) {
+                  <tr>
+                    <td><span class="branch-ico" aria-hidden="true">&#x2372;</span> <b>{{ b.name }}</b><div class="hint">{{ branchNote(b) }}</div></td>
+                    <td class="opt">{{ rel(b.date) }}</td>
+                    <td>@if (b.default) { <span class="hint">Up to date</span> } @else { <b class="ok">{{ b.aheadOfDefault }} ahead</b> <span class="hint">{{ b.behindDefault }} behind</span> }</td>
+                    <td class="opt">@if (b.default) { <span class="hint">—</span> } @else if (branchRows()[b.name] === undefined || branchRows()[b.name] === null) { <span class="hint">…</span> } @else { {{ branchRows()[b.name] }} row{{ branchRows()[b.name] === 1 ? '' : 's' }} }</td>
+                    <td class="r">@if (b.default) { <button type="button" class="secondary" (click)="browseData(b.name)">Browse data &#x2197;</button> } @else { <button type="button" class="secondary" (click)="compareWithDefault(b.name)">Compare &#x2197;</button> }</td>
+                  </tr>
+                }
+              </tbody>
+            </table></div>
+            <div class="w-foot"><span class="hint">{{ homeBranches().length }} of {{ branches().length }} branches</span><button type="button" class="link" (click)="go('branches')">View all branches &#x2192;</button></div>
+          </div>
+        }
         <p class="hint">Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (Users, Plugins and Assignments use separate validated administration routes to Dolt <code>main</code>.)</p>
       }
     }
