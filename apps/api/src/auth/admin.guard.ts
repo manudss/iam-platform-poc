@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { timingSafeEqual } from 'node:crypto';
+import { createConnection } from 'mysql2/promise';
 import { screenAccessOn, askScreen, screensFor } from './screen-decision.js';
 
 /**
@@ -37,6 +38,13 @@ export class AdminGuard implements CanActivate {
     const m = /\/tenants\/([^/]+)\/(.*)$/.exec(String(req.originalUrl ?? req.url ?? ''));
     const tenant = decodeURIComponent(m?.[1] ?? process.env.IAM_TENANT ?? 'acme-demo');
     const candidates = m ? screensFor(String(req.method ?? 'GET'), m[2]) : [];
+    // Without the branch-manage screen the caller works only on main (read) or on her own personal branch: any other x-iam-branch is refused.
+    const hb = req.headers?.['x-iam-branch'];
+    if (typeof hb === 'string' && hb && hb !== 'main' && !(m && /^workspace\/personal\/?(\?.*)?$/.test(m[2]) && String(req.method).toUpperCase() === 'POST')) {
+      let manage = false;
+      try { manage = (await askScreen(tenant, sub, 'branch-manage')).allow; } catch { manage = false; }
+      if (!manage && !(await ownsPersonalBranch(tenant, sub, hb))) throw new ForbiddenException({ code: 'branch-not-permitted', message: `You may only work on your own personal branch: ${hb} is not yours. Choosing another branch needs the branch-manage screen.` });
+    }
     const tryScreens = candidates.length ? candidates : ['unmapped'];
     let engine = true;
     try {
@@ -61,4 +69,13 @@ export class PolicyAdminGuard extends AdminGuard {
     }
     return true;
   }
+}
+
+/** True when `branch` is the personal branch registered for this user (survives a rename). */
+export async function ownsPersonalBranch(tenant: string, sub: string, branch: string): Promise<boolean> {
+  const db = `${process.env.DOLT_DATABASE ?? 'iam'}_meta`.replace(/[^A-Za-z0-9_]/g, '');
+  try {
+    const c = await createConnection({ host: process.env.DOLT_HOST ?? '127.0.0.1', port: Number(process.env.DOLT_PORT ?? 3307), user: process.env.DOLT_USER ?? 'root', password: process.env.DOLT_PASSWORD ?? '', database: db, connectTimeout: 5000 });
+    try { const [r] = await c.query('select 1 from personal_branches where tenant = ? and sub = ? and branch = ?', [tenant, sub, branch]); return (r as unknown[]).length > 0; } finally { await c.end(); }
+  } catch { return false; }
 }

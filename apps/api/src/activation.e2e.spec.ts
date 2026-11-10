@@ -195,8 +195,8 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-data', 'users', 'dashboard', 'branch-manage']) assert.equal(await screen('alice-sa', sc), true, `super admin opens ${sc}`);
     for (const sc of ['users', 'profile-reviews', 'assignments', 'my-profile']) assert.equal(await screen('lucie-sa', sc), true, `manager opens ${sc}`);
     for (const sc of ['roles', 'policies', 'activation', 'dashboard', 'dolt-sql', 'dolt-data', 'dolt-pulls', 'plugins', 'branch-manage']) assert.equal(await screen('lucie-sa', sc), false, `manager does not open ${sc}`);
-    for (const sc of ['dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'my-profile']) assert.equal(await screen('noemie-sa', sc), true, `main-merger opens ${sc}`);
-    for (const sc of ['dolt-data', 'dolt-edit', 'dolt-sql', 'users', 'roles', 'policies', 'activation', 'dashboard', 'plugins', 'branch-manage']) assert.equal(await screen('noemie-sa', sc), false, `main-merger does not open ${sc}`);
+    for (const sc of ['dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'branch-manage', 'my-profile']) assert.equal(await screen('noemie-sa', sc), true, `main-merger opens ${sc}`);
+    for (const sc of ['dolt-data', 'dolt-edit', 'dolt-sql', 'users', 'roles', 'policies', 'activation', 'dashboard', 'plugins']) assert.equal(await screen('noemie-sa', sc), false, `main-merger does not open ${sc}`);
     for (const sc of ['users', 'profile-reviews', 'assignments', 'my-profile']) assert.equal(await screen('noah-sa', sc), true, `org admin opens ${sc}`);
     for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-pulls', 'dashboard', 'branch-manage']) assert.equal(await screen('noah-sa', sc), false, `org admin does not open ${sc}`);
     assert.equal(await screen('bob-sa', 'my-profile'), true); assert.equal(await screen('bob-sa', 'users'), false); assert.equal(await screen('bob-sa', 'dolt-pulls'), false);

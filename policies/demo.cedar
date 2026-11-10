@@ -79,10 +79,10 @@ permit(principal, action == Action::"screen:open", resource)
   when { resource in [Screen::"users", Screen::"profile-reviews", Screen::"assignments"] && context has roles && (context.roles.contains("manager") || context.roles.contains("org-admin")) };
 
 @id("screen-branch-governance")
-@description("Merge and branch governance roles open Pull requests, Compare, History and Branches, never Data, SQL or configuration.")
+@description("Merge and branch governance roles open Pull requests, Compare, History, Branches and the branch selector, never Data, SQL or configuration.")
 @pillar("access")
 permit(principal, action == Action::"screen:open", resource)
-  when { resource in [Screen::"dolt-pulls", Screen::"dolt-compare", Screen::"dolt-history", Screen::"dolt-branches"] && context has roles && (context.roles.contains("main-merger") || context.roles.contains("branch-merger")) };
+  when { resource in [Screen::"dolt-pulls", Screen::"dolt-compare", Screen::"dolt-history", Screen::"dolt-branches", Screen::"branch-manage"] && context has roles && (context.roles.contains("main-merger") || context.roles.contains("branch-merger")) };
 
 @id("screen-my-profile")
 @description("Everyone signed in opens their own profile.")
