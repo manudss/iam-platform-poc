@@ -18,7 +18,7 @@ const TEST_KEY = 'iam.branch.test';
 /** Reads and stashes the branch-test parameters of a test link (docs/branch-test.md). Both or neither; main is never a test. */
 function testParams(q: URLSearchParams): { branch: string; ticket: string } | null {
   const branch = q.get('branch') ?? '', ticket = q.get('ticket') ?? '';
-  return /^[a-z0-9-]{1,32}$/.test(branch) && branch !== 'main' && ticket.length >= 10 ? { branch, ticket } : null;
+  return /^(?:[a-z0-9-]{1,16}\/)?[a-z0-9-]{1,54}$/.test(branch) && branch !== 'main' && ticket.length >= 10 ? { branch, ticket } : null;
 }
 
 /** True only for /login?preview=1 inside a frame. A top-level visit with the parameter behaves as a normal sign-in page. */
@@ -149,7 +149,7 @@ export class CallbackPage {
       try {
         const raw = sessionStorage.getItem(TEST_KEY); sessionStorage.removeItem(TEST_KEY);
         const t = raw ? (JSON.parse(raw) as { branch?: unknown }) : null;
-        if (t && typeof t.branch === 'string' && /^[a-z0-9-]{1,32}$/.test(t.branch) && t.branch !== 'main') {
+        if (t && typeof t.branch === 'string' && /^(?:[a-z0-9-]{1,16}\/)?[a-z0-9-]{1,54}$/.test(t.branch) && t.branch !== 'main') {
           this.s.enterBranchTest(t.branch);
           this.s.say(`Testing data branch ${t.branch}: sign-in and the app use it until you exit the test.`);
         }

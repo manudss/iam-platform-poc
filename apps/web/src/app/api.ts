@@ -85,7 +85,7 @@ export class ApiClient {
     storage.setItem('iam.pkce.verifier', verifier); storage.setItem('iam.pkce.state', state);
     const params: Record<string, string> = { response_type: 'code', client_id: 'demo-web', redirect_uri: REDIRECT, state, code_challenge: challenge, code_challenge_method: 'S256' };
     if (chain && /^[a-z0-9-]{1,40}$/.test(chain)) params['chain'] = chain;
-    if (branchTest && /^[a-z0-9-]{1,32}$/.test(branchTest.branch) && branchTest.branch !== 'main' && branchTest.ticket) { params['branch'] = branchTest.branch; params['ticket'] = branchTest.ticket; }
+    if (branchTest && /^(?:[a-z0-9-]{1,16}\/)?[a-z0-9-]{1,54}$/.test(branchTest.branch) && branchTest.branch !== 'main' && branchTest.ticket) { params['branch'] = branchTest.branch; params['ticket'] = branchTest.ticket; }
     const q = new URLSearchParams(params);
     go(`${CORE_PUBLIC}/authorize?${q}`);
   }
