@@ -55,6 +55,17 @@ const PAIRS: [keyof ThemeVars, keyof ThemeVars, number][] = [
   ['--warn-line', '--warn-soft', 1.2],
 ];
 
+/** Dark mode only (validated palette, 10 Nov 2026): visible surface ladder, visible borders, AA on every surface. */
+const DARK_PAIRS: [keyof ThemeVars, keyof ThemeVars, number][] = [
+  ['--line', '--card', 3], ['--line', '--panel', 3], ['--line', '--bg', 3],
+  ['--field-line', '--card', 3], ['--field-line', '--field-bg', 3],
+  ['--card', '--bg', 1.3], // cards must read as raised surfaces
+  ['--ink', '--row-hover', 4.5], ['--ink', '--field-bg', 4.5], ['--ink', '--th-bg', 4.5],
+  ['--muted', '--panel', 4.5], ['--muted', '--field-bg', 4.5], ['--muted', '--row-hover', 4.5], ['--muted', '--code-bg', 4.5],
+  ['--link', '--row-hover', 4.5], ['--link', '--panel', 4.5],
+  ['--ink', '--sel', 4.5], ['--ink', '--card-auth', 4.5], ['--ink', '--auth-field', 4.5],
+];
+
 const SOURCES: BrandingColors[] = [
   DEFAULT_COLORS,
   { primary: '#ffffff', accent: '#dddddd' },
@@ -80,5 +91,16 @@ describe('branding contrast (WCAG AA)', () => {
         assert.deepEqual(failures, []);
       });
     }
+  }
+  for (const colors of SOURCES) {
+    it(`dark surface ladder and borders hold for ${colors.primary}/${colors.accent}`, () => {
+      const vars = generateTheme(colors).dark;
+      const failures = DARK_PAIRS
+        .map(([a, b, min]) => ({ pair: `${a} on ${b}`, got: ratio(vars[a].slice(0, 7), vars[b].slice(0, 7)), min }))
+        .filter((f) => f.got < f.min);
+      assert.deepEqual(failures, []);
+      const order = ['--bg', '--panel', '--card', '--field-bg', '--code-bg', '--row-hover'] as const;
+      for (let i = 1; i < order.length; i++) assert.ok(lum(vars[order[i]]) > lum(vars[order[i - 1]]), `${order[i]} lighter than ${order[i - 1]}`);
+    });
   }
 });

@@ -65,18 +65,18 @@ export function palettesOf(colors: BrandingColors): Palettes {
 function modeVars(pl: Palettes, dark: boolean): ThemeVars {
   const { primary: P, secondary: S, neutral: N, neutralVariant: NV, ok: G, bad: E, warn: W } = pl;
   return dark ? {
-    '--bg': hex(N, 6), '--card': hex(N, 10), '--panel': hex(N, 15), '--code-bg': hex(N, 20),
-    '--th-bg': hex(NV, 20), '--row-hover': hex(N, 17), '--field-bg': hex(N, 15), '--bar-off': hex(NV, 30),
-    '--veil': hexa(N, 6, .60), '--card-auth': hex(N, 12), '--auth-field': hex(N, 8),
-    '--ink': hex(N, 90), '--muted': hex(NV, 75), '--label': hex(NV, 80), '--brand-sub': hex(NV, 75), '--th-ink': hex(NV, 75),
-    '--line': hex(NV, 25), '--field-line': hex(NV, 55), '--focus': hex(P, 70),
+    '--bg': hex(N, 16), '--card': hex(N, 25), '--panel': hex(N, 20), '--code-bg': hex(N, 30),
+    '--th-bg': hex(NV, 30), '--row-hover': hex(N, 32), '--field-bg': hex(N, 28), '--bar-off': hex(NV, 45),
+    '--veil': hexa(N, 16, .60), '--card-auth': hex(N, 22), '--auth-field': hex(N, 28),
+    '--ink': hex(N, 90), '--muted': hex(NV, 80), '--label': hex(NV, 85), '--brand-sub': hex(NV, 80), '--th-ink': hex(NV, 80),
+    '--line': hex(NV, 60), '--field-line': hex(NV, 61), '--focus': hex(P, 70),
     '--accent': hex(P, 80), '--accent-ink': hex(P, 20), '--accent-dark': hex(P, 70), '--accent-soft': hex(P, 25), '--link': hex(P, 80),
     '--chip-bg': hex(S, 30), '--chip-ink': hex(S, 90),
     '--ok': hex(G, 80), '--ok-soft': hex(G, 25), '--ok-line': hex(G, 40),
     '--bad': hex(E, 80), '--bad-soft': hex(E, 25), '--bad-ink': hex(E, 90), '--bad-line': hex(E, 40),
     '--warn-soft': hex(W, 25), '--warn-line': hex(W, 45), '--warn-ink': hex(W, 90),
-    '--sel': hex(P, 30), '--on-bad': hex(E, 20),
-    '--sidebar-bg':hex(P,10),'--sidebar-ink':hex(N,95),'--sidebar-muted':hex(NV,80),'--sidebar-active':hex(P,30),'--sidebar-hover':hex(P,20),
+    '--sel': hex(P, 32), '--on-bad': hex(E, 20),
+    '--sidebar-bg':hex(P,9),'--sidebar-ink':hex(N,95),'--sidebar-muted':hex(NV,80),'--sidebar-active':hex(P,30),'--sidebar-hover':hex(P,20),
     '--gradient-from':hex(S,80),'--gradient-to':hex(P,55),'--scrim':hexa(N,0,.55),'--shadow-color':hexa(N,0,.25),
   } : {
     '--bg': hex(N, 98), '--card': hex(N, 100), '--panel': hex(N, 96), '--code-bg': hex(N, 94),
