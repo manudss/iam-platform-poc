@@ -109,6 +109,10 @@ try {
   assert.equal((await (await fetch(BASE+'/api/tenants/acme-demo/branding')).json()).productName,'lyam','saving the draft never changes main');
   // Saved working-branch branding follows navigation across the administration.
   for(const route of ['/users','/roles','/assignments','/plugins','/database/branches']){await nav(route);await checkAdmin();await noBanner(route);}
+  const workingBranch=adminHeaders['x-iam-branch'];
+  await page.selectOption('select[aria-label="Data branch"]','main');
+  await page.waitForFunction(()=>getComputedStyle(document.documentElement).getPropertyValue('--sidebar-bg').trim()==='#0f0069');
+  await page.selectOption('select[aria-label="Data branch"]',workingBranch);await checkAdmin();
   await nav('/users');await shot('admin-users-dark');
   await page.getByRole('button',{name:'Light',exact:true}).first().click();await shot('admin-users-light');
   await page.setViewportSize({width:390,height:844});await page.waitForTimeout(300);await shot('admin-users-mobile');
