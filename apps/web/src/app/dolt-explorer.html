@@ -174,7 +174,8 @@
       </div>
       @if (createOpen) {
         <form class="card row" (ngSubmit)="createBranch()">
-          <label>New branch <input name="nb" [(ngModel)]="newBranch" placeholder="my-change" autocomplete="off" /></label>
+          <label>New branch <input name="nb" [ngModel]="newBranch" (ngModelChange)="newBranch = sanitizeRefName($event); newBranchErr.set('')" placeholder="my-change" autocomplete="off" [attr.aria-invalid]="newBranchErr() ? true : null" aria-describedby="nb-err" />
+            <span class="field-err" id="nb-err">{{ newBranchErr() }}</span></label>
           <label>From <select name="nf" [(ngModel)]="newBranchFrom">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
           <button type="submit">Create branch</button>
         </form>
@@ -292,12 +293,24 @@
               }
             } @else { <p class="hint">No data change in this commit.</p> }
             <div class="row commit-actions">
-              <input name="an" [(ngModel)]="actionName" placeholder="new-branch-name" autocomplete="off" aria-label="Name for a new branch or tag" />
+              <input name="an" [ngModel]="actionName" (ngModelChange)="actionName = sanitizeRefName($event); actionNameErr.set(''); actionDone.set(null)" placeholder="new-branch-name" autocomplete="off" aria-label="Name for a new branch or tag" [attr.aria-invalid]="actionNameErr() ? true : null" aria-describedby="an-err" />
               <button type="button" class="secondary" [disabled]="!actionName" (click)="branchFrom(s.commit)">Branch from here</button>
               <button type="button" class="secondary" [disabled]="!actionName" (click)="tagCommit(s.commit)">Tag</button>
               <button type="button" class="secondary" [disabled]="!actionName || !s.parents.length" (click)="revertOnBranch(s.commit)">Undo on a new branch</button>
               @if (canRestore()) { <button type="button" class="danger" (click)="restoreBranch(s.commit)">Restore {{ histRef }} to here</button> }
             </div>
+            @if (actionNameErr(); as anErr) { <p class="field-err" id="an-err">{{ anErr }}</p> }
+            @if (actionDone(); as ad) {
+              <div class="action-done" role="status">
+                <span>✓ {{ ad.kind === 'tag' ? 'Tag' : 'Branch' }} <b>{{ ad.name }}</b> created.</span>
+                @if (ad.kind === 'branch') {
+                  <button type="button" class="secondary" (click)="switchHistTo(ad.name)">Switch to it</button>
+                  <button type="button" class="secondary" (click)="pullFor(ad.name)">Open a pull request</button>
+                  <button type="button" class="secondary" (click)="compareWithDefault(ad.name)">Compare with {{ defaultBranch() }}</button>
+                }
+                <button type="button" class="ghost" (click)="actionDone.set(null)" aria-label="Dismiss">✕</button>
+              </div>
+            }
             <p class="hint">Undo adds a new commit on a new branch, then you open a pull request: history is never rewritten. Restore moves the branch back (not allowed on protected branches).</p>
           </aside>
         }
@@ -583,7 +596,8 @@
             <label>Source <select name="ps" [(ngModel)]="prForm.source">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
             <label>Into <select name="pt" [(ngModel)]="prForm.target">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
           </div>
-          <label>Title <input name="pti" [(ngModel)]="prForm.title" autocomplete="off" /></label>
+          <label>Title <input name="pti" [ngModel]="prForm.title" (ngModelChange)="prForm.title = $event; prTitleErr.set('')" autocomplete="off" [attr.aria-invalid]="prTitleErr() ? true : null" aria-describedby="pti-err" />
+            <span class="field-err" id="pti-err">{{ prTitleErr() }}</span></label>
           <label>Description <textarea name="pb" rows="3" [(ngModel)]="prForm.body"></textarea></label>
           <button type="submit">Open pull request</button>
         </form>

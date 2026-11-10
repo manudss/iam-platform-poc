@@ -83,6 +83,23 @@ export class DoltExplorer {
   protected readonly histRowDiffs = signal<Record<string, RowDiffView | undefined>>({});
   protected readonly histExpandedDiffs = signal<ReadonlySet<string>>(new Set());
   protected actionName = '';
+  protected readonly actionNameErr = signal('');
+  /** Inline confirmation after a branch/tag action in the history inspector, with the natural next steps. */
+  protected readonly actionDone = signal<{ kind: 'branch' | 'tag'; name: string } | null>(null);
+  protected readonly newBranchErr = signal('');
+  protected readonly prTitleErr = signal('');
+  /** Types a branch or tag name: whitespace becomes _, characters the API refuses are dropped, 63 max (guards.ts NEW_BRANCH/TAG). */
+  protected sanitizeRefName(v: string): string { return v.replace(/^\s+/, '').replace(/\s/g, '_').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 63); }
+  /** Client copy of the API rule so the exact reason shows next to the field instead of a generic banner after a round trip. */
+  protected refNameError(name: string): string {
+    if (!name) return 'A name is required.';
+    if (!/^[A-Za-z0-9]/.test(name)) return 'Start with a letter or a digit.';
+    if (name.length > 63) return '63 characters max.';
+    if (/[^A-Za-z0-9._-]/.test(name)) return 'Only letters, digits, dots, underscores and dashes.';
+    if (name.includes('..')) return 'No two dots in a row.';
+    if (name.endsWith('.lock')) return 'The name cannot end with .lock.';
+    return '';
+  }
 
   protected from = 'main'; protected to = 'main'; protected three = true;
   protected readonly diff = signal<DiffSummary | null>(null);
@@ -288,9 +305,17 @@ export class DoltExplorer {
       if (!b.branches.some((x) => x.name === this.prForm.target)) this.prForm.target = b.default;
     }, true);
   }
+  /** Server-side name failures belong next to the field, not only in the top banner. */
+  private mirrorNameError(setter: (m: string) => void, match: RegExp): void {
+    const m = this.note();
+    if (match.test(m)) { setter(m); this.note.set(''); }
+  }
   protected async createBranch() {
+    this.newBranchErr.set(this.refNameError(this.newBranch));
+    if (this.newBranchErr()) return;
     const r = await this.run(() => this.v.createBranch(this.newBranch, this.newBranchFrom));
-    if (r) { this.note.set(`Branch ${r.branch} created at ${shortHash(r.commit)}.`); this.newBranch = ''; this.createOpen = false; await this.refreshRefs(); }
+    if (!r) { this.mirrorNameError(m => (this.newBranchErr.set(m)), /name|exist|taken|invalid/i); return; }
+    if (r) { this.note.set(`Branch ${r.branch} created at ${shortHash(r.commit)}.`); this.newBranch = ''; this.newBranchErr.set(''); this.createOpen = false; await this.refreshRefs(); }
   }
   /** The signed-in user's working branch (the shell selection), or the default branch when none is selected. */
   protected sessionBranch() { return this.session.branch() || this.defaultBranch(); }
@@ -326,6 +351,10 @@ export class DoltExplorer {
   }
   protected showHistory(ref: string) { this.histRef = ref; void this.open('history'); }
   protected compareWithDefault(ref: string) { this.from = this.defaultBranch(); this.to = ref; this.three = true; this.go('compare'); void this.compare(); }
+  /** Follow-up offered after creating a branch from a commit: look at that branch's history. */
+  protected switchHistTo(name: string) { this.actionDone.set(null); this.histRef = name; void this.loadLog(true); }
+  /** Follow-up offered after creating a branch: prefill the pull-request form with it. */
+  protected pullFor(name: string) { this.actionDone.set(null); this.newPullFrom(name); }
 
   // history
   protected async loadLog(reset: boolean) {
@@ -334,6 +363,7 @@ export class DoltExplorer {
   }
   /** Opens the commit inspector beside the log and loads the row changes of every touched table (two-dot diff against the first parent). */
   protected async showCommit(c: CommitInfo) {
+    this.actionDone.set(null); this.actionNameErr.set('');
     const r = await this.run(() => this.v.commit(c.commit));
     if (!r) return;
     this.selected.set(r); this.histRowDiffs.set({}); this.histExpandedDiffs.set(new Set());
@@ -357,15 +387,25 @@ export class DoltExplorer {
   protected initials(name: string) { return name.split(/[-\s_]/).map((x) => x[0] ?? '').join('').slice(0, 2).toUpperCase(); }
   protected timeOf(d: string) { const t = Date.parse(d); return Number.isFinite(t) ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : d; }
   protected async branchFrom(hash: string) {
+    this.actionNameErr.set(this.refNameError(this.actionName));
+    if (this.actionNameErr()) return;
     const r = await this.run(() => this.v.createBranch(this.actionName, hash));
-    if (r) { this.note.set(`Branch ${r.branch} created from ${shortHash(hash)}.`); this.actionName = ''; await this.refreshRefs(); }
+    if (!r) { this.mirrorNameError(m => (this.actionNameErr.set(m)), /name|exist|taken|invalid/i); return; }
+    if (r) { this.actionDone.set({ kind: 'branch', name: r.branch }); this.actionName = ''; this.actionNameErr.set(''); await this.refreshRefs(); }
   }
   protected async tagCommit(hash: string) {
-    if (await this.run(() => this.v.createTag(this.actionName, hash)) !== undefined) { this.note.set(`Tag ${this.actionName} created.`); this.actionName = ''; await this.refreshRefs(); await this.loadLog(true); }
+    this.actionNameErr.set(this.refNameError(this.actionName));
+    if (this.actionNameErr()) return;
+    const ok = (await this.run(() => this.v.createTag(this.actionName, hash))) !== undefined;
+    if (!ok) { this.mirrorNameError(m => (this.actionNameErr.set(m)), /name|exist|taken|invalid/i); return; }
+    this.actionDone.set({ kind: 'tag', name: this.actionName }); this.actionName = ''; this.actionNameErr.set(''); await this.refreshRefs(); await this.loadLog(true);
   }
   protected async revertOnBranch(hash: string) {
+    this.actionNameErr.set(this.refNameError(this.actionName));
+    if (this.actionNameErr()) return;
     const r = await this.run(() => this.v.revert(hash, this.actionName));
-    if (r) { this.note.set(`Reverted on new branch ${r.branch}. Open a pull request to bring it to ${this.defaultBranch()}.`); this.prForm = { title: `Revert ${shortHash(hash)}`, body: '', source: r.branch, target: this.defaultBranch() }; this.actionName = ''; await this.refreshRefs(); }
+    if (!r) { this.mirrorNameError(m => (this.actionNameErr.set(m)), /name|exist|taken|invalid/i); return; }
+    if (r) { this.note.set(`Reverted on new branch ${r.branch}. Open a pull request to bring it to ${this.defaultBranch()}.`); this.prForm = { title: `Revert ${shortHash(hash)}`, body: '', source: r.branch, target: this.defaultBranch() }; this.actionDone.set({ kind: 'branch', name: r.branch }); this.actionName = ''; this.actionNameErr.set(''); await this.refreshRefs(); }
   }
   protected async restoreBranch(hash: string) {
     const b = this.histRef;
@@ -540,8 +580,11 @@ export class DoltExplorer {
   protected prReady(d: PullRequestDetail) { return !!d.checks?.mergeable && !d.checks.violations.length && d.approvals.length >= d.requiredApprovals; }
   protected approvalNames(d: PullRequestDetail) { return d.approvals.join(', '); }
   protected async openPull() {
+    this.prTitleErr.set(this.prForm.title.trim() ? '' : 'A title is required.');
+    if (this.prTitleErr()) return;
     const r = await this.run(() => this.v.openPull(this.prForm.title, this.prForm.body, this.prForm.source, this.prForm.target));
-    if (r) { this.prForm = { title: '', body: '', source: '', target: this.defaultBranch() }; await this.refreshRefs(); await this.loadPulls(); await this.showPull(r.id); }
+    if (!r) { this.mirrorNameError(m => (this.prTitleErr.set(m)), /title/i); return; }
+    if (r) { this.prForm = { title: '', body: '', source: '', target: this.defaultBranch() }; this.prTitleErr.set(''); await this.refreshRefs(); await this.loadPulls(); await this.showPull(r.id); }
   }
   protected async showPull(id: number) {
     const r = await this.run(() => this.v.pull(id), true);

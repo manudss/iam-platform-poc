@@ -391,6 +391,54 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(el.querySelector('.msg')?.textContent).toContain('protected');
   });
 
+  it('sanitizes branch names as they are typed: spaces become _, refused characters are dropped', async () => {
+    const { f, el, c } = await mount(routes());
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    expect(c['sanitizeRefName']('my change!')).toBe('my_change');
+    expect(c['sanitizeRefName']('  lead space')).toBe('lead_space');
+    await click(f, el, '+ New branch');
+    const input = el.querySelector('input[name=nb]') as HTMLInputElement;
+    input.value = 'on_boarding ok'; input.dispatchEvent(new Event('input')); await f.whenStable(); f.detectChanges();
+    expect(c['newBranch']).toBe('on_boarding_ok');
+  });
+  it('branch form: an invalid name shows the exact reason next to the field and never calls the API', async () => {
+    const { f, el, c, calls } = await mount(routes());
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    await click(f, el, '+ New branch'); c['newBranch'] = 'bad..name'; f.detectChanges();
+    await c['createBranch'](); f.detectChanges();
+    expect(c['newBranchErr']()).toBe('No two dots in a row.');
+    expect(calls.some((x) => x.path.startsWith('/versioning/branches') && x.method === 'POST')).toBe(false);
+    const err = el.querySelector('.field-err');
+    expect(err?.textContent).toContain('No two dots');
+    expect(el.querySelector('input[name=nb]')?.getAttribute('aria-invalid')).toBe('true');
+  });
+  it('branch form: a server-side name refusal is mirrored next to the field, not only in the banner', async () => {
+    const { f, el, c } = await mount(routes({ 'POST /versioning/branches': () => ({ status: 400, data: { message: 'invalid branch name (letters, digits, . _ - ; max 63)' } }) }));
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    await click(f, el, '+ New branch'); c['newBranch'] = 'on_boarding'; f.detectChanges();
+    await c['createBranch'](); f.detectChanges();
+    expect(c['newBranchErr']()).toContain('invalid branch name');
+    expect(c['note']()).toBe('');
+    expect(el.querySelector('.field-err')?.textContent).toContain('invalid branch name');
+  });
+  it('history inspector: the same inline validation guards branch/tag names', async () => {
+    const { f, c, calls } = await mount(routes());
+    f.componentRef.setInput('section', 'history'); await f.whenStable(); f.detectChanges();
+    c['actionName'] = '-bad';
+    await c['branchFrom']('a'.repeat(32)); f.detectChanges();
+    expect(c['actionNameErr']()).toBe('Start with a letter or a digit.');
+    expect(calls.some((x) => x.method === 'POST' && x.path.startsWith('/versioning/branches'))).toBe(false);
+  });
+  it('pull request form: an empty title shows an inline error and never calls the API', async () => {
+    const { f, el, c, calls } = await mount(routes());
+    f.componentRef.setInput('section', 'pulls'); await f.whenStable(); f.detectChanges();
+    await click(f, el, '+ New pull request'); c['prForm'] = { title: '  ', body: '', source: 'feat-a', target: 'main' }; f.detectChanges();
+    await c['openPull'](); f.detectChanges();
+    expect(c['prTitleErr']()).toBe('A title is required.');
+    expect(calls.some((x) => x.method === 'POST' && x.path === '/versioning/pulls')).toBe(false);
+    expect(el.querySelector('#pti-err')?.textContent).toContain('title is required');
+  });
+
   it('follows the route section, and announces its own jumps so the address can follow', async () => {
     const { api } = fakeApi(routes());
     const f = TestBed.createComponent(DoltExplorer); f.componentRef.setInput('api', api); f.componentRef.setInput('section', 'history');

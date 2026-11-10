@@ -127,3 +127,8 @@ table.grid tr.mod td{background:var(--warn-soft)}
 .pill:not(.on):hover:not(:disabled),.tabs button:hover:not(:disabled),.menu button:hover:not(:disabled),.diff-head:hover:not(:disabled){background:var(--row-hover);color:var(--ink)}
 .caret{transition:transform .15s}
 .caret.open{transform:rotate(90deg)}
+.field-err{color:var(--bad-ink);font-size:.8rem;margin:.15rem 0 0;display:block}
+.field-err:empty{display:none}
+input[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--bad);outline-color:var(--bad)}
+.action-done{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;background:var(--ok-soft);border:1px solid var(--ok-line);color:var(--ok);border-radius:8px;padding:.5rem .75rem;margin-top:.5rem}
+.action-done button.ghost{background:none;border:none;color:inherit;cursor:pointer;font-size:.9rem}
