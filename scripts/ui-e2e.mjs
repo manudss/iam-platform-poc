@@ -390,7 +390,13 @@ try {
   await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
   await page.getByRole('button', { name: 'Move the section Urgence up' }).click();
   const sectionOrder = await page.locator('#pf-table .pf-group').allTextContents();
-  await page.click('#pf-save'); await page.waitForSelector('#pf-note');
+  const sectionSave = await Promise.all([
+    page.waitForResponse(r => r.url().includes('/profile-fields') && r.request().method() === 'PUT'),
+    page.click('#pf-save'),
+  ]);
+  assert.equal(sectionSave[0].status(), 200, await sectionSave[0].text());
+  assert.ok((await sectionSave[0].json()).config.sections.includes('Urgence'), 'server persisted empty section');
+  await page.waitForFunction(() => !document.querySelector('#pf-save')?.disabled && !document.body.innerText.includes('Unsaved edits'));
   await page.reload(); await page.waitForSelector('#signin-browser');
   await coreLogin();
   await page.waitForSelector('details.token', { state: 'attached' });
