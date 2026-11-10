@@ -120,7 +120,7 @@ export function userStats(users: UserProfile[]): UserStats {
 </tr>}
 @empty {<tr><td colspan="6" class="empty">No users match.</td></tr>}
 </tbody></table></div>
-<div class="tfoot"><span>{{filtered().length}} of {{users().length}} users · sorted by {{sortLabel()}}</span></div></div>
+<div class="tfoot"><span>{{filtered().length}} of {{people().length}} users · sorted by {{sortLabel()}}</span></div></div>
 
 @if (editing()) {<div class="scrim" (click)="cancel()"></div>
 <aside class="drawer" id="user-editor" role="dialog" [attr.aria-label]="key ? 'Edit '+key : 'Create user'">
@@ -139,8 +139,8 @@ export function userStats(users: UserProfile[]): UserStats {
   <label>Display name<input name="displayName" [(ngModel)]="form.display_name" maxlength="80" /></label>
   <h4>Organisation</h4>
   <label>E-mail <small>used for sign-in codes</small><input name="email" type="text" [(ngModel)]="form.email" maxlength="254" autocomplete="off" /></label>
-  <label>Department<input name="department" [(ngModel)]="form.department" maxlength="40" /></label>
-  <label>Manager<select name="manager" [(ngModel)]="form.manager_id"><option value="">None</option>@for(u of users();track u.id){@if(u.id!==form.id){<option [value]="u.id">{{u.display_name}} ({{u.id}})</option>}}</select></label>
+  <label>Department<input name="department" [disabled]="!canEditAuthority()" [(ngModel)]="form.department" maxlength="40" /></label>
+  <label>Manager<select name="manager" [(ngModel)]="form.manager_id" [disabled]="!canEditAuthority()"><option value="">None</option>@for(u of users();track u.id){@if(u.id!==form.id){<option [value]="u.id">{{u.display_name}} ({{u.id}})</option>}}</select></label>
   @if (key && chain(); as c) {@if (c.manager || c.reports.length) {<div class="chain">
     @if (c.manager) {<span class="node"><span class="av mini" [style.background]="'color-mix(in srgb, '+deptColor(c.manager.department)+' 13%, transparent)'" [style.color]="deptColor(c.manager.department)">{{initials(c.manager.display_name)}}</span> {{c.manager.display_name}}</span><span class="arr">←</span>}
     <span class="node me"><span class="av mini" [style.background]="'color-mix(in srgb, '+deptColor(form.department || 'user')+' 13%, transparent)'" [style.color]="deptColor(form.department || 'user')">{{initials(form.display_name || key || '?')}}</span> {{form.display_name || key}}</span>
@@ -184,9 +184,13 @@ export class UsersPage {
 
   ngOnInit() { void this.load(); }
 
-  protected stats = computed(() => userStats(this.users()));
-  protected departments = computed(() => [...new Set(this.users().map((u) => u.department).filter(Boolean))].sort());
-  protected filtered = computed(() => sortUsers(filterUsers(this.users(), { q: this.search(), dept: this.fdept(), status: this.fstatus() }), this.sortKey(), this.sortDir()));
+  /** Referenced managers (reference rows) feed the manager field and the chain, never the list. */
+  protected people = computed(() => this.users().filter((u) => !(u as { reference?: boolean }).reference));
+  /** Manager and department are authority fields: only the super admin changes them. */
+  protected canEditAuthority() { const a = this.s.access(); return !a || !a.screenAccess || !a.screens || a.screens.includes('policies'); }
+  protected stats = computed(() => userStats(this.people()));
+  protected departments = computed(() => [...new Set(this.people().map((u) => u.department).filter(Boolean))].sort());
+  protected filtered = computed(() => sortUsers(filterUsers(this.people(), { q: this.search(), dept: this.fdept(), status: this.fstatus() }), this.sortKey(), this.sortDir()));
   // NOT computed(): key is a plain property (ngModel-bound form state), so a computed would cache the first user opened.
   protected current() { return this.users().find((u) => u.id === this.key) ?? null; }
   protected chain() { const c = this.current(); return c ? managerChain(c, this.users()) : null; }
