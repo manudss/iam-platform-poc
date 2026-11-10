@@ -33,6 +33,11 @@ commit SHA (immutable, the one previews deploy), `pr-<N>` (moving), and
 `latest` (main only). `workflow_dispatch` with an optional `ref` is the
 backstop when a commit's image is missing.
 
+`scripts/render-pr-previews.mjs` looks the build up by `head_sha` only and
+filters by status client-side: GitHub's runs API can silently return zero
+runs when `head_sha` is combined with a `status` filter for a run its index
+has not picked up yet (observed 2026-11-10, >1 h after the run completed).
+
 Measured on PR #55 (2026-11-08, commit `b82cffd`): cold GitHub build +
 push 8 min 12 s, Render image pull + create + boot + live **~2 min**, versus
 ~9 min for a git-backed Render build of the same tree the same evening - and

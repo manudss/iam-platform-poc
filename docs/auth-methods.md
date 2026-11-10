@@ -28,7 +28,7 @@ The page `Authentication methods` shows **one list**, not one block per concept.
 
 The panel frames `/login?preview=1`. In that mode the sign-in page runs only if it is embedded in a frame, takes its chains from a same-origin `postMessage` of the admin page (other origins and other senders are ignored), highlights the chain being edited, and does **no API call and no sign-in**: buttons do nothing, nothing is sent, no e-mail, no session. The *Step screen* tab shows a fixed, fake screen for each step type (password, PIN, code) with disabled fields; *Next step* walks through a chain; there is a dark mode toggle that does not change the saved theme. It does not call the plugin's own step handler: what a plugin really renders at sign-in can differ.
 
-The demo edge refuses framing everywhere (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) except `/login?preview=1`, which allows the same origin only (`demo/frame-policy.mjs`, test `demo/frame-policy.test.mjs`).
+The demo edge refuses framing everywhere (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) except the Customisation live previews, `/login?preview=1` and `/admin-preview?preview=1`, which allow the same origin only (`demo/frame-policy.mjs`, test `demo/frame-policy.test.mjs`).
 
 ### Tests
 

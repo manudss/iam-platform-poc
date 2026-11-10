@@ -2,7 +2,7 @@ import {it} from 'node:test';
 import assert from 'node:assert/strict';
 import {readdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {DEFAULT_COLORS,generateTheme,themeCss} from './theme-engine.js';
+import {DEFAULT_COLORS,THEME_VARIABLES,generateTheme,themeCss} from './theme-engine.js';
 function files(p:string):string[]{return readdirSync(p,{withFileTypes:true}).flatMap(e=>e.isDirectory()?files(join(p,e.name)):[join(p,e.name)]);}
 it('UI colors are semantic variables, not hardcoded literals',()=>{
  const paths=[...files('../web/src/app'),...files('../../plugins').filter(p=>p.includes('/screens/'))];
@@ -14,6 +14,12 @@ it('UI colors are semantic variables, not hardcoded literals',()=>{
   assert.doesNotMatch(s,/#[0-9a-f]{3,8}\b|\brgba?\(|\bhsla?\(|(?:color|background)\s*:\s*(?:white|black|red|blue|gray|grey|green)\b/i,p);
  }
 });
+it('adjacent surfaces are separated by the --panel-gap token, generically',()=>{
+ const css=readFileSync('../web/src/styles.css','utf8');
+ assert.match(css,/--panel-gap:\s*[\d.]+rem/);
+ // A class-agnostic sibling rule, so surfaces like the Authentication zones get the gap without per-page CSS.
+ assert.ok(css.includes(':is(.card, .panel, .zone, .scroll:has(> table)) + :is(.card, .panel, .zone, .scroll:has(> table)) { margin-top: var(--panel-gap); }'));
+});
 it('offline fallbacks are generated from the live engine',()=>{
  const css=themeCss(generateTheme(DEFAULT_COLORS),{baseline:'IAM next generation',footer:'Fictional demo data only. Do not enter real data.'});
  assert.equal(readFileSync('../../core/crates/iam-core/src/branding-default.css','utf8'),css);
@@ -21,4 +27,18 @@ it('offline fallbacks are generated from the live engine',()=>{
  const rust=readFileSync('../../core/crates/iam-core/src/authz.rs','utf8');
  const body=rust.slice(rust.indexOf('const CSS:'),rust.indexOf('const ICON_AUTO'));
  assert.doesNotMatch(body,/#[0-9a-f]{3,8}\b|\brgba?\(/i);
+});
+it('components only read variables that exist (contract or locally defined)',()=>{
+ const paths=[...files('../web/src'),...files('../../plugins').filter(p=>p.includes('/screens/'))].filter(p=>/\.(css|ts|html|mjs)$/.test(p)&&!p.endsWith('.spec.ts'));
+ const text=paths.map(p=>readFileSync(p,'utf8')).join('\n');
+ const known=new Set<string>(THEME_VARIABLES);
+ for(const m of text.matchAll(/(--[a-z0-9-]+)\s*:/g))known.add(m[1]);
+ const unknown=new Set<string>();
+ for(const m of text.matchAll(/var\((--[a-z0-9-]+)/g))if(!known.has(m[1]))unknown.add(m[1]);
+ assert.deepEqual([...unknown],[]);
+});
+it('docs/theming.md and the agent skill exist and state the rules',()=>{
+ const doc=readFileSync('../../docs/theming.md','utf8'),skill=readFileSync('../../.claude/skills/theming/SKILL.md','utf8');
+ for(const t of [doc,skill])assert.match(t,/THEME_VARIABLES/);
+ assert.match(skill,/light AND dark/);
 });

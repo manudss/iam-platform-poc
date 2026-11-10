@@ -27,6 +27,8 @@ export const routes: Routes = [
   { path: 'privacy', component: PrivacyPage, title: 'Politique de confidentialité' },
   { path: 'about', component: AboutPage, title: 'About this demo' },
   { path: 'login', component: LoginPage, title: 'Sign in' },
+  // Static console mock for the Customisation live preview (no session, no data; the parent frame posts the draft theme).
+  { path: 'admin-preview', loadComponent: () => import('./admin-preview').then(m => m.AdminPreviewPage), title: 'Console preview' },
   {
     path: '', component: Shell, canActivate: [authGuard], children: [
       { path: '', pathMatch: 'full', redirectTo: 'overview' },

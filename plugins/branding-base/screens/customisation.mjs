@@ -22,6 +22,9 @@ class Customisation extends HTMLElement {
       .brand-editor fieldset.palette{min-width:0;margin:0;padding:10px;border:1px solid var(--line);border-radius:10px}.brand-editor legend{font-size:.85rem;font-weight:600;color:var(--label)}
       .brand-editor .color-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.brand-editor .color-choice{display:grid;justify-items:center;gap:4px;min-width:0;padding:6px 2px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font-size:.65rem}.brand-editor .color-choice i{display:block;width:26px;height:26px;border-radius:50%}.brand-editor .color-choice:hover:not(:disabled){background:var(--accent-soft);color:var(--ink)}.brand-editor .color-choice[aria-pressed=true]{outline:2px solid var(--accent);outline-offset:1px;background:var(--accent-soft)}
       .brand-editor .presets,.brand-editor .tools{display:flex;flex-wrap:wrap;gap:8px}.brand-editor button{margin:0;min-height:44px}
+      .brand-editor .pages{display:flex;gap:0;border:1px solid var(--field-line);border-radius:.5rem;overflow:hidden}
+      .brand-editor .pages button{border:0;border-radius:0;min-height:44px}
+      .brand-editor .pages button[aria-pressed=true]{background:var(--accent-soft);color:var(--ink)}
       .brand-editor .hint{font-size:.8rem;color:var(--muted)}.brand-editor .status{min-height:24px;color:var(--muted);margin:12px 0}
       .brand-editor .preview{position:sticky;top:24px;overflow:hidden}.brand-editor iframe{width:100%;height:640px;border:1px solid var(--line);border-radius:12px;background:var(--bg);margin-top:16px}
       .brand-editor .swatches{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.brand-editor .swatches span{padding:8px;border-radius:8px;font-size:.75rem}
@@ -43,15 +46,17 @@ class Customisation extends HTMLElement {
       <p class="hint">SVG only, 50KB maximum. Scripts, external URLs, CSS and embedded HTML are refused. Custom artwork keeps its own colors.</p>
       <div class="tools"><button type="submit" data-save>Save to branch</button><button type="button" class="secondary" data-reset>Discard edits</button></div>
     </form><div class="status" role="status" aria-live="polite"></div></section>
-    <section class="preview"><h2>Live preview</h2><div class="tools"><button type="button" class="secondary" data-mode="light">Light</button><button type="button" class="secondary" data-mode="dark">Dark</button><button type="button" class="secondary" data-width>Mobile width</button></div>
-    <div class="swatches" aria-label="Computed theme roles"></div><p class="hint">The actual sign-in interface. Preview never signs in or publishes.</p><iframe title="Live branding preview" src="/login?preview=1"></iframe></section></div>`;
+    <section class="preview"><h2>Live preview</h2><div class="tools"><span class="pages" role="group" aria-label="Preview page"><button type="button" class="secondary" data-page="signin" aria-pressed="true">Sign in</button><button type="button" class="secondary" data-page="admin" aria-pressed="false">Admin page</button></span><button type="button" class="secondary" data-mode="light">Light</button><button type="button" class="secondary" data-mode="dark">Dark</button><button type="button" class="secondary" data-width>Mobile width</button></div>
+    <div class="swatches" aria-label="Computed theme roles"></div><p class="hint" data-preview-hint>The actual sign-in interface.</p><p class="hint">Preview never signs in, saves or publishes.</p><iframe title="Live branding preview" src="/login?preview=1"></iframe></section></div>`;
     this.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>{this.form.elements.namedItem(b.dataset.target).value=b.dataset.color;this.schedule();});
     this.form=this.querySelector('form');this.dark=false;
     this.form.addEventListener('input',e=>{ if(e.target.dataset.picker)this.form.elements.namedItem(e.target.dataset.picker).value=e.target.value; this.schedule(); });
     this.form.addEventListener('submit',e=>{e.preventDefault();void this.save();});
     this.querySelector('[data-reset]').onclick=()=>this.load();
     this.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{this.dark=b.dataset.mode==='dark';this.push();});
-    this.querySelector('[data-width]').onclick=()=>{const f=this.querySelector('iframe');this.mobile=!this.mobile;f.style.maxWidth=this.mobile?'390px':'';};
+    this.syncPreview=()=>{const admin=this.querySelector('[data-page="admin"]').getAttribute('aria-pressed')==='true';const f=this.querySelector('iframe');f.style.maxWidth=this.mobile?'390px':'';const url=admin?'/admin-preview?preview=1'+(this.mobile?'&width=mobile':''):'/login?preview=1';if(!f.src.endsWith(url))f.src=url;}; // The mock's layout follows this toggle, not the viewport: inside the iframe the viewport IS the frame width.
+    this.querySelector('[data-width]').onclick=()=>{this.mobile=!this.mobile;this.syncPreview();};
+    this.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{this.querySelectorAll('[data-page]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));this.querySelector('[data-preview-hint]').textContent=b.dataset.page==='admin'?'A static mock of the admin console.':'The actual sign-in interface.';this.syncPreview();});
     this.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const p=[['#5c6bc0','#8b769c'],['#527a59','#9c8759'],['#a15e45','#607d8b']][b.dataset.preset];this.form.elements.primaryColor.value=p[0];this.form.elements.accentColor.value=p[1];this.schedule();});
     this.ready=e=>{if(e.origin===location.origin&&e.source===this.querySelector('iframe').contentWindow&&e.data?.type==='iam-preview-ready')this.push();};window.addEventListener('message',this.ready);
   }
