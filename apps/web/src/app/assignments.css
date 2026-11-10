@@ -35,3 +35,11 @@
 .text-pair b,.text-pair small {display:block;}.text-pair small {font-size:.75rem;}
 @media(max-width:700px){.facets label {flex-basis:calc(50% - .6rem);}.dtabs {gap:.2rem;}.dtabs button {font-size:.75rem;padding:.5rem .3rem;}.tcard td.roles {padding:.45rem 0;}.drawer.wide {width:100vw;}.head .btn {flex:1;text-align:center;}}
 @media(max-width:700px){.head>a,.head>a.btn {flex:1 1 100%;display:block;white-space:normal;}}
+.mergebar{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--accent-soft);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:14px}
+.mergebar button{white-space:nowrap}
+#staged-rows tr.bad td{background:var(--bad-soft);color:var(--bad-ink)}
+#staged-rows .chip{display:inline-block;background:var(--chip-bg);color:var(--chip-ink);border-radius:999px;padding:2px 10px;font-size:12px}
+#staged-rows .chip.ok{background:var(--ok-soft);color:var(--ok)}
+#staged-rows .chip.no{background:var(--bad-soft);color:var(--bad-ink)}
+.refusal{background:var(--bad-soft);color:var(--bad-ink);border:1px solid var(--bad-line);border-radius:12px;padding:12px 16px;margin:12px 0}
+.refusal ul{margin:6px 0 0 18px;padding:0}

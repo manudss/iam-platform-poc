@@ -30,6 +30,9 @@ export function policyReferences(rules: Rule[], ids: string[]) {
 }
 export function referencedActions(rule: Rule): string[] { return [...new Set([...rule.text.matchAll(/Action::"([^"]+)"/g)].map(m => m[1]))]; }
 
+export interface StagedRow { identity: string; role: string; change: 'added' | 'removed' }
+export interface Offending { identity: string; role: string; change: string; why: string }
+
 @Injectable({ providedIn: 'root' })
 export class AssignmentData {
  readonly s = inject(Session);
@@ -37,6 +40,8 @@ export class AssignmentData {
  readonly assignments = signal<Assignment[]>([]); readonly orgs = signal<{id:string;name:string}[]>([]); readonly members = signal<Membership[]>([]);
  readonly policies = signal<Rule[]>([]); readonly policyNote = signal(''); readonly orgNote = signal('');
  readonly staged = signal<Set<string>>(new Set()); readonly stagedNote = signal('');
+ /** Rows staged on the working branch (assignments table diff against main). */
+ readonly stagedRows = signal<StagedRow[]>([]); readonly offending = signal<Offending[]>([]); readonly refusal = signal(''); readonly merging = signal(false);
  readonly loading = signal(false); readonly busy = signal(false); readonly error = signal(''); readonly note = signal('');
  private generation = 0;
  constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); this.note.set(''); void this.load(); }); }
@@ -48,7 +53,7 @@ export class AssignmentData {
  }
  async load() {
   const n=++this.generation, branch=this.s.branch(); this.loading.set(true); this.error.set('');
-  this.users.set([]); this.roles.set([]); this.assignments.set([]); this.rules.set([]); this.staged.set(new Set());
+  this.refusal.set(''); this.offending.set([]); this.users.set([]); this.roles.set([]); this.assignments.set([]); this.rules.set([]); this.staged.set(new Set());
   try {
    const [u,r,a,o,p,d]=await Promise.all([
     this.request<{users:UserProfile[]}>('GET','/users'),this.request<{roles:Role[];sodRules:SodRule[]}>('GET','/roles'),this.s.api.assignments(),
@@ -60,13 +65,23 @@ export class AssignmentData {
    this.users.set(u.users); this.roles.set(r.roles); this.rules.set(r.sodRules); this.assignments.set(a);this.s.assignments.set(a);
    this.orgs.set(o.orgs);this.members.set(o.members);this.orgNote.set('error' in o ? 'Organizations unavailable: '+o.error : '');
    this.policies.set(p.rules);this.policyNote.set('error' in p ? 'Policy catalogue unavailable: '+p.error : '');
-   this.staged.set(d.ids);this.stagedNote.set(d.note);
+   this.staged.set(d.ids);this.stagedNote.set(d.note);this.stagedRows.set(d.rows);
   } catch(e) {if(n===this.generation)this.error.set((e as Error).message);} finally {if(n===this.generation)this.loading.set(false);}
  }
  private async diff(branch:string) {
-  if(branch==='main')return {ids:new Set<string>(),note:''};
-  try {const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();const d=await v.diffTable('assignments','main',branch,true);return {ids:new Set(d.rows.flatMap(r=>[r.from?.['identity_id'],r.to?.['identity_id']].filter(Boolean).map(String))),note:d.truncated?'Staged view is limited to the first diff page.':''};}
-  catch(e){return {ids:new Set<string>(),note:'Staged comparison unavailable: '+(e as Error).message};}
+  if(branch==='main')return {ids:new Set<string>(),note:'',rows:[] as StagedRow[]};
+  try {const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();const d=await v.diffTable('assignments','main',branch,true);return {ids:new Set(d.rows.flatMap(r=>[r.from?.['identity_id'],r.to?.['identity_id']].filter(Boolean).map(String))),note:d.truncated?'Staged view is limited to the first diff page.':'',rows:d.rows.map(r=>({identity:String((r.to??r.from)?.['identity_id']??''),role:String((r.to??r.from)?.['role_id']??''),change:(r.to?'added':'removed') as 'added'|'removed'}))};}
+  catch(e){return {ids:new Set<string>(),note:'Staged comparison unavailable: '+(e as Error).message,rows:[] as StagedRow[]};}
+ }
+ /** One click for people who are not administrators: merge into main and activate (linked). A foreign row refuses everything and is named. */
+ async mergeMine() {
+  if(this.merging())return;
+  this.merging.set(true);this.refusal.set('');this.offending.set([]);this.error.set('');
+  try {
+   const r=await this.s.api.raw<{applied?:boolean;message?:string|string[];offending?:Offending[]}>('POST','/workspace/apply',{confirm:true},this.h());
+   if(r.status>=400||!r.data?.applied){const m=r.data?.message;this.refusal.set(Array.isArray(m)?m.join(' '):m||'Merge refused.');this.offending.set(r.data?.offending??[]);return;}
+   this.note.set('Merged into main and activated.');await this.load();
+  } catch(e){this.refusal.set((e as Error).message);this.offending.set((e as {body?:{offending?:Offending[]}}).body?.offending??[]);} finally{this.merging.set(false);}
  }
  ids(id:string) {return roleIds(this.assignments(),id);}
  label(id:string) {return this.roles().find(r=>r.id===id)?.label ?? id;}

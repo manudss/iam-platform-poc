@@ -16,8 +16,10 @@ export interface BranchProtection {
   source: 'default' | 'custom';
 }
 export interface MergeDecision { allowed: boolean; reasons: string[]; checked: boolean; message?: string }
-type Decide = (input: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string }) => Promise<{ allow: boolean; reasons: string[] }>;
+type Decide = (input: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string; ownBranch?: boolean }) => Promise<{ allow: boolean; reasons: string[] }>;
 type Row = Record<string, unknown>;
+/** Roles a manager or an organisation admin can never give (same list as the Cedar rule assignment-no-escalation). */
+const ROLE_ONLY_ADMIN = new Set(['iam-admin', 'main-merger', 'branch-merger', 'manager', 'org-admin', 'payment-approver', 'mcp-operator']);
 
 /**
  * Branch protection as a visible, per-branch setting (first slice) and the policy check for merging into a protected branch.
@@ -156,22 +158,60 @@ export class BranchProtectionService implements OnModuleInit {
     const who = typeof sub === 'string' ? sub.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64) : '';
     if (!who) throw this.refusal(branch, verb, ['no-identity']);
     let out: { allow: boolean; reasons: string[] };
-    try { out = await this.decide({ tenant: this.tenant, sub: who, branch, source, sourceKind: kind }); }
+    // Scoped assignments merge: computed from the REAL diff main...source, never from what the caller says.
+    let own = false;
+    let scope: { scope?: string; offending?: string; rows?: { identity: string; role: string; change: string; why: string }[] } = {};
+    if (source && branch === this.v.defaultBranch && process.env.IAM_SCREEN_ACCESS === '1') { try { own = await this.isOwnPersonalBranch(who, source); scope = own ? await this.assignmentsScope(branch, source, who) : { offending: `you may only merge your own personal branch into ${branch}: ${source} belongs to someone else or is not a personal branch` }; } catch { scope = {}; } }
+    try { out = await this.decide({ tenant: this.tenant, sub: who, branch, source, sourceKind: kind, changeScope: scope.scope, ownBranch: own }); }
     catch (e) { throw this.refusal(branch, verb, ['policy-engine-unreachable'], `the policy engine could not be reached (${(e as Error).message}); refused to stay on the safe side`); }
     // Bootstrap: before the very first activation no policy exists anywhere, and that first Apply is what creates the active version.
     if (!out.allow && out.reasons.length === 1 && out.reasons[0] === 'no-active-version') return;
+    if (!out.allow && scope.offending) throw this.refusal(branch, verb, out.reasons, scope.offending, undefined, undefined, scope.rows);
     if (!out.allow) throw this.refusal(branch, verb, out.reasons, undefined, source, kind);
   }
-  private refusal(branch: string, verb: string, reasons: string[], detail?: string, source?: string, kind?: string) {
-    const why = detail ?? (reasons.length ? `no rule allows it (${reasons.join(', ')})` : 'no policy rule allows it' + (source ? ` for a ${kind}/ branch (${source})` : '') + ': you need a role that a branch:merge policy accepts (for example iam-admin or branch-merger)');
-    return new ForbiddenException({ code: 'merge-not-permitted', message: `You are not allowed to ${verb} protected branch ${branch}: ${why}`, branch, action: 'branch:merge', reasons });
+
+  /** True when `source` is the personal branch registered to this user (the personal_branches table, which survives a rename). */
+  private async isOwnPersonalBranch(who: string, source: string): Promise<boolean> {
+    const c = await createConnection({ host: process.env.DOLT_HOST ?? '127.0.0.1', port: Number(process.env.DOLT_PORT ?? 3307), user: process.env.DOLT_USER ?? 'root', password: process.env.DOLT_PASSWORD ?? '', database: `${this.v.dbName}_meta`.replace(/[^A-Za-z0-9_]/g, ''), connectTimeout: 5000 });
+    try { const [r] = await c.query('select 1 from personal_branches where tenant = ? and sub = ? and branch = ?', [this.tenant, who, source]); return (r as unknown[]).length > 0; } finally { await c.end(); }
   }
 
-  private async askCore(i: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string }) {
+  /** Only the `assignments` table changed and every added or removed row passes assignment:change for the caller: scope `assignments-in-scope`. A foreign row is named. */
+  private async assignmentsScope(target: string, source: string, who: string): Promise<{ scope?: string; offending?: string; rows?: { identity: string; role: string; change: string; why: string }[] }> {
+    const sum = await this.v.diffSummary(target, source, true);
+    const names = sum.tables.map((t) => String((t as Row).table));
+    if (!names.length || names.some((n) => n !== 'assignments')) return names.length ? { offending: `this change also touches ${names.filter((n) => n !== 'assignments').join(', ')}: only a change limited to role assignments can be merged by a manager` } : {};
+    const d = await this.v.diffTable(target, source, 'assignments', true, 1000);
+    const { readHierarchy, askPerson } = await import('../access/scope.js');
+    const hMain = await readHierarchy(this.tenant, target);
+    const rows = (d as unknown as { rows?: { type?: string; from?: Row; to?: Row }[] }).rows ?? [];
+    const bad: string[] = []; const badRows: { identity: string; role: string; change: string; why: string }[] = [];
+    for (const r of rows) {
+      const row = (r.to ?? r.from ?? {}) as Row; const who2 = String(row.identity_id ?? ''), role = String(row.role_id ?? '');
+      if (!who2 || !role) { bad.push('an assignment row could not be read'); continue; }
+      const gone = r.type === 'removed' || r.type === 'delete';
+      const a = await askPerson(this.tenant, hMain, who, 'assignment:change', who2, role);
+      if (!a.allow) {
+        // Say the real reason: an administrator-only role, a role managers may not assign, or a person outside the scope (probed with a role managers may assign).
+        const inScope = ROLE_ONLY_ADMIN.has(role) ? undefined : (await askPerson(this.tenant, hMain, who, 'assignment:change', who2, 'employee')).allow;
+        const why = ROLE_ONLY_ADMIN.has(role) ? `only an administrator can give the role ${role}` : inScope ? `managers may not give the role ${role} (only an administrator can)` : `${who2} is not one of the people you manage`;
+        badRows.push({ identity: who2, role, change: gone ? 'removed' : 'added', why });
+        bad.push(`${gone ? 'removing' : 'giving'} the role ${role} ${gone ? 'from' : 'to'} ${who2}: ${why}`);
+      }
+    }
+    if (bad.length) return { offending: `${bad.length} row${bad.length > 1 ? 's are' : ' is'} outside your scope: ${bad.slice(0, 10).join('; ')}. Remove them from your branch and merge again`, rows: badRows };
+    return { scope: 'assignments-in-scope' };
+  }
+  private refusal(branch: string, verb: string, reasons: string[], detail?: string, source?: string, kind?: string, offending?: unknown[]) {
+    const why = detail ?? (reasons.length ? `no rule allows it (${reasons.join(', ')})` : 'no policy rule allows it' + (source ? ` for a ${kind}/ branch (${source})` : '') + ': you need a role that a branch:merge policy accepts (for example iam-admin or branch-merger)');
+    return new ForbiddenException({ code: 'merge-not-permitted', message: `You are not allowed to ${verb} protected branch ${branch}: ${why}`, branch, action: 'branch:merge', reasons, ...(offending ? { offending } : {}) });
+  }
+
+  private async askCore(i: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string; ownBranch?: boolean }) {
     const core = process.env.IAM_CORE_URL;
     if (!core) throw new Error('IAM_CORE_URL is not set');
     const res = await fetch(`${core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(4000),
-      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { source: i.source, source_kind: i.sourceKind ?? 'other', source_folder: branchFolder(i.source) } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
+      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { ...(i.ownBranch ? { own_branch: true } : {}), ...(i.changeScope ? { change_scope: i.changeScope } : {}), source: i.source, source_kind: i.sourceKind ?? 'other', source_folder: branchFolder(i.source) } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
     if (!res.ok) throw new Error(`core answered ${res.status}`);
     const out = (await res.json()) as { allow?: boolean; reasons?: string[]; errors?: string[] };
     return { allow: out.allow === true, reasons: [...(out.reasons ?? []), ...(out.errors ?? [])] };

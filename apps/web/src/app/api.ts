@@ -144,7 +144,7 @@ export class ApiClient {
     if(this.branch!==sentBranch)throw new Error('Working branch changed. Request result ignored.');
     if (this.epoch !== sentEpoch) throw new Error('Session changed. Request result ignored; check the current state.');
     if (r.status === 401) { if (this.token === sentToken) throw this.unauthorized(); throw new Error('Your session was just renewed. Please try the action again.'); }
-    if (!r.ok && r.status !== 409) throw new Error((data as { message?: string }).message ?? `HTTP ${r.status}`);
+    if (!r.ok && r.status !== 409) throw Object.assign(new Error((data as { message?: string }).message ?? `HTTP ${r.status}`), { body: data, status: r.status });
     return { status: r.status, data };
   }
 

@@ -22,9 +22,9 @@ describe('policy-studio with the real core', { skip: !have && 'the core binary i
   });
   after(() => { core?.kill(); if (env.u) process.env.IAM_CORE_URL = env.u; else delete process.env.IAM_CORE_URL; if (env.t) process.env.IAM_CORE_ADMIN_TOKEN = env.t; else delete process.env.IAM_CORE_ADMIN_TOKEN; });
 
-  it('lists the eight demo rules by name and refuses a caller without the admin token', async () => {
+  it('lists the demo rules by name and refuses a caller without the admin token', async () => {
     const c = await new CorePolicySource().catalog();
-    assert.deepEqual(c.rules.map((r) => r.id).sort(), ['approve-needs-payment-approver', 'demo-alice-approves', 'demo-bob-reads', 'main-profile-merger', 'mcp-operator-read-write-lifecycle', 'mcp-proxy-needs-delegation-grant', 'merge-into-main-needs-main-merger', 'merge-into-protected-needs-branch-merger', 'sod-blocks-approve']);
+    assert.deepEqual(c.rules.map((r) => r.id).sort(), ['approve-needs-payment-approver', 'assignment-manager-chain', 'assignment-no-escalation', 'assignment-organisation', 'demo-alice-approves', 'demo-bob-reads', 'main-profile-merger', 'main-scoped-assignments-merger', 'mcp-operator-read-write-lifecycle', 'mcp-proxy-needs-delegation-grant', 'merge-into-main-needs-main-merger', 'merge-into-protected-needs-branch-merger', 'screen-branch-governance', 'screen-business-admin', 'screen-iam-admin', 'screen-my-profile', 'screen-people-admin', 'sod-blocks-approve', 'user-business-admin', 'user-iam-admin', 'user-scope-manager-chain', 'user-scope-organisation']);
     assert.equal(c.rules.find((r) => r.id === 'sod-blocks-approve')!.effect, 'forbid');
     assert.equal((await fetch(`${CORE}/v1/policies`)).status, 401);
   });

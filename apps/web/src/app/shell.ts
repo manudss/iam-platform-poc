@@ -1,4 +1,5 @@
 import { Brand, Branding } from './branding';
+import { canOpen, screenOf } from './access';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
@@ -69,11 +70,11 @@ export class Shell {
     // Branch test shows the ordinary experience only: administration stays in the normal console.
     if (this.s.testBranch()) return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/overview' || i.path === '/my-profile') })).filter((g: NavGroup) => g.items.length);
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
-    const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-profile' || adminOk).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
+    const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-profile' || canOpen(a, screenOf(i.path))).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
     // Plugin menu entries (step 2): declared in the plugin's manifest, present only while the plugin is active.
     const pluginEntries = this.pluginMenu?.(); // test harnesses can render before the field settles: no entries = static console
     if (Array.isArray(pluginEntries)) for (const m of pluginEntries) {
-      if (m.area === 'admin' && !adminOk) continue;
+      if (m.area === 'admin' && (!adminOk || (a?.screenAccess && !(a.screens ?? []).includes('plugins')))) continue;
       let g = groups.find((x) => x.title === m.group);
       if (!g) { g = { title: m.group, items: [] }; groups.push(g); }
       if (!g.items.some((i) => i.path === m.path)) g.items.push({ path: m.path, label: m.title, icon: m.icon ?? '⬡', order: m.order ?? 50 });
@@ -85,6 +86,8 @@ export class Shell {
     groups.sort((a, b) => (GROUP_ORDER.indexOf(a.title) < 0 ? 99 : GROUP_ORDER.indexOf(a.title)) - (GROUP_ORDER.indexOf(b.title) < 0 ? 99 : GROUP_ORDER.indexOf(b.title)));
     return groups.filter((g: NavGroup) => g.items.length);
   }
+  /** The branch selector and Manage branches: only where a screen:open policy gives branch-manage (the super admin). Everyone else works on their own personal branch, opened for them. */
+  protected canBranches() { const a = this.s.access(); return this.isAdmin() && (!a || !a.screenAccess || !a.screens || a.screens.includes('branch-manage')); }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
   protected readonly title = signal('');
   protected readonly nav = computed<NavGroup[]>(() => {

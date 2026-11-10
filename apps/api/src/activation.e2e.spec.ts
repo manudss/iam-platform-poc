@@ -127,7 +127,7 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
   it('policy-studio step 4: the snapshot carries the Dolt rules; a broken rule refuses the activation', async () => {
     // The seed loaded the six demo rules as rows: the tenant engine is built from them, the boot file is only the fallback.
     const cat = await (await fetch(`${CORE}/v1/policies?tenant=${T}`, { headers: { 'x-core-admin-token': ADMIN } })).json() as { engine: { source: string; rules: number } };
-    assert.deepEqual(cat.engine, { source: 'tenant', rules: 9, sets: 1, schema: true });
+    assert.deepEqual(cat.engine, { source: 'tenant', rules: 22, sets: 1, schema: true });
     // A new rule row in Dolt decides once its commit is activated: carol may approve, and the audit name is the rule id.
     await sql(`insert into policy_rules values ('default','carol-approves','@id("carol-approves")\\npermit(principal == User::"carol", action == Action::"approve", resource);')`);
     const a = await svc.activate(T, await new DoltService().head());
@@ -179,6 +179,49 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     const mm = await merge('main-z', 'feature/x', 'feature');
     assert.equal(mm.allow, true); assert.deepEqual(mm.reasons, ['merge-into-main-needs-main-merger']);
     assert.equal((await merge('main-z', 'feature/x', 'feature', 'release')).allow, false, 'main-merger is a right on main only');
+  });
+  it('screen access and people scopes with the REAL core: roles open screens, managers and organisation admins reach only their people', async () => {
+    await sql("insert into assignments values ('alice-sa','iam-admin'),('lucie-sa','manager'),('noemie-sa','main-merger'),('noah-sa','org-admin'),('bob-sa','payment-creator')");
+    const a = await svc.activate(T, await new DoltService().head());
+    assert.equal(a.state, 'applied');
+    const ask = async (body: object) => (await (await fetch(`${CORE}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tenant: T, ...body }) })).json()) as { allow: boolean; reasons: string[]; errors: string[] };
+    const screen = async (id: string, screenId: string) => (await ask({ principal: `User::"${id}"`, action: 'Action::"screen:open"', resource: `Screen::"${screenId}"`, context: {} })).allow;
+    const ent = (id: string, parents: [string, string][] = []) => ({ uid: { type: 'User', id }, attrs: {}, parents: parents.map(([type, pid]) => ({ type, id: pid })) });
+    const org = (id: string, parent?: string) => ({ uid: { type: 'Org', id }, attrs: {}, parents: parent ? [{ type: 'Org', id: parent }] : [] });
+    // lucie-sa -> yanis-sa -> lea-sa (manager chain); camille-sa is somewhere else; ines-sa is in the security organisation below it
+    const world = [ent('lucie-sa'), ent('yanis-sa', [['User', 'lucie-sa']]), ent('lea-sa', [['User', 'yanis-sa']]), ent('camille-sa'), ent('noah-sa'), ent('ines-sa', [['Org', 'security']]), ent('cam-fin', [['Org', 'finance']]), org('it'), org('security', 'it'), org('finance')];
+    const person = async (action: string, id: string, target: string, role?: string, orgs?: string[]) => (await ask({ principal: `User::"${id}"`, action: `Action::"${action}"`, resource: `User::"${target}"`, context: { ...(role ? { role } : {}), ...(orgs ? { admin_orgs: orgs.map((o) => ({ __entity: { type: 'Org', id: o } })) } : {}) }, entities: world })).allow;
+    // screens
+    for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-data', 'users', 'dashboard', 'branch-manage']) assert.equal(await screen('alice-sa', sc), true, `super admin opens ${sc}`);
+    for (const sc of ['users', 'profile-reviews', 'assignments', 'my-profile']) assert.equal(await screen('lucie-sa', sc), true, `manager opens ${sc}`);
+    for (const sc of ['roles', 'policies', 'activation', 'dashboard', 'dolt-sql', 'dolt-data', 'dolt-pulls', 'plugins', 'branch-manage']) assert.equal(await screen('lucie-sa', sc), false, `manager does not open ${sc}`);
+    for (const sc of ['dashboard', 'users', 'profile-fields', 'roles', 'profile-reviews', 'my-profile', 'authentication', 'assignments', 'activation', 'organizations', 'applications', 'policies', 'workflows', 'plugins', 'customisation', 'templates', 'event-bus', 'mcp', 'dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'branch-manage', 'authority-edit']) assert.equal(await screen('noemie-sa', sc), true, `administrator (main-merger) opens ${sc}`);
+    for (const sc of ['dolt-home', 'dolt-data', 'dolt-edit', 'dolt-sql']) assert.equal(await screen('noemie-sa', sc), false, `administrator does not open the advanced Dolt manager (${sc})`);
+    for (const sc of ['authority-edit']) { assert.equal(await screen('lucie-sa', sc), false); assert.equal(await screen('noah-sa', sc), false); assert.equal(await screen('alice-sa', sc), true); }
+    for (const sc of ['users', 'profile-reviews', 'assignments', 'my-profile']) assert.equal(await screen('noah-sa', sc), true, `org admin opens ${sc}`);
+    for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-pulls', 'dashboard', 'branch-manage']) assert.equal(await screen('noah-sa', sc), false, `org admin does not open ${sc}`);
+    assert.equal(await screen('bob-sa', 'my-profile'), true); assert.equal(await screen('bob-sa', 'users'), false); assert.equal(await screen('bob-sa', 'dolt-pulls'), false);
+    // nobody but the super admin is a super admin: no other demo role reaches any config screen or any person
+    for (const id of ['lucie-sa', 'noah-sa']) for (const sc of ['roles', 'policies', 'activation', 'plugins', 'dolt-sql']) assert.equal(await screen(id, sc), false, `${id} is not a super admin (${sc})`);
+    for (const sc of ['dolt-sql', 'dolt-data', 'dolt-edit', 'dolt-home']) assert.equal(await screen('noemie-sa', sc), false, `the administrator is not a super admin (${sc})`);
+    // manager chain scope
+    assert.equal(await person('user:manage', 'lucie-sa', 'yanis-sa'), true); assert.equal(await person('user:read', 'lucie-sa', 'lea-sa'), true, 'a report of a report');
+    assert.equal(await person('user:manage', 'lucie-sa', 'camille-sa'), false); assert.equal(await person('user:read', 'lucie-sa', 'lucie-sa'), false, 'not herself');
+    assert.equal(await person('user:read', 'noemie-sa', 'yanis-sa'), true, 'an administrator reads every person'); assert.equal(await person('user:read', 'alice-sa', 'camille-sa'), true);
+    // organisation scope (the caller administers the it organisation; security is below it)
+    assert.equal(await person('user:manage', 'noah-sa', 'ines-sa', undefined, ['it']), true, 'a member of a sub-organisation');
+    assert.equal(await person('user:manage', 'noah-sa', 'cam-fin', undefined, ['it']), false); assert.equal(await person('user:manage', 'noah-sa', 'noah-sa', undefined, ['it']), false);
+    assert.equal(await person('user:manage', 'noah-sa', 'ines-sa'), false, 'no organisation sent: nothing in scope');
+    // assignments: allow list, scope, no escalation
+    assert.equal(await person('assignment:change', 'lucie-sa', 'lea-sa', 'payment-creator'), true); assert.equal(await person('assignment:change', 'lucie-sa', 'lea-sa', 'accountant'), true);
+    for (const r of ['iam-admin', 'main-merger', 'branch-merger', 'manager', 'org-admin', 'payment-approver', 'mcp-operator']) assert.equal(await person('assignment:change', 'lucie-sa', 'lea-sa', r), false, `a manager cannot assign ${r}`);
+    assert.equal(await person('assignment:change', 'lucie-sa', 'camille-sa', 'accountant'), false, 'outside the scope'); assert.equal(await person('assignment:change', 'lucie-sa', 'lucie-sa', 'accountant'), false, 'not herself');
+    assert.equal(await person('assignment:change', 'noah-sa', 'ines-sa', 'accountant', ['it']), true); assert.equal(await person('assignment:change', 'noah-sa', 'ines-sa', 'iam-admin', ['it']), false);
+    // the administrator (main-merger): every person but herself, every role but the super admin one
+    assert.equal(await person('user:manage', 'noemie-sa', 'camille-sa'), true); assert.equal(await person('user:manage', 'noemie-sa', 'noemie-sa'), false, 'not herself');
+    for (const r of ['payment-approver', 'manager', 'org-admin', 'main-merger', 'branch-merger', 'accountant']) assert.equal(await person('assignment:change', 'noemie-sa', 'camille-sa', r), true, `the administrator assigns ${r}`);
+    assert.equal(await person('assignment:change', 'noemie-sa', 'camille-sa', 'iam-admin'), false, 'only the super admin gives iam-admin'); assert.equal(await person('assignment:change', 'noemie-sa', 'noemie-sa', 'accountant'), false);
+    assert.equal(await person('assignment:change', 'alice-sa', 'lea-sa', 'iam-admin'), true, 'the super admin may grant authority roles');
   });
 });
 

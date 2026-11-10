@@ -4,6 +4,7 @@ import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
+import { screenAccessOn, askScreen } from '../auth/screen-decision.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 
 /**
@@ -49,7 +50,16 @@ export class RolesService {
 export class RolesController {
   constructor(private readonly r: RolesService) {}
   private who(req: { user: { sub: string } }) { return req.user.sub; }
-  @Get() list() { return this.r.list(); }
+  /** Callers who do not open the Roles screen (a manager editing assignments) only see the roles Cedar lets them assign (assignment:change), the same rule as the merge gate. */
+  @Get() async list(@Req() q: any) {
+    const view = await this.r.list();
+    if (!screenAccessOn() || typeof q?.user?.sub !== 'string') return view;
+    const tenant = String(q.params?.tenant ?? process.env.IAM_TENANT ?? 'acme-demo');
+    if ((await askScreen(tenant, q.user.sub, 'roles')).allow) return view;
+    const { assignableRoleIds } = await import('../access/scope.js');
+    const ok = await assignableRoleIds(tenant, q.user.sub, view.roles.map((r) => r.id));
+    return { ...view, roles: view.roles.filter((r) => ok.has(r.id)), sodRules: view.sodRules.filter((x) => ok.has(x.role_a) && ok.has(x.role_b)) };
+  }
   @Post() create(@Body() b: any, @Req() q: any) { return this.r.create(this.who(q), b); }
   @Patch(':id') update(@Param('id') id: string, @Body() b: any, @Req() q: any) { return this.r.update(this.who(q), id, b); }
   @Delete(':id') remove(@Param('id') id: string, @Req() q: any) { return this.r.remove(this.who(q), id); }
