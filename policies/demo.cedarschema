@@ -80,6 +80,8 @@ action "branch:merge" appliesTo {
     source_folder?: String,
     // assignments-in-scope when the real diff main...source touches only assignments and every row passes assignment:change for the caller.
     change_scope?: String,
+    // true when the source branch is the caller's own personal branch (looked up server side, never taken from the caller).
+    own_branch?: Bool,
   }
 };
 

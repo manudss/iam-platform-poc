@@ -16,7 +16,7 @@ export interface BranchProtection {
   source: 'default' | 'custom';
 }
 export interface MergeDecision { allowed: boolean; reasons: string[]; checked: boolean; message?: string }
-type Decide = (input: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string }) => Promise<{ allow: boolean; reasons: string[] }>;
+type Decide = (input: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string; ownBranch?: boolean }) => Promise<{ allow: boolean; reasons: string[] }>;
 type Row = Record<string, unknown>;
 /** Roles a manager or an organisation admin can never give (same list as the Cedar rule assignment-no-escalation). */
 const ROLE_ONLY_ADMIN = new Set(['iam-admin', 'main-merger', 'branch-merger', 'manager', 'org-admin', 'payment-approver', 'mcp-operator']);
@@ -159,14 +159,21 @@ export class BranchProtectionService implements OnModuleInit {
     if (!who) throw this.refusal(branch, verb, ['no-identity']);
     let out: { allow: boolean; reasons: string[] };
     // Scoped assignments merge: computed from the REAL diff main...source, never from what the caller says.
+    let own = false;
     let scope: { scope?: string; offending?: string; rows?: { identity: string; role: string; change: string; why: string }[] } = {};
-    if (source && branch === this.v.defaultBranch && process.env.IAM_SCREEN_ACCESS === '1') { try { scope = await this.assignmentsScope(branch, source, who); } catch { scope = {}; } }
-    try { out = await this.decide({ tenant: this.tenant, sub: who, branch, source, sourceKind: kind, changeScope: scope.scope }); }
+    if (source && branch === this.v.defaultBranch && process.env.IAM_SCREEN_ACCESS === '1') { try { own = await this.isOwnPersonalBranch(who, source); scope = own ? await this.assignmentsScope(branch, source, who) : { offending: `you may only merge your own personal branch into ${branch}: ${source} belongs to someone else or is not a personal branch` }; } catch { scope = {}; } }
+    try { out = await this.decide({ tenant: this.tenant, sub: who, branch, source, sourceKind: kind, changeScope: scope.scope, ownBranch: own }); }
     catch (e) { throw this.refusal(branch, verb, ['policy-engine-unreachable'], `the policy engine could not be reached (${(e as Error).message}); refused to stay on the safe side`); }
     // Bootstrap: before the very first activation no policy exists anywhere, and that first Apply is what creates the active version.
     if (!out.allow && out.reasons.length === 1 && out.reasons[0] === 'no-active-version') return;
     if (!out.allow && scope.offending) throw this.refusal(branch, verb, out.reasons, scope.offending, undefined, undefined, scope.rows);
     if (!out.allow) throw this.refusal(branch, verb, out.reasons, undefined, source, kind);
+  }
+
+  /** True when `source` is the personal branch registered to this user (the personal_branches table, which survives a rename). */
+  private async isOwnPersonalBranch(who: string, source: string): Promise<boolean> {
+    const c = await createConnection({ host: process.env.DOLT_HOST ?? '127.0.0.1', port: Number(process.env.DOLT_PORT ?? 3307), user: process.env.DOLT_USER ?? 'root', password: process.env.DOLT_PASSWORD ?? '', database: `${this.v.dbName}_meta`.replace(/[^A-Za-z0-9_]/g, ''), connectTimeout: 5000 });
+    try { const [r] = await c.query('select 1 from personal_branches where tenant = ? and sub = ? and branch = ?', [this.tenant, who, source]); return (r as unknown[]).length > 0; } finally { await c.end(); }
   }
 
   /** Only the `assignments` table changed and every added or removed row passes assignment:change for the caller: scope `assignments-in-scope`. A foreign row is named. */
@@ -195,11 +202,11 @@ export class BranchProtectionService implements OnModuleInit {
     return new ForbiddenException({ code: 'merge-not-permitted', message: `You are not allowed to ${verb} protected branch ${branch}: ${why}`, branch, action: 'branch:merge', reasons, ...(offending ? { offending } : {}) });
   }
 
-  private async askCore(i: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string }) {
+  private async askCore(i: { tenant: string; sub: string; branch: string; source?: string; sourceKind?: string; changeScope?: string; ownBranch?: boolean }) {
     const core = process.env.IAM_CORE_URL;
     if (!core) throw new Error('IAM_CORE_URL is not set');
     const res = await fetch(`${core}/v1/decide`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(4000),
-      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { ...(i.changeScope ? { change_scope: i.changeScope } : {}), source: i.source, source_kind: i.sourceKind ?? 'other', source_folder: branchFolder(i.source) } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
+      body: JSON.stringify({ tenant: i.tenant, principal: `User::"${i.sub}"`, action: 'Action::"branch:merge"', resource: `Branch::"${i.branch}"`, context: i.source ? { ...(i.ownBranch ? { own_branch: true } : {}), ...(i.changeScope ? { change_scope: i.changeScope } : {}), source: i.source, source_kind: i.sourceKind ?? 'other', source_folder: branchFolder(i.source) } : {}, audit: { source: 'http', subject: i.sub, note: `merge permission for protected branch ${i.branch}` } }) });
     if (!res.ok) throw new Error(`core answered ${res.status}`);
     const out = (await res.json()) as { allow?: boolean; reasons?: string[]; errors?: string[] };
     return { allow: out.allow === true, reasons: [...(out.reasons ?? []), ...(out.errors ?? [])] };

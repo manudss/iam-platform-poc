@@ -27,7 +27,13 @@ describe('scoped assignments merge: real Dolt + real core', { skip: !have && 'do
   const T = 'acme-demo';
   const conn = () => createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam', multipleStatements: false });
   /** A branch from main holding the given statements, committed; back on main afterwards (one session). */
-  const branch = async (name: string, stmts: string[]) => {
+  const branch = async (name: string, stmts: string[], owner = 'lucie-t') => {
+    const m = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', multipleStatements: false });
+    try {
+      await m.query('create database if not exists iam_meta'); await m.query('use iam_meta');
+      await m.query('create table if not exists personal_branches (tenant varchar(32) not null, sub varchar(64) not null, branch varchar(63) not null, created_at datetime(3) not null, last_seen_at datetime(3) not null, primary key (tenant, sub), unique key personal_branch_name (tenant, branch))');
+      await m.query('replace into personal_branches values (?,?,?,now(3),now(3))', [T, owner, name]);
+    } finally { await m.end(); }
     const c = await conn();
     try {
       await c.query("call dolt_checkout('main')"); await c.query("call dolt_checkout('-b', ?)", [name]);
@@ -64,6 +70,12 @@ describe('scoped assignments merge: real Dolt + real core', { skip: !have && 'do
   it('a manager merges a change limited to assignments of her reports, with an allowed role', async () => {
     await branch('feature/ok', ["insert into assignments values ('yanis-t','payment-creator')"]);
     await prot.assertMayMerge('main', 'lucie-t', 'merge into', 'feature/ok');
+  });
+  it('a manager may NOT merge a branch that is not her own, even when every row is in her scope', async () => {
+    await branch('feature/someone-else', ["insert into assignments values ('yanis-t','employee')"], 'noemie-t');
+    assert.match(await refusal(prot.assertMayMerge('main', 'lucie-t', 'merge into', 'feature/someone-else')), /your own personal branch/);
+    await branch('feature/unregistered', ["insert into assignments values ('yanis-t','employee')"], 'camille-t');
+    assert.match(await refusal(prot.assertMayMerge('main', 'lucie-t', 'merge into', 'feature/unregistered')), /your own personal branch/);
   });
   it('one foreign row refuses the whole merge and the message names the row', async () => {
     await branch('feature/foreign', ["insert into assignments values ('yanis-t','accountant'),('camille-t','accountant')"]);

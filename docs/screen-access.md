@@ -25,3 +25,8 @@ A manager or org-admin may merge into `main` a branch only if the real diff `mai
 
 ## Seed users
 demo-alice = iam-admin only; demo-lucie = manager only; demo-noemie = main-merger only; noah-petit = org-admin only. Tests prove the others are not super admins (`access/scoped-merge.e2e.spec.ts`, `activation.e2e.spec.ts`, `auth/screen-guard.spec.ts`). The demo seed runs on an empty database only: reset the database (or redeploy a preview) to get new seed users.
+
+## Own branch only, and the branch selector
+
+- A manager (or organisation admin) merges into main only HER OWN personal branch (`own_branch`, read server side from the personal branch registry, never from the caller) and only when the real diff touches assignments of her scope. Another branch, even with in-scope rows, is refused ("you may only merge your own personal branch"). Merge my changes, Review & Apply and Pull requests all go through the same gate.
+- The branch selector, Manage branches, rename/release of the personal branch and branch test links need the screen `branch-manage`, opened by the super admin rule only. Everyone else works on their own personal branch, opened for them at sign-in.
