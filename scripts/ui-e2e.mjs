@@ -392,7 +392,11 @@ try {
   const sectionOrder = await page.locator('#pf-table .pf-group').allTextContents();
   await page.click('#pf-save'); await page.waitForSelector('#pf-note');
   await page.reload(); await page.waitForSelector('#signin-browser');
-  await coreLogin(); await setToken();
+  await coreLogin();
+  await page.waitForSelector('details.token', { state: 'attached' });
+  await setToken();
+  await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
+  await status('personal branch');
   await nav('/profile-fields');
   await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
   assert.deepEqual(await page.locator('#pf-table .pf-group').allTextContents(), sectionOrder, 'empty sections and their order survive save/reload');
