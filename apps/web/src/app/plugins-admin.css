@@ -13,4 +13,4 @@ input[type=text], input[type=number], input[type=password], select { max-width: 
 .uninstall-confirm { border: 1px solid var(--bad); border-left-width: 4px; border-radius: .6rem; background: var(--bad-soft); color: var(--bad-ink); padding: .8rem 1rem; margin-top: .8rem; }
 .uninstall-confirm .row { display: flex; gap: .5rem; flex-wrap: wrap; }
 button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
-button.danger:hover:not(:disabled) { background: var(--bad); color: #fff; }
+button.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad); }
