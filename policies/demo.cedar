@@ -39,9 +39,9 @@ permit(principal, action == Action::"mcp:proxy", resource)
   when { context has roles && context.roles.contains("mcp-operator")
       && context has mcp_grants && context.mcp_grants.contains(resource) };
 
-// Protected branches: merging a pull request into a protected branch needs the branch-merger role from the ACTIVE version (main).
+// Protected branches: merging a pull request into a protected branch needs the iam-admin or branch-merger role from the ACTIVE version (main).
 @id("merge-into-protected-needs-branch-merger")
-@description("A person holding the branch-merger role may merge a pull request into a protected branch such as main.")
+@description("A person holding the iam-admin or branch-merger role may merge a pull request into a protected branch such as main.")
 @pillar("versioning")
 permit(principal, action == Action::"branch:merge", resource)
-  when { context has roles && context.roles.contains("branch-merger") };
+  when { context has roles && (context.roles.contains("branch-merger") || context.roles.contains("iam-admin")) };

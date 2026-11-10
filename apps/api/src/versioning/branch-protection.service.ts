@@ -129,7 +129,7 @@ export class BranchProtectionService implements OnModuleInit {
     if (!out.allow) throw this.refusal(branch, verb, out.reasons);
   }
   private refusal(branch: string, verb: string, reasons: string[], detail?: string) {
-    const why = detail ?? (reasons.length ? `no rule allows it (${reasons.join(', ')})` : 'no policy rule allows it: you need a role that the policy "merge-into-protected-needs-branch-merger" accepts (branch-merger)');
+    const why = detail ?? (reasons.length ? `no rule allows it (${reasons.join(', ')})` : 'no policy rule allows it: you need a role that the policy "merge-into-protected-needs-branch-merger" accepts (iam-admin or branch-merger)');
     return new ForbiddenException({ code: 'merge-not-permitted', message: `You are not allowed to ${verb} protected branch ${branch}: ${why}`, branch, action: 'branch:merge', reasons });
   }
 
