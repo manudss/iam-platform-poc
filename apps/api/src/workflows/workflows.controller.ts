@@ -25,6 +25,7 @@ export class WorkflowsController {
   @Delete('workflows/:id') remove(@Param('tenant') t: string, @Param('id') id: string) { return this.wf.remove(t, id); }
   @Post('workflows/test-run') testRun(@Param('tenant') t: string, @Body() b: Record<string, unknown>, @Req() r: Req_) { return this.wf.testRun(t, b ?? {}, r.user?.sub); }
   @Post('workflows/:id/duplicate') duplicate(@Param('tenant') t: string, @Param('id') id: string, @Req() r: Req_) { return this.wf.duplicate(t, id, r.user?.sub); }
+  @Post('workflows/:id/active') setActive(@Param('tenant') t: string, @Param('id') id: string, @Body() b: Record<string, unknown>) { return this.wf.setActive(t, id, b?.active); }
   @Post('workflows/:id/runs') start(@Param('tenant') t: string, @Param('id') id: string, @Req() r: Req_) { return this.wf.start(t, id, r.user?.sub); }
 
   @Get('workflow-runs') runs(@Param('tenant') t: string, @Query('definition') definition?: string, @Query('status') status?: string, @Query('tests') tests?: string) { return this.wf.listRuns(t, definition, { status, tests: tests === '1' || tests === 'true' }); }
@@ -33,4 +34,5 @@ export class WorkflowsController {
   @Post('workflow-runs/:runId/retry') retry(@Param('tenant') t: string, @Param('runId') runId: string) { return this.wf.retry(t, runId); }
   @Post('workflow-runs/:runId/cancel') cancel(@Param('tenant') t: string, @Param('runId') runId: string) { return this.wf.cancel(t, runId); }
   @Post('workflow-runs/:runId/review') review(@Param('tenant') t: string, @Param('runId') runId: string, @Req() r: Req_) { return this.wf.review(t, runId, r.user?.sub); }
+  @Delete('workflow-runs/:runId') removeRun(@Param('tenant') t: string, @Param('runId') runId: string) { return this.wf.removeRun(t, runId); }
 }

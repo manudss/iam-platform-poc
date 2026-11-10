@@ -45,7 +45,8 @@ export class WorkflowsService {
 
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant, currentBranch());
-    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
+    const stats = await this.store.runStats(tenant);
+    return { definitions: defs.map((d) => { const s = stats.get(d.id); return { id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at, stats: s ? { runs: s.runs, okPct: s.runs ? Math.round((s.ok / s.runs) * 100) : null, lastStatus: s.last?.status ?? null, lastAt: s.last?.started_at ?? null, lastDurationMs: s.last?.finished_at ? Date.parse(s.last.finished_at) - Date.parse(s.last.started_at) : null } : null }; }) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -87,6 +88,25 @@ export class WorkflowsService {
     if (running) throw new ConflictException('a run of this workflow is still active: cancel it first');
     if (!(await this.store.deleteDefinition(tenant, wid, currentBranch(true)))) throw new NotFoundException('unknown workflow');
     return { deleted: wid };
+  }
+
+  /** Flips only the active flag (the list cards' pause switch): no graph revalidation needed. */
+  async setActive(tenant: string, id: unknown, active: unknown) {
+    const ref = currentBranch(true);
+    const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), ref);
+    if (!d) throw new NotFoundException('unknown workflow');
+    if (typeof active !== 'boolean') throw new BadRequestException('active (boolean) is required');
+    await this.store.putDefinition({ ...d, active }, ref);
+    return { definition: { id: d.id, active } };
+  }
+
+  /** Deletes a finished run and its steps; a live run must be canceled first. */
+  async removeRun(tenant: string, runId: unknown) {
+    const r = await this.store.getRun(tenant, this.checkId(runId, 'run id'));
+    if (!r) throw new NotFoundException('unknown run');
+    if (r.status === 'queued' || r.status === 'running') throw new ConflictException('cancel the run first');
+    await this.store.deleteRun(r.id);
+    return { deleted: r.id };
   }
 
   /**

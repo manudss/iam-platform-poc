@@ -172,6 +172,22 @@ export class WorkflowStore {
     const m = await this.meta();
     try { await m.query(`update workflow_runs set ${sets.join(', ')} where id = ?`, vals); } finally { await m.end(); }
   }
+  /** Per-definition run statistics for the list cards (test runs excluded; POC-scale aggregation in JS). */
+  async runStats(tenant: string): Promise<Map<string, { runs: number; ok: number; last: RunRow | null }>> {
+    const out = new Map<string, { runs: number; ok: number; last: RunRow | null }>();
+    for (const r of await this.listRuns(tenant, undefined, 1000)) {
+      if (r.test) continue;
+      const s = out.get(r.definition_id) ?? { runs: 0, ok: 0, last: null };
+      s.runs++; if (r.status === 'completed') s.ok++;
+      if (!s.last) s.last = r; // listRuns is started_at desc: the first seen is the latest
+      out.set(r.definition_id, s);
+    }
+    return out;
+  }
+  async deleteRun(id: string): Promise<void> {
+    const m = await this.meta();
+    try { await m.query('delete from workflow_steps where run_id = ?', [id]); await m.query('delete from workflow_runs where id = ?', [id]); } finally { await m.end(); }
+  }
   async runningRuns(): Promise<RunRow[]> {
     const m = await this.meta();
     try { const [r] = await m.query("select * from workflow_runs where status in ('queued','running')"); return (r as Record<string, unknown>[]).map(WorkflowStore.run); } finally { await m.end(); }

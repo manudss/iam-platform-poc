@@ -92,7 +92,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 16);
+    assert.equal(routes.length, 18);
   });
 
   it('refuses an invalid graph (cycle, unknown type) and an unknown field', async () => {
@@ -296,6 +296,26 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, true);
     await ok('DELETE', `/workflows/${def.definition.id}`);
     assert.equal((await call('GET', `/workflows/${def.definition.id}`)).status, 404);
+  });
+
+  it('list cards: run stats per definition, the pause switch endpoint, deleting a finished run', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Stats', description: '', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['completed']);
+    const row = ((await ok('GET', '/workflows')) as { definitions: { id: string; stats: { runs: number; okPct: number; lastStatus: string } | null }[] }).definitions.find((d) => d.id === def.definition.id)!;
+    assert.ok(row.stats && row.stats.runs === 1 && row.stats.okPct === 100 && row.stats.lastStatus === 'completed', JSON.stringify(row.stats));
+    // the cards' pause switch flips only the flag
+    assert.equal(((await ok('POST', `/workflows/${def.definition.id}/active`, { active: false })) as { definition: { active: boolean } }).definition.active, false);
+    assert.equal((await call('POST', `/workflows/${def.definition.id}/active`, {})).status, 400);
+    assert.equal(((await ok('GET', `/workflows/${def.definition.id}`)) as { definition: { active: boolean } }).definition.active, false);
+    // a finished run can be deleted (and stops counting), a missing one 404s
+    assert.equal(((await ok('DELETE', `/workflow-runs/${started.run.id}`)) as { deleted: string }).deleted, started.run.id);
+    assert.equal((await call('GET', `/workflow-runs/${started.run.id}`)).status, 404);
+    assert.equal((await call('DELETE', `/workflow-runs/${started.run.id}`)).status, 404);
+    const second = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(second.run.id, ['completed']);
+    const row2 = ((await ok('GET', '/workflows')) as { definitions: { id: string; stats: { runs: number } | null }[] }).definitions.find((d) => d.id === def.definition.id)!;
+    assert.equal(row2.stats!.runs, 1, 'the deleted run no longer counts');
   });
 
   it('meta->main migration runs ONCE: a definition deleted afterwards is not resurrected at the next startup', async () => {
