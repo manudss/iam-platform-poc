@@ -133,7 +133,7 @@ export class WorkflowsService {
     const run: RunRow = { id: runId, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: event?.branch ?? null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null };
     const steps: StepRow[] = order.map((nodeId) => {
       const n = graph.nodes.find((x) => x.id === nodeId)!;
-      return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], output: null, started_at: null, finished_at: null };
+      return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null };
     });
     await this.store.createRun(run, steps);
     this.engine.kick(run.id);
@@ -161,7 +161,7 @@ export class WorkflowsService {
       steps: order.map((nodeId) => {
         const s = steps.find((x) => x.node_id === nodeId);
         const n = nodes.get(nodeId)!;
-        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], output: null, started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label, category: stepCategoryOf(n.type) };
+        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label, category: stepCategoryOf(n.type) };
       }),
     };
   }

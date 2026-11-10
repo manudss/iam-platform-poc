@@ -104,6 +104,15 @@ export function blockCatalogue(): { type: string; family: string; label: string;
     'set-profile-field': { hint: 'Real, on the run branch' },
   };
   const out = Object.entries(builtins).map(([type, b]) => ({ type, family: 'Core', label: STEP_TYPES[type].label, simulated: STEP_TYPES[type].simulated, category: stepCategoryOf(type), description: b.hint, fields: [] as WfBlockField[], outputs: [] as { key: string; description: string }[], provider: null as string | null }));
+  // Flow-control blocks (Logic family): they really evaluate at run time, have no external effect, and
+  // branch the run through labeled links (true/false, case/default, each/done) or catch failures (error).
+  const logic: { type: string; hint: string; outputs: { key: string; description: string }[] }[] = [
+    { type: 'if', hint: 'Branches on a condition: outgoing links labeled true / false', outputs: [{ key: 'branch', description: '"true" or "false"' }, { key: 'result', description: 'the condition result (boolean)' }] },
+    { type: 'switch', hint: 'Branches on a value: outgoing links labeled with a case, or default', outputs: [{ key: 'branch', description: 'the matched case, or "default"' }] },
+    { type: 'loop', hint: 'Runs its body (links labeled each) once per item, then the done links', outputs: [{ key: 'item', description: 'the current item (per iteration)' }, { key: 'index', description: 'the current iteration, 0-based' }, { key: 'count', description: 'the number of items' }] },
+    { type: 'merge', hint: 'Joins paths: runs as soon as one incoming link arrives', outputs: [{ key: 'arrived', description: 'the incoming steps that arrived' }] },
+  ];
+  for (const b of logic) out.push({ type: b.type, family: 'Logic', label: STEP_TYPES[b.type].label, simulated: true, category: stepCategoryOf(b.type), description: b.hint, fields: [], outputs: b.outputs, provider: null });
   const seen = new Set(out.map((b) => b.type));
   for (const impl of pluginCatalogue().impls()) {
     if (!impl.manifest.entrypoints?.['blocks']) continue;

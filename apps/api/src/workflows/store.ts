@@ -15,7 +15,7 @@ export interface DefinitionRow { id: string; tenant: string; name: string; descr
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
 export interface RunRow { id: string; tenant: string; definition_id: string; name: string; graph: WfGraph; branch: string | null; base_branch: string | null; status: RunStatus; error: string | null; started_by: string; started_at: string; finished_at: string | null }
 export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
-export interface StepRow { run_id: string; node_id: string; status: StepStatus; simulated: boolean; attempts: number; error: string | null; log: string[]; output: Record<string, unknown> | null; started_at: string | null; finished_at: string | null }
+export interface StepRow { run_id: string; node_id: string; status: StepStatus; simulated: boolean; attempts: number; error: string | null; log: string[]; input: Record<string, unknown> | null; output: Record<string, unknown> | null; started_at: string | null; finished_at: string | null }
 
 @Injectable()
 export class WorkflowStore {
@@ -44,8 +44,8 @@ export class WorkflowStore {
             if (!(cols as unknown[]).length) await m.query(`alter table ${table} add column ${column} ${ddl}`);
           }
           await m.query('CREATE TABLE IF NOT EXISTS workflow_steps (run_id VARCHAR(40) NOT NULL, node_id VARCHAR(40) NOT NULL, status VARCHAR(16) NOT NULL, simulated BOOLEAN NOT NULL, attempts INT NOT NULL DEFAULT 0, error VARCHAR(500) NULL, log JSON NULL, output JSON NULL, started_at DATETIME(3) NULL, finished_at DATETIME(3) NULL, PRIMARY KEY (run_id, node_id))');
-          // Existing demo databases: add the output column once (idempotent).
-          { const [cols] = await m.query(`show columns from workflow_steps like 'output'`); if (!(cols as unknown[]).length) await m.query('alter table workflow_steps add column output JSON NULL'); }
+          // Existing demo databases: add the output/input columns once (idempotent).
+          for (const col of ['output', 'input']) { const [cols] = await m.query(`show columns from workflow_steps like '${col}'`); if (!(cols as unknown[]).length) await m.query(`alter table workflow_steps add column ${col} JSON NULL`); }
           // One-time migration marker: without it, a definition deleted on main would be resurrected from a stale meta row at the next restart.
           await m.query('CREATE TABLE IF NOT EXISTS workflow_store_meta (k VARCHAR(40) NOT NULL PRIMARY KEY, v VARCHAR(200) NOT NULL)');
         } finally { await m.end(); }
@@ -90,7 +90,8 @@ export class WorkflowStore {
   private static step(r: Record<string, unknown>): StepRow {
     const log = typeof r.log === 'string' ? JSON.parse(r.log) : r.log;
     const output = typeof r.output === 'string' ? JSON.parse(r.output) : r.output;
-    return { run_id: String(r.run_id), node_id: String(r.node_id), status: r.status as StepStatus, simulated: !!r.simulated, attempts: Number(r.attempts), error: r.error === null ? null : String(r.error), log: Array.isArray(log) ? log.map(String) : [], output: (output ?? null) as Record<string, unknown> | null, started_at: r.started_at === null ? null : String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at) };
+    const input = typeof r.input === 'string' ? JSON.parse(r.input) : r.input;
+    return { run_id: String(r.run_id), node_id: String(r.node_id), status: r.status as StepStatus, simulated: !!r.simulated, attempts: Number(r.attempts), error: r.error === null ? null : String(r.error), log: Array.isArray(log) ? log.map(String) : [], input: (input ?? null) as Record<string, unknown> | null, output: (output ?? null) as Record<string, unknown> | null, started_at: r.started_at === null ? null : String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at) };
   }
 
   /** Definitions are versioned rows: reads run on the given ref, writes commit on it (working branch in workspace mode, main elsewhere). */
@@ -178,10 +179,11 @@ export class WorkflowStore {
     const m = await this.meta();
     try { const [r] = await m.query('select * from workflow_steps where run_id = ? and node_id = ?', [runId, nodeId]); const row = (r as Record<string, unknown>[])[0]; return row ? WorkflowStore.step(row) : null; } finally { await m.end(); }
   }
-  async patchStep(runId: string, nodeId: string, patch: Partial<Pick<StepRow, 'status' | 'error' | 'log' | 'output' | 'started_at' | 'finished_at'>> & { attempts?: number }): Promise<void> {
+  async patchStep(runId: string, nodeId: string, patch: Partial<Pick<StepRow, 'status' | 'error' | 'log' | 'input' | 'output' | 'started_at' | 'finished_at'>> & { attempts?: number }): Promise<void> {
     const sets: string[] = [], vals: unknown[] = [];
     for (const k of ['status', 'error', 'started_at', 'finished_at', 'attempts'] as const) if (k in patch) { sets.push(`${k} = ?`); vals.push((patch as Record<string, unknown>)[k] ?? null); }
     if ('log' in patch) { sets.push('log = ?'); vals.push(JSON.stringify(patch.log ?? [])); }
+    if ('input' in patch) { sets.push('input = ?'); vals.push(patch.input === undefined || patch.input === null ? null : JSON.stringify(patch.input).slice(0, 8000)); }
     if ('output' in patch) { sets.push('output = ?'); vals.push(patch.output === undefined || patch.output === null ? null : JSON.stringify(patch.output).slice(0, 8000)); }
     if (!sets.length) return;
     vals.push(runId, nodeId);
