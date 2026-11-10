@@ -78,7 +78,14 @@ export class DoltExplorer {
   protected dataRef = this.session.branch() || 'main';
   protected readonly tableList = signal<{ name: string; rows: number }[]>([]);
   protected readonly data = signal<TableData | null>(null);
-  protected tableSearch = ''; protected fieldSearch = ''; protected rowView = signal<Record<string, unknown> | null>(null); protected formFields: Record<string, string> = {}; protected nullFields: Record<string, boolean> = {}; protected editorOpen = false; protected jsonMode = false;
+  protected tableSearch = ''; protected rowView = signal<Record<string, unknown> | null>(null);
+  protected readonly openTables = signal<string[]>([]);
+  protected readonly systemTables = ['dolt_log', 'dolt_branches', 'dolt_diff_*', 'dolt_history_*'];
+  protected readonly savedQueries = signal<{ name: string; sql: string }[]>([]);
+  protected readonly rowFilter = signal('');
+  protected readonly sortCol = signal('');
+  protected readonly sortDir = signal<1 | -1>(1);
+  protected readonly hiddenCols = signal<Set<string>>(new Set()); protected formFields: Record<string, string> = {}; protected nullFields: Record<string, boolean> = {}; protected editorOpen = false; protected jsonMode = false;
   protected editJson = ''; protected editKey: Record<string, unknown> | null = null; protected editMessage = '';
   protected readonly editable = computed(() => { const d = this.data(); const b = this.branches().find((x) => x.name === d?.ref); return !!d && d.kind === 'branch' && !!b && !b.protected && !d.table.startsWith('plugin_runtime_'); });
 
@@ -110,6 +117,7 @@ export class DoltExplorer {
   protected prStatusLabel(s: string) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 
   async ngOnInit() {
+    try { this.savedQueries.set(JSON.parse(localStorage.getItem('dolt-saved-queries') ?? '[]')); } catch { this.savedQueries.set([]); }
     this.v = new VersioningClient(this.api);
     // one admin capability token for the whole console (shell sidebar); read at each call, never stored anywhere else
     Object.defineProperty(this.v, 'adminToken', { get: () => this.session.adminToken(), set: () => {}, configurable: true });
@@ -316,14 +324,40 @@ export class DoltExplorer {
   protected changed(r: RowDiff, col: string) { return r.type === 'modified' && this.cell(r.from?.[col]) !== this.cell(r.to?.[col]); }
 
   // data
-  protected async loadTables() { const r = await this.run(() => this.v.tables(this.dataRef), true); if (r) { this.tableList.set(r.tables); this.data.set(null); } }
-  protected async openTable(name: string, offset = 0) { const r = await this.run(() => this.v.rows(this.dataRef, name, offset), true); if (r) { this.data.set(r); this.editJson = ''; this.editKey = null; this.editorOpen = false; this.rowView.set(null); } }
+  protected async loadTables() { const r = await this.run(() => this.v.tables(this.dataRef), true); if (r) { this.tableList.set(r.tables); this.data.set(null); this.openTables.set([]); this.hiddenCols.set(new Set()); this.rowFilter.set(''); this.sortCol.set(''); } }
+  protected async openTable(name: string, offset = 0) {
+    const r = await this.run(() => this.v.rows(this.dataRef, name, offset), true);
+    if (r) { this.data.set(r); this.editJson = ''; this.editKey = null; this.editorOpen = false; this.rowView.set(null); this.hiddenCols.set(new Set()); this.rowFilter.set(''); this.sortCol.set(''); if (!this.openTables().includes(name)) this.openTables.update((t) => [...t, name]); }
+  }
+  protected closeTableTab(name: string) { this.openTables.update((t) => t.filter((x) => x !== name)); if (this.data()?.table === name) this.data.set(null); }
+  protected openSystemTable(name: string) {
+    this.sqlRef = this.dataRef; this.sqlMode = 'read';
+    this.sqlText = name.endsWith('*') ? `-- ${name} is a family of tables, one per user table\nselect * from dolt_log limit 50` : `select * from ${name} limit 50`;
+    this.go('sql');
+  }
+  protected openSavedQuery(q: { name: string; sql: string }) { this.sqlRef = this.dataRef; this.sqlMode = 'read'; this.sqlText = q.sql; this.go('sql'); }
+  protected editableRef() { const b = this.branches().find((x) => x.name === this.dataRef); return !!b && !b.protected; }
+  protected displayRows(d: TableData) {
+    const q = this.rowFilter().trim().toLowerCase();
+    let rows = q ? d.rows.filter((r) => d.columns.some((c) => cellText(r[c.name] as never).toLowerCase().includes(q))) : [...d.rows];
+    const col = this.sortCol();
+    if (col) rows = rows.sort((a, b) => cellText(a[col] as never).localeCompare(cellText(b[col] as never), undefined, { numeric: true }) * this.sortDir());
+    return rows;
+  }
+  protected toggleCol(name: string) { const s = new Set(this.hiddenCols()); if (s.has(name)) s.delete(name); else s.add(name); this.hiddenCols.set(s); }
+  protected exportCsv(d: TableData) {
+    const cols = this.visibleColumns().map((c) => c.name);
+    const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const csv = [cols.join(','), ...this.displayRows(d).map((r) => cols.map((c) => esc(cellText(r[c] as never))).join(','))].join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `${d.table}-${d.ref}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  }
   protected startEdit(row: Record<string, unknown>) {
     const d = this.data()!; this.editKey = Object.fromEntries(d.primaryKey.map((k) => [k, row[k]])); this.editJson = JSON.stringify(row, null, 2); this.editMessage = ''; this.prepareFields(row);
   }
   protected startInsert() { const d = this.data()!; this.editKey = null; this.editJson = JSON.stringify(Object.fromEntries(d.columns.map((c) => [c.name, ''])), null, 2); this.editMessage = ''; this.prepareFields(Object.fromEntries(d.columns.filter(c=>c.name!=='credential_revision').map(c=>[c.name,c.nullable?null:'']))); }
   protected visibleTables() { return this.tableList().filter(t=>t.name.toLowerCase().includes(this.tableSearch.toLowerCase())); }
-  protected visibleColumns() { return this.data()?.columns.filter(c=>c.name.toLowerCase().includes(this.fieldSearch.toLowerCase())) ?? []; }
+  protected visibleColumns() { return this.data()?.columns.filter((c) => !this.hiddenCols().has(c.name)) ?? []; }
   private prepareFields(row: Record<string,unknown>) { this.editorOpen=true;this.jsonMode=false;this.formFields={};this.nullFields={}; for(const c of this.data()!.columns.filter(c=>c.name!=='credential_revision')){this.nullFields[c.name]=row[c.name]===null; this.formFields[c.name]=row[c.name]===null?'':typeof row[c.name]==='object'?JSON.stringify(row[c.name]):String(row[c.name]??'');} }
   protected cancelEdit(){this.editorOpen=false;this.editJson='';}
   protected async saveEdit() {

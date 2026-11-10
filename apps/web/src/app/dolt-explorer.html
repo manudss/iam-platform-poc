@@ -298,40 +298,80 @@
     }
 
     @case ('data') {
-      <h3>Tables and rows</h3>
-      <label>Branch, tag or commit <select name="dr" [(ngModel)]="dataRef" (ngModelChange)="loadTables()">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
-      <p class="hint">Branches can be edited unless protected. Tags are read only snapshots.</p>
-      <label>Find a table<input name="tableSearch" [(ngModel)]="tableSearch" /></label>
-      <ul class="tables">@for (t of visibleTables(); track t.name) { <li><button type="button" class="link" (click)="openTable(t.name)">{{ t.name }}</button> ({{ t.rows }} rows)</li> }</ul>
-      @if (data(); as d) {
-        <h4>{{ d.table }} at {{ d.ref }}@if (!editable()) { <span class="chip lock">read only</span> }</h4>
-        <div class="row"><label>Find fields<input name="fieldSearch" [(ngModel)]="fieldSearch" /></label><button class="secondary" (click)="openTable(d.table,d.offset)">Refresh table</button></div>
-        <p class="hint">{{d.columns.length}} fields. Scroll horizontally for wide tables or open a row to inspect every field without truncation. Runtime plugin tables are read only: use Plugins to change them.</p>
-        <div class="scroll data-grid"><table class="grid">
-          <thead><tr><th>Row</th>@for (c of visibleColumns(); track c.name) { <th [title]="c.type">{{ c.name }}@if (c.key === 'PRI') { * }</th> }@if (editable()) { <th></th> }</tr></thead>
-          <tbody>@for (r of d.rows; track $index) {
-            <tr><td class="row-pin"><button type="button" class="link" (click)="rowView.set(r)">View row</button></td>@for (c of visibleColumns(); track c.name) { <td><div class="cell-value" [title]="cell(r[c.name])">{{ cell(r[c.name]) }}</div></td> }
-              @if (editable()) { <td class="act"><button type="button" (click)="startEdit(r)">Edit</button> <button type="button" class="danger" (click)="deleteRow(r)">Delete</button></td> }</tr>
-          }</tbody>
-        </table></div>
-        <p class="hint">{{ d.offset + 1 }} to {{ d.offset + d.rows.length }} of {{ d.total }}. * primary key.
-          @if (d.offset > 0) { <button type="button" class="link" (click)="openTable(d.table, d.offset - d.rows.length)">previous</button> }
-          @if (d.hasMore) { <button type="button" class="link" (click)="openTable(d.table, d.offset + d.rows.length)">next</button> }
-        </p>
-        @if (editable()) {
-          <button type="button" (click)="startInsert()">Add a row</button>
-          @if (editorOpen) {
-            <div class="panel">
-              <h4>{{editKey ? 'Edit row' : 'Add a row'}} on {{d.ref}}</h4>
-              <div class="field-editor">@for(c of d.columns;track c.name){@if(c.name!=='credential_revision'){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
-              <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
-              <button type="button" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
-            </div>
+      <div class="wb">
+        <aside class="wb-tree card">
+          <div class="tree-head">{{ dataRef }}@if (editableRef()) { (editable) }</div>
+          <input type="search" name="tableSearch" [(ngModel)]="tableSearch" placeholder="Filter tables" />
+          <h5>TABLES ({{ visibleTables().length }})</h5>
+          <ul class="tree-list">
+            @for (t of visibleTables(); track t.name) { <li><button type="button" class="tree-item" [class.on]="data()?.table === t.name" (click)="openTable(t.name)">{{ t.name }} <span class="cnt">{{ t.rows }}</span></button></li> }
+          </ul>
+          <h5>DOLT SYSTEM</h5>
+          <ul class="tree-list">
+            @for (s of systemTables; track s) { <li><button type="button" class="tree-item" (click)="openSystemTable(s)">{{ s }}</button></li> }
+          </ul>
+          @if (savedQueries().length) {
+            <h5>SAVED QUERIES</h5>
+            <ul class="tree-list">
+              @for (q of savedQueries(); track q.name) { <li><button type="button" class="tree-item" (click)="openSavedQuery(q)">&#x26A1; {{ q.name }}</button></li> }
+            </ul>
           }
-        }
-        @if(rowView();as row){<section class="panel row-detail"><h4>All fields · {{d.table}}</h4><dl>@for(c of d.columns;track c.name){<div><dt>{{c.name}} <small>{{c.type}}</small></dt><dd><pre>{{cell(row[c.name])}}</pre></dd></div>}</dl><button type="button" class="secondary" (click)="rowView.set(null)">Close row</button>@if(editable()){<button (click)="startEdit(row)">Edit this row</button>}</section>}
-        <details><summary>Table definition</summary><pre>{{ d.createStatement }}</pre></details>
-      }
+        </aside>
+        <div class="wb-main">
+          <div class="wb-tabs">
+            @for (t of openTables(); track t) { <span class="wb-tab" [class.on]="data()?.table === t"><button type="button" (click)="openTable(t)">&#x2637; {{ t }}</button><button type="button" class="x" [attr.aria-label]="'Close ' + t" (click)="closeTableTab(t)">&#x00D7;</button></span> }
+            <span class="spacer"></span>
+            <select name="dr" [ngModel]="dataRef" (ngModelChange)="dataRef = $event; loadTables()" aria-label="Branch, tag or commit">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select>
+          </div>
+          @if (data(); as d) {
+            <div class="card wb-card">
+              <div class="wb-card-head"><h4>{{ d.table }}</h4> <span class="chip">{{ d.ref }}</span> @if (!editable()) { <span class="chip lock">read only</span> }</div>
+              <div class="wb-toolbar">
+                <input type="search" name="rowFilter" [ngModel]="rowFilter()" (ngModelChange)="rowFilter.set($event)" placeholder="Filter rows" />
+                <select name="sortCol" [ngModel]="sortCol()" (ngModelChange)="sortCol.set($event)" aria-label="Sort by column">
+                  <option value="">Sort</option>
+                  @for (c of d.columns; track c.name) { <option [value]="c.name">{{ c.name }}</option> }
+                </select>
+                <button type="button" class="secondary" [disabled]="!sortCol()" [title]="sortDir() === 1 ? 'Ascending' : 'Descending'" (click)="sortDir.set(sortDir() === 1 ? -1 : 1)">{{ sortDir() === 1 ? '&#x2191;' : '&#x2193;' }}</button>
+                <details class="col-chooser">
+                  <summary>Columns &#x25BE;</summary>
+                  <div class="col-menu">@for (c of d.columns; track c.name) { <label class="inline"><input type="checkbox" [checked]="!hiddenCols().has(c.name)" (change)="toggleCol(c.name)" /> {{ c.name }}</label> }</div>
+                </details>
+                <button type="button" class="secondary" (click)="exportCsv(d)">&#x2B07; CSV</button>
+                @if (editable()) { <button type="button" class="primary" (click)="startInsert()">Add a row</button> }
+                <button type="button" class="secondary" (click)="openTable(d.table,d.offset)">Refresh</button>
+              </div>
+              <div class="scroll data-grid"><table class="grid">
+                <thead><tr>@for (c of visibleColumns(); track c.name) { <th [title]="c.type">{{ c.name }}@if (c.key === 'PRI') { <span class="chip pk">PK</span> }</th> }<th></th></tr></thead>
+                <tbody>@for (r of displayRows(d); track $index) {
+                  <tr>@for (c of visibleColumns(); track c.name) { <td><div class="cell-value" [title]="cell(r[c.name])">{{ cell(r[c.name]) }}</div></td> }
+                    <td class="act"><button type="button" class="secondary" (click)="rowView.set(r)">Open</button>@if (editable()) { <button type="button" (click)="startEdit(r)">Edit</button> <button type="button" class="danger" (click)="deleteRow(r)">Delete</button> }</td></tr>
+                }</tbody>
+              </table></div>
+              <p class="hint wb-foot">{{ d.offset + 1 }}–{{ d.offset + displayRows(d).length }} of {{ d.total }} · open a row to edit it and see its full change history
+                @if (d.offset > 0) { <button type="button" class="link" (click)="openTable(d.table, d.offset - d.rows.length)">previous</button> }
+                @if (d.hasMore) { <button type="button" class="link" (click)="openTable(d.table, d.offset + d.rows.length)">next</button> }
+              </p>
+            </div>
+            @if (editable()) {
+              @if (editorOpen) {
+                <div class="panel">
+                  <h4>{{editKey ? 'Edit row' : 'Add a row'}} on {{d.ref}}</h4>
+                  <div class="field-editor">@for(c of d.columns;track c.name){@if(c.name!=='credential_revision'){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
+                  <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
+                  <button type="button" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
+                </div>
+              }
+            }
+            @if(rowView();as row){<section class="panel row-detail"><h4>All fields · {{d.table}}</h4><dl>@for(c of d.columns;track c.name){<div><dt>{{c.name}} <small>{{c.type}}</small></dt><dd><pre>{{cell(row[c.name])}}</pre></dd></div>}</dl><button type="button" class="secondary" (click)="rowView.set(null)">Close row</button>@if(editable()){<button (click)="startEdit(row)">Edit this row</button>}</section>}
+            <details><summary>Table definition</summary><pre>{{ d.createStatement }}</pre></details>
+          } @else { <p class="hint wb-empty">Pick a table on the left. Branches can be edited unless protected; tags are read only snapshots.</p> }
+          <div class="wb-status">
+            <span><span class="dot" aria-hidden="true"></span> branch: <b>{{ dataRef }}</b>@if (data(); as d) { &nbsp; table: <b>{{ d.table }}</b> &nbsp; {{ d.total }} rows }</span>
+            <span class="hint">each edit is one commit, author = you</span>
+          </div>
+        </div>
+      </div>
     }
 
     @case ('sql') {

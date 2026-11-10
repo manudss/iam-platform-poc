@@ -140,6 +140,37 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     c['dataRef'] = 'feat-a'; await c['openTable']('roles'); f.detectChanges();
     expect([...el.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Edit')).toBe(true);
   });
+  it('data workbench: tree, object tabs, row filter, sort, column chooser and status bar', async () => {
+    const { f, el, c } = await mount(routes());
+    f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges();
+    expect(el.querySelector('.wb-tree')?.textContent).toContain('TABLES (1)');
+    expect(el.querySelector('.wb-tree')?.textContent).toContain('DOLT SYSTEM');
+    await c['openTable']('roles'); f.detectChanges();
+    expect(c['openTables']()).toContain('roles');
+    expect(el.querySelector('.wb-tab')?.textContent).toContain('roles');
+    expect(el.querySelector('.wb-status')?.textContent).toContain('branch:');
+    expect(el.querySelector('.wb-status')?.textContent).toContain('each edit is one commit');
+    // filter rows
+    c['rowFilter'].set('zzzz'); f.detectChanges();
+    expect(el.querySelectorAll('.data-grid tbody tr').length).toBe(0);
+    c['rowFilter'].set('a'); f.detectChanges();
+    expect(el.querySelectorAll('.data-grid tbody tr').length).toBe(1);
+    // column chooser hides a column
+    c['toggleCol']('label'); f.detectChanges();
+    expect(el.querySelector('.data-grid thead')?.textContent).not.toContain('label');
+    c['toggleCol']('label'); f.detectChanges();
+    // csv export builds a download from the visible rows
+    const a = { href: '', download: '', click: () => {} } as unknown as HTMLAnchorElement;
+    const create = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((t: string) => (t === 'a' ? a : create(t)));
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} });
+    c['exportCsv'](c['data']());
+    expect(a.download).toBe('roles-main.csv');
+    vi.restoreAllMocks(); vi.unstubAllGlobals();
+    // closing the active tab clears the grid
+    c['closeTableTab']('roles'); f.detectChanges();
+    expect(c['data']()).toBeNull(); expect(el.textContent).toContain('Pick a table on the left');
+  });
   it('compare: summary chips, per-table row diffs and a column-level schema diff', async () => {
     const diff = { from: 'main', to: 'feat-a', three: true, rows: { added: 1, modified: 1, removed: 1, total: 3 },
       tables: [{ table: 'roles', from: null, kind: 'modified', dataChange: true, schemaChange: true, rows: { added: 1, modified: 1, removed: 1 } }],
