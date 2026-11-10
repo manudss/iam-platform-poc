@@ -276,12 +276,16 @@ try {
   await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
   await btn('Add a row').click(); await page.waitForSelector('.explorer .panel textarea');
+  await page.waitForSelector('.commit-box'); // the commit step is its own section, not one of the column fields
   await page.fill('label[data-edit-field=id] textarea', 'auditor');
   for (const f of ['label', 'is_sensitive']) await page.locator(`label[data-edit-field=${f}] input[type=checkbox]`).uncheck(); // nullable columns start as NULL (field disabled)
   await page.fill('label[data-edit-field=label] textarea', 'Auditor'); await page.fill('label[data-edit-field=is_sensitive] textarea', '0');
-  await page.fill('input[name=em]', 'add auditor role'); await btn('Commit change').click();
-  await page.waitForSelector('td:has-text("Auditor")'); await shot('8-explorer-2-data-edit');
-  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('.explorer .chip.lock:text("read only")');
+  await page.fill('input[name=em]', 'add auditor role'); await btn('Commit & close tab').click(); // commit & close: back to the table tab, refreshed
+  await page.waitForSelector('td:has-text("Auditor")');
+  assert.equal(await page.locator('.explorer .wb-tab').count(), 1, 'the row tab closed on commit, only the table tab remains'); await shot('8-explorer-2-data-edit');
+  await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); // same table on another branch = a second tab, the ui-demo tab stays open
+  await page.waitForSelector('.explorer .chip.lock:text("read only")');
+  assert.equal(await page.locator('.explorer .wb-tab').count(), 2, 'roles on main opened as its own tab next to roles on ui-demo');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
   await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo');
   await page.waitForSelector('.cmp-summary'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
