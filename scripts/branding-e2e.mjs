@@ -85,6 +85,12 @@ try {
   await page.waitForFunction(()=>document.querySelector('iam-customisation .status')?.textContent.includes('Draft loaded'));
   const frame=page.frameLocator('iframe[title="Live branding preview"]');
   await frame.locator('app-brand img').first().waitFor();
+  const defaultSidebar=await page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue('--sidebar-bg').trim());
+  assert.equal(await page.locator('input[type=color]').count(),0,'mobile uses curated swatches, not native rainbow picker');
+  await page.getByRole('button',{name:'Primary Sage',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('input[name=primaryColor]').value==='#527a59');
+  await page.waitForFunction(()=>document.querySelector('iam-customisation .status')?.textContent.includes('Preview updated'));
+  await shot('material-swatches');
   await shot('branding-light');
   await page.locator('input[name=primaryColor]').fill('#00695c');
   await page.locator('input[name=accentColor]').fill('#d6a33a');
@@ -93,7 +99,7 @@ try {
   await frame.getByText('Acme Identity',{exact:true}).waitFor();
   assert.equal((await (await fetch(BASE+'/api/tenants/acme-demo/branding')).json()).productName,'lyam','unsaved preview never publishes');
   const expected=await page.evaluate(()=>{const css=getComputedStyle(document.documentElement);return Object.fromEntries(['--sidebar-bg','--bg','--card','--accent','--accent-ink'].map(k=>[k,css.getPropertyValue(k).trim()]));});
-  assert.notEqual(expected['--sidebar-bg'],'#0f0069','live editing themes the admin sidebar, not just the iframe');
+  assert.notEqual(expected['--sidebar-bg'],defaultSidebar,'live editing themes the admin sidebar, not just the iframe');
   const checkAdmin=async()=>{
     await page.waitForFunction(e=>getComputedStyle(document.documentElement).getPropertyValue('--sidebar-bg').trim()===e,expected['--sidebar-bg']);
     await page.evaluate(()=>{for(const [selector,role] of [['.side','--sidebar-bg'],['body','--bg'],['.top','--card']]){
@@ -111,7 +117,7 @@ try {
   for(const route of ['/users','/roles','/assignments','/plugins','/database/branches']){await nav(route);await checkAdmin();await noBanner(route);}
   const workingBranch=adminHeaders['x-iam-branch'];
   await page.selectOption('select[aria-label="Data branch"]','main');
-  await page.waitForFunction(()=>getComputedStyle(document.documentElement).getPropertyValue('--sidebar-bg').trim()==='#0f0069');
+  await page.waitForFunction(e=>getComputedStyle(document.documentElement).getPropertyValue('--sidebar-bg').trim()===e,defaultSidebar);
   await page.selectOption('select[aria-label="Data branch"]',workingBranch);await checkAdmin();
   await nav('/users');await shot('admin-users-dark');
   await page.getByRole('button',{name:'Light',exact:true}).first().click();await shot('admin-users-light');

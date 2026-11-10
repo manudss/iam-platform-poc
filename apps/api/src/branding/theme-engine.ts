@@ -51,13 +51,13 @@ export function palettesOf(colors: BrandingColors): Palettes {
   const p = Hct.fromInt(argbFromHex(colors.primary));
   const a = Hct.fromInt(argbFromHex(colors.accent));
   return {
-    primary: TonalPalette.fromHct(p),
-    secondary: TonalPalette.fromHct(a),
+    primary: palette(p.hue, Math.min(p.chroma, 48)),
+    secondary: palette(a.hue, Math.min(a.chroma, 24)),
     neutral: palette(p.hue, Math.min(p.chroma / 12, 8)),
     neutralVariant: palette(p.hue, Math.min(p.chroma / 8 + 4, 24)),
-    ok: palette(145, 70),
+    ok: palette(145, 32),
     bad: palette(25, 84),
-    warn: palette(80, 90),
+    warn: palette(80, 32),
   };
 }
 

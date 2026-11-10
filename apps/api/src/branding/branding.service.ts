@@ -30,7 +30,7 @@ export class BrandingService {
     return c;
   }
   private bundle(config: BrandingConfig): BrandingBundle {
-    const version = createHash('sha256').update('theme-v1|' + JSON.stringify(config)).digest('hex').slice(0,24);
+    const version = createHash('sha256').update('theme-v2|' + JSON.stringify(config)).digest('hex').slice(0,24);
     const hit = this.cache.get(version); if (hit) return hit;
     const colors: BrandingColors = { primary: config.primaryColor, accent: config.accentColor };
     const theme = generateTheme(colors);

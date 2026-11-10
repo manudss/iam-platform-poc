@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_COLORS, THEME_VARIABLES, cssString, generateTheme, logoColors, themeCss } from './theme-engine.js';
+import { DEFAULT_COLORS, THEME_VARIABLES, cssString, palettesOf, generateTheme, logoColors, themeCss } from './theme-engine.js';
 
 /** Theme engine contract (docs/branding.md step 2): both modes fill every variable of the contract, the
  * derivation is deterministic, and the served CSS carries the three blocks the pages rely on. */
@@ -43,6 +43,11 @@ describe('branding theme engine', () => {
     // every variable of the contract appears in the light block
     const light = css.split('\n')[0];
     for (const k of THEME_VARIABLES) assert.ok(light.includes(`${k}:`), k);
+  });
+
+  it('caps chroma so vivid custom seeds do not produce neon interface palettes',()=>{
+    const p=palettesOf({primary:'#00ff00',accent:'#ff00ff'});
+    assert.ok(p.primary.chroma<=48.5);assert.ok(p.secondary.chroma<=24.5);assert.ok(p.ok.chroma<=32.5);assert.ok(p.warn.chroma<=32.5);
   });
 
   it('escapes CSS string breakers', () => {

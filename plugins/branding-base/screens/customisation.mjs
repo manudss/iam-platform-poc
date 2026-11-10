@@ -1,4 +1,5 @@
 /** Packaged Customisation page. All effects stay on the selected Dolt branch; preview does not save. */
+const choices=[['Indigo','#5c6bc0'],['Teal','#00796b'],['Sage','#527a59'],['Blue','#546e9b'],['Plum','#80628b'],['Copper','#a15e45'],['Terracotta','#bf674c'],['Slate','#607d8b']];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 class Customisation extends HTMLElement {
   set context(c) { this.ctx=c; }
@@ -18,6 +19,8 @@ class Customisation extends HTMLElement {
       .brand-editor label{margin:12px 0;display:grid;gap:6px}.brand-editor input:not([type=color]),.brand-editor textarea,.brand-editor select{width:100%;box-sizing:border-box}
       .brand-editor input,.brand-editor select{min-height:44px}.brand-editor textarea{resize:vertical;min-height:64px}
       .brand-editor .colors{display:grid;grid-template-columns:1fr 1fr;gap:12px}.brand-editor input[type=color]{width:100%;padding:4px;background:var(--field-bg);border:1px solid var(--field-line);height:48px}
+      .brand-editor fieldset.palette{min-width:0;margin:0;padding:10px;border:1px solid var(--line);border-radius:10px}.brand-editor legend{font-size:.85rem;font-weight:600;color:var(--label)}
+      .brand-editor .color-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.brand-editor .color-choice{display:grid;justify-items:center;gap:4px;min-width:0;padding:6px 2px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font-size:.65rem}.brand-editor .color-choice i{display:block;width:26px;height:26px;border-radius:50%}.brand-editor .color-choice:hover:not(:disabled){background:var(--accent-soft);color:var(--ink)}.brand-editor .color-choice[aria-pressed=true]{outline:2px solid var(--accent);outline-offset:1px;background:var(--accent-soft)}
       .brand-editor .presets,.brand-editor .tools{display:flex;flex-wrap:wrap;gap:8px}.brand-editor button{margin:0;min-height:44px}
       .brand-editor .hint{font-size:.8rem;color:var(--muted)}.brand-editor .status{min-height:24px;color:var(--muted);margin:12px 0}
       .brand-editor .preview{position:sticky;top:24px;overflow:hidden}.brand-editor iframe{width:100%;height:640px;border:1px solid var(--line);border-radius:12px;background:var(--bg);margin-top:16px}
@@ -31,7 +34,8 @@ class Customisation extends HTMLElement {
       <label>Baseline<input name="baseline" maxlength="160"></label>
       <label>Footer<textarea name="footer" maxlength="400"></textarea></label>
       <h3>Material You palette</h3><p class="hint">Two seed colors generate surfaces, text, states and gradients for both themes. Text tones keep WCAG AA contrast.</p>
-      <div class="colors">${['primaryColor','accentColor'].map((k,i)=>`<label>${i?'Accent':'Primary'}<input type="color" data-picker="${k}"><input name="${k}" pattern="#[0-9a-fA-F]{6}" maxlength="7" aria-label="${i?'Accent':'Primary'} hex color" required></label>`).join('')}</div>
+      <p class="hint">Choose a balanced source color. Both light and dark themes are derived automatically. Custom hex values are softened to keep surfaces calm.</p>
+      <div class="colors">${['primaryColor','accentColor'].map((k,i)=>`<fieldset class="palette"><legend>${i?'Accent':'Primary'}</legend><div class="color-choices" role="group" aria-label="${i?'Accent':'Primary'} color suggestions">${choices.map(([name,color])=>`<button type="button" class="color-choice" data-color="${color}" data-target="${k}" aria-label="${i?'Accent':'Primary'} ${name}" aria-pressed="false" title="${name}"><i style="background:${color}"></i><span>${name}</span></button>`).join('')}</div><label>Hex color<input name="${k}" pattern="#[0-9a-fA-F]{6}" maxlength="7" aria-label="${i?'Accent':'Primary'} hex color" spellcheck="false" autocapitalize="off" required></label></fieldset>`).join('')}</div>
       <div class="presets"><button type="button" class="secondary" data-preset="0">Indigo</button><button type="button" class="secondary" data-preset="1">Forest</button><button type="button" class="secondary" data-preset="2">Copper</button></div>
       <h3>Logo &amp; favicon</h3><label>Logo<select name="logoMode"><option value="default">Themed lyam SVG</option><option value="custom">Custom SVG artwork</option></select></label>
       <label>Logo SVG<textarea name="logoSvg" class="svg" maxlength="50000" placeholder="Paste an inert SVG (paths, shapes, gradients)"></textarea></label>
@@ -41,13 +45,14 @@ class Customisation extends HTMLElement {
     </form><div class="status" role="status" aria-live="polite"></div></section>
     <section class="preview"><h2>Live preview</h2><div class="tools"><button type="button" class="secondary" data-mode="light">Light</button><button type="button" class="secondary" data-mode="dark">Dark</button><button type="button" class="secondary" data-width>Mobile width</button></div>
     <div class="swatches" aria-label="Computed theme roles"></div><p class="hint">The actual sign-in interface. Preview never signs in or publishes.</p><iframe title="Live branding preview" src="/login?preview=1"></iframe></section></div>`;
+    this.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>{this.form.elements.namedItem(b.dataset.target).value=b.dataset.color;this.schedule();});
     this.form=this.querySelector('form');this.dark=false;
     this.form.addEventListener('input',e=>{ if(e.target.dataset.picker)this.form.elements.namedItem(e.target.dataset.picker).value=e.target.value; this.schedule(); });
     this.form.addEventListener('submit',e=>{e.preventDefault();void this.save();});
     this.querySelector('[data-reset]').onclick=()=>this.load();
     this.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{this.dark=b.dataset.mode==='dark';this.push();});
     this.querySelector('[data-width]').onclick=()=>{const f=this.querySelector('iframe');this.mobile=!this.mobile;f.style.maxWidth=this.mobile?'390px':'';};
-    this.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const p=[['#4f46e5','#818cf8'],['#00695c','#d6a33a'],['#9c4221','#507b9c']][b.dataset.preset];this.form.elements.primaryColor.value=p[0];this.form.elements.accentColor.value=p[1];this.schedule();});
+    this.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const p=[['#5c6bc0','#8b769c'],['#527a59','#9c8759'],['#a15e45','#607d8b']][b.dataset.preset];this.form.elements.primaryColor.value=p[0];this.form.elements.accentColor.value=p[1];this.schedule();});
     this.ready=e=>{if(e.origin===location.origin&&e.source===this.querySelector('iframe').contentWindow&&e.data?.type==='iam-preview-ready')this.push();};window.addEventListener('message',this.ready);
   }
   values() { return Object.fromEntries(new FormData(this.form)); }
@@ -57,7 +62,7 @@ class Customisation extends HTMLElement {
   async update() {
     if(!this.form.checkValidity())throw Error('Complete the required fields before preview or save.');
     const seq=this.seq=(this.seq||0)+1;
-    try{const b=await this.call('/branding/preview','POST',this.values());if(seq!==this.seq||!this.isConnected)return;this.bundle=b;this.push();this.dispatchEvent(new CustomEvent('iam-branding-change',{detail:b}));for(const p of this.querySelectorAll('[data-picker]'))p.value=this.form.elements.namedItem(p.dataset.picker).value;this.status('Preview updated across this console. Save to keep these changes on your branch.');}catch(e){if(seq===this.seq)this.status(e.message,true);throw e;}
+    try{const b=await this.call('/branding/preview','POST',this.values());if(seq!==this.seq||!this.isConnected)return;this.bundle=b;this.push();this.dispatchEvent(new CustomEvent('iam-branding-change',{detail:b}));for(const p of this.querySelectorAll('[data-color]'))p.setAttribute('aria-pressed',String(p.dataset.color.toLowerCase()===this.form.elements.namedItem(p.dataset.target).value.toLowerCase()));this.status('Preview updated across this console. Save to keep these changes on your branch.');}catch(e){if(seq===this.seq)this.status(e.message,true);throw e;}
   }
   push() {
     if(!this.bundle)return;const b=this.bundle;const mode=this.dark?'dark':'light';
