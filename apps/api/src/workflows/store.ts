@@ -191,6 +191,16 @@ export class WorkflowStore {
     const m = await this.meta();
     try { await m.query('delete from workflow_steps where run_id = ?', [id]); await m.query('delete from workflow_runs where id = ?', [id]); } finally { await m.end(); }
   }
+  /** Small durable key/value store in the meta db (cron last-fire markers). */
+  async getMeta(k: string): Promise<string | null> {
+    const m = await this.meta();
+    try { const [r] = await m.query('select v from workflow_store_meta where k = ?', [k]); const row = (r as Record<string, unknown>[])[0]; return row ? String(row.v) : null; } finally { await m.end(); }
+  }
+  async setMeta(k: string, v: string): Promise<void> {
+    const m = await this.meta();
+    try { await m.query('insert into workflow_store_meta (k, v) values (?, ?) on duplicate key update v = values(v)', [k, v]); } finally { await m.end(); }
+  }
+
   async runningRuns(): Promise<RunRow[]> {
     const m = await this.meta();
     try { const [r] = await m.query("select * from workflow_runs where status in ('queued','running')"); return (r as Record<string, unknown>[]).map(WorkflowStore.run); } finally { await m.end(); }

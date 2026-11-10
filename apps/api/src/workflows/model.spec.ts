@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { hasDataSteps, placeholderKeys, substituteEventPayload, validateGraph, validateTrigger } from './model.js';
+import { hasDataSteps, nextCronFire, placeholderKeys, substituteEventPayload, validateCronExpression, validateGraph, validateTrigger } from './model.js';
 
 const node = (id: string, type: string, config: object = {}, name = id) => ({ id, type, name, config });
 const seq = (...ids: string[]) => ids.slice(1).map((to, i) => ({ from: ids[i], to }));
@@ -84,5 +84,35 @@ describe('workflow start triggers', () => {
     // The resolved graph is validated again at start: a bad payload value is caught there.
     const bad = substituteEventPayload(graph, { subject: 'UPPER CASE', displayName: 'x' });
     assert.throws(() => validateGraph(bad), /identity uses lowercase/);
+  });
+});
+
+describe('cron triggers (phase 3)', () => {
+  it('validates expressions: five fields, ranges, steps, lists', () => {
+    assert.equal(validateCronExpression('0 6 * * *'), '0 6 * * *');
+    assert.equal(validateCronExpression('  */15   9-17  *  *  1-5 '), '*/15 9-17 * * 1-5');
+    assert.throws(() => validateCronExpression('0 6 * *'), /five fields/);
+    assert.throws(() => validateCronExpression('99 * * * *'), /out of range/);
+    assert.throws(() => validateCronExpression('a b c d e'), /not a valid/);
+    assert.throws(() => validateCronExpression('*/0 * * * *'), /invalid step/);
+    assert.throws(() => validateCronExpression('5-2 * * * *'), /out of range/);
+  });
+  it('a trigger is either a cron or an event, never both, without match/config', () => {
+    assert.deepEqual(validateTrigger({ cron: '0 6 * * *' }), { cron: '0 6 * * *' });
+    assert.throws(() => validateTrigger({ cron: '0 6 * * *', event: 'user.created' }), /exclusive/);
+    assert.throws(() => validateTrigger({ cron: '0 6 * * *', match: { to: 'x' } }), /match/);
+    assert.throws(() => validateTrigger({ cron: '0 6 * * *', config: { token: 'x' } }), /config/);
+    assert.throws(() => validateTrigger({ cron: 'nope' }), /five fields/);
+  });
+  it('nextCronFire finds the next matching Paris minute', () => {
+    const from = Date.parse('2026-11-10T22:00:00+01:00'); // 23:00 Europe/Paris
+    assert.equal(new Date(nextCronFire('* * * * *', from)).toISOString(), '2026-11-10T21:01:00.000Z'); // 22:01 Paris = 21:01Z
+    // Daily at 06:00 Paris: next is tomorrow 06:00 Paris (05:00Z in winter)
+    assert.equal(new Date(nextCronFire('0 6 * * *', from)).toISOString(), '2026-11-11T05:00:00.000Z');
+    // Weekdays only (1-5): 2026-11-13 is a Friday 23:00 Paris -> next Monday 00:00 Paris
+    const fri = Date.parse('2026-11-13T22:00:00+01:00');
+    assert.equal(new Date(nextCronFire('0 0 * * 1-5', fri)).toISOString(), '2026-11-15T23:00:00.000Z');
+    // Steps: */15 from :00 -> :15
+    assert.equal(new Date(nextCronFire('*/15 * * * *', from)).toISOString(), '2026-11-10T21:15:00.000Z'); // 22:15 Paris = 21:15Z
   });
 });

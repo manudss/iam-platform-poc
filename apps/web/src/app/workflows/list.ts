@@ -9,7 +9,17 @@ import { MiniGraph, miniGraph } from './graph-utils';
 // pause switch, Run/Edit/Runs + menu), search + status filter chips + sort. The demo sheet and the
 // recent runs table stay below. ----
 
-const triggerLabel = (t: WfTrigger | null): string => (t ? t.event : 'manual');
+const triggerLabel = (t: WfTrigger | null): string => (t?.cron ? `⏰ ${t.cron}` : t?.event ? t.event : 'manual');
+/** Short relative time in the future: "in 5 min", "in 2 h", "tomorrow". */
+const until = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const ms = Date.parse(iso) - Date.now();
+  if (ms < 0) return 'overdue';
+  if (ms < 60000) return 'in <1 min';
+  if (ms < 3600000) return `in ${Math.round(ms / 60000)} min`;
+  if (ms < 86400000) return `in ${Math.round(ms / 3600000)} h`;
+  return `in ${Math.round(ms / 86400000)} d`;
+};
 const ago = (iso: string | null): string => {
   if (!iso) return '';
   const ms = Date.now() - Date.parse(iso.replace(' ', 'T'));
@@ -112,7 +122,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
         @for (e of miniOf(d).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
         @for (n of miniOf(d).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
       </svg>
-      <div class="wlc-stats"><span><b>{{d.steps}}</b> steps</span>@if (d.stats) {<span><b>{{d.stats.runs}}</b> runs</span><span [class.ok]="d.stats.okPct === 100" [class.ko]="(d.stats.okPct ?? 100) < 100"><b>{{d.stats.okPct}}%</b> ok</span>} @else {<span>never run</span>}</div>
+      <div class="wlc-stats"><span><b>{{d.steps}}</b> steps</span>@if (d.nextRunAt) {<span title="Next scheduled start (Europe/Paris)">⏰ next {{untilOf(d)}}</span>}@if (d.stats) {<span><b>{{d.stats.runs}}</b> runs</span><span [class.ok]="d.stats.okPct === 100" [class.ko]="(d.stats.okPct ?? 100) < 100"><b>{{d.stats.okPct}}%</b> ok</span>} @else {<span>never run</span>}</div>
       @if (d.stats?.lastStatus) {<div class="wlc-last">Last run <span class="chip" [attr.data-status]="d.stats!.lastStatus">{{d.stats!.lastStatus}}</span> · {{agoOf(d)}}@if (d.stats!.lastDurationMs !== null) { · {{durOf(d)}}}</div>}
       <div class="wlc-actions">
         <button (click)="start(d)" [disabled]="busy()">▶ Run</button>
@@ -183,6 +193,7 @@ export class WorkflowsPage implements OnInit {
   // ---- Card helpers ----
   protected triggerOf = (d: DefinitionSummary) => triggerLabel(d.trigger);
   protected agoOf = (d: DefinitionSummary) => ago(d.stats?.lastAt ?? null);
+  protected untilOf = (d: DefinitionSummary) => until(d.nextRunAt);
   protected durOf = (d: DefinitionSummary) => dur(d.stats?.lastDurationMs ?? null);
 
   /** Scaled-down graph thumbnail (shared with the template cards). */

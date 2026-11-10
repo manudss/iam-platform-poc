@@ -66,7 +66,8 @@ describe('sample workflows', () => {
     expect(triggered.length).toBeGreaterThanOrEqual(3); // joiner / mover / leaver start by themselves
     for (const s of triggered) {
       const t = s.trigger!;
-      const payload = EVENT_PAYLOADS[t.event];
+      if (t.cron) continue; // a schedule has no event payload to check against
+      const payload = EVENT_PAYLOADS[t.event!];
       expect(payload, `unknown event ${t.event}`).toBeDefined();
       for (const k of Object.keys(t.match ?? {})) expect(payload).toContain(k);
       const keys = [...JSON.stringify(s.nodes).matchAll(/\{\{event\.([a-zA-Z]+)\}\}/g)].map((m) => m[1]);

@@ -20,6 +20,7 @@ import { WorkflowStore } from './store.js';
 import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
 
+process.env.WF_CRON_TICK_MS = '2000'; // cron e2e: detect a matching minute within seconds, not 20 s
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
 const doltBin = process.env.DOLT_BIN ?? (which || '/tmp/dolt-linux-amd64/bin/dolt');
@@ -353,6 +354,34 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const s2 = new WorkflowStore(app.get(VersioningService)); // a second "restart"
     await s2.listRuns(T);
     assert.equal(await s2.getDefinition(T, 'wf-stale-meta', s2.liveRef), null, 'the marker prevents resurrection from the stale meta row');
+  });
+
+  it('cron: an active schedule fires a run on the matching minute, a paused one never fires', async () => {
+    const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] };
+    const on = (await ok('POST', '/workflows', { name: 'Cron every minute', graph: g, trigger: { cron: '* * * * *' } })) as { definition: { id: string; trigger: { cron: string } } };
+    assert.equal(on.definition.trigger.cron, '* * * * *');
+    const off = (await ok('POST', '/workflows', { name: 'Cron paused', graph: g, trigger: { cron: '* * * * *' }, active: false })) as { definition: { id: string } };
+    // The list exposes the next scheduled start for the active one only
+    const list = (await ok('GET', '/workflows')) as { definitions: { id: string; nextRunAt?: string | null }[] };
+    assert.ok(list.definitions.find((d) => d.id === on.definition.id)!.nextRunAt, 'active cron has a next run');
+    assert.equal(list.definitions.find((d) => d.id === off.definition.id)!.nextRunAt ?? null, null, 'paused: no next run');
+    // Validation
+    assert.equal((await call('POST', '/workflows', { name: 'bad', graph: g, trigger: { cron: 'nope' } })).status, 400);
+    assert.equal((await call('POST', '/workflows', { name: 'bad', graph: g, trigger: { cron: '* * * * *', event: 'user.created' } })).status, 400);
+    // Wait for the scheduler (tick 2 s, cron matches every minute: worst case a full minute + a tick)
+    const until = Date.now() + 90000;
+    let fired: { id: string; startedBy: string } | undefined;
+    while (Date.now() < until) {
+      const runs = (await ok('GET', `/workflow-runs?definition=${on.definition.id}`)) as { runs: { id: string; startedBy: string }[] };
+      fired = runs.runs.find((r) => r.startedBy === 'cron');
+      if (fired) break;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    assert.ok(fired, 'the cron scheduler started a run within 90 s');
+    const pausedRuns = (await ok('GET', `/workflow-runs?definition=${off.definition.id}`)) as { runs: unknown[] };
+    assert.equal(pausedRuns.runs.length, 0, 'a paused cron workflow never fires');
+    await ok('DELETE', `/workflows/${on.definition.id}`);
+    await ok('DELETE', `/workflows/${off.definition.id}`);
   });
 });
 

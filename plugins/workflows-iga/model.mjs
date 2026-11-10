@@ -187,6 +187,15 @@ export function validateTrigger(input) {
     const t = input;
     if (Object.keys(t).some((k) => !TRIGGER_KEYS.includes(k)))
         throw new BadRequestException(`trigger: only ${TRIGGER_KEYS.join(', ')} are allowed`);
+    if (t.cron !== undefined && t.cron !== null) {
+        if (t.event !== undefined && t.event !== null && t.event !== '')
+            throw new BadRequestException('trigger: cron and event are exclusive (a schedule or an event, not both)');
+        if (t.match !== undefined && t.match !== null)
+            throw new BadRequestException('trigger.match needs an event payload to match on: it has no meaning on a cron trigger');
+        if (t.config !== undefined && t.config !== null)
+            throw new BadRequestException('trigger.config needs an external event: it has no meaning on a cron trigger');
+        return { cron: validateCronExpression(t.cron) };
+    }
     const event = String(t.event ?? '');
     if (!Object.hasOwn(WF_EVENTS, event))
         throw new BadRequestException(`trigger.event: unknown event "${event}" (known: ${Object.keys(WF_EVENTS).join(', ')})`);
@@ -210,8 +219,79 @@ export function validateTrigger(input) {
     return out;
 }
 
-/** The keys allowed in a trigger object (event + match + config for external events). */
-export const TRIGGER_KEYS = ['event', 'match', 'config'];
+
+// ---- Cron triggers (phase 3): a definition can start on a schedule instead of an event. Five fields
+// (minute hour day-of-month month day-of-week), Europe/Paris, no catch-up after a downtime: only the
+// minutes that match while the server runs fire a run. ----
+const CRON_RANGES = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+/** Parses one cron field into the set of matching values. Supports *, lists, ranges and /steps. */
+function cronField(field, [lo, hi], what) {
+    const out = new Set();
+    for (const part of field.split(',')) {
+        const m = /^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/.exec(part.trim());
+        if (!m) throw new BadRequestException(`cron: "${part}" is not a valid ${what} field (use *, numbers, ranges, steps)`);
+        const step = m[2] === undefined ? 1 : Number(m[2]);
+        if (!Number.isInteger(step) || step < 1) throw new BadRequestException(`cron: invalid step in "${part}"`);
+        let a = lo, b = hi;
+        if (m[1] !== '*') {
+            const [x, y] = m[1].split('-').map(Number);
+            a = x; b = y === undefined ? x : y;
+            if (a < lo || b > hi || a > b) throw new BadRequestException(`cron: "${part}" is out of range for ${what} (${lo}-${hi})`);
+        }
+        for (let v = a; v <= b; v += step) out.add(v === 7 && hi === 7 ? 0 : v); // day-of-week: 0 and 7 are both Sunday
+    }
+    if (!out.size) throw new BadRequestException(`cron: empty ${what} field`);
+    return out;
+}
+/** A parsed 5-field cron expression: Sets for minute, hour, day-of-month, month, day-of-week. */
+export function parseCron(expr) {
+    const fields = String(expr ?? '').trim().split(/\s+/);
+    if (fields.length !== 5) throw new BadRequestException('cron: five fields expected (minute hour day-of-month month day-of-week), e.g. "0 6 * * *"');
+    const names = ['minute', 'hour', 'day-of-month', 'month', 'day-of-week'];
+    return fields.map((f, i) => cronField(f, CRON_RANGES[i], names[i]));
+}
+const PARIS = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'short', hour12: false });
+const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+/** Europe/Paris wall-clock parts of a timestamp (the cron evaluation timezone). */
+export function parisParts(ms) {
+    const p = {};
+    for (const part of PARIS.formatToParts(new Date(ms))) if (part.type !== 'literal') p[part.type] = part.value;
+    return { minute: Number(p.minute), hour: Number(p.hour) % 24, day: Number(p.day), month: Number(p.month), weekday: WD[p.weekday] ?? 0 };
+}
+/** True when the Paris wall-clock minute of `ms` matches the parsed expression. Standard cron rule:
+ * when BOTH day-of-month and day-of-week are restricted, either one matching is enough. */
+export function cronMatches(parsed, ms, domRestricted, dowRestricted) {
+    const p = parisParts(ms);
+    if (!parsed[0].has(p.minute) || !parsed[1].has(p.hour) || !parsed[3].has(p.month)) return false;
+    const dom = parsed[2].has(p.day), dow = parsed[4].has(p.weekday);
+    return domRestricted && dowRestricted ? dom || dow : dom && dow;
+}
+/** The next instant (ms) whose Paris minute matches the expression, searching up to 366 days ahead. */
+export function nextCronFire(expr, fromMs = Date.now()) {
+    const parsed = parseCron(expr);
+    const domRestricted = !/^\*(\/\d+)?$/.test(String(expr).trim().split(/\s+/)[2]);
+    const dowRestricted = !/^\*(\/\d+)?$/.test(String(expr).trim().split(/\s+/)[4]);
+    let t = Math.floor(fromMs / 60000) * 60000 + 60000; // the next full minute
+    const limit = t + 366 * 24 * 3600 * 1000;
+    while (t < limit) {
+        const p = parisParts(t);
+        if (!parsed[3].has(p.month)) { t += 24 * 3600 * 1000; continue; } // skip whole days until an allowed month
+        const dom = parsed[2].has(p.day), dow = parsed[4].has(p.weekday);
+        if (!(domRestricted && dowRestricted ? dom || dow : dom && dow)) { t += 24 * 3600 * 1000; continue; }
+        if (parsed[1].has(p.hour) && parsed[0].has(p.minute)) return t;
+        t += 60000;
+    }
+    throw new BadRequestException('cron: no matching time within a year');
+}
+/** Validates a cron expression string and returns it normalized (single spaces). */
+export function validateCronExpression(expr) {
+    const e = String(expr ?? '').trim().replace(/\s+/g, ' ');
+    parseCron(e); // throws on any malformed field
+    return e;
+}
+
+/** The keys allowed in a trigger object (event + match + config for external events, or cron for a schedule). */
+export const TRIGGER_KEYS = ['event', 'match', 'config', 'cron'];
 /** Resolves {{event.<key>}} placeholders in every config string of the graph. Unknown keys refuse the run start. */
 export function substituteEventPayload(graph, payload) {
     const nodes = graph.nodes.map((n) => {

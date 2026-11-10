@@ -40,9 +40,11 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       <div class="wb-trigger-body">
       <label>Event<select name="wfTrigger" [ngModel]="triggerEvent()" (ngModelChange)="onTriggerChange($event)">
         <option value="">Manual start only</option>
+        <option value="__cron">Scheduled (cron, Europe/Paris)</option>
         @for (ev of events(); track ev.type) {<option [value]="ev.type">{{ev.label}}</option>}
       </select></label>
-      @if (triggerEvent()) {
+      @if (triggerEvent() === '__cron') {<label>Schedule (5 fields, Europe/Paris)<input name="wfCron" [(ngModel)]="cronExpr" maxlength="40" placeholder="0 6 * * *" aria-label="Cron expression" /><span class="hint">minute hour day-of-month month day-of-week. The workflow starts at each matching minute while it is Active; missed times are not caught up.</span></label>}
+      @if (triggerEvent() && triggerEvent() !== '__cron') {
         @for (k of payloadKeys(); track k) {@if (k !== '*') {<label>only if {{k}} =<input [attr.name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
         @for (f of triggerFields(); track f.key) {
         @switch (f.type) {
@@ -73,7 +75,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 
   @if (testOpen()) {<div class="wb-test card">
     <b>Test run</b><span class="hint">Runs the CURRENT canvas (unsaved changes included) with a test event. Real steps write on a disposable branch, dropped when the run ends.</span>
-    @if (triggerEvent()) {<label>Event payload (JSON)<textarea class="wb-payload" name="testPayload" rows="3" [(ngModel)]="testPayload"></textarea></label>}
+    @if (triggerEvent() && triggerEvent() !== '__cron') {<label>Event payload (JSON)<textarea class="wb-payload" name="testPayload" rows="3" [(ngModel)]="testPayload"></textarea></label>}
     <button (click)="runTest()" [disabled]="testRunning()">{{testRunning() ? 'Running…' : 'Run test'}}</button>
     @if (testView(); as tv) {
       <span class="chip" [attr.data-status]="tv.run.status">{{tv.run.status}}</span>
@@ -221,6 +223,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected insertQuery = '';
   protected insertEdge = signal<Edge | null>(null);
   protected triggerEvent = signal('');
+  protected cronExpr = '';
   protected match = signal<Record<string, string>>({});
   protected triggerCfg = signal<Record<string, unknown>>({});
   protected drawerTab = signal<'settings' | 'input' | 'output'>('settings');
@@ -235,6 +238,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected setMatch(k: string, v: string) { this.match.update((m) => { const n = { ...m }; if (v) n[k] = v; else delete n[k]; return n; }); }
   private triggerPayload(): WfTrigger | null {
     const event = this.triggerEvent();
+    if (event === '__cron') return this.cronExpr.trim() ? { cron: this.cronExpr.trim() } : null;
     if (!event) return null;
     const cfg = Object.fromEntries(Object.entries(this.triggerCfg()).filter(([, v]) => v !== '' && v !== undefined));
     return { event, ...(Object.keys(this.match()).length ? { match: this.match() } : {}), ...(Object.keys(cfg).length ? { config: cfg } : {}) };
@@ -414,6 +418,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected triggerLabel = computed(() => {
     const t = this.triggerEvent();
     if (!t) return '';
+    if (t === '__cron') return `cron: ${this.cronExpr.trim() || '…'} (Europe/Paris)`;
     return this.events().find((e) => e.type === t)?.label ?? t;
   });
   private triggerNode = computed<Node | null>(() => {
@@ -687,7 +692,9 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       this.tags = ((definition as { tags?: string[] }).tags ?? []).join(', ');
       this.active = definition.active !== false;
       this.tabs.open('workflow', this.id, this.name || this.id);
-      this.triggerEvent.set(definition.trigger?.event ?? ''); this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
+      this.triggerEvent.set(definition.trigger?.cron ? '__cron' : (definition.trigger?.event ?? ''));
+      this.cronExpr = definition.trigger?.cron ?? '';
+      this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
       this.state.clear();
       const nodes: Node[] = [];
       definition.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });

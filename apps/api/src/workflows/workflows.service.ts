@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
-import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
+import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
@@ -61,7 +61,7 @@ export class WorkflowsService {
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant, currentBranch());
     const stats = await this.store.runStats(tenant);
-    return { definitions: defs.map((d) => { const s = stats.get(d.id); return { id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, tags: d.tags, steps: d.graph.nodes.length, graph: { nodes: d.graph.nodes.map((n) => ({ id: n.id, type: n.type })), edges: d.graph.edges }, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at, stats: s ? { runs: s.runs, okPct: s.runs ? Math.round((s.ok / s.runs) * 100) : null, lastStatus: s.last?.status ?? null, lastAt: s.last?.started_at ?? null, lastDurationMs: s.last?.finished_at ? Date.parse(s.last.finished_at) - Date.parse(s.last.started_at) : null } : null }; }) };
+    return { definitions: defs.map((d) => { const s = stats.get(d.id); return { id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, tags: d.tags, nextRunAt: d.trigger?.cron && d.active ? new Date(nextCronFire(d.trigger.cron, Date.now())).toISOString() : null, steps: d.graph.nodes.length, graph: { nodes: d.graph.nodes.map((n) => ({ id: n.id, type: n.type })), edges: d.graph.edges }, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at, stats: s ? { runs: s.runs, okPct: s.runs ? Math.round((s.ok / s.runs) * 100) : null, lastStatus: s.last?.status ?? null, lastAt: s.last?.started_at ?? null, lastDurationMs: s.last?.finished_at ? Date.parse(s.last.finished_at) - Date.parse(s.last.started_at) : null } : null }; }) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -85,7 +85,8 @@ export class WorkflowsService {
     for (const n of graph.nodes) for (const v of Object.values(n.config)) {
       for (const key of placeholderKeys(v)) {
         if (!trigger) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the workflow has no start trigger`);
-        if (!isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event].payload.join(', ')})`);
+        if (trigger.cron) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but a cron schedule carries no event payload`);
+        if (!isWildcardEvent(trigger.event!) && !WF_EVENTS[trigger.event!].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event!].payload.join(', ')})`);
       }
     }
     const ref = currentBranch(true);
@@ -137,7 +138,7 @@ export class WorkflowsService {
     const eventPayload: Record<string, string> = {};
     for (const [k, v] of Object.entries(payload ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) eventPayload[k] = String(v).slice(0, 200);
     const autoFilled: string[] = [];
-    if (d.trigger) for (const key of WF_EVENTS[d.trigger.event]?.payload ?? []) if (!(key in eventPayload)) { eventPayload[key] = `<${key}>`; autoFilled.push(key); }
+    if (d.trigger?.event) for (const key of WF_EVENTS[d.trigger.event]?.payload ?? []) if (!(key in eventPayload)) { eventPayload[key] = `<${key}>`; autoFilled.push(key); }
     const resolved = substituteEventPayload(d.graph, eventPayload);
     const steps = order.map((nodeId) => {
       const n = resolved.nodes.find((x) => x.id === nodeId)!;
@@ -205,12 +206,12 @@ export class WorkflowsService {
     for (const n of graph.nodes) for (const v of Object.values(n.config)) {
       for (const key of placeholderKeys(v)) {
         if (!trigger && !body?.payload) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the test has no trigger/payload`);
-        if (trigger && !isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event}`);
+        if (trigger?.event && !isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event}`);
       }
     }
     const eventPayload: Record<string, string> = {};
     for (const [k, v] of Object.entries((body?.payload as Record<string, unknown>) ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) eventPayload[k] = String(v).slice(0, 200);
-    if (trigger) for (const key of WF_EVENTS[trigger.event]?.payload ?? []) if (!(key in eventPayload) && key !== '*') eventPayload[key] = `<${key}>`;
+    if (trigger?.event) for (const key of WF_EVENTS[trigger.event]?.payload ?? []) if (!(key in eventPayload) && key !== '*') eventPayload[key] = `<${key}>`;
     const resolved = substituteEventPayload(graph, eventPayload);
     const checked = validateGraph(resolved);
     const runId = `run-${randomBytes(6).toString('hex')}`;

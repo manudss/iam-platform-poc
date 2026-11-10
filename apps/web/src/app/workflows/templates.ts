@@ -62,7 +62,7 @@ export function filterTemplates(templates: WfTemplate[], category: string, query
             @for (e of mini(t).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
             @for (n of mini(t).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
           </svg>
-          <div class="tpl-badges"><span class="chip" data-status="real">◆ OFFICIAL</span><span>{{t.nodes.length}} blocks</span>@if (t.trigger) {<span>· trigger {{t.trigger.event}}</span>} @else {<span>· manual</span>}</div>
+          <div class="tpl-badges"><span class="chip" data-status="real">◆ OFFICIAL</span><span>{{t.nodes.length}} blocks</span>@if (t.trigger) {<span>· trigger {{triggerText(t)}}</span>} @else {<span>· manual</span>}</div>
           <div class="tpl-actions"><button class="secondary" (click)="open(t)">Preview</button><button (click)="open(t)">Use template</button></div>
         </section>
       }
@@ -76,7 +76,7 @@ export function filterTemplates(templates: WfTemplate[], category: string, query
       <h3>Use template "{{t.name}}"</h3>
       <p class="hint">Creates a new workflow on your branch, <b>paused</b>: it stays inactive until you switch it on.</p>
       <label>Workflow name<input name="tplName" [(ngModel)]="newName" maxlength="80" /></label>
-      @if (t.trigger) {<p class="hint" style="margin-top:.5rem">Trigger: <b>{{t.trigger.event}}</b>@if (t.trigger.match) { · only if @for (kv of matchPairs(t); track kv) {<code>{{kv}}</code> }}</p>}
+      @if (t.trigger) {<p class="hint" style="margin-top:.5rem">Trigger: <b>{{triggerText(t)}}</b>@if (t.trigger.match) { · only if @for (kv of matchPairs(t); track kv) {<code>{{kv}}</code> }}</p>}
       <h4>{{t.nodes.length}} blocks will be created</h4>
       <div class="tpl-blocks">@for (n of t.nodes; track n.id) {<span class="chip" [attr.data-status]="catOf(n.type)">{{n.name}}</span>}</div>
       <svg class="wlc-mini" [attr.viewBox]="mini(t).viewBox" preserveAspectRatio="xMidYMid meet" aria-hidden="true" style="margin-bottom:.6rem">
@@ -100,6 +100,8 @@ export class WorkflowTemplatesPage {
   protected newName = '';
 
   protected categories = computed(() => templateCategories(this.templates));
+  /** Trigger line of a template card / modal: the event, or the cron schedule. */
+  protected triggerText(t: WfTemplate): string { return t.trigger?.cron ? `cron: ${t.trigger.cron}` : (t.trigger?.event ?? ''); }
   protected visible = computed(() => filterTemplates(this.templates, this.category(), this.query));
 
   protected mini(t: WfTemplate) { return miniGraph(t.nodes, t.edges); }

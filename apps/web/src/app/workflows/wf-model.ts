@@ -17,7 +17,7 @@ export { workflowsEnabledGuard } from './guard';
 export type StepType = string;
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
 export interface WfEdge { from: string; to: string; label?: string }
-export interface WfTrigger { event: string; match?: Record<string, string>; config?: Record<string, unknown> }
+export interface WfTrigger { event?: string; match?: Record<string, string>; config?: Record<string, unknown>; cron?: string }
 export interface WfBlockField { key: string; label: string; type: 'string' | 'text' | 'number' | 'boolean' | 'select'; required?: boolean; default?: unknown; options?: string[]; help?: string }
 export interface WfEvent { type: string; label: string; payload: string[]; configFields?: WfBlockField[] }
 export type StepCategory = 'simulated' | 'computed' | 'real';
@@ -29,7 +29,7 @@ export const categoryOfType = (type: string): StepCategory => { const t = STEP_T
 export interface WfBlock { type: string; family: string; label: string; simulated: boolean; category?: StepCategory; description: string; fields?: WfBlockField[]; outputs?: { key: string; description: string }[]; provider: string | null; providerActive: boolean }
 export interface DemoSheet { name: string; simulated: boolean; note: string; columns: string[]; rows: { rowNumber: number; values: Record<string, string> }[] }
 export interface RunStats { runs: number; okPct: number | null; lastStatus: string | null; lastAt: string | null; lastDurationMs: number | null }
-export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; active: boolean; tags: string[]; steps: number; graph: { nodes: { id: string; type: string }[]; edges: WfEdge[] }; stats: RunStats | null; simulatedSteps: number; computedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
+export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; active: boolean; tags: string[]; nextRunAt?: string | null; steps: number; graph: { nodes: { id: string; type: string }[]; edges: WfEdge[] }; stats: RunStats | null; simulatedSteps: number; computedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
 export interface RunSummary { id: string; definitionId: string; name: string; branch: string | null; status: string; error: string | null; startedBy: string; startedAt: string; finishedAt: string | null; hasDataSteps: boolean; test?: boolean }
 export interface RunStepView { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; category?: StepCategory; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null; input?: Record<string, unknown> | null; output?: Record<string, unknown> | null }
 export interface RunView { run: { id: string; definition_id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[]; edges: WfEdge[]; test?: boolean }; steps: RunStepView[] }
