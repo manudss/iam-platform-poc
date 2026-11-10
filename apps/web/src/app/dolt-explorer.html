@@ -367,44 +367,161 @@
     }
 
     @case ('pulls') {
-      <h3>Pull requests</h3>
-      <label>Show <select name="pf" [(ngModel)]="prFilter" (ngModelChange)="loadPulls()"><option value="open">open</option><option value="merged">merged</option><option value="closed">closed</option><option value="all">all</option></select></label>
-      <ul>@for (p of prs(); track p.id) { <li><button type="button" class="link" (click)="showPull(p.id)">#{{ p.id }} {{ p.title }}</button> <span class="chip">{{ p.status }}</span> <span class="hint">{{ p.source }} into {{ p.target }}, by {{ p.author }}</span></li> }</ul>
-      <form class="panel" (ngSubmit)="openPull()">
-        <h4>New pull request</h4>
-        <div class="row">
-          <label>Source <select name="ps" [(ngModel)]="prForm.source">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
-          <label>Into <select name="pt" [(ngModel)]="prForm.target">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
+      <div class="page-head">
+        <div>
+          <h3>Pull requests</h3>
+          <p class="hint">The only way into protected branches. Review the data diff, check the rules, merge.</p>
         </div>
-        <label>Title <input name="pti" [(ngModel)]="prForm.title" autocomplete="off" /></label>
-        <label>Description <textarea name="pb" rows="3" [(ngModel)]="prForm.body"></textarea></label>
-        <button type="submit">Open pull request</button>
-      </form>
-      @if (pr(); as d) {
-        <div class="panel">
-          <h4>#{{ d.pullRequest.id }} {{ d.pullRequest.title }} <span class="chip">{{ d.pullRequest.status }}</span></h4>
-          <p class="hint">{{ d.pullRequest.source }} into {{ d.pullRequest.target }}, opened by {{ d.pullRequest.author }} on {{ d.pullRequest.createdAt }}@if (d.pullRequest.mergeCommit) { , merged as {{ short(d.pullRequest.mergeCommit) }} }</p>
-          @if (d.pullRequest.body) { <p>{{ d.pullRequest.body }}</p> }
-          @if (d.checks; as k) {
-            <p [class]="k.mergeable ? 'ok' : 'ko'"><b>{{ k.mergeable ? 'Can be merged' : 'Cannot be merged' }}</b>@for (r of k.reasons; track r) { <br />{{ r }} }</p>
-            @for (v of k.violations; track v.roleA + v.roleB + v.identity) { <p class="ko">SoD: {{ v.identity }} would have {{ v.roleA }} and {{ v.roleB }}</p> }
+        <button type="button" class="primary" (click)="prCreateOpen = !prCreateOpen">+ New pull request</button>
+      </div>
+      <div class="card">
+        <div class="pr-toolbar">
+          <span class="pills" role="group" aria-label="Filter by status">
+            @for (s of prStatuses; track s) { <button type="button" class="pill" [class.on]="prStatus() === s" (click)="prStatus.set(s)">@if (s === 'open') { <span class="dot" aria-hidden="true"></span> }{{ s === 'all' ? 'All' : prStatusLabel(s) + ' ' + prCount(s) }}</button> }
+          </span>
+          <span class="spacer"></span>
+          <input type="search" name="pq" [ngModel]="prSearch()" (ngModelChange)="prSearch.set($event)" placeholder="Search title, author, branch..." />
+          <select name="pfo" [ngModel]="prSort()" (ngModelChange)="prSort.set($event)" aria-label="Sort">
+            <option value="new">Newest</option>
+            <option value="old">Oldest</option>
+          </select>
+        </div>
+        <ul class="pr-list">
+          @for (p of prShown(); track p.id) {
+            <li>
+              <div class="pr-main">
+                <div class="pr-line">
+                  <button type="button" class="link pr-title" (click)="showPull(p.id)">{{ p.title }}</button>
+                  <span class="chip">#{{ p.id }}</span>
+                  @if (p.status !== 'open') { <span class="chip">{{ p.status }}</span> }
+                </div>
+                <div class="pr-meta hint">
+                  {{ p.source }} &#x2192; {{ p.target }} · {{ p.status === 'merged' ? 'merged' : 'opened' }} {{ rel(p.status === 'merged' && p.mergedAt ? p.mergedAt : p.createdAt) }} by {{ p.author }}@if (prBadges()[p.id]?.rows) { · {{ prBadges()[p.id].rows }} rows }
+                </div>
+              </div>
+              <div class="pr-side">
+                @if (p.status === 'open') {
+                  @if (prBadges()[p.id]; as b) {
+                    @if (b.checks !== null) { <span class="chip" [class.ok]="b.checks" [class.ko]="!b.checks">{{ b.checks ? '&#x2713; checks pass' : '&#x2717; checks fail' }}</span> }
+                    @if (b.approved) { <span class="chip ok">approved</span> }
+                  }
+                  <span class="hint">opened {{ rel(p.createdAt) }}</span>
+                } @else if (p.status === 'merged' && p.mergeCommit) {
+                  <span class="hint">squash commit {{ short(p.mergeCommit) }}</span>
+                }
+              </div>
+            </li>
           }
-          @if (d.requiredApprovals) { <p class="hint">Approvals: {{ d.approvals.length }} of {{ d.requiredApprovals }} required.</p> }
-          @if (d.commits.length) { <h5>Commits</h5><ul>@for (c of d.commits; track c.commit) { <li><code>{{ short(c.commit) }}</code> {{ c.message }} <span class="hint">{{ c.author }}</span></li> }</ul> }
-          @if (d.diff; as df) { <h5>Changes</h5><ul>@for (t of df.tables; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b> @if (t.dataChange) { <button type="button" class="link" (click)="prDiff(t.table)">show rows</button> }</li> }</ul> }
-          <ng-container *ngTemplateOutlet="rowdiff; context: { diff: rowDiff() }" />
-          <h5>Discussion</h5>
-          <ul>@for (c of d.comments; track c.id) { <li><b>{{ c.author }}</b>@if (c.kind === 'approve') { approved }: {{ c.body }}</li> }</ul>
-          @if (d.pullRequest.status === 'open') {
-            @if (d.preventSelfApproval && d.viewer && d.viewer === d.pullRequest.author) { <p class="hint">You opened this pull request, so someone else has to approve it.</p> }
-            <label>Comment <input name="pc" [(ngModel)]="prComment" autocomplete="off" /></label>
-            <button type="button" [disabled]="!prComment" (click)="sendComment('comment')">Comment</button>
-            <button type="button" [disabled]="!!d.preventSelfApproval && d.viewer === d.pullRequest.author" [title]="d.preventSelfApproval && d.viewer === d.pullRequest.author ? 'The author cannot approve their own pull request' : ''" (click)="sendComment('approve')">Approve</button>
-            <button type="button" class="danger" [disabled]="!d.checks?.mergeable" (click)="mergePull()">Merge</button>
-            <button type="button" (click)="closePull()">Close</button>
+          @empty { <li class="hint">No pull request in this view.</li> }
+        </ul>
+      </div>
+      <p class="hint">Merging re-checks conflicts and separation of duties at merge time; a failed check blocks the merge.</p>
+      @if (prCreateOpen) {
+        <form class="panel" (ngSubmit)="openPull()">
+          <h4>New pull request</h4>
+          <div class="row">
+            <label>Source <select name="ps" [(ngModel)]="prForm.source">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
+            <label>Into <select name="pt" [(ngModel)]="prForm.target">@for (b of branches(); track b.name) { <option [value]="b.name">{{ b.name }}</option> }</select></label>
+          </div>
+          <label>Title <input name="pti" [(ngModel)]="prForm.title" autocomplete="off" /></label>
+          <label>Description <textarea name="pb" rows="3" [(ngModel)]="prForm.body"></textarea></label>
+          <button type="submit">Open pull request</button>
+        </form>
+      }
+      @if (pr(); as d) {
+        <div class="pr-detail">
+          <div class="page-head">
+            <div>
+              <h3>#{{ d.pullRequest.id }} · {{ d.pullRequest.title }}</h3>
+              <p class="hint">{{ d.pullRequest.author }} wants to merge {{ d.commits.length }} commit{{ d.commits.length === 1 ? '' : 's' }} into <code>{{ d.pullRequest.target }}</code> from <code>{{ d.pullRequest.source }}</code> · opened {{ rel(d.pullRequest.createdAt) }}@if (d.pullRequest.mergeCommit) { · merged as {{ short(d.pullRequest.mergeCommit) }} }</p>
+            </div>
+            <span class="chip" [class.ok]="d.pullRequest.status === 'open'">{{ prStatusLabel(d.pullRequest.status) }}</span>
+          </div>
+          <ol class="steps">
+            <li class="done"><span class="step-dot" aria-hidden="true">&#x2713;</span> Opened</li>
+            <li [class.done]="prReviewed(d)"><span class="step-dot" aria-hidden="true">{{ prReviewed(d) ? '&#x2713;' : '2' }}</span> Reviewed</li>
+            <li [class.done]="prReady(d)" [class.now]="d.pullRequest.status === 'open' && !prReady(d)"><span class="step-dot" aria-hidden="true">{{ prReady(d) ? '&#x2713;' : '3' }}</span> Ready to merge</li>
+          </ol>
+          <div class="tabs">
+            <button type="button" [class.on]="prTab() === 'conversation'" (click)="prTab.set('conversation')">Conversation</button>
+            <button type="button" [class.on]="prTab() === 'commits'" (click)="prTab.set('commits')">Commits <span class="cnt">{{ d.commits.length }}</span></button>
+            <button type="button" [class.on]="prTab() === 'checks'" (click)="prTab.set('checks')">Checks @if (d.checks) { <span class="cnt" [class.ok]="d.checks.mergeable && !d.checks.violations.length" [class.ko]="!d.checks.mergeable || !!d.checks.violations.length">{{ d.checks.mergeable && !d.checks.violations.length ? '&#x2713;' : '&#x2717;' }}</span> }</button>
+            <button type="button" [class.on]="prTab() === 'rows'" (click)="prTab.set('rows')">Rows changed @if (d.diff?.rows) { <span class="cnt">+{{ d.diff.rows.added }} &#x2212;{{ d.diff.rows.removed }}</span> }</button>
+          </div>
+          @switch (prTab()) {
+            @case ('conversation') {
+              @if (d.pullRequest.status === 'open') {
+                <ng-container *ngTemplateOutlet="prchecks; context: { d: d }" />
+              } @else if (d.pullRequest.status === 'merged') {
+                <div class="card pr-checks"><p class="ok">&#x2713; <b>Merged.</b> Squash commit {{ short(d.pullRequest.mergeCommit) }} on {{ d.pullRequest.target }}.</p></div>
+              } @else {
+                <div class="card pr-checks"><p class="hint">This pull request is closed.</p></div>
+              }
+              @if (d.pullRequest.body) { <div class="card comment"><div class="comment-head"><span class="avatar" aria-hidden="true">{{ initials(d.pullRequest.author) }}</span> <b>{{ d.pullRequest.author }}</b> <span class="hint">{{ rel(d.pullRequest.createdAt) }}</span></div><p>{{ d.pullRequest.body }}</p></div> }
+              @for (c of d.comments; track c.id) {
+                <div class="card comment">
+                  <div class="comment-head"><span class="avatar" aria-hidden="true">{{ initials(c.author) }}</span> <b>{{ c.author }}</b> @if (c.kind === 'approve') { <span class="chip ok">approved</span> } @if (c.createdAt) { <span class="hint">{{ rel(c.createdAt) }}</span> }</div>
+                  @if (c.body) { <p>{{ c.body }}</p> }
+                </div>
+              }
+              @if (d.pullRequest.status === 'open') {
+                <div class="card comment-box">
+                  <h4>Add a comment</h4>
+                  @if (d.preventSelfApproval && d.viewer && d.viewer === d.pullRequest.author) { <p class="hint">You opened this pull request, so someone else has to approve it.</p> }
+                  <textarea name="pc" rows="3" [(ngModel)]="prComment" placeholder="Write a review comment..."></textarea>
+                  <div class="row">
+                    <button type="button" [disabled]="!prComment" (click)="sendComment('comment')">Comment</button>
+                    <button type="button" class="primary" [disabled]="!!d.preventSelfApproval && d.viewer === d.pullRequest.author" [title]="d.preventSelfApproval && d.viewer === d.pullRequest.author ? 'The author cannot approve their own pull request' : ''" (click)="sendComment('approve')">Approve</button>
+                  </div>
+                </div>
+              }
+            }
+            @case ('commits') {
+              <ol class="log">
+                @for (c of d.commits; track c.commit) {
+                  <li><span class="dot" aria-hidden="true"></span><div class="log-main"><div><b>{{ c.message }}</b></div><div class="log-meta"><span class="avatar" aria-hidden="true">{{ initials(c.author) }}</span> {{ c.author }}@if (c.date) { · {{ rel(c.date) }} }</div></div><div class="log-act"><code>{{ short(c.commit) }}</code></div></li>
+                }
+                @empty { <p class="hint">No commit in this pull request.</p> }
+              </ol>
+            }
+            @case ('checks') {
+              <ng-container *ngTemplateOutlet="prchecks; context: { d: d }" />
+            }
+            @case ('rows') {
+              @if (d.diff; as df) {
+                @for (t of df.tables; track t.table) {
+                  <div class="card table-diff">
+                    <button type="button" class="diff-head" (click)="togglePrTableDiff(t.table)">
+                      <span class="caret" [class.open]="prExpandedDiffs().has(t.table)" aria-hidden="true">&#x25B8;</span> <b>{{ t.table }}</b>
+                      @if (t.rows) { <span class="hint">+{{ t.rows.added }} &#x2212;{{ t.rows.removed }}@if (t.rows.modified) { · {{ t.rows.modified }} modified }</span> }
+                      <span class="chip">{{ t.kind }}</span>
+                    </button>
+                    @if (prExpandedDiffs().has(t.table)) {
+                      <ng-container *ngTemplateOutlet="rowdiff; context: { diff: prRowDiffs()[t.table] ?? null }" />
+                    }
+                  </div>
+                }
+                @empty { <p class="hint">No table changed.</p> }
+              } @else { <p class="hint">No diff available.</p> }
+            }
           }
         </div>
       }
+      <ng-template #prchecks let-d="d">
+        <div class="card pr-checks">
+          @if (d.checks; as k) {
+            <p [class]="k.mergeable ? 'ok' : 'ko'">{{ k.mergeable ? '&#x2713;' : '&#x2717;' }} <b>{{ k.mergeable ? 'Able to merge.' : 'Cannot be merged.' }}</b> {{ k.mergeable ? 'No conflicts with ' + d.pullRequest.target + '.' : '' }}@for (r of k.reasons; track r) { <br />{{ r }} }</p>
+            @if (!k.violations.length) { <p class="ok">&#x2713; Separation of duties respected</p> } @else { @for (v of k.violations; track v.roleA + v.roleB + v.identity) { <p class="ko">SoD: {{ v.identity }} would have {{ v.roleA }} and {{ v.roleB }}</p> } }
+            <p [class]="prReviewed(d) ? 'ok' : 'hint'">{{ prReviewed(d) ? '&#x2713;' : '' }} Review: {{ d.approvals.length ? 'approved by ' + approvalNames(d) : 'no approval yet' }} · {{ d.approvals.length }} of {{ d.requiredApprovals }} required</p>
+          } @else { <p class="hint">Checks not available.</p> }
+          @if (d.pullRequest.status === 'open') {
+            <div class="row">
+              <button type="button" class="primary" [disabled]="!d.checks?.mergeable" (click)="mergePull()">Merge pull request</button>
+              <button type="button" (click)="closePull()">Close</button>
+            </div>
+          }
+        </div>
+      </ng-template>
     }
   }
 </section>

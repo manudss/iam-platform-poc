@@ -169,7 +169,7 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     const { f, el, c } = await mount(routes({ 'GET /versioning/pulls/7': () => ({ data: detail }) }));
     await c['showPull'](7); c['tab'].set('pulls'); f.detectChanges();
     expect(el.textContent).toContain('Cannot be merged'); expect(el.textContent).toContain('demo-bob would have payment-creator and payment-approver');
-    const merge = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Merge') as HTMLButtonElement;
+    const merge = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Merge pull request') as HTMLButtonElement;
     expect(merge.disabled).toBe(true);
   });
   it('allows author approval by default and follows the configured protection', async () => {
@@ -180,6 +180,41 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(approve().disabled).toBe(false);
     detail.preventSelfApproval = true; await c['showPull'](9); f.detectChanges();
     expect(approve().disabled).toBe(true); expect(el.textContent).toContain('someone else has to approve');
+  });
+  it('pull requests: status pills with counts, search, and per-PR badges from the detail', async () => {
+    const list = { pullRequests: [
+      { id: 3, title: 'Grant hr-partner', body: '', source: 'feat-a', target: 'main', status: 'open', author: 'demo-alice', createdAt: new Date().toISOString(), mergedAt: null, mergeCommit: null },
+      { id: 2, title: 'Role rework part 1', body: '', source: 'work', target: 'main', status: 'merged', author: 'demo-bob', createdAt: new Date(Date.now() - 6 * 864e5).toISOString(), mergedAt: new Date(Date.now() - 5 * 864e5).toISOString(), mergeCommit: 'abc123456789' }] };
+    const detail3 = { pullRequest: list.pullRequests[0], comments: [], approvals: ['demo-bob'], requiredApprovals: 1, commits: [], checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] }, diff: { from: 'main', to: 'feat-a', three: true, rows: { added: 9, modified: 0, removed: 1, total: 10 }, tables: [], schema: [] } };
+    const detail2 = { pullRequest: list.pullRequests[1], comments: [], approvals: [], requiredApprovals: 1, commits: [], checks: null, diff: null };
+    const { f, el, c } = await mount(routes({
+      'GET /versioning/pulls': (cc) => cc.path.includes('/pulls/3') ? ({ data: detail3 }) : cc.path.includes('/pulls/2') ? ({ data: detail2 }) : ({ data: list }) }));
+    f.componentRef.setInput('section', 'pulls'); await f.whenStable(); await new Promise((r) => setTimeout(r, 0)); f.detectChanges();
+    const text = el.textContent ?? '';
+    expect(text).toContain('Open 1'); expect(text).toContain('Merged 1');
+    expect(text).toContain('Grant hr-partner'); expect(text).not.toContain('Role rework part 1'); // open pill by default
+    expect(text).toContain('checks pass'); expect(text).toContain('approved'); expect(text).toContain('+9 \u22121 rows');
+    c['prStatus'].set('all'); f.detectChanges();
+    expect(el.textContent).toContain('Role rework part 1'); expect(el.textContent).toContain('squash commit');
+    c['prSearch'].set('zzzz'); f.detectChanges();
+    expect(el.textContent).toContain('No pull request in this view');
+  });
+  it('pull request detail: steps, checks card and rows tab', async () => {
+    const diff = { from: 'main', to: 'feat-a', three: true, rows: { added: 1, modified: 0, removed: 1, total: 2 }, tables: [{ table: 'roles', from: null, kind: 'modified', dataChange: true, schemaChange: false, rows: { added: 1, modified: 0, removed: 1 } }], schema: [] };
+    const rows = { table: 'roles', columns: ['id', 'label'], rows: [{ type: 'added', from: null, to: { id: 'b', label: 'B' } }], truncated: false };
+    const detail = { pullRequest: { id: 5, title: 'Grant hr-partner', body: 'Adds the role.', source: 'feat-a', target: 'main', status: 'open', author: 'demo-alice', createdAt: new Date().toISOString(), mergedAt: null, mergeCommit: null },
+      comments: [{ id: 1, author: 'demo-bob', kind: 'approve', body: 'LGTM', createdAt: new Date().toISOString() }], approvals: ['demo-bob'], requiredApprovals: 1,
+      commits: [{ commit: 'c'.repeat(32), author: 'demo-alice', date: new Date().toISOString(), message: 'grant hr-partner' }], diff, checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] } };
+    const { f, el, c } = await mount(routes({ 'GET /versioning/pulls/5': () => ({ data: detail }), 'GET /versioning/diff/roles': () => ({ data: rows }) }));
+    await c['showPull'](5); c['tab'].set('pulls'); f.detectChanges();
+    const text = el.textContent ?? '';
+    expect(text).toContain('wants to merge 1 commit into'); expect(text).toContain('Able to merge.'); expect(text).toContain('Separation of duties respected');
+    expect(text).toContain('approved by demo-bob'); expect(text).toContain('1 of 1 required');
+    expect(text).toContain('LGTM');
+    const merge = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Merge pull request') as HTMLButtonElement;
+    expect(merge.disabled).toBe(false);
+    c['prTab'].set('rows'); f.detectChanges();
+    expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('B');
   });
   it('shows server errors in the status line instead of failing silently', async () => {
     const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ status: 403, data: { message: 'branch main is protected: open a pull request instead' } }) }));

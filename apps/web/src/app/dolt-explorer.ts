@@ -87,12 +87,27 @@ export class DoltExplorer {
   protected sqlMessage = ''; protected confirmDestructive = false;
   protected readonly sqlResult = signal<SqlResult | null>(null);
 
-  protected prFilter = 'open';
   protected prCreateOpen = false;
   protected readonly prs = signal<PullRequestInfo[]>([]);
   protected readonly pr = signal<PullRequestDetail | null>(null);
   protected prForm = { title: '', body: '', source: '', target: 'main' };
   protected prComment = '';
+  protected readonly prStatuses = ['open', 'merged', 'closed', 'all'] as const;
+  protected readonly prStatus = signal<'open' | 'merged' | 'closed' | 'all'>('open');
+  protected readonly prSearch = signal('');
+  protected readonly prSort = signal<'new' | 'old'>('new');
+  protected readonly prBadges = signal<Record<number, { checks: boolean | null; approved: boolean; rows: string }>>({});
+  protected readonly prTab = signal<'conversation' | 'commits' | 'checks' | 'rows'>('conversation');
+  protected readonly prRowDiffs = signal<Record<string, RowDiffView | undefined>>({});
+  protected readonly prExpandedDiffs = signal<Set<string>>(new Set());
+  protected readonly prShown = computed(() => {
+    const q = this.prSearch().trim().toLowerCase();
+    const st = this.prStatus();
+    const list = this.prs().filter((p) => (st === 'all' || p.status === st) && (!q || [p.title, p.author, p.source, p.target].some((x) => x.toLowerCase().includes(q))));
+    return list.sort((a, b) => (this.prSort() === 'new' ? -1 : 1) * (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id - b.id));
+  });
+  protected prCount(s: 'open' | 'merged' | 'closed' | 'all') { return s === 'all' ? this.prs().length : this.prs().filter((p) => p.status === s).length; }
+  protected prStatusLabel(s: string) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 
   async ngOnInit() {
     this.v = new VersioningClient(this.api);
@@ -334,13 +349,43 @@ export class DoltExplorer {
   protected sqlColumns(): string[] { return this.sqlResult()?.columns ?? []; }
 
   // pull requests
-  protected async loadPulls() { const r = await this.run(() => this.v.pulls(this.prFilter === 'all' ? undefined : this.prFilter), true); if (r) this.prs.set(r.pullRequests); }
+  protected async loadPulls() {
+    const r = await this.run(() => this.v.pulls(), true);
+    if (!r) return;
+    this.prs.set(r.pullRequests);
+    // the list endpoint carries no checks/approvals/rows: fetch each detail for the badges (a demo has a handful of PRs)
+    for (const p of r.pullRequests) {
+      const d = await this.run(() => this.v.pull(p.id), true);
+      if (!d) continue;
+      const rows = d.diff?.rows ? `+${d.diff.rows.added} \u2212${d.diff.rows.removed}` : '';
+      this.prBadges.update((m) => ({ ...m, [p.id]: { checks: d.checks ? d.checks.mergeable && !d.checks.violations.length : null, approved: this.prReviewed(d), rows } }));
+    }
+  }
+  protected prReviewed(d: PullRequestDetail) { return d.approvals.length > 0 && d.approvals.length >= d.requiredApprovals; }
+  protected prReady(d: PullRequestDetail) { return !!d.checks?.mergeable && !d.checks.violations.length && d.approvals.length >= d.requiredApprovals; }
+  protected approvalNames(d: PullRequestDetail) { return d.approvals.join(', '); }
   protected async openPull() {
     const r = await this.run(() => this.v.openPull(this.prForm.title, this.prForm.body, this.prForm.source, this.prForm.target));
     if (r) { this.prForm = { title: '', body: '', source: '', target: this.defaultBranch() }; await this.refreshRefs(); await this.loadPulls(); await this.showPull(r.id); }
   }
-  protected async showPull(id: number) { const r = await this.run(() => this.v.pull(id), true); if (r) { this.pr.set(r); this.rowDiff.set(null); } }
-  protected async prDiff(table: string) { const p = this.pr()!.pullRequest; await this.showRowDiff(table, p.target, p.source, true); }
+  protected async showPull(id: number) {
+    const r = await this.run(() => this.v.pull(id), true);
+    if (!r) return;
+    this.pr.set(r); this.rowDiff.set(null);
+    this.prTab.set('conversation'); this.prRowDiffs.set({}); this.prExpandedDiffs.set(new Set());
+    for (const t of (r.diff?.tables ?? []).filter((x) => x.dataChange)) { this.prExpandedDiffs.update((s) => new Set(s).add(t.table)); await this.loadPrRowDiff(t.table); }
+  }
+  protected async togglePrTableDiff(table: string) {
+    const s = new Set(this.prExpandedDiffs());
+    if (s.has(table)) { s.delete(table); this.prExpandedDiffs.set(s); return; }
+    s.add(table); this.prExpandedDiffs.set(s);
+    if (!this.prRowDiffs()[table]) await this.loadPrRowDiff(table);
+  }
+  private async loadPrRowDiff(table: string) {
+    const p = this.pr()?.pullRequest; if (!p) return;
+    const r = await this.run(() => this.v.diffTable(table, p.target, p.source, true), true);
+    if (r) this.prRowDiffs.update((m) => ({ ...m, [table]: r }));
+  }
   protected async sendComment(kind: 'comment' | 'approve') {
     const p = this.pr()!.pullRequest;
     if (await this.run(() => this.v.comment(p.id, this.prComment, kind)) !== undefined) { this.prComment = ''; await this.showPull(p.id); }

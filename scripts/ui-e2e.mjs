@@ -292,15 +292,15 @@ try {
   await page.waitForSelector('text=Preview only'); await shot('8-explorer-4-sql-preview');
   await page.selectOption('select[name=sm]', 'read'); await page.fill('textarea[name=sq]', 'select * from mysql.user'); await btn('Run').click();
   await page.waitForSelector('.explorer .msg:has-text("not reachable")');
-  await nav('/database/pulls'); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
+  await nav('/database/pulls'); await btn('+ New pull request').click(); await page.selectOption('select[name=ps]', 'ui-demo'); await page.selectOption('select[name=pt]', 'main');
   await page.fill('input[name=pti]', 'Add auditor role'); await btn('Open pull request').click();
-  await page.waitForSelector('text=Can be merged');
+  await page.waitForSelector('text=Able to merge');
   assert.equal(await btn('Approve').isDisabled(), false); // author approval allowed by default
   await btn('Approve').click(); await page.waitForSelector('text=approved');
   assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
   await shot('8-explorer-5-pull-request');
   // Human Merge now uses the same checked publication path as Review & Apply.
-  await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
+  await btn('Merge pull request').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
   assert.equal(await page.locator('.explorer .msg:has-text("Use the global Apply")').count(), 0);
   await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('8-explorer-6-history');
   assert.match(await page.locator('.explorer ol.log').innerText(), /Apply workspace ui-demo/);
