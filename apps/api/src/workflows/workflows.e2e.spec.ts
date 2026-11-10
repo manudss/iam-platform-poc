@@ -278,6 +278,25 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(v.run.status, 'canceled');
   });
 
+  it('tags: free-form labels are validated, saved, listed and updated', async () => {
+    const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] };
+    const created = (await ok('POST', '/workflows', { name: 'Tagged', graph: g, tags: ['HR', 'joiner', 'hr'] })) as { definition: { id: string } };
+    const id = created.definition.id;
+    const fromGet = (await ok('GET', `/workflows/${id}`)) as { definition: { tags: string[] } };
+    assert.deepEqual(fromGet.definition.tags, ['hr', 'joiner'], 'lowercased and deduped');
+    const fromList = (await ok('GET', '/workflows')) as { definitions: { id: string; tags: string[] }[] };
+    assert.deepEqual(fromList.definitions.find((d) => d.id === id)!.tags, ['hr', 'joiner']);
+    await ok('PUT', `/workflows/${id}`, { name: 'Tagged', graph: g, tags: ['finance'] });
+    assert.deepEqual(((await ok('GET', `/workflows/${id}`)) as { definition: { tags: string[] } }).definition.tags, ['finance']);
+    const bad = await call('POST', '/workflows', { name: 'Bad tag', graph: g, tags: ['not a tag!'] });
+    assert.equal(bad.status, 400);
+    const tooMany = await call('POST', '/workflows', { name: 'Too many', graph: g, tags: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9'] });
+    assert.equal(tooMany.status, 400);
+    const notArray = await call('POST', '/workflows', { name: 'Not array', graph: g, tags: 'hr' });
+    assert.equal(notArray.status, 400);
+    await ok('DELETE', `/workflows/${id}`);
+  });
+
   it('update, list and delete a definition; deleting while active is refused', async () => {
     const def = (await ok('POST', '/workflows', { name: 'To edit', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] } })) as { definition: { id: string } };
     const updated = (await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }, { id: 'b', type: 'notify', name: 'b', config: { recipient: 'r', message: 'm' } }], edges: [{ from: 'a', to: 'b' }] } })) as { definition: { name: string } };

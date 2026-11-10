@@ -28,6 +28,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
   '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
   '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
   '.ph-popup button.on, .ph-popup button:hover { background: var(--accent-soft); color: var(--accent-dark); }',
+  '.wb-tags { width: 180px; }',
 ], template: `
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="wb">
@@ -55,6 +56,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       </div>
     </details>
     <input class="wb-desc" name="wfDesc" [(ngModel)]="description" maxlength="500" placeholder="Description" aria-label="Description" />
+    <input class="wb-tags" name="wfTags" [(ngModel)]="tags" maxlength="200" placeholder="Tags (comma-separated)" aria-label="Tags, comma-separated" title="Free-form labels used to filter the list, e.g. hr, finance, spike" />
     <span class="spacer"></span>
     <button class="secondary" (click)="undo()" [disabled]="!undoStack.length" title="Undo (Ctrl+Z)">↺</button>
     <button class="secondary" (click)="redo()" [disabled]="!redoStack.length" title="Redo (Ctrl+Shift+Z)">↻</button>
@@ -209,7 +211,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly tabs = inject(WbTabs);
   protected id = 'new';
-  protected name = ''; protected description = '';
+  protected name = ''; protected description = ''; protected tags = '';
   protected active = true;
   protected note = signal(''); protected busy = signal(false);
   protected readonly samples = SAMPLE_WORKFLOWS;
@@ -682,6 +684,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     try {
       const { definition } = await clientOf(this.s).get(this.id);
       this.name = definition.name; this.description = definition.description;
+      this.tags = ((definition as { tags?: string[] }).tags ?? []).join(', ');
       this.active = definition.active !== false;
       this.tabs.open('workflow', this.id, this.name || this.id);
       this.triggerEvent.set(definition.trigger?.event ?? ''); this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
@@ -693,6 +696,14 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       this.stateVersion.update((v) => v + 1);
       this.fitCanvas();
     } catch (e) { this.note.set((e as Error).message); }
+  }
+
+  /** Tags as the API expects them: lowercase, comma/space separated, deduped (validation server-side). */
+  private tagList(): string[] {
+    const out: string[] = [];
+    for (const t of this.tags.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))
+      if (!out.includes(t)) out.push(t);
+    return out;
   }
 
   private graph() {
@@ -708,12 +719,12 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       const c = clientOf(this.s);
       const trigger = this.triggerPayload();
       if (this.id === 'new') {
-        const r = await c.create(this.name, this.description, this.graph(), trigger, this.active);
+        const r = await c.create(this.name, this.description, this.graph(), trigger, this.active, this.tagList());
         this.tabs.replace({ kind: 'workflow', id: 'new', label: 'New workflow' }, { kind: 'workflow', id: r.definition.id, label: this.name || r.definition.id });
         this.id = r.definition.id;
         this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`);
       }
-      else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
+      else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active, this.tagList()); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
 

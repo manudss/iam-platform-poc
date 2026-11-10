@@ -23,11 +23,12 @@ const dur = (ms: number | null): string => (ms === null ? '' : ms < 1000 ? `${ms
 export type WfListFilter = 'all' | 'active' | 'paused' | 'failed';
 export type WfListSort = 'lastRun' | 'name' | 'updated';
 /** Cards' search + chip filter + sort, kept pure so the list stays testable. */
-export function filterWorkflows(defs: DefinitionSummary[], query: string, filter: WfListFilter, sort: WfListSort): DefinitionSummary[] {
+export function filterWorkflows(defs: DefinitionSummary[], query: string, filter: WfListFilter, sort: WfListSort, tag = ''): DefinitionSummary[] {
   const q = query.trim().toLowerCase();
   let out = defs.filter((d) =>
     (filter === 'all' || (filter === 'active' ? d.active : filter === 'paused' ? !d.active : d.stats?.lastStatus === 'failed')) &&
-    (!q || d.name.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || (d.trigger?.event ?? '').includes(q) || d.graph.nodes.some((n) => n.type.includes(q))));
+    (!tag || (d.tags ?? []).includes(tag)) &&
+    (!q || d.name.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || (d.trigger?.event ?? '').includes(q) || (d.tags ?? []).some((t) => t.includes(q)) || d.graph.nodes.some((n) => n.type.includes(q))));
   const lastAt = (d: DefinitionSummary) => d.stats?.lastAt ?? '';
   if (sort === 'name') out = [...out].sort((a, b) => a.name.localeCompare(b.name));
   else if (sort === 'updated') out = [...out].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -44,6 +45,8 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-fchip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 1rem; padding: .2rem .8rem; cursor: pointer; min-height: 0; }
 .wlc-fchip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .wlc-fchip b { margin-left: .25rem; font-weight: 600; }
+.wlc-tagchip { cursor: pointer; border: 1px solid transparent; }
+.wlc-tagchip.on { border-color: var(--accent); color: var(--accent); }
 .wlc-sort { display: inline-flex; flex-direction: row; align-items: center; gap: .3rem; margin: 0; }
 .wlc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: .8rem; margin-bottom: 1rem; }
 .wlc-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; height: 100%; }
@@ -89,6 +92,9 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
   <span class="wlc-chips">
     @for (f of filters; track f.key) {<button class="wlc-fchip" [class.on]="filter() === f.key" (click)="filter.set(f.key)">{{f.label}} <b>{{f.count()}}</b></button>}
   </span>
+  @if (tagChips().length) {<span class="wlc-chips" aria-label="Filter by tag">
+    @for (t of tagChips(); track t.name) {<button class="wlc-fchip wlc-tag" [class.on]="tag() === t.name" (click)="tag.set(tag() === t.name ? '' : t.name)">#{{t.name}} <b>{{t.count}}</b></button>}
+  </span>}
   <span class="spacer"></span>
   <label class="hint wlc-sort">Sort: <select name="wlcSort" [(ngModel)]="sort">
     <option value="lastRun">last run</option><option value="name">name</option><option value="updated">updated</option>
@@ -101,6 +107,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
         <label class="wlc-switch" [title]="d.active ? 'Active: its triggers start runs' : 'Paused: triggers never start a run'"><input type="checkbox" [attr.name]="'on-'+d.id" [checked]="d.active" [disabled]="busy()" (change)="toggleActive(d)" /><i></i></label>
       </div>
       <span class="chip wlc-trigger" [attr.data-status]="d.trigger ? 'real' : null">{{triggerOf(d)}}</span>
+      @for (t of d.tags ?? []; track t) {<button class="chip wlc-tagchip" [class.on]="tag() === t" (click)="tag.set(tag() === t ? '' : t)" title="Filter on this tag">#{{t}}</button>}
       <svg class="wlc-mini" [attr.viewBox]="miniOf(d).viewBox" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         @for (e of miniOf(d).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
         @for (n of miniOf(d).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
@@ -148,6 +155,7 @@ export class WorkflowsPage implements OnInit {
   protected query = '';
   protected sort: 'lastRun' | 'name' | 'updated' = 'lastRun';
   protected filter = signal<'all' | 'active' | 'paused' | 'failed'>('all');
+  protected tag = signal('');
   protected readonly filters = [
     { key: 'all' as const, label: 'All', count: () => this.defs().length },
     { key: 'active' as const, label: 'Active', count: () => this.defs().filter((d) => d.active).length },
@@ -155,7 +163,14 @@ export class WorkflowsPage implements OnInit {
     { key: 'failed' as const, label: 'Failed last run', count: () => this.defs().filter((d) => d.stats?.lastStatus === 'failed').length },
   ];
 
-  protected visible = computed(() => filterWorkflows(this.defs(), this.query, this.filter(), this.sort));
+  /** Distinct tags across the visible catalog, with their workflow counts (first-seen order). */
+  protected tagChips = computed(() => {
+    const counts = new Map<string, number>();
+    for (const d of this.defs()) for (const t of d.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+    return [...counts.entries()].map(([name, count]) => ({ name, count }));
+  });
+
+  protected visible = computed(() => filterWorkflows(this.defs(), this.query, this.filter(), this.sort, this.tag()));
 
   ngOnInit() { void this.load(); }
   protected async load() {

@@ -113,7 +113,7 @@ describe('WorkflowClient', () => {
     const h = (i: number) => (calls[i].init.headers as Record<string, string>)['x-api-admin-token'];
     expect(calls[0].url).toBe('/api/tenants/acme-demo/workflows'); expect(calls[0].init.method).toBe('GET');
     expect(calls[1].url).toBe('/api/tenants/acme-demo/workflows'); expect(calls[1].init.method).toBe('POST');
-    expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, active: true });
+    expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, active: true, tags: [] });
     expect(calls[2].url).toBe('/api/tenants/acme-demo/workflow-runs');
     expect(calls[3].url).toBe('/api/tenants/acme-demo/workflow-runs/r1/retry');
     expect(calls[4].url).toBe('/api/tenants/acme-demo/workflow-runs/r1/cancel');
@@ -127,9 +127,9 @@ describe('WorkflowClient', () => {
     expect(calls[0].url).toBe('/api/tenants/acme-demo/workflows-events');
     const trigger = { event: 'user.created', match: { department: 'finance' } };
     await c.create('n', 'd', { nodes: [], edges: [] }, trigger);
-    expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, trigger, active: true });
+    expect(JSON.parse(calls[1].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, trigger, active: true, tags: [] });
     await c.update('w1', 'n', 'd', { nodes: [], edges: [] }, trigger);
-    expect(JSON.parse(calls[2].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, trigger, active: true });
+    expect(JSON.parse(calls[2].init.body as string)).toEqual({ name: 'n', description: 'd', graph: { nodes: [], edges: [] }, trigger, active: true, tags: [] });
     await c.update('w1', 'n', 'd', { nodes: [], edges: [] }, null, false);
     expect(JSON.parse(calls[3].init.body as string).active).toBe(false);
   });

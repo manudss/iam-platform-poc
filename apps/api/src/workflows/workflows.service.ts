@@ -37,6 +37,21 @@ export class WorkflowsService {
     return { blocks: blockCatalogue().map((b) => ({ ...b, providerActive: b.provider ? registry.isActive(tenant, b.provider) : true })) };
   }
 
+  /** Free-form tags: 0 to 8 lowercase labels (letters, digits, hyphens), 1-24 chars each, deduped. */
+  private static validateTags(input: unknown): string[] {
+    if (input === undefined || input === null) return [];
+    if (!Array.isArray(input)) throw new BadRequestException('tags must be an array of labels');
+    const out: string[] = [];
+    for (const raw of input) {
+      const t = String(raw ?? '').trim().toLowerCase();
+      if (!t) continue;
+      if (!/^[a-z0-9][a-z0-9-]{0,23}$/.test(t)) throw new BadRequestException(`tag "${t}": lowercase letters, digits, hyphens (1-24 characters)`);
+      if (!out.includes(t)) out.push(t);
+      if (out.length > 8) throw new BadRequestException('at most 8 tags per workflow');
+    }
+    return out;
+  }
+
   private checkId(id: unknown, what = 'id'): string {
     const s = String(id ?? '');
     if (!ID.test(s)) throw new BadRequestException(`invalid ${what}`);
@@ -46,7 +61,7 @@ export class WorkflowsService {
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant, currentBranch());
     const stats = await this.store.runStats(tenant);
-    return { definitions: defs.map((d) => { const s = stats.get(d.id); return { id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, steps: d.graph.nodes.length, graph: { nodes: d.graph.nodes.map((n) => ({ id: n.id, type: n.type })), edges: d.graph.edges }, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at, stats: s ? { runs: s.runs, okPct: s.runs ? Math.round((s.ok / s.runs) * 100) : null, lastStatus: s.last?.status ?? null, lastAt: s.last?.started_at ?? null, lastDurationMs: s.last?.finished_at ? Date.parse(s.last.finished_at) - Date.parse(s.last.started_at) : null } : null }; }) };
+    return { definitions: defs.map((d) => { const s = stats.get(d.id); return { id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, tags: d.tags, steps: d.graph.nodes.length, graph: { nodes: d.graph.nodes.map((n) => ({ id: n.id, type: n.type })), edges: d.graph.edges }, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at, stats: s ? { runs: s.runs, okPct: s.runs ? Math.round((s.ok / s.runs) * 100) : null, lastStatus: s.last?.status ?? null, lastAt: s.last?.started_at ?? null, lastDurationMs: s.last?.finished_at ? Date.parse(s.last.finished_at) - Date.parse(s.last.started_at) : null } : null }; }) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -60,7 +75,8 @@ export class WorkflowsService {
     const name = String(body?.name ?? '').trim();
     if (!name || name.length > 80) throw new BadRequestException('a name is required (max 80)');
     const description = String(body?.description ?? '').slice(0, 500);
-    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger', 'active'].includes(k))) throw new BadRequestException('unknown field');
+    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger', 'active', 'tags'].includes(k))) throw new BadRequestException('unknown field');
+    const tags = WorkflowsService.validateTags(body?.tags);
     const trigger = validateTrigger(body?.trigger);
     const { graph, order } = validateGraph(body?.graph);
     validateStepPlaceholders(graph, order);
@@ -77,7 +93,7 @@ export class WorkflowsService {
     if (!create && !existing) throw new NotFoundException('unknown workflow');
     // active defaults to true on create and is preserved on update unless the caller passes it (false = paused: event triggers skip it).
     const active = body.active === undefined ? (existing?.active ?? true) : body.active === true || body.active === 'true';
-    const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, active, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
+    const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, active, tags, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
     await this.store.putDefinition(def, ref);
     return { definition: def };
   }
