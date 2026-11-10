@@ -324,6 +324,23 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     c['prTab'].set('rows'); f.detectChanges();
     expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('B');
   });
+  it('pull requests: the new-PR form hides the open detail, and opening a PR closes the form', async () => {
+    const detail = { pullRequest: { id: 5, title: 'Grant hr-partner', body: '', source: 'feat-a', target: 'main', status: 'open', author: 'demo-alice', createdAt: new Date().toISOString(), mergedAt: null, mergeCommit: null },
+      comments: [], approvals: [], requiredApprovals: 1, commits: [], diff: null, checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] } };
+    const { f, el, c } = await mount(routes({ 'GET /versioning/pulls/5': () => ({ data: detail }) }));
+    f.componentRef.setInput('section', 'pulls'); await f.whenStable(); f.detectChanges();
+    await c['showPull'](5); f.detectChanges();
+    expect(el.querySelector('.pr-detail')).toBeTruthy();
+    // opening the form hides the previously selected pull request
+    const newBtn = [...el.querySelectorAll('button')].find((b) => b.textContent?.includes('New pull request')) as HTMLButtonElement;
+    newBtn.click(); f.detectChanges();
+    expect(el.querySelector('.pr-detail')).toBeFalsy();
+    expect(el.textContent).toContain('New pull request');
+    // and opening a pull request closes the form again
+    await c['showPull'](5); f.detectChanges();
+    expect(el.querySelector('.pr-detail')).toBeTruthy();
+    expect(c['prCreateOpen']).toBe(false);
+  });
   it('sql console: query tabs keep their text, and save query stores to localStorage', async () => {
     const { f, el, c } = await mount(routes());
     f.componentRef.setInput('section', 'sql'); await f.whenStable(); f.detectChanges();

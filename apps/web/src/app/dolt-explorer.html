@@ -588,7 +588,7 @@
           <button type="submit">Open pull request</button>
         </form>
       }
-      @if (pr(); as d) {
+      @if (!prCreateOpen) { @if (pr(); as d) {
         <div class="pr-detail">
           <div class="page-head">
             <div>
@@ -666,7 +666,7 @@
             }
           }
         </div>
-      }
+      } }
       <ng-template #prchecks let-d="d">
         <div class="card pr-checks">
           @if (d.checks; as k) {

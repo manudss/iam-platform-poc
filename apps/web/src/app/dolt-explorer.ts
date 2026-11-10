@@ -546,6 +546,7 @@ export class DoltExplorer {
   protected async showPull(id: number) {
     const r = await this.run(() => this.v.pull(id), true);
     if (!r) return;
+    this.prCreateOpen = false;
     this.pr.set(r); this.rowDiff.set(null);
     this.prTab.set('conversation'); this.prRowDiffs.set({}); this.prExpandedDiffs.set(new Set());
     for (const t of (r.diff?.tables ?? []).filter((x) => x.dataChange)) { this.prExpandedDiffs.update((s) => new Set(s).add(t.table)); await this.loadPrRowDiff(t.table); }
