@@ -494,7 +494,7 @@
               <div class="pr-side">
                 @if (p.status === 'open') {
                   @if (prBadges()[p.id]; as b) {
-                    @if (b.checks !== null) { <span class="chip" [class.ok]="b.checks" [class.ko]="!b.checks">{{ b.checks ? '&#x2713; checks pass' : '&#x2717; checks fail' }}</span> }
+                    @if (b.checks !== null) { <span class="chip" [class.ok]="b.checks" [class.ko]="!b.checks">{{ b.checks ? '✓ checks pass' : '✗ checks fail' }}</span> }
                     @if (b.approved) { <span class="chip ok">approved</span> }
                   }
                   <span class="hint">opened {{ rel(p.createdAt) }}</span>
@@ -531,13 +531,13 @@
           </div>
           <ol class="steps">
             <li class="done"><span class="step-dot" aria-hidden="true">&#x2713;</span> Opened</li>
-            <li [class.done]="prReviewed(d)"><span class="step-dot" aria-hidden="true">{{ prReviewed(d) ? '&#x2713;' : '2' }}</span> Reviewed</li>
-            <li [class.done]="prReady(d)" [class.now]="d.pullRequest.status === 'open' && !prReady(d)"><span class="step-dot" aria-hidden="true">{{ prReady(d) ? '&#x2713;' : '3' }}</span> Ready to merge</li>
+            <li [class.done]="prReviewed(d)"><span class="step-dot" aria-hidden="true">{{ prReviewed(d) ? '✓' : '2' }}</span> Reviewed</li>
+            <li [class.done]="prReady(d)" [class.now]="d.pullRequest.status === 'open' && !prReady(d)"><span class="step-dot" aria-hidden="true">{{ prReady(d) ? '✓' : '3' }}</span> Ready to merge</li>
           </ol>
           <div class="tabs">
             <button type="button" [class.on]="prTab() === 'conversation'" (click)="prTab.set('conversation')">Conversation</button>
             <button type="button" [class.on]="prTab() === 'commits'" (click)="prTab.set('commits')">Commits <span class="cnt">{{ d.commits.length }}</span></button>
-            <button type="button" [class.on]="prTab() === 'checks'" (click)="prTab.set('checks')">Checks @if (d.checks) { <span class="cnt" [class.ok]="d.checks.mergeable && !d.checks.violations.length" [class.ko]="!d.checks.mergeable || !!d.checks.violations.length">{{ d.checks.mergeable && !d.checks.violations.length ? '&#x2713;' : '&#x2717;' }}</span> }</button>
+            <button type="button" [class.on]="prTab() === 'checks'" (click)="prTab.set('checks')">Checks @if (d.checks) { <span class="cnt" [class.ok]="d.checks.mergeable && !d.checks.violations.length" [class.ko]="!d.checks.mergeable || !!d.checks.violations.length">{{ d.checks.mergeable && !d.checks.violations.length ? '✓' : '✗' }}</span> }</button>
             <button type="button" [class.on]="prTab() === 'rows'" (click)="prTab.set('rows')">Rows changed @if (d.diff?.rows) { <span class="cnt">+{{ d.diff.rows.added }} &#x2212;{{ d.diff.rows.removed }}</span> }</button>
           </div>
           @switch (prTab()) {
@@ -602,9 +602,9 @@
       <ng-template #prchecks let-d="d">
         <div class="card pr-checks">
           @if (d.checks; as k) {
-            <p [class]="k.mergeable ? 'ok' : 'ko'">{{ k.mergeable ? '&#x2713;' : '&#x2717;' }} <b>{{ k.mergeable ? 'Able to merge.' : 'Cannot be merged.' }}</b> {{ k.mergeable ? 'No conflicts with ' + d.pullRequest.target + '.' : '' }}@for (r of k.reasons; track r) { <br />{{ r }} }</p>
+            <p [class]="k.mergeable ? 'ok' : 'ko'">{{ k.mergeable ? '✓' : '✗' }} <b>{{ k.mergeable ? 'Able to merge.' : 'Cannot be merged.' }}</b> {{ k.mergeable ? 'No conflicts with ' + d.pullRequest.target + '.' : '' }}@for (r of k.reasons; track r) { <br />{{ r }} }</p>
             @if (!k.violations.length) { <p class="ok">&#x2713; Separation of duties respected</p> } @else { @for (v of k.violations; track v.roleA + v.roleB + v.identity) { <p class="ko">SoD: {{ v.identity }} would have {{ v.roleA }} and {{ v.roleB }}</p> } }
-            <p [class]="prReviewed(d) ? 'ok' : 'hint'">{{ prReviewed(d) ? '&#x2713;' : '' }} Review: {{ d.approvals.length ? 'approved by ' + approvalNames(d) : 'no approval yet' }} · {{ d.approvals.length }} of {{ d.requiredApprovals }} required</p>
+            <p [class]="prReviewed(d) ? 'ok' : 'hint'">{{ prReviewed(d) ? '✓' : '' }} Review: {{ d.approvals.length ? 'approved by ' + approvalNames(d) : 'no approval yet' }} · {{ d.approvals.length }} of {{ d.requiredApprovals }} required</p>
           } @else { <p class="hint">Checks not available.</p> }
           @if (d.pullRequest.status === 'open') {
             <div class="row">
