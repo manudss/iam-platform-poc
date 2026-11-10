@@ -50,19 +50,14 @@
     @if (rowHistory().length) {
       <div class="card row-history">
         <h4>Row history <span class="hint">· every past version of {{ pkLabel() }} (dolt_history_{{ histTable() }} joined with the commit log)</span></h4>
-        <table class="grid">
-          <thead><tr><th>COMMIT</th><th>AUTHOR</th><th>MESSAGE</th><th>CHANGE</th><th>WHEN</th><th></th></tr></thead>
-          <tbody>@for (h of rowHistory(); track h.commit + h.date) {
-            <tr>
-              <td><code>{{ short(h.commit) }}</code></td>
-              <td><span class="avatar" aria-hidden="true">{{ initials(h.author) }}</span> {{ h.author }}</td>
-              <td>{{ h.message || '&#x2014;' }}</td>
-              <td>@if (h.created) { <b>row created</b> } @else { @for (ch of h.changes; track ch.col) { <div><b>{{ ch.col }}:</b> <s>{{ cell(ch.from) }}</s> {{ cell(ch.to) }}</div> } @empty { <div class="hint">no column change</div> } }</td>
-              <td>{{ rel(h.date) }}</td>
-              <td>@if (histEditable() && !$first) { <button type="button" class="link" (click)="restoreVersion(h)">Restore</button> }</td>
-            </tr>
-          }</tbody>
-        </table>
+        @for (h of rowHistory(); track h.commit + h.date) {
+          <article class="row-version">
+            <div class="version-meta"><span class="avatar" aria-hidden="true">{{ initials(h.author) }}</span> <b>{{ h.author }}</b> · <time [title]="h.date">{{ rel(h.date) }}</time> <code>{{ short(h.commit) }}</code></div>
+            <p class="version-message">{{ h.message || '(no commit message)' }}</p>
+            @if (h.created) { <b>row created</b> } @else { @for (ch of h.changes; track ch.col) { <div class="version-change"><b>{{ ch.col }}:</b> <s>{{ cell(ch.from) }}</s> → {{ cell(ch.to) }}</div> } @empty { <div class="hint">no column change</div> } }
+            @if (histEditable() && !$first) { <button type="button" class="link" (click)="restoreVersion(h)">Restore</button> }
+          </article>
+        }
         <p class="hint">Restore fills the editor with that version: committing it makes a new commit, nothing is rewritten.</p>
       </div>
     }
@@ -443,7 +438,7 @@
                   <div class="commit-title">Commit on {{ rt.ref }}</div>
                   <label class="commit-msg">Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" [placeholder]="'e.g. ' + rt.table + ': update this row'" /></label>
                   <div class="commit-acts">
-                    <button type="button" class="primary" (click)="saveEdit()" [disabled]="busy()">Commit &amp; close tab</button>
+                    <button type="button" class="primary" (click)="saveEdit()" [disabled]="busy() || !rowTabEditable()">Commit &amp; close tab</button>
                     <button type="button" class="secondary" (click)="cancelEdit()">Discard &amp; close</button>
                     <span class="hint">Committing saves the row on {{ rt.ref }} and closes this tab - back to the table tab, refreshed.</span>
                   </div>
@@ -467,7 +462,7 @@
                 </details>
                 <button type="button" class="secondary" (click)="exportCsv(d)">&#x2B07; CSV</button>
                 @if (editable()) { <button type="button" class="primary" (click)="startInsert()">Add a row</button> }
-                <button type="button" class="secondary" (click)="openTable(d.table,d.offset)">Refresh</button>
+                <button type="button" class="secondary" (click)="loadTableRows(d.offset)">Refresh</button>
               </div>
               <div class="scroll data-grid"><table class="grid">
                 <thead><tr>@for (c of visibleColumns(); track c.name) { <th [title]="c.type">{{ c.name }}@if (c.key === 'PRI') { <span class="chip pk">PK</span> }</th> }<th></th></tr></thead>
@@ -477,8 +472,8 @@
                 }</tbody>
               </table></div>
               <p class="hint wb-foot">{{ d.offset + 1 }}–{{ d.offset + displayRows(d).length }} of {{ d.total }} · open a row to edit it and see its full change history
-                @if (d.offset > 0) { <button type="button" class="link" (click)="openTable(d.table, d.offset - d.rows.length)">previous</button> }
-                @if (d.hasMore) { <button type="button" class="link" (click)="openTable(d.table, d.offset + d.rows.length)">next</button> }
+                @if (d.offset > 0) { <button type="button" class="link" (click)="loadTableRows(d.offset - d.rows.length)">previous</button> }
+                @if (d.hasMore) { <button type="button" class="link" (click)="loadTableRows(d.offset + d.rows.length)">next</button> }
               </p>
             </div>
             @if (rowView()) {

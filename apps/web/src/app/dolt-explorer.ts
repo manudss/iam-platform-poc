@@ -497,7 +497,7 @@ export class DoltExplorer {
     await this.loadTableRows(offset);
   }
   /** Loads the rows of the active table tab into the grid - fresh on every activation: the branch may have moved. */
-  private async loadTableRows(offset = 0) {
+  protected async loadTableRows(offset = 0) {
     const t = this.dataTabs()[this.dataActiveTab()]; if (!t || t.kind !== 'table') { this.data.set(null); return; }
     this.rowView.set(null); this.rowHistory.set([]); this.hiddenCols.set(new Set()); this.rowFilter.set(''); this.sortCol.set(''); this.data.set(null);
     const r = await this.run(() => this.v.rows(t.ref, t.table, offset), true);
@@ -528,7 +528,7 @@ export class DoltExplorer {
   /** The row tab currently shown, when one is. */
   protected readonly activeRowTab = computed(() => { const t = this.dataTabs()[this.dataActiveTab()]; return t?.kind === 'row' ? t : null; });
   /** The branch the workbench status line talks about: the active tab's, else the tree's. */
-  protected readonly wbRef = computed(() => this.dataTabs()[this.dataActiveTab()]?.ref ?? this.dataRef);
+  protected wbRef() { return this.dataTabs()[this.dataActiveTab()]?.ref ?? this.dataRef; }
   /** Can the active row tab still be committed (its branch exists and is unprotected)? */
   protected readonly rowTabEditable = computed(() => { const t = this.activeRowTab(); const b = this.branches().find((x) => x.name === t?.ref); return !!t && !!b && !b.protected; });
   protected dataTabLabel(t: DataTab) { return t.kind === 'table' ? t.table : t.key ? t.primaryKey.map((k) => String(t.key![k] ?? '')).join(', ') : 'new row'; }
@@ -576,6 +576,7 @@ export class DoltExplorer {
   private openRowTab(src: { table: string; ref: string; columns: ColumnInfo[]; primaryKey: string[] }, key: Record<string, unknown> | null, values: Record<string, unknown>, message: string) {
     this.stashDataTab();
     let i = key ? this.dataTabs().findIndex((t) => t.kind === 'row' && t.table === src.table && t.ref === src.ref && JSON.stringify(t.key) === JSON.stringify(key)) : -1;
+    if (i >= 0 && !message) { this.dataActiveTab.set(i); void this.activateDataTab(); return; }
     if (i < 0) {
       this.dataTabs.update((t) => [...t, { kind: 'row', table: src.table, ref: src.ref, key, columns: src.columns, primaryKey: src.primaryKey, formFields: {}, nullFields: {}, editMessage: message, editJson: '', jsonMode: false } as DataTab]);
       i = this.dataTabs().length - 1;
@@ -607,7 +608,7 @@ export class DoltExplorer {
     if (!ref || !table || !pk?.length || !keyVals) return;
     const where = pk.map((k) => `h.\`${k}\` = '${String(keyVals[k]).replace(/'/g, "''")}'`).join(' and ');
     const r = await this.run(() => this.v.sql({ ref, sql: `select h.*, c.message as _commit_message from \`dolt_history_${table}\` h left join \`dolt_commits\` c on c.commit_hash = h.commit_hash where ${where} order by h.commit_date desc limit 50`, mode: 'read' }), true);
-    if (!r?.rows) return;
+    if (!r?.rows || this.activeRowTab() !== rt || this.data() !== d) return;
     this.rowHistory.set(r.rows.map((v, i) => {
       const older = r.rows![i + 1];
       const changes = cols.filter((c) => JSON.stringify(v[c] ?? null) !== JSON.stringify(older?.[c] ?? null)).map((c) => ({ col: c, from: older?.[c] ?? null, to: v[c] ?? null }));
@@ -637,10 +638,11 @@ export class DoltExplorer {
     let values: Record<string, unknown>;
     try { values = this.jsonMode ? JSON.parse(this.editJson) : Object.fromEntries(t.columns.filter((c) => c.name !== 'credential_revision').map((c) => { let value: unknown = this.formFields[c.name]; if (this.nullFields[c.name]) value = null; else if (/json/i.test(c.type)) value = JSON.parse(String(value)); else if (/^(int|bigint|tinyint|smallint|mediumint|float|double|decimal|boolean)/i.test(c.type)) { if (String(value).trim() === '' || !Number.isFinite(Number(value))) throw new Error('invalid number'); value = Number(value); } return [c.name, value]; })); } catch { this.note.set('Check the row values: numbers and JSON must be valid.'); return; }
     const op = t.key ? { op: 'update', key: t.key, values } : { op: 'insert', values };
+    const savedTab = t;
     const r = await this.run(() => this.v.edit(t.ref, t.table, [op], this.editMessage));
     if (r) {
       this.note.set(`Committed ${shortHash(r.commit)} on ${t.ref}.`);
-      const idx = this.dataActiveTab();
+      const idx = this.dataTabs().findIndex((x) => this.dataTabId(x) === this.dataTabId(savedTab));
       this.dataTabs.update((tabs) => tabs.filter((_, j) => j !== idx));
       let ti = this.dataTabs().findIndex((x) => x.kind === 'table' && x.table === t.table && x.ref === t.ref);
       if (ti < 0) { this.dataTabs.update((tabs) => [...tabs, { kind: 'table', table: t.table, ref: t.ref } as DataTab]); ti = this.dataTabs().length - 1; }

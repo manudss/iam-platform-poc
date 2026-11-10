@@ -296,6 +296,22 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(box?.querySelector('input[name=em]')).toBeTruthy();
     expect(el.querySelector('[data-edit-field=label]')).toBeTruthy();
     expect(el.querySelector('.row-history')?.textContent).toContain('demo-seed');
+    // Unsaved edits survive switches and clicking Edit again on the same row focuses its existing draft.
+    c['formFields']['label'] = 'Draft A'; c['editMessage'] = 'draft message';
+    c['switchDataTab'](0); await f.whenStable(); f.detectChanges();
+    c['dataRef'] = 'main'; await c['loadTables']();
+    await c['loadTableRows']();
+    expect(c['data']()?.ref).toBe('feat-a'); // refresh uses the tab branch, never the sidebar branch
+    c['startEdit']({ id: 'a', label: 'A' }); await f.whenStable(); f.detectChanges();
+    expect(c['dataTabs']().length).toBe(2);
+    expect(c['formFields']['label']).toBe('Draft A'); expect(c['editMessage']).toBe('draft message');
+    // A second row keeps an independent draft.
+    c['switchDataTab'](0); await f.whenStable();
+    c['startEdit']({ id: 'b', label: 'B' }); await f.whenStable();
+    c['formFields']['label'] = 'Draft B';
+    c['switchDataTab'](1); await f.whenStable(); f.detectChanges();
+    expect(c['formFields']['label']).toBe('Draft A');
+    c['closeDataTab'](2); f.detectChanges();
     // commit & close: the row tab goes away, the table tab is back and refreshed
     c['formFields']['label'] = 'A2'; c['editMessage'] = 'roles: fix label';
     await c['saveEdit'](); await f.whenStable(); f.detectChanges();

@@ -73,3 +73,10 @@
 .sql-editor textarea{border:0;border-radius:0;background:transparent;color:var(--sidebar-ink);font-family:monospace;font-size:.85rem;line-height:1.45;padding:.6rem .8rem;resize:vertical}
 .sql-editor textarea:focus{outline:none;box-shadow:none}
 .msg.sql-dryrun{border:1px solid var(--warn-line);background:var(--warn-soft);color:var(--warn-ink);border-radius:.5rem;padding:.5rem .8rem}
+
+.row-version{border-top:1px solid var(--line);padding:.7rem 0;overflow-wrap:anywhere}
+.version-meta{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:var(--muted)}
+.version-meta code{margin-left:auto}
+.version-message{margin:.3rem 0;font-size:.85rem}
+.version-change{font-family:monospace;font-size:.8rem;white-space:pre-wrap}
+.rowedit-form .field-editor>label{display:flex;flex-direction:column;align-items:stretch}
