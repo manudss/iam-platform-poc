@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
-import { branchContext, workspaceMode } from '../workspace/context.js';
+import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
+import { validateSettings } from '../plugins/v1/settings.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { authorOf } from '../versioning/guards.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
@@ -28,6 +29,7 @@ interface EngineDeps {
   versioning: { createBranch: (branch: string, base: string) => Promise<unknown>; writeOn: <T>(branch: string, fn: (c: unknown) => Promise<T>) => Promise<T>; defaultBranch: string };
   authorOf: (actor: string) => string;
   branchRun: <T>(branch: string, fn: () => Promise<T>) => Promise<T>;
+  settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 interface WorkflowEngineApi {
@@ -48,8 +50,18 @@ export class WorkflowEngine implements OnModuleInit {
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch },
       authorOf,
       branchRun: (b, fn) => branchContext.run({ branch: b }, fn),
+      settingsFor: (tenant, branch, pluginId) => this.settingsFor(tenant, branch, pluginId),
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
+  }
+
+  /** The validated settings of a block provider plugin (secrets resolved), on the current branch registry. */
+  private async settingsFor(tenant: string, branch: string | null, pluginId: string): Promise<Record<string, unknown>> {
+    const registry = await this.registryFor(branch);
+    const impl = registry.impl(pluginId);
+    if (!impl) return {};
+    const raw = (await registry.settingsFor(tenant, pluginId)) ?? {};
+    return validateSettings(impl.manifest.settings, raw).values;
   }
 
   /** The registry of the run's branch (engine choice is per tenant AND branch, like the enable guard). */

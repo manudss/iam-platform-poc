@@ -24,6 +24,7 @@
 .chip[data-status="running"], .chip[data-status="queued"] { background: var(--warn-soft); }
 .chip[data-status="skipped"], .chip[data-status="canceled"] { background: var(--chip-bg); }
 .chip[data-status="simulated"] { background: var(--accent-soft); }
+.chip[data-status="computed"] { background: var(--warn-soft); }
 .chip[data-status="real"] { background: var(--warn-soft); }
 .btn { display: inline-block; border-radius: .4rem; padding: .35rem .8rem; background: var(--accent); color: var(--accent-ink); text-decoration: none; border: 0; cursor: pointer; font-size: .9rem; }
 .btn.secondary { background: transparent; color: inherit; border: 1px solid currentColor; }
@@ -124,3 +125,9 @@ h3.profile-section { margin: .9rem 0 .3rem; font-size: 1rem; border-bottom: 1px 
 /* Segments must not shrink and clip their words. The table scrolls within its own region on small screens. */
 #pf-components-table .seg { max-width: none; }
 #pf-components-table .seg-opt { flex-shrink: 0; }
+
+/* Contributed workflow blocks (plugin catalogue) */
+.wf-family { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: .8rem 0 .3rem; }
+.ph-chip { display: inline-block; background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent-dark); border-radius: .3rem; padding: 0 .3rem; font-size: .72rem; margin: .1rem .15rem 0 0; font-family: ui-monospace, monospace; }
+.req { color: var(--bad); }
+td input { width: 100%; box-sizing: border-box; }

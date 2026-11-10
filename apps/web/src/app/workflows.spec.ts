@@ -1,16 +1,22 @@
 import { signal } from '@angular/core';
 import { Node } from 'ngx-vflow';
 import { ApiClient } from './api';
-import { SAMPLE_WORKFLOWS, STEP_TYPES, WorkflowClient, anchorViewport, leftmostNode, rectsWithin } from './workflows';
+import { SAMPLE_WORKFLOWS, STEP_TYPES, WorkflowClient, anchorViewport, categoryLabel, categoryOf, leftmostNode, rectsWithin } from './workflows';
 
-// Mirrors the server catalog (apps/api/src/workflows/model.ts WF_EVENTS): the editor fetches it live,
-// the samples are checked against this copy so a drift between the two fails here.
+// Mirrors the server catalog (apps/api/src/workflows/model.ts WF_EVENTS, contributed events included):
+// the editor fetches it live, the samples are checked against this copy so a drift between the two fails here.
+// '*' means the event carries an open payload (webhook body keys, sheet row columns).
 const EVENT_PAYLOADS: Record<string, string[]> = {
   'user.created': ['subject', 'displayName', 'department', 'email'],
   'user.department-changed': ['subject', 'from', 'to'],
   'user.disabled': ['subject'],
   'signup.approved': ['subject', 'email'],
+  'http.webhook-received': ['*'],
+  'google-sheets.row-ready': ['*'],
 };
+// Mirrors plugins/workflow-connectors/blocks.mjs: the contributed step types samples may use on top of the
+// built-in catalogue (drift between the two fails here).
+const CONTRIBUTED_TYPES = ['http-request', 'text-transform', 'google-sheets-read', 'google-sheets-update', 'google-sheets-add-row', 'jira-create-issue', 'jira-search-issues', 'lyam-create-user'];
 
 describe('workflow step types', () => {
   it('marks exactly wait/notify/fail as simulated; data steps are real', () => {
@@ -18,6 +24,17 @@ describe('workflow step types', () => {
     expect(simulated).toEqual(['wait', 'notify', 'fail']);
     const real = STEP_TYPES.filter((t) => !t.simulated).map((t) => t.type);
     expect(real).toEqual(['assign-role', 'revoke-role', 'set-department', 'set-profile-field']);
+  });
+  it('assigns a badge category to every built-in type and labels the three categories', () => {
+    for (const t of STEP_TYPES) expect(['simulated', 'computed', 'real']).toContain(t.category);
+    expect(STEP_TYPES.filter((t) => t.category === 'simulated').map((t) => t.type)).toEqual(['wait', 'notify', 'fail']);
+    expect(STEP_TYPES.filter((t) => t.category === 'real').map((t) => t.type)).toEqual(['assign-role', 'revoke-role', 'set-department', 'set-profile-field']);
+    expect(categoryLabel('simulated')).toBe('SIMULATED');
+    expect(categoryLabel('computed')).toBe('COMPUTED');
+    expect(categoryLabel('real')).toBe('REAL');
+    expect(categoryOf({ simulated: true })).toBe('simulated'); // a block without a category keeps the derived badge
+    expect(categoryOf({ simulated: false })).toBe('real');
+    expect(categoryOf({ simulated: true, category: 'computed' })).toBe('computed');
   });
 });
 
@@ -31,7 +48,7 @@ describe('sample workflows', () => {
     return seen;
   };
   it('use known types, unique ids and acyclic graphs with edges that reference real nodes', () => {
-    const known = new Set(STEP_TYPES.map((t) => t.type));
+    const known = new Set([...STEP_TYPES.map((t) => t.type), ...CONTRIBUTED_TYPES]);
     expect(SAMPLE_WORKFLOWS.length).toBeGreaterThanOrEqual(3);
     for (const s of SAMPLE_WORKFLOWS) {
       expect(s.name.startsWith('Sample: ')).toBe(true);
@@ -52,7 +69,7 @@ describe('sample workflows', () => {
       for (const k of Object.keys(t.match ?? {})) expect(payload).toContain(k);
       const keys = [...JSON.stringify(s.nodes).matchAll(/\{\{event\.([a-zA-Z]+)\}\}/g)].map((m) => m[1]);
       expect(keys.length).toBeGreaterThan(0);
-      for (const k of keys) expect(payload, `${s.name}: {{event.${k}}}`).toContain(k);
+      if (!payload.includes('*')) for (const k of keys) expect(payload, `${s.name}: {{event.${k}}}`).toContain(k); // wildcard payloads (webhook, sheet row) allow any key
     }
   });
   it('cover the demo story: onboarding, offboarding and a SoD case that fails then refuses the merge', () => {

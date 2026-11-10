@@ -158,8 +158,10 @@ export interface PluginManifest {
   subscribes?: SubscribeDecl[];
   /** v2: custom event kinds (namespace `plg.<id>.*`) this plugin may emit on the bus. The core checks this grant before accepting an emission. */
   emits?: string[];
-  /** v3 (folder plugins): where the plugin's code lives inside its folder. */
-  entrypoints?: { handlers?: string };
+  /** v3 (folder plugins): where the plugin's code lives inside its folder. `blocks` declares a
+   * workflow block catalogue (the `workflows.blocks` surface): a module exporting BLOCKS and
+   * TRIGGER_EVENTS, merged into the workflow model at boot. */
+  entrypoints?: { handlers?: string; blocks?: string };
   /** v3: HTTP routes mounted under `/plugins/:id/`. Each needs a handler; public routes are for sign-in and protocol endpoints only. */
   httpRoutes?: HttpRouteDecl[];
   /** v3: console menu entries. An entry disappears with its plugin (disabled = out of the menu, routes refuse). */
@@ -293,9 +295,9 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
   for (const e of m.emits ?? []) {
     if (!e?.startsWith(ns)) errs.push(`emits: ${e} must be in the plugin's own namespace ${ns}*`);
   }
-  if (m.entrypoints?.handlers !== undefined) {
-    const h = m.entrypoints.handlers;
-    if (typeof h !== 'string' || h.includes('..') || h.startsWith('/') || !h.endsWith('.mjs')) errs.push('entrypoints.handlers must be a relative .mjs path inside the plugin folder');
+  for (const key of ['handlers', 'blocks'] as const) {
+    const h = m.entrypoints?.[key];
+    if (h !== undefined && (typeof h !== 'string' || h.includes('..') || h.startsWith('/') || !h.endsWith('.mjs'))) errs.push(`entrypoints.${key} must be a relative .mjs path inside the plugin folder`);
   }
   const seenRoutes = new Set<string>();
   for (const r of m.httpRoutes ?? []) {

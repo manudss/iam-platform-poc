@@ -1,20 +1,41 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
-import { hasDataSteps, placeholderKeys, STEP_TYPES, substituteEventPayload, validateGraph, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
+import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
+import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
 import { DefinitionRow, RunRow, StepRow, WorkflowStore } from './store.js';
-import { currentBranch } from '../workspace/context.js';
+import { currentBranch, workspaceMode } from '../workspace/context.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
 
-export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean; order: string[] }; steps: (StepRow & { name: string; type: string; label: string })[] }
+export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean; order: string[] }; steps: (StepRow & { name: string; type: string; label: string; category: string })[] }
 
 /** API surface of the workflows feature. All state changes are validated here; the engine only executes. */
 @Injectable()
 export class WorkflowsService {
-  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService) {}
+  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
+
+  /** The registry of the current workspace branch (plugin enablement is per tenant AND branch). */
+  private async registry(): Promise<PluginRegistry> {
+    return workspaceMode() && this.branches ? this.branches.get(currentBranch(false)) : this.reg;
+  }
+
+  /** Every external block used by the graph must have its provider plugin enabled (fail closed). */
+  private async checkProviders(tenant: string, graph: WfGraph) {
+    const registry = await this.registry();
+    const used = [...new Set(graph.nodes.map((n) => externalBlockProvider(n.type)).filter((p): p is string => !!p))];
+    for (const p of used)
+      if (!registry.isActive(tenant, p)) throw new BadRequestException(`this workflow uses blocks from the "${p}" plugin, which is disabled for this tenant: enable it from the Plugins page`);
+  }
+
+  /** The editor palette: built-in step types + contributed blocks, with each provider's enabled state. */
+  async catalogue(tenant: string) {
+    const registry = await this.registry();
+    return { blocks: blockCatalogue().map((b) => ({ ...b, providerActive: b.provider ? registry.isActive(tenant, b.provider) : true })) };
+  }
 
   private checkId(id: unknown, what = 'id'): string {
     const s = String(id ?? '');
@@ -24,7 +45,7 @@ export class WorkflowsService {
 
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant, currentBranch());
-    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => STEP_TYPES[n.type].simulated).length, dataSteps: d.graph.nodes.filter((n) => !STEP_TYPES[n.type].simulated).length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
+    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -40,12 +61,14 @@ export class WorkflowsService {
     const description = String(body?.description ?? '').slice(0, 500);
     if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger'].includes(k))) throw new BadRequestException('unknown field');
     const trigger = validateTrigger(body?.trigger);
-    const { graph } = validateGraph(body?.graph);
+    const { graph, order } = validateGraph(body?.graph);
+    validateStepPlaceholders(graph, order);
+    await this.checkProviders(tenant, graph);
     // Every {{event.<key>}} placeholder must resolve from the chosen trigger's payload; without a trigger there is no event at all.
     for (const n of graph.nodes) for (const v of Object.values(n.config)) {
       for (const key of placeholderKeys(v)) {
         if (!trigger) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the workflow has no start trigger`);
-        if (!WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event].payload.join(', ')})`);
+        if (!isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event].payload.join(', ')})`);
       }
     }
     const ref = currentBranch(true);
@@ -81,9 +104,14 @@ export class WorkflowsService {
     const steps = order.map((nodeId) => {
       const n = resolved.nodes.find((x) => x.id === nodeId)!;
       const simulated = STEP_TYPES[n.type].simulated;
+      const category = stepCategoryOf(n.type);
       return {
-        step: n.id, type: n.type, name: n.name, simulated, config: n.config,
-        would: simulated ? 'write a log line only (a simulated step never has an external effect)' : 'a REAL data write on the run branch - NOT executed in this test',
+        step: n.id, type: n.type, name: n.name, simulated, category, config: n.config,
+        would: externalBlockProvider(n.type)
+          ? category === 'computed'
+            ? `a computed block from the "${externalBlockProvider(n.type)}" plugin (really runs, no external effect) - NOT executed in this test`
+            : `an external block from the "${externalBlockProvider(n.type)}" plugin (HTTP call, sheet or Jira write, user creation) - NOT executed in this test`
+          : simulated ? 'write a log line only (a simulated step never has an external effect)' : 'a REAL data write on the run branch - NOT executed in this test',
       };
     });
     return { definition: d.id, name: d.name, trigger: d.trigger, autoFilledEventKeys: autoFilled, steps, dataSteps: steps.filter((x) => !x.simulated).length, executed: false, note: 'test only: nothing was executed, written, sent or stored' };
@@ -93,6 +121,7 @@ export class WorkflowsService {
     // A run executes effects now, so it always uses the LIVE (main) definition, never an unreviewed branch edit.
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), this.store.liveRef);
     if (!d) throw new NotFoundException('unknown workflow');
+    await this.checkProviders(tenant, d.graph);
     const runId = event?.eventId ? `run-${createHash('sha256').update(JSON.stringify([tenant, d.id, event.branch, event.eventId])).digest('hex').slice(0, 32)}` : `run-${randomBytes(6).toString('hex')}`;
     if (event?.eventId && await this.store.getRun(tenant, runId)) return this.runView(tenant, runId);
     const active = (await this.store.listRuns(tenant, d.id, 100)).filter((r) => r.status === 'queued' || r.status === 'running');
@@ -104,7 +133,7 @@ export class WorkflowsService {
     const run: RunRow = { id: runId, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: event?.branch ?? null, status: 'queued', error: null, started_by: String(sub ?? 'unknown'), started_at: now(), finished_at: null };
     const steps: StepRow[] = order.map((nodeId) => {
       const n = graph.nodes.find((x) => x.id === nodeId)!;
-      return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], started_at: null, finished_at: null };
+      return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], output: null, started_at: null, finished_at: null };
     });
     await this.store.createRun(run, steps);
     this.engine.kick(run.id);
@@ -132,7 +161,7 @@ export class WorkflowsService {
       steps: order.map((nodeId) => {
         const s = steps.find((x) => x.node_id === nodeId);
         const n = nodes.get(nodeId)!;
-        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label };
+        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], output: null, started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label, category: stepCategoryOf(n.type) };
       }),
     };
   }

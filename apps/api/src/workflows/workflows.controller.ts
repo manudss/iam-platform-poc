@@ -16,6 +16,7 @@ interface Req_ { user?: { sub?: string } }
 export class WorkflowsController {
   constructor(private readonly wf: WorkflowsService) {}
 
+  @Get('workflow-blocks') blocks(@Param('tenant') t: string) { return this.wf.catalogue(t); }
   @Get('workflows-events') events() { return { events: Object.entries(WF_EVENTS).map(([type, e]) => ({ type, ...e })) }; }
   @Get('workflows') list(@Param('tenant') t: string) { return this.wf.list(t); }
   @Post('workflows') create(@Param('tenant') t: string, @Body() b: Record<string, unknown>, @Req() r: Req_) { return this.wf.save(t, undefined, b ?? {}, r.user?.sub, true); }

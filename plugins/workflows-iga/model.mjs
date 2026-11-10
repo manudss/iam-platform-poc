@@ -2,14 +2,23 @@ import { createRequire } from 'node:module';
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
+export const STEP_CATEGORIES = ['simulated', 'computed', 'real'];
+/**
+ * Display category of a step type, shown as the node/run badge:
+ *   simulated  nothing really happens (a notification is only logged, never sent)
+ *   computed   the step REALLY runs and computes its output, but has no external effect and writes nothing
+ *   real       external call or data write (on the run branch)
+ * `simulated` (the boolean) keeps its engine meaning: no external effect, no write. The category refines the badge.
+ */
+export const stepCategory = (type) => STEP_TYPES[type]?.category ?? (STEP_TYPES[type]?.simulated ? 'simulated' : 'real');
 export const STEP_TYPES = {
-    wait: { simulated: true, label: 'Wait (simulated delay)' },
-    notify: { simulated: true, label: 'Notify (simulated, nothing sent)' },
-    fail: { simulated: true, label: 'Fail on purpose (simulated error)' },
-    'assign-role': { simulated: false, label: 'Assign a role (real, on the run branch)' },
-    'revoke-role': { simulated: false, label: 'Revoke a role (real, on the run branch)' },
-    'set-department': { simulated: false, label: 'Set department (real, on the run branch)' },
-    'set-profile-field': { simulated: false, label: 'Set a profile field (real, on the run branch)' },
+    wait: { simulated: true, category: 'simulated', label: 'Wait (simulated delay)' },
+    notify: { simulated: true, category: 'simulated', label: 'Notify (simulated, nothing sent)' },
+    fail: { simulated: true, category: 'simulated', label: 'Fail on purpose (simulated error)' },
+    'assign-role': { simulated: false, category: 'real', label: 'Assign a role (real, on the run branch)' },
+    'revoke-role': { simulated: false, category: 'real', label: 'Revoke a role (real, on the run branch)' },
+    'set-department': { simulated: false, category: 'real', label: 'Set department (real, on the run branch)' },
+    'set-profile-field': { simulated: false, category: 'real', label: 'Set a profile field (real, on the run branch)' },
 };
 /**
  * Application events a workflow can start on (its "start trigger"). This is the hook catalog the
@@ -40,25 +49,141 @@ export function placeholderKeys(value) {
         return [];
     return [...value.matchAll(new RegExp(PLACEHOLDER.source, 'g'))].map((m) => m[1]);
 }
+const STEP_PLACEHOLDER = /\{\{steps\.([a-z0-9-]+)\.([a-zA-Z0-9_]+)\}\}/g;
+/** Upstream-output placeholders used in a config string, e.g. "{{steps.read.rowNumber}}" -> [{node, key}]. */
+export function stepPlaceholderRefs(value) {
+    if (typeof value !== 'string')
+        return [];
+    return [...value.matchAll(new RegExp(STEP_PLACEHOLDER.source, 'g'))].map((m) => ({ node: m[1], key: m[2] }));
+}
+/** Replaces {{steps.<node>.<key>}} placeholders from the outputs of already-finished steps (engine, at step time).
+ * A missing step or key refuses the step with a clear error. Objects are injected as JSON. */
+export function substituteStepOutputs(node, outputs) {
+    const config = {};
+    for (const [k, v] of Object.entries(node.config)) {
+        if (typeof v !== 'string') { config[k] = v; continue; }
+        config[k] = v.replace(new RegExp(STEP_PLACEHOLDER.source, 'g'), (_m, id, key) => {
+            const out = outputs[id];
+            if (out === undefined || out === null)
+                throw new BadRequestException(`step "${node.id}": {{steps.${id}.${key}}} cannot resolve: step "${id}" produced no output`);
+            const val = out[key];
+            if (val === undefined)
+                throw new BadRequestException(`step "${node.id}": {{steps.${id}.${key}}} cannot resolve: no key "${key}" in the output of "${id}" (has: ${Object.keys(out).join(', ') || 'none'})`);
+            return typeof val === 'object' ? JSON.stringify(val) : String(val);
+        });
+    }
+    return { ...node, config };
+}
+/** Save-time check: every {{steps.<id>.<key>}} must reference a step that comes EARLIER in the execution order. */
+export function validateStepPlaceholders(graph, order) {
+    const position = new Map(order.map((id, i) => [id, i]));
+    for (const n of graph.nodes) {
+        for (const v of Object.values(n.config)) {
+            for (const ref of stepPlaceholderRefs(v)) {
+                if (!position.has(ref.node))
+                    throw new BadRequestException(`step "${n.id}": {{steps.${ref.node}.${ref.key}}} references an unknown step "${ref.node}"`);
+                if (position.get(ref.node) >= position.get(n.id))
+                    throw new BadRequestException(`step "${n.id}": {{steps.${ref.node}.${ref.key}}} references "${ref.node}", which does not run before it (link the steps so the value exists)`);
+            }
+        }
+    }
+}
+
+// ---- External catalogue (workflows.blocks providers, e.g. the workflow-connectors plugin) ----
+// Blocks and trigger events contributed by other plugins are MERGED here at boot by the core adapter
+// (apps/api/src/workflows/model.ts): STEP_TYPES and WF_EVENTS are live objects so every importer sees
+// the merged catalogue. A contributed block carries validate(config) and run(ctx); its provider plugin
+// id is recorded so save/start/run can refuse it while the provider is disabled.
+const EXTERNAL_BLOCK_PROVIDER = new Map(); // type -> provider plugin id
+const EXTERNAL_BLOCK_IMPL = new Map();     // type -> descriptor { fields, outputs, validate, run, description }
+const EXTERNAL_EVENT_IMPL = new Map();     // event -> descriptor { configFields, poll }
+export function registerExternalBlocks(blocks) {
+    for (const b of blocks ?? []) {
+        if (!b || typeof b.type !== 'string' || !/^[a-z0-9][a-z0-9-]{0,38}$/.test(b.type))
+            throw new Error(`external block: invalid type ${b?.type}`);
+        if (STEP_TYPES[b.type])
+            throw new Error(`external block "${b.type}" collides with an existing step type`);
+        if (typeof b.validate !== 'function' || typeof b.run !== 'function')
+            throw new Error(`external block "${b.type}": validate and run functions are required`);
+        const category = b.category ?? (b.simulated ? 'simulated' : 'real');
+        if (!STEP_CATEGORIES.includes(category))
+            throw new Error(`external block "${b.type}": category must be one of ${STEP_CATEGORIES.join(', ')}`);
+        STEP_TYPES[b.type] = { simulated: !!b.simulated, category, label: String(b.label ?? b.type) };
+        EXTERNAL_BLOCK_PROVIDER.set(b.type, b.pluginId);
+        EXTERNAL_BLOCK_IMPL.set(b.type, b);
+    }
+}
+export function registerExternalEvents(events) {
+    for (const [event, d] of Object.entries(events ?? {})) {
+        if (WF_EVENTS[event])
+            throw new Error(`external trigger "${event}" collides with an existing event`);
+        WF_EVENTS[event] = { label: String(d.label ?? event), payload: Array.isArray(d.payload) ? d.payload : ['*'], configFields: Array.isArray(d.configFields) ? d.configFields : [] };
+        EXTERNAL_EVENT_IMPL.set(event, d);
+    }
+}
+export const externalBlock = (type) => EXTERNAL_BLOCK_IMPL.get(type);
+export const externalBlockProvider = (type) => EXTERNAL_BLOCK_PROVIDER.get(type);
+export const externalEvent = (event) => EXTERNAL_EVENT_IMPL.get(event);
+export const isWildcardEvent = (event) => (WF_EVENTS[event]?.payload ?? []).includes('*');
+/** Validates the trigger-level `config` object of an external event against its declared configFields. */
+function validateTriggerConfig(event, config) {
+    const desc = EXTERNAL_EVENT_IMPL.get(event);
+    const fields = desc?.configFields ?? [];
+    if (config === undefined || config === null)
+        config = {};
+    if (typeof config !== 'object' || Array.isArray(config))
+        throw new BadRequestException('trigger.config must be an object');
+    const known = new Set(fields.map((f) => f.key));
+    for (const k of Object.keys(config))
+        if (!known.has(k))
+            throw new BadRequestException(`trigger.config: unknown key "${k}" for ${event} (known: ${[...known].join(', ') || 'none'})`);
+    const out = {};
+    for (const f of fields) {
+        let v = config[f.key] ?? f.default;
+        if (v === undefined || v === null || v === '') {
+            if (f.required)
+                throw new BadRequestException(`trigger.config.${f.key} is required for ${event}`);
+            continue;
+        }
+        if (f.type === 'number') {
+            v = Number(v);
+            if (!Number.isFinite(v))
+                throw new BadRequestException(`trigger.config.${f.key}: a number`);
+        }
+        else {
+            v = String(v);
+            if (v.length > 200)
+                throw new BadRequestException(`trigger.config.${f.key}: text up to 200 characters`);
+            if (f.options && !f.options.includes(v))
+                throw new BadRequestException(`trigger.config.${f.key}: one of ${f.options.join(', ')}`);
+            if (f.key === 'token' && v.length < 12 && !v.includes('{{'))
+                throw new BadRequestException('trigger.config.token: at least 12 characters (it is the webhook credential)');
+        }
+        out[f.key] = v;
+    }
+    return out;
+}
 /** Validates a trigger object (or null/undefined = manual start only). Match keys must exist in the event payload. */
 export function validateTrigger(input) {
     if (input === undefined || input === null)
         return null;
     if (typeof input !== 'object' || Array.isArray(input))
-        throw new BadRequestException('trigger must be an object {event, match?} or null');
+        throw new BadRequestException('trigger must be an object {event, match?, config?} or null');
     const t = input;
-    if (Object.keys(t).some((k) => !['event', 'match'].includes(k)))
-        throw new BadRequestException('trigger: only event and match are allowed');
+    if (Object.keys(t).some((k) => !TRIGGER_KEYS.includes(k)))
+        throw new BadRequestException(`trigger: only ${TRIGGER_KEYS.join(', ')} are allowed`);
     const event = String(t.event ?? '');
     if (!Object.hasOwn(WF_EVENTS, event))
         throw new BadRequestException(`trigger.event: unknown event "${event}" (known: ${Object.keys(WF_EVENTS).join(', ')})`);
     const out = { event };
+    if (t.config !== undefined || isWildcardEvent(event))
+        out.config = validateTriggerConfig(event, t.config);
     if (t.match !== undefined && t.match !== null) {
         if (typeof t.match !== 'object' || Array.isArray(t.match))
             throw new BadRequestException('trigger.match must be an object of payload filters');
         const match = {};
         for (const [k, v] of Object.entries(t.match)) {
-            if (!WF_EVENTS[event].payload.includes(k))
+            if (!isWildcardEvent(event) && !WF_EVENTS[event].payload.includes(k))
                 throw new BadRequestException(`trigger.match: "${k}" is not a payload key of ${event} (${WF_EVENTS[event].payload.join(', ')})`);
             if (typeof v !== 'string' || !v || v.length > 40)
                 throw new BadRequestException('trigger.match: values are texts of 1 to 40 characters');
@@ -69,6 +194,9 @@ export function validateTrigger(input) {
     }
     return out;
 }
+
+/** The keys allowed in a trigger object (event + match + config for external events). */
+export const TRIGGER_KEYS = ['event', 'match', 'config'];
 /** Resolves {{event.<key>}} placeholders in every config string of the graph. Unknown keys refuse the run start. */
 export function substituteEventPayload(graph, payload) {
     const nodes = graph.nodes.map((n) => {
@@ -130,7 +258,7 @@ function configFor(type, cfg) {
         case 'revoke-role': {
             const identity = str(cfg.identity, `${type}.identity`, 64), role = str(cfg.role, `${type}.role`, 64);
             for (const [k, v] of [['identity', identity], ['role', role]])
-                if (!NAME32.test(v) && !placeholderKeys(v).length)
+                if (!NAME32.test(v) && !placeholderKeys(v).length && !stepPlaceholderRefs(v).length)
                     throw new BadRequestException(`${type}: ${k} uses lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders`);
             out.identity = identity;
             out.role = role;
@@ -138,7 +266,7 @@ function configFor(type, cfg) {
         }
         case 'set-department': {
             const identity = str(cfg.identity, 'set-department.identity', 64);
-            if (!NAME32.test(identity) && !placeholderKeys(identity).length)
+            if (!NAME32.test(identity) && !placeholderKeys(identity).length && !stepPlaceholderRefs(identity).length)
                 throw new BadRequestException('set-department.identity: lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders');
             out.identity = identity;
             out.department = str(cfg.department, 'set-department.department', 40);
@@ -146,7 +274,7 @@ function configFor(type, cfg) {
         }
         case 'set-profile-field': {
             const identity = str(cfg.identity, 'set-profile-field.identity', 64);
-            if (!NAME32.test(identity) && !placeholderKeys(identity).length)
+            if (!NAME32.test(identity) && !placeholderKeys(identity).length && !stepPlaceholderRefs(identity).length)
                 throw new BadRequestException('set-profile-field.identity: lowercase letters, digits, hyphens (max 32), or {{event.<key>}} placeholders');
             out.identity = identity;
             const field = str(cfg.field, 'set-profile-field.field', 80);
@@ -154,6 +282,18 @@ function configFor(type, cfg) {
                 throw new BadRequestException('set-profile-field.field: a profile field key like "hr-attributes.employee_grade"');
             out.field = field;
             out.value = str(cfg.value, 'set-profile-field.value', 200);
+            break;
+        }
+        default: {
+            const external = EXTERNAL_BLOCK_IMPL.get(type);
+            if (external) {
+                const clean = external.validate(cfg);
+                const known = new Set(Object.keys(clean));
+                for (const k of Object.keys(cfg))
+                    if (!known.has(k))
+                        throw new BadRequestException(`${type}: unknown config key "${k}"`);
+                return clean;
+            }
             break;
         }
     }

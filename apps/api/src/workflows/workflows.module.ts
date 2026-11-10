@@ -8,7 +8,9 @@ import { WorkflowEngine } from './engine.js';
 import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsController } from './workflows.controller.js';
 import { WorkflowTriggersService } from './triggers.js';
+import { WorkflowHooksController } from './hooks.controller.js';
+import { WorkflowSheetPollerService } from './sheet-poller.js';
 import { WorkflowDemoSeed } from './demo-seed.js';
 
-@Module({ imports: [EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowsController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed], exports: [WorkflowsService] })
+@Module({ imports: [EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowsController, WorkflowHooksController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService], exports: [WorkflowsService] })
 export class WorkflowsModule {}

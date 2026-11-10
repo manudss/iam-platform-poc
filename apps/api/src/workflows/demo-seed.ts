@@ -7,7 +7,7 @@ import { DefinitionRow, WorkflowStore } from './store.js';
  * definitions so the feature is alive out of the box - a joiner, a mover and a leaver scenario that
  * start from durable application-bus events. Redelivery reuses the same run ID. Idempotent (fixed ids, never overwritten).
  */
-const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: 'assign-role' | 'revoke-role' | 'notify' | 'set-profile-field'; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
+export const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
   {
     id: 'wf-joiner', name: 'Joiner: new hire baseline', description: 'Starts from user.created on the durable bus: grants the employee baseline role (real, on the run branch) and informs the manager (simulated).',
     trigger: { event: 'user.created' },
@@ -78,6 +78,40 @@ const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger
       { id: 'tell', type: 'notify', name: 'Inform the security office (simulated)', config: { recipient: 'security', message: '{{event.subject}} joined the security office: review access manually, nothing granted' } },
     ],
     edges: [],
+  },
+  {
+    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SIMULATED candidates sheet: process=OK builds nom.prenom@lyam.demo (without accents), creates a lyam account and grants the row role on a run branch, then marks cree=ok. Login stays disabled; a human reviews the branch. No Google credential is needed for the demo. For a real sheet, configure the service account in plugin settings and select source google.',
+    trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } },
+    nodes: [
+      { id: 'join', type: 'text-transform', name: 'Join nom.prenom', config: { operation: 'concat', values: '{{event.nom}}\n.\n{{event.prenom}}', separator: '' } },
+      { id: 'clean', type: 'text-transform', name: 'Strip accents', config: { operation: 'unaccent', text: '{{steps.join.value}}' } },
+      { id: 'lower', type: 'text-transform', name: 'Lowercase the login', config: { operation: 'lower', text: '{{steps.clean.value}}' } },
+      { id: 'email', type: 'text-transform', name: 'Build the e-mail', config: { operation: 'concat', values: '{{steps.lower.value}}\n@lyam.demo', separator: '' } },
+      { id: 'create', type: 'lyam-create-user', name: 'Create the user (lyam connector)', config: { identity: '{{steps.lower.value}}', displayName: '{{event.prenom}} {{event.nom}}', email: '{{steps.email.value}}', department: '{{event.departement}}' } },
+      { id: 'role', type: 'assign-role', name: 'Grant the role named in the row', config: { identity: '{{steps.lower.value}}', role: '{{event.role}}' } },
+      { id: 'mark', type: 'google-sheets-update', name: 'Mark the row cree=ok', config: { source: 'demo-sheet', rowNumber: '{{event.rownumber}}', column: 'cree', value: 'ok' } },
+      { id: 'tell', type: 'notify', name: 'Inform HR (simulated)', config: { recipient: 'hr', message: '{{event.prenom}} {{event.nom}} onboarded from the candidates sheet: user {{steps.lower.value}} created with role {{event.role}}, pending branch review' } },
+    ],
+    edges: [{ from: 'join', to: 'clean' }, { from: 'clean', to: 'lower' }, { from: 'lower', to: 'email' }, { from: 'email', to: 'create' }, { from: 'create', to: 'role' }, { from: 'role', to: 'mark' }, { from: 'mark', to: 'tell' }],
+  },
+  {
+    id: 'wf-leaver-jira', name: 'Leaver: a Jira ticket tracks the offboarding (spike)', description: 'SPIKE workflow-connectors: when an account is disabled, opens a Jira issue for the offboarding checklist (dryRun ON by default: simulated, only logged - turn dryRun off with the Jira sandbox settings for a real ticket) and informs security (simulated).',
+    trigger: { event: 'user.disabled' },
+    nodes: [
+      { id: 'ticket', type: 'jira-create-issue', name: 'Open the offboarding ticket (dry-run)', config: { dryRun: true, project: 'KAN', issueTypeId: '10001', summary: 'Offboard {{event.subject}}', description: 'Account disabled: revoke remaining roles, collect equipment, close the lyam account after branch review.' } },
+      { id: 'search', type: 'jira-search-issues', name: 'List open offboardings (dry-run)', config: { dryRun: true, jql: "project = KAN AND labels = offboarding AND status != Done", maxResults: 10 } },
+      { id: 'tell', type: 'notify', name: 'Inform security (simulated)', config: { recipient: 'security', message: 'offboarding ticket for {{event.subject}} requested (dry-run: nothing created)' } },
+    ],
+    edges: [{ from: 'ticket', to: 'search' }, { from: 'search', to: 'tell' }],
+  },
+  {
+    id: 'wf-candidate-intake', name: 'Intake: a webhook adds a candidate row (spike)', description: 'SPIKE workflow-connectors: POST JSON {nom, prenom, departement, role} to /tenants/<tenant>/workflow-hooks/wf-candidate-intake/demo-intake-token (demo token, change it) appends the candidate to the SIMULATED sheet with process "En cours"; set process = OK to onboard them. Shows the webhook trigger + the append-row block.',
+    trigger: { event: 'http.webhook-received', config: { token: 'demo-intake-token' } },
+    nodes: [
+      { id: 'add', type: 'google-sheets-add-row', name: 'Append the candidate to the demo sheet', config: { source: 'demo-sheet', values: 'nom = {{event.nom}}\nprenom = {{event.prenom}}\ndepartement = {{event.departement}}\nrole = {{event.role}}\nprocess = En cours\ncree = ' } },
+      { id: 'tell', type: 'notify', name: 'Inform HR (simulated)', config: { recipient: 'hr', message: 'candidate {{event.prenom}} {{event.nom}} received by webhook, appended at row {{steps.add.rowNumber}}: review and set process = OK' } },
+    ],
+    edges: [{ from: 'add', to: 'tell' }],
   },
 ];
 

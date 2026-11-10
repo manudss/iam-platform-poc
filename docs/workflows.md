@@ -18,12 +18,19 @@ While the plugin is disabled:
   Dolt branch and main is untouched. Retry, cancel, review and every other action are refused until the plugin is
   re-enabled. Disabling never deletes definitions, runs or branches.
 
-## Two kinds of steps, never mixed up
+## Three badge categories, never mixed up
 
-| Family | Types | Effect |
+Every step carries a badge on the canvas, in the palette and on the run view:
+
+| Badge | Types | Effect |
 |---|---|---|
 | **SIMULATED** | `wait`, `notify`, `fail` | Orchestration only. A wait really waits; a `notify` step **only writes a log line — nothing is ever sent** (no e-mail, no message); a `fail` step fails on its first attempt and recovers on retry (`config.mode: "always"` keeps failing, to show a permanently blocked run). |
-| **REAL** (data) | `assign-role`, `revoke-role`, `set-department`, `set-profile-field` | Write business data in Dolt, **always on the run's own branch `wf-<run>` created from `main`**, one commit per step, with the SoD check after an assignment. `set-profile-field` records one profile value (`profile_field_values`) for a person. **A run never writes on `main`.** |
+| **COMPUTED** | `text-transform` | The step **really runs and computes its output** (real string operations, the real Activepieces piece code), and downstream steps consume that output. It only has **no external effect**: nothing is sent, called or written. The badge exists so a real calculation is never read as a fake one. |
+| **REAL** (data / external) | `assign-role`, `revoke-role`, `set-department`, `set-profile-field`, `http-request`, Google Sheets and Jira blocks, `lyam-create-user` | Write business data in Dolt, **always on the run's own branch `wf-<run>` created from `main`**, one commit per step, with the SoD check after an assignment — or perform an external call (HTTP, Sheets, Jira; a dry-run says so in the step log). `set-profile-field` records one profile value (`profile_field_values`) for a person. **A run never writes on `main`.** |
+
+A contributed block declares its category (`simulated` | `computed` | `real`); it defaults from the `simulated`
+flag (`true` -> SIMULATED, `false` -> REAL), so older blocks keep their badge. The definitions list counts the
+three families separately (Simulated / Computed / Real columns).
 
 Publishing stays the existing human path: from a completed run, "Review & open a pull request" opens the Dolt pull
 request for the run branch; a person reviews the diff and merges (a SoD conflict is refused with 409, exactly like a
@@ -33,6 +40,9 @@ manual change). The workflow itself never merges.
 
 The console page **Workflows** (`/workflows`) lists definitions and recent runs. The editor (`/workflows/edit/:id`)
 uses **ngx-vflow** (MIT, Angular-native node-graph editor — <https://github.com/artem-mangilev/ngx-vflow>).
+When the workflow starts on an event, the trigger is drawn as the **first canvas node** (dashed amber look,
+TRIGGER badge, no incoming handle), automatically linked to every root step; it is a visual node only — the
+trigger itself is edited with the Start trigger field above the canvas and never saved as a graph node.
 
 Editor choice, checked on 2026-10-30: Temporal has **no official visual workflow editor** (the Temporal Web UI is
 read-only observability); community Temporal graph editors are experimental. Reusing an existing, maintained,
