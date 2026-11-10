@@ -81,16 +81,21 @@ export class PluginsPage {
 }
 
 /** One instance serves every /database/:tab, so branch, comparison and form state survive moving between sections. */
-@Component({ selector: 'app-explorer-page', imports: [DoltExplorer], template: `<app-dolt-explorer [api]="s.api" [section]="tab()" (navigate)="go($event)" />` })
+@Component({ selector: 'app-explorer-page', imports: [DoltExplorer], template: `<app-dolt-explorer [api]="s.api" [section]="tab()" [dataDeepLink]="deepLink()" (navigate)="go($event)" />` })
 export class ExplorerPage {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
   protected readonly tab = signal<Tab>('home');
+  /** /database/data?table=<t>&ref=<branch>&filter=<row>: a deep link into the data workbench (workflow runs). */
+  protected readonly deepLink = signal<{ table: string | null; ref: string | null; filter: string | null } | null>(null);
   constructor() {
-    inject(ActivatedRoute).paramMap.subscribe((m) => {
+    const route = inject(ActivatedRoute);
+    route.paramMap.subscribe((m) => {
       const t = m.get('tab') as Tab;
       if (TABS.includes(t)) this.tab.set(t); else void this.router.navigateByUrl('/database/home', { replaceUrl: true });
     });
+    const q = route.snapshot.queryParamMap;
+    if (q.get('table')) this.deepLink.set({ table: q.get('table'), ref: q.get('ref'), filter: q.get('filter') });
   }
   protected go(t: Tab) { if (t !== this.tab()) { this.tab.set(t); void this.router.navigate(['/database', t]); } }
 }

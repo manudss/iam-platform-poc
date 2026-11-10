@@ -445,7 +445,7 @@ const lyamCreateUser = {
       await db.query('insert into identities (id, display_name, manager_id, department, email, login_enabled, credential_revision) values (?,?,null,?,?,false,null)', [c.identity, c.displayName, c.department || null, c.email || null]);
       ctx.log(`user "${c.identity}" (${c.displayName}) created on the run branch, login disabled until review`);
     }, `workflow: create user ${c.identity} (lyam connector)`);
-    return { identity: c.identity, email: c.email || null };
+    return { identity: c.identity, email: c.email || null, dataRow: { table: 'identities', pk: { id: c.identity } } };
   },
 };
 

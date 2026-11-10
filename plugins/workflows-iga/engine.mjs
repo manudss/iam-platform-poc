@@ -390,7 +390,7 @@ export function createWorkflowEngine(deps) {
           say(`assignment written and committed on ${branch} (commit ${hash.slice(0, 10)})`);
           if (viol.length) say(`warning: ${viol.length} SoD conflict(s) now present on this branch (e.g. ${viol[0].identity}: ${viol[0].roleA} + ${viol[0].roleB}); the review merge will refuse them`);
           else say('SoD check on the branch: no conflict');
-          output = { identity: String(cfg.identity), role: String(cfg.role) };
+          output = { identity: String(cfg.identity), role: String(cfg.role), dataRow: { table: 'assignments', pk: { identity_id: String(cfg.identity), role_id: String(cfg.role) } } };
           break;
         }
         case 'revoke-role': {
@@ -398,7 +398,7 @@ export function createWorkflowEngine(deps) {
           if (!Number(res.affectedRows)) throw new Error(`${String(cfg.identity)} does not have role "${String(cfg.role)}" on this branch`);
           const hash = await commit(c, `workflow ${run.id}: revoke ${String(cfg.role)} from ${String(cfg.identity)}`, author);
           say(`assignment removed and committed on ${branch} (commit ${hash.slice(0, 10)})`);
-          output = { identity: String(cfg.identity), role: String(cfg.role) };
+          output = { identity: String(cfg.identity), role: String(cfg.role), dataRow: { table: 'assignments', pk: { identity_id: String(cfg.identity), role_id: String(cfg.role) }, removed: true } };
           break;
         }
         case 'set-department': {
@@ -411,7 +411,7 @@ export function createWorkflowEngine(deps) {
           }
           const hash = await commit(c, `workflow ${run.id}: ${String(cfg.identity)} moves to ${String(cfg.department)}`, author);
           say(`department updated and committed on ${branch} (commit ${hash.slice(0, 10)})`);
-          output = { identity: String(cfg.identity), department: String(cfg.department) };
+          output = { identity: String(cfg.identity), department: String(cfg.department), dataRow: { table: 'identities', pk: { id: String(cfg.identity) } } };
           break;
         }
         case 'set-profile-field': {
@@ -423,7 +423,7 @@ export function createWorkflowEngine(deps) {
           if (!Number(dirty[0].n)) { say(`profile field "${String(cfg.field)}" already has this value: no change, nothing committed`); break; }
           const hash = await commit(c, `workflow ${run.id}: record ${String(cfg.field)} for ${String(cfg.identity)}`, author);
           say(`profile field "${String(cfg.field)}" recorded and committed on ${branch} (commit ${hash.slice(0, 10)})`);
-          output = { identity: String(cfg.identity), field: String(cfg.field), value: String(cfg.value) };
+          output = { identity: String(cfg.identity), field: String(cfg.field), value: String(cfg.value), dataRow: { table: 'profile_field_values', pk: { tenant: run.tenant, subject: String(cfg.identity), field_key: String(cfg.field) } } };
           break;
         }
       }

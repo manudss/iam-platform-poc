@@ -41,7 +41,7 @@ class FakeAuth implements CanActivate {
   }
 }
 
-interface RunView { run: { id: string; status: string; branch: string | null; error: string | null; simulatedOnly: boolean; test?: boolean }; steps: { node_id: string; status: string; simulated: boolean; attempts: number; log: string[]; input?: Record<string, unknown> | null }[] }
+interface RunView { run: { id: string; status: string; branch: string | null; error: string | null; simulatedOnly: boolean; test?: boolean }; steps: { node_id: string; status: string; simulated: boolean; attempts: number; log: string[]; input?: Record<string, unknown> | null; output?: Record<string, unknown> | null }[] }
 
 const call = async (method: string, path: string, body?: object, o: { token?: string | null; admin?: string | null } = {}) => {
   const token = o.token === undefined ? `${T}:demo-alice` : o.token;
@@ -195,6 +195,8 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.match(v.run.branch ?? '', /^workflow\/[0-9a-f]{8}$/);
     assert.equal(v.steps[0].simulated, false);
     assert.ok(v.steps[0].log.some((l) => l.includes('commit')));
+    // "Open the row in Data": the write is recorded in the step output (table + primary key)
+    assert.deepEqual((v.steps[0].output as { dataRow?: unknown }).dataRow, { table: 'assignments', pk: { identity_id: 'demo-bob', role_id: 'accountant' } });
     // main untouched: only the seeded assignments
     const rows = (await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: unknown[] };
     assert.equal(rows.rows.length, 4);

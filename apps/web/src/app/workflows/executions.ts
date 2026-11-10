@@ -15,6 +15,17 @@ import { WbTabs, WbTabsBar } from './workbench-tabs';
 // link). The selected run lives in the URL (?run=<id>): a link is shareable and /workflows/run/:id
 // redirects here. Test runs (editor) are hidden unless "test runs" is checked. ----
 
+/** A real write recorded by the engine in the step output: the table and primary key it touched. */
+export interface StepDataRow { table: string; pk: Record<string, string>; /** true when the step REMOVED the row (revoke-role). */ removed?: boolean }
+/** "Open the row in Data": the deep link of a step that wrote data, on the run's own branch. The row
+ * filter targets the most distinctive pk column (identity before tenant), a plain substring of the grid. */
+export function stepDataLink(runBranch: string | null, output: unknown): { table: string; ref: string; filter: string; removed: boolean } | null {
+  const row = (output as { dataRow?: StepDataRow } | null | undefined)?.dataRow;
+  if (!row || !runBranch || !row.table || !row.pk) return null;
+  const filter = row.pk['identity_id'] ?? row.pk['id'] ?? row.pk['subject'] ?? Object.values(row.pk)[0] ?? '';
+  return { table: row.table, ref: runBranch, filter, removed: row.removed === true };
+}
+
 const duration = (r: { startedAt?: string; finishedAt?: string | null; started_at?: string | null; finished_at?: string | null }): string => {
   const a = r.startedAt ?? r.started_at, b = r.finishedAt ?? r.finished_at;
   if (!a) return '-';
@@ -87,6 +98,7 @@ const duration = (r: { startedAt?: string; finishedAt?: string | null; started_a
   <div class="row"><span class="chip" [attr.data-status]="st.status">{{st.status}}</span><b>{{st.name}}</b><span class="chip" [attr.data-status]="categoryOf(st)">{{categoryLabel(categoryOf(st))}}</span><small>attempts: {{st.attempts}} — {{dur(st)}}</small><span class="spacer"></span>
   @if ((v.run.status === 'completed' || v.run.status === 'failed' || v.run.status === 'canceled') && st.status !== 'skipped') {<button class="secondary" (click)="rerunFrom(st.node_id)" title="Re-run the workflow from this step">Re-run from here</button>}</div>
   @if (st.error) {<p class="msg error">{{st.error}}</p>}
+  @if (dataLinkOf(v, st); as l) {<p style="margin:.3rem 0"><a class="btn secondary" [routerLink]="['/database', 'data']" [queryParams]="{ table: l.table, ref: l.ref, filter: l.filter }">{{l.removed ? 'Open the table in Data (row removed)' : 'Open the row in Data'}}</a> <span class="hint">{{l.table}} on {{l.ref}}</span></p>}
   <details><summary>Input</summary><pre class="wf-log">{{st.input | json}}</pre></details>
   <details open><summary>Output</summary><pre class="wf-log">{{st.output | json}}</pre></details>
   <details><summary>Log</summary><pre class="wf-log">@for (l of st.log; track l) {{{l}}
@@ -157,6 +169,7 @@ export class WorkflowExecutionsPage implements OnInit, OnDestroy {
     void this.router.navigate(['/workflows/runs'], { queryParams: { definition: this.fDefinition || null } });
   }
   protected noop(_e: unknown) {}
+  protected dataLinkOf(v: RunView, st: { output?: Record<string, unknown> | null }) { return stepDataLink(v.run.branch, st.output); }
 
   protected async refreshRun() {
     const id = this.selected(); if (!id) return;
