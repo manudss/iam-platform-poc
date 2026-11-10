@@ -43,6 +43,14 @@ customisation colours; nothing is hard-coded.
 `contrast.spec.ts` checks all of this for nine source-colour pairs (extremes included). If you change a tone,
 the spec tells you what broke.
 
+## Page structure: levels without cards
+
+A page must never be flat elements on the background. Tables sit in a bordered container on `--card` (the global
+`.scroll` wrapper) with the `--th-bg` header band and zebra rows alternating `--card` / `--panel`; hover stays
+`--row-hover`. Form sections and grouped content use `.panel` (`--panel`). Adjacent surfaces never touch: cards,
+panels and table containers are separated by the spacing token `--panel-gap` (styles.css), never a magic number.
+All of this is global in styles.css and holds in light and dark.
+
 ## Checklist for a UI change
 
 1. Only `var(--...)` colours. 2. `npm test` in `apps/api` (contract, contrast). 3. Look at it in light and dark.

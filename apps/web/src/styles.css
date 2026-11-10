@@ -2,7 +2,7 @@
 :root{color-scheme:light;--brand-baseline:"IAM next generation";--brand-footer:"Fictional demo data only. Do not enter real data.";--bg:#fcf8ff;--card:#ffffff;--panel:#f6f2fa;--code-bg:#f0ecf4;--th-bg:#e9e6fa;--row-hover:#f3eff7;--field-bg:#ffffff;--bar-off:#d5d2e6;--veil:#fcf8ff73;--card-auth:#ffffff;--auth-field:#ffffff;--ink:#1b1b21;--muted:#6a697a;--label:#464555;--brand-sub:#6a697a;--th-ink:#5e5d6e;--line:#dedaef;--field-line:#848294;--focus:#6361b5;--accent:#5755a8;--accent-ink:#ffffff;--accent-dark:#3f3c8e;--accent-soft:#e9e5ff;--link:#5755a8;--chip-bg:#e0e0ff;--chip-ink:#424465;--ok:#42673d;--ok-soft:#c3eeb8;--ok-line:#9ac491;--bad:#ba1a1a;--bad-soft:#ffdad6;--bad-ink:#93000a;--bad-line:#ff9f94;--warn-soft:#ffe4be;--warn-line:#cea55f;--warn-ink:#513600;--sel:#d2d0ff;--on-bad:#ffffff;--sidebar-bg:#100563;--sidebar-ink:#f3eff7;--sidebar-muted:#c7c4d8;--sidebar-active:#3f3c8e;--sidebar-hover:#282376;--gradient-from:#a7a8cf;--gradient-to:#5755a8;--scrim:#0000008c;--shadow-color:#00000026;}
 :root[data-theme='dark']{color-scheme:dark;--bg:#2b2a3b;--card:#424051;--panel:#363546;--code-bg:#4d4c5d;--th-bg:#4d4c5f;--row-hover:#525162;--field-bg:#494759;--bar-off:#6a687d;--veil:#2b2a3b99;--card-auth:#363546;--auth-field:#494759;--ink:#e4e0f6;--muted:#c7c4db;--label:#d5d2e9;--brand-sub:#c7c4db;--th-ink:#c7c4db;--line:#9694aa;--field-line:#9996ac;--focus:#a4a2fb;--accent:#c3c0ff;--accent-ink:#282376;--accent-dark:#a4a2fb;--accent-soft:#333082;--link:#c3c0ff;--chip-bg:#424465;--chip-ink:#e0e0ff;--ok:#a7d29e;--ok-soft:#1f431d;--ok-line:#42673d;--bad:#ffb4ab;--bad-soft:#7e0007;--bad-ink:#ffdad6;--bad-line:#ba1a1a;--warn-soft:#513600;--warn-line:#876526;--warn-ink:#ffdeab;--sel:#434193;--on-bad:#690005;--sidebar-bg:#100563;--sidebar-ink:#f2efff;--sidebar-muted:#c7c4db;--sidebar-active:#3f3c8e;--sidebar-hover:#282376;--gradient-from:#c2c3eb;--gradient-to:#7c7ad0;--scrim:#0000008c;--shadow-color:#00000040;}
 @media (prefers-color-scheme:dark){:root:not([data-theme='light']){color-scheme:dark;--bg:#2b2a3b;--card:#424051;--panel:#363546;--code-bg:#4d4c5d;--th-bg:#4d4c5f;--row-hover:#525162;--field-bg:#494759;--bar-off:#6a687d;--veil:#2b2a3b99;--card-auth:#363546;--auth-field:#494759;--ink:#e4e0f6;--muted:#c7c4db;--label:#d5d2e9;--brand-sub:#c7c4db;--th-ink:#c7c4db;--line:#9694aa;--field-line:#9996ac;--focus:#a4a2fb;--accent:#c3c0ff;--accent-ink:#282376;--accent-dark:#a4a2fb;--accent-soft:#333082;--link:#c3c0ff;--chip-bg:#424465;--chip-ink:#e0e0ff;--ok:#a7d29e;--ok-soft:#1f431d;--ok-line:#42673d;--bad:#ffb4ab;--bad-soft:#7e0007;--bad-ink:#ffdad6;--bad-line:#ba1a1a;--warn-soft:#513600;--warn-line:#876526;--warn-ink:#ffdeab;--sel:#434193;--on-bad:#690005;--sidebar-bg:#100563;--sidebar-ink:#f2efff;--sidebar-muted:#c7c4db;--sidebar-active:#3f3c8e;--sidebar-hover:#282376;--gradient-from:#c2c3eb;--gradient-to:#7c7ad0;--scrim:#0000008c;--shadow-color:#00000040;}}
-:root{--radius:.75rem;--shadow:0 2px 14px var(--shadow-color);font-family:Inter,system-ui,sans-serif}
+:root{--radius:.75rem;--shadow:0 2px 14px var(--shadow-color);--panel-gap:1rem;font-family:Inter,system-ui,sans-serif}
 *, *::before, *::after { box-sizing: border-box; }
 ::placeholder { color: var(--muted); opacity: 1; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-size: 15px; line-height: 1.45; }
@@ -34,8 +34,8 @@ button.danger:hover:not(:disabled) { background: var(--bad); border-color: var(-
 button.link { background: none; border: 0; color: var(--link); font-weight: 500; text-decoration: underline; padding: 0; margin: 0 .3rem; }
 button.link:hover:not(:disabled) { background: none; color: var(--accent-dark); }
 
-.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.25rem; margin: 0 0 1.1rem; }
-.panel { border: 1px solid var(--line); border-radius: .6rem; padding: .7rem .9rem; margin: .8rem 0; background: var(--panel); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.25rem; margin: 0 0 var(--panel-gap); }
+.panel { border: 1px solid var(--line); border-radius: .6rem; padding: .7rem .9rem; margin: 0 0 var(--panel-gap); background: var(--panel); }
 .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; }
 .scroll { overflow-x: auto; }
 .msg { background: var(--accent-soft); border-left: 4px solid var(--accent); padding: .55rem .8rem; border-radius: .4rem; margin: .6rem 0; }
@@ -48,6 +48,10 @@ button.link:hover:not(:disabled) { background: none; color: var(--accent-dark); 
 table { border-collapse: collapse; width: 100%; font-size: .88rem; }
 th, td { text-align: left; padding: .5rem .65rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { background: var(--th-bg); color: var(--th-ink); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+/* Pages without cards keep visible levels: a table sits in a bordered container with its header band, and rows
+   alternate card/panel (zebra). The hover rule stays AFTER the zebra so it always wins. */
+.scroll:has(> table) { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 .7rem; margin-bottom: var(--panel-gap); }
+tbody tr:nth-child(even) td { background: var(--panel); }
 tbody tr:hover td { background: var(--row-hover); }
 table.grid th, table.grid td { border: 0; border-bottom: 1px solid var(--line); }
 
