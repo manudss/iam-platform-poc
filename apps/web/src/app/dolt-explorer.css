@@ -132,3 +132,17 @@ table.grid tr.mod td{background:var(--warn-soft)}
 input[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--bad);outline-color:var(--bad)}
 .action-done{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;background:var(--ok-soft);border:1px solid var(--ok-line);color:var(--ok);border-radius:8px;padding:.5rem .75rem;margin-top:.5rem}
 .action-done button.ghost{background:none;border:none;color:inherit;cursor:pointer;font-size:.9rem}
+
+.new-branch{display:grid;gap:.6rem}
+.nb-fields{display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-end}
+.nb-field{display:grid;gap:.25rem;margin:0}
+.nb-lbl{font-size:.8rem;color:var(--muted)}
+.nb-pair{display:flex;align-items:center;gap:.5rem}
+.nb-slash{color:var(--muted);font-weight:600;line-height:1}
+.nb-folder{max-width:9rem}
+.protect{display:block;margin:.2rem 0 1rem 1.4rem}
+.protect h4{margin:0 0 .5rem}
+.protect ul{margin:0;padding-left:1.1rem;display:grid;gap:.5rem}
+.kinds{display:inline-flex;flex-wrap:wrap;gap:.4rem;margin:.3rem 0 0 .3rem;align-items:center}
+.kinds label{display:inline-flex;gap:.3rem;align-items:center;border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:.1rem .5rem;margin:0;font-weight:400}
+input[type=checkbox].inline{width:auto;margin-left:.3rem;vertical-align:middle}
