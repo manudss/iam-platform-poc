@@ -60,6 +60,14 @@ The editor is a workbench: a left rail with the searchable block palette (drag &
 a light canvas with minimap, zoom controls and auto-layout (topological layers), a right config drawer with
 **Settings / Input / Output** tabs, and a bottom status bar. Ergonomics:
 
+- **Workbench tabs**: the workflows and runs you open live in a tab bar on top of the editor and run pages
+  (persisted in the browser). Closing the current tab switches to the previous one; `+` goes back to the list.
+- **Active toggle**: the header switch maps to the definition's `active` flag. A paused (inactive) workflow never
+  starts from an event — its triggers are skipped by the dispatch and the sheets poller — but a manual **Run**
+  still works. The flag is kept as-is on a save that does not touch it.
+- **Placeholder picker**: typing `{{` in a step field opens an autocomplete of the placeholders valid there
+  (event payload keys, outputs of upstream steps); arrows + Enter pick, Escape closes. The placeholder chips of
+  the Settings/Input tabs insert into the last edited field (they only copied before).
 - **Insert on link**: every link carries a small `+` that inserts a block rewired between its two ends (the branch
   label, if any, stays on the upstream half).
 - **Branch links**: logic steps (If / Switch / Loop) label their outgoing links (`true/false`, case keys +
