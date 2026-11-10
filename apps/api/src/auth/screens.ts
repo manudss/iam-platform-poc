@@ -38,7 +38,7 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'profile-fields': case 'profile-components-inventory': return ['profile-fields'];
     case 'profile-components': case 'profile-schema': return ['users', 'profile-fields', 'profile-reviews', 'my-profile'];
     case 'roles': return m === 'GET' ? ['roles', 'assignments'] : ['roles'];
-    case 'organizations': return ['organizations'];
+    case 'organizations': return m === 'GET' ? ['organizations', 'assignments'] : ['organizations'];
     case 'assignments': case 'changes': case 'connectors': return ['assignments'];
     // The personal working branch (opened at sign-in) and Apply: people editing assignments and the branch screens use them; the merge itself is decided by branch:merge.
     case 'workspace': return ['assignments', 'dolt-branches', 'dolt-pulls'];
