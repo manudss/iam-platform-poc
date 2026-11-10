@@ -151,3 +151,13 @@ table.grid tr.add td { background: var(--ok-soft); } table.grid tr.del td { back
 .wb-status { display: flex; justify-content: space-between; gap: 1rem; border-top: 1px solid var(--line); margin-top: .8rem; padding: .4rem .2rem 0; font-size: .82rem; color: var(--muted); }
 .wb-status .dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 999px; background: var(--ok); margin-right: .3rem; }
 @media (max-width: 900px) { .wb { grid-template-columns: 1fr; } }
+
+/* row editor + row history */
+.wb-row { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; align-items: start; margin-top: 1rem; }
+.wb-row-left { display: grid; gap: 1rem; }
+.wb-edit { position: sticky; top: 1rem; }
+.field-editor.one-col { grid-template-columns: 1fr; }
+.row-history h4 { margin-top: 0; }
+.row-history s { color: var(--bad); }
+.row-history b { color: var(--ink); }
+@media (max-width: 900px) { .wb-row { grid-template-columns: 1fr; } }

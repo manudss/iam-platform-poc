@@ -171,6 +171,24 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     c['closeTableTab']('roles'); f.detectChanges();
     expect(c['data']()).toBeNull(); expect(el.textContent).toContain('Pick a table on the left');
   });
+  it('row history: past versions from dolt_history_, with restore filling the editor as a new commit', async () => {
+    const hist = { mode: 'read', columns: ['id', 'label', 'commit_hash', 'committer', 'commit_date'], rows: [
+      { id: 'a', label: 'A2', commit_hash: 'h2'.padEnd(32, '2'), committer: 'demo-alice', commit_date: new Date().toISOString() },
+      { id: 'a', label: 'A1', commit_hash: 'h1'.padEnd(32, '1'), committer: 'demo-seed', commit_date: new Date(Date.now() - 864e5).toISOString() }] };
+    const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ data: hist }) }));
+    f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges();
+    c['dataRef'] = 'feat-a'; await c['openTable']('roles'); f.detectChanges();
+    c['openRow']({ id: 'a', label: 'A2' }); await f.whenStable(); f.detectChanges();
+    const card = el.querySelector('.row-history');
+    expect(card?.textContent).toContain('every past version of a'); expect(card?.textContent).toContain('dolt_history_roles');
+    expect(card?.textContent).toContain('label:'); expect(card?.textContent).toContain('A1'); expect(card?.textContent).toContain('A2');
+    expect(card?.textContent).toContain('row created');
+    // restore an old version: the editor opens with its values and a restore commit message
+    const restore = [...el.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Restore') as HTMLButtonElement;
+    restore.click(); await f.whenStable(); f.detectChanges();
+    expect(c['editKey']).toEqual({ id: 'a' }); expect(c['formFields']['label']).toBe('A1');
+    expect(el.querySelector<HTMLInputElement>('input[name=em]')?.value).toContain('restore a to');
+  });
   it('compare: summary chips, per-table row diffs and a column-level schema diff', async () => {
     const diff = { from: 'main', to: 'feat-a', three: true, rows: { added: 1, modified: 1, removed: 1, total: 3 },
       tables: [{ table: 'roles', from: null, kind: 'modified', dataChange: true, schemaChange: true, rows: { added: 1, modified: 1, removed: 1 } }],

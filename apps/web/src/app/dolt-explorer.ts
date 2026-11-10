@@ -353,7 +353,36 @@ export class DoltExplorer {
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `${d.table}-${d.ref}.csv`; a.click(); URL.revokeObjectURL(a.href);
   }
   protected startEdit(row: Record<string, unknown>) {
-    const d = this.data()!; this.editKey = Object.fromEntries(d.primaryKey.map((k) => [k, row[k]])); this.editJson = JSON.stringify(row, null, 2); this.editMessage = ''; this.prepareFields(row);
+    const d = this.data()!; this.editKey = Object.fromEntries(d.primaryKey.map((k) => [k, row[k]])); this.editJson = JSON.stringify(row, null, 2); this.editMessage = ''; this.prepareFields(row); void this.loadRowHistory(row);
+  }
+  protected readonly rowHistory = signal<{ commit: string; author: string; date: string; changes: { col: string; from: unknown; to: unknown }[]; created: boolean; values: Record<string, unknown> }[]>([]);
+  protected openRow(row: Record<string, unknown>) { this.rowView.set(row); void this.loadRowHistory(row); }
+  protected pkLabel() {
+    const d = this.data(); if (!d) return '';
+    const src = this.rowView() ?? this.editKey;
+    return src ? d.primaryKey.map((k) => (src as Record<string, unknown>)[k]).join(', ') : '';
+  }
+  /** Every past version of the selected row, newest first, from the dolt_history_<table> system table. */
+  protected async loadRowHistory(row: Record<string, unknown>) {
+    this.rowHistory.set([]);
+    const d = this.data(); if (!d || !d.primaryKey.length) return;
+    const where = d.primaryKey.map((k) => `\`${k}\` = '${String(row[k]).replace(/'/g, "''")}'`).join(' and ');
+    const r = await this.run(() => this.v.sql({ ref: d.ref, sql: `select * from \`dolt_history_${d.table}\` where ${where} order by commit_date desc limit 50`, mode: 'read' }), true);
+    if (!r?.rows) return;
+    const cols = d.columns.map((c) => c.name);
+    this.rowHistory.set(r.rows.map((v, i) => {
+      const older = r.rows![i + 1];
+      const changes = cols.filter((c) => JSON.stringify(v[c] ?? null) !== JSON.stringify(older?.[c] ?? null)).map((c) => ({ col: c, from: older?.[c] ?? null, to: v[c] ?? null }));
+      return { commit: String(v['commit_hash'] ?? ''), author: String(v['committer'] ?? ''), date: String(v['commit_date'] ?? ''), changes, created: !older, values: v };
+    }));
+  }
+  /** Restore fills the editor with an old version: saving it is a new commit, nothing is rewritten. */
+  protected restoreVersion(h: { commit: string; values: Record<string, unknown> }) {
+    const d = this.data(); if (!d) return;
+    const row = Object.fromEntries(d.columns.map((c) => [c.name, h.values[c.name] ?? null]));
+    this.editKey = Object.fromEntries(d.primaryKey.map((k) => [k, row[k]]));
+    this.editMessage = `restore ${d.primaryKey.map((k) => row[k]).join(', ')} to ${shortHash(h.commit)}`;
+    this.prepareFields(row);
   }
   protected startInsert() { const d = this.data()!; this.editKey = null; this.editJson = JSON.stringify(Object.fromEntries(d.columns.map((c) => [c.name, ''])), null, 2); this.editMessage = ''; this.prepareFields(Object.fromEntries(d.columns.filter(c=>c.name!=='credential_revision').map(c=>[c.name,c.nullable?null:'']))); }
   protected visibleTables() { return this.tableList().filter(t=>t.name.toLowerCase().includes(this.tableSearch.toLowerCase())); }

@@ -345,7 +345,7 @@
                 <thead><tr>@for (c of visibleColumns(); track c.name) { <th [title]="c.type">{{ c.name }}@if (c.key === 'PRI') { <span class="chip pk">PK</span> }</th> }<th></th></tr></thead>
                 <tbody>@for (r of displayRows(d); track $index) {
                   <tr>@for (c of visibleColumns(); track c.name) { <td><div class="cell-value" [title]="cell(r[c.name])">{{ cell(r[c.name]) }}</div></td> }
-                    <td class="act"><button type="button" class="secondary" (click)="rowView.set(r)">Open</button>@if (editable()) { <button type="button" (click)="startEdit(r)">Edit</button> <button type="button" class="danger" (click)="deleteRow(r)">Delete</button> }</td></tr>
+                    <td class="act"><button type="button" class="secondary" (click)="openRow(r)">Open</button>@if (editable()) { <button type="button" (click)="startEdit(r)">Edit</button> <button type="button" class="danger" (click)="deleteRow(r)">Delete</button> }</td></tr>
                 }</tbody>
               </table></div>
               <p class="hint wb-foot">{{ d.offset + 1 }}–{{ d.offset + displayRows(d).length }} of {{ d.total }} · open a row to edit it and see its full change history
@@ -353,17 +353,38 @@
                 @if (d.hasMore) { <button type="button" class="link" (click)="openTable(d.table, d.offset + d.rows.length)">next</button> }
               </p>
             </div>
-            @if (editable()) {
-              @if (editorOpen) {
-                <div class="panel">
-                  <h4>{{editKey ? 'Edit row' : 'Add a row'}} on {{d.ref}}</h4>
-                  <div class="field-editor">@for(c of d.columns;track c.name){@if(c.name!=='credential_revision'){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
-                  <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
-                  <button type="button" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
+            @if (rowView() || editorOpen) {
+              <div class="wb-row">
+                <div class="wb-row-left">
+                  @if(rowView();as row){<section class="panel row-detail"><h4>All fields · {{d.table}}</h4><dl>@for(c of d.columns;track c.name){<div><dt>{{c.name}} <small>{{c.type}}</small></dt><dd><pre>{{cell(row[c.name])}}</pre></dd></div>}</dl><button type="button" class="secondary" (click)="rowView.set(null)">Close row</button>@if(editable()){<button (click)="startEdit(row)">Edit this row</button>}</section>}
+                  @if (rowHistory().length) {
+                    <div class="card row-history">
+                      <h4>Row history <span class="hint">· every past version of {{ pkLabel() }} (dolt_history_{{ d.table }})</span></h4>
+                      <table class="grid">
+                        <thead><tr><th>COMMIT</th><th>CHANGE</th><th>WHEN</th><th></th></tr></thead>
+                        <tbody>@for (h of rowHistory(); track h.commit + h.date) {
+                          <tr>
+                            <td><code>{{ short(h.commit) }}</code></td>
+                            <td>@if (h.created) { <b>row created</b> } @else { @for (ch of h.changes; track ch.col) { <div><b>{{ ch.col }}:</b> <s>{{ cell(ch.from) }}</s> {{ cell(ch.to) }}</div> } @empty { <div class="hint">no column change</div> } }</td>
+                            <td>{{ rel(h.date) }}</td>
+                            <td>@if (editable() && !$first) { <button type="button" class="link" (click)="restoreVersion(h)">Restore</button> }</td>
+                          </tr>
+                        }</tbody>
+                      </table>
+                      <p class="hint">Restore a version: it becomes a new commit, nothing is rewritten.</p>
+                    </div>
+                  }
                 </div>
-              }
+                @if (editable() && editorOpen) {
+                  <div class="panel wb-edit">
+                    <h4>{{editKey ? 'Edit row ' + pkLabel() : 'Add a row'}} <span class="chip">{{d.ref}}</span></h4>
+                    <div class="field-editor one-col">@for(c of d.columns;track c.name){@if(c.name!=='credential_revision'){<label [attr.data-edit-field]="c.name">{{c.name}} <small>{{c.type}}{{c.key==='PRI'?' · primary key':''}}</small><textarea rows="2" [name]="'field-'+c.name" [(ngModel)]="formFields[c.name]" [disabled]="nullFields[c.name]"></textarea>@if(c.nullable){<span class="inline"><input type="checkbox" [name]="'null-'+c.name" [(ngModel)]="nullFields[c.name]" /> NULL</span>}</label>}}</div>
+                    <label>Commit message <input name="em" [(ngModel)]="editMessage" autocomplete="off" /></label>
+                    <button type="button" class="primary" (click)="saveEdit()" [disabled]="busy()">Commit change</button><button type="button" class="secondary" (click)="cancelEdit()">Cancel</button>
+                  </div>
+                }
+              </div>
             }
-            @if(rowView();as row){<section class="panel row-detail"><h4>All fields · {{d.table}}</h4><dl>@for(c of d.columns;track c.name){<div><dt>{{c.name}} <small>{{c.type}}</small></dt><dd><pre>{{cell(row[c.name])}}</pre></dd></div>}</dl><button type="button" class="secondary" (click)="rowView.set(null)">Close row</button>@if(editable()){<button (click)="startEdit(row)">Edit this row</button>}</section>}
             <details><summary>Table definition</summary><pre>{{ d.createStatement }}</pre></details>
           } @else { <p class="hint wb-empty">Pick a table on the left. Branches can be edited unless protected; tags are read only snapshots.</p> }
           <div class="wb-status">
