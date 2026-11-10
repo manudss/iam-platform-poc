@@ -13,7 +13,7 @@ interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; trunc
  * refs, tables and rows at any ref, a guarded SQL console and pull requests. Everything is read from the API; nothing here
  * decides what is allowed (the server enforces protected branches, SQL limits and merge checks).
  */
-@Component({ selector: 'app-dolt-explorer', imports: [FormsModule, NgTemplateOutlet, RouterLink], templateUrl: './dolt-explorer.html', styleUrl: './dolt-explorer.css' })
+@Component({ selector: 'app-dolt-explorer', imports: [FormsModule, NgTemplateOutlet, RouterLink], templateUrl: './dolt-explorer.html', styleUrls: ['./dolt-explorer.css', './dolt-explorer-data.css'] })
 export class DoltExplorer {
   @Input({ required: true }) api!: ApiClient;
   /** The section shown, driven by the route (/database/:tab). Internal jumps (e.g. branch -> compare) are announced through `navigate`. */
@@ -63,6 +63,9 @@ export class DoltExplorer {
   });
   protected readonly hasMore = signal(false);
   protected readonly selected = signal<{ commit: string; message: string; author: string; date: string; parents: string[]; changes: DiffSummary['tables'] } | null>(null);
+  /** Row-level diff per table of the inspected commit (two-dot diff against its first parent). */
+  protected readonly histRowDiffs = signal<Record<string, RowDiffView | undefined>>({});
+  protected readonly histExpandedDiffs = signal<ReadonlySet<string>>(new Set());
   protected actionName = '';
 
   protected from = 'main'; protected to = 'main'; protected three = true;
@@ -263,9 +266,30 @@ export class DoltExplorer {
   // history
   protected async loadLog(reset: boolean) {
     const r = await this.run(() => this.v.log(this.histRef, reset ? 0 : this.commits().length), true);
-    if (r) { this.commits.set(reset ? r.commits : [...this.commits(), ...r.commits]); this.hasMore.set(r.hasMore); if (reset) this.selected.set(null); }
+    if (r) { this.commits.set(reset ? r.commits : [...this.commits(), ...r.commits]); this.hasMore.set(r.hasMore); if (reset) { this.selected.set(null); this.histRowDiffs.set({}); } }
   }
-  protected async showCommit(c: CommitInfo) { const r = await this.run(() => this.v.commit(c.commit)); if (r) this.selected.set(r); }
+  /** Opens the commit inspector beside the log and loads the row changes of every touched table (two-dot diff against the first parent). */
+  protected async showCommit(c: CommitInfo) {
+    const r = await this.run(() => this.v.commit(c.commit));
+    if (!r) return;
+    this.selected.set(r); this.histRowDiffs.set({}); this.histExpandedDiffs.set(new Set());
+    // on narrow screens the inspector stacks below the log: scroll to it so the button never looks dead
+    setTimeout(() => { if (window.matchMedia?.('(max-width: 900px)')?.matches) document.getElementById('hist-inspector')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); });
+    if (!r.parents.length) return;
+    for (const t of r.changes.filter((x) => x.dataChange)) { this.histExpandedDiffs.update((s) => new Set(s).add(t.table)); await this.loadHistRowDiff(t.table); }
+  }
+  protected closeCommit() { this.selected.set(null); }
+  protected async toggleHistTableDiff(table: string) {
+    const s = new Set(this.histExpandedDiffs());
+    if (s.has(table)) { s.delete(table); this.histExpandedDiffs.set(s); return; }
+    s.add(table); this.histExpandedDiffs.set(s);
+    if (!this.histRowDiffs()[table]) await this.loadHistRowDiff(table);
+  }
+  private async loadHistRowDiff(table: string) {
+    const s = this.selected(); if (!s || !s.parents.length) return;
+    const r = await this.run(() => this.v.diffTable(table, s.parents[0], s.commit, false), true);
+    if (r) this.histRowDiffs.update((m) => ({ ...m, [table]: r }));
+  }
   protected initials(name: string) { return name.split(/[-\s_]/).map((x) => x[0] ?? '').join('').slice(0, 2).toUpperCase(); }
   protected timeOf(d: string) { const t = Date.parse(d); return Number.isFinite(t) ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : d; }
   protected async branchFrom(hash: string) {

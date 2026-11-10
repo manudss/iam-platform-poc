@@ -133,6 +133,31 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(el.querySelectorAll('ol.log li').length).toBe(0);
   });
 
+  it('history: Rows opens a side inspector with the row changes of the commit', async () => {
+    const { f, el, calls, c } = await mount(routes({
+      'GET /versioning/commits/': () => ({ data: { commit: 'm'.repeat(32), message: 'roles: add auditor', author: 'demo-alice', date: new Date().toISOString(), parents: ['p'.repeat(32)], changes: [
+        { table: 'roles', from: null, kind: 'modified', dataChange: true, schemaChange: false, rows: { added: 1, modified: 0, removed: 0 } },
+        { table: 'policies', from: null, kind: 'modified', dataChange: false, schemaChange: true }] } }),
+      'GET /versioning/diff/roles': () => ({ data: { table: 'roles', columns: ['id', 'label'], rows: [{ type: 'added', from: null, to: { id: 'auditor', label: 'Auditor' } }], truncated: false } }),
+    }));
+    f.componentRef.setInput('section', 'history'); await f.whenStable(); f.detectChanges();
+    await click(f, el, 'Rows'); await f.whenStable(); f.detectChanges();
+    const insp = el.querySelector('.hist-inspector');
+    expect(insp?.textContent).toContain('roles: add auditor');
+    expect(insp?.textContent).toContain('Row changes in roles');
+    expect(insp?.textContent).toContain('auditor');
+    // the diff is the two-dot diff against the first parent, not a navigation to Compare
+    expect(calls.some((c) => c.path.startsWith('/versioning/diff/roles?from=' + 'p'.repeat(32)))).toBe(true);
+    // the inspector sits beside the log (its own grid column), not below it
+    expect(el.querySelector('.hist-cols.with-inspector > .hist-inspector')).toBeTruthy();
+    // a schema-only table says so instead of loading rows (expand it: only data tables open by default)
+    await c['toggleHistTableDiff']('policies'); f.detectChanges();
+    expect(insp?.textContent).toContain('Schema change only');
+    // the close button clears the selection
+    (el.querySelector('.insp-close') as HTMLButtonElement).click(); f.detectChanges();
+    expect(el.querySelector('.hist-inspector')).toBeNull();
+  });
+
   it('offers row editing on an unprotected branch only, and read only on protected main', async () => {
     const { f, el, c } = await mount(routes());
     f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges(); c['dataRef'] = 'main'; await c['openTable']('roles'); f.detectChanges();

@@ -112,6 +112,13 @@ try {
   // history on main shows the merge commit
   await nav('/database/history'); await page.selectOption('select[name=hr]', 'main'); await page.waitForSelector('li.merge'); await shot('6-history');
   const text = await page.locator('.explorer ol.log').innerText(); assert.match(text, /Merge pull request #1: Add auditor role/);
+  // the Rows button of a commit opens the inspector beside the log, with the row changes of that commit
+  await btn('Rows').click();
+  await page.waitForSelector('.hist-cols.with-inspector .hist-inspector:has-text("Row changes in roles")');
+  await page.waitForSelector('.hist-inspector:has-text("auditor")');
+  await shot('7-history-rows');
+  await page.locator('.insp-close').click();
+  assert.equal(await page.locator('.hist-inspector').count(), 0);
   console.log('UI e2e OK; screenshots in', out);
 } catch (e) { console.error('UI e2e FAILED:', e); process.exitCode = 1; try { await (await browser?.contexts()[0]?.pages()[0])?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {} }
 finally { await cleanup(); }
