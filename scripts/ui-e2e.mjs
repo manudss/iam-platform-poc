@@ -389,6 +389,7 @@ try {
   await page.fill('input[name=pf-rn]', 'Urgence'); await page.getByRole('button', { name: 'Save name' }).click();
   await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
   await page.getByRole('button', { name: 'Move the section Urgence up' }).click();
+  const sectionBranch = await page.locator('select[name=globalBranch]').inputValue();
   const sectionOrder = await page.locator('#pf-table .pf-group').allTextContents();
   const sectionSave = await Promise.all([
     page.waitForResponse(r => r.url().includes('/profile-fields') && r.request().method() === 'PUT'),
@@ -403,6 +404,7 @@ try {
   await setToken();
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
+  await page.locator('select[name=globalBranch]').selectOption(sectionBranch);
   const reloadFields = page.waitForResponse(r => r.url().includes('/profile-fields') && r.request().method() === 'GET' && r.status() === 200);
   await nav('/profile-fields');
   const reloadConfig = await (await reloadFields).json();
