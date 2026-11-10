@@ -92,12 +92,30 @@ try {
   await page.waitForFunction(()=>document.querySelector('iam-customisation .status')?.textContent.includes('Preview updated'));
   await frame.getByText('Acme Identity',{exact:true}).waitFor();
   assert.equal((await (await fetch(BASE+'/api/tenants/acme-demo/branding')).json()).productName,'lyam','unsaved preview never publishes');
-  await shot('branding-forest');
+  const expected=await page.evaluate(()=>{const css=getComputedStyle(document.documentElement);return Object.fromEntries(['--sidebar-bg','--bg','--card','--accent','--accent-ink'].map(k=>[k,css.getPropertyValue(k).trim()]));});
+  assert.notEqual(expected['--sidebar-bg'],'#0f0069','live editing themes the admin sidebar, not just the iframe');
+  const checkAdmin=async()=>{
+    await page.waitForFunction(e=>getComputedStyle(document.documentElement).getPropertyValue('--sidebar-bg').trim()===e,expected['--sidebar-bg']);
+    await page.evaluate(()=>{for(const [selector,role] of [['.side','--sidebar-bg'],['body','--bg'],['.top','--card']]){
+      const probe=document.createElement('div');probe.style.background=`var(${role})`;document.body.append(probe);
+      const actual=getComputedStyle(document.querySelector(selector)).backgroundColor,want=getComputedStyle(probe).backgroundColor;probe.remove();if(actual!==want)throw Error(`${selector}: ${actual} != ${want}`);
+    }});
+  };
+  await checkAdmin();await shot('branding-forest');
   await page.locator('[data-mode=dark]').click();
-  await shot('branding-dark');
+  await page.getByRole('button',{name:'Dark',exact:true}).first().click();await checkAdmin();await shot('branding-dark');
   await page.locator('[data-save]').click();
   await page.waitForFunction(()=>document.querySelector('iam-customisation .status')?.textContent.includes('Saved to this branch'));
   assert.equal((await (await fetch(BASE+'/api/tenants/acme-demo/branding')).json()).productName,'lyam','saving the draft never changes main');
+  // Saved working-branch branding follows navigation across the administration.
+  for(const route of ['/users','/roles','/assignments','/plugins','/database/branches']){await nav(route);await checkAdmin();await noBanner(route);}
+  await nav('/users');await shot('admin-users-dark');
+  await page.getByRole('button',{name:'Light',exact:true}).first().click();await shot('admin-users-light');
+  await page.setViewportSize({width:390,height:844});await page.waitForTimeout(300);await shot('admin-users-mobile');
+  await page.click('.burger');await shot('admin-sidebar-mobile');await page.click('.scrim');
+  await page.setViewportSize({width:1440,height:1040});
+  await nav('/screens/branding-base/customisation');await page.waitForFunction(()=>document.querySelector('iam-customisation .status')?.textContent.includes('Draft loaded'));await checkAdmin();
+  assert.equal((await fetch(BASE+'/api/tenants/acme-demo/branding/draft')).status,401,'no unauthenticated draft disclosure');
   // A valid branch ticket exposes only this draft, including core-rendered pages.
   const issue=await fetch(BASE+'/api/tenants/acme-demo/workspace/branch-test',{method:'POST',headers:{...adminHeaders,'content-type':'application/json'},body:JSON.stringify({branch:adminHeaders['x-iam-branch']})});
   assert.equal(issue.status,201);const ticket=await issue.json();

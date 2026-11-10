@@ -34,6 +34,12 @@ export class BrandingController {
     if (!branch && req.headers['if-none-match'] === `"${b.version}"`) return res.status(304).end();
     return res.type('text/css').send(b.css);
   }
+  /** Authenticated console snapshot of the selected working branch. Never public/cacheable. */
+  @UseGuards(AuthGuard,AdminGuard) @Get('draft') async draft(@Param('tenant') t: string, @Res({passthrough:true}) res: Response) {
+    res.setHeader('Cache-Control','no-store');
+    if (!/^[a-z0-9-]{1,32}$/.test(t)) throw new BadRequestException('invalid tenant');
+    return this.branding.get(t,currentBranch());
+  }
   @Get(':asset') async asset(@Param('tenant') t: string, @Param('asset') asset: string, @Query('branch') branch: string, @Query('ticket') ticket: string, @Res() res: Response) {
     if (!['logo-horizontal-light.svg','logo-horizontal-dark.svg','symbol.svg','favicon.svg'].includes(asset)) throw new BadRequestException('Unknown branding asset');
     const b = await this.read(t,branch,ticket); this.headers(res,b,branch);

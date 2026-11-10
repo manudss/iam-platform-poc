@@ -57,7 +57,7 @@ class Customisation extends HTMLElement {
   async update() {
     if(!this.form.checkValidity())throw Error('Complete the required fields before preview or save.');
     const seq=this.seq=(this.seq||0)+1;
-    try{const b=await this.call('/branding/preview','POST',this.values());if(seq!==this.seq||!this.isConnected)return;this.bundle=b;this.push();for(const p of this.querySelectorAll('[data-picker]'))p.value=this.form.elements.namedItem(p.dataset.picker).value;this.status('Preview updated. Unsaved changes stay in this editor.');}catch(e){if(seq===this.seq)this.status(e.message,true);throw e;}
+    try{const b=await this.call('/branding/preview','POST',this.values());if(seq!==this.seq||!this.isConnected)return;this.bundle=b;this.push();this.dispatchEvent(new CustomEvent('iam-branding-change',{detail:b}));for(const p of this.querySelectorAll('[data-picker]'))p.value=this.form.elements.namedItem(p.dataset.picker).value;this.status('Preview updated across this console. Save to keep these changes on your branch.');}catch(e){if(seq===this.seq)this.status(e.message,true);throw e;}
   }
   push() {
     if(!this.bundle)return;const b=this.bundle;const mode=this.dark?'dark':'light';

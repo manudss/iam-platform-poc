@@ -40,7 +40,15 @@ export class Branding {
     else this.stylesheet();
   }
   logo(mode:'light'|'dark') {return this.logoOverride()[`logo-horizontal-${mode}.svg`] || BASE+`/logo-horizontal-${mode}.svg`+this.query;}
-  preview(m: unknown): boolean {
+  /** The admin keeps its own light/dark choice while the iframe can use another mode. */
+  applyBundle(b: any): boolean {
+    return this.preview({type:'iam-branding-preview',dark:false,...b},false);
+  }
+  clearDraft() {
+    this.doc.getElementById('iam-branding-preview')?.remove();this.logoOverride.set({});
+    void this.load();
+  }
+  preview(m: unknown, changeMode = true): boolean {
     const x=m as any;
     if(x?.type!=='iam-branding-preview'||typeof x.dark!=='boolean'||!x.theme||!x.config)return false;
     const vars:Record<string,string>={};
@@ -55,7 +63,7 @@ export class Branding {
     style.textContent=`:root{${vars['light']}}:root[data-theme='dark']{${vars['dark']}}`;
     this.profile.set({...DEFAULT,...x.config});
     const logos:Record<string,string>={};for(const mode of ['light','dark']){const k=`logo-horizontal-${mode}.svg`;const svg=x.logos?.[k];if(typeof svg==='string'&&svg.length<=60000)logos[k]='data:image/svg+xml,'+encodeURIComponent(svg);}
-    this.logoOverride.set(logos);this.doc.documentElement.dataset['theme']=x.dark?'dark':'light';
+    this.logoOverride.set(logos);if(changeMode)this.doc.documentElement.dataset['theme']=x.dark?'dark':'light';
     return true;
   }
 }

@@ -1,5 +1,6 @@
 import { Component, ElementRef, Injectable, effect, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
+import { Branding } from './branding';
 import { Session } from './session';
 
 interface ScreenInv { plugin: string; id: string; title: string; area: string; render: string; schemaRef?: string; component?: string }
@@ -51,6 +52,7 @@ export class PluginScreenLoader {
   <div #mount id="plugin-screen-mount"></div>`,
 })
 export class PluginScreenPage {
+  private readonly branding = inject(Branding);
   protected readonly s = inject(Session);
   private readonly route = inject(ActivatedRoute);
   private readonly loader = inject(PluginScreenLoader);
@@ -86,6 +88,7 @@ export class PluginScreenPage {
       if (req !== this.request) return;
       if (typeof tag !== 'string' || !tag) throw new Error('the screen module must default-export its custom-element tag');
       const el = document.createElement(tag) as HTMLElement & { context?: unknown };
+      if(plugin==='branding-base')el.addEventListener('iam-branding-change',(e:Event)=>this.branding.applyBundle((e as CustomEvent).detail));
       el.context = this.context();
       mount.replaceChildren(el);
     } catch (e) { if (req === this.request) this.problem.set(`The plugin screen failed to load: ${(e as Error).message ?? e}`); }

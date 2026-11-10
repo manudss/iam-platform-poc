@@ -118,3 +118,10 @@ Run the browser check after API/core/web builds and plugin dev signing setup:
 DOLT_BIN=/path/to/dolt NATS_SERVER_BIN=/path/to/nats-server CHROME_BIN=/path/to/google-chrome \
   NODE_PATH=/path/to/playwright/node_modules node scripts/branding-e2e.mjs /tmp/branding-shots
 ```
+
+
+## Morning review fix: administration follows the working branch
+
+The first delivery applied the public main theme to the admin and only showed draft edits inside the iframe. This did not meet the whole-application requirement. The console now gets its selected branch's cached bundle through an authenticated, admin-only, no-store endpoint. The root semantic variables and logo update on branch selection and navigation. Customisation edits preview across the entire console immediately, without changing the admin's independent light/dark choice. Navigation discards unsaved preview colors and restores the saved branch configuration; Save keeps them across pages. Signing out removes the draft override and restores public main branding.
+
+The real browser guard checks computed sidebar, body and header colors against the generated tokens, then navigates Users, Roles, Assignments, Plugins and Database while preserving the saved non-default theme. Captures include themed admin light/dark/mobile and mobile sidebar. Anonymous draft endpoint requests are refused.
