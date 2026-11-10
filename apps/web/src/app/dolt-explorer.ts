@@ -57,6 +57,7 @@ export class DoltExplorer {
   protected readonly cell = cellText;
 
   protected readonly branches = signal<BranchInfo[]>([]);
+  protected readonly protections = signal<BranchProtection[]>([]);
   protected readonly tags = signal<{ name: string; commit: string }[]>([]);
   protected readonly defaultBranch = signal('main');
   protected readonly refs = computed(() => [...this.branches().map((b) => b.name), ...this.tags().map((t) => t.name)]);
@@ -312,6 +313,7 @@ export class DoltExplorer {
     await this.run(async () => {
       const b = await this.v.branches(); this.branches.set(b.branches); this.defaultBranch.set(b.default);
       this.tags.set((await this.v.tags()).tags);
+      this.protections.set((await this.v.protections()).protections.filter((x) => x.protected));
       // pre-select a source branch for a new pull request (the first branch that is not the target)
       if (!b.branches.some((x) => x.name === this.prForm.source)) this.prForm.source = b.branches.find((x) => x.name !== b.default)?.name ?? '';
       if (!b.branches.some((x) => x.name === this.prForm.target)) this.prForm.target = b.default;
