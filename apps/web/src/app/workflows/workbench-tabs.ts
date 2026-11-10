@@ -22,8 +22,12 @@ export class WbTabs {
   readonly tabs = signal<WbTab[]>(loadTabs());
 
   static keyOf(t: WbTab) { return `${t.kind}:${t.id}`; }
-  urlOf(t: WbTab): string { return t.kind === 'run' ? `/workflows/run/${t.id}` : `/workflows/edit/${t.id}`; }
-  isActive(t: WbTab): boolean { return this.router.url.split('?')[0] === this.urlOf(t); }
+  urlOf(t: WbTab): string { return t.kind === 'run' ? `/workflows/runs?run=${t.id}` : `/workflows/edit/${t.id}`; }
+  isActive(t: WbTab): boolean {
+    const url = this.router.url;
+    if (t.kind === 'run') return url.split('?')[0] === '/workflows/runs' && new URLSearchParams(url.split('?')[1] ?? '').get('run') === t.id;
+    return url.split('?')[0] === this.urlOf(t);
+  }
 
   /** Registers (or moves to the front, on re-open) the tab of an object being viewed. */
   open(kind: WbTab['kind'], id: string, label: string) {

@@ -163,7 +163,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 </section>}
 <section class="card"><h3>Recent runs <a class="btn secondary" routerLink="/workflows/runs">All executions</a></h3>
 <div class="scroll"><table><thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Branch</th><th>Started</th><th></th></tr></thead><tbody>
-@for (r of runs(); track r.id) {<tr><td>{{r.id}}</td><td>{{r.name}}</td><td><span class="chip" [attr.data-status]="r.status">{{r.status}}</span></td><td>{{r.branch || '-'}}</td><td>{{r.startedAt}}</td><td><a class="btn secondary" [routerLink]="['/workflows/run', r.id]">Open</a></td></tr>}
+@for (r of runs(); track r.id) {<tr><td>{{r.id}}</td><td>{{r.name}}</td><td><span class="chip" [attr.data-status]="r.status">{{r.status}}</span></td><td>{{r.branch || '-'}}</td><td>{{r.startedAt}}</td><td><a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ run: r.id }">Open</a></td></tr>}
 @empty {<tr><td colspan="6">No run yet.</td></tr>}
 </tbody></table></div></section>
 ` })
@@ -223,7 +223,7 @@ export class WorkflowsPage implements OnInit {
   }
   protected async start(d: DefinitionSummary) {
     this.busy.set(true);
-    try { const v = await clientOf(this.s).start(d.id); void this.router.navigateByUrl(`/workflows/run/${v.run.id}`); }
+    try { const v = await clientOf(this.s).start(d.id); void this.router.navigateByUrl(`/workflows/runs?run=${v.run.id}`); }
     catch (e) { this.note.set((e as Error).message); this.busy.set(false); }
   }
   protected async duplicate(d: DefinitionSummary) {

@@ -85,7 +85,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       <span class="chip" [attr.data-status]="tv.run.status">{{tv.run.status}}</span>
       <small>{{tv.run.branch}} (disposable)</small>
       @if (tv.run.error) {<span class="msg error">{{tv.run.error}}</span>}
-      <a class="btn secondary" [routerLink]="['/workflows/run', tv.run.id]">Open the run</a>
+      <a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ run: tv.run.id }">Open the run</a>
     }
     @if (testError()) {<span class="msg error">{{testError()}}</span>}
   </div>}
