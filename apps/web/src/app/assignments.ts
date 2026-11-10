@@ -4,10 +4,14 @@ import { AssignmentData, filterAssignments } from './assignment-data';
 import { AssignmentFilters, emptyFilter } from './assignment-filters';
 import { RolesRights } from './roles-rights';
 import { UserProfile } from './api';
+import { Session } from './session';
 import { initials, deptColor, userStatus, statusLabel } from './users';
 
 @Component({selector:'app-assignments',imports:[RouterLink,AssignmentFilters,RolesRights],styleUrls:['./users.css','./assignments.css'],template:`
 <div class="head"><div class="grow"><h2>Assignments</h2><span class="cnt">Find people by access, then manage their roles.</span></div><a class="btn" routerLink="/assignments/matrix">Bulk edit matrix</a><button class="secondary" (click)="d.load()" [disabled]="d.busy()">Refresh</button></div>
+@if(scoped()&&d.s.branch()&&d.s.branch()!=='main'){<div class="mergebar" id="merge-bar" role="region" aria-label="Merge my changes"><div><b>{{d.stagedRows().length}} staged change{{d.stagedRows().length===1?'':'s'}} on your working branch</b><br><span class="hint">Only role assignments of people you manage. Merging applies them to main and activates them.</span></div>@if(d.stagedRows().length){<button type="button" id="merge-mine" (click)="d.mergeMine()" [disabled]="d.merging()">{{d.merging()?'Merging…':'Merge my changes'}}</button>}</div>
+@if(d.stagedRows().length){<div class="tcard"><div class="twrap"><table id="staged-rows"><thead><tr><th>Person</th><th>Role</th><th>Change</th></tr></thead><tbody>@for(r of d.stagedRows();track r.identity+r.role+r.change){<tr [class.bad]="isOffending(r)"><td>{{r.identity}}</td><td><span class="chip">{{r.role}}</span></td><td><span class="chip" [class.ok]="r.change==='added'" [class.no]="r.change==='removed'">{{r.change==='added'?'+ added':'- removed'}}</span></td></tr>}</tbody></table></div></div>}
+@if(d.refusal()){<div class="refusal" id="merge-refusal" role="alert"><b>Merge refused@if(d.offending().length){: {{d.offending().length}} row{{d.offending().length===1?' is':'s are'}} outside what you may change}</b>@if(d.offending().length){<ul>@for(o of d.offending();track o.identity+o.role){<li>{{o.change==='removed'?'removing':'giving'}} the role {{o.role}} {{o.change==='removed'?'from':'to'}} <b>{{o.identity}}</b>: {{o.why}}</li>}</ul><div class="hint">Remove these rows from your branch, then merge again. The other rows are untouched.</div>}@else{<p>{{d.refusal()}}</p>}</div>}}
 <div class="stats"><div class="stat"><span class="n">{{d.assignments().length}}</span><span class="l">Direct assignments</span></div><div class="stat"><span class="n">{{d.users().length}}</span><span class="l">People in scope</span></div><div class="stat"><span class="n">{{withoutRole()}}</span><span class="l">Without a role</span></div><div class="stat"><span class="n">{{conflictCount()}}</span><span class="l">People with SoD conflicts</span></div></div>
 <app-assignment-filters [(filters)]="filter" />
 @if(d.error()){<p class="msg error" role="alert">{{d.error()}}</p>}
@@ -23,7 +27,10 @@ import { initials, deptColor, userStatus, statusLabel } from './users';
 `})
 export class AssignmentsPage {
  ngOnInit(){void this.d.load();}
- protected readonly d=inject(AssignmentData);protected filter=signal(emptyFilter());protected person=signal<UserProfile|null>(null);
+ protected readonly d=inject(AssignmentData);protected readonly s=inject(Session);
+ protected scoped=computed(()=>{const a=this.s.access();return !!a?.screenAccess&&!(a.screens??[]).includes('policies');});
+ protected isOffending(r:{identity:string;role:string}){return this.d.offending().some(o=>o.identity===r.identity&&o.role===r.role);}
+protected filter=signal(emptyFilter());protected person=signal<UserProfile|null>(null);
  protected results=computed(()=>filterAssignments(this.d.users(),this.d.assignments(),this.d.rules(),this.d.members(),this.d.staged(),this.filter()));
  protected withoutRole=computed(()=>this.d.users().filter(u=>!this.d.ids(u.id).length).length);
  protected conflictCount=computed(()=>this.d.users().filter(u=>this.d.conflict(u.id).length).length);

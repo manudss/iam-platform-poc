@@ -18,7 +18,8 @@ export function doltScreens(method: string, sub: string): Screen[] {
     case 'tags': return m === 'GET' ? DOLT_READ : ['dolt-branches'];
     case 'log': return ['dolt-history', 'dolt-pulls', 'dolt-compare', 'dolt-home'];
     case 'commits': return seg[2] === 'revert' ? ['dolt-edit'] : ['dolt-history', 'dolt-pulls', 'dolt-compare', 'dolt-home'];
-    case 'diff': return ['dolt-compare', 'dolt-pulls', 'dolt-history'];
+    // The assignments screen reads the role catalogue and the diff of the assignments table only (its staged changes).
+    case 'diff': return seg.length === 1 || seg[1] === 'assignments' ? ['dolt-compare', 'dolt-pulls', 'dolt-history', 'assignments'] : ['dolt-compare', 'dolt-pulls', 'dolt-history'];
     case 'tables': return m === 'POST' ? ['dolt-edit'] : seg.length > 1 ? ['dolt-data'] : ['dolt-data', 'dolt-compare', 'dolt-pulls'];
     case 'sql': return ['dolt-sql'];
     case 'pulls': return ['dolt-pulls', 'dolt-home'];
@@ -28,6 +29,7 @@ export function doltScreens(method: string, sub: string): Screen[] {
 
 /** The screens that may reach `method path` (the part of the URL after `tenants/<tenant>/`). Empty = unmapped (super admin only). */
 export function screensFor(method: string, path: string): Screen[] {
+  const m = method.toUpperCase();
   const p = path.replace(/^\/+/, '').split('?')[0]; const seg = p.split('/'); const first = seg[0];
   switch (first) {
     case 'versioning': return doltScreens(method, seg.slice(1).join('/'));
@@ -35,7 +37,7 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'profile-reviews': return ['profile-reviews'];
     case 'profile-fields': case 'profile-components-inventory': return ['profile-fields'];
     case 'profile-components': case 'profile-schema': return ['users', 'profile-fields', 'profile-reviews', 'my-profile'];
-    case 'roles': return ['roles'];
+    case 'roles': return m === 'GET' ? ['roles', 'assignments'] : ['roles'];
     case 'organizations': return ['organizations'];
     case 'assignments': case 'changes': case 'connectors': return ['assignments'];
     case 'workspace': return ['assignments'];

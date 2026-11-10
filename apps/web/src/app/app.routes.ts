@@ -39,6 +39,7 @@ export const routes: Routes = [
       { path: 'policies', loadComponent: () => import('./policies').then(m => m.PoliciesPage), title: 'Policies', canActivate: [accessGuard, pluginGuard('policy-studio')] },
       { path: 'profile-reviews', loadComponent: () => import('./profile-reviews').then(m => m.ProfileReviewsPage), title: 'Profile reviews', canActivate: [accessGuard] },
       { path: 'roles', canActivate: [accessGuard], loadComponent: () => import('./roles-admin').then(m => m.RolesAdminPage), title: 'Roles' },
+      { path: 'access-denied', loadComponent: () => import('./access-denied').then(m => m.AccessDeniedPage), title: 'Access denied' },
       { path: 'my-profile', loadComponent: () => import('./my-profile').then(m => m.MyProfilePage), title: 'My profile' },
       { path: 'auth-methods', canActivate: [accessGuard], loadComponent: () => import('./auth-methods').then(m => m.AuthMethodsPage), title: 'Authentication methods' },
       { path: 'assignments/matrix', canActivate: [accessGuard], loadComponent: () => import('./assignment-matrix').then(m => m.AssignmentMatrixPage), title: 'Bulk assignments' },
