@@ -34,7 +34,7 @@ export class VersioningService {
   /** Set by BranchProtectionService: stored per-branch setting (true/false), undefined while nothing is stored for the branch. */
   protectionLookup?: (branch: string) => boolean | undefined;
   /** Set by BranchProtectionService: throws 403 when the caller may not merge into this protected branch. */
-  mergeGate?: (target: string, sub: unknown) => Promise<void>;
+  mergeGate?: (target: string, sub: unknown, source?: string) => Promise<void>;
   isProtectedByEnv(b: string) { return this.protectedBranches.includes(b); }
   isProtected(b: string) { return !this.protectionOff && (this.protectionLookup?.(b) ?? this.isProtectedByEnv(b)); }
 
@@ -448,7 +448,7 @@ export class VersioningService {
   /** Performs the merge (merge commit) when every check passes. Called under the lock by the pull request service. */
   async mergeInto(source: string, target: string, message: string, sub: unknown, expectedHead?: string) {
     if (workspaceMode() && target === 'main' && !applyContext.getStore()) throw new ForbiddenException('Use the global Apply action to merge into main');
-    if (this.isProtected(target) && this.mergeGate) await this.mergeGate(target, sub);
+    if (this.isProtected(target) && this.mergeGate) await this.mergeGate(target, sub, source);
     return this.lock(() => this.at(target, async (c) => {
       await this.cleanOrFail(c, target);
       if(expectedHead){const [heads]=await c.query('select hash from dolt_branches where name=?',[source]);if((heads as {hash:string}[])[0]?.hash!==expectedHead)throw new ConflictException('Working branch changed. Review again before Apply.');}

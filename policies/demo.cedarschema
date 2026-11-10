@@ -69,5 +69,8 @@ action "branch:merge" appliesTo {
   resource: [Branch],
   context: {
     roles?: Set<String>,
+    // The branch being merged and its folder (personal, profile, ai, workflow, feature, other): a policy can allow a role for some kinds only.
+    source?: String,
+    source_kind?: String,
   }
 };
