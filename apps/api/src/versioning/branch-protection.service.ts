@@ -176,12 +176,15 @@ export class BranchProtectionService implements OnModuleInit {
     const { readHierarchy, askPerson } = await import('../access/scope.js');
     const hMain = await readHierarchy(this.tenant, target);
     const rows = (d as unknown as { rows?: { type?: string; from?: Row; to?: Row }[] }).rows ?? [];
+    const bad: string[] = [];
     for (const r of rows) {
       const row = (r.to ?? r.from ?? {}) as Row; const who2 = String(row.identity_id ?? ''), role = String(row.role_id ?? '');
-      if (!who2 || !role) return { offending: 'an assignment row could not be read' };
+      if (!who2 || !role) { bad.push('an assignment row could not be read'); continue; }
+      const gone = r.type === 'removed' || r.type === 'delete';
       const a = await askPerson(this.tenant, hMain, who, 'assignment:change', who2, role);
-      if (!a.allow) return { offending: `${r.type === 'removed' || r.type === 'delete' ? 'removing' : 'giving'} the role ${role} ${r.type === 'removed' || r.type === 'delete' ? 'from' : 'to'} ${who2} is outside what you may change (either ${who2} is not one of the people you manage, or ${role} can only be given by an administrator)` };
+      if (!a.allow) bad.push(`${gone ? 'removing' : 'giving'} the role ${role} ${gone ? 'from' : 'to'} ${who2} is outside what you may change (either ${who2} is not one of the people you manage, or ${role} can only be given by an administrator)`);
     }
+    if (bad.length) return { offending: `${bad.length} row${bad.length > 1 ? 's are' : ' is'} outside your scope: ${bad.slice(0, 10).join('; ')}. Remove them from your branch and merge again` };
     return { scope: 'assignments-in-scope' };
   }
   private refusal(branch: string, verb: string, reasons: string[], detail?: string, source?: string, kind?: string) {
