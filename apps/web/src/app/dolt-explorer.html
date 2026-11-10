@@ -2,8 +2,8 @@
   @if (note()) { <p class="msg" role="status">{{ note() }}</p> }
   @if (busy()) { <p class="hint">Working...</p> }
 
-  <ng-template #rowdiff>
-    @if (rowDiff(); as d) {
+  <ng-template #rowdiff let-d="diff">
+    @if (d) {
       <h4>Row changes in {{ d.table }}@if (d.truncated) { (first rows only) }</h4>
       <div class="scroll"><table class="grid">
         <thead><tr><th></th>@for (c of d.columns; track c) { <th>{{ c }}</th> }</tr></thead>
@@ -216,21 +216,85 @@
     }
 
     @case ('compare') {
-      <h3>Compare two points</h3>
-      <form class="row" (ngSubmit)="compare()">
-        <label>From <select name="cf" [(ngModel)]="from">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
-        <label>To <select name="ct" [(ngModel)]="to">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
-        <label class="inline"><input name="c3" type="checkbox" [(ngModel)]="three" /> since common ancestor (like a pull request)</label>
-        <button type="submit">Compare</button>
-      </form>
+      <div class="page-head">
+        <div>
+          <h3 class="page-title">Compare</h3>
+          <p class="page-sub">Exactly what changed between two branches, tags or commits. Start a pull request from here.</p>
+        </div>
+      </div>
+      <div class="card compare-bar">
+        <label>base <select name="cf" [(ngModel)]="from" (ngModelChange)="compare()">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+        <button type="button" class="secondary swap" title="Swap base and compare" (click)="swapRefs()">⇄</button>
+        <label>compare <select name="ct" [(ngModel)]="to" (ngModelChange)="compare()">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+        <span class="pills" role="group" aria-label="Diff mode">
+          <button type="button" class="pill" [class.on]="!three" (click)="three = false; compare()">2-dot</button>
+          <button type="button" class="pill" [class.on]="three" (click)="three = true; compare()">3-dot · merge base</button>
+        </span>
+        <span class="spacer"></span>
+        <button type="button" [disabled]="!canCreatePrFromCompare()" title="Open a pull request from these two branches" (click)="createPullFromCompare()">Create pull request &#x2192;</button>
+      </div>
       @if (diff(); as d) {
-        @if (!d.tables.length) { <p>No differences.</p> }
-        <ul>@for (t of d.tables; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema changed) } @if (t.dataChange) { <button type="button" class="link" (click)="showRowDiff(t.table)">show rows</button> }</li> }</ul>
-        @for (s of d.schema; track s.table) { <details><summary>Schema of {{ s.table }}</summary><pre>{{ s.from ?? '(none)' }}
+        @if (!d.tables.length && !d.schema.length) { <p class="hint">No differences.</p> } @else {
+          <p class="cmp-summary">
+            <span class="chip"><b>{{ compareAhead()?.length ?? '…' }}</b> commits</span>
+            <span class="chip"><b>{{ d.tables.length }}</b> tables</span>
+            @if (d.rows) { <span class="chip"><b class="ok">+{{ d.rows.added }}</b> <b class="ko">−{{ d.rows.removed }}</b> rows@if (d.rows.modified) { , {{ d.rows.modified }} modified }</span> }
+            <span class="chip"><b>{{ d.schema.length }}</b> schema change{{ d.schema.length === 1 ? '' : 's' }}</span>
+          </p>
+          <div class="tabs">
+            <button type="button" [class.on]="compareTab() === 'commits'" (click)="compareTab.set('commits')">Commits <span class="cnt">{{ compareAhead()?.length ?? '…' }}</span></button>
+            <button type="button" [class.on]="compareTab() === 'rows'" (click)="compareTab.set('rows')">Rows changed @if (d.rows) { <span class="cnt">+{{ d.rows.added }} −{{ d.rows.removed }}</span> }</button>
+            <button type="button" [class.on]="compareTab() === 'schema'" (click)="compareTab.set('schema')">Schema <span class="cnt">{{ d.schema.length }}</span></button>
+          </div>
+          @switch (compareTab()) {
+            @case ('commits') {
+              @if (compareAhead(); as ahead) {
+                <ol class="log">
+                  @for (c of ahead; track c.commit) {
+                    <li><span class="dot" aria-hidden="true"></span><div class="log-main"><div><b>{{ c.message }}</b></div><div class="log-meta"><span class="avatar" aria-hidden="true">{{ initials(c.author) }}</span> {{ c.author }} · {{ rel(c.date) }}</div></div><div class="log-act"><code>{{ short(c.commit) }}</code></div></li>
+                  }
+                  @empty { <p class="hint">No commit ahead of the base.</p> }
+                </ol>
+              } @else { <p class="hint">Loading commits...</p> }
+            }
+            @case ('rows') {
+              @for (t of d.tables; track t.table) {
+                @if (t.dataChange) {
+                  <div class="card table-diff">
+                    <button type="button" class="link tbl" (click)="toggleTableDiff(t.table)">{{ expandedDiffs().has(t.table) ? '▾' : '▸' }} <b>{{ t.table }}</b></button>
+                    <span class="hint">@if (t.rows) { @if (t.rows.added) { +{{ t.rows.added }} } @if (t.rows.removed) { −{{ t.rows.removed }} } @if (t.rows.modified) { {{ t.rows.modified }} modified } }</span>
+                    @if (expandedDiffs().has(t.table)) {
+                      @if (rowDiffs()[t.table]) { <ng-container *ngTemplateOutlet="rowdiff; context: { diff: rowDiffs()[t.table] }" /> } @else { <p class="hint">Loading rows...</p> }
+                    }
+                  </div>
+                }
+              }
+            }
+            @case ('schema') {
+              @for (s of d.schema; track s.table) {
+                <div class="card">
+                  <h4>Schema: {{ s.table }} <span class="hint">{{ schemaRows(s).filter((r) => r.changed).length }} column(s) changed</span></h4>
+                  @if (schemaRows(s).length) {
+                    <table class="grid">
+                      <thead><tr><th>Column</th><th>{{ from }}</th><th>{{ to }}</th></tr></thead>
+                      <tbody>@for (r of schemaRows(s); track r.col) {
+                        <tr [class.mod]="r.changed && r.from && r.to" [class.add]="!r.from" [class.del]="!r.to">
+                          <td><code>{{ r.col }}</code></td>
+                          <td>@if (r.from) { @if (r.changed) { <s>{{ r.from }}</s> } @else { {{ r.from }} } } @else { <span class="hint">(absent)</span> }</td>
+                          <td>@if (r.to) { <b [class.ok]="r.changed">{{ r.to }}</b> } @else { <span class="hint">(dropped)</span> }</td>
+                        </tr>
+                      }</tbody>
+                    </table>
+                  } @else { <pre>{{ s.from ?? '(none)' }}
 -&gt;
-{{ s.to ?? '(dropped)' }}</pre></details> }
+{{ s.to ?? '(dropped)' }}</pre> }
+                </div>
+              }
+            }
+          }
+        }
+        <p class="hint">Nothing here is applied yet. Review, then create a pull request: checks and approval happen there.</p>
       }
-      <ng-container *ngTemplateOutlet="rowdiff" />
     }
 
     @case ('data') {
@@ -328,7 +392,7 @@
           @if (d.requiredApprovals) { <p class="hint">Approvals: {{ d.approvals.length }} of {{ d.requiredApprovals }} required.</p> }
           @if (d.commits.length) { <h5>Commits</h5><ul>@for (c of d.commits; track c.commit) { <li><code>{{ short(c.commit) }}</code> {{ c.message }} <span class="hint">{{ c.author }}</span></li> }</ul> }
           @if (d.diff; as df) { <h5>Changes</h5><ul>@for (t of df.tables; track t.table) { <li>{{ t.kind }} <b>{{ t.table }}</b> @if (t.dataChange) { <button type="button" class="link" (click)="prDiff(t.table)">show rows</button> }</li> }</ul> }
-          <ng-container *ngTemplateOutlet="rowdiff" />
+          <ng-container *ngTemplateOutlet="rowdiff; context: { diff: rowDiff() }" />
           <h5>Discussion</h5>
           <ul>@for (c of d.comments; track c.id) { <li><b>{{ c.author }}</b>@if (c.kind === 'approve') { approved }: {{ c.body }}</li> }</ul>
           @if (d.pullRequest.status === 'open') {

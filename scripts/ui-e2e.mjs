@@ -283,8 +283,8 @@ try {
   await page.waitForSelector('td:has-text("Auditor")'); await shot('8-explorer-2-data-edit');
   await page.selectOption('select[name=dr]', 'main'); await page.click('button:has-text("roles")'); await page.waitForSelector('.explorer .chip.lock:text("read only")');
   assert.equal(await page.locator('.explorer button:text-is("Edit")').count(), 0);
-  await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo'); await btn('Compare', '.explorer form').click();
-  await page.click('button:has-text("show rows")'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
+  await nav('/database/compare'); await page.selectOption('select[name=cf]', 'main'); await page.selectOption('select[name=ct]', 'ui-demo');
+  await page.waitForSelector('.cmp-summary'); await page.waitForSelector('tr.add'); await shot('8-explorer-3-compare');
   await nav('/database/sql'); await page.selectOption('select[name=sr]', 'main'); await page.selectOption('select[name=sm]', 'write');
   await page.fill('textarea[name=sq]', "insert into roles values ('x','x',false)"); await btn('Apply and commit').click();
   await page.waitForSelector('.explorer .msg:has-text("selected working branch")'); // workspace mode: SQL writes only on the selected working branch

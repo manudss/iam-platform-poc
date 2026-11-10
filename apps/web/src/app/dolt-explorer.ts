@@ -68,6 +68,12 @@ export class DoltExplorer {
   protected from = 'main'; protected to = 'main'; protected three = true;
   protected readonly diff = signal<DiffSummary | null>(null);
   protected readonly rowDiff = signal<RowDiffView | null>(null);
+  protected readonly compareTab = signal<'commits' | 'rows' | 'schema'>('rows');
+  /** Commits of the compare side that the base does not have (walked from the logs, newest first). */
+  protected readonly compareAhead = signal<CommitInfo[] | null>(null);
+  /** Row-level diff per expanded table of the compare view. */
+  protected readonly rowDiffs = signal<Record<string, RowDiffView | undefined>>({});
+  protected readonly expandedDiffs = signal<ReadonlySet<string>>(new Set());
 
   protected dataRef = this.session.branch() || 'main';
   protected readonly tableList = signal<{ name: string; rows: number }[]>([]);
@@ -106,6 +112,7 @@ export class DoltExplorer {
     if (t === 'branches') { await this.refreshRefs(); await this.loadRowsChanged(); }
     if (t === 'history') await this.loadLog(true);
     if (t === 'data') await this.loadTables();
+    if (t === 'compare' && this.from !== this.to) await this.compare();
     if (t === 'pulls') { await this.refreshRefs(); await this.loadPulls(); }
   }
 
@@ -239,8 +246,53 @@ export class DoltExplorer {
 
   // compare
   protected async compare() {
-    this.rowDiff.set(null);
-    const r = await this.run(() => this.v.diff(this.from, this.to, this.three)); if (r) this.diff.set(r);
+    if (this.from === this.to) { this.diff.set(null); this.compareAhead.set(null); return; }
+    this.rowDiff.set(null); this.rowDiffs.set({}); this.expandedDiffs.set(new Set()); this.compareAhead.set(null);
+    const r = await this.run(() => this.v.diff(this.from, this.to, this.three)); if (!r) return;
+    this.diff.set(r);
+    for (const t of r.tables.filter((x) => x.dataChange)) { this.expandedDiffs.update((s) => new Set(s).add(t.table)); await this.loadTableDiff(t.table); }
+    await this.loadCompareAhead();
+  }
+  protected swapRefs() { const f = this.from; this.from = this.to; this.to = f; void this.compare(); }
+  protected async toggleTableDiff(table: string) {
+    const s = new Set(this.expandedDiffs());
+    if (s.has(table)) { s.delete(table); this.expandedDiffs.set(s); return; }
+    s.add(table); this.expandedDiffs.set(s);
+    if (!this.rowDiffs()[table]) await this.loadTableDiff(table);
+  }
+  private async loadTableDiff(table: string) {
+    const r = await this.run(() => this.v.diffTable(table, this.from, this.to, this.three), true);
+    if (r) this.rowDiffs.update((m) => ({ ...m, [table]: r }));
+  }
+  /** The commits of `to` that `from` does not have: walk both logs and stop at the first shared commit. */
+  private async loadCompareAhead() {
+    const [fromLog, toLog] = await Promise.all([this.v.log(this.from, 0, 100), this.v.log(this.to, 0, 100)]);
+    const base = new Set(fromLog.commits.map((c) => c.commit));
+    const ahead: CommitInfo[] = [];
+    for (const c of toLog.commits) { if (base.has(c.commit)) break; ahead.push(c); }
+    this.compareAhead.set(ahead);
+  }
+  protected canCreatePrFromCompare() {
+    const names = this.branches().map((b) => b.name);
+    return this.from !== this.to && names.includes(this.from) && names.includes(this.to);
+  }
+  protected createPullFromCompare() {
+    this.prForm = { title: '', body: '', source: this.to, target: this.from };
+    this.prCreateOpen = true;
+    this.go('pulls');
+  }
+  /** Column definitions of a CREATE TABLE statement, keyed by column name (best effort; the raw statement shows when empty). */
+  protected schemaRows(s: { table: string; from: string | null; to: string | null }) {
+    const cols = (stmt: string | null) => {
+      const out: Record<string, string> = {};
+      for (const line of (stmt ?? '').split('\n')) {
+        const m = line.trim().match(/^`([^`]+)`\s+(.+?)$/);
+        if (m) out[m[1]] = m[2].replace(/,$/, '');
+      }
+      return out;
+    };
+    const a = cols(s.from), b = cols(s.to);
+    return [...new Set([...Object.keys(a), ...Object.keys(b)])].map((col) => ({ col, from: a[col] ?? null, to: b[col] ?? null, changed: (a[col] ?? null) !== (b[col] ?? null) }));
   }
   protected async showRowDiff(table: string, from = this.from, to = this.to, three = this.three) {
     const r = await this.run(() => this.v.diffTable(table, from, to, three)); if (r) this.rowDiff.set(r);

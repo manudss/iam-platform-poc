@@ -140,6 +140,29 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     c['dataRef'] = 'feat-a'; await c['openTable']('roles'); f.detectChanges();
     expect([...el.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Edit')).toBe(true);
   });
+  it('compare: summary chips, per-table row diffs and a column-level schema diff', async () => {
+    const diff = { from: 'main', to: 'feat-a', three: true, rows: { added: 1, modified: 1, removed: 1, total: 3 },
+      tables: [{ table: 'roles', from: null, kind: 'modified', dataChange: true, schemaChange: true, rows: { added: 1, modified: 1, removed: 1 } }],
+      schema: [{ table: 'roles', from: 'CREATE TABLE `roles` (\n  `id` varchar(64) NOT NULL,\n  `label` varchar(120) NULL,\n  PRIMARY KEY (`id`)\n)', to: 'CREATE TABLE `roles` (\n  `id` varchar(64) NOT NULL,\n  `label` varchar(254) NULL,\n  PRIMARY KEY (`id`)\n)' }] };
+    const rows = { table: 'roles', columns: ['id', 'label'], rows: [{ type: 'added', from: null, to: { id: 'b', label: 'B' } }], truncated: false };
+    const { f, el, c } = await mount(routes({
+      'GET /versioning/diff?from=main&to=feat-a': () => ({ data: diff }),
+      'GET /versioning/diff/roles': () => ({ data: rows }),
+    }));
+    f.componentRef.setInput('section', 'compare'); await f.whenStable(); f.detectChanges();
+    c['from'] = 'main'; c['to'] = 'feat-a'; await c['compare'](); f.detectChanges();
+    const summary = el.querySelector('.cmp-summary')?.textContent ?? '';
+    expect(summary).toContain('1 tables'); expect(summary).toContain('+1'); expect(summary).toContain('−1'); expect(summary).toContain('1 schema change');
+    expect(el.querySelector('.table-diff')?.textContent).toContain('roles');
+    expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('B');
+    // schema tab: column-level diff, old value struck, new one kept
+    c['compareTab'].set('schema'); f.detectChanges();
+    const schema = el.textContent ?? '';
+    expect(schema).toContain('Schema: roles'); expect(schema).toContain('label');
+    expect(schema).toContain('varchar(120) NULL'); expect(schema).toContain('varchar(254) NULL');
+    expect(schema).not.toContain('PRIMARY KEY');
+  });
+
   it('shows a merge refusal reason and keeps Merge disabled when checks fail', async () => {
     const detail = { pullRequest: { id: 7, title: 'bob approves', body: '', source: 'sod', target: 'main', status: 'open', author: 'demo-alice', createdAt: '', mergedAt: null, mergeCommit: null }, comments: [], approvals: [], requiredApprovals: 0, commits: [], diff: { from: 'main', to: 'sod', three: true, tables: [], schema: [] },
       checks: { mergeable: false, reasons: ['1 Separation-of-Duties violation(s)'], conflicts: 0, violations: [{ identity: 'demo-bob', roleA: 'payment-creator', roleB: 'payment-approver' }] } };
