@@ -57,3 +57,64 @@ permit(principal, action == Action::"branch:merge", resource == Branch::"main")
 @pillar("versioning")
 permit(principal, action == Action::"branch:merge", resource == Branch::"main")
   when { context has roles && context.roles.contains("main-merger") };
+
+// Screen access and people scopes (access pillar): who opens which admin screen, and which people a manager or an organisation admin may read, manage or assign roles to.
+
+@id("screen-iam-admin")
+@description("The super admin role opens every screen.")
+@pillar("access")
+permit(principal, action == Action::"screen:open", resource)
+  when { context has roles && context.roles.contains("iam-admin") };
+
+@id("screen-people-admin")
+@description("Managers and organisation admins open Users, Profile reviews and Assignments & changes.")
+@pillar("access")
+permit(principal, action == Action::"screen:open", resource)
+  when { resource in [Screen::"users", Screen::"profile-reviews", Screen::"assignments"] && context has roles && (context.roles.contains("manager") || context.roles.contains("org-admin")) };
+
+@id("screen-branch-governance")
+@description("Merge and branch governance roles open Pull requests, Compare, History and Branches, never Data, SQL or configuration.")
+@pillar("access")
+permit(principal, action == Action::"screen:open", resource)
+  when { resource in [Screen::"dolt-pulls", Screen::"dolt-compare", Screen::"dolt-history", Screen::"dolt-branches"] && context has roles && (context.roles.contains("main-merger") || context.roles.contains("branch-merger")) };
+
+@id("screen-my-profile")
+@description("Everyone signed in opens their own profile.")
+@pillar("access")
+permit(principal, action == Action::"screen:open", resource == Screen::"my-profile");
+
+@id("user-iam-admin")
+@description("The super admin reads and manages every person.")
+@pillar("access")
+permit(principal, action in [Action::"user:read", Action::"user:manage", Action::"assignment:change"], resource)
+  when { context has roles && context.roles.contains("iam-admin") };
+
+@id("user-scope-manager-chain")
+@description("A manager reads and manages the people below them in the manager chain (reports, recursively), never themselves.")
+@pillar("access")
+permit(principal, action in [Action::"user:read", Action::"user:manage"], resource)
+  when { context has roles && context.roles.contains("manager") && resource in principal && resource != principal };
+
+@id("user-scope-organisation")
+@description("An organisation admin reads and manages the people of their organisations and the organisations below, never themselves.")
+@pillar("access")
+permit(principal, action in [Action::"user:read", Action::"user:manage"], resource)
+  when { context has roles && context.roles.contains("org-admin") && context has admin_orgs && resource in context.admin_orgs && resource != principal };
+
+@id("assignment-manager-chain")
+@description("A manager may assign or remove an allowed role for the people below them in the manager chain.")
+@pillar("access")
+permit(principal, action == Action::"assignment:change", resource)
+  when { context has roles && context.roles.contains("manager") && resource in principal && resource != principal && context has role && ["accountant", "payment-creator", "employee", "hr-partner", "sales-rep"].contains(context.role) };
+
+@id("assignment-organisation")
+@description("An organisation admin may assign or remove an allowed role for the people of their organisations.")
+@pillar("access")
+permit(principal, action == Action::"assignment:change", resource)
+  when { context has roles && context.roles.contains("org-admin") && context has admin_orgs && resource in context.admin_orgs && resource != principal && context has role && ["accountant", "payment-creator", "employee", "hr-partner", "sales-rep"].contains(context.role) };
+
+@id("assignment-no-escalation")
+@description("Nobody but the super admin assigns a role that carries authority over rights.")
+@pillar("access")
+forbid(principal, action == Action::"assignment:change", resource)
+  when { context has role && ["iam-admin", "main-merger", "branch-merger", "manager", "org-admin", "payment-approver"].contains(context.role) && !(context has roles && context.roles.contains("iam-admin")) };

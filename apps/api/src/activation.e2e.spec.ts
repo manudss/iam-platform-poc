@@ -127,7 +127,7 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
   it('policy-studio step 4: the snapshot carries the Dolt rules; a broken rule refuses the activation', async () => {
     // The seed loaded the six demo rules as rows: the tenant engine is built from them, the boot file is only the fallback.
     const cat = await (await fetch(`${CORE}/v1/policies?tenant=${T}`, { headers: { 'x-core-admin-token': ADMIN } })).json() as { engine: { source: string; rules: number } };
-    assert.deepEqual(cat.engine, { source: 'tenant', rules: 9, sets: 1, schema: true });
+    assert.deepEqual(cat.engine, { source: 'tenant', rules: 19, sets: 1, schema: true });
     // A new rule row in Dolt decides once its commit is activated: carol may approve, and the audit name is the rule id.
     await sql(`insert into policy_rules values ('default','carol-approves','@id("carol-approves")\\npermit(principal == User::"carol", action == Action::"approve", resource);')`);
     const a = await svc.activate(T, await new DoltService().head());

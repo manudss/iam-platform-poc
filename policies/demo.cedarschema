@@ -4,7 +4,9 @@
 
 // People and what groups them. A department is optional: not every person has one.
 entity Role;
-entity User in [Role] = {
+// Organisations form a tree; a user belongs to organisations and to the managers above them (manager chain), so `resource in principal` reads "resource is below principal".
+entity Org in [Org];
+entity User in [Role, User, Org] = {
   department?: String,
 };
 
@@ -16,6 +18,8 @@ entity Resource = {
 entity Request;
 entity Report;
 entity Branch;
+// An admin screen of the console (users, roles, dolt-sql, ...).
+entity Screen;
 entity UpstreamTool;
 
 // approve and read carry the tenant context the core computes from the ACTIVE data version (never from the
@@ -74,5 +78,26 @@ action "branch:merge" appliesTo {
     source_kind?: String,
     // The folder of the source branch (team for team/x), empty without one: lets a rule target one custom folder.
     source_folder?: String,
+  }
+};
+
+// Screen access: who opens which admin screen. Decided from the roles of the ACTIVE version, like branch:merge.
+action "screen:open" appliesTo {
+  principal: [User],
+  resource: [Screen],
+  context: {
+    roles?: Set<String>,
+  }
+};
+
+// People scopes: the API sends the target user with its parents (manager chain and organisations) as entities; admin_orgs holds the
+// organisations of the caller (organisation admins). role is the role being assigned or removed (assignment:change).
+action "user:read", "user:manage", "assignment:change" appliesTo {
+  principal: [User],
+  resource: [User],
+  context: {
+    roles?: Set<String>,
+    role?: String,
+    admin_orgs?: Set<Org>,
   }
 };

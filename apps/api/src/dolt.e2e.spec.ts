@@ -72,9 +72,9 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
     const sim = (await (await j(`${API}/${T}/changes`, 'POST', t, { identity: 'demo-bob', role: 'payment-approver' })).json()) as { branch: string; mergeable: boolean; violations: unknown[] };
     assert.equal(sim.mergeable, false);
     assert.equal(sim.violations.length, 1);
-    assert.equal(((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length, 3); // seed: alice/branch-merger + alice/mcp-operator + bob/payment-creator
+    assert.equal(((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length, 4); // seed: alice/iam-admin + alice/branch-merger + alice/mcp-operator + bob/payment-creator
     assert.equal((await j(`${API}/${T}/changes/${sim.branch}/merge`, 'POST', t)).status, 409);
-    assert.equal(((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length, 3);
+    assert.equal(((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length, 4);
   });
   it('conflict-free change merges and the merged commit can be activated', async () => {
     const t = await login();
