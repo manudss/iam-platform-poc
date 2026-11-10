@@ -270,7 +270,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 1100 });
   const btn = (name, scope = '.explorer') => page.locator(`${scope} button`).filter({ hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).first();
   await nav('/database/branches'); await page.waitForSelector('text=protected'); await shot('8-explorer-1-branches');
-  await btn('+ New branch').click(); await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('.branch-card:has-text("ui-demo")');
+  await btn('+ New branch').click(); await page.selectOption('select[name=nfd]', 'none'); await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('.branch-card:has-text("ui-demo")');
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); // the explorer created ui-demo behind the shell's back: reload the branch list before selecting it
   await page.selectOption('select[name=globalBranch]', 'ui-demo'); await status('Working on ui-demo'); // explorer edits and SQL writes must run on the selected working branch
   await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');

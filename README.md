@@ -90,6 +90,7 @@ Full step-by-step guide (Windows PowerShell and bash, prerequisites, configurati
 7. Console: `cd apps/web && npx ng serve`, open http://localhost:4200 (build verified on Windows).
 
 See [docs/explorer.md](docs/explorer.md) for the Dolt database explorer (branches, diff, history, SQL, pull requests).
+See [docs/protected-branches.md](docs/protected-branches.md) for protected branches and the policy needed to merge into them.
 
 ## Step 3: mandatory event bus (big-bang migration)
 

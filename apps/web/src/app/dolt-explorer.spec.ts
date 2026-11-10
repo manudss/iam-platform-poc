@@ -487,6 +487,48 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(el.querySelector('.sql-dryrun')?.textContent).toContain('Preview only');
     expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('X');
   });
+  it('creates a protected branch: the slash is added between folder and name, custom folders are free text, then protection is set', async () => {
+    const { f, el, calls, c } = await mount(routes({
+      'POST /versioning/branches': () => ({ status: 201, data: { branch: 'team/payroll', commit: 'c'.repeat(32) } }),
+      'PUT /versioning/branches/team%2Fpayroll/protection': () => ({ data: {} }),
+    }));
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    await click(f, el, '+ New branch');
+    expect(el.textContent).toContain('cannot be made by hand');
+    c['newFolder'] = 'custom'; c['customFolder'] = 'team'; c['newBranch'] = 'payroll'; f.detectChanges();
+    expect(c['fullName']()).toBe('team/payroll');
+    c['newFolder'] = 'feature'; expect(c['fullName']()).toBe('feature/payroll');
+    c['newFolder'] = 'custom';
+    await click(f, el, 'Create protected branch');
+    expect(calls.find((x) => x.method === 'POST' && x.path.endsWith('/versioning/branches'))?.body).toEqual({ name: 'team/payroll', from: 'main' });
+    expect(calls.some((x) => x.method === 'PUT' && x.path.endsWith('/versioning/branches/team%2Fpayroll/protection') && (x.body as { protected?: boolean }).protected === true)).toBe(true);
+  });
+  it('allowed source folders: custom folders can be allowed all at once or one by one', async () => {
+    const prot = { branch: 'main', protected: true, requirePullRequest: true, minReviews: 0, requireChecks: true, mergeRule: 'policy', selfMerge: true, sourceKinds: ['custom:team'], source: 'custom' };
+    const { f, el, calls, c } = await mount(routes({ 'GET /versioning/protection': () => ({ data: { protections: [prot], policyAction: 'branch:merge' } }), 'PUT /versioning/branches/main/protection': () => ({ data: prot }) }));
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    c['protectOpen'].set('main'); f.detectChanges();
+    expect(el.textContent).toContain('custom folders (all)'); expect(el.textContent).toContain('team/');
+    c['addCustom'] = 'Squad/'; await click(f, el, 'Add folder');
+    expect((calls.find((x) => x.method === 'PUT')?.body as { sourceKinds: string[] }).sourceKinds).toEqual(['custom:team', 'custom:squad']);
+  });
+  it('protects an existing branch from its card and removes the protection again, never on the default branch', async () => {
+    const prot = { branch: 'feat-a', protected: true, requirePullRequest: true, minReviews: 0, requireChecks: true, mergeRule: 'policy', selfMerge: true, sourceKinds: [], source: 'custom' };
+    const main = { ...prot, branch: 'main', source: 'default' };
+    const { f, el, calls, c } = await mount(routes({ 'PUT /versioning/branches/feat-a/protection': () => ({ data: prot }), 'GET /versioning/protection': () => ({ data: { protections: [main, prot], policyAction: 'branch:merge' } }) }));
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
+    const card = () => [...el.querySelectorAll('.branch-card')].find((x) => x.textContent?.includes('feat-a')) as Element;
+    const btn = (root: Element, label: string) => [...root.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement | undefined;
+    expect(btn(card(), 'Protect')).toBeTruthy();
+    btn(card(), 'Protect')!.click(); await f.whenStable(); f.detectChanges();
+    expect((calls.find((x) => x.method === 'PUT' && x.path.endsWith('/branches/feat-a/protection'))?.body as { protected: boolean }).protected).toBe(true);
+    c['protectOpen'].set('feat-a'); f.detectChanges();
+    expect(btn(el, 'Remove protection')).toBeTruthy();
+    btn(el, 'Remove protection')!.click(); await f.whenStable(); f.detectChanges();
+    expect(calls.filter((x) => x.method === 'PUT').some((x) => (x.body as { protected: boolean }).protected === false)).toBe(true);
+    c['protectOpen'].set('main'); f.detectChanges();
+    expect(el.querySelector('section.protect')?.textContent).not.toContain('Remove protection');
+  });
   it('shows server errors in the status line instead of failing silently', async () => {
     const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ status: 403, data: { message: 'branch main is protected: open a pull request instead' } }) }));
     c['sqlMode'] = 'write'; c['sqlRef'] = 'main'; c['sqlText'] = "insert into roles values ('x','x',false)"; await c['runSql'](false); f.detectChanges();

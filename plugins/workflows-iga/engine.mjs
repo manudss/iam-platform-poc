@@ -169,7 +169,7 @@ export function createWorkflowEngine(deps) {
   /** The run branch, created lazily on the first data-writing step. Never main. */
   async function ensureBranch(run, say) {
     if (!run.branch) {
-      const branch = `wf-${run.id.replace(/^run-/, '').slice(0, 8)}`;
+      const branch = `workflow/${run.id.replace(/^run-/, '').slice(0, 8)}`;
       const base = run.base_branch ?? deps.versioning.defaultBranch; // a triggered run branches from the branch its event happened on
       await deps.versioning.createBranch(branch, base);
       await store.updateRun(run.id, { branch });

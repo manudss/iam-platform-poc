@@ -14,6 +14,7 @@ import { INestApplication } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from './versioning.module.js';
 import { VersioningController } from './versioning.controller.js';
+import { BranchProtectionService } from './branch-protection.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
 
 const root = resolve(process.cwd(), '../..');
@@ -67,6 +68,8 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
     delete process.env.IAM_PR_APPROVALS; delete process.env.IAM_VERSIONING_ALLOW_PROTECTED_WRITE;
     const m = await Test.createTestingModule({ imports: [VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13418);
+    // This suite covers the Dolt mechanics, not the policy engine (no core here): the merge permission is covered by branch-protection.e2e.spec.ts.
+    app.get(BranchProtectionService).decide = async () => ({ allow: true, reasons: [] });
   });
   after(async () => { await app?.close(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
@@ -79,7 +82,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.ok(routes.length >= 22, `route table walked: ${routes.length} routes`);
     });
     it('refuses without sign-in (401), with the wrong tenant (403), and without the admin capability (403), on reads and writes alike', async () => {
-      const routes: [string, string, object?][] = [['GET', '/branches'], ['GET', '/log'], ['GET', '/tables'], ['GET', '/tables/assignments'], ['GET', '/pulls'], ['GET', '/tags'], ['GET', '/diff?from=main&to=main'], ['POST', '/sql', { sql: 'select 1' }],
+      const routes: [string, string, object?][] = [['GET', '/branches'], ['GET', '/log'], ['GET', '/tables'], ['GET', '/tables/assignments'], ['GET', '/pulls'], ['GET', '/tags'], ['GET', '/protection'], ['PUT', '/branches/x/protection', {}], ['GET', '/diff?from=main&to=main'], ['POST', '/sql', { sql: 'select 1' }],
         ['POST', '/branches', { name: 'x' }], ['POST', '/tables/assignments/edit', {}], ['POST', '/pulls', {}], ['DELETE', '/branches/x'], ['POST', '/branches/x/restore', {}]];
       for (const [m, p, b] of routes) {
         assert.equal((await call(m, p, b, { token: null })).status, 401, `${m} ${p} anonymous`);
@@ -100,7 +103,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal(b.default, 'main'); assert.ok(b.branches.find((x: any) => x.name === 'main').protected);
       await branchOf('feat-a');
       assert.equal((await call('POST', '/branches', { name: 'feat-a' })).status, 409);
-      for (const n of ['a b', "x'; drop table roles; --", 'a/b', '', '..']) assert.equal((await call('POST', '/branches', { name: n })).status, 400, n);
+      for (const n of ['a b', 'a/b/c', "x'; drop table roles; --", '', '..']) assert.equal((await call('POST', '/branches', { name: n })).status, 400, n);
       assert.equal((await call('POST', '/branches', { name: 'zz', from: 'nope' })).status, 404);
       assert.equal((await ok('GET', '/branches')).branches.find((x: any) => x.name === 'feat-a').aheadOfDefault, 0);
     });
@@ -110,9 +113,9 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       const log = await ok('GET', '/log?ref=feat-a&limit=5');
       assert.equal(log.commits[0].message, 'give alice accountant'); assert.equal(log.commits[0].author, 'demo-alice'); assert.equal(log.commits[0].parents.length, 1);
       assert.ok(log.commits[0].refs.includes('feat-a'));
-      assert.equal(await count('feat-a', 'assignments'), 3); assert.equal(await count('main', 'assignments'), 2); // seed holds 2 assignments since the MCP operator role
+      assert.equal(await count('feat-a', 'assignments'), 4); assert.equal(await count('main', 'assignments'), 3); // seed holds 3 assignments (payment creator, MCP operator, branch merger)
       const direct = await call('POST', '/tables/assignments/edit', { branch: 'main', ops: [{ op: 'delete', key: { identity_id: 'demo-bob', role_id: 'payment-creator' } }] });
-      assert.equal(direct.status, 403); assert.equal(await count('main', 'assignments'), 2);
+      assert.equal(direct.status, 403); assert.equal(await count('main', 'assignments'), 3);
     });
     it('validates edits and leaves no half change behind', async () => {
       const bad = (ops: object[]) => call('POST', '/tables/assignments/edit', { branch: 'feat-a', ops });
@@ -123,7 +126,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await bad([{ op: 'frob' }])).status, 400);
       assert.equal((await call('POST', '/tables/dolt_log/edit', { branch: 'feat-a', ops: [{ op: 'insert', values: { x: 1 } }] })).status, 404);
       assert.equal((await call('POST', '/tables/x%3Bdrop/edit', { branch: 'feat-a', ops: [] })).status, 400);
-      assert.equal(await count('feat-a', 'assignments'), 3);
+      assert.equal(await count('feat-a', 'assignments'), 4);
       const st = await sql('feat-a', 'select * from dolt_status'); assert.equal(st.rows.length, 0, 'working set must be clean after failures');
       // and the next edit still works
       await ok('POST', '/tables/identities/edit', { branch: 'feat-a', ops: [{ op: 'update', key: { id: 'demo-bob' }, values: { department: 'treasury' } }] });
@@ -155,9 +158,9 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
     it('reads tables at a branch, a commit and a tag (read only), with paging', async () => {
       const log = await ok('GET', '/log?ref=feat-a&limit=10');
       const before = log.commits[2].commit; // main's head at branch time
-      assert.equal(await count(before, 'assignments'), 2);
+      assert.equal(await count(before, 'assignments'), 3);
       await ok('POST', '/tags', { name: 'v-seed', commit: before });
-      assert.equal(await count('v-seed', 'assignments'), 2);
+      assert.equal(await count('v-seed', 'assignments'), 3);
       const t = await ok('GET', '/tags'); assert.ok(t.tags.find((x: any) => x.name === 'v-seed'));
       assert.equal((await call('POST', '/tags', { name: 'act-x-1', commit: before })).status, 400);
       const page = await ok('GET', '/tables/assignments?ref=feat-a&limit=1&offset=0'); assert.equal(page.rows.length, 1); assert.equal(page.hasMore, true);
@@ -169,17 +172,17 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
     });
     it('branch reads are isolated from each other, also when concurrent', async () => {
       const [a, b, c] = await Promise.all([count('feat-a', 'assignments'), count('main', 'assignments'), count('feat-a', 'assignments')]);
-      assert.deepEqual([a, b, c], [3, 2, 3]);
+      assert.deepEqual([a, b, c], [4, 3, 4]);
     });
   });
 
   describe('SQL console', () => {
     it('reads on any ref, caps nothing silly, and refuses version-control and write statements', async () => {
-      const r = await sql('feat-a', 'select identity_id, role_id from assignments order by 1,2'); assert.deepEqual(r.columns, ['identity_id', 'role_id']); assert.equal(r.rows.length, 3);
+      const r = await sql('feat-a', 'select identity_id, role_id from assignments order by 1,2'); assert.deepEqual(r.columns, ['identity_id', 'role_id']); assert.equal(r.rows.length, 4);
       assert.equal((await sql('main', 'select * from dolt_branches')).rows.length >= 2, true);
       assert.equal((await sql('main', 'show tables')).rows.length >= 5, true);
       for (const q of ["call dolt_commit('-am','x')", "select dolt_commit('-am','x')", "select dolt_merge('feat-a')", "insert into assignments values ('q','q')", 'drop table roles', 'select 1; select 2', 'select sleep(3)']) assert.equal((await call('POST', '/sql', { ref: 'main', sql: q })).status, 400, q);
-      assert.equal(await count('main', 'assignments'), 2);
+      assert.equal(await count('main', 'assignments'), 3);
       assert.equal((await call('POST', '/sql', { ref: 'nope', sql: 'select 1' })).status, 404);
       assert.equal((await call('POST', '/sql', { ref: 'main', sql: 'selec 1' })).status, 400);
       assert.equal((await call('POST', '/sql', { ref: 'main', sql: 'select * from nope' })).status, 400);
@@ -278,7 +281,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
     it('merges with a real merge commit; the data reaches main; a second merge is refused', async () => {
       const m = await ok('POST', `/pulls/${pr1}/merge`, {});
       assert.match(m.commit, /^[0-9a-v]{32}$/); assert.equal(m.pullRequest.status, 'merged');
-      assert.equal(await count('main', 'assignments'), 3);
+      assert.equal(await count('main', 'assignments'), 4);
       const log = await ok('GET', '/log?ref=main&limit=3');
       assert.equal(log.commits[0].merge, true); assert.match(log.commits[0].message, /Merge pull request #\d+: Alice becomes accountant/);
       assert.equal((await call('POST', `/pulls/${pr1}/merge`, {})).status, 409);
@@ -332,7 +335,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       const before = log.commits[0].commit;
       const r = await ok('POST', `/commits/${target}/revert`, { newBranch: 'revert-alice', message: 'undo: alice accountant' });
       assert.equal(r.createdBranch, true);
-      assert.equal(await count('revert-alice', 'assignments'), 2); assert.equal(await count('main', 'assignments'), 3);
+      assert.equal(await count('revert-alice', 'assignments'), 3); assert.equal(await count('main', 'assignments'), 4);
       assert.equal((await ok('GET', '/log?ref=main&limit=1')).commits[0].commit, before);
       assert.equal((await ok('GET', '/log?ref=revert-alice&limit=1')).commits[0].message, 'undo: alice accountant');
       assert.equal((await call('POST', `/commits/${target}/revert`, {})).status, 400);
@@ -345,7 +348,7 @@ describe('database explorer API + real Dolt', { skip: !have && 'dolt binary miss
       assert.equal((await call('POST', '/branches/main/restore', { commit: oldest, confirm: true })).status, 403);
       assert.equal((await call('POST', '/branches/feat-a/restore', { commit: 'zz', confirm: true })).status, 404);
       const r = await ok('POST', '/branches/feat-a/restore', { commit: oldest, confirm: true });
-      assert.equal(r.was, head); assert.equal(await count('feat-a', 'assignments'), 2);
+      assert.equal(r.was, head); assert.equal(await count('feat-a', 'assignments'), 3);
       assert.equal((await ok('GET', '/log?ref=feat-a&limit=1')).commits[0].commit, oldest);
       assert.ok((await ok('GET', `/commits/${head}`)).message, 'the dropped commit still exists by hash');
     });

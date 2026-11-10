@@ -20,7 +20,7 @@ export class Branding {
     if(typeof window==='undefined') { void this.pending.run(()=>this.load()); return; }
     afterNextRender(()=>{
       const q=new URLSearchParams(location.search),branch=q.get('branch'),ticket=q.get('ticket');
-      if(branch && branch!=='main' && /^[a-z0-9-]{1,32}$/.test(branch) && ticket)this.query='?'+new URLSearchParams({branch,ticket});
+      if(branch && branch!=='main' && /^(?:[a-z0-9-]{1,16}\/)?[a-z0-9-]{1,54}$/.test(branch) && ticket)this.query='?'+new URLSearchParams({branch,ticket});
       if(q.get('preview')==='1' && window.parent!==window)return;
       if(this.state.hasKey(KEY)&&!this.query){this.profile.set(this.state.get(KEY,DEFAULT));this.state.remove(KEY);this.stylesheet();}
       else void this.load();

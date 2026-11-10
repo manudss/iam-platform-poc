@@ -127,7 +127,7 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
   it('policy-studio step 4: the snapshot carries the Dolt rules; a broken rule refuses the activation', async () => {
     // The seed loaded the six demo rules as rows: the tenant engine is built from them, the boot file is only the fallback.
     const cat = await (await fetch(`${CORE}/v1/policies?tenant=${T}`, { headers: { 'x-core-admin-token': ADMIN } })).json() as { engine: { source: string; rules: number } };
-    assert.deepEqual(cat.engine, { source: 'tenant', rules: 6, sets: 1, schema: true });
+    assert.deepEqual(cat.engine, { source: 'tenant', rules: 9, sets: 1, schema: true });
     // A new rule row in Dolt decides once its commit is activated: carol may approve, and the audit name is the rule id.
     await sql(`insert into policy_rules values ('default','carol-approves','@id("carol-approves")\\npermit(principal == User::"carol", action == Action::"approve", resource);')`);
     const a = await svc.activate(T, await new DoltService().head());
@@ -159,6 +159,26 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     assert.equal(a.state, 'applied');
     const d = await decide('dave');
     assert.equal(d.allow, true); assert.deepEqual(d.reasons, ['dave-approves']);
+  });
+  it('branch:merge with the REAL core: manager may merge profile/ into main only; branch-merger any kind; nobody else', async () => {
+    await sql("insert into assignments values ('mgr-x','manager'),('merger-y','branch-merger'),('main-z','main-merger')");
+    const a = await svc.activate(T, await new DoltService().head());
+    assert.equal(a.state, 'applied');
+    const merge = async (id: string, source?: string, kind?: string, target = 'main') => (await (await fetch(`${CORE}/v1/decide`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tenant: T, principal: `User::"${id}"`, action: 'Action::"branch:merge"', resource: `Branch::"${target}"`, context: source ? { source, source_kind: kind } : {} }),
+    })).json()) as { allow: boolean; reasons: string[] };
+    const p = await merge('mgr-x', 'profile/pend-dan', 'profile');
+    assert.equal(p.allow, true); assert.deepEqual(p.reasons, ['main-profile-merger']);
+    assert.equal((await merge('mgr-x', 'feature/x', 'feature')).allow, false, 'a manager may not merge a feature/ branch');
+    assert.equal((await merge('mgr-x', 'personal/mgr-x', 'personal')).allow, false);
+    assert.equal((await merge('mgr-x', 'profile/pend-dan', 'profile', 'release')).allow, false, 'the manager rule is scoped to main');
+    assert.equal((await merge('mgr-x')).allow, false, 'no source given: the manager rule does not apply');
+    assert.equal((await merge('merger-y', 'feature/x', 'feature')).allow, true);
+    assert.equal((await merge('nobody', 'profile/x', 'profile')).allow, false);
+    const mm = await merge('main-z', 'feature/x', 'feature');
+    assert.equal(mm.allow, true); assert.deepEqual(mm.reasons, ['merge-into-main-needs-main-merger']);
+    assert.equal((await merge('main-z', 'feature/x', 'feature', 'release')).allow, false, 'main-merger is a right on main only');
   });
 });
 

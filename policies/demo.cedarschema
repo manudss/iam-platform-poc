@@ -60,3 +60,19 @@ action "mcp:proxy" appliesTo {
     mcp_grants?: Set<UpstreamTool>,
   }
 };
+
+// Branch protection (versioning): merging a pull request into a protected branch (main by default) is an action decided like any
+// other. The core injects the caller's roles from the ACTIVE version, so a role granted on a working branch changes nothing until
+// a human merges it into main.
+action "branch:merge" appliesTo {
+  principal: [User],
+  resource: [Branch],
+  context: {
+    roles?: Set<String>,
+    // The branch being merged and its folder (personal, profile, ai, workflow, feature, other): a policy can allow a role for some kinds only.
+    source?: String,
+    source_kind?: String,
+    // The folder of the source branch (team for team/x), empty without one: lets a rule target one custom folder.
+    source_folder?: String,
+  }
+};

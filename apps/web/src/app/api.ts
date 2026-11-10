@@ -85,7 +85,7 @@ export class ApiClient {
     storage.setItem('iam.pkce.verifier', verifier); storage.setItem('iam.pkce.state', state);
     const params: Record<string, string> = { response_type: 'code', client_id: 'demo-web', redirect_uri: REDIRECT, state, code_challenge: challenge, code_challenge_method: 'S256' };
     if (chain && /^[a-z0-9-]{1,40}$/.test(chain)) params['chain'] = chain;
-    if (branchTest && /^[a-z0-9-]{1,32}$/.test(branchTest.branch) && branchTest.branch !== 'main' && branchTest.ticket) { params['branch'] = branchTest.branch; params['ticket'] = branchTest.ticket; }
+    if (branchTest && /^(?:[a-z0-9-]{1,16}\/)?[a-z0-9-]{1,54}$/.test(branchTest.branch) && branchTest.branch !== 'main' && branchTest.ticket) { params['branch'] = branchTest.branch; params['ticket'] = branchTest.ticket; }
     const q = new URLSearchParams(params);
     go(`${CORE_PUBLIC}/authorize?${q}`);
   }
@@ -218,7 +218,10 @@ export interface ColumnInfo { name: string; type: string; nullable: boolean; key
 export interface TableData { ref: string; kind: string; table: string; columns: ColumnInfo[]; primaryKey: string[]; total: number; offset: number; hasMore: boolean; rows: Record<string, unknown>[]; createStatement: string }
 export interface SqlResult { mode: string; columns?: string[]; rows?: Record<string, unknown>[]; truncated?: boolean; rowCount?: number; ms?: number; committed?: string | null; dryRun?: boolean; destructive?: boolean; changes?: TableSummary[]; samples?: Record<string, { columns: string[]; rows: RowDiff[] }>; statements?: number; affectedRows?: number; note?: string }
 export interface PullRequestInfo { id: number; title: string; body: string; source: string; target: string; status: 'open' | 'merged' | 'closed'; author: string; createdAt: string; mergedAt: string | null; mergeCommit: string | null }
+export interface BranchProtection { branch: string; protected: boolean; requirePullRequest: boolean; minReviews: number; requireChecks: boolean; mergeRule: 'policy' | 'anyone'; selfMerge: boolean; sourceKinds: string[]; source: 'default' | 'custom' }
 export interface PullRequestDetail {
+  /** Who may merge is decided by the policy engine; `mayMerge` is the answer for the signed-in person, shown before they click. */
+  mayMerge?: { allowed: boolean; checked: boolean; message?: string; reasons: string[] }; protection?: BranchProtection;
   preventSelfApproval?: boolean; viewer?: string; pullRequest: PullRequestInfo; comments: { id: number; author: string; kind: string; body: string; createdAt: string }[]; approvals: string[]; requiredApprovals: number;
   commits: { commit: string; author: string; date: string; message: string }[]; diff: DiffSummary | null; checks: { mergeable: boolean; reasons: string[]; conflicts: number; violations: { identity: string; roleA: string; roleB: string }[] } | null;
 }
@@ -254,6 +257,8 @@ export class VersioningClient {
   rows(ref: string, table: string, offset = 0, limit = 25) { return this.req<TableData>('GET', `/tables/${table}${this.q({ ref, offset, limit })}`); }
   edit(branch: string, table: string, ops: object[], message: string) { return this.req<{ commit: string }>('POST', `/tables/${table}/edit`, { branch, ops, message }); }
   sql(body: { ref: string; sql: string; mode: 'read' | 'write'; message?: string; dryRun?: boolean; confirmDestructive?: boolean }) { return this.req<SqlResult>('POST', '/sql', body); }
+  protections() { return this.req<{ protections: BranchProtection[]; policyAction: string }>('GET', '/protection'); }
+  setProtection(branch: string, change: Partial<Pick<BranchProtection, 'protected' | 'minReviews' | 'mergeRule' | 'requireChecks' | 'requirePullRequest' | 'selfMerge' | 'sourceKinds'>>) { return this.req<BranchProtection>('PUT', `/branches/${encodeURIComponent(branch)}/protection`, change); }
   pulls(status?: string) { return this.req<{ pullRequests: PullRequestInfo[] }>('GET', `/pulls${this.q({ status })}`); }
   openPull(title: string, body: string, source: string, target: string) { return this.req<PullRequestInfo>('POST', '/pulls', { title, body, source, target }); }
   pull(id: number) { return this.req<PullRequestDetail>('GET', `/pulls/${id}`); }

@@ -24,7 +24,8 @@ export interface ProfileValueStore {
 }
 /** Dolt branch of one person's pending profile edits. Reversible encoding: [a-z0-9-] kept, every other character becomes _hh (hex). */
 /** Pending change set of one person against one base branch: 'main' keeps the historical name, any other base is encoded after a ';'. */
-export const pendingBranch = (subject: string, base = 'main') => { const key = base === 'main' ? subject : subject + ';' + base; const b = 'profile-' + [...key].map((c) => (/[a-z0-9-]/.test(c) ? c : '_' + c.charCodeAt(0).toString(16).padStart(2, '0'))).join(''); if (b.length > 63) throw new Error('subject too long for a personal branch'); return b; };
+/** New pending branches are profile/<subject>; a pending branch created before the folder convention (profile-<subject>) keeps being used while it exists. */
+export const pendingBranch = (subject: string, base = 'main', existing?: ReadonlySet<string>) => { const key = base === 'main' ? subject : subject + ';' + base; const b = 'profile/' + [...key].map((c) => (/[a-z0-9-]/.test(c) ? c : '_' + c.charCodeAt(0).toString(16).padStart(2, '0'))).join(''); if (b.length > 63) throw new Error('subject too long for a personal branch'); return existing && !existing.has(b) && existing.has('profile-' + b.slice('profile/'.length)) ? 'profile-' + b.slice('profile/'.length) : b; };
 export const subjectOfBranch = (b: string) => b.slice('profile-'.length).replace(/_([0-9a-f]{2})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)));
 
 export class MemoryProfileStore implements ProfileValueStore {
@@ -179,7 +180,7 @@ export class DoltProfileStore implements ProfileValueStore {
   }
   /** The personal branch is cut from the base (main, or the tested branch in a branch test) on first use and reused for later edits against the same base. */
   async putPending(t: string, s: string, changes: Record<string, string | number | boolean | null>, actor: string, base = 'main') {
-    const b = pendingBranch(s, base);
+    const b = pendingBranch(s, base, new Set((await this.v.branches()).branches.map((x) => x.name)));
     await this.v.lock(() => this.v.at('main', async (c) => { await this.ensure(c); await this.commit(c, 'profile: values table'); }));
     const have = (await this.v.branches()).branches.some((x) => x.name === b);
     if (!have) await this.v.createBranch(b, base);
@@ -193,7 +194,7 @@ export class DoltProfileStore implements ProfileValueStore {
     }));
   }
   async pending(t: string, s: string, base = 'main') {
-    const b = pendingBranch(s, base);
+    const b = pendingBranch(s, base, new Set((await this.v.branches()).branches.map((x) => x.name)));
     if (!(await this.v.branches()).branches.some((x) => x.name === b)) return {};
     const read = (ref: string) => this.v.at(ref, async (c) => { const [r] = await c.query('select field_key, value from profile_field_values where tenant=? and subject=?', [t, s]); return Object.fromEntries((r as { field_key: string; value: unknown }[]).map((x) => [x.field_key, x.value])) as Values; });
     const [main, mine] = [await read(base), await read(b)];
@@ -202,10 +203,10 @@ export class DoltProfileStore implements ProfileValueStore {
     return out;
   }
   async listPending(_t: string) {
-    return (await this.v.branches()).branches.filter((x) => x.name.startsWith('profile-')).map((x) => { const d = subjectOfBranch(x.name); const i = d.lastIndexOf(';'); return i < 0 ? { subject: d, base: 'main' } : { subject: d.slice(0, i), base: d.slice(i + 1) }; });
+    return (await this.v.branches()).branches.filter((x) => (x.name.startsWith('profile-') || x.name.startsWith('profile/'))).map((x) => { const d = subjectOfBranch(x.name); const i = d.lastIndexOf(';'); return i < 0 ? { subject: d, base: 'main' } : { subject: d.slice(0, i), base: d.slice(i + 1) }; });
   }
   async resolvePending(t: string, s: string, accept: boolean, actor: string, base = 'main') {
-    const b = pendingBranch(s, base);
+    const b = pendingBranch(s, base, new Set((await this.v.branches()).branches.map((x) => x.name)));
     if (accept) {
       const r = await applyContext.run(true, () => this.v.mergeInto(b, base, `profile: ${actor} accepted the pending edits of ${s}`, actor));
       if (!r.mergeable || !r.commit) throw new ConflictException(`cannot merge: ${r.reasons.join('; ')}`);

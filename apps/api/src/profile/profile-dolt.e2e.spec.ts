@@ -73,7 +73,7 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     assert.deepEqual(await store.get(T, 'pend-dan', 'live'), { [F]: 'Old' }, 'main untouched');
     assert.deepEqual(await store.pending(T, 'pend-dan'), { [F]: 'New', 'hr-attributes.language': 'en' });
     assert.ok((await store.listPending(T)).some((p) => p.subject === 'pend-dan' && p.base === 'main'));
-    assert.equal((await v.branches()).branches.filter((b) => b.name === 'profile-pend-dan').length, 1);
+    assert.equal((await v.branches()).branches.filter((b) => b.name === 'profile/pend-dan').length, 1);
     await store.resolvePending(T, 'pend-dan', true, 'validator');
     assert.deepEqual(await store.get(T, 'pend-dan', 'live'), { [F]: 'New', 'hr-attributes.language': 'en' });
     assert.deepEqual(await store.pending(T, 'pend-dan'), {}); assert.ok(!(await store.listPending(T)).some((p) => p.subject === 'pend-dan'));

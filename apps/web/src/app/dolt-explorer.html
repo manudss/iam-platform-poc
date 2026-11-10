@@ -191,11 +191,21 @@
         </div>
       </div>
       @if (createOpen) {
-        <form class="card row" (ngSubmit)="createBranch()">
-          <label>New branch <input name="nb" [ngModel]="newBranch" (ngModelChange)="newBranch = sanitizeRefName($event); newBranchErr.set('')" placeholder="my-change" autocomplete="off" [attr.aria-invalid]="newBranchErr() ? true : null" aria-describedby="nb-err" />
-            <span class="field-err" id="nb-err">{{ newBranchErr() }}</span></label>
-          <label>From <select name="nf" [(ngModel)]="newBranchFrom">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
-          <button type="submit">Create branch</button>
+        <form class="card new-branch" (ngSubmit)="createBranch(false)" aria-label="Create a branch">
+          <div class="nb-fields">
+            <div class="nb-field"><span class="nb-lbl">Folder / Name</span>
+              <span class="nb-pair">
+                <select name="nfd" [(ngModel)]="newFolder" aria-label="Folder"><option value="feature">feature</option><option value="custom">custom</option><option value="none">no folder</option></select>
+                @if (newFolder === 'custom') { <input name="ncf" [(ngModel)]="customFolder" placeholder="team" autocomplete="off" aria-label="Custom folder" class="nb-folder" /> }
+                @if (newFolder !== 'none') { <span class="nb-slash" aria-hidden="true">/</span> }
+                <input name="nb" [ngModel]="newBranch" (ngModelChange)="newBranch = sanitizeRefName($event); newBranchErr.set('')" placeholder="payroll-2026" autocomplete="off" aria-label="Name" [attr.aria-invalid]="newBranchErr() ? true : null" aria-describedby="nb-err" />
+              </span>
+            </div>
+            <label class="nb-field"><span class="nb-lbl">From</span><select name="nf" [(ngModel)]="newBranchFrom">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
+          </div>
+          <span class="field-err" id="nb-err">{{ newBranchErr() }}</span>
+          <div class="row"><button type="submit">Create branch</button> <button type="button" class="secondary" (click)="createBranch(true)">Create protected branch</button></div>
+          <p class="hint">Will create <code>{{ fullName() || '…' }}</code>. personal/, profile/, ai/ and workflow/ are created automatically (administrators, profile edits, AI sessions, workflows) and cannot be made by hand. A protected branch is merged only through a pull request, by someone the policy engine allows.</p>
         </form>
       }
       @for (b of filteredBranches(); track b.name) {
@@ -217,7 +227,10 @@
           <div class="branch-act">
             @if (b.default) {
               <span class="hint branch-note">Direct writes refused here; every change lands through review.</span>
+              <button type="button" class="secondary" [attr.aria-expanded]="protectOpen() === b.name" (click)="protectOpen.set(protectOpen() === b.name ? '' : b.name)">Protection</button>
             } @else {
+              @if (!b.protected) { <button type="button" class="secondary" (click)="protectBranch(b)">Protect</button> }
+              @if (b.protected) { <button type="button" class="secondary" [attr.aria-expanded]="protectOpen() === b.name" (click)="protectOpen.set(protectOpen() === b.name ? '' : b.name)">Protection</button> }
               @if (b.name === sessionBranch()) { <button type="button" (click)="goReview()">Review &amp; apply ⇥</button> }
               @else { <button type="button" class="secondary" (click)="newPullFrom(b.name)">New pull request</button> }
               <button type="button" class="secondary" (click)="compareWithDefault(b.name)">Compare</button>
@@ -228,6 +241,7 @@
                   @if (menuFor() === b.name) {
                     <span class="menu">
                       <button type="button" (click)="menuFor.set(''); showHistory(b.name)">History</button>
+                      @if (!b.protected) { <button type="button" (click)="menuFor.set(''); protectBranch(b)">Protect this branch</button> }
                       @if (!b.protected) { <button type="button" class="danger" (click)="menuFor.set(''); deleteBranch(b)">Delete</button> }
                     </span>
                   }
@@ -236,6 +250,24 @@
             }
           </div>
         </div>
+        @if (protectOpen() === b.name && protections()[b.name]; as p) {
+          <section class="card protect" [attr.aria-label]="'Protection of ' + p.branch">
+            <h4>Protection of <code>{{ p.branch }}</code> @if (p.source === 'default') { <span class="chip">built-in rule</span> }</h4>
+            <ul>
+              <li>No direct writes: changes arrive only through a pull request.</li>
+              <li>Checks (conflicts, constraints, Separation of Duties) must pass before merging.</li>
+              <li>Who can merge: <select [name]="'mr-' + p.branch" [ngModel]="p.mergeRule" (ngModelChange)="changeProtection(p, { mergeRule: $event })"><option value="policy">people allowed by the policy engine (action branch:merge)</option><option value="anyone">anyone who can open the explorer</option></select></li>
+              <li>Reviews from someone other than the author: <select [name]="'mv-' + p.branch" [ngModel]="p.minReviews" (ngModelChange)="changeProtection(p, { minReviews: +$event })">@for (n of reviewChoices; track n) { <option [ngValue]="n">{{ n === 0 ? 'none required' : n }}</option> }</select></li>
+              <li>Authors may merge their own pull request: <input type="checkbox" class="inline" [name]="'sm-' + p.branch" [ngModel]="p.selfMerge" (ngModelChange)="changeProtection(p, { selfMerge: $event })" aria-label="Authors may merge their own pull request" /></li>
+              <li>Branches allowed to merge here (by folder; none ticked means every kind):
+                <span class="kinds">@for (k of branchKinds; track k) { <label><input type="checkbox" [name]="'sk-' + p.branch + k" [ngModel]="p.sourceKinds.includes(k)" (ngModelChange)="toggleKind(p, k, $event)" /> {{ kindLabel(k) }}</label> }</span>
+                <span class="kinds">@for (f of customFoldersOf(p); track f) { <span class="chip">{{ f }}/ <button type="button" class="link" (click)="removeCustomFolder(p, f)" [attr.aria-label]="'Remove folder ' + f">x</button></span> }
+                  <input [name]="'ac-' + p.branch" [(ngModel)]="addCustom" placeholder="custom folder, e.g. team" autocomplete="off" aria-label="Custom folder to allow" /> <button type="button" class="secondary" (click)="addCustomFolder(p)">Add folder</button></span></li>
+            </ul>
+            @if (p.branch !== defaultBranch()) { <p><button type="button" class="danger" (click)="unprotectBranch(p.branch)">Remove protection</button></p> }
+            <p class="hint">With the policy rule, merging needs a role that a policy rule accepts for <code>branch:merge</code> (demo: <code>branch-merger</code> or <code>iam-admin</code>; <code>manager</code> for profile/ branches; <code>main-merger</code> for main only), from the active version of main. See the Policies screen.</p>
+          </section>
+        }
       }
       @if (tags().length) { <p class="hint">Tags: @for (t of tags(); track t.name) { <span class="chip">{{ t.name }} <code>{{ short(t.commit) }}</code></span> }</p> }
     }
@@ -702,9 +734,11 @@
             @if (!k.violations.length) { <p class="ok">&#x2713; Separation of duties respected</p> } @else { @for (v of k.violations; track v.roleA + v.roleB + v.identity) { <p class="ko">SoD: {{ v.identity }} would have {{ v.roleA }} and {{ v.roleB }}</p> } }
             <p [class]="prReviewed(d) ? 'ok' : 'hint'">{{ prReviewed(d) ? '✓' : '' }} Review: {{ d.approvals.length ? 'approved by ' + approvalNames(d) : 'no approval yet' }} · {{ d.approvals.length }} of {{ d.requiredApprovals }} required</p>
           } @else { <p class="hint">Checks not available.</p> }
+          @if (d.mayMerge && d.mayMerge.allowed === false) { <p class="ko" role="alert"><b>You cannot merge this pull request.</b> {{ d.mayMerge.message }}</p> }
+          @else if (d.mayMerge?.checked) { <p class="hint">{{ d.pullRequest.target }} is protected: your roles allow you to merge into it.</p> }
           @if (d.pullRequest.status === 'open') {
             <div class="row">
-              <button type="button" class="primary" [disabled]="!d.checks?.mergeable" (click)="mergePull()">Merge pull request</button>
+              <button type="button" class="primary" [disabled]="!d.checks?.mergeable || d.mayMerge?.allowed === false" [title]="d.mayMerge?.allowed === false ? (d.mayMerge?.message ?? '') : ''" (click)="mergePull()">Merge pull request</button>
               <button type="button" (click)="closePull()">Close</button>
             </div>
           }

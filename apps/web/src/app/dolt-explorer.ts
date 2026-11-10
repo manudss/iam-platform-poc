@@ -3,7 +3,7 @@ import { Router, RouterLink } from '@angular/router';
 import { Session } from './session';
 import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ApiClient, BranchInfo, ColumnInfo, CommitInfo, DiffSummary, PullRequestDetail, PullRequestInfo, RowDiff, SqlResult, TableData, VersioningClient, cellText, shortHash } from './api';
+import { ApiClient, BranchInfo, BranchProtection, ColumnInfo, CommitInfo, DiffSummary, PullRequestDetail, PullRequestInfo, RowDiff, SqlResult, TableData, VersioningClient, cellText, shortHash } from './api';
 
 export type Tab = 'home' | 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
 interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }
@@ -61,6 +61,41 @@ export class DoltExplorer {
   protected readonly defaultBranch = signal('main');
   protected readonly refs = computed(() => [...this.branches().map((b) => b.name), ...this.tags().map((t) => t.name)]);
   protected newBranch = ''; protected newBranchFrom = 'main';
+  /** Folder of a hand-made branch: the fixed `feature`, a `custom` one, or none. personal/ profile/ ai/ workflow/ are created by the platform only. */
+  protected newFolder: 'feature' | 'custom' | 'none' = 'feature'; protected customFolder = '';
+  protected readonly protections = signal<Record<string, BranchProtection>>({});
+  protected readonly protectOpen = signal('');
+  protected readonly branchKinds = ['profile', 'personal', 'ai', 'workflow', 'feature', 'custom', 'other'];
+  protected readonly reviewChoices = [0, 1, 2, 3];
+  protected addCustom = '';
+  protected kindLabel(k: string) { return k === 'other' ? 'no folder' : k === 'custom' ? 'custom folders (all)' : k + '/'; }
+  protected customFoldersOf(p: BranchProtection) { return p.sourceKinds.filter((k) => k.startsWith('custom:')).map((k) => k.slice(7)); }
+  protected fullName() { const f = this.newFolder === 'feature' ? 'feature' : this.newFolder === 'custom' ? this.customFolder.trim() : ''; return f ? `${f}/${this.newBranch.trim()}` : this.newBranch.trim(); }
+  protected folderError(): string {
+    if (this.newFolder !== 'custom') return '';
+    const f = this.customFolder.trim();
+    if (!f) return 'Type a folder name.';
+    if (['personal', 'profile', 'ai', 'workflow'].includes(f)) return `${f}/ is created automatically and cannot be made by hand.`;
+    if (!/^[a-z][a-z0-9-]{0,15}$/.test(f)) return 'Folder: lowercase letters, digits and dashes, 16 characters max.';
+    return '';
+  }
+  protected async changeProtection(p: BranchProtection, change: Parameters<VersioningClient['setProtection']>[1]) {
+    const r = await this.run(() => this.v.setProtection(p.branch, change));
+    if (r) this.note.set(`Protection of ${p.branch} updated.`);
+    await this.refreshRefs();
+  }
+  protected async toggleKind(p: BranchProtection, kind: string, on: boolean) {
+    await this.changeProtection(p, { sourceKinds: on ? [...new Set([...p.sourceKinds, kind])] : p.sourceKinds.filter((k) => k !== kind) });
+  }
+  protected async addCustomFolder(p: BranchProtection) {
+    const f = this.addCustom.trim().replace(/\/$/, '').toLowerCase();
+    if (!f) return;
+    this.addCustom = '';
+    await this.changeProtection(p, { sourceKinds: [...new Set([...p.sourceKinds, `custom:${f}`])] });
+  }
+  protected async removeCustomFolder(p: BranchProtection, f: string) { await this.changeProtection(p, { sourceKinds: p.sourceKinds.filter((k) => k !== `custom:${f}`) }); }
+  protected async protectBranch(b: BranchInfo) { await this.run(() => this.v.setProtection(b.name, { protected: true })); this.protectOpen.set(b.name); await this.refreshRefs(); }
+  protected async unprotectBranch(name: string) { await this.run(() => this.v.setProtection(name, { protected: false })); this.protectOpen.set(''); await this.refreshRefs(); }
   protected readonly branchSearch = signal(''); protected createOpen = false;
   protected readonly menuFor = signal('');
   /** Changed rows vs the default branch, loaded lazily for the working branch only (one diff call). */
@@ -312,6 +347,7 @@ export class DoltExplorer {
     await this.run(async () => {
       const b = await this.v.branches(); this.branches.set(b.branches); this.defaultBranch.set(b.default);
       this.tags.set((await this.v.tags()).tags);
+      try { this.protections.set(Object.fromEntries((await this.v.protections()).protections.map((p) => [p.branch, p]))); } catch { /* protection settings are optional for the screen */ }
       // pre-select a source branch for a new pull request (the first branch that is not the target)
       if (!b.branches.some((x) => x.name === this.prForm.source)) this.prForm.source = b.branches.find((x) => x.name !== b.default)?.name ?? '';
       if (!b.branches.some((x) => x.name === this.prForm.target)) this.prForm.target = b.default;
@@ -322,12 +358,13 @@ export class DoltExplorer {
     const m = this.note();
     if (match.test(m)) { setter(m); this.note.set(''); }
   }
-  protected async createBranch() {
-    this.newBranchErr.set(this.refNameError(this.newBranch));
+  protected async createBranch(protect = false) {
+    this.newBranchErr.set(this.folderError() || this.refNameError(this.newBranch));
     if (this.newBranchErr()) return;
-    const r = await this.run(() => this.v.createBranch(this.newBranch, this.newBranchFrom));
-    if (!r) { this.mirrorNameError(m => (this.newBranchErr.set(m)), /name|exist|taken|invalid/i); return; }
-    if (r) { this.note.set(`Branch ${r.branch} created at ${shortHash(r.commit)}.`); this.newBranch = ''; this.newBranchErr.set(''); this.createOpen = false; await this.refreshRefs(); }
+    const r = await this.run(() => this.v.createBranch(this.fullName(), this.newBranchFrom));
+    if (!r) { this.mirrorNameError(m => (this.newBranchErr.set(m)), /name|exist|taken|invalid|automatically|folder/i); return; }
+    if (protect) await this.run(() => this.v.setProtection(r.branch, { protected: true }));
+    this.note.set(`Branch ${r.branch} created at ${shortHash(r.commit)}${protect ? ' and protected' : ''}.`); this.newBranch = ''; this.newBranchErr.set(''); this.createOpen = false; await this.refreshRefs();
   }
   /** The signed-in user's working branch (the shell selection), or the default branch when none is selected. */
   protected sessionBranch() { return this.session.branch() || this.defaultBranch(); }

@@ -78,7 +78,7 @@ try {
   await shot('1-branches');
 
   // new branch from main
-  await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
+  await page.selectOption('select[name=nfd]', 'none'); await page.fill('input[name=nb]', 'ui-demo'); await btn('Create branch').click(); await page.waitForSelector('td:has-text("ui-demo")');
   // edit a row on the branch through the Data tab
   await nav('/database/data'); await page.selectOption('select[name=dr]', 'ui-demo'); await page.click('button:has-text("roles")');
   await page.waitForSelector('th:has-text("label")');
