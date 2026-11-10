@@ -1,5 +1,5 @@
 import { WfTemplate, WF_TEMPLATES } from './wf-model';
-import { filterTemplates, templateCategories } from './templates';
+import { filterTemplates, templateBadge, templateCategories } from './templates';
 
 // Unit tests for the template gallery: category counts, filters, and the sample-derived gallery itself.
 const tpl = (over: Partial<WfTemplate>): WfTemplate => ({
@@ -21,6 +21,14 @@ describe('templateCategories / filterTemplates', () => {
     expect(filterTemplates(TEMPLATES, 'all', 'rows').map((t) => t.id)).toEqual(['b']);
     expect(filterTemplates(TEMPLATES, 'all', 'loop').map((t) => t.id)).toEqual(['b']);
     expect(filterTemplates(TEMPLATES, 'HR & sheets', 'rows').map((t) => t.id)).toEqual(['b']);
+  });
+});
+
+describe('templateBadge', () => {
+  it('labels each template source', () => {
+    expect(templateBadge('official')).toEqual({ text: '◆ OFFICIAL', status: 'real' });
+    expect(templateBadge('user')).toEqual({ text: '✎ YOURS', status: 'computed' });
+    expect(templateBadge('community')).toEqual({ text: '❖ COMMUNITY', status: 'queued' });
   });
 });
 

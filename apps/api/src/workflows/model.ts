@@ -21,7 +21,7 @@ export type BuiltinStepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revo
  * `config` (e.g. webhook token, watched sheet). event and cron are exclusive. */
 export interface WfTrigger { event?: string; match?: Record<string, string>; config?: Record<string, unknown>; cron?: string }
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
-export interface WfEdge { from: string; to: string }
+export interface WfEdge { from: string; to: string; /** Branching links carry the case they follow: true/false, a switch case, each/done. */ label?: string }
 export interface WfGraph { nodes: WfNode[]; edges: WfEdge[] }
 
 export type StepCategory = 'simulated' | 'computed' | 'real';

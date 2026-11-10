@@ -93,7 +93,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 18);
+    assert.equal(routes.length, 21);
   });
 
   it('refuses an invalid graph (cycle, unknown type) and an unknown field', async () => {
@@ -382,6 +382,31 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(pausedRuns.runs.length, 0, 'a paused cron workflow never fires');
     await ok('DELETE', `/workflows/${on.definition.id}`);
     await ok('DELETE', `/workflows/${off.definition.id}`);
+  });
+
+  it('templates: save from a definition or a canvas, gallery merges official + user, only user templates deletable', async () => {
+    const all0 = (await ok('GET', '/workflow-templates')) as { templates: { id: string; source: string }[] };
+    assert.ok(all0.templates.length >= 8, 'the official catalog is served by the API');
+    assert.ok(all0.templates.every((t) => t.source === 'official'), 'only official entries before any save');
+    const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }, { id: 'b', type: 'notify', name: 'b', config: { recipient: 'hr', message: 'hi' } }], edges: [{ from: 'a', to: 'b' }] };
+    const def = (await ok('POST', '/workflows', { name: 'Tpl source', description: 'to template', graph: g })) as { definition: { id: string } };
+    const t1 = (await ok('POST', '/workflow-templates', { name: 'My first template', description: 'from a definition', category: 'Tests', fromDefinition: def.definition.id })) as { template: { id: string; source: string; nodes: unknown[]; category: string } };
+    assert.equal(t1.template.source, 'user');
+    assert.equal(t1.template.nodes.length, 2, 'the template copies the definition graph');
+    const t2 = (await ok('POST', '/workflow-templates', { name: 'Canvas template', description: '', category: '', graph: g })) as { template: { id: string; category: string } };
+    assert.equal(t2.template.category, 'My templates', 'an empty category falls back');
+    const all1 = (await ok('GET', '/workflow-templates')) as { templates: { id: string; source: string }[] };
+    assert.ok(all1.templates.some((t) => t.id === t1.template.id && t.source === 'user'), 'the gallery shows the saved template');
+    assert.ok(all1.templates.some((t) => t.source === 'official'), 'the official entries stay');
+    assert.equal((await call('POST', '/workflow-templates', { name: 'bad', graph: { nodes: [{ id: 'a', type: 'teleport', name: 'a', config: {} }], edges: [] } })).status, 400);
+    assert.equal((await call('POST', '/workflow-templates', { name: 'bad', graph: { nodes: [{ id: 'a', type: 'assign-role', name: 'a', config: { identity: '{{event.subject}}', role: 'employee' } }], edges: [] } })).status, 400, 'an event placeholder without a trigger is refused');
+    assert.equal((await call('DELETE', `/workflow-templates/${all0.templates[0].id}`)).status, 400, 'an official template cannot be deleted');
+    await ok('DELETE', `/workflow-templates/${t1.template.id}`);
+    await ok('DELETE', `/workflow-templates/${t2.template.id}`);
+    assert.equal((await call('DELETE', `/workflow-templates/${t1.template.id}`)).status, 404);
+    const all2 = (await ok('GET', '/workflow-templates')) as { templates: { id: string }[] };
+    assert.ok(!all2.templates.some((t) => t.id === t1.template.id), 'the deleted template leaves the gallery');
+    await ok('DELETE', `/workflows/${def.definition.id}`);
   });
 });
 

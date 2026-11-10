@@ -29,6 +29,9 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
   '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
   '.ph-popup button.on, .ph-popup button:hover { background: var(--accent-soft); color: var(--accent-dark); }',
   '.wb-tags { width: 180px; }',
+  '.tpl-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: var(--scrim); }',
+  '.tpl-dialog { width: min(560px, 92vw); max-height: 86vh; overflow: auto; background: var(--card); border-radius: .8rem; padding: 1.1rem 1.3rem; box-shadow: 0 20px 60px var(--shadow-color); }',
+  '.tpl-dialog h3 { margin-top: 0; }',
 ], template: `
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="wb">
@@ -68,6 +71,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
     <button class="secondary" (click)="exportDef()" title="Download the definition as JSON">Export</button>
     <label class="btn secondary wb-import" title="Load a definition JSON into the canvas">Import<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
     @if (id !== 'new') {<button class="secondary" (click)="duplicateWorkflow()" [disabled]="busy()">Duplicate</button>}
+    <button class="secondary" (click)="openSaveTpl()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save the current canvas as a gallery template'">Save as template</button>
     <button class="secondary" (click)="testOpen.set(!testOpen())" [class.active-tool]="testOpen()">Test</button>
     <label class="wb-active" [class.paused]="!active" title="A paused workflow never starts from an event; Run still works"><input type="checkbox" name="wfActive" [(ngModel)]="active" /> Active</label>
     <button (click)="save()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save'">Save</button>
@@ -203,6 +207,18 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
   @if (phPopup(); as pp) {
     <div class="ph-popup" role="listbox" [style.top.px]="pp.top" [style.left.px]="pp.left" [style.minWidth.px]="pp.width">
       @for (sugg of pp.list; track sugg; let i = $index) {<button type="button" role="option" [attr.aria-selected]="i === pp.index" [class.on]="i === pp.index" (mousedown)="$event.preventDefault(); pickPlaceholder(sugg)">{{sugg}}</button>}
+    </div>
+  }
+  @if (saveTplOpen()) {
+    <div class="tpl-modal" (click)="saveTplOpen.set(false)">
+      <div class="tpl-dialog" (click)="$event.stopPropagation()" role="dialog" aria-modal="true" aria-label="Save as template">
+        <h3>Save as a template</h3>
+        <p class="hint">Saves the CURRENT canvas (unsaved changes included) into the templates gallery, shared with every demo account. Instantiating a template creates a paused workflow.</p>
+        <label>Template name<input name="tplName" [(ngModel)]="tplName" maxlength="80" /></label>
+        <label>Description<input name="tplDesc" [(ngModel)]="tplDesc" maxlength="500" /></label>
+        <label>Category<input name="tplCat" [(ngModel)]="tplCat" maxlength="60" placeholder="My templates" /></label>
+        <div class="row"><span class="spacer"></span><button class="secondary" (click)="saveTplOpen.set(false)">Cancel</button><button (click)="saveTpl()" [disabled]="busy() || !tplName.trim()">Save the template</button></div>
+      </div>
     </div>
   }
 </div>
@@ -720,6 +736,18 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     };
   }
 
+  // ---- Save as template: the CURRENT canvas (unsaved changes included) into the shared gallery. ----
+  protected saveTplOpen = signal(false);
+  protected tplName = ''; protected tplDesc = ''; protected tplCat = '';
+  protected openSaveTpl() { this.tplName = this.name; this.tplDesc = this.description; this.tplCat = 'My templates'; this.saveTplOpen.set(true); }
+  protected async saveTpl() {
+    this.busy.set(true);
+    try {
+      await clientOf(this.s).saveTemplate({ name: this.tplName.trim() || this.name, description: this.tplDesc.trim() || this.description, category: this.tplCat.trim(), graph: this.graph(), trigger: this.triggerPayload() });
+      this.note.set('Template saved: find it in the Templates gallery.');
+      this.saveTplOpen.set(false);
+    } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
+  }
   protected async save() {
     this.busy.set(true);
     try {

@@ -169,6 +169,11 @@ export class WorkflowClient {
   rerunFrom(id: string, nodeId: string) { return this.req<RunView>('POST', `/workflow-runs/${id}/rerun-from/${nodeId}`, {}); }
   cancel(id: string) { return this.req<RunView>('POST', `/workflow-runs/${id}/cancel`, {}); }
   review(id: string) { return this.req<{ pullRequest: { id: number }; reused: boolean }>('POST', `/workflow-runs/${id}/review`, {}); }
+  /** The templates gallery: official API catalog + user-saved templates (and community picks, phase 3). */
+  templates() { return this.req<{ templates: WfTemplate[] }>('GET', '/workflow-templates'); }
+  /** Saves a template from an explicit graph (editor canvas) or from a saved definition (fromDefinition). */
+  saveTemplate(body: { name: string; description: string; category: string; graph?: { nodes: WfNode[]; edges: WfEdge[] }; trigger?: WfTrigger | null; fromDefinition?: string }) { return this.req<{ template: WfTemplate }>('POST', '/workflow-templates', body); }
+  deleteTemplate(id: string) { return this.req<{ deleted: string }>('DELETE', `/workflow-templates/${id}`); }
 }
 
 // ---- Initial canvas framing ----
@@ -246,8 +251,10 @@ export const SAMPLE_WORKFLOWS: { name: string; description: string; trigger?: Wf
     ], edges: [{ from: 'each', to: 'grant', label: 'each' }, { from: 'each', to: 'tell', label: 'done' }] },
   ];
 
-// ---- Template gallery (direction C): the samples above, categorized, instantiate into a PAUSED workflow. ----
-export interface WfTemplate { id: string; name: string; description: string; category: string; source: 'official'; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[] }
+// ---- Template gallery: official catalog + user-saved templates (phase 3) + community picks (phase 3),
+// served by GET /workflow-templates and instantiated into a PAUSED workflow. WF_TEMPLATES below stays the
+// offline fallback of the gallery; the editor palette keeps SAMPLE_WORKFLOWS for its samples section. ----
+export interface WfTemplate { id: string; name: string; description: string; category: string; source: 'official' | 'user' | 'community'; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[]; createdBy?: string | null; createdAt?: string | null }
 const TEMPLATE_CATEGORIES: readonly (readonly [string, string])[] = [
   ['HR onboarding', 'HR & sheets'], ['loop over rows', 'HR & sheets'],
   ['joiner', 'Joiner · Mover · Leaver'], ['mover', 'Joiner · Mover · Leaver'], ['leaver', 'Joiner · Mover · Leaver'], ['onboarding', 'Joiner · Mover · Leaver'], ['offboarding', 'Joiner · Mover · Leaver'],

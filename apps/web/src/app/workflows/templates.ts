@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Session } from '../session';
@@ -8,7 +8,8 @@ import { WbTabs } from './workbench-tabs';
 
 // ---- Workflow templates gallery (direction C): categories on the left, searchable cards with a graph
 // thumbnail, "Use template" opens a modal (name + blocks created) that instantiates a PAUSED workflow and
-// opens it in the editor. The catalog is the official samples of the product; nothing runs until activated. ----
+// opens it in the editor. The catalog comes from the API: official samples + templates users saved
+// ("Save as template", deletable here) + community picks. Nothing runs until activated. ----
 
 /** Sidebar categories with their template counts, in first-seen order. */
 export function templateCategories(templates: WfTemplate[]): { name: string; count: number }[] {
@@ -20,6 +21,10 @@ export function templateCategories(templates: WfTemplate[]): { name: string; cou
 export function filterTemplates(templates: WfTemplate[], category: string, query: string): WfTemplate[] {
   const q = query.trim().toLowerCase();
   return templates.filter((t) => (category === 'all' || t.category === category) && (!q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q) || t.nodes.some((n) => n.type.includes(q))));
+}
+/** Source badge of a card: OFFICIAL catalog, a template you saved, or a community pick. */
+export function templateBadge(source: WfTemplate['source']): { text: string; status: string } {
+  return source === 'user' ? { text: '✎ YOURS', status: 'computed' } : source === 'community' ? { text: '❖ COMMUNITY', status: 'queued' } : { text: '◆ OFFICIAL', status: 'real' };
 }
 
 @Component({ selector: 'app-workflow-templates', imports: [FormsModule, RouterLink], styleUrl: '../pages.css', styles: [`
@@ -62,8 +67,8 @@ export function filterTemplates(templates: WfTemplate[], category: string, query
             @for (e of mini(t).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
             @for (n of mini(t).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
           </svg>
-          <div class="tpl-badges"><span class="chip" data-status="real">◆ OFFICIAL</span><span>{{t.nodes.length}} blocks</span>@if (t.trigger) {<span>· trigger {{triggerText(t)}}</span>} @else {<span>· manual</span>}</div>
-          <div class="tpl-actions"><button class="secondary" (click)="open(t)">Preview</button><button (click)="open(t)">Use template</button></div>
+          <div class="tpl-badges"><span class="chip" [attr.data-status]="badgeOf(t).status">{{badgeOf(t).text}}</span><span>{{t.nodes.length}} blocks</span>@if (t.trigger) {<span>· trigger {{triggerText(t)}}</span>} @else {<span>· manual</span>}</div>
+          <div class="tpl-actions"><button class="secondary" (click)="open(t)">Preview</button><button (click)="open(t)">Use template</button>@if (t.source === 'user') {<button class="secondary" style="flex:0 0 auto" (click)="removeTpl(t)" [disabled]="busy()" title="Delete this template">🗑</button>}</div>
         </section>
       }
       @empty {<p class="hint">No template matches.</p>}
@@ -88,21 +93,34 @@ export function filterTemplates(templates: WfTemplate[], category: string, query
   </div>
 }
 ` })
-export class WorkflowTemplatesPage {
+export class WorkflowTemplatesPage implements OnInit {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
   private readonly tabs = inject(WbTabs);
-  protected readonly templates = WF_TEMPLATES;
+  /** Gallery cards, loaded from the API (official + user-saved + community); static official fallback. */
+  protected readonly templates = signal<WfTemplate[]>(WF_TEMPLATES);
   protected note = signal(''); protected busy = signal(false);
   protected query = '';
   protected category = signal('all');
   protected using = signal<WfTemplate | null>(null);
   protected newName = '';
 
-  protected categories = computed(() => templateCategories(this.templates));
+  async ngOnInit() { await this.load(); }
+  protected async load() {
+    try { const r = await clientOf(this.s).templates(); this.templates.set(r.templates); }
+    catch (e) { this.note.set(`${(e as Error).message} - showing the built-in official templates only.`); }
+  }
+
+  protected categories = computed(() => templateCategories(this.templates()));
   /** Trigger line of a template card / modal: the event, or the cron schedule. */
   protected triggerText(t: WfTemplate): string { return t.trigger?.cron ? `cron: ${t.trigger.cron}` : (t.trigger?.event ?? ''); }
-  protected visible = computed(() => filterTemplates(this.templates, this.category(), this.query));
+  protected visible = computed(() => filterTemplates(this.templates(), this.category(), this.query));
+  protected badgeOf(t: WfTemplate): { text: string; status: string } { return templateBadge(t.source); }
+  protected async removeTpl(t: WfTemplate) {
+    this.busy.set(true);
+    try { await clientOf(this.s).deleteTemplate(t.id); await this.load(); this.note.set(`Deleted the template "${t.name}".`); }
+    catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
+  }
 
   protected mini(t: WfTemplate) { return miniGraph(t.nodes, t.edges); }
   protected catOf = (type: string) => miniGraph([{ id: 'x', type }], []).nodes[0]?.cat ?? 'simulated';

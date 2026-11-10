@@ -5,7 +5,8 @@ import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, n
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
-import { DefinitionRow, RunRow, StepRow, WorkflowStore } from './store.js';
+import { DefinitionRow, RunRow, StepRow, TemplateRow, WorkflowStore } from './store.js';
+import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
@@ -97,6 +98,62 @@ export class WorkflowsService {
     const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, active, tags, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
     await this.store.putDefinition(def, ref);
     return { definition: def };
+  }
+
+  // ---- Templates gallery: the official API catalog + the templates users saved themselves. ----
+
+  /** Every gallery card: official catalog entries first, then the user-saved templates (newest first). */
+  async templates(_tenant: string) {
+    const user = await this.store.listTemplates(currentBranch());
+    return {
+      templates: [
+        ...OFFICIAL_TEMPLATES.map((t) => ({ ...t, createdBy: null as string | null, createdAt: null as string | null })),
+        ...user.map((t) => ({ id: t.id, name: t.name, description: t.description, category: t.category, source: 'user' as const, trigger: t.trigger ?? undefined, nodes: t.graph.nodes, edges: t.graph.edges, createdBy: t.created_by, createdAt: t.created_at })),
+      ],
+    };
+  }
+
+  /**
+   * Saves a template, either from a saved definition (`fromDefinition`) or from an explicit graph
+   * (the editor's current canvas). The graph is validated exactly like a definition save: a template
+   * must always instantiate into a working workflow.
+   */
+  async saveTemplate(tenant: string, body: Record<string, unknown>, sub: unknown) {
+    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'category', 'graph', 'trigger', 'fromDefinition'].includes(k))) throw new BadRequestException('unknown field');
+    let graphIn: unknown = body?.graph;
+    let triggerIn: unknown = body?.trigger;
+    if (body?.fromDefinition !== undefined) {
+      const d = await this.store.getDefinition(tenant, this.checkId(body.fromDefinition, 'workflow id'), currentBranch());
+      if (!d) throw new NotFoundException('unknown workflow');
+      graphIn = d.graph;
+      triggerIn = d.trigger ?? undefined;
+    }
+    const name = String(body?.name ?? '').trim();
+    if (!name || name.length > 80) throw new BadRequestException('a name is required (max 80)');
+    const description = String(body?.description ?? '').slice(0, 500);
+    const category = String(body?.category ?? '').trim().slice(0, 60) || 'My templates';
+    const trigger = validateTrigger(triggerIn);
+    const { graph, order } = validateGraph(graphIn);
+    validateStepPlaceholders(graph, order);
+    await this.checkProviders(tenant, graph);
+    for (const n of graph.nodes) for (const v of Object.values(n.config)) {
+      for (const key of placeholderKeys(v)) {
+        if (!trigger) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the template has no start trigger`);
+        if (trigger.cron) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but a cron schedule carries no event payload`);
+        if (!isWildcardEvent(trigger.event!) && !WF_EVENTS[trigger.event!].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event!].payload.join(', ')})`);
+      }
+    }
+    const t: TemplateRow = { id: `wf-tpl-${randomBytes(4).toString('hex')}`, name, description, category, graph, trigger, created_by: String(sub ?? 'unknown'), created_at: now() };
+    await this.store.putTemplate(t, currentBranch(true));
+    return { template: { id: t.id, name: t.name, description: t.description, category: t.category, source: 'user' as const, trigger: t.trigger ?? undefined, nodes: t.graph.nodes, edges: t.graph.edges, createdBy: t.created_by, createdAt: t.created_at } };
+  }
+
+  /** Deletes a user-saved template. Official/community catalog entries are static: they cannot be deleted. */
+  async removeTemplate(_tenant: string, id: unknown) {
+    const tid = String(id ?? '');
+    if (!/^wf-tpl-[a-z0-9-]{1,32}$/.test(tid)) throw new BadRequestException('only a saved (user) template can be deleted');
+    if (!(await this.store.deleteTemplate(tid, currentBranch(true)))) throw new NotFoundException('unknown template');
+    return { deleted: tid };
   }
 
   async remove(tenant: string, id: unknown) {

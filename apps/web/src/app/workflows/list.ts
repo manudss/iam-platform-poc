@@ -87,6 +87,9 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-menu div { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .5rem; box-shadow: 0 6px 24px var(--shadow-color); min-width: 150px; }
 .wlc-menu div button { background: none; border: 0; border-radius: 0; text-align: left; padding: .45rem .8rem; min-height: 0; color: var(--ink); cursor: pointer; }
 .wlc-menu div button:hover { background: var(--row-hover); }
+.tpl-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: var(--scrim); }
+.tpl-dialog { width: min(560px, 92vw); max-height: 86vh; overflow: auto; background: var(--card); border-radius: .8rem; padding: 1.1rem 1.3rem; box-shadow: 0 20px 60px var(--shadow-color); }
+.tpl-dialog h3 { margin-top: 0; }
 `], template: `
 <p class="lead">IGA workflows: build a scenario as a graph of steps, run it, follow every step, retry after an error.
 <b>Simulated</b> steps never touch anything; <b>real</b> steps write business data on the run's own Dolt branch, which a human then reviews and merges.</p>
@@ -130,6 +133,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
         <a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ definition: d.id }">≡ Runs</a>
         <details class="wlc-menu"><summary title="More">⋯</summary><div>
           <button (click)="duplicate(d); $event.stopPropagation()">Duplicate</button>
+          <button (click)="openSaveTpl(d)">Save as template</button>
           <button (click)="exportDef(d)">Export JSON</button>
           <button (click)="remove(d)">Delete</button>
         </div></details>
@@ -138,6 +142,18 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
   }
   @empty {<p class="hint">No workflow matches. Create one, import a JSON definition, or start from a template.</p>}
 </div>
+@if (savingTpl(); as d) {
+  <div class="tpl-modal" (click)="savingTpl.set(null)">
+    <div class="tpl-dialog" (click)="$event.stopPropagation()" role="dialog" aria-modal="true" aria-label="Save as template">
+      <h3>Save "{{d.name}}" as a template</h3>
+      <p class="hint">The template lands in the gallery, shared with every demo account: anyone can instantiate it into a paused workflow. It keeps the CURRENT graph and trigger of the workflow.</p>
+      <label>Template name<input name="tplName" [(ngModel)]="tplName" maxlength="80" /></label>
+      <label>Description<input name="tplDesc" [(ngModel)]="tplDesc" maxlength="500" /></label>
+      <label>Category<input name="tplCat" [(ngModel)]="tplCat" maxlength="60" placeholder="My templates" /></label>
+      <div class="row"><span class="spacer"></span><button class="secondary" (click)="savingTpl.set(null)">Cancel</button><button (click)="saveTpl()" [disabled]="busy() || !tplName.trim()">Save the template</button></div>
+    </div>
+  </div>
+}
 @if (sheet(); as sh) {<section class="card"><h3>Demo sheet - {{sh.name}} <span class="chip" data-status="simulated">SIMULATED</span></h3>
 <p class="hint">{{sh.note}}</p>
 <div class="scroll"><table><thead><tr><th>#</th>@for (c of sh.columns; track c) {<th>{{c}}</th>}</tr></thead><tbody>
@@ -219,6 +235,19 @@ export class WorkflowsPage implements OnInit {
     this.busy.set(true);
     try { await clientOf(this.s).remove(d.id); await this.load(); this.note.set(`Deleted ${d.name}.`); }
     catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
+  }
+  // ---- Save as template (gallery, shared across demo accounts) ----
+  protected savingTpl = signal<DefinitionSummary | null>(null);
+  protected tplName = ''; protected tplDesc = ''; protected tplCat = '';
+  protected openSaveTpl(d: DefinitionSummary) { this.savingTpl.set(d); this.tplName = d.name; this.tplDesc = d.description; this.tplCat = 'My templates'; }
+  protected async saveTpl() {
+    const d = this.savingTpl(); if (!d) return;
+    this.busy.set(true);
+    try {
+      await clientOf(this.s).saveTemplate({ name: this.tplName.trim(), description: this.tplDesc.trim(), category: this.tplCat.trim(), fromDefinition: d.id });
+      this.note.set(`Template "${this.tplName.trim()}" saved: find it in the Templates gallery.`);
+      this.savingTpl.set(null);
+    } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
   protected async exportDef(d: DefinitionSummary) {
     try {

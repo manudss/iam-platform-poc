@@ -1,7 +1,8 @@
 import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { hasDataSteps, nextCronFire, placeholderKeys, substituteEventPayload, validateCronExpression, validateGraph, validateTrigger } from './model.js';
+import { hasDataSteps, nextCronFire, placeholderKeys, substituteEventPayload, validateCronExpression, validateGraph, validateStepPlaceholders, validateTrigger } from './model.js';
+import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
 
 const node = (id: string, type: string, config: object = {}, name = id) => ({ id, type, name, config });
 const seq = (...ids: string[]) => ids.slice(1).map((to, i) => ({ from: ids[i], to }));
@@ -114,5 +115,18 @@ describe('cron triggers (phase 3)', () => {
     assert.equal(new Date(nextCronFire('0 0 * * 1-5', fri)).toISOString(), '2026-11-15T23:00:00.000Z');
     // Steps: */15 from :00 -> :15
     assert.equal(new Date(nextCronFire('*/15 * * * *', from)).toISOString(), '2026-11-10T21:15:00.000Z'); // 22:15 Paris = 21:15Z
+  });
+});
+
+describe('official templates catalog (phase 3)', () => {
+  it('every official template is categorized, unique and instantiable: valid graph, placeholders and trigger', () => {
+    assert.ok(OFFICIAL_TEMPLATES.length >= 8);
+    assert.equal(new Set(OFFICIAL_TEMPLATES.map((t) => t.id)).size, OFFICIAL_TEMPLATES.length, 'unique ids');
+    for (const t of OFFICIAL_TEMPLATES) {
+      assert.ok(t.category.length > 0 && t.nodes.length > 0, `${t.id}: categorized with blocks`);
+      const { graph, order } = validateGraph({ nodes: t.nodes, edges: t.edges });
+      validateStepPlaceholders(graph, order);
+      validateTrigger(t.trigger ?? null);
+    }
   });
 });
