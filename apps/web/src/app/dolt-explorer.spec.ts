@@ -114,6 +114,25 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     c['branchSearch'].set(''); f.detectChanges();
     expect(el.querySelectorAll('.branch-card').length).toBe(2);
   });
+  it('history: commits are grouped by day and the search filters by message, author or hash', async () => {
+    const { f, el, c } = await mount(routes({
+      'GET /versioning/log': () => ({ data: { ref: 'main', hasMore: true, commits: [
+        { commit: 'a1'.padEnd(32, '0'), author: 'demo-seed', date: new Date().toISOString(), message: 'workflows: saved wf', parents: [], refs: ['main'], merge: false },
+        { commit: 'b2'.padEnd(32, '0'), author: 'sarah-fontaine', date: new Date(Date.now() - 864e5).toISOString(), message: 'profile: edited demo-bob', parents: ['p'], refs: [], merge: false }] } }),
+    }));
+    f.componentRef.setInput('section', 'history'); await f.whenStable(); f.detectChanges();
+    const days = [...el.querySelectorAll('.log-day')].map((x) => x.textContent?.trim());
+    expect(days).toEqual(['Today', 'Yesterday']);
+    expect(el.querySelector('ol.log')?.textContent).toContain('workflows: saved wf');
+    c['histSearch'].set('sarah'); f.detectChanges();
+    expect(el.querySelectorAll('ol.log li').length).toBe(1);
+    expect(el.querySelector('ol.log')?.textContent).toContain('profile: edited demo-bob');
+    c['histSearch'].set('b2'.padEnd(32, '0')); f.detectChanges();
+    expect(el.querySelectorAll('ol.log li').length).toBe(1);
+    c['histSearch'].set('zzz'); f.detectChanges();
+    expect(el.querySelectorAll('ol.log li').length).toBe(0);
+  });
+
   it('offers row editing on an unprotected branch only, and read only on protected main', async () => {
     const { f, el, c } = await mount(routes());
     f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges(); c['dataRef'] = 'main'; await c['openTable']('roles'); f.detectChanges();

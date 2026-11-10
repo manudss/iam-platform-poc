@@ -145,31 +145,69 @@
     }
 
     @case ('history') {
-      <h3>History</h3>
-      <label>Branch or tag <select name="hr" [(ngModel)]="histRef" (ngModelChange)="loadLog(true)">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select></label>
-      <ol class="log">
-        @for (c of commits(); track c.commit) {
-          <li [class.merge]="c.merge">
-            <button type="button" class="link" (click)="showCommit(c)"><code>{{ short(c.commit) }}</code> {{ c.message }}</button>
-            @for (r of c.refs; track r) { <span class="chip">{{ r }}</span> }
-            <span class="hint">{{ c.author }}, {{ c.date }}@if (c.merge) { , merge of {{ short(c.parents[0]) }} + {{ short(c.parents[1]) }} } @else if (c.parents.length) { , parent {{ short(c.parents[0]) }} }</span>
-          </li>
-        }
-      </ol>
-      @if (hasMore()) { <button type="button" (click)="loadLog(false)">Older commits</button> }
+      <div class="page-head">
+        <div>
+          <h3 class="page-title">History</h3>
+          <p class="page-sub">Every commit on the branch, newest first. Pick one to inspect, branch or tag from it.</p>
+        </div>
+        <div class="page-actions">
+          <select name="hr" [(ngModel)]="histRef" (ngModelChange)="loadLog(true)" aria-label="Branch or tag">@for (r of refs(); track r) { <option [value]="r">{{ r }}</option> }</select>
+          <input name="histSearch" [ngModel]="histSearch()" (ngModelChange)="histSearch.set($event)" placeholder="Search commits (message, author, hash)..." autocomplete="off" />
+        </div>
+      </div>
+      @for (g of commitGroups(); track g.label) {
+        <h4 class="log-day">{{ g.label }}</h4>
+        <ol class="log">
+          @for (c of g.commits; track c.commit) {
+            <li [class.merge]="c.merge" [class.sel]="selected()?.commit === c.commit">
+              <span class="dot" aria-hidden="true"></span>
+              <div class="log-main">
+                <div>
+                  <button type="button" class="link msg" (click)="showCommit(c)">{{ c.message }}</button>
+                  @for (r of c.refs; track r) { <span class="chip">{{ r }}</span> }
+                </div>
+                <div class="log-meta"><span class="avatar" aria-hidden="true">{{ initials(c.author) }}</span> {{ c.author }} · {{ timeOf(c.date) }}@if (c.merge) { · merge } </div>
+              </div>
+              <div class="log-act">
+                <code>{{ short(c.commit) }}</code>
+                <button type="button" class="secondary" (click)="showCommit(c)">Rows</button>
+                <span class="menu-wrap">
+                  <button type="button" class="secondary" [attr.aria-expanded]="menuFor() === c.commit" (click)="menuFor.set(menuFor() === c.commit ? '' : c.commit)">&#x22EF;</button>
+                  @if (menuFor() === c.commit) {
+                    <span class="menu">
+                      <button type="button" (click)="menuFor.set(''); showCommit(c)">Branch from here / tag / undo...</button>
+                      @if (c.parents.length) { <button type="button" (click)="menuFor.set(''); go('compare'); from = c.parents[0]; to = c.commit; three = false; compare()">Compare with parent</button> }
+                    </span>
+                  }
+                </span>
+              </div>
+            </li>
+          }
+        </ol>
+      }
+      @if (histSearch() && !commits().length) { <p class="hint">No loaded commit matches.</p> }
+      @if (hasMore()) { <button type="button" class="secondary" (click)="loadLog(false)">Older commits</button> }
+      @if (histSearch()) { <p class="hint">The search covers the loaded commits; load older commits to search further back.</p> }
       @if (selected(); as s) {
-        <div class="panel">
-          <h4>Commit <code>{{ s.commit }}</code></h4>
-          <p>{{ s.message }} <span class="hint">by {{ s.author }}, {{ s.date }}</span></p>
-          <ul>@for (t of s.changes; track t.table) {
-            <li>{{ t.kind }} <b>{{ t.table }}</b>@if (t.schemaChange) { (schema) }
-              @if (s.parents.length && t.dataChange) { <button type="button" class="link" (click)="go('compare'); from = s.parents[0]; to = s.commit; three = false; compare().then(() => showRowDiff(t.table))">rows</button> }</li>
-          }</ul>
-          <div class="row">
-            <label>Name for a new branch / tag <input name="an" [(ngModel)]="actionName" autocomplete="off" /></label>
-            <button type="button" [disabled]="!actionName" (click)="branchFrom(s.commit)">Branch from here</button>
-            <button type="button" [disabled]="!actionName" (click)="tagCommit(s.commit)">Tag this commit</button>
-            <button type="button" [disabled]="!actionName || !s.parents.length" (click)="revertOnBranch(s.commit)">Undo this commit on a new branch</button>
+        <div class="card commit-card">
+          <p class="commit-head"><code>{{ short(s.commit) }}</code> · {{ s.message }} <span class="hint">by {{ s.author }}, {{ rel(s.date) }}@if (s.parents.length) { · parent {{ short(s.parents[0]) }} }</span></p>
+          @if (s.changes.length) {
+            <table class="grid">
+              <thead><tr><th>Change</th><th>Table</th><th></th></tr></thead>
+              <tbody>@for (t of s.changes; track t.table) {
+                <tr>
+                  <td class="kind-{{ t.kind }}"><b>{{ t.kind }}</b></td>
+                  <td>{{ t.table }}@if (t.schemaChange) { <span class="hint">(schema)</span> }</td>
+                  <td class="r">@if (s.parents.length && t.dataChange) { <button type="button" class="link" (click)="go('compare'); from = s.parents[0]; to = s.commit; three = false; compare().then(() => showRowDiff(t.table))">show rows</button> }</td>
+                </tr>
+              }</tbody>
+            </table>
+          } @else { <p class="hint">No data change in this commit.</p> }
+          <div class="row commit-actions">
+            <input name="an" [(ngModel)]="actionName" placeholder="new-branch-name" autocomplete="off" aria-label="Name for a new branch or tag" />
+            <button type="button" class="secondary" [disabled]="!actionName" (click)="branchFrom(s.commit)">Branch from here</button>
+            <button type="button" class="secondary" [disabled]="!actionName" (click)="tagCommit(s.commit)">Tag</button>
+            <button type="button" class="secondary" [disabled]="!actionName || !s.parents.length" (click)="revertOnBranch(s.commit)">Undo on a new branch</button>
             @if (canRestore()) { <button type="button" class="danger" (click)="restoreBranch(s.commit)">Restore {{ histRef }} to here</button> }
           </div>
           <p class="hint">Undo adds a new commit on a new branch, then you open a pull request: history is never rewritten. Restore moves the branch back (not allowed on protected branches).</p>

@@ -45,7 +45,22 @@ export class DoltExplorer {
   protected readonly rowsChangedOn = signal<Record<string, number>>({});
 
   protected histRef = 'main';
+  protected readonly histSearch = signal('');
   protected readonly commits = signal<CommitInfo[]>([]);
+  /** Commits of the log, filtered by the search and grouped by day (Today / Yesterday / dated). */
+  protected readonly commitGroups = computed(() => {
+    const q = this.histSearch().trim().toLowerCase();
+    const list = this.commits().filter((c) => !q || c.message.toLowerCase().includes(q) || c.author.toLowerCase().includes(q) || c.commit.toLowerCase().startsWith(q));
+    const day = (t: number) => new Date(t).toDateString();
+    const today = day(Date.now()), yest = day(Date.now() - 864e5);
+    const groups: { label: string; commits: CommitInfo[] }[] = [];
+    for (const c of list) {
+      const t = Date.parse(c.date);
+      const label = !Number.isFinite(t) ? 'Earlier' : day(t) === today ? 'Today' : day(t) === yest ? 'Yesterday' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+      (groups.find((x) => x.label === label) ?? groups[groups.push({ label, commits: [] }) - 1]).commits.push(c);
+    }
+    return groups;
+  });
   protected readonly hasMore = signal(false);
   protected readonly selected = signal<{ commit: string; message: string; author: string; date: string; parents: string[]; changes: DiffSummary['tables'] } | null>(null);
   protected actionName = '';
@@ -202,6 +217,8 @@ export class DoltExplorer {
     if (r) { this.commits.set(reset ? r.commits : [...this.commits(), ...r.commits]); this.hasMore.set(r.hasMore); if (reset) this.selected.set(null); }
   }
   protected async showCommit(c: CommitInfo) { const r = await this.run(() => this.v.commit(c.commit)); if (r) this.selected.set(r); }
+  protected initials(name: string) { return name.split(/[-\s_]/).map((x) => x[0] ?? '').join('').slice(0, 2).toUpperCase(); }
+  protected timeOf(d: string) { const t = Date.parse(d); return Number.isFinite(t) ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : d; }
   protected async branchFrom(hash: string) {
     const r = await this.run(() => this.v.createBranch(this.actionName, hash));
     if (r) { this.note.set(`Branch ${r.branch} created from ${shortHash(hash)}.`); this.actionName = ''; await this.refreshRefs(); }
