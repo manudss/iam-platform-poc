@@ -22,9 +22,9 @@ describe('policy-studio with the real core', { skip: !have && 'the core binary i
   });
   after(() => { core?.kill(); if (env.u) process.env.IAM_CORE_URL = env.u; else delete process.env.IAM_CORE_URL; if (env.t) process.env.IAM_CORE_ADMIN_TOKEN = env.t; else delete process.env.IAM_CORE_ADMIN_TOKEN; });
 
-  it('lists the six demo rules by name and refuses a caller without the admin token', async () => {
+  it('lists the seven demo rules by name and refuses a caller without the admin token', async () => {
     const c = await new CorePolicySource().catalog();
-    assert.deepEqual(c.rules.map((r) => r.id).sort(), ['approve-needs-payment-approver', 'demo-alice-approves', 'demo-bob-reads', 'mcp-operator-read-write-lifecycle', 'mcp-proxy-needs-delegation-grant', 'sod-blocks-approve']);
+    assert.deepEqual(c.rules.map((r) => r.id).sort(), ['approve-needs-payment-approver', 'demo-alice-approves', 'demo-bob-reads', 'mcp-operator-read-write-lifecycle', 'mcp-proxy-needs-delegation-grant', 'merge-into-protected-needs-branch-merger', 'sod-blocks-approve']);
     assert.equal(c.rules.find((r) => r.id === 'sod-blocks-approve')!.effect, 'forbid');
     assert.equal((await fetch(`${CORE}/v1/policies`)).status, 401);
   });
