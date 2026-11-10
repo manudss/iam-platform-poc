@@ -208,7 +208,6 @@ test('refresh does not touch Render when the GitHub image build failed', async (
   const calls = mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
-    if (u.includes('api.github.com') && u.includes('/actions/workflows/') && u.includes('status=completed')) return json200({ workflow_runs: [{ status: 'completed', conclusion: 'failure' }] });
     if (u.includes('api.github.com') && u.includes('/actions/workflows/')) return json200({ workflow_runs: [{ status: 'completed', conclusion: 'failure' }] });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     return json200([]);
@@ -224,16 +223,15 @@ test('refresh does not touch Render when the GitHub image build failed', async (
 
 test('refresh dispatches the image build when no run exists for the head sha', async () => {
   let dispatched = 0;
-  let completedReads = 0;
   const calls = mockFetch(async (u, opts) => {
     if (u.includes('/pulls/3')) return openPr();
     if (u.includes('api.github.com') && u.includes('/contents/demo/Dockerfile')) return json200({ type: 'file' });
     if (u.includes('api.github.com') && u.includes('/dispatches')) { dispatched++; return { ok: true, status: 204, json: async () => null, text: async () => '' }; }
-    if (u.includes('api.github.com') && u.includes('/actions/workflows/') && u.includes('status=completed')) {
-      completedReads++;
-      return completedReads >= 2 ? imageBuilt : json200({ workflow_runs: [] });
+    // Runs are fetched by head_sha only and filtered client-side: no runs
+    // until the dispatch registers the build, then a completed success.
+    if (u.includes('api.github.com') && u.includes('/actions/workflows/')) {
+      return dispatched === 0 ? json200({ workflow_runs: [] }) : imageBuilt;
     }
-    if (u.includes('api.github.com') && u.includes('/actions/workflows/')) return json200({ workflow_runs: [] });
     if (u.includes('api.github.com') && u.includes('/comments')) return json200([]);
     if (u.includes('/deploys') && (opts.method ?? 'GET') === 'GET') return liveDeploy();
     if (u.includes('/services') && !u.includes('name=')) return json200({ service: { id: 'srv-new', serviceDetails: { url: 'https://iam-pr3.onrender.com', runtime: 'image' } } });
