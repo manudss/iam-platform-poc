@@ -30,7 +30,7 @@
       <input type="search" name="tableSearch" [(ngModel)]="tableSearch" placeholder="Filter tables" />
       <h5>TABLES ({{ visibleTables().length }})</h5>
       <ul class="tree-list">
-        @for (t of visibleTables(); track t.name) { <li><button type="button" class="tree-item" [class.on]="data()?.table === t.name" (click)="openTable(t.name)">{{ t.name }} <span class="cnt">{{ t.rows }}</span></button></li> }
+        @for (t of visibleTables(); track t.name) { <li><button type="button" class="tree-item" [class.on]="data()?.table === t.name" (click)="treeTableClick(t.name)">{{ t.name }} <span class="cnt">{{ t.rows }}</span></button></li> }
       </ul>
       <h5>DOLT SYSTEM</h5>
       <ul class="tree-list">

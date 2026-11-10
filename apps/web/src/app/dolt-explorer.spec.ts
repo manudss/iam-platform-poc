@@ -345,6 +345,21 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     expect(c['sqlMode']).toBe('write'); expect(el.textContent).toContain('Preview changes');
     vi.restoreAllMocks();
   });
+  it('sql console: clicking an application table in the tree fills the editor like a system table', async () => {
+    const { f, el, c } = await mount(routes());
+    f.componentRef.setInput('section', 'sql'); await f.whenStable(); f.detectChanges();
+    const item = [...el.querySelectorAll('.tree-item')].find((b) => b.textContent?.trim().startsWith('roles')) as HTMLButtonElement;
+    expect(item).toBeTruthy();
+    item.click(); await f.whenStable(); f.detectChanges();
+    expect(c['tab']()).toBe('sql');
+    expect(c['sqlText']).toBe('select * from roles limit 50');
+    expect(c['sqlMode']).toBe('read');
+    // on the data view the same tree still opens the data grid
+    f.componentRef.setInput('section', 'data'); await f.whenStable(); f.detectChanges();
+    const item2 = [...el.querySelectorAll('.tree-item')].find((b) => b.textContent?.trim().startsWith('roles')) as HTMLButtonElement;
+    item2.click(); await f.whenStable(); f.detectChanges();
+    expect(c['data']()?.table).toBe('roles');
+  });
   it('sql dry run: banner plus per-table row samples', async () => {
     const res = { mode: 'write', dryRun: true, statements: 1, affectedRows: 1, changes: [{ table: 'roles', kind: 'modified', dataChange: true, schemaChange: false }], samples: { roles: { columns: ['id', 'label'], rows: [{ type: 'added', from: null, to: { id: 'x', label: 'X' } }] } } };
     const { f, el, c } = await mount(routes({ 'POST /versioning/sql': () => ({ data: res }) }));

@@ -173,7 +173,7 @@ export class DoltExplorer {
     if (t === 'home') await this.loadHome();
     if (t === 'branches') { await this.refreshRefs(); await this.loadRowsChanged(); }
     if (t === 'history') await this.loadLog(true);
-    if (t === 'data') await this.loadTables();
+    if (t === 'data' || t === 'sql') await this.loadTables();
     if (t === 'compare' && this.from !== this.to) await this.compare();
     if (t === 'pulls') { await this.refreshRefs(); await this.loadPulls(); }
   }
@@ -437,6 +437,11 @@ export class DoltExplorer {
     if (r) { this.data.set(r); this.editJson = ''; this.editKey = null; this.editorOpen = false; this.rowView.set(null); this.hiddenCols.set(new Set()); this.rowFilter.set(''); this.sortCol.set(''); if (!this.openTables().includes(name)) this.openTables.update((t) => [...t, name]); }
   }
   protected closeTableTab(name: string) { this.openTables.update((t) => t.filter((x) => x !== name)); if (this.data()?.table === name) this.data.set(null); }
+  /** Tree click on an application table: on the SQL console it becomes a ready-to-run select, like the Dolt system tables; elsewhere it opens the data grid. */
+  protected treeTableClick(name: string) {
+    if (this.tab() === 'sql') { this.sqlRef = this.dataRef; this.sqlMode = 'read'; this.sqlText = `select * from ${name} limit 50`; return; }
+    void this.openTable(name);
+  }
   protected openSystemTable(name: string) {
     this.sqlRef = this.dataRef; this.sqlMode = 'read';
     this.sqlText = name.endsWith('*') ? `-- ${name} is a family of tables, one per user table\nselect * from dolt_log limit 50` : `select * from ${name} limit 50`;
