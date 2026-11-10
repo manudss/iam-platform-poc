@@ -40,6 +40,9 @@ manual change). The workflow itself never merges.
 
 The console page **Workflows** (`/workflows`) lists definitions and recent runs. The editor (`/workflows/edit/:id`)
 uses **ngx-vflow** (MIT, Angular-native node-graph editor — <https://github.com/artem-mangilev/ngx-vflow>).
+When the workflow starts on an event, the trigger is drawn as the **first canvas node** (dashed amber look,
+TRIGGER badge, no incoming handle), automatically linked to every root step; it is a visual node only — the
+trigger itself is edited with the Start trigger field above the canvas and never saved as a graph node.
 
 Editor choice, checked on 2026-10-30: Temporal has **no official visual workflow editor** (the Temporal Web UI is
 read-only observability); community Temporal graph editors are experimental. Reusing an existing, maintained,

@@ -96,6 +96,47 @@ export class WfNodeComponent extends CustomNodeComponent<WfNodeData> {
   protected badgeLabel() { return categoryLabel(this.data()?.category ?? 'simulated'); }
 }
 
+// ---- Visual trigger node: shown as the first node when the workflow starts on an event. Distinct dashed
+// amber look, no target handle (nothing points into it), not selectable or editable on the canvas: the
+// trigger itself is edited with the Start trigger field above the canvas.
+export const TRIGGER_NODE_ID = '__trigger';
+export interface WfTriggerNodeData { name: string }
+
+@Component({
+  selector: 'app-wf-trigger-node',
+  imports: [HandleComponent],
+  template: `
+    <div class="wf-node wf-trigger">
+      <span class="wf-node-badge trigger">TRIGGER</span>
+      <span class="wf-node-name">{{ data()?.name }}</span>
+      <span class="wf-trigger-hint">starts the first steps</span>
+    </div>
+    <handle type="source" position="right" />
+  `,
+  styles: [`
+    :host { display: block; position: relative; }
+    .wf-node {
+      box-sizing: border-box; width: 190px; min-height: 64px; padding: 10px 12px;
+      background: #fff8e6; border: 1.5px dashed #d9a514; border-left: 5px solid #d9a514; border-radius: 10px;
+      box-shadow: 0 1px 3px rgba(20, 30, 60, .12);
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .wf-node-name {
+      font-size: 14px; font-weight: 600; line-height: 1.35; color: #1c2440;
+      overflow-wrap: anywhere; white-space: normal;
+    }
+    .wf-node-badge.trigger {
+      align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+      padding: 2px 7px; border-radius: 999px; background: #fde9c8; color: #8a6d1a;
+    }
+    .wf-trigger-hint { font-size: 11px; color: #6b7280; }
+    handle { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
+      background: #ffffff; border: 2px solid #d9a514; transform: translateY(-50%); }
+    handle[position="right"] { right: -6px; }
+  `],
+})
+export class WfTriggerNodeComponent extends CustomNodeComponent<WfTriggerNodeData> {}
+
 export class WorkflowClient {
   constructor(private readonly api: ApiClient, private readonly adminToken: () => string) {}
   private req<T>(method: string, path: string, body?: object) {
@@ -262,11 +303,11 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 <section class="card"><div class="row wf-head">
 <label>Name<input name="wfName" [(ngModel)]="name" maxlength="80" /></label>
 <label>Description<input name="wfDesc" [(ngModel)]="description" maxlength="500" /></label>
-<label>Start trigger<select name="wfTrigger" [(ngModel)]="triggerEvent" (ngModelChange)="match.set({}); triggerCfg.set({})">
+<label>Start trigger<select name="wfTrigger" [ngModel]="triggerEvent()" (ngModelChange)="onTriggerChange($event)">
 <option value="">Manual start only</option>
 @for (ev of events(); track ev.type) {<option [value]="ev.type">{{ev.label}}</option>}
 </select></label>
-@if (triggerEvent) {<span class="hint">Starts by itself on this event. Step fields may use placeholders: {{placeholderHint()}}</span>
+@if (triggerEvent()) {<span class="hint">Starts by itself on this event. Step fields may use placeholders: {{placeholderHint()}}</span>
 @for (k of payloadKeys(); track k) {@if (k !== '*') {<label>only if {{k}} =<input [attr.name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
 @for (f of triggerFields(); track f.key) {
 @switch (f.type) {
@@ -289,7 +330,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 @for (t of g.blocks; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{categoryLabel(categoryOf(t))}}</small>@if (t.provider && !t.providerActive) { <small class="req">(plugin disabled)</small>}<br /><small>{{t.description}}</small></button>}}
 </section>
 <section class="card wf-canvas">
-<vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [minZoom]="0.4" [maxZoom]="1.6" [background]="'var(--bg)'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
+<vflow [nodes]="allNodes()" [edges]="allEdges()" [view]="'auto'" [minZoom]="0.4" [maxZoom]="1.6" [background]="'var(--bg)'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
 </section>
 <section class="card"><h3>Selected</h3>
 @if (selectedNode(); as nid) {@if (state.get(nid); as st) {
@@ -338,20 +379,22 @@ export class WorkflowEditPage implements OnInit {
   protected events = signal<WfEvent[]>([]);
   protected blocks = signal<WfBlock[]>([]);
   protected paletteQuery = '';
-  protected triggerEvent = '';
+  protected triggerEvent = signal('');
   protected match = signal<Record<string, string>>({});
   protected triggerCfg = signal<Record<string, unknown>>({});
   protected readonly categoryLabel = categoryLabel;
   protected readonly categoryOf = categoryOf;
-  protected payloadKeys() { return this.events().find((e) => e.type === this.triggerEvent)?.payload ?? []; }
+  protected onTriggerChange(v: string) { this.triggerEvent.set(v); this.match.set({}); this.triggerCfg.set({}); }
+  protected payloadKeys() { return this.events().find((e) => e.type === this.triggerEvent())?.payload ?? []; }
   protected placeholderHint() { return this.payloadKeys().includes('*') ? '{{event.<any key of the row/call>}}' : this.payloadKeys().map((k) => `{{event.${k}}}`).join('  '); }
-  protected triggerFields(): WfBlockField[] { return this.events().find((e) => e.type === this.triggerEvent)?.configFields ?? []; }
+  protected triggerFields(): WfBlockField[] { return this.events().find((e) => e.type === this.triggerEvent())?.configFields ?? []; }
   protected setTriggerCfg(k: string, v: unknown) { this.triggerCfg.update((c) => ({ ...c, [k]: v })); }
   protected setMatch(k: string, v: string) { this.match.update((m) => { const n = { ...m }; if (v) n[k] = v; else delete n[k]; return n; }); }
   private triggerPayload(): WfTrigger | null {
-    if (!this.triggerEvent) return null;
+    const event = this.triggerEvent();
+    if (!event) return null;
     const cfg = Object.fromEntries(Object.entries(this.triggerCfg()).filter(([, v]) => v !== '' && v !== undefined));
-    return { event: this.triggerEvent, ...(Object.keys(this.match()).length ? { match: this.match() } : {}), ...(Object.keys(cfg).length ? { config: cfg } : {}) };
+    return { event, ...(Object.keys(this.match()).length ? { match: this.match() } : {}), ...(Object.keys(cfg).length ? { config: cfg } : {}) };
   }
   /** The editor palette: the API block catalogue grouped by family (Core first), built-ins last-resort fallback. */
   protected palette(): { family: string; blocks: WfBlock[] }[] {
@@ -370,7 +413,7 @@ export class WorkflowEditPage implements OnInit {
     return out;
   }
   protected placeholdersFor(nid: string): string[] {
-    const ev = this.events().find((e) => e.type === this.triggerEvent);
+    const ev = this.events().find((e) => e.type === this.triggerEvent());
     const out: string[] = (ev?.payload ?? []).filter((k) => k !== '*').map((k) => `{{event.${k}}}`);
     if (ev?.payload?.includes('*')) out.push('{{event.<any key of the row/call>}}');
     for (const aid of this.ancestorsOf(nid)) {
@@ -399,7 +442,7 @@ export class WorkflowEditPage implements OnInit {
     const canvas = this.host.nativeElement.querySelector('vflow');
     if (!v || !canvas) return; // the page was left before the framing finished
     const rects = this.nodeRects();
-    const ready = v.initialized() && canvas.clientWidth > 0 && rects.length === this.vfNodes().length && rects.every((r) => r.width > 0 && r.height > 0);
+    const ready = v.initialized() && canvas.clientWidth > 0 && rects.length === this.allNodes().length && rects.every((r) => r.width > 0 && r.height > 0);
     if (!ready) {
       if (waitedFrames < 600) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt, waitedFrames + 1)));
       else v.fitView({ padding: 0.14, duration: 120 }); // last-resort best effort, same as the old behavior
@@ -442,18 +485,44 @@ export class WorkflowEditPage implements OnInit {
     return STEP_TYPES.find((x) => x.type === t) ?? { type: t, label: t, simulated: true, category: 'simulated', hint: '' };
   }
 
+  // ---- Trigger as the first canvas node: a computed visual node (never in the saved graph) linked to every
+  // root step, so a workflow that starts on an event reads left-to-right: TRIGGER -> steps. ----
+  protected triggerLabel = computed(() => {
+    const t = this.triggerEvent();
+    if (!t) return '';
+    return this.events().find((e) => e.type === t)?.label ?? t;
+  });
+  private triggerNode = computed<Node | null>(() => {
+    const label = this.triggerLabel();
+    if (!label) return null;
+    return {
+      id: TRIGGER_NODE_ID, type: WfTriggerNodeComponent,
+      data: signal<WfTriggerNodeData>({ name: label }),
+      point: signal({ x: 20, y: 60 }),
+      selected: signal(false),
+    } as Node;
+  });
+  protected allNodes = computed(() => { const t = this.triggerNode(); return t ? [t, ...this.vfNodes()] : this.vfNodes(); });
+  /** Visual links from the trigger node to every root step (no incoming link). Never saved in the graph. */
+  protected triggerEdges = computed<Edge[]>(() => {
+    if (!this.triggerNode()) return [];
+    const incoming = new Set(this.vfEdges().map((e) => e.target));
+    return this.vfNodes().filter((n) => !incoming.has(n.id)).map((n) => this.makeEdge(`${TRIGGER_NODE_ID}->${n.id}`, TRIGGER_NODE_ID, n.id, '#d9a514'));
+  });
+  protected allEdges = computed(() => [...this.triggerEdges(), ...this.vfEdges()]);
+
   private makeNode(id: string, st: NodeState, i: number): Node {
     return {
       id, type: WfNodeComponent,
       data: signal<WfNodeData>({ name: st.name, category: this.typeOf(st.type).category }),
-      point: signal({ x: 40 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
+      point: signal({ x: 320 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
       selected: signal(false),
     } as Node;
   }
-  private makeEdge(id: string, source: string, target: string): Edge {
+  private makeEdge(id: string, source: string, target: string, color = 'var(--muted)'): Edge {
     return {
       id, source, target, selected: signal(false),
-      markers: signal({ end: { type: 'arrow-closed', width: 16, height: 16, color: 'var(--muted)' } }),
+      markers: signal({ end: { type: 'arrow-closed', width: 16, height: 16, color } }),
     } as Edge;
   }
 
@@ -482,6 +551,7 @@ export class WorkflowEditPage implements OnInit {
   protected noop(_e: unknown) {}
   protected onConnect(c: Connection) {
     if (!c.source || !c.target) return;
+    if (c.source === TRIGGER_NODE_ID || c.target === TRIGGER_NODE_ID) return; // trigger links are drawn automatically to the root steps
     const id = `${c.source}->${c.target}`;
     if (this.vfEdges().some((e) => e.id === id)) return;
     this.vfEdges.update((es) => [...es, this.makeEdge(id, c.source!, c.target!)]);
@@ -513,7 +583,7 @@ export class WorkflowEditPage implements OnInit {
   protected loadSample(sm: (typeof this.samples)[number]) {
     this.name = sm.name.replace('Sample: ', 'Demo: ');
     this.description = sm.description;
-    this.triggerEvent = sm.trigger?.event ?? ''; this.match.set({ ...(sm.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(sm.trigger?.config ?? {}) });
+    this.triggerEvent.set(sm.trigger?.event ?? ''); this.match.set({ ...(sm.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(sm.trigger?.config ?? {}) });
     this.state.clear();
     const nodes: Node[] = [];
     sm.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); });
@@ -526,7 +596,7 @@ export class WorkflowEditPage implements OnInit {
     try {
       const { definition } = await clientOf(this.s).get(this.id);
       this.name = definition.name; this.description = definition.description;
-      this.triggerEvent = definition.trigger?.event ?? ''; this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
+      this.triggerEvent.set(definition.trigger?.event ?? ''); this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
       this.state.clear();
       const nodes: Node[] = [];
       definition.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });
