@@ -229,6 +229,7 @@
               <span class="hint branch-note">Direct writes refused here; every change lands through review.</span>
               <button type="button" class="secondary" [attr.aria-expanded]="protectOpen() === b.name" (click)="protectOpen.set(protectOpen() === b.name ? '' : b.name)">Protection</button>
             } @else {
+              @if (!b.protected) { <button type="button" class="secondary" (click)="protectBranch(b)">Protect</button> }
               @if (b.protected) { <button type="button" class="secondary" [attr.aria-expanded]="protectOpen() === b.name" (click)="protectOpen.set(protectOpen() === b.name ? '' : b.name)">Protection</button> }
               @if (b.name === sessionBranch()) { <button type="button" (click)="goReview()">Review &amp; apply ⇥</button> }
               @else { <button type="button" class="secondary" (click)="newPullFrom(b.name)">New pull request</button> }
@@ -263,7 +264,8 @@
                 <span class="kinds">@for (f of customFoldersOf(p); track f) { <span class="chip">{{ f }}/ <button type="button" class="link" (click)="removeCustomFolder(p, f)" [attr.aria-label]="'Remove folder ' + f">x</button></span> }
                   <input [name]="'ac-' + p.branch" [(ngModel)]="addCustom" placeholder="custom folder, e.g. team" autocomplete="off" aria-label="Custom folder to allow" /> <button type="button" class="secondary" (click)="addCustomFolder(p)">Add folder</button></span></li>
             </ul>
-            <p class="hint">With the policy rule, merging needs a role that a policy rule accepts for <code>branch:merge</code> (demo: <code>branch-merger</code> or <code>iam-admin</code>; <code>manager</code> for profile/ branches), from the active version of main. See the Policies screen.</p>
+            @if (p.branch !== defaultBranch()) { <p><button type="button" class="danger" (click)="unprotectBranch(p.branch)">Remove protection</button></p> }
+            <p class="hint">With the policy rule, merging needs a role that a policy rule accepts for <code>branch:merge</code> (demo: <code>branch-merger</code> or <code>iam-admin</code>; <code>manager</code> for profile/ branches; <code>main-merger</code> for main only), from the active version of main. See the Policies screen.</p>
           </section>
         }
       }
