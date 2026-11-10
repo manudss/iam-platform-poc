@@ -19,7 +19,7 @@ try {
   await page.waitForSelector('text=protected'); await shot('h1-branches');
   assert.doesNotMatch(await page.locator('.explorer .msg').first().innerText().catch(() => ''), /capability required/);
   const br = 'hosted-' + Date.now().toString(36);
-  await page.fill('input[name=nb]', br); await btn('Create branch').click(); await page.waitForSelector(`td:has-text("${br}")`);
+  await page.selectOption('select[name=nfd]', 'none'); await page.fill('input[name=nb]', br); await btn('Create branch').click(); await page.waitForSelector(`td:has-text("${br}")`);
   await nav('/database/data'); await page.selectOption('select[name=dr]', br); await page.click('button:has-text("roles")'); await page.waitForSelector('th:has-text("label")');
   await btn('Add a row').click(); await page.fill('[data-edit-field="id"] textarea', 'auditor-' + br); await page.locator('[data-edit-field="label"] input[type=checkbox]').uncheck(); await page.fill('[data-edit-field="label"] textarea','Auditor'); await page.locator('[data-edit-field="is_sensitive"] input[type=checkbox]').uncheck(); await page.fill('[data-edit-field="is_sensitive"] textarea','0');
   await page.fill('input[name=em]', 'add role'); await btn('Commit change').click(); await page.waitForSelector('td:has-text("Auditor")');
