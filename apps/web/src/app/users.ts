@@ -187,7 +187,7 @@ export class UsersPage {
   /** Referenced managers (reference rows) feed the manager field and the chain, never the list. */
   protected people = computed(() => this.users().filter((u) => !(u as { reference?: boolean }).reference));
   /** Manager and department are authority fields: only the super admin changes them. */
-  protected canEditAuthority() { const a = this.s.access(); return !a || !a.screenAccess || !a.screens || a.screens.includes('policies'); }
+  protected canEditAuthority() { const a = this.s.access(); return !a || !a.screenAccess || !a.screens || a.screens.includes('authority-edit'); }
   protected stats = computed(() => userStats(this.people()));
   protected departments = computed(() => [...new Set(this.people().map((u) => u.department).filter(Boolean))].sort());
   protected filtered = computed(() => sortUsers(filterUsers(this.people(), { q: this.search(), dept: this.fdept(), status: this.fstatus() }), this.sortKey(), this.sortDir()));

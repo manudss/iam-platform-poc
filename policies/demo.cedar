@@ -84,6 +84,12 @@ permit(principal, action == Action::"screen:open", resource)
 permit(principal, action == Action::"screen:open", resource)
   when { resource in [Screen::"dolt-pulls", Screen::"dolt-compare", Screen::"dolt-history", Screen::"dolt-branches", Screen::"branch-manage"] && context has roles && (context.roles.contains("main-merger") || context.roles.contains("branch-merger")) };
 
+@id("screen-business-admin")
+@description("An administrator (main-merger) opens every administration screen except the advanced Dolt manager (Home, Data, SQL, Edit), and may change managers and departments.")
+@pillar("access")
+permit(principal, action == Action::"screen:open", resource)
+  when { resource in [Screen::"dashboard", Screen::"users", Screen::"profile-fields", Screen::"roles", Screen::"profile-reviews", Screen::"my-profile", Screen::"authentication", Screen::"assignments", Screen::"activation", Screen::"organizations", Screen::"applications", Screen::"policies", Screen::"workflows", Screen::"plugins", Screen::"customisation", Screen::"templates", Screen::"event-bus", Screen::"mcp", Screen::"dolt-pulls", Screen::"dolt-compare", Screen::"dolt-history", Screen::"dolt-branches", Screen::"branch-manage", Screen::"authority-edit"] && context has roles && context.roles.contains("main-merger") };
+
 @id("screen-my-profile")
 @description("Everyone signed in opens their own profile.")
 @pillar("access")
@@ -94,6 +100,12 @@ permit(principal, action == Action::"screen:open", resource == Screen::"my-profi
 @pillar("access")
 permit(principal, action in [Action::"user:read", Action::"user:manage", Action::"assignment:change"], resource)
   when { context has roles && context.roles.contains("iam-admin") };
+
+@id("user-business-admin")
+@description("An administrator (main-merger) reads and manages every person but herself, and assigns any role except the super admin one.")
+@pillar("access")
+permit(principal, action in [Action::"user:read", Action::"user:manage", Action::"assignment:change"], resource)
+  when { context has roles && context.roles.contains("main-merger") && resource != principal && (if context has role then context.role != "iam-admin" else true) };
 
 @id("user-scope-manager-chain")
 @description("A manager reads and manages the people below them in the manager chain (reports, recursively), never themselves.")
@@ -120,7 +132,7 @@ permit(principal, action == Action::"assignment:change", resource)
   when { context has roles && context.roles.contains("org-admin") && context has admin_orgs && resource in context.admin_orgs && resource != principal && context has role && ["accountant", "payment-creator", "employee", "hr-partner", "sales-rep"].contains(context.role) };
 
 @id("assignment-no-escalation")
-@description("Nobody but the super admin assigns a role that carries authority over rights.")
+@description("Only the super admin assigns iam-admin; an administrator (main-merger) assigns the other roles; nobody else assigns a role that carries authority over rights.")
 @pillar("access")
 forbid(principal, action == Action::"assignment:change", resource)
-  when { context has role && ["iam-admin", "main-merger", "branch-merger", "manager", "org-admin", "payment-approver"].contains(context.role) && !(context has roles && context.roles.contains("iam-admin")) };
+  when { context has role && ["iam-admin", "main-merger", "branch-merger", "manager", "org-admin", "payment-approver"].contains(context.role) && !(context has roles && context.roles.contains("iam-admin")) && !(context has roles && context.roles.contains("main-merger") && context.role != "iam-admin") };

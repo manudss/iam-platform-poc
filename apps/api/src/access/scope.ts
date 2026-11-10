@@ -110,7 +110,7 @@ export async function filterPeople<T>(tenant: string, actor: string, action: Per
 export async function assertSuperAdmin(tenant: string, actor: string, what: string): Promise<void> {
   if (!screenAccessOn()) return;
   const { askScreen } = await import('../auth/screen-decision.js');
-  let a; try { a = await askScreen(tenant, actor, 'unmapped'); } catch { throw new ForbiddenException('the policy engine could not be reached; refused to stay on the safe side'); }
+  let a; try { a = await askScreen(tenant, actor, 'authority-edit'); } catch { throw new ForbiddenException('the policy engine could not be reached; refused to stay on the safe side'); }
   if (!a.engine || a.allow) return;
   throw new ForbiddenException({ code: 'administrator-only', message: `${what} is reserved to an administrator: it changes who reports to whom or where someone works.` });
 }

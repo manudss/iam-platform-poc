@@ -97,7 +97,7 @@ describe('scoped assignments merge: real Dolt + real core', { skip: !have && 'do
     const all = ['accountant', 'payment-creator', 'employee', 'hr-partner', 'sales-rep', 'security-analyst', 'iam-admin', 'manager', 'main-merger', 'org-admin', 'payment-approver'];
     const l = await assignableRoleIds(T, 'lucie-t', all);
     assert.deepEqual([...l].sort(), ['accountant', 'employee', 'hr-partner', 'payment-creator', 'sales-rep']);
-    assert.equal((await assignableRoleIds(T, 'noemie-t', all)).size, 0, 'a main-merger gets no assignable role from this rule alone');
+    const n = await assignableRoleIds(T, 'noemie-t', all); assert.equal(n.size, 10, 'an administrator assigns every role...'); assert.equal(n.has('iam-admin'), false, '...but the super admin one');
     assert.equal((await assignableRoleIds(T, 'camille-t', all)).size, 0, 'someone with no role gets none');
   });
   it('a diff that touches anything else than assignments is refused', async () => {

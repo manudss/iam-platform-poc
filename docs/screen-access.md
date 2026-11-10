@@ -30,3 +30,8 @@ demo-alice = iam-admin only; demo-lucie = manager only; demo-noemie = main-merge
 
 - A manager (or organisation admin) merges into main only HER OWN personal branch (`own_branch`, read server side from the personal branch registry, never from the caller) and only when the real diff touches assignments of her scope. Another branch, even with in-scope rows, is refused ("you may only merge your own personal branch"). Merge my changes, Review & Apply and Pull requests all go through the same gate.
 - The branch selector, Manage branches, rename/release of the personal branch and branch test links need the screen `branch-manage`, opened by the super admin rule only. Everyone else works on their own personal branch, opened for them at sign-in.
+
+## Administrator (main-merger) and the role catalogue
+
+- Rule `screen-business-admin`: a main-merger opens every administration screen except the advanced Dolt manager (Home, Data, SQL, Edit). Rule `user-business-admin`: she reads and manages every person but herself and assigns every role except `iam-admin` (`assignment-no-escalation` still reserves that one to the super admin). The screen `authority-edit` (change a manager or a department) is opened by the same rule and by the super admin only.
+- The role list a manager sees (Manage roles, matrix, filters) is computed from the same Cedar rule as the merge gate (`assignment:change`), not from a list in code; callers who open the Roles screen see the whole catalogue. The merge refusal stays as the safety net.
