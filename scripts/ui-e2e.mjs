@@ -403,8 +403,12 @@ try {
   await setToken();
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
+  const reloadFields = page.waitForResponse(r => r.url().includes('/profile-fields') && r.request().method() === 'GET' && r.status() === 200);
   await nav('/profile-fields');
-  await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")');
+  const reloadConfig = await (await reloadFields).json();
+  console.log('SECTION RELOAD', JSON.stringify({sections: reloadConfig.working?.config?.sections, branch: await page.locator('select[name=globalBranch]').inputValue()}));
+  try { await page.waitForSelector('.pf-group:has-text("Urgence · 0 field(s)")'); }
+  catch(e) { console.log('SECTION DOM', (await page.locator('body').innerText()).slice(-3500)); throw e; }
   assert.deepEqual(await page.locator('#pf-table .pf-group').allTextContents(), sectionOrder, 'empty sections and their order survive save/reload');
   await page.getByRole('button', { name: 'Remove the empty section Urgence' }).click();
   await page.waitForSelector('.pf-group:has-text("Urgence")', { state: 'detached' });
