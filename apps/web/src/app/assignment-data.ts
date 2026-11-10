@@ -53,7 +53,7 @@ export class AssignmentData {
  }
  async load() {
   const n=++this.generation, branch=this.s.branch(); this.loading.set(true); this.error.set('');
-  this.users.set([]); this.roles.set([]); this.assignments.set([]); this.rules.set([]); this.staged.set(new Set());
+  this.refusal.set(''); this.offending.set([]); this.users.set([]); this.roles.set([]); this.assignments.set([]); this.rules.set([]); this.staged.set(new Set());
   try {
    const [u,r,a,o,p,d]=await Promise.all([
     this.request<{users:UserProfile[]}>('GET','/users'),this.request<{roles:Role[];sodRules:SodRule[]}>('GET','/roles'),this.s.api.assignments(),

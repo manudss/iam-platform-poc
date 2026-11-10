@@ -88,6 +88,11 @@ describe('scoped assignments merge: real Dolt + real core', { skip: !have && 'do
     await branch('feature/escalate2', ["insert into assignments values ('yanis-t','manager')"]);
     assert.match(await refusal(prot.assertMayMerge('main', 'lucie-t', 'merge into', 'feature/escalate2')), /manager/);
   });
+  it('a role managers may not give is named as such, not blamed on the person', async () => {
+    await branch('feature/analyst', ["insert into assignments values ('yanis-t','security-analyst')"]);
+    const m = await refusal(prot.assertMayMerge('main', 'lucie-t', 'merge into', 'feature/analyst'));
+    assert.match(m, /security-analyst/); assert.match(m, /managers may not give the role security-analyst/); assert.doesNotMatch(m, /not one of the people you manage/);
+  });
   it('a diff that touches anything else than assignments is refused', async () => {
     await branch('feature/other', ["insert into assignments values ('yanis-t','employee')", "update identities set department='hr' where id='yanis-t'"]);
     assert.match(await refusal(prot.assertMayMerge('main', 'lucie-t', 'merge into', 'feature/other')), /identities/);

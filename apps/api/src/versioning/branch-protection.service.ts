@@ -191,8 +191,13 @@ export class BranchProtectionService implements OnModuleInit {
       if (!who2 || !role) { bad.push('an assignment row could not be read'); continue; }
       const gone = r.type === 'removed' || r.type === 'delete';
       const a = await askPerson(this.tenant, hMain, who, 'assignment:change', who2, role);
-      if (!a.allow) badRows.push({ identity: who2, role, change: gone ? 'removed' : 'added', why: ROLE_ONLY_ADMIN.has(role) ? `only an administrator can give the role ${role}` : `${who2} is not one of the people you manage` });
-      if (!a.allow) bad.push(`${gone ? 'removing' : 'giving'} the role ${role} ${gone ? 'from' : 'to'} ${who2} is outside what you may change (either ${who2} is not one of the people you manage, or ${role} can only be given by an administrator)`);
+      if (!a.allow) {
+        // Say the real reason: an administrator-only role, a role managers may not assign, or a person outside the scope (probed with a role managers may assign).
+        const inScope = ROLE_ONLY_ADMIN.has(role) ? undefined : (await askPerson(this.tenant, hMain, who, 'assignment:change', who2, 'employee')).allow;
+        const why = ROLE_ONLY_ADMIN.has(role) ? `only an administrator can give the role ${role}` : inScope ? `managers may not give the role ${role} (only an administrator can)` : `${who2} is not one of the people you manage`;
+        badRows.push({ identity: who2, role, change: gone ? 'removed' : 'added', why });
+        bad.push(`${gone ? 'removing' : 'giving'} the role ${role} ${gone ? 'from' : 'to'} ${who2}: ${why}`);
+      }
     }
     if (bad.length) return { offending: `${bad.length} row${bad.length > 1 ? 's are' : ' is'} outside your scope: ${bad.slice(0, 10).join('; ')}. Remove them from your branch and merge again`, rows: badRows };
     return { scope: 'assignments-in-scope' };
