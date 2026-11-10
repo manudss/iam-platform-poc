@@ -27,21 +27,21 @@
       <app-theme-switch class="top-theme" />
       <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
       @if (isAdmin() && !s.testBranch()) {
-      <span class="pillwrap" title="The data branch you are working on. Main is read only. Your own branch is green, other branches are orange."><span class="dot" [class]="dot()"></span>
-        <select class="pill" name="globalBranch" aria-label="Data branch" [(ngModel)]="working" (ngModelChange)="select()"><option value="">Choose a branch</option>@for(b of branches();track b.name){<option [value]="b.name">{{b.name}}{{b.name==='main'?' (read only)':''}}{{b.name===personal()?' (yours)':''}}</option>}</select></span>
+      @if (canBranches()) {<span class="pillwrap" title="The data branch you are working on. Main is read only. Your own branch is green, other branches are orange."><span class="dot" [class]="dot()"></span>
+        <select class="pill" name="globalBranch" aria-label="Data branch" [(ngModel)]="working" (ngModelChange)="select()"><option value="">Choose a branch</option>@for(b of branches();track b.name){<option [value]="b.name">{{b.name}}{{b.name==='main'?' (read only)':''}}{{b.name===personal()?' (yours)':''}}</option>}</select></span>}
       <button type="button" class="icon review" id="review-apply" (click)="prepareApply()" [disabled]="workingBusy()||!s.branch()||s.branch()==='main'" aria-label="Review and apply changes"
         title="Review &amp; Apply: see what you changed on this branch, compared with main, then publish it to main. Disabled on main, which is read only.">⇄@if(changes();as n){<span class="badge" id="changes-badge" [attr.aria-label]="n+' changed rows'">{{n}}</span>}</button>
-      <button type="button" class="icon" id="more-menu" (click)="more.set(!more())" [attr.aria-expanded]="more()" aria-label="More branch actions" title="Test sign-in, stable test link, manage branches">⋯</button>
+      @if (canBranches()) {<button type="button" class="icon" id="more-menu" (click)="more.set(!more())" [attr.aria-expanded]="more()" aria-label="More branch actions" title="Test sign-in, stable test link, manage branches">⋯</button>}
       }
       <button type="button" class="secondary" (click)="signOut()">Sign out</button>
     </header>
     @if (isAdmin() && !s.testBranch()) {
-    @if (more()) {<div class="pop menu" id="more-panel" role="menu" aria-label="More branch actions">
+    @if (more() && canBranches()) {<div class="pop menu" id="more-panel" role="menu" aria-label="More branch actions">
       <button type="button" class="secondary" id="test-signin" role="menuitem" (click)="testSignIn()" [disabled]="!s.branch()||s.branch()==='main'||workingBusy()||testing()" title="Opens the whole app, login included, as it behaves on this branch, in a new tab. Valid 10 minutes. Main is never touched.">Test sign-in on this branch</button>
       <button type="button" class="secondary" id="stable-link" role="menuitem" (click)="stableLink()" [disabled]="!s.branch()||s.branch()==='main'||workingBusy()||testing()" title="A test link that does not expire until you revoke it. It never grants extra rights and never publishes to main.">Stable test link</button>
       <button type="button" class="secondary" id="manage-branches" role="menuitem" (click)="openManage()">Manage branches…</button>
     </div>}
-    @if (manage()) {<section class="pop inline manage" id="branch-panel" aria-label="Manage branches">
+    @if (manage() && canBranches()) {<section class="pop inline manage" id="branch-panel" aria-label="Manage branches">
       <div class="row"><label>New branch from main<input name="workspaceNewBranch" [(ngModel)]="newBranch" placeholder="my-work" /></label><button (click)="create()" [disabled]="!newBranch || workingBusy()">Create &amp; select</button><button class="secondary" (click)="refresh()">Refresh branches</button></div>
       @if(personal()){<div class="row"><label>Your personal branch<input name="personalBranchName" [(ngModel)]="renameTo" /></label><button class="secondary" id="rename-personal" (click)="rename()" [disabled]="!renameTo || renameTo===personal() || workingBusy()">Rename</button></div>}
       @if(s.branch() && s.branch()!=='main'){<div class="row">@if(stableUrl()){<input id="stable-url" readonly [value]="stableUrl()" aria-label="Stable test link URL" />}@if(branchLinks().length){<span class="links">Stable links: @for(l of branchLinks();track l.id){<span class="chip">{{l.label||l.id}} <button class="secondary" [attr.data-revoke]="l.id" (click)="revokeLink(l.id)">Revoke</button></span>}</span>}</div>}

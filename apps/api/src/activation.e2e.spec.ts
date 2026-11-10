@@ -192,13 +192,13 @@ describe('activation protocol: real Dolt + real Rust core', { skip: !have && 'do
     const world = [ent('lucie-sa'), ent('yanis-sa', [['User', 'lucie-sa']]), ent('lea-sa', [['User', 'yanis-sa']]), ent('camille-sa'), ent('noah-sa'), ent('ines-sa', [['Org', 'security']]), ent('cam-fin', [['Org', 'finance']]), org('it'), org('security', 'it'), org('finance')];
     const person = async (action: string, id: string, target: string, role?: string, orgs?: string[]) => (await ask({ principal: `User::"${id}"`, action: `Action::"${action}"`, resource: `User::"${target}"`, context: { ...(role ? { role } : {}), ...(orgs ? { admin_orgs: orgs.map((o) => ({ __entity: { type: 'Org', id: o } })) } : {}) }, entities: world })).allow;
     // screens
-    for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-data', 'users', 'dashboard']) assert.equal(await screen('alice-sa', sc), true, `super admin opens ${sc}`);
+    for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-data', 'users', 'dashboard', 'branch-manage']) assert.equal(await screen('alice-sa', sc), true, `super admin opens ${sc}`);
     for (const sc of ['users', 'profile-reviews', 'assignments', 'my-profile']) assert.equal(await screen('lucie-sa', sc), true, `manager opens ${sc}`);
-    for (const sc of ['roles', 'policies', 'activation', 'dashboard', 'dolt-sql', 'dolt-data', 'dolt-pulls', 'plugins']) assert.equal(await screen('lucie-sa', sc), false, `manager does not open ${sc}`);
+    for (const sc of ['roles', 'policies', 'activation', 'dashboard', 'dolt-sql', 'dolt-data', 'dolt-pulls', 'plugins', 'branch-manage']) assert.equal(await screen('lucie-sa', sc), false, `manager does not open ${sc}`);
     for (const sc of ['dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'my-profile']) assert.equal(await screen('noemie-sa', sc), true, `main-merger opens ${sc}`);
-    for (const sc of ['dolt-data', 'dolt-edit', 'dolt-sql', 'users', 'roles', 'policies', 'activation', 'dashboard', 'plugins']) assert.equal(await screen('noemie-sa', sc), false, `main-merger does not open ${sc}`);
+    for (const sc of ['dolt-data', 'dolt-edit', 'dolt-sql', 'users', 'roles', 'policies', 'activation', 'dashboard', 'plugins', 'branch-manage']) assert.equal(await screen('noemie-sa', sc), false, `main-merger does not open ${sc}`);
     for (const sc of ['users', 'profile-reviews', 'assignments', 'my-profile']) assert.equal(await screen('noah-sa', sc), true, `org admin opens ${sc}`);
-    for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-pulls', 'dashboard']) assert.equal(await screen('noah-sa', sc), false, `org admin does not open ${sc}`);
+    for (const sc of ['roles', 'policies', 'activation', 'dolt-sql', 'dolt-pulls', 'dashboard', 'branch-manage']) assert.equal(await screen('noah-sa', sc), false, `org admin does not open ${sc}`);
     assert.equal(await screen('bob-sa', 'my-profile'), true); assert.equal(await screen('bob-sa', 'users'), false); assert.equal(await screen('bob-sa', 'dolt-pulls'), false);
     // nobody but the super admin is a super admin: no other demo role reaches any config screen or any person
     for (const id of ['lucie-sa', 'noemie-sa', 'noah-sa']) for (const sc of ['roles', 'policies', 'activation', 'plugins', 'dolt-sql']) assert.equal(await screen(id, sc), false, `${id} is not a super admin (${sc})`);

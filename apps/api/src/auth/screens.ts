@@ -3,7 +3,7 @@
  * API guard read the same map. A request that belongs to no known screen is `unmapped`: only the super admin rule (any resource) opens it.
  * Each entry lists the screens that may reach the route (any one is enough): the Dolt explorer shares a few read routes between its screens.
  */
-export const SCREENS = ['dashboard', 'users', 'profile-fields', 'roles', 'profile-reviews', 'my-profile', 'authentication', 'assignments', 'activation', 'organizations', 'applications', 'policies', 'workflows', 'plugins', 'customisation', 'templates', 'event-bus', 'mcp', 'dolt-home', 'dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'dolt-data', 'dolt-edit', 'dolt-sql'] as const;
+export const SCREENS = ['dashboard', 'users', 'profile-fields', 'roles', 'profile-reviews', 'my-profile', 'authentication', 'assignments', 'activation', 'organizations', 'applications', 'policies', 'workflows', 'plugins', 'customisation', 'templates', 'event-bus', 'mcp', 'dolt-home', 'dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'dolt-data', 'dolt-edit', 'dolt-sql', 'branch-manage'] as const;
 export type Screen = (typeof SCREENS)[number];
 
 const DOLT_READ: Screen[] = ['dolt-branches', 'dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-home'];
@@ -41,7 +41,8 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'organizations': return m === 'GET' ? ['organizations', 'assignments'] : ['organizations'];
     case 'assignments': case 'changes': case 'connectors': return ['assignments'];
     // The personal working branch (opened at sign-in) and Apply: people editing assignments and the branch screens use them; the merge itself is decided by branch:merge.
-    case 'workspace': return ['assignments', 'dolt-branches', 'dolt-pulls'];
+    // Choosing, renaming, releasing or test-signing-in a branch is the branch selector and Manage branches: reserved to the roles a screen:open rule gives branch-manage (the super admin).
+    case 'workspace': return seg[1] === 'branch-test' || seg[1] === 'personal' && (seg[2] === 'rename' || seg[2] === 'release') ? ['branch-manage'] : ['assignments', 'dolt-branches', 'dolt-pulls'];
     case 'activation': case 'activations': case 'audit': return ['activation'];
     case 'policies': case 'policy-studio': return ['policies'];
     case 'plugins': return ['plugins'];

@@ -35,6 +35,7 @@ describe('screen access guard', () => {
 
   it('maps each route to its screens (Dolt explorer areas included)', () => {
     assert.deepEqual(screensFor('GET', 'users'), ['users']); assert.deepEqual(screensFor('POST', 'profile-reviews/x/accept'), ['profile-reviews']);
+    assert.deepEqual(screensFor('POST', 'workspace/branch-test'), ['branch-manage']); assert.deepEqual(screensFor('POST', 'workspace/personal/rename'), ['branch-manage']); assert.ok(screensFor('POST', 'workspace/apply').includes('assignments'));
     assert.deepEqual(screensFor('POST', 'versioning/sql'), ['dolt-sql']); assert.deepEqual(screensFor('POST', 'versioning/tables/roles/edit'), ['dolt-edit']);
     assert.deepEqual(screensFor('GET', 'versioning/tables/roles?ref=main'), ['dolt-data']); assert.deepEqual(screensFor('POST', 'versioning/pulls/3/merge'), ['dolt-pulls', 'dolt-home']);
     assert.deepEqual(screensFor('PUT', 'versioning/branches/x/protection'), ['dolt-branches']); assert.deepEqual(screensFor('GET', 'something-new'), []);

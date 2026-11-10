@@ -86,6 +86,8 @@ export class Shell {
     groups.sort((a, b) => (GROUP_ORDER.indexOf(a.title) < 0 ? 99 : GROUP_ORDER.indexOf(a.title)) - (GROUP_ORDER.indexOf(b.title) < 0 ? 99 : GROUP_ORDER.indexOf(b.title)));
     return groups.filter((g: NavGroup) => g.items.length);
   }
+  /** The branch selector and Manage branches: only where a screen:open policy gives branch-manage (the super admin). Everyone else works on their own personal branch, opened for them. */
+  protected canBranches() { const a = this.s.access(); return this.isAdmin() && (!a || !a.screenAccess || !a.screens || a.screens.includes('branch-manage')); }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
   protected readonly title = signal('');
   protected readonly nav = computed<NavGroup[]>(() => {
