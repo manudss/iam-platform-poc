@@ -117,21 +117,21 @@ export interface WfTriggerNodeData { name: string }
     :host { display: block; position: relative; }
     .wf-node {
       box-sizing: border-box; width: 190px; min-height: 64px; padding: 10px 12px;
-      background: #fff8e6; border: 1.5px dashed #d9a514; border-left: 5px solid #d9a514; border-radius: 10px;
-      box-shadow: 0 1px 3px rgba(20, 30, 60, .12);
+      background: var(--warn-soft); border: 1.5px dashed var(--warn-line); border-left: 5px solid var(--warn-line); border-radius: 10px;
+      box-shadow: 0 1px 3px var(--shadow-color);
       display: flex; flex-direction: column; gap: 6px;
     }
     .wf-node-name {
-      font-size: 14px; font-weight: 600; line-height: 1.35; color: #1c2440;
+      font-size: 14px; font-weight: 600; line-height: 1.35; color: var(--warn-ink);
       overflow-wrap: anywhere; white-space: normal;
     }
     .wf-node-badge.trigger {
       align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .04em;
-      padding: 2px 7px; border-radius: 999px; background: #fde9c8; color: #8a6d1a;
+      padding: 2px 7px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-ink); border: 1px solid var(--warn-line);
     }
-    .wf-trigger-hint { font-size: 11px; color: #6b7280; }
+    .wf-trigger-hint { font-size: 11px; color: var(--muted); }
     handle { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
-      background: #ffffff; border: 2px solid #d9a514; transform: translateY(-50%); }
+      background: var(--card); border: 2px solid var(--warn-line); transform: translateY(-50%); }
     handle[position="right"] { right: -6px; }
   `],
 })
@@ -507,7 +507,7 @@ export class WorkflowEditPage implements OnInit {
   protected triggerEdges = computed<Edge[]>(() => {
     if (!this.triggerNode()) return [];
     const incoming = new Set(this.vfEdges().map((e) => e.target));
-    return this.vfNodes().filter((n) => !incoming.has(n.id)).map((n) => this.makeEdge(`${TRIGGER_NODE_ID}->${n.id}`, TRIGGER_NODE_ID, n.id, '#d9a514'));
+    return this.vfNodes().filter((n) => !incoming.has(n.id)).map((n) => this.makeEdge(`${TRIGGER_NODE_ID}->${n.id}`, TRIGGER_NODE_ID, n.id, 'var(--warn-line)'));
   });
   protected allEdges = computed(() => [...this.triggerEdges(), ...this.vfEdges()]);
 
