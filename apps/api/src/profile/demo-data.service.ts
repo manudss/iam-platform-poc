@@ -12,6 +12,7 @@ import type { ProfileValueStore } from './store.js';
 const PASSWORD = 'demo-only-not-a-secret'; // the published fictional demo password, same as demo-alice and demo-bob
 const ACCOUNTS = [
   { id: 'demo-lucie', display_name: 'Lucie Demo', department: 'hr', manager_id: 'demo-alice', email: 'lucie.demo@example.invalid', title: 'HR manager', phone: '+33 4 72 00 30 02', language: 'fr', grade: 'G5', orgs: ['hr'], roles: ['manager'] },
+  { id: 'demo-noemie', display_name: 'Noémie Demo', department: 'it', manager_id: 'demo-alice', email: 'noemie.demo@example.invalid', title: 'IT administrator', phone: '+33 4 72 00 20 03', language: 'fr', grade: 'G5', orgs: ['it'], roles: ['main-merger'] },
   { id: 'camille-martin', display_name: 'Camille Martin', department: 'finance', manager_id: 'demo-alice', email: 'camille.martin@example.invalid', title: 'Chief accountant', phone: '+33 4 72 00 10 01', language: 'fr', grade: 'G5', orgs: ['finance'], roles: ['accountant'] },
   { id: 'hugo-bernard', display_name: 'Hugo Bernard', department: 'finance', manager_id: 'camille-martin', email: 'hugo.bernard@example.invalid', title: 'Payments clerk', phone: '+33 4 72 00 10 02', language: 'fr', grade: 'G3', orgs: ['finance'], roles: ['payment-creator'] },
   { id: 'lea-moreau', display_name: 'Léa Moreau', department: 'finance', manager_id: 'camille-martin', email: 'lea.moreau@example.invalid', title: 'Treasury analyst', phone: '+33 4 72 00 10 03', language: 'en', grade: 'G4', orgs: ['finance'], roles: ['payment-approver'] },
