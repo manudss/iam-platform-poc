@@ -186,7 +186,7 @@ describe('routing and sign-in guard', () => {
     await new Promise((r) => setTimeout(r, 0)); h.detectChanges(); // the plugin menu loads asynchronously (GET /plugins/menu)
     const el = h.routeNativeElement as HTMLElement;
     const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
-    expect(nav).toEqual(['/overview', '/users', '/profile-fields', '/screens/organizations/orgs', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
+    expect(nav).toEqual(['/overview', '/users', '/profile-fields', '/screens/organizations/orgs', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/home', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
     expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
     expect(el.textContent).toContain('Choose your working branch');
   });

@@ -6,7 +6,7 @@ import { DoltExplorer, Tab } from './dolt-explorer';
 import { PluginsAdmin } from './plugins-admin';
 import { Session } from './session';
 
-export const TABS: Tab[] = ['branches', 'history', 'compare', 'data', 'sql', 'pulls'];
+export const TABS: Tab[] = ['home', 'branches', 'history', 'compare', 'data', 'sql', 'pulls'];
 
 interface Stat { label: string; value: string; to: string; hint: string }
 
@@ -85,11 +85,11 @@ export class PluginsPage {
 export class ExplorerPage {
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
-  protected readonly tab = signal<Tab>('branches');
+  protected readonly tab = signal<Tab>('home');
   constructor() {
     inject(ActivatedRoute).paramMap.subscribe((m) => {
       const t = m.get('tab') as Tab;
-      if (TABS.includes(t)) this.tab.set(t); else void this.router.navigateByUrl('/database/branches', { replaceUrl: true });
+      if (TABS.includes(t)) this.tab.set(t); else void this.router.navigateByUrl('/database/home', { replaceUrl: true });
     });
   }
   protected go(t: Tab) { if (t !== this.tab()) { this.tab.set(t); void this.router.navigate(['/database', t]); } }

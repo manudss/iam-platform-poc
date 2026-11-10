@@ -1,4 +1,23 @@
 :host { display: block; }
+
+/* page header (home and every section): title + subtitle left, main actions right */
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.page-title { font-size: 1.45rem; margin: 0; }
+.page-sub { color: var(--muted); font-size: .88rem; margin: .15rem 0 0; }
+.page-actions { display: flex; gap: .5rem; align-items: center; }
+.page-actions button { margin: 0; }
+
+/* home: stat cards, activity feed and workspace panel */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: .8rem 1rem; display: flex; flex-direction: column; gap: .1rem; }
+.stat .n { font-size: 1.7rem; font-weight: 700; color: var(--accent-dark); line-height: 1.1; }
+.stat .l { font-weight: 600; font-size: .85rem; color: var(--label); }
+.home-cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
+.feed { list-style: none; padding: 0; margin: 0; }
+.feed li { padding: .45rem 0; border-bottom: 1px solid var(--line); }
+.feed li:last-child { border-bottom: 0; }
+.jump { margin-bottom: 0; }
+@media (max-width: 800px) { .home-cols { grid-template-columns: 1fr; } }
 .row { gap: .5rem; }
 .panel label, .explorer > label { display: flex; margin: .4rem 0; }
 tr.add td { background: var(--ok-soft); } tr.del td { background: var(--bad-soft); } tr.mod td.chg { background: var(--warn-soft); }

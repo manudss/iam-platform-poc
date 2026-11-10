@@ -103,6 +103,7 @@ export class Shell {
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
     { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }, { path: '/event-bus', label: 'Event bus', icon: '≋' }, { path: '/mcp', label: 'MCP (AI)', icon: '⚡' }] },
     { title: 'Database (Dolt)', items: [
+      { path: '/database/home', label: 'Home', icon: '⌂' },
       { path: '/database/branches', label: 'Branches', icon: '⑂' },
       { path: '/database/history', label: 'History', icon: '◷' },
       { path: '/database/compare', label: 'Compare', icon: '⇋' },

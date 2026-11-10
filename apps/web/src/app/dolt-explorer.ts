@@ -1,10 +1,11 @@
 import { Component, EventEmitter, Input, Output, inject, signal, computed } from '@angular/core';
+import { Router, RouterLink } from '@angular/router';
 import { Session } from './session';
 import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiClient, BranchInfo, CommitInfo, DiffSummary, PullRequestDetail, PullRequestInfo, RowDiff, SqlResult, TableData, VersioningClient, cellText, shortHash } from './api';
 
-export type Tab = 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
+export type Tab = 'home' | 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
 interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }
 
 /**
@@ -12,16 +13,22 @@ interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; trunc
  * refs, tables and rows at any ref, a guarded SQL console and pull requests. Everything is read from the API; nothing here
  * decides what is allowed (the server enforces protected branches, SQL limits and merge checks).
  */
-@Component({ selector: 'app-dolt-explorer', imports: [FormsModule, NgTemplateOutlet], templateUrl: './dolt-explorer.html', styleUrl: './dolt-explorer.css' })
+@Component({ selector: 'app-dolt-explorer', imports: [FormsModule, NgTemplateOutlet, RouterLink], templateUrl: './dolt-explorer.html', styleUrl: './dolt-explorer.css' })
 export class DoltExplorer {
   @Input({ required: true }) api!: ApiClient;
   /** The section shown, driven by the route (/database/:tab). Internal jumps (e.g. branch -> compare) are announced through `navigate`. */
   @Input() set section(t: Tab) { this.wanted = t; if (this.ready && t !== this.tab()) void this.open(t); }
   @Output() navigate = new EventEmitter<Tab>();
   private readonly session = inject(Session);
-  private wanted: Tab = 'branches'; private ready = false;
+  private readonly router = inject(Router);
+  private wanted: Tab = 'home'; private ready = false;
   protected v!: VersioningClient;
-  protected readonly tab = signal<Tab>('branches');
+  protected readonly tab = signal<Tab>('home');
+
+  // home: database overview (stats, recent activity, workspace state). Read only: it only assembles what the other sections use.
+  protected readonly homeStats = signal<{ branches: number; defaultBranch: string; openPulls: number; commits: number; commitsMore: boolean; commitsThisWeek: number; tables: number; tableRows: number; onRef: string } | null>(null);
+  protected readonly activity = signal<{ kind: 'commit' | 'pr'; hash?: string; prId?: number; prState?: string; text: string; branch?: string; when: string }[]>([]);
+  protected readonly workspace = signal<{ branch: string; protected: boolean; ahead: number; behind: number; changedRows: number | null; openPr: number | null } | null>(null);
   protected readonly note = signal('');
   protected readonly busy = signal(false);
   protected readonly short = shortHash;
@@ -75,10 +82,64 @@ export class DoltExplorer {
   }
   protected async open(t: Tab) {
     this.go(t); this.note.set('');
+    if (t === 'home') await this.loadHome();
     if (t === 'branches') await this.refreshRefs();
     if (t === 'history') await this.loadLog(true);
     if (t === 'data') await this.loadTables();
     if (t === 'pulls') { await this.refreshRefs(); await this.loadPulls(); }
+  }
+
+  // ---- home ----
+  /** Assembles the overview: counts, the latest commits and pull-request events, and the state of the working branch. */
+  protected async loadHome() {
+    await this.run(async () => {
+      await this.refreshRefs();
+      const def = this.defaultBranch(), current = this.session.branch() || def;
+      const pulls = await this.v.pulls();
+      const tbl = await this.v.tables(current);
+      const logR = await this.v.log(def, 0);
+      const weekAgo = Date.now() - 7 * 864e5;
+      this.homeStats.set({
+        branches: this.branches().length, defaultBranch: def,
+        openPulls: pulls.pullRequests.filter((p) => p.status === 'open').length,
+        commits: logR.commits.length, commitsMore: logR.hasMore,
+        commitsThisWeek: logR.commits.filter((c) => Date.parse(c.date) >= weekAgo).length,
+        tables: tbl.tables.length, tableRows: tbl.tables.reduce((n, t) => n + t.rows, 0), onRef: current,
+      });
+      const commits = [...logR.commits];
+      if (current !== def) {
+        const mine = await this.v.log(current, 0, 10);
+        commits.push(...mine.commits.filter((c) => !commits.some((x) => x.commit === c.commit)));
+      }
+      const feed = [
+        ...commits.map((c) => ({ kind: 'commit' as const, hash: c.commit, text: c.message, branch: c.refs.find((r) => r === current) ?? c.refs.find((r) => r === def) ?? current, when: c.date })),
+        ...pulls.pullRequests.flatMap((p) => [
+          { kind: 'pr' as const, prId: p.id, prState: 'opened', text: `${p.author} opened PR #${p.id} "${p.title}"`, when: p.createdAt },
+          ...(p.mergedAt ? [{ kind: 'pr' as const, prId: p.id, prState: 'merged', text: `PR #${p.id} "${p.title}" merged into ${p.target}`, when: p.mergedAt }] : []),
+        ]),
+      ];
+      this.activity.set(feed.sort((x, y) => Date.parse(y.when) - Date.parse(x.when)).slice(0, 8));
+      const wb = this.branches().find((x) => x.name === current);
+      let changedRows: number | null = null;
+      if (wb && !wb.default && wb.aheadOfDefault > 0) changedRows = (await this.v.diff(def, current, true)).rows?.total ?? null;
+      this.workspace.set({ branch: current, protected: !!wb?.protected, ahead: wb?.aheadOfDefault ?? 0, behind: wb?.behindDefault ?? 0, changedRows, openPr: pulls.pullRequests.find((p) => p.status === 'open' && p.source === current)?.id ?? null });
+    });
+  }
+  protected goReview() { void this.router.navigateByUrl('/review'); }
+  /** "2 h ago", "yesterday", "5 d ago": short relative dates for the activity feed and the cards. */
+  protected rel(when: string): string {
+    const t = Date.parse(when);
+    if (!Number.isFinite(t)) return when;
+    const s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 90) return 'just now';
+    const m = s / 60;
+    if (m < 60) return `${Math.round(m)} min ago`;
+    const h = m / 60;
+    if (h < 24) return `${Math.round(h)} h ago`;
+    const d = h / 24;
+    if (d < 2) return 'yesterday';
+    if (d < 30) return `${Math.round(d)} d ago`;
+    return new Date(t).toLocaleDateString();
   }
 
   // branches and tags

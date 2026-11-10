@@ -1,5 +1,4 @@
 <section class="explorer">
-  <p class="hint">Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (Users, Plugins and Assignments use separate validated administration routes to Dolt <code>main</code>.)</p>
   @if (note()) { <p class="msg" role="status">{{ note() }}</p> }
   @if (busy()) { <p class="hint">Working...</p> }
 
@@ -26,6 +25,65 @@
   </ng-template>
 
   @switch (tab()) {
+    @case ('home') {
+      <div class="page-head">
+        <div>
+          <h3 class="page-title">Database</h3>
+          <p class="page-sub">Versioned with Dolt: every change is a commit on a branch, merged through review.</p>
+        </div>
+        <div class="page-actions">
+          <button type="button" class="secondary" (click)="go('sql')">Open SQL console</button>
+          <button type="button" (click)="go('branches')">+ New branch</button>
+        </div>
+      </div>
+      @if (homeStats(); as st) {
+        <div class="stats">
+          <div class="stat"><span class="n">{{ st.branches }}</span><span class="l">Branches · default <b>{{ st.defaultBranch }}</b></span></div>
+          <div class="stat"><span class="n">{{ st.openPulls }}</span><span class="l">Open pull request{{ st.openPulls === 1 ? '' : 's' }} · awaiting merge</span></div>
+          <div class="stat"><span class="n">{{ st.commits }}{{ st.commitsMore ? '+' : '' }}</span><span class="l">Commits · {{ st.commitsThisWeek }} this week</span></div>
+          <div class="stat"><span class="n">{{ st.tables }}</span><span class="l">Tables · {{ st.tableRows }} rows on {{ st.onRef }}</span></div>
+        </div>
+        <div class="home-cols">
+          <div class="card">
+            <h4>Recent activity</h4>
+            <ul class="feed">
+              @for (a of activity(); track $index) {
+                <li>
+                  @if (a.kind === 'commit') { <code>{{ short(a.hash) }}</code> {{ a.text }} on <b>{{ a.branch }}</b> }
+                  @else { <span class="chip" [class.ok]="a.prState === 'merged'">{{ a.prState }}</span> {{ a.text }} }
+                  <span class="hint">· {{ rel(a.when) }}</span>
+                </li>
+              }
+              @empty { <li class="hint">Nothing yet: commits and pull requests will appear here.</li> }
+            </ul>
+          </div>
+          <div class="card">
+            @if (workspace(); as w) {
+              <h4>Your workspace</h4>
+              <p>You are on <b class="chip" [class.lock]="w.protected">{{ w.branch }}</b>
+                @if (w.protected) { (protected): direct writes refused, every change lands through review. }
+                @else { , {{ w.ahead }} ahead of {{ homeStats()?.defaultBranch }}@if (w.changedRows !== null) { , {{ w.changedRows }} changed row{{ w.changedRows === 1 ? '' : 's' }} waiting }. }
+              </p>
+              <div class="row">
+                @if (!w.protected) { <button type="button" (click)="goReview()">Review &amp; apply to main ⇥</button> }
+                @if (w.openPr !== null) { <button type="button" class="secondary" (click)="showPull(w.openPr); go('pulls')">Open PR #{{ w.openPr }}</button> }
+              </div>
+            }
+            <h4>Jump to</h4>
+            <p class="jump">
+              <button type="button" class="link" (click)="go('branches')">Branches</button> ·
+              <button type="button" class="link" (click)="go('history')">History</button> ·
+              <button type="button" class="link" (click)="go('compare')">Compare</button> ·
+              <button type="button" class="link" (click)="go('data')">Data</button> ·
+              <button type="button" class="link" (click)="go('sql')">SQL</button> ·
+              <button type="button" class="link" (click)="go('pulls')">Pull requests</button>
+            </p>
+          </div>
+        </div>
+        <p class="hint">Fictional demo data only. Direct writes to <code>main</code> are refused here: changes reach it through a pull request. (Users, Plugins and Assignments use separate validated administration routes to Dolt <code>main</code>.)</p>
+      }
+    }
+
     @case ('branches') {
       <h3>Branches</h3>
       <div class="scroll"><table class="grid">

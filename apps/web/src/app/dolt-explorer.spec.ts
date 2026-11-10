@@ -10,7 +10,7 @@ function fakeApi(routes: Record<string, (c: Call) => { status?: number; data: un
   const api = new ApiClient('acme-demo');
   api.raw = (async (method: string, path: string, body?: object, headers: Record<string, string> = {}) => {
     const c = { method, path, body, headers }; calls.push(c);
-    const key = Object.keys(routes).find((k) => `${method} ${path}`.startsWith(k));
+    const key = Object.keys(routes).filter((k) => `${method} ${path}`.startsWith(k)).sort((a, b) => b.length - a.length)[0];
     if (!key) throw new Error(`unexpected ${method} ${path}`);
     const r = routes[key](c); return { status: r.status ?? 200, data: r.data };
   }) as never;
@@ -37,6 +37,38 @@ describe('VersioningClient', () => {
 });
 
 describe('DoltExplorer (rendering with a fake API)', () => {
+  const mountHome = async (extra: Record<string, (c: Call) => { status?: number; data: unknown }> = {}) => {
+    const r = routes({
+      'GET /versioning/pulls': () => ({ data: { pullRequests: [
+        { id: 3, title: 'Grant hr-partner', body: '', source: 'feat-a', target: 'main', status: 'open', author: 'demo-alice', createdAt: new Date().toISOString(), mergedAt: null, mergeCommit: null },
+        { id: 2, title: 'Role rework part 1', body: '', source: 'work', target: 'main', status: 'merged', author: 'demo-bob', createdAt: new Date(Date.now() - 6 * 864e5).toISOString(), mergedAt: new Date(Date.now() - 5 * 864e5).toISOString(), mergeCommit: 'abc' } ] } }),
+      ...extra });
+    return mount(r);
+  };
+
+  it('home: overview cards, activity feed and the workspace panel, all read from the API', async () => {
+    const { el } = await mountHome();
+    const stats = [...el.querySelectorAll('.stat')].map((x) => x.textContent ?? '');
+    expect(stats.some((t) => t.includes('Branches') && t.includes('main'))).toBe(true);
+    expect(stats.some((t) => t.includes('Open pull request') && t.includes('awaiting merge'))).toBe(true);
+    expect(stats.some((t) => t.includes('Tables') && t.includes('main'))).toBe(true);
+    const feed = el.querySelector('.feed')?.textContent ?? '';
+    expect(feed).toContain('seed: demo data');
+    expect(feed).toContain('opened PR #3');
+    expect(feed).toContain('merged');
+    const ws = el.textContent ?? '';
+    expect(ws).toContain('Your workspace'); expect(ws).toContain('protected');
+    expect(ws).toContain('Jump to');
+  });
+  it('home: the workspace panel offers the open pull request of the working branch', async () => {
+    const { f, el, c } = await mountHome();
+    c['workspace'].set({ branch: 'feat-a', protected: false, ahead: 2, behind: 1, changedRows: 3, openPr: 3 });
+    f.detectChanges();
+    const text = el.textContent ?? '';
+    expect(text).toContain('feat-a'); expect(text).toContain('3 changed rows'); expect(text).toContain('Open PR #3');
+    expect([...el.querySelectorAll('button')].some((b) => b.textContent?.includes('Review & apply to main'))).toBe(true);
+  });
+
   const branches = { default: 'main', branches: [
     { name: 'main', commit: 'm'.repeat(32), committer: 'poc', date: '', message: 'seed', protected: true, default: true, aheadOfDefault: 0, behindDefault: 0 },
     { name: 'feat-a', commit: 'f'.repeat(32), committer: 'demo-alice', date: '', message: 'add role', protected: false, default: false, aheadOfDefault: 2, behindDefault: 1 }] };
@@ -46,7 +78,8 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     'GET /versioning/branches': () => ({ data: branches }), 'GET /versioning/tags': () => ({ data: { tags: [] } }),
     'GET /versioning/tables?': () => ({ data: { ref: 'main', kind: 'branch', tables: [{ name: 'roles', rows: 1 }] } }),
     'GET /versioning/tables/roles?ref=main': () => ({ data: tableOf('main') }), 'GET /versioning/tables/roles?ref=feat-a': () => ({ data: tableOf('feat-a') }),
-    'GET /versioning/pulls?': () => ({ data: { pullRequests: [] } }), ...extra });
+    'GET /versioning/log': () => ({ data: { ref: 'main', commits: [{ commit: 'm'.repeat(32), author: 'demo-seed', date: new Date().toISOString(), message: 'seed: demo data', parents: [], refs: ['main'], merge: false }], hasMore: false } }),
+    'GET /versioning/pulls': () => ({ data: { pullRequests: [] } }), ...extra });
   const mount = async (r: ReturnType<typeof routes>) => {
     const { api, calls } = fakeApi(r);
     const f = TestBed.createComponent(DoltExplorer); f.componentInstance.api = api; f.detectChanges(); await f.whenStable(); await new Promise((r) => setTimeout(r, 0)); f.detectChanges();
@@ -58,7 +91,8 @@ describe('DoltExplorer (rendering with a fake API)', () => {
   };
 
   it('lists branches; main is marked protected and cannot be deleted from the screen, others can', async () => {
-    const { el } = await mount(routes());
+    const { f, el } = await mount(routes());
+    f.componentRef.setInput('section', 'branches'); await f.whenStable(); f.detectChanges();
     const rows = [...el.querySelectorAll('tbody tr')];
     expect(rows.length).toBe(2);
     expect(rows[0].textContent).toContain('protected'); expect(rows[0].textContent).not.toContain('Delete');
