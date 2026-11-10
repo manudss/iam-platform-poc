@@ -81,7 +81,7 @@ export class AssignmentData {
    const r=await this.s.api.raw<{applied?:boolean;message?:string|string[];offending?:Offending[]}>('POST','/workspace/apply',{confirm:true},this.h());
    if(r.status>=400||!r.data?.applied){const m=r.data?.message;this.refusal.set(Array.isArray(m)?m.join(' '):m||'Merge refused.');this.offending.set(r.data?.offending??[]);return;}
    this.note.set('Merged into main and activated.');await this.load();
-  } catch(e){this.refusal.set((e as Error).message);} finally{this.merging.set(false);}
+  } catch(e){this.refusal.set((e as Error).message);this.offending.set((e as {body?:{offending?:Offending[]}}).body?.offending??[]);} finally{this.merging.set(false);}
  }
  ids(id:string) {return roleIds(this.assignments(),id);}
  label(id:string) {return this.roles().find(r=>r.id===id)?.label ?? id;}
