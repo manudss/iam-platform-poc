@@ -9,7 +9,7 @@ Protection is a visible per-branch setting (Explorer > Branches). `main` is prot
 - **Who can merge.** Not a list of people. `mergeRule: "policy"` (default) asks the policy engine for the Cedar action `branch:merge` as the caller; `"anyone"` skips that check.
 
 ## The merge policy
-The demo rule `merge-into-protected-needs-branch-merger` (set `default`, pillar `versioning`) permits `branch:merge` for a person holding the `branch-merger` role. Roles come from the ACTIVE version (main), so a role granted on a working branch changes nothing until a human merges and activates it. Demo seed: `demo-alice` holds `branch-merger`, `demo-bob` does not. The rule is business data: edit it in the Policies screen to use other roles or policies.
+The demo rule `merge-into-protected-needs-branch-merger` (set `default`, pillar `versioning`) permits `branch:merge` for a person holding the `iam-admin` or `branch-merger` role. Roles come from the ACTIVE version (main), so a role granted on a working branch changes nothing until a human merges and activates it. Demo seed: `demo-alice` holds `branch-merger`, `demo-bob` does not. The rule is business data: edit it in the Policies screen to use other roles or policies.
 
 Refusal: HTTP 403, code `merge-not-permitted`, with a message naming the branch. The pull request page shows it before the click (Merge disabled, reason shown).
 
