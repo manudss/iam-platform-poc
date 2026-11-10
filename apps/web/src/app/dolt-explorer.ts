@@ -95,6 +95,7 @@ export class DoltExplorer {
   }
   protected async removeCustomFolder(p: BranchProtection, f: string) { await this.changeProtection(p, { sourceKinds: p.sourceKinds.filter((k) => k !== `custom:${f}`) }); }
   protected async protectBranch(b: BranchInfo) { await this.run(() => this.v.setProtection(b.name, { protected: true })); this.protectOpen.set(b.name); await this.refreshRefs(); }
+  protected async unprotectBranch(name: string) { await this.run(() => this.v.setProtection(name, { protected: false })); this.protectOpen.set(''); await this.refreshRefs(); }
   protected readonly branchSearch = signal(''); protected createOpen = false;
   protected readonly menuFor = signal('');
   /** Changed rows vs the default branch, loaded lazily for the working branch only (one diff call). */

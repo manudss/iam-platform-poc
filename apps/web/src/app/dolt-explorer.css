@@ -140,7 +140,7 @@ input[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--bad)
 .nb-pair{display:flex;align-items:center;gap:.5rem}
 .nb-slash{color:var(--muted);font-weight:600;line-height:1}
 .nb-folder{max-width:9rem}
-.protect{display:block;margin:.2rem 0 1rem 1.4rem}
+.protect{display:block;margin:.2rem 0 1rem}
 .protect h4{margin:0 0 .5rem}
 .protect ul{margin:0;padding-left:1.1rem;display:grid;gap:.5rem}
 .kinds{display:inline-flex;flex-wrap:wrap;gap:.4rem;margin:.3rem 0 0 .3rem;align-items:center}
