@@ -74,10 +74,12 @@ export async function assignableRoleIds(tenant: string, actor: string, roleIds: 
   for (const id of h.managerOf.keys()) if (chainOf(h, id).includes(actor)) people.add(id);
   for (const [sub, orgs] of h.orgsOf) if (sub !== actor && orgs.some((o) => mine.has(o))) people.add(sub);
   for (const id of h.managerOf.keys()) if (people.size < 3 && id !== actor) people.add(id);
-  const probe = [...people].slice(0, 6);
+  const probe = [...people].slice(0, 3);
   const ok = new Set<string>();
   try {
-    for (const role of roleIds) for (const p of probe) { const a = await askPerson(tenant, h, actor, 'assignment:change', p, role); if (!a.engine) return new Set(roleIds); if (a.allow) { ok.add(role); break; } }
+    let off = false;
+    await Promise.all(roleIds.map(async (role) => { for (const p of probe) { const a = await askPerson(tenant, h, actor, 'assignment:change', p, role); if (!a.engine) { off = true; return; } if (a.allow) { ok.add(role); return; } } }));
+    if (off) return new Set(roleIds);
   } catch { throw new ForbiddenException('the policy engine could not be reached; refused to stay on the safe side'); }
   return ok;
 }
