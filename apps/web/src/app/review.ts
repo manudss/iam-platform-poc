@@ -15,6 +15,9 @@ interface TableView { table: string; kind: string; rows: { added: number; modifi
   template: `
   <section class="card" id="review-page">
     <h2>Changes on <b>{{ branch() }}</b> compared with <b>main</b></h2>
+    @if (applied()) { <p class="ok" role="status">{{ applied() }}</p> }
+    @if (prOpened() !== null) { <p class="ok" role="status">Pull request #{{ prOpened() }} opened. <a routerLink="/database/pulls">Review and merge it in Database &gt; Pull requests</a>.</p> }
+    @if (actionError()) { <p class="bad" role="alert">{{ actionError() }}</p> }
     @if (!branch() || branch() === 'main') { <p>Choose your working branch in the top bar: main is read only, so it has no changes to review.</p> }
     @else if (error()) { <p class="bad" role="alert">{{ error() }}</p> }
     @else if (!summary()) { <p>Loading the changes…</p> }
@@ -22,6 +25,12 @@ interface TableView { table: string; kind: string; rows: { added: number; modifi
       <p id="review-total"><b>{{ total() }}</b> row{{ total() === 1 ? '' : 's' }} changed in <b>{{ views().length }}</b> table{{ views().length === 1 ? '' : 's' }}.
         @if (summary()!.rows) { <span class="add">+{{ summary()!.rows!.added }} added</span> <span class="mod">~{{ summary()!.rows!.modified }} modified</span> <span class="del">-{{ summary()!.rows!.removed }} removed</span> }</p>
       @if (!views().length) { <p>No data changes. Nothing to apply.</p> }
+      @else {
+        <div class="actions" id="review-actions">
+          <button type="button" (click)="apply()" [disabled]="acting()">Apply {{ branch() }} into main</button>
+          <button type="button" class="secondary" (click)="openPr()" [disabled]="acting()">Open a pull request</button>
+        </div>
+      }
       @for (t of views(); track t.table) {
         <article class="tbl" [attr.data-table]="t.table">
           <h3><button type="button" class="secondary tog" (click)="toggle(t)" [attr.aria-expanded]="t.open">{{ t.open ? '▾' : '▸' }}</button> {{ t.table }}
@@ -51,7 +60,8 @@ interface TableView { table: string; kind: string; rows: { added: number; modifi
     }
   </section>`,
   styles: [`
-    .add { color: var(--ok); } .del { color: var(--bad); } .mod { color: var(--warn-ink); } .bad { color: var(--bad); }
+    .add { color: var(--ok); } .del { color: var(--bad); } .mod { color: var(--warn-ink); } .bad { color: var(--bad); } .ok { color: var(--ok); }
+    .actions { display: flex; gap: .5rem; margin: .6rem 0; }
     .tbl { border: 1px solid var(--line); border-radius: .5rem; margin: .8rem 0; padding: .4rem .8rem; }
     .tbl h3 { margin: .3rem 0; display: flex; gap: .6rem; align-items: center; } .tbl h3 small { color: var(--muted); font-weight: 400; }
     .tog { padding: .1rem .5rem; } .scroll { overflow-x: auto; }
@@ -69,6 +79,10 @@ export class ReviewPage {
   protected readonly summary = signal<DiffSummary | null>(null);
   protected readonly views = signal<TableView[]>([]);
   protected readonly error = signal('');
+  protected readonly acting = signal(false);
+  protected readonly applied = signal('');
+  protected readonly prOpened = signal<number | null>(null);
+  protected readonly actionError = signal('');
   protected readonly total = computed(() => this.summary()?.rows?.total ?? this.views().length);
   private get v() { const v = new VersioningClient(this.session.api); v.adminToken = this.session.adminToken(); return v; }
 
@@ -82,6 +96,30 @@ export class ReviewPage {
     } catch (e) { this.error.set((e as Error).message); }
   }
   protected changed(r: RowDiff, col: string) { return r.type === 'modified' && cellText(r.from?.[col]) !== cellText(r.to?.[col]); }
+  private headers(): Record<string, string> { return this.session.adminToken() ? { 'x-api-admin-token': this.session.adminToken() } : {}; }
+  /** Publishes the working branch into main through the same guarded endpoint as the toolbar's Review & Apply (server re-checks conflicts and separation of duties). */
+  protected async apply() {
+    const b = this.branch(); if (!b || b === 'main' || this.acting()) return;
+    if (!confirm('Apply ' + b + ' into Dolt main? Its users, plugins and role permissions will become live.')) return;
+    this.acting.set(true); this.actionError.set('');
+    try {
+      const head = (await this.v.branches()).branches.find((x) => x.name === b)?.commit;
+      const r = await this.session.api.raw<{ applied?: boolean; commit?: string; message?: string }>('POST', '/workspace/apply', { confirm: true, expectedHead: head }, this.headers());
+      if (r.status >= 400 || !r.data.applied) throw new Error(r.data?.message ?? 'Apply refused');
+      this.applied.set('Applied ' + b + ' into main: ' + r.data.commit);
+      this.session.branchEpoch.update((x) => x + 1);
+      this.views.set([]);
+    } catch (e) { this.actionError.set((e as Error).message); }
+    finally { this.acting.set(false); }
+  }
+  /** Routes the branch through a pull request instead of a direct apply: the PR re-checks everything at merge time. */
+  protected async openPr() {
+    const b = this.branch(); if (!b || b === 'main' || this.acting()) return;
+    this.acting.set(true); this.actionError.set('');
+    try { const p = await this.v.openPull('Merge ' + b + ' into main', '', b, 'main'); this.prOpened.set(p.id); }
+    catch (e) { this.actionError.set((e as Error).message); }
+    finally { this.acting.set(false); }
+  }
   protected async toggle(t: TableView) {
     t.open = !t.open; this.views.update((x) => [...x]);
     if (!t.open || t.columns.length || t.loading) return;
