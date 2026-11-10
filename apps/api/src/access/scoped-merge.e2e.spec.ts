@@ -12,7 +12,7 @@ import { Test } from '@nestjs/testing';
 import { ActivationService } from '../activation/activation.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
-import { filterPeople } from './scope.js';
+import { filterPeople, assignableRoleIds } from './scope.js';
 import { BranchProtectionService } from '../versioning/branch-protection.service.js';
 
 const root = resolve(process.cwd(), '../..');
@@ -92,6 +92,13 @@ describe('scoped assignments merge: real Dolt + real core', { skip: !have && 'do
     await branch('feature/analyst', ["insert into assignments values ('yanis-t','security-analyst')"]);
     const m = await refusal(prot.assertMayMerge('main', 'lucie-t', 'merge into', 'feature/analyst'));
     assert.match(m, /security-analyst/); assert.match(m, /managers may not give the role security-analyst/); assert.doesNotMatch(m, /not one of the people you manage/);
+  });
+  it('the role catalogue offered to a manager is what Cedar lets her assign (same rule as the merge gate)', async () => {
+    const all = ['accountant', 'payment-creator', 'employee', 'hr-partner', 'sales-rep', 'security-analyst', 'iam-admin', 'manager', 'main-merger', 'org-admin', 'payment-approver'];
+    const l = await assignableRoleIds(T, 'lucie-t', all);
+    assert.deepEqual([...l].sort(), ['accountant', 'employee', 'hr-partner', 'payment-creator', 'sales-rep']);
+    assert.equal((await assignableRoleIds(T, 'noemie-t', all)).size, 0, 'a main-merger gets no assignable role from this rule alone');
+    assert.equal((await assignableRoleIds(T, 'camille-t', all)).size, 0, 'someone with no role gets none');
   });
   it('a diff that touches anything else than assignments is refused', async () => {
     await branch('feature/other', ["insert into assignments values ('yanis-t','employee')", "update identities set department='hr' where id='yanis-t'"]);

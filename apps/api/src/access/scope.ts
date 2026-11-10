@@ -62,6 +62,26 @@ export async function askPerson(tenant: string, h: Hierarchy, actor: string, act
   return { allow: out.allow === true, reasons, engine: !(reasons.length === 1 && reasons[0] === 'no-active-version') };
 }
 
+/**
+ * The roles `actor` may give or take away, decided by the same Cedar rule as the merge gate (assignment:change): a role is offered when the policy allows it for at least one
+ * person the actor works with (her reports, the people of her organisations; any known person for a super admin). No parallel list of roles lives in code.
+ */
+export async function assignableRoleIds(tenant: string, actor: string, roleIds: string[]): Promise<Set<string>> {
+  if (!screenAccessOn()) return new Set(roleIds);
+  const h = await readHierarchy(tenant);
+  const mine = new Set((h.orgsOf.get(actor) ?? []));
+  const people = new Set<string>();
+  for (const id of h.managerOf.keys()) if (chainOf(h, id).includes(actor)) people.add(id);
+  for (const [sub, orgs] of h.orgsOf) if (sub !== actor && orgs.some((o) => mine.has(o))) people.add(sub);
+  for (const id of h.managerOf.keys()) if (people.size < 3 && id !== actor) people.add(id);
+  const probe = [...people].slice(0, 6);
+  const ok = new Set<string>();
+  try {
+    for (const role of roleIds) for (const p of probe) { const a = await askPerson(tenant, h, actor, 'assignment:change', p, role); if (!a.engine) return new Set(roleIds); if (a.allow) { ok.add(role); break; } }
+  } catch { throw new ForbiddenException('the policy engine could not be reached; refused to stay on the safe side'); }
+  return ok;
+}
+
 /** Throws 403 unless `actor` may `action` on `target` (no-op when screen access is off or before the first activation). */
 export async function assertPerson(tenant: string, actor: string, action: PersonAction, target: string, role?: string, h?: Hierarchy): Promise<void> {
   if (!screenAccessOn()) return;
