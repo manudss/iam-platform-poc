@@ -51,3 +51,9 @@ permit(principal, action == Action::"branch:merge", resource)
 @pillar("versioning")
 permit(principal, action == Action::"branch:merge", resource)
   when { context has roles && context.roles.contains("manager") && context has source_kind && context.source_kind == "profile" };
+
+@id("merge-into-main-needs-main-merger")
+@description("A person holding the main-merger role may merge a pull request into main, and into no other protected branch.")
+@pillar("versioning")
+permit(principal, action == Action::"branch:merge", resource == Branch::"main")
+  when { context has roles && context.roles.contains("main-merger") };
