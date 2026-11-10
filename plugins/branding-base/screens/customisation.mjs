@@ -54,8 +54,9 @@ class Customisation extends HTMLElement {
     this.form.addEventListener('submit',e=>{e.preventDefault();void this.save();});
     this.querySelector('[data-reset]').onclick=()=>this.load();
     this.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{this.dark=b.dataset.mode==='dark';this.push();});
-    this.querySelector('[data-width]').onclick=()=>{const f=this.querySelector('iframe');this.mobile=!this.mobile;f.style.maxWidth=this.mobile?'390px':'';};
-    this.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{this.querySelectorAll('[data-page]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));const admin=b.dataset.page==='admin';const f=this.querySelector('iframe');f.src=admin?'/admin-preview?preview=1':'/login?preview=1';this.querySelector('[data-preview-hint]').textContent=admin?'A static mock of the admin console.':'The actual sign-in interface.';});
+    this.syncPreview=()=>{const admin=this.querySelector('[data-page="admin"]').getAttribute('aria-pressed')==='true';const f=this.querySelector('iframe');f.style.maxWidth=this.mobile?'390px':'';const url=admin?'/admin-preview?preview=1'+(this.mobile?'&width=mobile':''):'/login?preview=1';if(!f.src.endsWith(url))f.src=url;}; // The mock's layout follows this toggle, not the viewport: inside the iframe the viewport IS the frame width.
+    this.querySelector('[data-width]').onclick=()=>{this.mobile=!this.mobile;this.syncPreview();};
+    this.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{this.querySelectorAll('[data-page]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));this.querySelector('[data-preview-hint]').textContent=b.dataset.page==='admin'?'A static mock of the admin console.':'The actual sign-in interface.';this.syncPreview();});
     this.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const p=[['#5c6bc0','#8b769c'],['#527a59','#9c8759'],['#a15e45','#607d8b']][b.dataset.preset];this.form.elements.primaryColor.value=p[0];this.form.elements.accentColor.value=p[1];this.schedule();});
     this.ready=e=>{if(e.origin===location.origin&&e.source===this.querySelector('iframe').contentWindow&&e.data?.type==='iam-preview-ready')this.push();};window.addEventListener('message',this.ready);
   }

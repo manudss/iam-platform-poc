@@ -1,8 +1,34 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, it, expect } from 'vitest';
-import { AdminPreviewPage } from './admin-preview';
+import { AdminPreviewPage, previewLayout } from './admin-preview';
 import { Theme } from './theme';
 
+describe('admin console preview layout', () => {
+  it('stacks the console only when the width toggle asks for mobile, never from the iframe viewport', () => {
+    expect(previewLayout('?preview=1')).toBe('desktop');
+    expect(previewLayout('?preview=1&width=mobile')).toBe('mobile');
+    const fixture = TestBed.createComponent(AdminPreviewPage);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.layout').classList.contains('mobile')).toBe(false);
+    (fixture.componentInstance as any).mobile.set(true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.layout').classList.contains('mobile')).toBe(true);
+  });
+  it('opens the mobile navigation as an overlay drawer, like the real shell', () => {
+    const fixture = TestBed.createComponent(AdminPreviewPage);
+    fixture.detectChanges();
+    (fixture.componentInstance as any).mobile.set(true);
+    fixture.detectChanges();
+    const layout = fixture.nativeElement.querySelector('.layout');
+    expect(layout.classList.contains('open')).toBe(false);
+    fixture.nativeElement.querySelector('.burger').click();
+    fixture.detectChanges();
+    expect(layout.classList.contains('open')).toBe(true);
+    fixture.nativeElement.querySelector('.scrim').click();
+    fixture.detectChanges();
+    expect(layout.classList.contains('open')).toBe(false);
+  });
+});
 describe('admin console preview', () => {
   it('applies a preview message from the parent frame and follows its mode without persisting', () => {
     localStorage.removeItem('iam.theme');

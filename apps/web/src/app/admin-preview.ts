@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { Brand, Branding } from './branding';
 import { Theme } from './theme';
 
@@ -8,10 +8,18 @@ import { Theme } from './theme';
  * dark and at mobile width. No API call, no session, no navigation. The parent frame (Customisation) posts the
  * draft theme; this page applies it like the sign-in preview does and never persists the theme choice.
  */
+/** The mock's layout follows the preview's width toggle, never the viewport: inside the preview iframe the
+ * viewport IS the iframe, so a media query would stack the console whenever the frame is narrow. */
+export function previewLayout(search: string): 'mobile' | 'desktop' {
+  return new URLSearchParams(search).get('width') === 'mobile' ? 'mobile' : 'desktop';
+}
+
 @Component({ selector: 'app-admin-preview', imports: [Brand], templateUrl: './admin-preview.html', styleUrl: './admin-preview.css' })
 export class AdminPreviewPage {
   private readonly branding = inject(Branding);
   private readonly theme = inject(Theme);
+  readonly mobile = signal(previewLayout(location.search) === 'mobile');
+  readonly menu = signal(false); // the mobile drawer, opened by the burger like the real shell
 
   constructor() {
     addEventListener('message', (ev) => this.onMessage(ev));

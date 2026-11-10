@@ -1,4 +1,4 @@
-<div class="layout">
+<div class="layout" [class.mobile]="mobile()" [class.open]="menu()">
   <aside class="side" aria-label="Mock navigation">
     <div class="brandcell"><app-brand [forceDark]="true" /></div>
     <nav>
@@ -12,8 +12,10 @@
       <a><span class="ico" aria-hidden="true">🗄</span>Database</a>
     </nav>
   </aside>
+  <div class="scrim" (click)="menu.set(false)"></div>
   <div class="main">
     <header class="top">
+      <button type="button" class="burger secondary" aria-label="Toggle menu" (click)="menu.set(!menu())">☰</button>
       <h1>Overview</h1>
       <span class="spacer"></span>
       <span class="who">demo-alice</span>
