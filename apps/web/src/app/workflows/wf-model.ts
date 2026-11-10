@@ -1,5 +1,4 @@
 import { Component, inject, signal } from '@angular/core';
-import { CanActivateFn, Router } from '@angular/router';
 import { CustomNodeComponent, HandleComponent, Node, SelectableDirective, ViewportState } from 'ngx-vflow';
 import { Session } from '../session';
 import { ApiClient } from '../api';
@@ -8,14 +7,7 @@ import { ApiClient } from '../api';
 // The whole feature is gated by the `workflows-iga` plugin: while disabled, the menu entry is hidden
 // (shell.ts), these routes redirect to /plugins, and every API endpoint answers 403.
 
-/** Route guard: the Workflows pages are inaccessible while the workflows-iga plugin is disabled. */
-export const workflowsEnabledGuard: CanActivateFn = async () => {
-  const s = inject(Session);
-  const router = inject(Router);
-  if (await s.refreshWorkflowsEnabled()) return true;
-  s.say('The Workflows (IGA) plugin is disabled. Enable it from the Plugins page to use workflows.', 'info');
-  return router.parseUrl('/plugins');
-};
+export { workflowsEnabledGuard } from './guard';
 // SIMULATED steps (wait/notify/fail) demonstrate orchestration only: a notification is never sent.
 // REAL data steps (assign-role/revoke-role/set-department) write on the run's own Dolt branch only;
 // publishing to main stays the human review/merge path.
@@ -77,7 +69,7 @@ export interface WfNodeData { name: string; category: StepCategory; runStatus?: 
     .wf-node.computed { border-left-color: var(--warn-line); }
     .wf-node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--shadow-color); }
     .wf-node[data-run="done"] { border-color: var(--ok); }
-    .wf-node[data-run="failed"] { border-color: var(--err, var(--warn-line)); }
+    .wf-node[data-run="failed"] { border-color: var(--bad-line); }
     .wf-node[data-run="running"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
     .wf-node[data-run="skipped"] { opacity: .55; }
     .wf-node-name {
