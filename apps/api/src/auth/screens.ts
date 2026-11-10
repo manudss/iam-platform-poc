@@ -13,7 +13,7 @@ export function doltScreens(method: string, sub: string): Screen[] {
   const m = method.toUpperCase(); const p = sub.replace(/^\/+/, '').split('?')[0];
   const seg = p.split('/');
   switch (seg[0]) {
-    case 'branches': return m === 'GET' ? DOLT_READ : ['dolt-branches'];
+    case 'branches': return m === 'GET' ? [...DOLT_READ, 'assignments'] : ['dolt-branches'];
     case 'protection': return DOLT_READ;
     case 'tags': return m === 'GET' ? DOLT_READ : ['dolt-branches'];
     case 'log': return ['dolt-history', 'dolt-pulls', 'dolt-compare', 'dolt-home'];
@@ -40,7 +40,8 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'roles': return m === 'GET' ? ['roles', 'assignments'] : ['roles'];
     case 'organizations': return ['organizations'];
     case 'assignments': case 'changes': case 'connectors': return ['assignments'];
-    case 'workspace': return ['assignments'];
+    // The personal working branch (opened at sign-in) and Apply: people editing assignments and the branch screens use them; the merge itself is decided by branch:merge.
+    case 'workspace': return ['assignments', 'dolt-branches', 'dolt-pulls'];
     case 'activation': case 'activations': case 'audit': return ['activation'];
     case 'policies': case 'policy-studio': return ['policies'];
     case 'plugins': return ['plugins'];
