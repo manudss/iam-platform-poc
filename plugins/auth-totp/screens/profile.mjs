@@ -495,7 +495,7 @@ export const qrcode = function(typeNumber, errorCorrectionLevel) {
         qrHtml += ' width: ' + cellSize + 'px;';
         qrHtml += ' height: ' + cellSize + 'px;';
         qrHtml += ' background-color: ';
-        qrHtml += _this.isDark(r, c)? '#000000' : '#ffffff';
+        qrHtml += _this.isDark(r, c)? 'black' : 'white';
         qrHtml += ';';
         qrHtml += '"/>';
       }
@@ -2271,7 +2271,7 @@ const css = `
 .tpf .msg{font-size:.9em;padding:.3em .6em;border-radius:4px}.tpf .bad{background:var(--bad-soft);color:var(--bad-ink)}.tpf .ok{background:var(--ok-soft);color:var(--ok)}
 .tpf .hint{overflow-wrap:anywhere;color:var(--label);font-size:.85em;max-width:36em}
 .tpf code.secret{display:inline-block;font-size:1.05em;letter-spacing:.08em;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:.4em .7em;margin:.3em 0;user-select:all}
-.tpf .qr{background:#fff;padding:8px;border-radius:8px;max-width:100%;box-sizing:border-box}.tpf .qr svg{display:block;width:192px;max-width:100%;height:auto}
+.tpf .qr{background:var(--card);padding:8px;border-radius:8px;max-width:100%;box-sizing:border-box}.tpf .qr svg{display:block;width:192px;max-width:100%;height:auto}
 .tpf .status{display:inline-block;border-radius:999px;padding:.15em .7em;font-size:.85em}
 .tpf .on{background:var(--ok-soft);color:var(--ok)}.tpf .off{background:var(--code-bg);color:var(--muted)}
 .tpf .immediate{color:var(--warn-ink);background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:6px;padding:.4em .7em;font-size:.85em;margin:.5em 0}
