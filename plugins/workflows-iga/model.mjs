@@ -2,14 +2,23 @@ import { createRequire } from 'node:module';
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
+export const STEP_CATEGORIES = ['simulated', 'computed', 'real'];
+/**
+ * Display category of a step type, shown as the node/run badge:
+ *   simulated  nothing really happens (a notification is only logged, never sent)
+ *   computed   the step REALLY runs and computes its output, but has no external effect and writes nothing
+ *   real       external call or data write (on the run branch)
+ * `simulated` (the boolean) keeps its engine meaning: no external effect, no write. The category refines the badge.
+ */
+export const stepCategory = (type) => STEP_TYPES[type]?.category ?? (STEP_TYPES[type]?.simulated ? 'simulated' : 'real');
 export const STEP_TYPES = {
-    wait: { simulated: true, label: 'Wait (simulated delay)' },
-    notify: { simulated: true, label: 'Notify (simulated, nothing sent)' },
-    fail: { simulated: true, label: 'Fail on purpose (simulated error)' },
-    'assign-role': { simulated: false, label: 'Assign a role (real, on the run branch)' },
-    'revoke-role': { simulated: false, label: 'Revoke a role (real, on the run branch)' },
-    'set-department': { simulated: false, label: 'Set department (real, on the run branch)' },
-    'set-profile-field': { simulated: false, label: 'Set a profile field (real, on the run branch)' },
+    wait: { simulated: true, category: 'simulated', label: 'Wait (simulated delay)' },
+    notify: { simulated: true, category: 'simulated', label: 'Notify (simulated, nothing sent)' },
+    fail: { simulated: true, category: 'simulated', label: 'Fail on purpose (simulated error)' },
+    'assign-role': { simulated: false, category: 'real', label: 'Assign a role (real, on the run branch)' },
+    'revoke-role': { simulated: false, category: 'real', label: 'Revoke a role (real, on the run branch)' },
+    'set-department': { simulated: false, category: 'real', label: 'Set department (real, on the run branch)' },
+    'set-profile-field': { simulated: false, category: 'real', label: 'Set a profile field (real, on the run branch)' },
 };
 /**
  * Application events a workflow can start on (its "start trigger"). This is the hook catalog the
@@ -96,7 +105,10 @@ export function registerExternalBlocks(blocks) {
             throw new Error(`external block "${b.type}" collides with an existing step type`);
         if (typeof b.validate !== 'function' || typeof b.run !== 'function')
             throw new Error(`external block "${b.type}": validate and run functions are required`);
-        STEP_TYPES[b.type] = { simulated: !!b.simulated, label: String(b.label ?? b.type) };
+        const category = b.category ?? (b.simulated ? 'simulated' : 'real');
+        if (!STEP_CATEGORIES.includes(category))
+            throw new Error(`external block "${b.type}": category must be one of ${STEP_CATEGORIES.join(', ')}`);
+        STEP_TYPES[b.type] = { simulated: !!b.simulated, category, label: String(b.label ?? b.type) };
         EXTERNAL_BLOCK_PROVIDER.set(b.type, b.pluginId);
         EXTERNAL_BLOCK_IMPL.set(b.type, b);
     }

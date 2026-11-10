@@ -30,33 +30,37 @@ export interface WfEdge { from: string; to: string }
 export interface WfTrigger { event: string; match?: Record<string, string>; config?: Record<string, unknown> }
 export interface WfBlockField { key: string; label: string; type: 'string' | 'text' | 'number' | 'boolean' | 'select'; required?: boolean; default?: unknown; options?: string[]; help?: string }
 export interface WfEvent { type: string; label: string; payload: string[]; configFields?: WfBlockField[] }
-export interface WfBlock { type: string; family: string; label: string; simulated: boolean; description: string; fields?: WfBlockField[]; outputs?: { key: string; description: string }[]; provider: string | null; providerActive: boolean }
+export type StepCategory = 'simulated' | 'computed' | 'real';
+/** Badge text of a step category: SIMULATED (nothing really happens) | COMPUTED (really runs, no external effect) | REAL. */
+export const categoryLabel = (c: StepCategory): string => (c === 'computed' ? 'COMPUTED' : c === 'real' ? 'REAL' : 'SIMULATED');
+export const categoryOf = (x: { simulated: boolean; category?: StepCategory }): StepCategory => x.category ?? (x.simulated ? 'simulated' : 'real');
+export interface WfBlock { type: string; family: string; label: string; simulated: boolean; category?: StepCategory; description: string; fields?: WfBlockField[]; outputs?: { key: string; description: string }[]; provider: string | null; providerActive: boolean }
 export interface DemoSheet { name: string; simulated: boolean; note: string; columns: string[]; rows: { rowNumber: number; values: Record<string, string> }[] }
-export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; steps: number; simulatedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
+export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; steps: number; simulatedSteps: number; computedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
 export interface RunSummary { id: string; definitionId: string; name: string; branch: string | null; status: string; error: string | null; startedBy: string; startedAt: string; finishedAt: string | null; hasDataSteps: boolean }
-export interface RunView { run: { id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[] }; steps: { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null; output?: Record<string, unknown> | null }[] }
+export interface RunView { run: { id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[] }; steps: { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; category?: StepCategory; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null; output?: Record<string, unknown> | null }[] }
 
-export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; hint: string }[] = [
-  { type: 'wait', label: 'Wait', simulated: true, hint: 'Simulated delay (seconds)' },
-  { type: 'notify', label: 'Notify', simulated: true, hint: 'Simulated: logged, never sent' },
-  { type: 'fail', label: 'Fail on purpose', simulated: true, hint: 'Simulated error: fails once, recovers on retry' },
-  { type: 'assign-role', label: 'Assign role', simulated: false, hint: 'Real, on the run branch' },
-  { type: 'revoke-role', label: 'Revoke role', simulated: false, hint: 'Real, on the run branch' },
-  { type: 'set-department', label: 'Set department', simulated: false, hint: 'Real, on the run branch' },
-  { type: 'set-profile-field', label: 'Set profile field', simulated: false, hint: 'Real, on the run branch' },
+export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; category: StepCategory; hint: string }[] = [
+  { type: 'wait', label: 'Wait', simulated: true, category: 'simulated', hint: 'Simulated delay (seconds)' },
+  { type: 'notify', label: 'Notify', simulated: true, category: 'simulated', hint: 'Simulated: logged, never sent' },
+  { type: 'fail', label: 'Fail on purpose', simulated: true, category: 'simulated', hint: 'Simulated error: fails once, recovers on retry' },
+  { type: 'assign-role', label: 'Assign role', simulated: false, category: 'real', hint: 'Real, on the run branch' },
+  { type: 'revoke-role', label: 'Revoke role', simulated: false, category: 'real', hint: 'Real, on the run branch' },
+  { type: 'set-department', label: 'Set department', simulated: false, category: 'real', hint: 'Real, on the run branch' },
+  { type: 'set-profile-field', label: 'Set profile field', simulated: false, category: 'real', hint: 'Real, on the run branch' },
 ];
 
 
-// ---- Visual node for the workflow canvas: readable name, wrapped text, SIMULATED/REAL badge, side handles ----
-export interface WfNodeData { name: string; simulated: boolean }
+// ---- Visual node for the workflow canvas: readable name, wrapped text, SIMULATED/COMPUTED/REAL badge, side handles ----
+export interface WfNodeData { name: string; category: StepCategory }
 
 @Component({
   selector: 'app-wf-node',
   imports: [HandleComponent, SelectableDirective],
   template: `
-    <div selectable class="wf-node" [class.real]="!data()?.simulated" [class.selected]="selected()">
+    <div selectable class="wf-node" [class.real]="data()?.category === 'real'" [class.computed]="data()?.category === 'computed'" [class.selected]="selected()">
       <span class="wf-node-name">{{ data()?.name }}</span>
-      <span class="wf-node-badge" [class.real]="!data()?.simulated">{{ data()?.simulated ? 'SIMULATED' : 'REAL' }}</span>
+      <span class="wf-node-badge" [class.real]="data()?.category === 'real'" [class.computed]="data()?.category === 'computed'">{{ badgeLabel() }}</span>
     </div>
     <handle type="target" position="left" />
     <handle type="source" position="right" />
@@ -70,6 +74,7 @@ export interface WfNodeData { name: string; simulated: boolean }
       display: flex; flex-direction: column; gap: 6px;
     }
     .wf-node.real { border-left-color: var(--ok); }
+    .wf-node.computed { border-left-color: var(--warn-line); }
     .wf-node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--shadow-color); }
     .wf-node-name {
       font-size: 14px; font-weight: 600; line-height: 1.35; color: var(--ink);
@@ -80,13 +85,16 @@ export interface WfNodeData { name: string; simulated: boolean }
       padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
     }
     .wf-node-badge.real { background: var(--ok-soft); color: var(--ok); }
+    .wf-node-badge.computed { background: var(--warn-soft); color: var(--warn-ink); }
     handle { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
       background: var(--card); border: 2px solid var(--accent); transform: translateY(-50%); }
     handle[position="left"] { left: -6px; }
     handle[position="right"] { right: -6px; }
   `],
 })
-export class WfNodeComponent extends CustomNodeComponent<WfNodeData> {}
+export class WfNodeComponent extends CustomNodeComponent<WfNodeData> {
+  protected badgeLabel() { return categoryLabel(this.data()?.category ?? 'simulated'); }
+}
 
 export class WorkflowClient {
   constructor(private readonly api: ApiClient, private readonly adminToken: () => string) {}
@@ -142,8 +150,8 @@ const clientOf = (s: Session) => new WorkflowClient(s.api, () => s.adminToken())
 <b>Simulated</b> steps never touch anything (a notification is only logged, never sent). <b>Real</b> steps write business data on the run's own Dolt branch, which a human then reviews and merges.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <section class="card"><div class="row"><h3 style="flex:1">Definitions</h3><a class="btn" routerLink="/workflows/edit/new">New workflow</a><button class="secondary" (click)="load()">Refresh</button></div>
-<div class="scroll"><table><thead><tr><th>Name</th><th>Trigger</th><th>Steps</th><th>Simulated</th><th>Real</th><th>By</th><th></th></tr></thead><tbody>
-@for (d of defs(); track d.id) {<tr><td><a [routerLink]="['/workflows/edit', d.id]">{{d.name}}</a><br /><small>{{d.description}}</small></td><td>@if (d.trigger) {<span class="chip" data-status="real">auto: {{d.trigger.event}}</span>} @else {<small>manual</small>}</td><td>{{d.steps}}</td><td>{{d.simulatedSteps}}</td><td>{{d.dataSteps}}</td><td>{{d.createdBy}}</td>
+<div class="scroll"><table><thead><tr><th>Name</th><th>Trigger</th><th>Steps</th><th>Simulated</th><th>Computed</th><th>Real</th><th>By</th><th></th></tr></thead><tbody>
+@for (d of defs(); track d.id) {<tr><td><a [routerLink]="['/workflows/edit', d.id]">{{d.name}}</a><br /><small>{{d.description}}</small></td><td>@if (d.trigger) {<span class="chip" data-status="real">auto: {{d.trigger.event}}</span>} @else {<small>manual</small>}</td><td>{{d.steps}}</td><td>{{d.simulatedSteps}}</td><td>{{d.computedSteps}}</td><td>{{d.dataSteps}}</td><td>{{d.createdBy}}</td>
 <td><button (click)="start(d)" [disabled]="busy()">Run</button> <a class="btn secondary" [routerLink]="['/workflows/edit', d.id]">Edit</a> <button class="secondary" (click)="remove(d)" [disabled]="busy()">Delete</button></td></tr>}
 @empty {<tr><td colspan="7">No workflow yet. Create one, or open the editor and load a sample.</td></tr>}
 </tbody></table></div></section>
@@ -278,7 +286,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 <label>Search blocks<input name="paletteSearch" [(ngModel)]="paletteQuery" placeholder="HTTP, Sheets, Jira, text..." /></label>
 <p class="hint">Click to add a step. Connect handles in the canvas. Select a step to edit it.</p>
 @for (g of palette(); track g.family) {<div class="wf-family">{{g.family}}</div>
-@for (t of g.blocks; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{t.simulated ? 'SIMULATED' : 'REAL'}}</small>@if (t.provider && !t.providerActive) { <small class="req">(plugin disabled)</small>}<br /><small>{{t.description}}</small></button>}}
+@for (t of g.blocks; track t.type) {<button class="secondary wf-pal" (click)="addNode(t.type)">+ {{t.label}} <small>{{categoryLabel(categoryOf(t))}}</small>@if (t.provider && !t.providerActive) { <small class="req">(plugin disabled)</small>}<br /><small>{{t.description}}</small></button>}}
 </section>
 <section class="card wf-canvas">
 <vflow [nodes]="vfNodes()" [edges]="vfEdges()" [view]="'auto'" [minZoom]="0.4" [maxZoom]="1.6" [background]="'var(--bg)'" (connect)="onConnect($event)" (componentNodeEvent)="noop($event)" />
@@ -286,7 +294,7 @@ interface NodeState { type: StepType; name: string; config: Record<string, unkno
 <section class="card"><h3>Selected</h3>
 @if (selectedNode(); as nid) {@if (state.get(nid); as st) {
 <label>Step name<input name="stepName" [ngModel]="st.name" (ngModelChange)="rename(nid, $event)" maxlength="80" /></label>
-<p class="hint">{{typeOf(st.type).label}} — {{typeOf(st.type).simulated ? 'SIMULATED: demonstrates the flow, no external effect' : 'REAL: data or external effect. Read the block description before running.'}}</p>
+<p class="hint">{{typeOf(st.type).label}} — {{typeOf(st.type).category === 'computed' ? 'COMPUTED: really runs and computes its output, but has no external effect.' : typeOf(st.type).category === 'real' ? 'REAL: data or external effect. Read the block description before running.' : 'SIMULATED: demonstrates the flow, no external effect.'}}</p>
 @if (blockOf(st.type)?.description) {<p class="hint">{{blockOf(st.type)!.description}}</p>}
 @if ((blockOf(st.type)?.fields?.length ?? 0) > 0) {
 @for (f of blockOf(st.type)!.fields!; track f.key) {
@@ -333,6 +341,8 @@ export class WorkflowEditPage implements OnInit {
   protected triggerEvent = '';
   protected match = signal<Record<string, string>>({});
   protected triggerCfg = signal<Record<string, unknown>>({});
+  protected readonly categoryLabel = categoryLabel;
+  protected readonly categoryOf = categoryOf;
   protected payloadKeys() { return this.events().find((e) => e.type === this.triggerEvent)?.payload ?? []; }
   protected placeholderHint() { return this.payloadKeys().includes('*') ? '{{event.<any key of the row/call>}}' : this.payloadKeys().map((k) => `{{event.${k}}}`).join('  '); }
   protected triggerFields(): WfBlockField[] { return this.events().find((e) => e.type === this.triggerEvent)?.configFields ?? []; }
@@ -426,16 +436,16 @@ export class WorkflowEditPage implements OnInit {
     void clientOf(this.s).blocks().then((r) => this.blocks.set(r.blocks)).catch(() => this.blocks.set([]));
     if (this.id !== 'new') void this.load();
   }
-  protected typeOf(t: StepType): { type: string; label: string; simulated: boolean; hint: string } {
+  protected typeOf(t: StepType): { type: string; label: string; simulated: boolean; category: StepCategory; hint: string } {
     const b = this.blockOf(t);
-    if (b) return { type: b.type, label: b.label, simulated: b.simulated, hint: b.description };
-    return STEP_TYPES.find((x) => x.type === t) ?? { type: t, label: t, simulated: true, hint: '' };
+    if (b) return { type: b.type, label: b.label, simulated: b.simulated, category: categoryOf(b), hint: b.description };
+    return STEP_TYPES.find((x) => x.type === t) ?? { type: t, label: t, simulated: true, category: 'simulated', hint: '' };
   }
 
   private makeNode(id: string, st: NodeState, i: number): Node {
     return {
       id, type: WfNodeComponent,
-      data: signal<WfNodeData>({ name: st.name, simulated: this.typeOf(st.type).simulated }),
+      data: signal<WfNodeData>({ name: st.name, category: this.typeOf(st.type).category }),
       point: signal({ x: 40 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
       selected: signal(false),
     } as Node;
@@ -466,7 +476,7 @@ export class WorkflowEditPage implements OnInit {
   protected rename(id: string, v: string) {
     const st = this.state.get(id)!; st.name = v;
     const n = this.vfNodes().find((x) => x.id === id);
-    if (n?.type === WfNodeComponent) n.data?.set({ name: v, simulated: this.typeOf(st.type).simulated });
+    if (n?.type === WfNodeComponent) n.data?.set({ name: v, category: this.typeOf(st.type).category });
   }
   protected setCfg(id: string, k: string, v: unknown) { this.state.get(id)!.config[k] = k === 'seconds' ? Number(v) : v; }
   protected noop(_e: unknown) {}
@@ -558,7 +568,7 @@ export class WorkflowEditPage implements OnInit {
 </section>
 <section class="card"><h3>Steps</h3>
 @for (st of v.steps; track st.node_id) {<div class="wf-step" [attr.data-status]="st.status">
-<div class="row"><span class="chip" [attr.data-status]="st.status">{{st.status}}</span><b>{{st.name}}</b><span class="chip" [attr.data-status]="st.simulated ? 'simulated' : 'real'">{{st.simulated ? 'SIMULATED' : 'REAL'}}</span><small>attempts: {{st.attempts}}</small></div>
+<div class="row"><span class="chip" [attr.data-status]="st.status">{{st.status}}</span><b>{{st.name}}</b><span class="chip" [attr.data-status]="categoryOf(st)">{{categoryLabel(categoryOf(st))}}</span><small>attempts: {{st.attempts}}</small></div>
 @if (st.error) {<p class="msg error">{{st.error}}</p>}
 <details open><summary>Output</summary><pre class="wf-log">{{st.output | json}}</pre></details>
 <details><summary>Log</summary><pre class="wf-log">@for (l of st.log; track l) {{{l}}
@@ -569,6 +579,8 @@ export class WorkflowEditPage implements OnInit {
 export class WorkflowRunPage implements OnInit, OnDestroy {
   protected readonly s = inject(Session);
   private readonly route = inject(ActivatedRoute);
+  protected readonly categoryLabel = categoryLabel;
+  protected readonly categoryOf = categoryOf;
   protected view = signal<RunView | null>(null);
   protected note = signal(''); protected prId = signal<number | null>(null);
   private id = ''; private timer?: ReturnType<typeof setInterval>;

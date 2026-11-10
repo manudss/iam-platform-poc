@@ -12,6 +12,9 @@ import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
  *   family      palette group in the editor
  *   label       human name
  *   simulated   false = REAL-capable (external call or branch write); a dry-run says so in the step log
+ *   category    badge shown on the node: 'simulated' (nothing really happens) | 'computed' (really runs and
+ *               computes its output, no external effect) | 'real' (external call or write); default derives
+ *               from `simulated` (true -> simulated, false -> real)
  *   description one honest line (what is real, what is simulated)
  *   fields      editor form: { key, label, type: string|text|number|boolean|select, required?, default?, options?, help? }
  *   outputs     documented keys usable downstream as {{steps.<id>.<key>}}
@@ -118,6 +121,7 @@ const textTransform = {
   family: 'Text',
   label: 'Text transform (Activepieces)',
   simulated: true,
+  category: 'computed', // really runs (real string operations, real Activepieces piece code), only no external effect
   description: 'Text helpers: concat, replace, slugify, find, split come from the Activepieces text-helper piece; lower and unaccent are native additions (the piece has none). Pure computation, no external effect.',
   fields: [
     { key: 'operation', label: 'Operation', type: 'select', options: ['concat', 'replace', 'slugify', 'find', 'split', 'lower', 'unaccent'], required: true, default: 'concat' },

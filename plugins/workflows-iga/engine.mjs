@@ -30,7 +30,7 @@
  *  - an EXTERNAL effect (HTTP call, Jira ticket, real Google write) is NOT reverted by abandoning the branch:
  *    the block's own log line says exactly what really happened outside (dry-run or real).
  */
-import { STEP_TYPES, externalBlock, externalBlockProvider, substituteStepOutputs, validateGraph } from './model.mjs';
+import { STEP_TYPES, externalBlock, externalBlockProvider, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
 
 const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
   from assignments a join assignments b on a.identity_id = b.identity_id
@@ -98,10 +98,12 @@ export function createWorkflowEngine(deps) {
     const logs = [...step.log];
     const say = (line) => { logs.push(`${now()} ${line}`); };
     const external = externalBlock(node.type);
+    const cat = stepCategory(node.type);
+    const effect = cat === 'computed' ? 'COMPUTED - really runs and computes its output, no external effect' : cat === 'simulated' ? 'SIMULATED, no external effect' : null;
     if (external)
-      say(`step started (block "${external.label ?? node.type}" from the ${externalBlockProvider(node.type)} plugin${STEP_TYPES[node.type].simulated ? ' - SIMULATED, no external effect' : ' - REAL-capable: the lines below say exactly what really happened outside lyam'})`);
+      say(`step started (block "${external.label ?? node.type}" from the ${externalBlockProvider(node.type)} plugin${effect ? ' - ' + effect : ' - REAL-capable: the lines below say exactly what really happened outside lyam'})`);
     else
-      say(`step started (${STEP_TYPES[node.type].simulated ? 'SIMULATED - no external effect' : 'REAL data change on branch ' + (run.branch ?? 'pending')})`);
+      say(`step started (${effect ?? 'REAL data change on branch ' + (run.branch ?? 'pending')})`);
     await store.patchStep(run.id, node.id, { status: 'running', started_at: step.started_at ?? now(), attempts: step.attempts + 1, log: logs, error: null });
     try {
       // Outputs apply to every node, including built-ins such as assign-role and notify.

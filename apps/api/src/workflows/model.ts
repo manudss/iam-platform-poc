@@ -22,6 +22,7 @@ export interface WfNode { id: string; type: StepType; name: string; config: Reco
 export interface WfEdge { from: string; to: string }
 export interface WfGraph { nodes: WfNode[]; edges: WfEdge[] }
 
+export type StepCategory = 'simulated' | 'computed' | 'real';
 /** A workflow block contributed by a plugin on the `workflows.blocks` surface (its manifest entrypoints.blocks). */
 export interface WfBlockField { key: string; label: string; type: 'string' | 'text' | 'number' | 'boolean' | 'select'; required?: boolean; default?: unknown; options?: string[]; help?: string }
 export interface WfBlockCtx {
@@ -30,7 +31,7 @@ export interface WfBlockCtx {
   branchWrite: (fn: (db: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }) => Promise<void>, message?: string) => Promise<void>;
 }
 export interface WfBlock {
-  type: string; family: string; label: string; simulated: boolean; description: string;
+  type: string; family: string; label: string; simulated: boolean; category?: StepCategory; description: string;
   fields: WfBlockField[]; outputs: { key: string; description: string }[];
   validate: (cfg: Record<string, unknown>) => Record<string, unknown>;
   run: (ctx: WfBlockCtx) => Promise<Record<string, unknown> | undefined>;
@@ -42,7 +43,7 @@ export interface WfTriggerEvent {
 }
 
 interface WfModelModule {
-  STEP_TYPES: Record<StepType, { simulated: boolean; label: string }>;
+  STEP_TYPES: Record<StepType, { simulated: boolean; label: string; category?: StepCategory }>;
   WF_EVENTS: Record<string, { label: string; payload: string[]; configFields?: WfBlockField[] }>;
   placeholderKeys: (value: unknown) => string[];
   stepPlaceholderRefs: (value: unknown) => { node: string; key: string }[];
@@ -88,8 +89,11 @@ export const externalBlockProvider = plugin.externalBlockProvider;
 export const externalEvent = plugin.externalEvent;
 export const isWildcardEvent = plugin.isWildcardEvent;
 
+/** Badge category of a step type: simulated (nothing really happens) | computed (really runs, no external effect) | real. */
+export const stepCategoryOf = (type: StepType): StepCategory => STEP_TYPES[type]?.category ?? (STEP_TYPES[type]?.simulated ? 'simulated' : 'real');
+
 /** The merged block catalogue for the editor palette: built-in step types first, then contributed blocks. */
-export function blockCatalogue(): { type: string; family: string; label: string; simulated: boolean; description: string; fields: WfBlockField[]; outputs: { key: string; description: string }[]; provider: string | null }[] {
+export function blockCatalogue(): { type: string; family: string; label: string; simulated: boolean; category: StepCategory; description: string; fields: WfBlockField[]; outputs: { key: string; description: string }[]; provider: string | null }[] {
   const builtins: Record<string, { hint: string }> = {
     wait: { hint: 'Simulated delay (seconds)' },
     notify: { hint: 'Simulated: logged, never sent' },
@@ -99,14 +103,14 @@ export function blockCatalogue(): { type: string; family: string; label: string;
     'set-department': { hint: 'Real, on the run branch' },
     'set-profile-field': { hint: 'Real, on the run branch' },
   };
-  const out = Object.entries(builtins).map(([type, b]) => ({ type, family: 'Core', label: STEP_TYPES[type].label, simulated: STEP_TYPES[type].simulated, description: b.hint, fields: [] as WfBlockField[], outputs: [] as { key: string; description: string }[], provider: null as string | null }));
+  const out = Object.entries(builtins).map(([type, b]) => ({ type, family: 'Core', label: STEP_TYPES[type].label, simulated: STEP_TYPES[type].simulated, category: stepCategoryOf(type), description: b.hint, fields: [] as WfBlockField[], outputs: [] as { key: string; description: string }[], provider: null as string | null }));
   const seen = new Set(out.map((b) => b.type));
   for (const impl of pluginCatalogue().impls()) {
     if (!impl.manifest.entrypoints?.['blocks']) continue;
     for (const b of impl.manifest ? (loadPluginModule(impl.manifest.id, impl.manifest.entrypoints['blocks']) as { BLOCKS?: WfBlock[] }).BLOCKS ?? [] : []) {
       if (seen.has(b.type)) continue;
       seen.add(b.type);
-      out.push({ type: b.type, family: b.family, label: b.label, simulated: b.simulated, description: b.description, fields: b.fields ?? [], outputs: b.outputs ?? [], provider: impl.manifest.id });
+      out.push({ type: b.type, family: b.family, label: b.label, simulated: b.simulated, category: b.category ?? (b.simulated ? 'simulated' : 'real'), description: b.description, fields: b.fields ?? [], outputs: b.outputs ?? [], provider: impl.manifest.id });
     }
   }
   return out;

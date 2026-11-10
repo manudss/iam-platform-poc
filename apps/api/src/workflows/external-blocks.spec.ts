@@ -48,6 +48,16 @@ describe('contributed block catalogue (workflow-connectors)', () => {
     const lyam = cat.find((b) => b.type === 'lyam-create-user');
     assert.ok(lyam && lyam.provider === 'workflow-connectors' && lyam.fields.length > 0);
   });
+  it('badges text-transform as COMPUTED (really runs, no external effect); the other blocks stay REAL-capable', () => {
+    const cat = new Map(blockCatalogue().map((b) => [b.type, b.category]));
+    assert.equal(cat.get('text-transform'), 'computed');
+    for (const t of ['http-request', 'google-sheets-read', 'google-sheets-update', 'google-sheets-add-row', 'jira-create-issue', 'jira-search-issues', 'lyam-create-user'])
+      assert.equal(cat.get(t), 'real', `${t} real-capable`);
+    for (const t of ['wait', 'notify', 'fail']) assert.equal(cat.get(t), 'simulated');
+    for (const t of ['assign-role', 'revoke-role', 'set-department', 'set-profile-field']) assert.equal(cat.get(t), 'real');
+    // text-transform keeps the simulated flag (no external effect) so a run of pure transforms stays branchless
+    assert.equal(externalBlock('text-transform')!.simulated, true);
+  });
   it('validates contributed step config inside a graph and rejects unknown keys', () => {
     const { order } = validateGraph({ nodes: [node('a', 'text-transform', { operation: 'lower', text: 'X' }), node('b', 'notify', { recipient: 'hr', message: '{{steps.a.value}}' })], edges: [{ from: 'a', to: 'b' }] });
     assert.deepEqual(order, ['a', 'b']);

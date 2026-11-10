@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
-import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, placeholderKeys, STEP_TYPES, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
+import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
@@ -11,7 +11,7 @@ import { currentBranch, workspaceMode } from '../workspace/context.js';
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
 
-export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean; order: string[] }; steps: (StepRow & { name: string; type: string; label: string })[] }
+export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean; order: string[] }; steps: (StepRow & { name: string; type: string; label: string; category: string })[] }
 
 /** API surface of the workflows feature. All state changes are validated here; the engine only executes. */
 @Injectable()
@@ -45,7 +45,7 @@ export class WorkflowsService {
 
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant, currentBranch());
-    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => STEP_TYPES[n.type].simulated).length, dataSteps: d.graph.nodes.filter((n) => !STEP_TYPES[n.type].simulated).length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
+    return { definitions: defs.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, steps: d.graph.nodes.length, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at })) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -104,10 +104,13 @@ export class WorkflowsService {
     const steps = order.map((nodeId) => {
       const n = resolved.nodes.find((x) => x.id === nodeId)!;
       const simulated = STEP_TYPES[n.type].simulated;
+      const category = stepCategoryOf(n.type);
       return {
-        step: n.id, type: n.type, name: n.name, simulated, config: n.config,
+        step: n.id, type: n.type, name: n.name, simulated, category, config: n.config,
         would: externalBlockProvider(n.type)
-          ? `an external block from the "${externalBlockProvider(n.type)}" plugin (HTTP call, sheet or Jira write, user creation) - NOT executed in this test`
+          ? category === 'computed'
+            ? `a computed block from the "${externalBlockProvider(n.type)}" plugin (really runs, no external effect) - NOT executed in this test`
+            : `an external block from the "${externalBlockProvider(n.type)}" plugin (HTTP call, sheet or Jira write, user creation) - NOT executed in this test`
           : simulated ? 'write a log line only (a simulated step never has an external effect)' : 'a REAL data write on the run branch - NOT executed in this test',
       };
     });
@@ -158,7 +161,7 @@ export class WorkflowsService {
       steps: order.map((nodeId) => {
         const s = steps.find((x) => x.node_id === nodeId);
         const n = nodes.get(nodeId)!;
-        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], output: null, started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label };
+        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], output: null, started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label, category: stepCategoryOf(n.type) };
       }),
     };
   }

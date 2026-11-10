@@ -24,6 +24,7 @@
 .chip[data-status="running"], .chip[data-status="queued"] { background: var(--warn-soft); }
 .chip[data-status="skipped"], .chip[data-status="canceled"] { background: var(--chip-bg); }
 .chip[data-status="simulated"] { background: var(--accent-soft); }
+.chip[data-status="computed"] { background: var(--warn-soft); }
 .chip[data-status="real"] { background: var(--warn-soft); }
 .btn { display: inline-block; border-radius: .4rem; padding: .35rem .8rem; background: var(--accent); color: var(--accent-ink); text-decoration: none; border: 0; cursor: pointer; font-size: .9rem; }
 .btn.secondary { background: transparent; color: inherit; border: 1px solid currentColor; }

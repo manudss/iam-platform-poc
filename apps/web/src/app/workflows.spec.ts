@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { Node } from 'ngx-vflow';
 import { ApiClient } from './api';
-import { SAMPLE_WORKFLOWS, STEP_TYPES, WorkflowClient, anchorViewport, leftmostNode, rectsWithin } from './workflows';
+import { SAMPLE_WORKFLOWS, STEP_TYPES, WorkflowClient, anchorViewport, categoryLabel, categoryOf, leftmostNode, rectsWithin } from './workflows';
 
 // Mirrors the server catalog (apps/api/src/workflows/model.ts WF_EVENTS, contributed events included):
 // the editor fetches it live, the samples are checked against this copy so a drift between the two fails here.
@@ -24,6 +24,17 @@ describe('workflow step types', () => {
     expect(simulated).toEqual(['wait', 'notify', 'fail']);
     const real = STEP_TYPES.filter((t) => !t.simulated).map((t) => t.type);
     expect(real).toEqual(['assign-role', 'revoke-role', 'set-department', 'set-profile-field']);
+  });
+  it('assigns a badge category to every built-in type and labels the three categories', () => {
+    for (const t of STEP_TYPES) expect(['simulated', 'computed', 'real']).toContain(t.category);
+    expect(STEP_TYPES.filter((t) => t.category === 'simulated').map((t) => t.type)).toEqual(['wait', 'notify', 'fail']);
+    expect(STEP_TYPES.filter((t) => t.category === 'real').map((t) => t.type)).toEqual(['assign-role', 'revoke-role', 'set-department', 'set-profile-field']);
+    expect(categoryLabel('simulated')).toBe('SIMULATED');
+    expect(categoryLabel('computed')).toBe('COMPUTED');
+    expect(categoryLabel('real')).toBe('REAL');
+    expect(categoryOf({ simulated: true })).toBe('simulated'); // a block without a category keeps the derived badge
+    expect(categoryOf({ simulated: false })).toBe('real');
+    expect(categoryOf({ simulated: true, category: 'computed' })).toBe('computed');
   });
 });
 
