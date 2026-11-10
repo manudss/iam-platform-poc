@@ -76,7 +76,7 @@ function modeVars(pl: Palettes, dark: boolean): ThemeVars {
     '--bad': hex(E, 80), '--bad-soft': hex(E, 25), '--bad-ink': hex(E, 90), '--bad-line': hex(E, 40),
     '--warn-soft': hex(W, 25), '--warn-line': hex(W, 45), '--warn-ink': hex(W, 90),
     '--sel': hex(P, 32), '--on-bad': hex(E, 20),
-    '--sidebar-bg':hex(P,9),'--sidebar-ink':hex(N,95),'--sidebar-muted':hex(NV,80),'--sidebar-active':hex(P,30),'--sidebar-hover':hex(P,20),
+    '--sidebar-bg':hex(P,10),'--sidebar-ink':hex(N,95),'--sidebar-muted':hex(NV,80),'--sidebar-active':hex(P,30),'--sidebar-hover':hex(P,20),
     '--gradient-from':hex(S,80),'--gradient-to':hex(P,55),'--scrim':hexa(N,0,.55),'--shadow-color':hexa(N,0,.25),
   } : {
     '--bg': hex(N, 98), '--card': hex(N, 100), '--panel': hex(N, 96), '--code-bg': hex(N, 94),
