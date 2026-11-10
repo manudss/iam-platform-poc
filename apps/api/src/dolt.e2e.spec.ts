@@ -65,7 +65,7 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
   const T = 'tenants/acme-demo';
   it('reads seeded assignments from Dolt', async () => {
     const r = await j(`${API}/${T}/assignments`, 'GET', await login());
-    assert.deepEqual(await r.json(), [{ identity_id: 'demo-alice', role_id: 'branch-merger' }, { identity_id: 'demo-alice', role_id: 'mcp-operator' }, { identity_id: 'demo-bob', role_id: 'payment-creator' }]); // the demo seed also makes alice the MCP operator
+    assert.deepEqual(await r.json(), [{ identity_id: 'demo-alice', role_id: 'branch-merger' }, { identity_id: 'demo-alice', role_id: 'iam-admin' }, { identity_id: 'demo-alice', role_id: 'mcp-operator' }, { identity_id: 'demo-bob', role_id: 'payment-creator' }]); // the demo seed also makes alice the MCP operator
   });
   it('simulation on a branch finds the SoD violation, main stays untouched, merge is refused', async () => {
     const t = await login();
@@ -83,7 +83,7 @@ describe('e2e api + real Dolt', { skip: !have && 'dolt or core binary missing' }
     const m = await j(`${API}/${T}/changes/${sim.branch}/merge`, 'POST', t);
     assert.equal(m.status, 201);
     const { commit } = (await m.json()) as { commit: string };
-    assert.equal(((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length, 4);
+    assert.equal(((await (await j(`${API}/${T}/assignments`, 'GET', t)).json()) as unknown[]).length, 5);
     const act = (await (await j(`${API}/${T}/activations`, 'POST', t, {})).json()) as { seq: number; commit: string };
     assert.equal(act.commit, commit);
   });

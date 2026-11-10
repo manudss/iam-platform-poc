@@ -65,10 +65,10 @@ describe('EffectsService wiring: real Dolt export + PostgreSQL + core + bus -> l
     await sql("insert into assignments values ('demo-alice','payment-approver')");
     const a = await svc.activate(T, await new DoltService().head(), 'req-eff-0001');
     assert.deepEqual([a.state, a.seq], ['applied', 1]);
-    await pump(() => sinkCalls.length >= 4 && targetCalls.length >= 4);
-    assert.equal(sinkCalls.length, 4); assert.equal(targetCalls.length, 4); // the seeded demo data already holds alice/mcp-operator and bob/payment-creator, plus the new alice grant (alice also holds branch-merger)
+    await pump(() => sinkCalls.length >= 5 && targetCalls.length >= 5);
+    assert.equal(sinkCalls.length, 5); assert.equal(targetCalls.length, 5); // the seeded demo data already holds alice/mcp-operator and bob/payment-creator, plus the new alice grant (alice also holds branch-merger and iam-admin)
     const ai = sinkCalls.findIndex((c) => c.key.includes('demo-alice:payment-approver')), ti = targetCalls.findIndex((c) => c.url.includes('/Users/demo-alice/Roles/payment-approver'));
-    assert.deepEqual(sinkCalls.map((c) => c.key).sort(), [`${T}:1:notify:demo-alice:branch-merger:granted`, `${T}:1:notify:demo-alice:mcp-operator:granted`, `${T}:1:notify:demo-alice:payment-approver:granted`, `${T}:1:notify:demo-bob:payment-creator:granted`]);
+    assert.deepEqual(sinkCalls.map((c) => c.key).sort(), [`${T}:1:notify:demo-alice:branch-merger:granted`, `${T}:1:notify:demo-alice:iam-admin:granted`, `${T}:1:notify:demo-alice:mcp-operator:granted`, `${T}:1:notify:demo-alice:payment-approver:granted`, `${T}:1:notify:demo-bob:payment-creator:granted`]);
     const n = JSON.parse(sinkCalls[ai].body);
     assert.deepEqual([n.type, n.tenant, n.activation, n.subject, n.role, n.change], ['role.changed', T, 1, 'demo-alice', 'payment-approver', 'granted']);
     assert.equal(n.to, 'manager-of:demo-alice'); // fictional recipient, never a person
@@ -81,13 +81,13 @@ describe('EffectsService wiring: real Dolt export + PostgreSQL + core + bus -> l
     await sql("delete from assignments where identity_id='demo-alice' and role_id='payment-approver'");
     const b = await svc.activate(T, await new DoltService().head(), 'req-eff-0002');
     assert.deepEqual([b.state, b.seq], ['applied', 2]);
-    await pump(() => sinkCalls.length >= 6 && targetCalls.length >= 6);
+    await pump(() => sinkCalls.length >= 7 && targetCalls.length >= 7);
     const want = [`${T}:2:notify:demo-alice:payment-approver:revoked`, `${T}:2:notify:demo-bob:payment-approver:granted`];
     assert.deepEqual(sinkCalls.filter((c) => c.key.startsWith(`${T}:2:`)).map((c) => c.key).sort(), want);
     assert.deepEqual(targetCalls.filter((c) => c.key.startsWith(`${T}:2:`)).map((c) => `${c.method} ${c.url}`).sort(), ['DELETE /Users/demo-alice/Roles/payment-approver', 'PUT /Users/demo-bob/Roles/payment-approver']);
     assert.equal(new Set(sinkCalls.map((c) => c.key)).size, sinkCalls.length); // no duplicate effect key reached the sink
     assert.equal((await pool.query("select count(*)::int n from effects where state <> 'done'")).rows[0].n, 0); // every effect ended done after the retries
-    assert.equal((await pool.query("select count(*)::int n from effects where tenant=$1", [T])).rows[0].n, 12); // (4+2 changes) x (notify, provision)
+    assert.equal((await pool.query("select count(*)::int n from effects where tenant=$1", [T])).rows[0].n, 14); // (5+2 changes) x (notify, provision)
   });
   it('the startup catch-up replays the journal without repeating any effect (idempotent per effect key)', async () => {
     const before = [sinkCalls.length, targetCalls.length];
