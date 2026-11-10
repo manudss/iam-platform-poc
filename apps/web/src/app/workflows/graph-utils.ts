@@ -1,4 +1,4 @@
-import { StepCategory, WfBlock, WfEdge, WfEvent, WfNode } from './wf-model';
+import { StepCategory, WfBlock, WfEdge, WfEvent, WfNode, categoryOfType } from './wf-model';
 
 // ---- Graph helpers for the editor: logic-block metadata, client-side validation (mirrors the server
 // rules in plugins/workflows-iga/model.mjs so problems surface before Save), auto-layout, placeholders. ----
@@ -157,3 +157,24 @@ export function autoLayout(nodes: WfNode[], edges: WfEdge[]): Map<string, { x: n
 }
 
 export const categoryBadge = (category: StepCategory) => category;
+
+// ---- Mini graph thumbnails (list cards, template cards): auto-layout positions normalized into a fixed box. ----
+export interface MiniGraphNode { x: number; y: number; cat: StepCategory }
+export interface MiniGraphEdge { x1: number; y1: number; x2: number; y2: number }
+export interface MiniGraph { nodes: MiniGraphNode[]; edges: MiniGraphEdge[]; viewBox: string }
+export function miniGraph(nodes: { id: string; type: string }[], edges: WfEdge[]): MiniGraph {
+  const viewBox = '0 0 336 74';
+  if (!nodes.length) return { nodes: [], edges: [], viewBox };
+  const pos = autoLayout(nodes.map((n) => ({ ...n, name: n.id, config: {} })), edges);
+  const xs = nodes.map((n) => pos.get(n.id)?.x ?? 0), ys = nodes.map((n) => pos.get(n.id)?.y ?? 0);
+  const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const W = 300, H = 58, padX = 18, padY = 8;
+  const sx = (x: number) => padX + (maxX === minX ? W / 2 - padX : ((x - minX) / (maxX - minX)) * (W - 2 * padX));
+  const sy = (y: number) => padY + (maxY === minY ? H / 2 - padY : ((y - minY) / (maxY - minY)) * (H - 2 * padY));
+  const at = (id: string) => { const p = pos.get(id); return p ? { x: sx(p.x), y: sy(p.y) } : { x: 0, y: 0 }; };
+  return {
+    nodes: nodes.map((n) => { const p = at(n.id); return { ...p, cat: categoryOfType(n.type) }; }),
+    edges: edges.map((e) => { const a = at(e.from), b = at(e.to); return { x1: a.x, y1: a.y, x2: b.x, y2: b.y }; }),
+    viewBox,
+  };
+}

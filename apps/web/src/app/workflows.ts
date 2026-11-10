@@ -4,6 +4,7 @@ export * from './workflows/wf-model';
 export * from './workflows/graph-utils';
 export * from './workflows/workbench-tabs';
 export * from './workflows/placeholder-pick';
+export * from './workflows/templates';
 export * from './workflows/editor';
 export * from './workflows/executions';
 export * from './workflows/list';

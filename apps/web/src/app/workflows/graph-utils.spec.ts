@@ -1,5 +1,5 @@
 import { WfBlock, WfEvent, WfNode } from './wf-model';
-import { autoLayout, defaultLabel, edgeLabelChoices, loopBody, outgoingLabels, placeholdersIn, validateGraph } from './graph-utils';
+import { autoLayout, defaultLabel, edgeLabelChoices, loopBody, miniGraph, outgoingLabels, placeholdersIn, validateGraph } from './graph-utils';
 
 // Unit tests for the editor graph helpers: branch labels, client-side validation (mirrors the server
 // rules) and the layered auto-layout.
@@ -92,5 +92,30 @@ describe('loopBody / placeholders / auto-layout', () => {
     expect(pos.get('c')!.x).toBeGreaterThan(pos.get('a')!.x);
     expect(pos.get('d')!.x).toBeGreaterThan(pos.get('c')!.x);
     expect(pos.get('a')!.y).not.toBe(pos.get('b')!.y);
+  });
+});
+
+describe('miniGraph thumbnails', () => {
+  it('returns an empty graph with the fixed viewBox for no nodes', () => {
+    const g = miniGraph([], []);
+    expect(g.nodes.length).toBe(0);
+    expect(g.edges.length).toBe(0);
+    expect(g.viewBox).toBe('0 0 336 74');
+  });
+  it('lays nodes out left to right and keeps one edge per input edge', () => {
+    const g = miniGraph([{ id: 'a', type: 'assign-role' }, { id: 'b', type: 'notify' }, { id: 'c', type: 'plugin-step' }], [{ from: 'a', to: 'b' }, { from: 'b', to: 'c' }]);
+    expect(g.nodes.length).toBe(3);
+    expect(g.edges.length).toBe(2);
+    expect(g.nodes[0].x).toBeLessThan(g.nodes[1].x);
+    expect(g.nodes[1].x).toBeLessThan(g.nodes[2].x);
+    expect(g.nodes[0].cat).toBe('real');
+    expect(g.nodes[1].cat).toBe('simulated');
+    expect(g.nodes[2].cat).toBe('real'); // unknown/plugin types fall back to real
+  });
+  it('centers a single node instead of dividing by zero', () => {
+    const g = miniGraph([{ id: 'only', type: 'notify' }], []);
+    expect(g.nodes.length).toBe(1);
+    expect(g.nodes[0].x).toBeGreaterThan(0);
+    expect(g.nodes[0].y).toBeGreaterThan(0);
   });
 });
