@@ -28,6 +28,10 @@ export class WorkflowsController {
   @Post('workflows/:id/active') setActive(@Param('tenant') t: string, @Param('id') id: string, @Body() b: Record<string, unknown>) { return this.wf.setActive(t, id, b?.active); }
   @Post('workflows/:id/runs') start(@Param('tenant') t: string, @Param('id') id: string, @Req() r: Req_) { return this.wf.start(t, id, r.user?.sub); }
 
+  @Get('workflow-templates') templates(@Param('tenant') t: string) { return this.wf.templates(t); }
+  @Post('workflow-templates') saveTemplate(@Param('tenant') t: string, @Body() b: Record<string, unknown>, @Req() r: Req_) { return this.wf.saveTemplate(t, b ?? {}, r.user?.sub); }
+  @Delete('workflow-templates/:id') removeTemplate(@Param('tenant') t: string, @Param('id') id: string) { return this.wf.removeTemplate(t, id); }
+
   @Get('workflow-runs') runs(@Param('tenant') t: string, @Query('definition') definition?: string, @Query('status') status?: string, @Query('tests') tests?: string) { return this.wf.listRuns(t, definition, { status, tests: tests === '1' || tests === 'true' }); }
   @Get('workflow-runs/:runId') run(@Param('tenant') t: string, @Param('runId') runId: string) { return this.wf.runView(t, runId); }
   @Post('workflow-runs/:runId/rerun-from/:nodeId') rerunFrom(@Param('tenant') t: string, @Param('runId') runId: string, @Param('nodeId') nodeId: string) { return this.wf.rerunFrom(t, runId, nodeId); }

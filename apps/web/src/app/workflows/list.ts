@@ -9,7 +9,17 @@ import { MiniGraph, miniGraph } from './graph-utils';
 // pause switch, Run/Edit/Runs + menu), search + status filter chips + sort. The demo sheet and the
 // recent runs table stay below. ----
 
-const triggerLabel = (t: WfTrigger | null): string => (t ? t.event : 'manual');
+const triggerLabel = (t: WfTrigger | null): string => (t?.cron ? `⏰ ${t.cron}` : t?.event ? t.event : 'manual');
+/** Short relative time in the future: "in 5 min", "in 2 h", "tomorrow". */
+const until = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const ms = Date.parse(iso) - Date.now();
+  if (ms < 0) return 'overdue';
+  if (ms < 60000) return 'in <1 min';
+  if (ms < 3600000) return `in ${Math.round(ms / 60000)} min`;
+  if (ms < 86400000) return `in ${Math.round(ms / 3600000)} h`;
+  return `in ${Math.round(ms / 86400000)} d`;
+};
 const ago = (iso: string | null): string => {
   if (!iso) return '';
   const ms = Date.now() - Date.parse(iso.replace(' ', 'T'));
@@ -23,11 +33,12 @@ const dur = (ms: number | null): string => (ms === null ? '' : ms < 1000 ? `${ms
 export type WfListFilter = 'all' | 'active' | 'paused' | 'failed';
 export type WfListSort = 'lastRun' | 'name' | 'updated';
 /** Cards' search + chip filter + sort, kept pure so the list stays testable. */
-export function filterWorkflows(defs: DefinitionSummary[], query: string, filter: WfListFilter, sort: WfListSort): DefinitionSummary[] {
+export function filterWorkflows(defs: DefinitionSummary[], query: string, filter: WfListFilter, sort: WfListSort, tag = ''): DefinitionSummary[] {
   const q = query.trim().toLowerCase();
   let out = defs.filter((d) =>
     (filter === 'all' || (filter === 'active' ? d.active : filter === 'paused' ? !d.active : d.stats?.lastStatus === 'failed')) &&
-    (!q || d.name.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || (d.trigger?.event ?? '').includes(q) || d.graph.nodes.some((n) => n.type.includes(q))));
+    (!tag || (d.tags ?? []).includes(tag)) &&
+    (!q || d.name.toLowerCase().includes(q) || d.description.toLowerCase().includes(q) || (d.trigger?.event ?? '').includes(q) || (d.tags ?? []).some((t) => t.includes(q)) || d.graph.nodes.some((n) => n.type.includes(q))));
   const lastAt = (d: DefinitionSummary) => d.stats?.lastAt ?? '';
   if (sort === 'name') out = [...out].sort((a, b) => a.name.localeCompare(b.name));
   else if (sort === 'updated') out = [...out].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -44,6 +55,8 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-fchip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 1rem; padding: .2rem .8rem; cursor: pointer; min-height: 0; }
 .wlc-fchip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .wlc-fchip b { margin-left: .25rem; font-weight: 600; }
+.wlc-tagchip { cursor: pointer; border: 1px solid transparent; }
+.wlc-tagchip.on { border-color: var(--accent); color: var(--accent); }
 .wlc-sort { display: inline-flex; flex-direction: row; align-items: center; gap: .3rem; margin: 0; }
 .wlc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: .8rem; margin-bottom: 1rem; }
 .wlc-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; height: 100%; }
@@ -74,6 +87,9 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-menu div { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .5rem; box-shadow: 0 6px 24px var(--shadow-color); min-width: 150px; }
 .wlc-menu div button { background: none; border: 0; border-radius: 0; text-align: left; padding: .45rem .8rem; min-height: 0; color: var(--ink); cursor: pointer; }
 .wlc-menu div button:hover { background: var(--row-hover); }
+.tpl-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: var(--scrim); }
+.tpl-dialog { width: min(560px, 92vw); max-height: 86vh; overflow: auto; background: var(--card); border-radius: .8rem; padding: 1.1rem 1.3rem; box-shadow: 0 20px 60px var(--shadow-color); }
+.tpl-dialog h3 { margin-top: 0; }
 `], template: `
 <p class="lead">IGA workflows: build a scenario as a graph of steps, run it, follow every step, retry after an error.
 <b>Simulated</b> steps never touch anything; <b>real</b> steps write business data on the run's own Dolt branch, which a human then reviews and merges.</p>
@@ -89,6 +105,9 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
   <span class="wlc-chips">
     @for (f of filters; track f.key) {<button class="wlc-fchip" [class.on]="filter() === f.key" (click)="filter.set(f.key)">{{f.label}} <b>{{f.count()}}</b></button>}
   </span>
+  @if (tagChips().length) {<span class="wlc-chips" aria-label="Filter by tag">
+    @for (t of tagChips(); track t.name) {<button class="wlc-fchip wlc-tag" [class.on]="tag() === t.name" (click)="tag.set(tag() === t.name ? '' : t.name)">#{{t.name}} <b>{{t.count}}</b></button>}
+  </span>}
   <span class="spacer"></span>
   <label class="hint wlc-sort">Sort: <select name="wlcSort" [(ngModel)]="sort">
     <option value="lastRun">last run</option><option value="name">name</option><option value="updated">updated</option>
@@ -101,11 +120,12 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
         <label class="wlc-switch" [title]="d.active ? 'Active: its triggers start runs' : 'Paused: triggers never start a run'"><input type="checkbox" [attr.name]="'on-'+d.id" [checked]="d.active" [disabled]="busy()" (change)="toggleActive(d)" /><i></i></label>
       </div>
       <span class="chip wlc-trigger" [attr.data-status]="d.trigger ? 'real' : null">{{triggerOf(d)}}</span>
+      @for (t of d.tags ?? []; track t) {<button class="chip wlc-tagchip" [class.on]="tag() === t" (click)="tag.set(tag() === t ? '' : t)" title="Filter on this tag">#{{t}}</button>}
       <svg class="wlc-mini" [attr.viewBox]="miniOf(d).viewBox" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         @for (e of miniOf(d).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
         @for (n of miniOf(d).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
       </svg>
-      <div class="wlc-stats"><span><b>{{d.steps}}</b> steps</span>@if (d.stats) {<span><b>{{d.stats.runs}}</b> runs</span><span [class.ok]="d.stats.okPct === 100" [class.ko]="(d.stats.okPct ?? 100) < 100"><b>{{d.stats.okPct}}%</b> ok</span>} @else {<span>never run</span>}</div>
+      <div class="wlc-stats"><span><b>{{d.steps}}</b> steps</span>@if (d.nextRunAt) {<span title="Next scheduled start (Europe/Paris)">⏰ next {{untilOf(d)}}</span>}@if (d.stats) {<span><b>{{d.stats.runs}}</b> runs</span><span [class.ok]="d.stats.okPct === 100" [class.ko]="(d.stats.okPct ?? 100) < 100"><b>{{d.stats.okPct}}%</b> ok</span>} @else {<span>never run</span>}</div>
       @if (d.stats?.lastStatus) {<div class="wlc-last">Last run <span class="chip" [attr.data-status]="d.stats!.lastStatus">{{d.stats!.lastStatus}}</span> · {{agoOf(d)}}@if (d.stats!.lastDurationMs !== null) { · {{durOf(d)}}}</div>}
       <div class="wlc-actions">
         <button (click)="start(d)" [disabled]="busy()">▶ Run</button>
@@ -113,6 +133,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
         <a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ definition: d.id }">≡ Runs</a>
         <details class="wlc-menu"><summary title="More">⋯</summary><div>
           <button (click)="duplicate(d); $event.stopPropagation()">Duplicate</button>
+          <button (click)="openSaveTpl(d)">Save as template</button>
           <button (click)="exportDef(d)">Export JSON</button>
           <button (click)="remove(d)">Delete</button>
         </div></details>
@@ -121,6 +142,18 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
   }
   @empty {<p class="hint">No workflow matches. Create one, import a JSON definition, or start from a template.</p>}
 </div>
+@if (savingTpl(); as d) {
+  <div class="tpl-modal" (click)="savingTpl.set(null)">
+    <div class="tpl-dialog" (click)="$event.stopPropagation()" role="dialog" aria-modal="true" aria-label="Save as template">
+      <h3>Save "{{d.name}}" as a template</h3>
+      <p class="hint">The template lands in the gallery, shared with every demo account: anyone can instantiate it into a paused workflow. It keeps the CURRENT graph and trigger of the workflow.</p>
+      <label>Template name<input name="tplName" [(ngModel)]="tplName" maxlength="80" /></label>
+      <label>Description<input name="tplDesc" [(ngModel)]="tplDesc" maxlength="500" /></label>
+      <label>Category<input name="tplCat" [(ngModel)]="tplCat" maxlength="60" placeholder="My templates" /></label>
+      <div class="row"><span class="spacer"></span><button class="secondary" (click)="savingTpl.set(null)">Cancel</button><button (click)="saveTpl()" [disabled]="busy() || !tplName.trim()">Save the template</button></div>
+    </div>
+  </div>
+}
 @if (sheet(); as sh) {<section class="card"><h3>Demo sheet - {{sh.name}} <span class="chip" data-status="simulated">SIMULATED</span></h3>
 <p class="hint">{{sh.note}}</p>
 <div class="scroll"><table><thead><tr><th>#</th>@for (c of sh.columns; track c) {<th>{{c}}</th>}</tr></thead><tbody>
@@ -130,7 +163,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 </section>}
 <section class="card"><h3>Recent runs <a class="btn secondary" routerLink="/workflows/runs">All executions</a></h3>
 <div class="scroll"><table><thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Branch</th><th>Started</th><th></th></tr></thead><tbody>
-@for (r of runs(); track r.id) {<tr><td>{{r.id}}</td><td>{{r.name}}</td><td><span class="chip" [attr.data-status]="r.status">{{r.status}}</span></td><td>{{r.branch || '-'}}</td><td>{{r.startedAt}}</td><td><a class="btn secondary" [routerLink]="['/workflows/run', r.id]">Open</a></td></tr>}
+@for (r of runs(); track r.id) {<tr><td>{{r.id}}</td><td>{{r.name}}</td><td><span class="chip" [attr.data-status]="r.status">{{r.status}}</span></td><td>{{r.branch || '-'}}</td><td>{{r.startedAt}}</td><td><a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ run: r.id }">Open</a></td></tr>}
 @empty {<tr><td colspan="6">No run yet.</td></tr>}
 </tbody></table></div></section>
 ` })
@@ -148,6 +181,7 @@ export class WorkflowsPage implements OnInit {
   protected query = '';
   protected sort: 'lastRun' | 'name' | 'updated' = 'lastRun';
   protected filter = signal<'all' | 'active' | 'paused' | 'failed'>('all');
+  protected tag = signal('');
   protected readonly filters = [
     { key: 'all' as const, label: 'All', count: () => this.defs().length },
     { key: 'active' as const, label: 'Active', count: () => this.defs().filter((d) => d.active).length },
@@ -155,7 +189,14 @@ export class WorkflowsPage implements OnInit {
     { key: 'failed' as const, label: 'Failed last run', count: () => this.defs().filter((d) => d.stats?.lastStatus === 'failed').length },
   ];
 
-  protected visible = computed(() => filterWorkflows(this.defs(), this.query, this.filter(), this.sort));
+  /** Distinct tags across the visible catalog, with their workflow counts (first-seen order). */
+  protected tagChips = computed(() => {
+    const counts = new Map<string, number>();
+    for (const d of this.defs()) for (const t of d.tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1);
+    return [...counts.entries()].map(([name, count]) => ({ name, count }));
+  });
+
+  protected visible = computed(() => filterWorkflows(this.defs(), this.query, this.filter(), this.sort, this.tag()));
 
   ngOnInit() { void this.load(); }
   protected async load() {
@@ -168,6 +209,7 @@ export class WorkflowsPage implements OnInit {
   // ---- Card helpers ----
   protected triggerOf = (d: DefinitionSummary) => triggerLabel(d.trigger);
   protected agoOf = (d: DefinitionSummary) => ago(d.stats?.lastAt ?? null);
+  protected untilOf = (d: DefinitionSummary) => until(d.nextRunAt);
   protected durOf = (d: DefinitionSummary) => dur(d.stats?.lastDurationMs ?? null);
 
   /** Scaled-down graph thumbnail (shared with the template cards). */
@@ -181,7 +223,7 @@ export class WorkflowsPage implements OnInit {
   }
   protected async start(d: DefinitionSummary) {
     this.busy.set(true);
-    try { const v = await clientOf(this.s).start(d.id); void this.router.navigateByUrl(`/workflows/run/${v.run.id}`); }
+    try { const v = await clientOf(this.s).start(d.id); void this.router.navigateByUrl(`/workflows/runs?run=${v.run.id}`); }
     catch (e) { this.note.set((e as Error).message); this.busy.set(false); }
   }
   protected async duplicate(d: DefinitionSummary) {
@@ -193,6 +235,19 @@ export class WorkflowsPage implements OnInit {
     this.busy.set(true);
     try { await clientOf(this.s).remove(d.id); await this.load(); this.note.set(`Deleted ${d.name}.`); }
     catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
+  }
+  // ---- Save as template (gallery, shared across demo accounts) ----
+  protected savingTpl = signal<DefinitionSummary | null>(null);
+  protected tplName = ''; protected tplDesc = ''; protected tplCat = '';
+  protected openSaveTpl(d: DefinitionSummary) { this.savingTpl.set(d); this.tplName = d.name; this.tplDesc = d.description; this.tplCat = 'My templates'; }
+  protected async saveTpl() {
+    const d = this.savingTpl(); if (!d) return;
+    this.busy.set(true);
+    try {
+      await clientOf(this.s).saveTemplate({ name: this.tplName.trim(), description: this.tplDesc.trim(), category: this.tplCat.trim(), fromDefinition: d.id });
+      this.note.set(`Template "${this.tplName.trim()}" saved: find it in the Templates gallery.`);
+      this.savingTpl.set(null);
+    } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
   protected async exportDef(d: DefinitionSummary) {
     try {

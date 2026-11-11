@@ -28,6 +28,10 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
   '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
   '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
   '.ph-popup button.on, .ph-popup button:hover { background: var(--accent-soft); color: var(--accent-dark); }',
+  '.wb-tags { width: 180px; }',
+  '.tpl-modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: var(--scrim); }',
+  '.tpl-dialog { width: min(560px, 92vw); max-height: 86vh; overflow: auto; background: var(--card); border-radius: .8rem; padding: 1.1rem 1.3rem; box-shadow: 0 20px 60px var(--shadow-color); }',
+  '.tpl-dialog h3 { margin-top: 0; }',
 ], template: `
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="wb">
@@ -39,9 +43,11 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       <div class="wb-trigger-body">
       <label>Event<select name="wfTrigger" [ngModel]="triggerEvent()" (ngModelChange)="onTriggerChange($event)">
         <option value="">Manual start only</option>
+        <option value="__cron">Scheduled (cron, Europe/Paris)</option>
         @for (ev of events(); track ev.type) {<option [value]="ev.type">{{ev.label}}</option>}
       </select></label>
-      @if (triggerEvent()) {
+      @if (triggerEvent() === '__cron') {<label>Schedule (5 fields, Europe/Paris)<input name="wfCron" [(ngModel)]="cronExpr" maxlength="40" placeholder="0 6 * * *" aria-label="Cron expression" /><span class="hint">minute hour day-of-month month day-of-week. The workflow starts at each matching minute while it is Active; missed times are not caught up.</span></label>}
+      @if (triggerEvent() && triggerEvent() !== '__cron') {
         @for (k of payloadKeys(); track k) {@if (k !== '*') {<label>only if {{k}} =<input [attr.name]="'match-'+k" [ngModel]="match()[k] ?? ''" (ngModelChange)="setMatch(k, $event)" maxlength="40" placeholder="(any value)" /></label>}}
         @for (f of triggerFields(); track f.key) {
         @switch (f.type) {
@@ -55,6 +61,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       </div>
     </details>
     <input class="wb-desc" name="wfDesc" [(ngModel)]="description" maxlength="500" placeholder="Description" aria-label="Description" />
+    <input class="wb-tags" name="wfTags" [(ngModel)]="tags" maxlength="200" placeholder="Tags (comma-separated)" aria-label="Tags, comma-separated" title="Free-form labels used to filter the list, e.g. hr, finance, spike" />
     <span class="spacer"></span>
     <button class="secondary" (click)="undo()" [disabled]="!undoStack.length" title="Undo (Ctrl+Z)">↺</button>
     <button class="secondary" (click)="redo()" [disabled]="!redoStack.length" title="Redo (Ctrl+Shift+Z)">↻</button>
@@ -64,6 +71,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
     <button class="secondary" (click)="exportDef()" title="Download the definition as JSON">Export</button>
     <label class="btn secondary wb-import" title="Load a definition JSON into the canvas">Import<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
     @if (id !== 'new') {<button class="secondary" (click)="duplicateWorkflow()" [disabled]="busy()">Duplicate</button>}
+    <button class="secondary" (click)="openSaveTpl()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save the current canvas as a gallery template'">Save as template</button>
     <button class="secondary" (click)="testOpen.set(!testOpen())" [class.active-tool]="testOpen()">Test</button>
     <label class="wb-active" [class.paused]="!active" title="A paused workflow never starts from an event; Run still works"><input type="checkbox" name="wfActive" [(ngModel)]="active" /> Active</label>
     <button (click)="save()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save'">Save</button>
@@ -71,13 +79,13 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 
   @if (testOpen()) {<div class="wb-test card">
     <b>Test run</b><span class="hint">Runs the CURRENT canvas (unsaved changes included) with a test event. Real steps write on a disposable branch, dropped when the run ends.</span>
-    @if (triggerEvent()) {<label>Event payload (JSON)<textarea class="wb-payload" name="testPayload" rows="3" [(ngModel)]="testPayload"></textarea></label>}
+    @if (triggerEvent() && triggerEvent() !== '__cron') {<label>Event payload (JSON)<textarea class="wb-payload" name="testPayload" rows="3" [(ngModel)]="testPayload"></textarea></label>}
     <button (click)="runTest()" [disabled]="testRunning()">{{testRunning() ? 'Running…' : 'Run test'}}</button>
     @if (testView(); as tv) {
       <span class="chip" [attr.data-status]="tv.run.status">{{tv.run.status}}</span>
       <small>{{tv.run.branch}} (disposable)</small>
       @if (tv.run.error) {<span class="msg error">{{tv.run.error}}</span>}
-      <a class="btn secondary" [routerLink]="['/workflows/run', tv.run.id]">Open the run</a>
+      <a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ run: tv.run.id }">Open the run</a>
     }
     @if (testError()) {<span class="msg error">{{testError()}}</span>}
   </div>}
@@ -201,6 +209,18 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       @for (sugg of pp.list; track sugg; let i = $index) {<button type="button" role="option" [attr.aria-selected]="i === pp.index" [class.on]="i === pp.index" (mousedown)="$event.preventDefault(); pickPlaceholder(sugg)">{{sugg}}</button>}
     </div>
   }
+  @if (saveTplOpen()) {
+    <div class="tpl-modal" (click)="saveTplOpen.set(false)">
+      <div class="tpl-dialog" (click)="$event.stopPropagation()" role="dialog" aria-modal="true" aria-label="Save as template">
+        <h3>Save as a template</h3>
+        <p class="hint">Saves the CURRENT canvas (unsaved changes included) into the templates gallery, shared with every demo account. Instantiating a template creates a paused workflow.</p>
+        <label>Template name<input name="tplName" [(ngModel)]="tplName" maxlength="80" /></label>
+        <label>Description<input name="tplDesc" [(ngModel)]="tplDesc" maxlength="500" /></label>
+        <label>Category<input name="tplCat" [(ngModel)]="tplCat" maxlength="60" placeholder="My templates" /></label>
+        <div class="row"><span class="spacer"></span><button class="secondary" (click)="saveTplOpen.set(false)">Cancel</button><button (click)="saveTpl()" [disabled]="busy() || !tplName.trim()">Save the template</button></div>
+      </div>
+    </div>
+  }
 </div>
 ` })
 export class WorkflowEditPage implements OnInit, OnDestroy {
@@ -209,7 +229,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly tabs = inject(WbTabs);
   protected id = 'new';
-  protected name = ''; protected description = '';
+  protected name = ''; protected description = ''; protected tags = '';
   protected active = true;
   protected note = signal(''); protected busy = signal(false);
   protected readonly samples = SAMPLE_WORKFLOWS;
@@ -219,6 +239,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected insertQuery = '';
   protected insertEdge = signal<Edge | null>(null);
   protected triggerEvent = signal('');
+  protected cronExpr = '';
   protected match = signal<Record<string, string>>({});
   protected triggerCfg = signal<Record<string, unknown>>({});
   protected drawerTab = signal<'settings' | 'input' | 'output'>('settings');
@@ -233,6 +254,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected setMatch(k: string, v: string) { this.match.update((m) => { const n = { ...m }; if (v) n[k] = v; else delete n[k]; return n; }); }
   private triggerPayload(): WfTrigger | null {
     const event = this.triggerEvent();
+    if (event === '__cron') return this.cronExpr.trim() ? { cron: this.cronExpr.trim() } : null;
     if (!event) return null;
     const cfg = Object.fromEntries(Object.entries(this.triggerCfg()).filter(([, v]) => v !== '' && v !== undefined));
     return { event, ...(Object.keys(this.match()).length ? { match: this.match() } : {}), ...(Object.keys(cfg).length ? { config: cfg } : {}) };
@@ -412,6 +434,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected triggerLabel = computed(() => {
     const t = this.triggerEvent();
     if (!t) return '';
+    if (t === '__cron') return `cron: ${this.cronExpr.trim() || '…'} (Europe/Paris)`;
     return this.events().find((e) => e.type === t)?.label ?? t;
   });
   private triggerNode = computed<Node | null>(() => {
@@ -682,9 +705,12 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     try {
       const { definition } = await clientOf(this.s).get(this.id);
       this.name = definition.name; this.description = definition.description;
+      this.tags = ((definition as { tags?: string[] }).tags ?? []).join(', ');
       this.active = definition.active !== false;
       this.tabs.open('workflow', this.id, this.name || this.id);
-      this.triggerEvent.set(definition.trigger?.event ?? ''); this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
+      this.triggerEvent.set(definition.trigger?.cron ? '__cron' : (definition.trigger?.event ?? ''));
+      this.cronExpr = definition.trigger?.cron ?? '';
+      this.match.set({ ...(definition.trigger?.match ?? {}) }); this.triggerCfg.set({ ...(definition.trigger?.config ?? {}) });
       this.state.clear();
       const nodes: Node[] = [];
       definition.graph.nodes.forEach((n, i) => { const st = { type: n.type, name: n.name, config: { ...n.config } }; this.state.set(n.id, st); nodes.push(this.makeNode(n.id, st, i)); this.seq = Math.max(this.seq, Number(n.id.replace(/\D/g, '')) || 0); });
@@ -695,6 +721,14 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     } catch (e) { this.note.set((e as Error).message); }
   }
 
+  /** Tags as the API expects them: lowercase, comma/space separated, deduped (validation server-side). */
+  private tagList(): string[] {
+    const out: string[] = [];
+    for (const t of this.tags.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))
+      if (!out.includes(t)) out.push(t);
+    return out;
+  }
+
   private graph() {
     return {
       nodes: [...this.state.entries()].map(([id, st]) => ({ id, type: st.type, name: st.name, config: st.config })),
@@ -702,18 +736,30 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     };
   }
 
+  // ---- Save as template: the CURRENT canvas (unsaved changes included) into the shared gallery. ----
+  protected saveTplOpen = signal(false);
+  protected tplName = ''; protected tplDesc = ''; protected tplCat = '';
+  protected openSaveTpl() { this.tplName = this.name; this.tplDesc = this.description; this.tplCat = 'My templates'; this.saveTplOpen.set(true); }
+  protected async saveTpl() {
+    this.busy.set(true);
+    try {
+      await clientOf(this.s).saveTemplate({ name: this.tplName.trim() || this.name, description: this.tplDesc.trim() || this.description, category: this.tplCat.trim(), graph: this.graph(), trigger: this.triggerPayload() });
+      this.note.set('Template saved: find it in the Templates gallery.');
+      this.saveTplOpen.set(false);
+    } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
+  }
   protected async save() {
     this.busy.set(true);
     try {
       const c = clientOf(this.s);
       const trigger = this.triggerPayload();
       if (this.id === 'new') {
-        const r = await c.create(this.name, this.description, this.graph(), trigger, this.active);
+        const r = await c.create(this.name, this.description, this.graph(), trigger, this.active, this.tagList());
         this.tabs.replace({ kind: 'workflow', id: 'new', label: 'New workflow' }, { kind: 'workflow', id: r.definition.id, label: this.name || r.definition.id });
         this.id = r.definition.id;
         this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`);
       }
-      else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
+      else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active, this.tagList()); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
 

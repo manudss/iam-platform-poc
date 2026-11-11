@@ -225,6 +225,25 @@ export class DoltExplorer {
     // one admin capability token for the whole console (shell sidebar); read at each call, never stored anywhere else
     Object.defineProperty(this.v, 'adminToken', { get: () => this.session.adminToken(), set: () => {}, configurable: true });
     this.ready = true; await this.open(this.wanted); if (this.wanted !== 'branches') await this.refreshRefs();
+    await this.applyDataDeepLink();
+  }
+  /** Deep link, e.g. from a workflow run step: /database/data?table=<t>&ref=<branch>&filter=<row>, handed
+   * down by the routed page. Opens the table on the requested branch with the row filter applied; an
+   * unknown branch falls back with a note. */
+  @Input() dataDeepLink: { table?: string | null; ref?: string | null; filter?: string | null } | null = null;
+  private async applyDataDeepLink() {
+    if (this.wanted !== 'data') return;
+    const table = this.dataDeepLink?.table;
+    if (!table) return;
+    const ref = this.dataDeepLink?.ref;
+    if (ref && ref !== this.dataRef) {
+      if (this.refs().includes(ref)) this.dataRef = ref;
+      else this.note.set(`The branch "${ref}" no longer exists: showing "${table}" on ${this.dataRef} instead.`);
+    }
+    await this.loadTables();
+    await this.openTable(table);
+    const filter = this.dataDeepLink?.filter;
+    if (filter) this.rowFilter.set(filter);
   }
   protected go(t: Tab) { this.tab.set(t); this.navigate.emit(t); }
   /** Runs an API call with the busy flag. `keepNote` is for follow-up reloads, so they do not wipe the message of the action that triggered them. */

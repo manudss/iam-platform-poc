@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
-import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
+import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
-import { DefinitionRow, RunRow, StepRow, WorkflowStore } from './store.js';
+import { DefinitionRow, RunRow, StepRow, TemplateRow, WorkflowStore } from './store.js';
+import { COMMUNITY_TEMPLATES, OFFICIAL_TEMPLATES } from './templates-catalog.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
@@ -37,6 +38,21 @@ export class WorkflowsService {
     return { blocks: blockCatalogue().map((b) => ({ ...b, providerActive: b.provider ? registry.isActive(tenant, b.provider) : true })) };
   }
 
+  /** Free-form tags: 0 to 8 lowercase labels (letters, digits, hyphens), 1-24 chars each, deduped. */
+  private static validateTags(input: unknown): string[] {
+    if (input === undefined || input === null) return [];
+    if (!Array.isArray(input)) throw new BadRequestException('tags must be an array of labels');
+    const out: string[] = [];
+    for (const raw of input) {
+      const t = String(raw ?? '').trim().toLowerCase();
+      if (!t) continue;
+      if (!/^[a-z0-9][a-z0-9-]{0,23}$/.test(t)) throw new BadRequestException(`tag "${t}": lowercase letters, digits, hyphens (1-24 characters)`);
+      if (!out.includes(t)) out.push(t);
+      if (out.length > 8) throw new BadRequestException('at most 8 tags per workflow');
+    }
+    return out;
+  }
+
   private checkId(id: unknown, what = 'id'): string {
     const s = String(id ?? '');
     if (!ID.test(s)) throw new BadRequestException(`invalid ${what}`);
@@ -46,7 +62,7 @@ export class WorkflowsService {
   async list(tenant: string) {
     const defs = await this.store.listDefinitions(tenant, currentBranch());
     const stats = await this.store.runStats(tenant);
-    return { definitions: defs.map((d) => { const s = stats.get(d.id); return { id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, steps: d.graph.nodes.length, graph: { nodes: d.graph.nodes.map((n) => ({ id: n.id, type: n.type })), edges: d.graph.edges }, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at, stats: s ? { runs: s.runs, okPct: s.runs ? Math.round((s.ok / s.runs) * 100) : null, lastStatus: s.last?.status ?? null, lastAt: s.last?.started_at ?? null, lastDurationMs: s.last?.finished_at ? Date.parse(s.last.finished_at) - Date.parse(s.last.started_at) : null } : null }; }) };
+    return { definitions: defs.map((d) => { const s = stats.get(d.id); return { id: d.id, name: d.name, description: d.description, trigger: d.trigger, active: d.active, tags: d.tags, nextRunAt: d.trigger?.cron && d.active ? new Date(nextCronFire(d.trigger.cron, Date.now())).toISOString() : null, steps: d.graph.nodes.length, graph: { nodes: d.graph.nodes.map((n) => ({ id: n.id, type: n.type })), edges: d.graph.edges }, simulatedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'simulated').length, computedSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'computed').length, dataSteps: d.graph.nodes.filter((n) => stepCategoryOf(n.type) === 'real').length, createdBy: d.created_by, createdAt: d.created_at, updatedAt: d.updated_at, stats: s ? { runs: s.runs, okPct: s.runs ? Math.round((s.ok / s.runs) * 100) : null, lastStatus: s.last?.status ?? null, lastAt: s.last?.started_at ?? null, lastDurationMs: s.last?.finished_at ? Date.parse(s.last.finished_at) - Date.parse(s.last.started_at) : null } : null }; }) };
   }
 
   async get(tenant: string, id: unknown) {
@@ -60,7 +76,8 @@ export class WorkflowsService {
     const name = String(body?.name ?? '').trim();
     if (!name || name.length > 80) throw new BadRequestException('a name is required (max 80)');
     const description = String(body?.description ?? '').slice(0, 500);
-    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger', 'active'].includes(k))) throw new BadRequestException('unknown field');
+    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'graph', 'trigger', 'active', 'tags'].includes(k))) throw new BadRequestException('unknown field');
+    const tags = WorkflowsService.validateTags(body?.tags);
     const trigger = validateTrigger(body?.trigger);
     const { graph, order } = validateGraph(body?.graph);
     validateStepPlaceholders(graph, order);
@@ -69,7 +86,8 @@ export class WorkflowsService {
     for (const n of graph.nodes) for (const v of Object.values(n.config)) {
       for (const key of placeholderKeys(v)) {
         if (!trigger) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the workflow has no start trigger`);
-        if (!isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event].payload.join(', ')})`);
+        if (trigger.cron) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but a cron schedule carries no event payload`);
+        if (!isWildcardEvent(trigger.event!) && !WF_EVENTS[trigger.event!].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event!].payload.join(', ')})`);
       }
     }
     const ref = currentBranch(true);
@@ -77,9 +95,66 @@ export class WorkflowsService {
     if (!create && !existing) throw new NotFoundException('unknown workflow');
     // active defaults to true on create and is preserved on update unless the caller passes it (false = paused: event triggers skip it).
     const active = body.active === undefined ? (existing?.active ?? true) : body.active === true || body.active === 'true';
-    const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, active, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
+    const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, active, tags, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
     await this.store.putDefinition(def, ref);
     return { definition: def };
+  }
+
+  // ---- Templates gallery: the official API catalog + the templates users saved themselves. ----
+
+  /** Every gallery card: official catalog entries first, then the user-saved templates (newest first). */
+  async templates(_tenant: string) {
+    const user = await this.store.listTemplates(currentBranch());
+    return {
+      templates: [
+        ...OFFICIAL_TEMPLATES.map((t) => ({ ...t, createdBy: null as string | null, createdAt: null as string | null })),
+        ...COMMUNITY_TEMPLATES.map((t) => ({ ...t, createdBy: t.author ?? null as string | null, createdAt: null as string | null })),
+        ...user.map((t) => ({ id: t.id, name: t.name, description: t.description, category: t.category, source: 'user' as const, trigger: t.trigger ?? undefined, nodes: t.graph.nodes, edges: t.graph.edges, createdBy: t.created_by, createdAt: t.created_at })),
+      ],
+    };
+  }
+
+  /**
+   * Saves a template, either from a saved definition (`fromDefinition`) or from an explicit graph
+   * (the editor's current canvas). The graph is validated exactly like a definition save: a template
+   * must always instantiate into a working workflow.
+   */
+  async saveTemplate(tenant: string, body: Record<string, unknown>, sub: unknown) {
+    if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'category', 'graph', 'trigger', 'fromDefinition'].includes(k))) throw new BadRequestException('unknown field');
+    let graphIn: unknown = body?.graph;
+    let triggerIn: unknown = body?.trigger;
+    if (body?.fromDefinition !== undefined) {
+      const d = await this.store.getDefinition(tenant, this.checkId(body.fromDefinition, 'workflow id'), currentBranch());
+      if (!d) throw new NotFoundException('unknown workflow');
+      graphIn = d.graph;
+      triggerIn = d.trigger ?? undefined;
+    }
+    const name = String(body?.name ?? '').trim();
+    if (!name || name.length > 80) throw new BadRequestException('a name is required (max 80)');
+    const description = String(body?.description ?? '').slice(0, 500);
+    const category = String(body?.category ?? '').trim().slice(0, 60) || 'My templates';
+    const trigger = validateTrigger(triggerIn);
+    const { graph, order } = validateGraph(graphIn);
+    validateStepPlaceholders(graph, order);
+    await this.checkProviders(tenant, graph);
+    for (const n of graph.nodes) for (const v of Object.values(n.config)) {
+      for (const key of placeholderKeys(v)) {
+        if (!trigger) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the template has no start trigger`);
+        if (trigger.cron) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but a cron schedule carries no event payload`);
+        if (!isWildcardEvent(trigger.event!) && !WF_EVENTS[trigger.event!].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event} (${WF_EVENTS[trigger.event!].payload.join(', ')})`);
+      }
+    }
+    const t: TemplateRow = { id: `wf-tpl-${randomBytes(4).toString('hex')}`, name, description, category, graph, trigger, created_by: String(sub ?? 'unknown'), created_at: now() };
+    await this.store.putTemplate(t, currentBranch(true));
+    return { template: { id: t.id, name: t.name, description: t.description, category: t.category, source: 'user' as const, trigger: t.trigger ?? undefined, nodes: t.graph.nodes, edges: t.graph.edges, createdBy: t.created_by, createdAt: t.created_at } };
+  }
+
+  /** Deletes a user-saved template. Official/community catalog entries are static: they cannot be deleted. */
+  async removeTemplate(_tenant: string, id: unknown) {
+    const tid = String(id ?? '');
+    if (!/^wf-tpl-[a-z0-9-]{1,32}$/.test(tid)) throw new BadRequestException('only a saved (user) template can be deleted');
+    if (!(await this.store.deleteTemplate(tid, currentBranch(true)))) throw new NotFoundException('unknown template');
+    return { deleted: tid };
   }
 
   async remove(tenant: string, id: unknown) {
@@ -121,7 +196,7 @@ export class WorkflowsService {
     const eventPayload: Record<string, string> = {};
     for (const [k, v] of Object.entries(payload ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) eventPayload[k] = String(v).slice(0, 200);
     const autoFilled: string[] = [];
-    if (d.trigger) for (const key of WF_EVENTS[d.trigger.event]?.payload ?? []) if (!(key in eventPayload)) { eventPayload[key] = `<${key}>`; autoFilled.push(key); }
+    if (d.trigger?.event) for (const key of WF_EVENTS[d.trigger.event]?.payload ?? []) if (!(key in eventPayload)) { eventPayload[key] = `<${key}>`; autoFilled.push(key); }
     const resolved = substituteEventPayload(d.graph, eventPayload);
     const steps = order.map((nodeId) => {
       const n = resolved.nodes.find((x) => x.id === nodeId)!;
@@ -189,12 +264,12 @@ export class WorkflowsService {
     for (const n of graph.nodes) for (const v of Object.values(n.config)) {
       for (const key of placeholderKeys(v)) {
         if (!trigger && !body?.payload) throw new BadRequestException(`step "${n.id}" uses {{event.${key}}} but the test has no trigger/payload`);
-        if (trigger && !isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event}`);
+        if (trigger?.event && !isWildcardEvent(trigger.event) && !WF_EVENTS[trigger.event].payload.includes(key)) throw new BadRequestException(`step "${n.id}": {{event.${key}}} is not a payload key of ${trigger.event}`);
       }
     }
     const eventPayload: Record<string, string> = {};
     for (const [k, v] of Object.entries((body?.payload as Record<string, unknown>) ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) eventPayload[k] = String(v).slice(0, 200);
-    if (trigger) for (const key of WF_EVENTS[trigger.event]?.payload ?? []) if (!(key in eventPayload) && key !== '*') eventPayload[key] = `<${key}>`;
+    if (trigger?.event) for (const key of WF_EVENTS[trigger.event]?.payload ?? []) if (!(key in eventPayload) && key !== '*') eventPayload[key] = `<${key}>`;
     const resolved = substituteEventPayload(graph, eventPayload);
     const checked = validateGraph(resolved);
     const runId = `run-${randomBytes(6).toString('hex')}`;

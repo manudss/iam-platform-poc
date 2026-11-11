@@ -1,5 +1,5 @@
 import { WfTemplate, WF_TEMPLATES } from './wf-model';
-import { filterTemplates, templateCategories } from './templates';
+import { filterTemplates, templateBadge, templateCategories, templateSources } from './templates';
 
 // Unit tests for the template gallery: category counts, filters, and the sample-derived gallery itself.
 const tpl = (over: Partial<WfTemplate>): WfTemplate => ({
@@ -21,6 +21,26 @@ describe('templateCategories / filterTemplates', () => {
     expect(filterTemplates(TEMPLATES, 'all', 'rows').map((t) => t.id)).toEqual(['b']);
     expect(filterTemplates(TEMPLATES, 'all', 'loop').map((t) => t.id)).toEqual(['b']);
     expect(filterTemplates(TEMPLATES, 'HR & sheets', 'rows').map((t) => t.id)).toEqual(['b']);
+  });
+  it('filters by source and lists the sources present, in fixed order', () => {
+    const mixed = [...TEMPLATES, tpl({ id: 'u', source: 'user' }), tpl({ id: 'w', source: 'community' })];
+    expect(filterTemplates(mixed, 'all', '', 'user').map((t) => t.id)).toEqual(['u']);
+    expect(filterTemplates(mixed, 'all', '', 'community').map((t) => t.id)).toEqual(['w']);
+    expect(templateSources(mixed)).toEqual([
+      { key: 'all', label: 'All sources', count: 5 },
+      { key: 'official', label: 'Official', count: 3 },
+      { key: 'user', label: 'Yours', count: 1 },
+      { key: 'community', label: 'Community', count: 1 },
+    ]);
+    expect(templateSources(TEMPLATES).map((s) => s.key)).toEqual(['all', 'official']);
+  });
+});
+
+describe('templateBadge', () => {
+  it('labels each template source', () => {
+    expect(templateBadge('official')).toEqual({ text: '◆ OFFICIAL', status: 'real' });
+    expect(templateBadge('user')).toEqual({ text: '✎ YOURS', status: 'computed' });
+    expect(templateBadge('community')).toEqual({ text: '❖ COMMUNITY', status: 'queued' });
   });
 });
 

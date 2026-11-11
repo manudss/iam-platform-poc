@@ -10,7 +10,8 @@ import { WorkflowsController } from './workflows.controller.js';
 import { WorkflowTriggersService } from './triggers.js';
 import { WorkflowHooksController } from './hooks.controller.js';
 import { WorkflowSheetPollerService } from './sheet-poller.js';
+import { WorkflowCronService } from './cron.js';
 import { WorkflowDemoSeed } from './demo-seed.js';
 
-@Module({ imports: [EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowsController, WorkflowHooksController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService], exports: [WorkflowsService] })
+@Module({ imports: [EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowsController, WorkflowHooksController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService, WorkflowCronService], exports: [WorkflowsService] })
 export class WorkflowsModule {}

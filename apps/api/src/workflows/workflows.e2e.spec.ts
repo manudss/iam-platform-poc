@@ -20,6 +20,7 @@ import { WorkflowStore } from './store.js';
 import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
 
+process.env.WF_CRON_TICK_MS = '2000'; // cron e2e: detect a matching minute within seconds, not 20 s
 const root = resolve(process.cwd(), '../..');
 const which = spawnSync('sh', ['-c', 'command -v dolt']).stdout.toString().trim();
 const doltBin = process.env.DOLT_BIN ?? (which || '/tmp/dolt-linux-amd64/bin/dolt');
@@ -40,7 +41,7 @@ class FakeAuth implements CanActivate {
   }
 }
 
-interface RunView { run: { id: string; status: string; branch: string | null; error: string | null; simulatedOnly: boolean; test?: boolean }; steps: { node_id: string; status: string; simulated: boolean; attempts: number; log: string[]; input?: Record<string, unknown> | null }[] }
+interface RunView { run: { id: string; status: string; branch: string | null; error: string | null; simulatedOnly: boolean; test?: boolean }; steps: { node_id: string; status: string; simulated: boolean; attempts: number; log: string[]; input?: Record<string, unknown> | null; output?: Record<string, unknown> | null }[] }
 
 const call = async (method: string, path: string, body?: object, o: { token?: string | null; admin?: string | null } = {}) => {
   const token = o.token === undefined ? `${T}:demo-alice` : o.token;
@@ -92,7 +93,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const names = guards.map((g) => (g as { name: string }).name);
     assert.ok(names.includes('AuthGuard') && names.includes('AdminGuard'), `guards: ${names}`);
     const routes = Object.getOwnPropertyNames(WorkflowsController.prototype).filter((n) => n !== 'constructor' && Reflect.getMetadata('path', (WorkflowsController.prototype as never)[n]) !== undefined);
-    assert.equal(routes.length, 18);
+    assert.equal(routes.length, 21);
   });
 
   it('refuses an invalid graph (cycle, unknown type) and an unknown field', async () => {
@@ -194,6 +195,8 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.match(v.run.branch ?? '', /^workflow\/[0-9a-f]{8}$/);
     assert.equal(v.steps[0].simulated, false);
     assert.ok(v.steps[0].log.some((l) => l.includes('commit')));
+    // "Open the row in Data": the write is recorded in the step output (table + primary key)
+    assert.deepEqual((v.steps[0].output as { dataRow?: unknown }).dataRow, { table: 'assignments', pk: { identity_id: 'demo-bob', role_id: 'accountant' } });
     // main untouched: only the seeded assignments
     const rows = (await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: unknown[] };
     assert.equal(rows.rows.length, 4);
@@ -278,6 +281,25 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(v.run.status, 'canceled');
   });
 
+  it('tags: free-form labels are validated, saved, listed and updated', async () => {
+    const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] };
+    const created = (await ok('POST', '/workflows', { name: 'Tagged', graph: g, tags: ['HR', 'joiner', 'hr'] })) as { definition: { id: string } };
+    const id = created.definition.id;
+    const fromGet = (await ok('GET', `/workflows/${id}`)) as { definition: { tags: string[] } };
+    assert.deepEqual(fromGet.definition.tags, ['hr', 'joiner'], 'lowercased and deduped');
+    const fromList = (await ok('GET', '/workflows')) as { definitions: { id: string; tags: string[] }[] };
+    assert.deepEqual(fromList.definitions.find((d) => d.id === id)!.tags, ['hr', 'joiner']);
+    await ok('PUT', `/workflows/${id}`, { name: 'Tagged', graph: g, tags: ['finance'] });
+    assert.deepEqual(((await ok('GET', `/workflows/${id}`)) as { definition: { tags: string[] } }).definition.tags, ['finance']);
+    const bad = await call('POST', '/workflows', { name: 'Bad tag', graph: g, tags: ['not a tag!'] });
+    assert.equal(bad.status, 400);
+    const tooMany = await call('POST', '/workflows', { name: 'Too many', graph: g, tags: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9'] });
+    assert.equal(tooMany.status, 400);
+    const notArray = await call('POST', '/workflows', { name: 'Not array', graph: g, tags: 'hr' });
+    assert.equal(notArray.status, 400);
+    await ok('DELETE', `/workflows/${id}`);
+  });
+
   it('update, list and delete a definition; deleting while active is refused', async () => {
     const def = (await ok('POST', '/workflows', { name: 'To edit', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] } })) as { definition: { id: string } };
     const updated = (await ok('PUT', `/workflows/${def.definition.id}`, { name: 'Edited', description: 'v2', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }, { id: 'b', type: 'notify', name: 'b', config: { recipient: 'r', message: 'm' } }], edges: [{ from: 'a', to: 'b' }] } })) as { definition: { name: string } };
@@ -334,6 +356,64 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const s2 = new WorkflowStore(app.get(VersioningService)); // a second "restart"
     await s2.listRuns(T);
     assert.equal(await s2.getDefinition(T, 'wf-stale-meta', s2.liveRef), null, 'the marker prevents resurrection from the stale meta row');
+  });
+
+  it('cron: an active schedule fires a run on the matching minute, a paused one never fires', async () => {
+    const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] };
+    const on = (await ok('POST', '/workflows', { name: 'Cron every minute', graph: g, trigger: { cron: '* * * * *' } })) as { definition: { id: string; trigger: { cron: string } } };
+    assert.equal(on.definition.trigger.cron, '* * * * *');
+    const off = (await ok('POST', '/workflows', { name: 'Cron paused', graph: g, trigger: { cron: '* * * * *' }, active: false })) as { definition: { id: string } };
+    // The list exposes the next scheduled start for the active one only
+    const list = (await ok('GET', '/workflows')) as { definitions: { id: string; nextRunAt?: string | null }[] };
+    assert.ok(list.definitions.find((d) => d.id === on.definition.id)!.nextRunAt, 'active cron has a next run');
+    assert.equal(list.definitions.find((d) => d.id === off.definition.id)!.nextRunAt ?? null, null, 'paused: no next run');
+    // Validation
+    assert.equal((await call('POST', '/workflows', { name: 'bad', graph: g, trigger: { cron: 'nope' } })).status, 400);
+    assert.equal((await call('POST', '/workflows', { name: 'bad', graph: g, trigger: { cron: '* * * * *', event: 'user.created' } })).status, 400);
+    // Wait for the scheduler (tick 2 s, cron matches every minute: worst case a full minute + a tick)
+    const until = Date.now() + 90000;
+    let fired: { id: string; startedBy: string } | undefined;
+    while (Date.now() < until) {
+      const runs = (await ok('GET', `/workflow-runs?definition=${on.definition.id}`)) as { runs: { id: string; startedBy: string }[] };
+      fired = runs.runs.find((r) => r.startedBy === 'cron');
+      if (fired) break;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    assert.ok(fired, 'the cron scheduler started a run within 90 s');
+    const pausedRuns = (await ok('GET', `/workflow-runs?definition=${off.definition.id}`)) as { runs: unknown[] };
+    assert.equal(pausedRuns.runs.length, 0, 'a paused cron workflow never fires');
+    await ok('DELETE', `/workflows/${on.definition.id}`);
+    await ok('DELETE', `/workflows/${off.definition.id}`);
+  });
+
+  it('templates: save from a definition or a canvas, gallery merges official + user, only user templates deletable', async () => {
+    const all0 = (await ok('GET', '/workflow-templates')) as { templates: { id: string; source: string; createdBy?: string | null; trigger?: { cron?: string } }[] };
+    assert.ok(all0.templates.filter((t) => t.source === 'official').length >= 8, 'the official catalog is served by the API');
+    const community0 = all0.templates.filter((t) => t.source === 'community');
+    assert.ok(community0.length >= 3, 'community picks are served too');
+    assert.ok(community0.every((t) => t.createdBy), 'community picks carry their author');
+    assert.ok(community0.some((t) => t.trigger?.cron), 'a community pick shows a cron trigger');
+    assert.ok(!all0.templates.some((t) => t.source === 'user'), 'no user template before any save');
+    const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }, { id: 'b', type: 'notify', name: 'b', config: { recipient: 'hr', message: 'hi' } }], edges: [{ from: 'a', to: 'b' }] };
+    const def = (await ok('POST', '/workflows', { name: 'Tpl source', description: 'to template', graph: g })) as { definition: { id: string } };
+    const t1 = (await ok('POST', '/workflow-templates', { name: 'My first template', description: 'from a definition', category: 'Tests', fromDefinition: def.definition.id })) as { template: { id: string; source: string; nodes: unknown[]; category: string } };
+    assert.equal(t1.template.source, 'user');
+    assert.equal(t1.template.nodes.length, 2, 'the template copies the definition graph');
+    const t2 = (await ok('POST', '/workflow-templates', { name: 'Canvas template', description: '', category: '', graph: g })) as { template: { id: string; category: string } };
+    assert.equal(t2.template.category, 'My templates', 'an empty category falls back');
+    const all1 = (await ok('GET', '/workflow-templates')) as { templates: { id: string; source: string }[] };
+    assert.ok(all1.templates.some((t) => t.id === t1.template.id && t.source === 'user'), 'the gallery shows the saved template');
+    assert.ok(all1.templates.some((t) => t.source === 'official'), 'the official entries stay');
+    assert.equal((await call('POST', '/workflow-templates', { name: 'bad', graph: { nodes: [{ id: 'a', type: 'teleport', name: 'a', config: {} }], edges: [] } })).status, 400);
+    assert.equal((await call('POST', '/workflow-templates', { name: 'bad', graph: { nodes: [{ id: 'a', type: 'assign-role', name: 'a', config: { identity: '{{event.subject}}', role: 'employee' } }], edges: [] } })).status, 400, 'an event placeholder without a trigger is refused');
+    assert.equal((await call('DELETE', `/workflow-templates/${all0.templates[0].id}`)).status, 400, 'an official template cannot be deleted');
+    assert.equal((await call('DELETE', `/workflow-templates/${community0[0].id}`)).status, 400, 'a community template cannot be deleted');
+    await ok('DELETE', `/workflow-templates/${t1.template.id}`);
+    await ok('DELETE', `/workflow-templates/${t2.template.id}`);
+    assert.equal((await call('DELETE', `/workflow-templates/${t1.template.id}`)).status, 404);
+    const all2 = (await ok('GET', '/workflow-templates')) as { templates: { id: string }[] };
+    assert.ok(!all2.templates.some((t) => t.id === t1.template.id), 'the deleted template leaves the gallery');
+    await ok('DELETE', `/workflows/${def.definition.id}`);
   });
 });
 

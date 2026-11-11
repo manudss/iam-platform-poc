@@ -11,11 +11,15 @@ import { WfGraph, WfTrigger } from './model.js';
  * (table workflow_definitions), so an edit prepared on a working branch only goes live through a reviewed
  * data pull request - the same circuit as roles, plugin settings and the sign-in configuration.
  */
-export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; trigger: WfTrigger | null; /** false = paused: event triggers skip it (a manual Run still works). */ active: boolean; created_by: string; created_at: string; updated_at: string }
+export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; trigger: WfTrigger | null; /** false = paused: event triggers skip it (a manual Run still works). */ active: boolean; /** Free-form lowercase labels used to filter the list (max 8, 1-24 chars each). */ tags: string[]; created_by: string; created_at: string; updated_at: string }
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
 export interface RunRow { id: string; tenant: string; definition_id: string; name: string; graph: WfGraph; branch: string | null; base_branch: string | null; status: RunStatus; error: string | null; started_by: string; started_at: string; finished_at: string | null; test: boolean }
 export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export interface StepRow { run_id: string; node_id: string; status: StepStatus; simulated: boolean; attempts: number; error: string | null; log: string[]; input: Record<string, unknown> | null; output: Record<string, unknown> | null; started_at: string | null; finished_at: string | null }
+/** A template a user saved from a workflow ("Save as template"). Versioned like definitions, and GLOBAL
+ * (no tenant column): in this demo every account shares the same gallery. Official/community templates
+ * are the static API catalog, not rows. */
+export interface TemplateRow { id: string; name: string; description: string; category: string; graph: WfGraph; trigger: WfTrigger | null; created_by: string; created_at: string }
 
 @Injectable()
 export class WorkflowStore {
@@ -58,9 +62,10 @@ export class WorkflowStore {
           if (!already) {
             await v.lock(() => v.at(v.defaultBranch, async (c) => {
               await WorkflowStore.ensureDefsTable(c);
+              await WorkflowStore.ensureTemplatesTable(c);
               await c.query(`INSERT IGNORE INTO workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) SELECT tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at FROM \`${this.metaDb}\`.workflow_definitions`);
-              const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
-              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
+              const [d] = await c.query("select table_name from dolt_status where table_name in ('workflow_definitions', 'workflow_templates')");
+              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions', 'workflow_templates')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions and templates')"); }
             }));
             const m2 = await this.open();
             try { await m2.query("insert into workflow_store_meta (k, v) values ('defs_migrated', ?)", [new Date().toISOString()]); } finally { await m2.end(); }
@@ -68,8 +73,9 @@ export class WorkflowStore {
             // Marker set: still make sure the versioned table exists (fresh main after the marker db was kept).
             await v.lock(() => v.at(v.defaultBranch, async (c) => {
               await WorkflowStore.ensureDefsTable(c);
-              const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
-              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions')"); }
+              await WorkflowStore.ensureTemplatesTable(c);
+              const [d] = await c.query("select table_name from dolt_status where table_name in ('workflow_definitions', 'workflow_templates')");
+              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions', 'workflow_templates')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions and templates')"); }
             }));
           }
         }
@@ -82,7 +88,8 @@ export class WorkflowStore {
   private static ts(v: unknown): string { return v instanceof Date ? v.toISOString().slice(0, 23).replace('T', ' ') : String(v); }
   private static def(r: Record<string, unknown>): DefinitionRow {
     const trig = typeof r.trigger_json === 'string' ? JSON.parse(r.trigger_json) : r.trigger_json;
-    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, active: r.active === undefined || r.active === null ? true : !!r.active, created_by: String(r.created_by), created_at: WorkflowStore.ts(r.created_at), updated_at: WorkflowStore.ts(r.updated_at) };
+    const tags = typeof r.tags === 'string' ? JSON.parse(r.tags) : r.tags;
+    return { id: String(r.id), tenant: String(r.tenant), name: String(r.name), description: String(r.description), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, active: r.active === undefined || r.active === null ? true : !!r.active, tags: Array.isArray(tags) ? tags.map(String) : [], created_by: String(r.created_by), created_at: WorkflowStore.ts(r.created_at), updated_at: WorkflowStore.ts(r.updated_at) };
   }
   private static run(r: Record<string, unknown>): RunRow {
     return { id: String(r.id), tenant: String(r.tenant), definition_id: String(r.definition_id), name: String(r.name), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfRow_graph, branch: r.branch === null ? null : String(r.branch), base_branch: r.base_branch === null || r.base_branch === undefined ? null : String(r.base_branch), status: r.status as RunStatus, error: r.error === null ? null : String(r.error), started_by: String(r.started_by), started_at: String(r.started_at), finished_at: r.finished_at === null ? null : String(r.finished_at), test: !!r.test };
@@ -106,12 +113,43 @@ export class WorkflowStore {
   /** The versioned definitions table, with every column added since (idempotent on existing databases). */
   private static async ensureDefsTable(c: Connection) {
     await c.query('CREATE TABLE IF NOT EXISTS workflow_definitions (tenant VARCHAR(32) NOT NULL, id VARCHAR(40) NOT NULL, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, id))');
-    const [cols] = await c.query("show columns from workflow_definitions like 'active'");
-    if (!(cols as unknown[]).length) await c.query('alter table workflow_definitions add column active BOOLEAN NOT NULL DEFAULT TRUE');
+    for (const [column, ddl] of [['active', 'BOOLEAN NOT NULL DEFAULT TRUE'], ['tags', 'JSON NULL']] as const) {
+      const [cols] = await c.query('show columns from workflow_definitions like ?', [column]);
+      if (!(cols as unknown[]).length) await c.query(`alter table workflow_definitions add column ${column} ${ddl}`);
+    }
+  }
+  /** The versioned templates table (user-saved templates, shared across demo accounts). */
+  private static async ensureTemplatesTable(c: Connection) {
+    await c.query('CREATE TABLE IF NOT EXISTS workflow_templates (id VARCHAR(40) NOT NULL PRIMARY KEY, name VARCHAR(80) NOT NULL, description VARCHAR(500) NOT NULL, category VARCHAR(60) NOT NULL, graph JSON NOT NULL, trigger_json JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL)');
   }
   private static async commitDefs(c: Connection, msg: string) {
     const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_definitions'");
     if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions')"); await c.query("call dolt_commit('-m', ?)", [msg]); }
+  }
+  private static async commitTemplates(c: Connection, msg: string) {
+    const [d] = await c.query("select table_name from dolt_status where table_name = 'workflow_templates'");
+    if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_templates')"); await c.query("call dolt_commit('-m', ?)", [msg]); }
+  }
+  private static template(r: Record<string, unknown>): TemplateRow {
+    const trig = typeof r.trigger_json === 'string' ? JSON.parse(r.trigger_json) : r.trigger_json;
+    return { id: String(r.id), name: String(r.name), description: String(r.description), category: String(r.category), graph: (typeof r.graph === 'string' ? JSON.parse(r.graph) : r.graph) as WfGraph, trigger: (trig ?? null) as WfTrigger | null, created_by: String(r.created_by), created_at: WorkflowStore.ts(r.created_at) };
+  }
+  async listTemplates(ref: string): Promise<TemplateRow[]> {
+    return this.defsRead(ref, async (c) => { const [r] = await c.query('select * from workflow_templates order by created_at desc'); return (r as Record<string, unknown>[]).map(WorkflowStore.template); });
+  }
+  async putTemplate(t: TemplateRow, ref: string): Promise<void> {
+    await this.defsWrite(ref, async (c) => {
+      await c.query('insert into workflow_templates (id, name, description, category, graph, trigger_json, created_by, created_at) values (?,?,?,?,?,?,?,?)', [t.id, t.name, t.description, t.category, JSON.stringify(t.graph), t.trigger ? JSON.stringify(t.trigger) : null, t.created_by, t.created_at]);
+      await WorkflowStore.commitTemplates(c, `workflows: ${t.created_by} saved template ${t.id}`);
+    });
+  }
+  async deleteTemplate(id: string, ref: string): Promise<boolean> {
+    return this.defsWrite(ref, async (c) => {
+      const [r] = await c.query('delete from workflow_templates where id = ?', [id]);
+      const gone = Number((r as { affectedRows: number }).affectedRows) > 0;
+      if (gone) await WorkflowStore.commitTemplates(c, `workflows: deleted template ${id}`);
+      return gone;
+    });
   }
   async listDefinitions(tenant: string, ref: string): Promise<DefinitionRow[]> {
     return this.defsRead(ref, async (c) => { const [r] = await c.query('select * from workflow_definitions where tenant = ? order by name', [tenant]); return (r as Record<string, unknown>[]).map(WorkflowStore.def); });
@@ -125,7 +163,7 @@ export class WorkflowStore {
   }
   async putDefinition(d: DefinitionRow, ref: string): Promise<void> {
     await this.defsWrite(ref, async (c) => {
-      await c.query('insert into workflow_definitions (tenant, id, name, description, graph, trigger_json, active, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), trigger_json=values(trigger_json), active=values(active), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.trigger ? JSON.stringify(d.trigger) : null, d.active ? 1 : 0, d.created_by, d.created_at, d.updated_at]);
+      await c.query('insert into workflow_definitions (tenant, id, name, description, graph, trigger_json, active, tags, created_by, created_at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?) on duplicate key update name=values(name), description=values(description), graph=values(graph), trigger_json=values(trigger_json), active=values(active), tags=values(tags), updated_at=values(updated_at)', [d.tenant, d.id, d.name, d.description, JSON.stringify(d.graph), d.trigger ? JSON.stringify(d.trigger) : null, d.active ? 1 : 0, JSON.stringify(d.tags ?? []), d.created_by, d.created_at, d.updated_at]);
       await WorkflowStore.commitDefs(c, `workflows: ${d.created_by} saved ${d.id}`);
     });
   }
@@ -188,6 +226,16 @@ export class WorkflowStore {
     const m = await this.meta();
     try { await m.query('delete from workflow_steps where run_id = ?', [id]); await m.query('delete from workflow_runs where id = ?', [id]); } finally { await m.end(); }
   }
+  /** Small durable key/value store in the meta db (cron last-fire markers). */
+  async getMeta(k: string): Promise<string | null> {
+    const m = await this.meta();
+    try { const [r] = await m.query('select v from workflow_store_meta where k = ?', [k]); const row = (r as Record<string, unknown>[])[0]; return row ? String(row.v) : null; } finally { await m.end(); }
+  }
+  async setMeta(k: string, v: string): Promise<void> {
+    const m = await this.meta();
+    try { await m.query('insert into workflow_store_meta (k, v) values (?, ?) on duplicate key update v = values(v)', [k, v]); } finally { await m.end(); }
+  }
+
   async runningRuns(): Promise<RunRow[]> {
     const m = await this.meta();
     try { const [r] = await m.query("select * from workflow_runs where status in ('queued','running')"); return (r as Record<string, unknown>[]).map(WorkflowStore.run); } finally { await m.end(); }

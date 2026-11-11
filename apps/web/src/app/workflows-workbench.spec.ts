@@ -46,7 +46,7 @@ describe('workbench tabs', () => {
     tabs.open('workflow', 'a', 'Joiner');
     expect(tabs.tabs()).toEqual([{ kind: 'run', id: 'r1', label: 'Joiner #3' }, wf('a', 'Joiner')]);
     expect(tabs.urlOf(wf('a'))).toBe('/workflows/edit/a');
-    expect(tabs.urlOf({ kind: 'run', id: 'r1', label: '' })).toBe('/workflows/run/r1');
+    expect(tabs.urlOf({ kind: 'run', id: 'r1', label: '' })).toBe('/workflows/runs?run=r1');
   });
 
   it('persists to localStorage and survives a reload', () => {

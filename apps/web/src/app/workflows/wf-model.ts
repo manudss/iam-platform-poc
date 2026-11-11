@@ -17,7 +17,7 @@ export { workflowsEnabledGuard } from './guard';
 export type StepType = string;
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
 export interface WfEdge { from: string; to: string; label?: string }
-export interface WfTrigger { event: string; match?: Record<string, string>; config?: Record<string, unknown> }
+export interface WfTrigger { event?: string; match?: Record<string, string>; config?: Record<string, unknown>; cron?: string }
 export interface WfBlockField { key: string; label: string; type: 'string' | 'text' | 'number' | 'boolean' | 'select'; required?: boolean; default?: unknown; options?: string[]; help?: string }
 export interface WfEvent { type: string; label: string; payload: string[]; configFields?: WfBlockField[] }
 export type StepCategory = 'simulated' | 'computed' | 'real';
@@ -29,7 +29,7 @@ export const categoryOfType = (type: string): StepCategory => { const t = STEP_T
 export interface WfBlock { type: string; family: string; label: string; simulated: boolean; category?: StepCategory; description: string; fields?: WfBlockField[]; outputs?: { key: string; description: string }[]; provider: string | null; providerActive: boolean }
 export interface DemoSheet { name: string; simulated: boolean; note: string; columns: string[]; rows: { rowNumber: number; values: Record<string, string> }[] }
 export interface RunStats { runs: number; okPct: number | null; lastStatus: string | null; lastAt: string | null; lastDurationMs: number | null }
-export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; active: boolean; steps: number; graph: { nodes: { id: string; type: string }[]; edges: WfEdge[] }; stats: RunStats | null; simulatedSteps: number; computedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
+export interface DefinitionSummary { id: string; name: string; description: string; trigger: WfTrigger | null; active: boolean; tags: string[]; nextRunAt?: string | null; steps: number; graph: { nodes: { id: string; type: string }[]; edges: WfEdge[] }; stats: RunStats | null; simulatedSteps: number; computedSteps: number; dataSteps: number; createdBy: string; updatedAt: string }
 export interface RunSummary { id: string; definitionId: string; name: string; branch: string | null; status: string; error: string | null; startedBy: string; startedAt: string; finishedAt: string | null; hasDataSteps: boolean; test?: boolean }
 export interface RunStepView { node_id: string; name: string; type: string; label: string; status: string; simulated: boolean; category?: StepCategory; attempts: number; error: string | null; log: string[]; started_at: string | null; finished_at: string | null; input?: Record<string, unknown> | null; output?: Record<string, unknown> | null }
 export interface RunView { run: { id: string; definition_id: string; name: string; branch: string | null; status: string; error: string | null; simulatedOnly: boolean; started_by: string; started_at: string; finished_at: string | null; order: string[]; edges: WfEdge[]; test?: boolean }; steps: RunStepView[] }
@@ -151,8 +151,8 @@ export class WorkflowClient {
   demoSheet() { return this.req<DemoSheet>('GET', '/plugins/workflow-connectors/demo-sheet'); }
   demoSheetAdd(values: Record<string, string>) { return this.req('POST', '/plugins/workflow-connectors/demo-sheet/rows', values); }
   demoSheetUpdate(row: number, column: string, value: string) { return this.req('PUT', `/plugins/workflow-connectors/demo-sheet/rows/${row}`, { column, value }); }
-  create(name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null, active = true) { return this.req<{ definition: { id: string } }>('POST', '/workflows', trigger ? { name, description, graph, trigger, active } : { name, description, graph, active }); }
-  update(id: string, name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null, active = true) { return this.req('PUT', `/workflows/${id}`, trigger ? { name, description, graph, trigger, active } : { name, description, graph, active }); }
+  create(name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null, active = true, tags: string[] = []) { return this.req<{ definition: { id: string } }>('POST', '/workflows', { name, description, graph, ...(trigger ? { trigger } : {}), active, tags }); }
+  update(id: string, name: string, description: string, graph: { nodes: WfNode[]; edges: WfEdge[] }, trigger: WfTrigger | null, active = true, tags: string[] = []) { return this.req('PUT', `/workflows/${id}`, { name, description, graph, ...(trigger ? { trigger } : {}), active, tags }); }
   /** The list cards' pause switch: flips only the definition's active flag. */
   setActive(id: string, active: boolean) { return this.req<{ definition: { id: string; active: boolean } }>('POST', `/workflows/${id}/active`, { active }); }
   remove(id: string) { return this.req('DELETE', `/workflows/${id}`); }
@@ -169,6 +169,11 @@ export class WorkflowClient {
   rerunFrom(id: string, nodeId: string) { return this.req<RunView>('POST', `/workflow-runs/${id}/rerun-from/${nodeId}`, {}); }
   cancel(id: string) { return this.req<RunView>('POST', `/workflow-runs/${id}/cancel`, {}); }
   review(id: string) { return this.req<{ pullRequest: { id: number }; reused: boolean }>('POST', `/workflow-runs/${id}/review`, {}); }
+  /** The templates gallery: official API catalog + user-saved templates (and community picks, phase 3). */
+  templates() { return this.req<{ templates: WfTemplate[] }>('GET', '/workflow-templates'); }
+  /** Saves a template from an explicit graph (editor canvas) or from a saved definition (fromDefinition). */
+  saveTemplate(body: { name: string; description: string; category: string; graph?: { nodes: WfNode[]; edges: WfEdge[] }; trigger?: WfTrigger | null; fromDefinition?: string }) { return this.req<{ template: WfTemplate }>('POST', '/workflow-templates', body); }
+  deleteTemplate(id: string) { return this.req<{ deleted: string }>('DELETE', `/workflow-templates/${id}`); }
 }
 
 // ---- Initial canvas framing ----
@@ -246,8 +251,10 @@ export const SAMPLE_WORKFLOWS: { name: string; description: string; trigger?: Wf
     ], edges: [{ from: 'each', to: 'grant', label: 'each' }, { from: 'each', to: 'tell', label: 'done' }] },
   ];
 
-// ---- Template gallery (direction C): the samples above, categorized, instantiate into a PAUSED workflow. ----
-export interface WfTemplate { id: string; name: string; description: string; category: string; source: 'official'; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[] }
+// ---- Template gallery: official catalog + user-saved templates (phase 3) + community picks (phase 3),
+// served by GET /workflow-templates and instantiated into a PAUSED workflow. WF_TEMPLATES below stays the
+// offline fallback of the gallery; the editor palette keeps SAMPLE_WORKFLOWS for its samples section. ----
+export interface WfTemplate { id: string; name: string; description: string; category: string; source: 'official' | 'user' | 'community'; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[]; createdBy?: string | null; createdAt?: string | null }
 const TEMPLATE_CATEGORIES: readonly (readonly [string, string])[] = [
   ['HR onboarding', 'HR & sheets'], ['loop over rows', 'HR & sheets'],
   ['joiner', 'Joiner · Mover · Leaver'], ['mover', 'Joiner · Mover · Leaver'], ['leaver', 'Joiner · Mover · Leaver'], ['onboarding', 'Joiner · Mover · Leaver'], ['offboarding', 'Joiner · Mover · Leaver'],

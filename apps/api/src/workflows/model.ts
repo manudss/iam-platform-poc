@@ -16,10 +16,12 @@ import { loadPluginModule, pluginCatalogue } from '../plugins/v1/loader.js';
 export type StepType = string;
 export type BuiltinStepType = 'wait' | 'notify' | 'fail' | 'assign-role' | 'revoke-role' | 'set-department' | 'set-profile-field';
 
-/** Start trigger of a definition: run automatically when `event` fires and every `match` key equals the payload value. External events may carry a validated `config` (e.g. webhook token, watched sheet). */
-export interface WfTrigger { event: string; match?: Record<string, string>; config?: Record<string, unknown> }
+/** Start trigger of a definition: run automatically when `event` fires and every `match` key equals the payload value,
+ * or on a schedule (`cron`, five fields, Europe/Paris, no catch-up). External events may carry a validated
+ * `config` (e.g. webhook token, watched sheet). event and cron are exclusive. */
+export interface WfTrigger { event?: string; match?: Record<string, string>; config?: Record<string, unknown>; cron?: string }
 export interface WfNode { id: string; type: StepType; name: string; config: Record<string, unknown> }
-export interface WfEdge { from: string; to: string }
+export interface WfEdge { from: string; to: string; /** Branching links carry the case they follow: true/false, a switch case, each/done. */ label?: string }
 export interface WfGraph { nodes: WfNode[]; edges: WfEdge[] }
 
 export type StepCategory = 'simulated' | 'computed' | 'real';
@@ -51,6 +53,8 @@ interface WfModelModule {
   substituteStepOutputs: (node: WfNode, outputs: Record<string, Record<string, unknown>>) => WfNode;
   validateStepPlaceholders: (graph: WfGraph, order: string[]) => void;
   validateTrigger: (input: unknown) => WfTrigger | null;
+  validateCronExpression: (expr: unknown) => string;
+  nextCronFire: (expr: string, fromMs?: number) => number;
   substituteEventPayload: (graph: WfGraph, payload: Record<string, string>) => WfGraph;
   validateGraph: (input: unknown) => { graph: WfGraph; order: string[] };
   hasDataSteps: (g: WfGraph) => boolean;
@@ -82,6 +86,8 @@ export const stepPlaceholderRefs = plugin.stepPlaceholderRefs;
 export const substituteStepOutputs = plugin.substituteStepOutputs;
 export const validateStepPlaceholders = plugin.validateStepPlaceholders;
 export const validateTrigger = plugin.validateTrigger;
+export const validateCronExpression = plugin.validateCronExpression;
+export const nextCronFire = plugin.nextCronFire;
 export const substituteEventPayload = plugin.substituteEventPayload;
 export const validateGraph = plugin.validateGraph;
 export const hasDataSteps = plugin.hasDataSteps;
