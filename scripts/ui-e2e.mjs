@@ -202,9 +202,11 @@ try {
   await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
   await noBanner('disabled'); await shot('7-plugin-disabled-back-to-base');
 
-  // refresh on a deep link: the in-memory token is gone, so sign-in comes first and then the same plugin page opens again
-  await page.reload(); await page.waitForSelector('#signin-browser'); assert.equal(path(), '/login');
-  await coreLogin();
+  // A valid saved user session survives reload. The separate admin capability stays memory-only.
+  await page.reload(); await page.waitForSelector('header .who');
+  assert.equal(path(), '/plugins/auth-password-lockout');
+  assert.match(await page.locator('header .who').innerText(), /demo-alice/);
+  assert.equal(await page.locator('#signin-browser').count(), 0, 'reload must not ask for credentials');
   await page.waitForFunction(() => document.body.innerText.includes('admin capability')); // the automatic open is refused first (no token in memory after a reload)
   await setToken();
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
@@ -247,9 +249,8 @@ try {
   await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
   await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
-  await page.goto(`${BASE}/screens/organizations/orgs`); // a full reload signs out (memory-only token): the deep link resumes after sign-in
-  await page.waitForSelector('#signin-browser');
-  await coreLogin();
+  await page.goto(`${BASE}/screens/organizations/orgs`); // the user session survives the full reload
+  await page.waitForSelector('header .who');
   await page.waitForFunction(() => location.pathname === '/screens/organizations/orgs');
   await setToken(); // the screens inventory is an admin read: the capability token is memory-only, re-enter it after the reload
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); // ensurePersonal raced the token entry at sign-in: reopen the personal branch now that the token is back
@@ -403,8 +404,7 @@ try {
   assert.equal(sectionSave[0].status(), 200, await sectionSave[0].text());
   assert.ok((await sectionSave[0].json()).config.sections.includes('Urgence'), 'server persisted empty section');
   await page.waitForFunction(() => !document.querySelector('#pf-save')?.disabled && !document.body.innerText.includes('Unsaved edits'));
-  await page.reload(); await page.waitForSelector('#signin-browser');
-  await coreLogin();
+  await page.reload(); await page.waitForSelector('header .who');
   await page.waitForSelector('details.token', { state: 'attached' });
   await setToken();
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
@@ -481,9 +481,10 @@ try {
   // ---- phone width: no sideways scroll, the menu opens from the burger, pages stay usable ----
   await page.setViewportSize({ width: 390, height: 800 });
   for (const p of ['/overview', '/users', '/roles', '/assignments', '/plugins', '/database/branches', '/database/data', '/database/pulls', ...(NATS ? ['/event-bus'] : [])]) {
-    await page.goto(BASE + p).catch(() => {}); // a full load drops the token: sign in again, which lands back on the same page
+    await page.goto(BASE + p).catch(() => {}); // full loads retain user auth, not the separate admin capability
     await page.waitForSelector('#signin-browser, main.content section, main.content .stats');
     if (path() === '/login') { await coreLogin(); await page.waitForFunction(() => document.body.innerText.includes('admin capability')); await setToken(); await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
+    else { await setToken(); await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); await status('personal branch'); }
     await page.waitForFunction((x) => location.pathname.startsWith(x), p);
     await page.waitForSelector('main.content section, main.content .stats');
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
