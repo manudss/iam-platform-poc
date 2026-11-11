@@ -1,3 +1,4 @@
+import type { WorkflowConnection } from './connections.js';
 import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { createConnection, Connection } from 'mysql2/promise';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -63,9 +64,10 @@ export class WorkflowStore {
             await v.lock(() => v.at(v.defaultBranch, async (c) => {
               await WorkflowStore.ensureDefsTable(c);
               await WorkflowStore.ensureTemplatesTable(c);
+              await WorkflowStore.ensureConnectionsTable(c);
               await c.query(`INSERT IGNORE INTO workflow_definitions (tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at) SELECT tenant, id, name, description, graph, trigger_json, created_by, created_at, updated_at FROM \`${this.metaDb}\`.workflow_definitions`);
-              const [d] = await c.query("select table_name from dolt_status where table_name in ('workflow_definitions', 'workflow_templates')");
-              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions', 'workflow_templates')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions and templates')"); }
+              const [d] = await c.query("select table_name from dolt_status where table_name in ('workflow_definitions', 'workflow_templates', 'workflow_connections')");
+              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions', 'workflow_templates', 'workflow_connections')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions and templates')"); }
             }));
             const m2 = await this.open();
             try { await m2.query("insert into workflow_store_meta (k, v) values ('defs_migrated', ?)", [new Date().toISOString()]); } finally { await m2.end(); }
@@ -74,8 +76,9 @@ export class WorkflowStore {
             await v.lock(() => v.at(v.defaultBranch, async (c) => {
               await WorkflowStore.ensureDefsTable(c);
               await WorkflowStore.ensureTemplatesTable(c);
-              const [d] = await c.query("select table_name from dolt_status where table_name in ('workflow_definitions', 'workflow_templates')");
-              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions', 'workflow_templates')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions and templates')"); }
+              await WorkflowStore.ensureConnectionsTable(c);
+              const [d] = await c.query("select table_name from dolt_status where table_name in ('workflow_definitions', 'workflow_templates', 'workflow_connections')");
+              if ((d as unknown[]).length) { await c.query("call dolt_add('workflow_definitions', 'workflow_templates', 'workflow_connections')"); await c.query("call dolt_commit('-m', 'workflows: version workflow definitions and templates')"); }
             }));
           }
         }
@@ -150,6 +153,22 @@ export class WorkflowStore {
       if (gone) await WorkflowStore.commitTemplates(c, `workflows: deleted template ${id}`);
       return gone;
     });
+  }
+  private static async ensureConnectionsTable(c: Connection) {
+    await c.query('CREATE TABLE IF NOT EXISTS workflow_connections (tenant VARCHAR(64) NOT NULL, id VARCHAR(40) NOT NULL, metadata JSON NOT NULL, PRIMARY KEY (tenant, id))');
+  }
+  async listConnections(tenant: string, ref: string): Promise<WorkflowConnection[]> {
+    const m = await this.meta(); await m.end();
+    return this.defsRead(ref, async c => { const [rows] = await c.query('select metadata from workflow_connections where tenant = ?', [tenant]); return (rows as {metadata: string | WorkflowConnection}[]).map(r => typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata); });
+  }
+  async getConnection(tenant: string, id: string, ref: string): Promise<WorkflowConnection | null> { return (await this.listConnections(tenant, ref)).find(c => c.id === id) ?? null; }
+  async putConnection(connection: WorkflowConnection, ref: string) {
+    const m = await this.meta(); await m.end();
+    await this.defsWrite(ref, async c => { await WorkflowStore.ensureConnectionsTable(c); await c.query('insert into workflow_connections (tenant, id, metadata) values (?,?,?) on duplicate key update metadata=values(metadata)', [connection.tenant, connection.id, JSON.stringify(connection)]); await c.query("call dolt_add('workflow_connections')"); await c.query("call dolt_commit('-m', 'workflows: save connection metadata')"); });
+  }
+  async deleteConnection(tenant: string, id: string, ref: string) {
+    const m = await this.meta(); await m.end();
+    return this.defsWrite(ref, async c => { const [r] = await c.query('delete from workflow_connections where tenant = ? and id = ?', [tenant, id]); if (!(r as {affectedRows: number}).affectedRows) return false; await c.query("call dolt_add('workflow_connections')"); await c.query("call dolt_commit('-m', 'workflows: remove connection metadata')"); return true; });
   }
   async listDefinitions(tenant: string, ref: string): Promise<DefinitionRow[]> {
     return this.defsRead(ref, async (c) => { const [r] = await c.query('select * from workflow_definitions where tenant = ? order by name', [tenant]); return (r as Record<string, unknown>[]).map(WorkflowStore.def); });
