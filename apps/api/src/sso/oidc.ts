@@ -11,6 +11,7 @@ import { loadPluginModule } from '../plugins/v1/loader.js';
 import { PluginError, PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { engineHttpError, resolveEngine } from '../plugins/v1/engines.js';
+import { parseSession, SESSION_SETTINGS_ID } from '../authn/session-config.js';
 import { workspaceMode } from '../workspace/context.js';
 
 /**
@@ -40,6 +41,7 @@ interface OidcPluginModule {
   mayOpen: (app: Pick<AppConnector, 'enabled' | 'allowed_roles'>, u: DirectoryUser | undefined) => boolean;
   createOidcEngine: (deps: {
     liveApps: (tenant: string) => Promise<AppConnector[]>;
+    sessionSeconds: (tenant: string) => Promise<number>;
     pluginActive: (tenant: string, id: string) => Promise<boolean>;
     directoryUser: (tenant: string, id: string) => Promise<DirectoryUser | undefined>;
     secretGet: (ref: string) => Promise<Record<string, string> | undefined>;
@@ -90,6 +92,11 @@ export class OidcProviderService implements OnModuleInit {
   ) {
     this.deps = {
       liveApps: (t) => apps.liveApps(t),
+      sessionSeconds: async (t) => {
+        const config = parseSession(await (await this.liveRegistry()).coreSettings(t, SESSION_SETTINGS_ID));
+        const ceiling = Number(process.env.IAM_TOKEN_TTL_SECS);
+        return Math.min(config.ttlSeconds, Number.isFinite(ceiling) && ceiling > 0 ? ceiling : config.ttlSeconds);
+      },
       pluginActive: (t, id) => profile.pluginActive(t, id, 'live'),
       directoryUser: (t, id) => dir.user(t, id),
       secretGet: (ref) => secrets.get(ref),

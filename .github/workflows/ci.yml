@@ -82,6 +82,8 @@ jobs:
         run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
       - run: npm test
         working-directory: apps/api
+      - name: SSO session integration (two applications and expiration)
+        run: node --test scripts/sso-session.test.mjs
       - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
         env:
           NG_CLI_ANALYTICS: "false"

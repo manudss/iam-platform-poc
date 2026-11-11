@@ -54,7 +54,7 @@ The `sso-config-oidc` seed exercises the full set (all scopes, refresh allowed).
 - **Signing key**: read from the secret store (`sso/<tenant>/oidc-signing-key`, field `jwk`, a private ES256 JWK) so it survives restarts. Without one, a key is **generated at each start** (ES256): tokens issued before a restart cannot be verified afterwards. Only the public key is published (JWKS).
 - Sessions, codes, tokens and grants are **in memory** (runtime state, not Dolt), so they are lost at restart. Cookie keys: `IAM_SSO_COOKIE_KEY` (16+ characters) or random at start.
 - **SSO session persistence**: the provider session is remembered across a browser restart (`remember me`), for the
-  Session ttl (8h). While it lives, opening another application does not ask for credentials again. The console token
+  per-tenant token lifetime (`core-session.ttlSeconds`, also bounded by `IAM_TOKEN_TTL_SECS`). While it lives, opening another application does not ask for credentials again. The console token
   is likewise kept across visits while valid (docs/session.md), which also covers SP-initiated SAML sign-in requests.
 
 ## Events and audit
