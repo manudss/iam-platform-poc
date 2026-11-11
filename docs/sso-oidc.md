@@ -40,9 +40,9 @@ Any other claim name is ignored, and a claim whose profile value is empty is lef
 
 Each OIDC application carries, next to its redirect URIs and launch URL:
 
-- **Scopes**: which scopes it may receive on top of `openid` (`profile`, `email`, `roles`, `offline_access`). The
-  consent screen and the issued grant are filtered to that list: asking for more is not an error, the extra scopes are
-  simply not granted. Applications registered before this option keep `profile email roles`.
+- **Scopes**: which scopes it may receive on top of `openid` (`profile`, `email`, `roles`, `offline_access`). Asking
+  for a scope outside the list is refused at authorize (`invalid_scope`); the consent screen only ever shows allowed
+  scopes. Applications registered before this option keep `profile email roles`.
 - **Allow refresh tokens**: without it the `refresh_token` grant is closed for the application and `offline_access` is
   refused (the two go together). Older applications keep it on.
 

@@ -36,8 +36,8 @@ Production code: 40 points. Test code: 84 points.
 | plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:123 |
 | plugin deps.emit (durable app event) | emitter | signup.requested | plugins/directory/signup.mjs:74 |
 | plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:91 |
-| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/oidc-provider/handlers.mjs:171 |
-| plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/oidc-provider/handlers.mjs:179 |
+| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/oidc-provider/handlers.mjs:173 |
+| plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/oidc-provider/handlers.mjs:181 |
 | plugin deps.emit (durable app event) | emitter | organization.member-added | plugins/organizations/handlers.mjs:72 |
 | plugin deps.emit (durable app event) | emitter | policy.changed | plugins/policy-studio/handlers.mjs:122 |
 | plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:169 |
@@ -47,7 +47,7 @@ Production code: 40 points. Test code: 84 points.
 | plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/saml-idp/handlers.mjs:220 |
 | plugin deps.emit (durable app event) | emitter | sso.assertion.issued | plugins/saml-idp/handlers.mjs:243 |
 | plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/saml-idp/handlers.mjs:244 |
-| plugin oidc/saml provider event hook | listener | - | plugins/oidc-provider/handlers.mjs:139 |
+| plugin oidc/saml provider event hook | listener | - | plugins/oidc-provider/handlers.mjs:141 |
 | plugins.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/mail/mail-templates.ts:186 |
