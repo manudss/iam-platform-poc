@@ -130,7 +130,7 @@ describe('parseSpMetadata: SP metadata import for the admin form', () => {
     assert.deepEqual(parseSpMetadata(xml), { entity_id: 'https://sp.example.invalid/saml', acs_url: 'https://sp.example.invalid/acs', sp_certificate: '-----BEGIN CERTIFICATE-----\nMIIBCERT\n-----END CERTIFICATE-----' });
   });
   it('refuses a document without entity id or ACS, and a non-SAML document', () => {
-    assert.throws(() => parseSpMetadata('<EntityDescriptor/>'), /missing/);
+    assert.throws(() => parseSpMetadata('<EntityDescriptor >'), /missing/);
     assert.throws(() => parseSpMetadata('hello'), /EntityDescriptor/);
   });
 });
