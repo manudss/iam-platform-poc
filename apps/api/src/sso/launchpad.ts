@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, Body, Controller, Get, Inject, Param, Put, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, Put, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { PROFILE_STORE } from '../profile/profile.service.js';
@@ -54,7 +54,7 @@ export class LaunchpadController {
         ? (samlOn ? `${base}/sso/${encodeURIComponent(t)}/saml/login?app=${encodeURIComponent(a.id)}` : null)
         : (oidcOn ? a.launch_url : null);
       if (!url) continue;
-      apps.push({ id: a.id, name: a.name, description: a.description, logo: a.logo ?? null, protocol: a.protocol, url });
+      apps.push({ id: a.id, name: a.name, description: a.description, logo: logoUrl(base, t, a.logo), protocol: a.protocol, url });
     }
     const values = await this.preferences.get(t, r.user.sub, 'live');
     let saved: unknown; try { saved = JSON.parse(String(values['console.launchpad'] ?? '{}')); } catch { saved = {}; }
@@ -85,6 +85,45 @@ export function validatePreferences(value: unknown, allowed: string[]): Launchpa
     if (!Array.isArray(xs) || xs.length > 1000 || xs.some(x => typeof x !== 'string' || !allowed.includes(x)) || new Set(xs).size !== xs.length) throw new BadRequestException(key + ': unique accessible application IDs only');
   }
   return readPreferences(v, allowed);
+}
+
+/** Stored artwork is a validated data URL (plugins/app-connector/logo.mjs): bytes + type for serving. */
+const DATA_URL = /^data:image\/(png|jpeg|webp|svg\+xml);base64,([A-Za-z0-9+/]+={0,2})$/;
+export function logoBytes(logo: string | null | undefined): { type: string; bytes: Buffer } | null {
+  const m = logo ? DATA_URL.exec(logo) : null;
+  return m ? { type: 'image/' + m[1], bytes: Buffer.from(m[2], 'base64') } : null;
+}
+/** The content address of an artwork: sha256 of its bytes. Unguessable, stable across restarts, changes with the artwork. */
+export const logoId = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+/** In the launchpad payload the artwork travels as a content-hashed URL (immutable, cacheable), never inline. */
+function logoUrl(base: string, t: string, logo: string | null | undefined): string | null {
+  const art = logoBytes(logo);
+  return art ? `${base}/sso/${encodeURIComponent(t)}/launchpad/logo/${logoId(art.bytes)}` : null;
+}
+
+/**
+ * Artwork at its content address. Public by design: the hash is the capability (unguessable, 256 bits of the
+ * artwork's own bytes), the bytes are non-personal application metadata, and the response is immutable so any
+ * cache may keep it forever - this is the one piece of the launchpad that may be shared. No authentication,
+ * no enumeration: an unknown hash is a 404 and reveals nothing.
+ */
+@Controller('sso/:tenant/launchpad/logo')
+export class LaunchpadLogoController {
+  constructor(private readonly apps: AppConnectorService) {}
+  @Get(':id') async logo(@Param('tenant') t: string, @Param('id') id: string, @Res() res: Response) {
+    if (!/^[a-f0-9]{64}$/.test(id)) throw new NotFoundException('unknown artwork');
+    for (const a of await this.apps.liveApps(t)) {
+      const art = logoBytes(a.logo);
+      if (art && logoId(art.bytes) === id) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('Content-Type', art.type);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.send(art.bytes);
+        return;
+      }
+    }
+    throw new NotFoundException('unknown artwork');
+  }
 }
 
 /** Public base URL the browser can reach: pinned by IAM_SSO_BASE_URL (the demo sets it to <origin>/api), else request-derived. Same rule as the protocol plugins. */

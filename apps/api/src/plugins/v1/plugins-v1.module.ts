@@ -17,7 +17,7 @@ import { PgPluginStore } from './pg-stores.js';
 import { authPassword, shippedPlugins } from './builtin/index.js';
 import { OidcProviderService, SsoInteractionController, SSO_DIRECTORY, DoltSsoDirectory, MemorySsoDirectory } from '../../sso/oidc.js';
 import { SamlIdpService, SamlInteractionController } from '../../sso/saml.js';
-import { LaunchpadController } from '../../sso/launchpad.js';
+import { LaunchpadController, LaunchpadLogoController } from '../../sso/launchpad.js';
 import { SecretsService } from '../../integrations/secrets.service.js';
 import { AppConnectorController, AppConnectorService, APP_CONNECTOR_STORE, DoltAppConnectorStore, MemoryAppConnectorStore } from '../../connectors/app-connector.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
@@ -48,7 +48,7 @@ import { SessionAdminController } from '../../authn/session.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
-  controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, ProfileController, SignupController, TestAccountController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, LaunchpadController, RolesController, SigninOptionsController, MailTemplatesController],
+  controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, ProfileController, SignupController, TestAccountController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, LaunchpadController, LaunchpadLogoController, RolesController, SigninOptionsController, MailTemplatesController],
   providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BrandingService, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
     provide: MAIL_TEMPLATE_STORE,
     inject: [VersioningService],

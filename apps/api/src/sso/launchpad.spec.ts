@@ -7,6 +7,7 @@ import { EventsModule } from '../events/events.module.js';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
+import { createHash } from 'node:crypto';
 import { AppConnectorService } from '../connectors/app-connector.js';
 import { SSO_DIRECTORY, MemorySsoDirectory } from './oidc.js';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
@@ -58,6 +59,30 @@ describe('launchpad: the applications a signed-in person may open, with their SS
     assert.equal(byId.get('wiki').protocol, 'oidc');
     assert.equal(byId.get('payroll').url, `${BASE}/sso/${T}/saml/login?app=payroll`, 'a SAML application opens IdP-initiated through the IdP');
     assert.equal(byId.get('payroll').protocol, 'saml');
+  });
+
+  it('serves artwork at a content-hashed immutable URL instead of inline, publicly, without enumeration', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20" fill="teal"/></svg>';
+    const logo = 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
+    const appsSvc = app.get(AppConnectorService);
+    await appsSvc.create(T, 'admin', { id: 'artapp', name: 'Artwork app', protocol: 'oidc', enabled: true, redirect_uris: ['https://art.example.invalid/cb'], launch_url: 'https://art.example.invalid/', allowed_roles: ['employee'], attribute_mapping: {}, logo });
+    const r = await api('demo-alice');
+    const art = (await r.json() as { apps: { id: string; logo: string | null }[] }).apps.find(a => a.id === 'artapp');
+    assert.ok(art?.logo, 'the app is listed');
+    assert.ok(!art!.logo!.startsWith('data:'), 'no inline artwork in the payload');
+    const match = /^https?:\/\/[^/]+\/sso\/acme-demo\/launchpad\/logo\/([a-f0-9]{64})$/.exec(art!.logo!);
+    assert.ok(match, 'a content-hashed URL: ' + art!.logo);
+    // Public (no token at all), immutable, and the exact validated bytes (the stored form is normalized).
+    const img = await fetch(art!.logo!);
+    assert.equal(img.status, 200);
+    assert.match(img.headers.get('cache-control') ?? '', /public, max-age=31536000, immutable/);
+    assert.match(img.headers.get('content-type') ?? '', /image\/svg/);
+    const served = Buffer.from(await img.arrayBuffer());
+    assert.equal(createHash('sha256').update(served).digest('hex'), match![1], 'the address is the hash of the served bytes');
+    assert.ok(served.toString('utf8').includes('<svg'));
+    // Unknown hashes enumerate nothing.
+    assert.equal((await fetch(`${BASE}/sso/${T}/launchpad/logo/${'0'.repeat(64)}`)).status, 404);
+    assert.equal((await fetch(`${BASE}/sso/${T}/launchpad/logo/not-a-hash`)).status, 404);
   });
 
   it('caches privately per user: a matching ETag answers 304, another user never reuses it', async () => {
