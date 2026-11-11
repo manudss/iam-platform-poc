@@ -80,6 +80,7 @@ jobs:
         working-directory: apps/api
       - name: Plugin shared dependencies (step 4 - the controlled install the plugins resolve against)
         run: npm ci && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
+      - run: node --test scripts/saml-signatures.test.mjs
       - run: npm test
         working-directory: apps/api
       - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
