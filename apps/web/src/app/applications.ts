@@ -7,7 +7,15 @@ export interface AppConnector {
   id: string; name: string; description: string; protocol: Protocol; enabled: boolean; redirect_uris: string[];
   entity_id: string | null; acs_url: string | null; attribute_mapping: Record<string, string>; allowed_roles: string[]; secret_ref: string | null; launch_url: string | null;
   sp_certificate: string | null; want_signed_requests: boolean; nameid_format: 'emailAddress' | 'unspecified' | 'persistent' | null;
+  scopes: string[]; allow_refresh_tokens: boolean;
 }
+
+/** Scopes an OIDC application may receive on top of openid, in display order. */
+export const OIDC_SCOPES = ['profile', 'email', 'roles', 'offline_access'] as const;
+export type OidcScope = (typeof OIDC_SCOPES)[number];
+export type OidcScopeChecks = Record<OidcScope, boolean>;
+export const scopeChecksFromList = (scopes: string[]): OidcScopeChecks => ({ profile: scopes.includes('profile'), email: scopes.includes('email'), roles: scopes.includes('roles'), offline_access: scopes.includes('offline_access') });
+export const scopeListFromChecks = (c: OidcScopeChecks): string[] => OIDC_SCOPES.filter((sc) => c[sc]);
 
 /** What the parse-sp-metadata endpoint returns (fields are null when absent from the document). */
 export interface SpMetadataResult { entity_id: string | null; acs_url: string | null; sp_certificate: string | null; }
@@ -46,12 +54,18 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   <label>Protocol<select name="aproto" [(ngModel)]="protocol"><option value="oidc">OpenID Connect</option><option value="saml">SAML 2.0</option></select></label></div>
   <div class="row"><label>Description<input name="adesc" [(ngModel)]="description" maxlength="240" /></label></div>
   @if (protocol === 'oidc') { <div class="row"><label>Redirect URIs (one per line, exact, https)<textarea name="auris" rows="3" [(ngModel)]="uris"></textarea></label>
-  <label>Launch URL (where users open the app; shown on their home page)<input name="alaunch" [(ngModel)]="launch" placeholder="https://app.example.com/" /></label></div> }
+  <label>Launch URL (where users open the app; shown on their home page)<input name="alaunch" [(ngModel)]="launch" placeholder="https://app.example.com/" /></label></div>
+  <div class="row"><div><small>Scopes the application may receive (openid is always granted)</small><br>
+  <label class="row"><input type="checkbox" name="ascopeprofile" [(ngModel)]="scopeChecks.profile" /> profile</label>
+  <label class="row"><input type="checkbox" name="ascopeemail" [(ngModel)]="scopeChecks.email" /> email</label>
+  <label class="row"><input type="checkbox" name="ascoperoles" [(ngModel)]="scopeChecks.roles" /> roles</label>
+  <label class="row"><input type="checkbox" name="ascopeoffline" [(ngModel)]="scopeChecks.offline_access" /> offline_access</label></div>
+  <div><small>Tokens</small><br><label class="row"><input type="checkbox" name="arefresh" [(ngModel)]="allowRefresh" /> Allow refresh tokens (required for offline_access)</label></div></div> }
   @else {
   <div class="row"><label>SP entity ID<input name="aent" [(ngModel)]="entity" /></label><label>ACS URL (https)<input name="aacs" [(ngModel)]="acs" /></label>
   <label>NameID format<select name="anameid" [(ngModel)]="nameid"><option value="emailAddress">emailAddress</option><option value="unspecified">unspecified</option><option value="persistent">persistent</option></select></label></div>
   <div class="row"><label>SP signing certificate (PEM)<textarea name="acert" rows="4" [(ngModel)]="cert" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label></div>
-  <div class="row"><label class="check"><input type="checkbox" name="asigned" [(ngModel)]="signedReq" /> Require signed AuthnRequests (needs the certificate above)</label></div>
+  <div class="row"><label class="row"><input type="checkbox" name="asigned" [(ngModel)]="signedReq" /> Require signed AuthnRequests (needs the certificate above)</label></div>
   <div class="row"><label>Import SP metadata (paste the XML)<textarea name="aspmeta" rows="3" [(ngModel)]="spMeta"></textarea></label>
   <div><button class="secondary" id="app-spmeta-import" (click)="importSpMetadata()" [disabled]="!spMeta.trim()">Read metadata</button><br>
   <a class="hint" [href]="idpMetadataUrl()" target="_blank" rel="noopener">Download this platform's IdP metadata to register in the application</a></div></div> }
@@ -66,6 +80,7 @@ export class ApplicationsPage {
   protected apps = signal<AppConnector[]>([]); protected note = signal(''); protected problem = signal(''); protected off = signal(false); protected editing = signal(false);
   protected id = ''; protected name = ''; protected description = ''; protected protocol: Protocol = 'oidc'; protected uris = ''; protected entity = ''; protected acs = ''; protected mapping = ''; protected roles = ''; protected ref = ''; protected launch = '';
   protected nameid = 'emailAddress'; protected cert = ''; protected signedReq = false; protected spMeta = '';
+  protected scopeChecks: OidcScopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); protected allowRefresh = false;
   constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   private fail(r: { status: number; data: any }) { if (r.status < 400) return false; this.problem.set(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused'); return true; }
@@ -81,11 +96,13 @@ export class ApplicationsPage {
     this.editing.set(true); this.id = a.id; this.name = a.name; this.description = a.description; this.protocol = a.protocol; this.uris = a.redirect_uris.join('\n');
     this.entity = a.entity_id ?? ''; this.acs = a.acs_url ?? ''; this.mapping = formatMapping(a.attribute_mapping); this.roles = a.allowed_roles.join('\n'); this.ref = a.secret_ref ?? ''; this.launch = a.launch_url ?? '';
     this.nameid = a.nameid_format ?? 'emailAddress'; this.cert = a.sp_certificate ?? ''; this.signedReq = a.want_signed_requests; this.spMeta = '';
+    this.scopeChecks = scopeChecksFromList(a.scopes ?? []); this.allowRefresh = a.allow_refresh_tokens;
   }
-  protected reset() { this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; }
+  protected reset() { this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; this.scopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); this.allowRefresh = false; }
   private body(): Record<string, unknown> {
     return { name: this.name, description: this.description, protocol: this.protocol, redirect_uris: this.protocol === 'oidc' ? parseList(this.uris) : [], entity_id: this.protocol === 'saml' ? this.entity : null, acs_url: this.protocol === 'saml' ? this.acs : null, attribute_mapping: parseMapping(this.mapping), allowed_roles: parseList(this.roles), secret_ref: this.ref || null, launch_url: this.protocol === 'oidc' ? this.launch || null : null,
-      nameid_format: this.protocol === 'saml' ? this.nameid : null, sp_certificate: this.protocol === 'saml' ? this.cert.trim() || null : null, want_signed_requests: this.protocol === 'saml' ? this.signedReq : false };
+      nameid_format: this.protocol === 'saml' ? this.nameid : null, sp_certificate: this.protocol === 'saml' ? this.cert.trim() || null : null, want_signed_requests: this.protocol === 'saml' ? this.signedReq : false,
+      scopes: this.protocol === 'oidc' ? scopeListFromChecks(this.scopeChecks) : [], allow_refresh_tokens: this.protocol === 'oidc' ? this.allowRefresh : false };
   }
   /** IdP metadata to hand to the SAML application when it is registered there. */
   protected idpMetadataUrl(): string { return `/api/sso/${encodeURIComponent(this.s.api.tenant)}/saml/metadata`; }

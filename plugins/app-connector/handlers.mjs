@@ -23,7 +23,7 @@ const { BadRequestException, ConflictException, NotFoundException } = require('@
 export const APP_CONNECTOR_PLUGIN = 'app-connector';
 export const APP_CONNECTOR_DDL = 'create table if not exists app_connectors (tenant varchar(32) not null, id varchar(32) not null, name varchar(80) not null, description varchar(240) not null, protocol varchar(8) not null, enabled tinyint not null, config longtext not null, primary key (tenant, id))';
 
-export const appConnectorConfig = (a) => JSON.stringify({ redirect_uris: a.redirect_uris, entity_id: a.entity_id, acs_url: a.acs_url, attribute_mapping: a.attribute_mapping, allowed_roles: a.allowed_roles, secret_ref: a.secret_ref, launch_url: a.launch_url, sp_certificate: a.sp_certificate, want_signed_requests: a.want_signed_requests, nameid_format: a.nameid_format });
+export const appConnectorConfig = (a) => JSON.stringify({ redirect_uris: a.redirect_uris, entity_id: a.entity_id, acs_url: a.acs_url, attribute_mapping: a.attribute_mapping, allowed_roles: a.allowed_roles, secret_ref: a.secret_ref, launch_url: a.launch_url, sp_certificate: a.sp_certificate, want_signed_requests: a.want_signed_requests, nameid_format: a.nameid_format, scopes: a.scopes, allow_refresh_tokens: a.allow_refresh_tokens });
 
 const ID = /^[a-z0-9-]{1,32}$/, KEY = /^[A-Za-z0-9_.:-]{1,64}$/, REF = /^[a-z0-9][a-z0-9/_.-]{0,63}$/;
 const FORBIDDEN = ['secret', 'client_secret', 'private_key', 'password', 'token'];
@@ -36,12 +36,15 @@ export function checkUrl(v, what) {
   if (v.includes('*') || u.hash || u.username || u.password) throw new BadRequestException(`${what}: no wildcard, fragment or credentials`);
   return v;
 }
+/** Scopes an OIDC application may ask for on top of openid (which is always granted). */
+export const OIDC_SCOPES = ['profile', 'email', 'roles', 'offline_access'];
+export const DEFAULT_OIDC_SCOPES = ['profile', 'email', 'roles'];
 const strs = (v, what, max) => { if (!Array.isArray(v) || v.length > max || v.some((x) => typeof x !== 'string')) throw new BadRequestException(`${what}: a list of at most ${max} strings`); return [...new Set(v)]; };
 
 /** Validates a full or partial body and returns the new connector. `base` is the existing one for a partial update. */
 export function build(id, b, base) {
   for (const k of Object.keys(b ?? {})) if (FORBIDDEN.includes(k.toLowerCase())) throw new BadRequestException(`${k}: secrets are never stored here; save it in the secret store and give its name in secret_ref`);
-  const a = base ? structuredClone(base) : { id, name: '', description: '', protocol: 'oidc', enabled: false, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, sp_certificate: null, want_signed_requests: false, nameid_format: null };
+  const a = base ? structuredClone(base) : { id, name: '', description: '', protocol: 'oidc', enabled: false, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [...DEFAULT_OIDC_SCOPES], allow_refresh_tokens: true };
   if (b.name !== undefined) { if (typeof b.name !== 'string' || !b.name.trim() || b.name.length > 80) throw new BadRequestException('name: 1 to 80 characters'); a.name = b.name.trim(); }
   if (b.description !== undefined) { if (typeof b.description !== 'string' || b.description.length > 240) throw new BadRequestException('description: at most 240 characters'); a.description = b.description; }
   if (b.protocol !== undefined) { if (b.protocol !== 'oidc' && b.protocol !== 'saml') throw new BadRequestException("protocol: 'oidc' or 'saml'"); a.protocol = b.protocol; }
@@ -71,13 +74,23 @@ export function build(id, b, base) {
     else if (['emailAddress', 'unspecified', 'persistent'].includes(b.nameid_format)) a.nameid_format = b.nameid_format;
     else throw new BadRequestException("nameid_format: 'emailAddress', 'unspecified' or 'persistent'");
   }
+  if (b.scopes !== undefined) {
+    const list = strs(b.scopes, 'scopes', 8);
+    for (const sc of list) {
+      if (sc === 'openid') throw new BadRequestException("scopes: 'openid' is always granted, leave it out");
+      if (!OIDC_SCOPES.includes(sc)) throw new BadRequestException(`scopes: unknown scope '${sc}' (${OIDC_SCOPES.join(', ')})`);
+    }
+    a.scopes = list;
+  }
+  if (b.allow_refresh_tokens !== undefined) { if (typeof b.allow_refresh_tokens !== 'boolean') throw new BadRequestException('allow_refresh_tokens: true or false'); a.allow_refresh_tokens = b.allow_refresh_tokens; }
   if (b.launch_url !== undefined) a.launch_url = b.launch_url === null || b.launch_url === '' ? null : checkUrl(b.launch_url, 'launch_url');
   if (b.secret_ref !== undefined) { if (b.secret_ref === null || b.secret_ref === '') a.secret_ref = null; else if (typeof b.secret_ref === 'string' && REF.test(b.secret_ref)) a.secret_ref = b.secret_ref; else throw new BadRequestException('secret_ref: the name of a secret in the secret store (lowercase letters, digits, / _ . -)'); }
   if (!a.name) throw new BadRequestException('name is required');
   if (a.protocol === 'oidc' && a.redirect_uris.length === 0) throw new BadRequestException('redirect_uris: at least one for an OIDC application');
   if (a.protocol === 'saml' && (!a.entity_id || !a.acs_url)) throw new BadRequestException('entity_id and acs_url are required for a SAML application');
   if (a.protocol === 'oidc') { a.entity_id = null; a.acs_url = null; a.sp_certificate = null; a.want_signed_requests = false; a.nameid_format = null; }
-  else { a.redirect_uris = []; if (a.want_signed_requests && !a.sp_certificate) throw new BadRequestException('want_signed_requests: the SP certificate is required to verify signed AuthnRequests'); }
+  else { a.redirect_uris = []; a.scopes = []; a.allow_refresh_tokens = false; if (a.want_signed_requests && !a.sp_certificate) throw new BadRequestException('want_signed_requests: the SP certificate is required to verify signed AuthnRequests'); }
+  if (a.protocol === 'oidc' && a.scopes.includes('offline_access') && !a.allow_refresh_tokens) throw new BadRequestException("scopes: 'offline_access' needs allow_refresh_tokens");
   return a;
 }
 
@@ -134,46 +147,46 @@ export function parseSpMetadata(xml) {
 export const DEMO_APP_CONNECTORS = [
   { id: 'wiki', name: 'Company wiki', description: 'Internal knowledge base (fictional). Signs in with OpenID Connect.', protocol: 'oidc', enabled: true,
     redirect_uris: ['https://wiki.example.invalid/auth/callback', 'http://localhost:4300/callback'], entity_id: null, acs_url: null,
-    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name' }, allowed_roles: ['employee'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: 'https://wiki.example.invalid/', secret_ref: 'apps/wiki/client-secret' },
+    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name' }, allowed_roles: ['employee'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email'], allow_refresh_tokens: false, launch_url: 'https://wiki.example.invalid/', secret_ref: 'apps/wiki/client-secret' },
   { id: 'payroll', name: 'Payroll', description: 'Payroll portal (fictional). Signs in with SAML 2.0.', protocol: 'saml', enabled: true,
     redirect_uris: [], entity_id: 'https://payroll.example.invalid/saml/metadata', acs_url: 'https://payroll.example.invalid/saml/acs',
-    attribute_mapping: { NameID: 'email', givenName: 'display_name', department: 'department' }, allowed_roles: ['hr-partner'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: null, secret_ref: 'apps/payroll/signing-key' },
+    attribute_mapping: { NameID: 'email', givenName: 'display_name', department: 'department' }, allowed_roles: ['hr-partner'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/payroll/signing-key' },
   { id: 'crm', name: 'Sales CRM', description: 'Customer relationship tool (fictional). Signs in with OpenID Connect; still being set up, so disabled.', protocol: 'oidc', enabled: false,
     redirect_uris: ['https://crm.example.invalid/oauth/callback', 'http://localhost:4300/callback'], entity_id: null, acs_url: null,
-    attribute_mapping: { sub: 'id', email: 'email', groups: 'roles' }, allowed_roles: ['sales-rep'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: null, secret_ref: 'apps/crm/client-secret' },
+    attribute_mapping: { sub: 'id', email: 'email', groups: 'roles' }, allowed_roles: ['sales-rep'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email', 'roles'], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/crm/client-secret' },
 
 // The ten fictional business applications of the iam-demo-apps gallery (separate repository).
 // SAML apps live on their own subdomain of apps.dss.name (wildcard CNAME -> iam-demo-apps.onrender.com).
   { id: 'peoplehub', name: 'PeopleHub', description: 'HR portal (fictional): directory, time off, org chart. Signs in with OpenID Connect.', protocol: 'oidc', enabled: true,
     redirect_uris: ['http://localhost:3000/peoplehub/auth/callback', 'https://iam-demo-apps.onrender.com/peoplehub/auth/callback', 'https://peoplehub.apps.dss.name/auth/callback'], entity_id: null, acs_url: null,
-    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['hr-viewer', 'hr-manager'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: 'https://peoplehub.apps.dss.name/', secret_ref: 'apps/peoplehub/client-secret' },
+    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['hr-viewer', 'hr-manager'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email', 'roles'], allow_refresh_tokens: false, launch_url: 'https://peoplehub.apps.dss.name/', secret_ref: 'apps/peoplehub/client-secret' },
   { id: 'expenseflow', name: 'ExpenseFlow', description: 'Expense reports (fictional): submit, approve, track. Signs in with SAML 2.0.', protocol: 'saml', enabled: true,
     redirect_uris: [], entity_id: 'https://expenseflow.apps.dss.name/saml/metadata', acs_url: 'https://expenseflow.apps.dss.name/saml/acs',
-    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['expense-user', 'expense-approver'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: null, secret_ref: 'apps/expenseflow/signing-key' },
+    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['expense-user', 'expense-approver'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/expenseflow/signing-key' },
   { id: 'clientdesk', name: 'ClientDesk', description: 'CRM (fictional): accounts, opportunities, pipeline. Signs in with OpenID Connect.', protocol: 'oidc', enabled: true,
     redirect_uris: ['http://localhost:3000/clientdesk/auth/callback', 'https://iam-demo-apps.onrender.com/clientdesk/auth/callback', 'https://clientdesk.apps.dss.name/auth/callback'], entity_id: null, acs_url: null,
-    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['sales', 'sales-manager'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: 'https://clientdesk.apps.dss.name/', secret_ref: 'apps/clientdesk/client-secret' },
+    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['sales', 'sales-manager'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email', 'roles'], allow_refresh_tokens: false, launch_url: 'https://clientdesk.apps.dss.name/', secret_ref: 'apps/clientdesk/client-secret' },
   { id: 'ticketly', name: 'Ticketly', description: 'Support (fictional): tickets, queues, assignment. Signs in with SAML 2.0.', protocol: 'saml', enabled: true,
     redirect_uris: [], entity_id: 'https://ticketly.apps.dss.name/saml/metadata', acs_url: 'https://ticketly.apps.dss.name/saml/acs',
-    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['ticket-user', 'ticket-agent'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: null, secret_ref: 'apps/ticketly/signing-key' },
+    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['ticket-user', 'ticket-agent'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/ticketly/signing-key' },
   { id: 'stockroom', name: 'StockRoom', description: 'Inventory (fictional): stock, supplier orders. Signs in with OpenID Connect.', protocol: 'oidc', enabled: true,
     redirect_uris: ['http://localhost:3000/stockroom/auth/callback', 'https://iam-demo-apps.onrender.com/stockroom/auth/callback', 'https://stockroom.apps.dss.name/auth/callback'], entity_id: null, acs_url: null,
-    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['stock-viewer', 'stock-manager'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: 'https://stockroom.apps.dss.name/', secret_ref: 'apps/stockroom/client-secret' },
+    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['stock-viewer', 'stock-manager'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email', 'roles'], allow_refresh_tokens: false, launch_url: 'https://stockroom.apps.dss.name/', secret_ref: 'apps/stockroom/client-secret' },
   { id: 'timesheet', name: 'TimeSheet', description: 'Time tracking (fictional): log, approve, report. Signs in with SAML 2.0.', protocol: 'saml', enabled: true,
     redirect_uris: [], entity_id: 'https://timesheet.apps.dss.name/saml/metadata', acs_url: 'https://timesheet.apps.dss.name/saml/acs',
-    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['time-user', 'time-approver'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: null, secret_ref: 'apps/timesheet/signing-key' },
+    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['time-user', 'time-approver'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/timesheet/signing-key' },
   { id: 'learnup', name: 'LearnUp', description: 'Training (fictional): catalogue, enrolment, progress. Signs in with OpenID Connect.', protocol: 'oidc', enabled: true,
     redirect_uris: ['http://localhost:3000/learnup/auth/callback', 'https://iam-demo-apps.onrender.com/learnup/auth/callback', 'https://learnup.apps.dss.name/auth/callback'], entity_id: null, acs_url: null,
-    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['learner', 'trainer'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: 'https://learnup.apps.dss.name/', secret_ref: 'apps/learnup/client-secret' },
+    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['learner', 'trainer'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email', 'roles'], allow_refresh_tokens: false, launch_url: 'https://learnup.apps.dss.name/', secret_ref: 'apps/learnup/client-secret' },
   { id: 'travelops', name: 'TravelOps', description: 'Travel (fictional): requests, approval, booking. Signs in with SAML 2.0.', protocol: 'saml', enabled: true,
     redirect_uris: [], entity_id: 'https://travelops.apps.dss.name/saml/metadata', acs_url: 'https://travelops.apps.dss.name/saml/acs',
-    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['traveler', 'travel-approver'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: null, secret_ref: 'apps/travelops/signing-key' },
+    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['traveler', 'travel-approver'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/travelops/signing-key' },
   { id: 'sso-config-oidc', name: 'SSO Config: OIDC', description: 'Guided OpenID Connect configuration (fictional): discovery, endpoints, test sign-in. Signs in with OpenID Connect.', protocol: 'oidc', enabled: true,
     redirect_uris: ['http://localhost:3000/sso-config-oidc/auth/callback', 'https://iam-demo-apps.onrender.com/sso-config-oidc/auth/callback', 'https://sso-config-oidc.apps.dss.name/auth/callback'], entity_id: null, acs_url: null,
-    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['employee'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: 'https://sso-config-oidc.apps.dss.name/', secret_ref: 'apps/sso-config-oidc/client-secret' },
+    attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', department: 'department', roles: 'roles' }, allowed_roles: ['employee'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email', 'roles', 'offline_access'], allow_refresh_tokens: true, launch_url: 'https://sso-config-oidc.apps.dss.name/', secret_ref: 'apps/sso-config-oidc/client-secret' },
   { id: 'sso-config-saml', name: 'SSO Config: SAML', description: 'Guided SAML 2.0 configuration (fictional): IdP/SP metadata, attribute mapping, test sign-in. Signs in with SAML 2.0.', protocol: 'saml', enabled: true,
     redirect_uris: [], entity_id: 'https://sso-config-saml.apps.dss.name/saml/metadata', acs_url: 'https://sso-config-saml.apps.dss.name/saml/acs',
-    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['employee'], sp_certificate: null, want_signed_requests: false, nameid_format: null, launch_url: null, secret_ref: 'apps/sso-config-saml/signing-key' },
+    attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['employee'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/sso-config-saml/signing-key' },
 ];
 
 // No bus hooks: the plugin serves its registry through the engine the core adapter wires.

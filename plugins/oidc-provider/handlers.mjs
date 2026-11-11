@@ -107,7 +107,9 @@ export function createOidcEngine(deps) {
     let secret;
     if (a.secret_ref) { try { const s = await deps.secretGet(a.secret_ref); secret = s?.client_secret ?? s?.value; } catch (e) { warn(`secret of ${a.id} unreadable: ${e.message}`); } }
     return {
-      client_id: a.id, client_name: a.name, redirect_uris: a.redirect_uris, response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'],
+      client_id: a.id, client_name: a.name, redirect_uris: a.redirect_uris, response_types: ['code'], grant_types: ['authorization_code', ...(a.allow_refresh_tokens === false ? [] : ['refresh_token'])],
+      // the scopes this application may ask for: a request beyond the list is refused with invalid_scope
+      scope: ['openid', ...(Array.isArray(a.scopes) ? a.scopes : ['profile', 'email', 'roles'])].join(' '),
       // without a readable secret the application is a public client: it must use PKCE (always required here anyway)
       token_endpoint_auth_method: secret ? 'client_secret_basic' : 'none', ...(secret ? { client_secret: secret } : {}), application_type: 'web',
     };
@@ -156,10 +158,12 @@ export function createOidcEngine(deps) {
     const app = (await deps.liveApps(t)).find((x) => x.id === i.params.client_id); if (!app) throw new NotFoundException('unknown application');
     return { p, i, app };
   }
+  /** The scopes an application may receive: openid plus its configured list; an unconfigured (older) application keeps the profile scopes. */
+  const appScopes = (a) => new Set(['openid', ...(Array.isArray(a.scopes) ? a.scopes : ['profile', 'email', 'roles'])]);
   /** What the console shows after the user signed in: which application asks for what, and whether the user may open it. */
   async function details(t, uid, sub, req) {
     const { i, app } = await interaction(t, uid, req); const u = await deps.directoryUser(t, sub);
-    const scopes = String(i.params.scope ?? '').split(' ').filter((s) => SCOPES.includes(s));
+    const scopes = String(i.params.scope ?? '').split(' ').filter((s) => SCOPES.includes(s) && appScopes(app).has(s));
     return { app: { id: app.id, name: app.name, description: app.description }, scopes, user: { sub, name: u?.display_name || sub }, allowed: mayOpen(app, u) };
   }
   /** The signed-in user answers. Returns where the browser must go next (the library resumes the authorization request there). */
@@ -170,7 +174,7 @@ export function createOidcEngine(deps) {
     if (!mayOpen(app, u)) return deny('access_denied', 'not-allowed');
     if (decision === 'deny') return deny('access_denied', 'user-declined');
     const grant = new p.provider.Grant({ accountId: sub, clientId: app.id });
-    grant.addOIDCScope(String(i.params.scope ?? 'openid').split(' ').filter((s) => SCOPES.includes(s)).join(' ') || 'openid');
+    grant.addOIDCScope(String(i.params.scope ?? 'openid').split(' ').filter((s) => SCOPES.includes(s) && appScopes(app).has(s)).join(' ') || 'openid');
     const grantId = await grant.save();
     i.result = { login: { accountId: sub, remember: false }, consent: { grantId } };
     await i.save(i.exp - Math.floor(Date.now() / 1000));

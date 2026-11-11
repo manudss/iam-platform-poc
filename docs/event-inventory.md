@@ -31,13 +31,13 @@ Production code: 40 points. Test code: 84 points.
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:375 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:379 |
-| plugin deps.emit (durable app event) | emitter | app.registered | plugins/app-connector/handlers.mjs:98 |
-| plugin deps.emit (durable app event) | emitter | app.updated | plugins/app-connector/handlers.mjs:104 |
-| plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:110 |
+| plugin deps.emit (durable app event) | emitter | app.registered | plugins/app-connector/handlers.mjs:111 |
+| plugin deps.emit (durable app event) | emitter | app.updated | plugins/app-connector/handlers.mjs:117 |
+| plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:123 |
 | plugin deps.emit (durable app event) | emitter | signup.requested | plugins/directory/signup.mjs:74 |
 | plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:91 |
-| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/oidc-provider/handlers.mjs:169 |
-| plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/oidc-provider/handlers.mjs:177 |
+| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/oidc-provider/handlers.mjs:173 |
+| plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/oidc-provider/handlers.mjs:181 |
 | plugin deps.emit (durable app event) | emitter | organization.member-added | plugins/organizations/handlers.mjs:72 |
 | plugin deps.emit (durable app event) | emitter | policy.changed | plugins/policy-studio/handlers.mjs:122 |
 | plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:171 |
@@ -47,7 +47,7 @@ Production code: 40 points. Test code: 84 points.
 | plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/saml-idp/handlers.mjs:232 |
 | plugin deps.emit (durable app event) | emitter | sso.assertion.issued | plugins/saml-idp/handlers.mjs:255 |
 | plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/saml-idp/handlers.mjs:256 |
-| plugin oidc/saml provider event hook | listener | - | plugins/oidc-provider/handlers.mjs:139 |
+| plugin oidc/saml provider event hook | listener | - | plugins/oidc-provider/handlers.mjs:141 |
 | plugins.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/mail/mail-templates.ts:186 |
