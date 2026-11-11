@@ -77,4 +77,15 @@ test('without a secret-store key the demonstration signing key is stable across 
   const privateCert=await certOf(privateDeployment,'iam.example.test');
   assert.equal(privateCert,own.certPem.replace(/-----[^-]+-----/g,'').replace(/\s/g,''),'the secret-store key is served');
   assert.notEqual(privateCert,prodCert,'and it is not the demonstration key');
+
+  // So does a key carried by the environment (PEMs pasted single-line with escaped newlines included).
+  const envKey=selfSignedCert('Fictional env deployment');
+  const envDeployment=createSamlEngine({ ...deps(),env:{ IAM_SAML_SIGNING_CERT:envKey.certPem.replace(/\n/g,'\\n'),IAM_SAML_SIGNING_PRIVATE_KEY:envKey.privateKeyPem.replace(/\n/g,'\\n') } });
+  const envCert=await certOf(envDeployment,'iam-env.example.test');
+  assert.equal(envCert,envKey.certPem.replace(/-----[^-]+-----/g,'').replace(/\s/g,''),'the environment key is served');
+  assert.notEqual(envCert,prodCert,'and it is not the demonstration key');
+
+  // Precedence: the secret store beats the environment.
+  const both=createSamlEngine({ ...deps(),secretGet:async()=>({cert:own.certPem,privateKey:own.privateKeyPem}),env:{ IAM_SAML_SIGNING_CERT:envKey.certPem,IAM_SAML_SIGNING_PRIVATE_KEY:envKey.privateKeyPem } });
+  assert.equal(await certOf(both,'iam-both.example.test'),own.certPem.replace(/-----[^-]+-----/g,'').replace(/\s/g,''),'the secret store wins over the environment');
 });

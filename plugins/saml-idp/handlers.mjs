@@ -113,11 +113,21 @@ export function createSamlEngine(deps) {
   }
   async function active(t) { return (await deps.pluginActive(t, SAML_PLUGIN)) && (await deps.pluginActive(t, 'app-connector')); }
 
-  /** Signing key: from the secret store (`sso/<tenant>/saml-signing-key`, fields `cert` and `privateKey`, PEM) so it survives restarts; else the committed DEMONSTRATION key (demo-key.mjs), stable across restarts, redeploys and preview environments so the demo applications keep trusting the metadata they fetched. */
+  /** Signing key, first match wins: the secret store (`sso/<tenant>/saml-signing-key`, fields `cert` and
+   * `privateKey`, PEM); the environment (`IAM_SAML_SIGNING_CERT` + `IAM_SAML_SIGNING_PRIVATE_KEY`, PEM, a
+   * private per-deployment key without any secret-store setup - single-line values with escaped \n are
+   * accepted, as dashboards usually paste PEMs that way); else the committed DEMONSTRATION key (demo-key.mjs),
+   * stable across restarts, redeploys and preview environments so the demo applications keep trusting the
+   * metadata they fetched. */
   async function keyMaterial(t) {
     let k = keys.get(t); if (k) return k;
     try { const s = await deps.secretGet(`sso/${t}/saml-signing-key`); if (s?.cert && s?.privateKey) k = { certPem: String(s.cert), privateKeyPem: String(s.privateKey) }; } catch (e) { warn(`signing key not read from the secret store: ${e.message}`); }
-    if (!k) { k = { certPem: DEMO_SAML_IDP_CERT_PEM, privateKeyPem: DEMO_SAML_IDP_PRIVATE_KEY_PEM }; warn(`saml-idp: no signing key in the secret store for ${t}, using the committed DEMONSTRATION key (anyone can sign as this demo IdP); configure sso/${t}/saml-signing-key in the secret store for a private, per-deployment key`); }
+    if (!k) {
+      const pem = (v) => String(v ?? '').replace(/\\n/g, '\n');
+      const cert = pem(env.IAM_SAML_SIGNING_CERT), privateKey = pem(env.IAM_SAML_SIGNING_PRIVATE_KEY);
+      if (cert.includes('BEGIN CERTIFICATE') && privateKey.includes('BEGIN') && privateKey.includes('PRIVATE KEY')) k = { certPem: cert, privateKeyPem: privateKey };
+    }
+    if (!k) { k = { certPem: DEMO_SAML_IDP_CERT_PEM, privateKeyPem: DEMO_SAML_IDP_PRIVATE_KEY_PEM }; warn(`saml-idp: no signing key in the secret store or the environment for ${t}, using the committed DEMONSTRATION key (anyone can sign as this demo IdP); configure sso/${t}/saml-signing-key in the secret store or IAM_SAML_SIGNING_CERT + IAM_SAML_SIGNING_PRIVATE_KEY for a private, per-deployment key`); }
     keys.set(t, k); return k;
   }
   /** The IdP entity. `wantSigned` makes signed AuthnRequests mandatory for the application being served
