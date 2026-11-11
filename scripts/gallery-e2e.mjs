@@ -19,6 +19,15 @@ try {
   await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]'); await page.locator('nav a[data-nav="/"]').click(); await page.waitForSelector('.lp-card');
   assert.ok(await page.locator('.lp-card').count()>=10);
   assert.equal(await page.getByText('Open with SSO',{exact:false}).count(),0);
+  // Launching opens a new tab, never replaces the launchpad, and stays keyboard reachable.
+  const launch = await page.locator('.lp-launch').evaluateAll(xs=>xs.map(x=>({target:x.getAttribute('target'),rel:x.getAttribute('rel'),tabIndex:x.tabIndex})));
+  assert.ok(launch.length>=10);
+  for (const l of launch) { assert.equal(l.target,'_blank'); assert.ok(l.rel.includes('noopener')); assert.ok(l.rel.includes('noreferrer')); assert.equal(l.tabIndex,0); }
+  const popup = page.waitForEvent('popup',{timeout:5000}).catch(()=>null);
+  await page.locator('.lp-launch').first().focus(); await page.keyboard.press('Enter');
+  const tab = await popup; assert.ok(tab,'Enter on a launch link opens a popup tab');
+  assert.equal(page.url().startsWith(base),true,'launchpad stays in the current tab'); await tab.close();
+  await page.waitForSelector('.lp-card');
   await page.waitForFunction(()=>[...document.querySelectorAll('.lp-logo')].filter(x=>x.tagName==='IMG').every(x=>x.complete&&x.naturalWidth>0));
   const favourite=page.locator('[data-app=peoplehub] .lp-star');
   await favourite.click(); await page.waitForFunction(()=>document.querySelector('[aria-label=Favourites] [data-app=peoplehub]'));

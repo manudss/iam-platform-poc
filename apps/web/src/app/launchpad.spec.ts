@@ -20,6 +20,11 @@ describe('launchpad (the signed-in home)', () => {
     const cards = [...el.querySelectorAll('.lp-card')]; expect(cards.length).toBe(2);
     expect(el.querySelector('[data-app="peoplehub"] a')?.getAttribute('href')).toBe(APPS[0].url);
     expect(el.querySelector('[data-app="expenseflow"] a')?.getAttribute('href')).toBe(APPS[1].url);
+    for (const link of el.querySelectorAll('.lp-launch')) {
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+      expect(link.getAttribute('aria-label')).toContain('opens in a new tab');
+    }
     expect(el.textContent).not.toContain('Open with SSO');
     expect(el.querySelectorAll('.lp-star').length).toBe(2);
   });

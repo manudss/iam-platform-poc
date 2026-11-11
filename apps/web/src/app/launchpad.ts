@@ -44,7 +44,7 @@ const LAUNCHPAD_KEY = makeStateKey<{ user?: { name?: string }; apps?: LaunchpadA
       <div class="lp-grid" [class.lp-editing]="editing()">
       @for (a of section.apps; track a.id; let first = $first; let last = $last) {
         <article class="lp-card" [attr.data-app]="a.id" [class.lp-dragging]="dragging()===a.id">
-          @if (!editing()) { <a class="lp-launch" [href]="a.url" [attr.aria-label]="'Open ' + a.name"><span class="lp-sr">Open {{a.name}}</span></a> }
+          @if (!editing()) { <a class="lp-launch" [href]="a.url" target="_blank" rel="noopener noreferrer" [attr.aria-label]="'Open ' + a.name + ' (opens in a new tab)'"><span class="lp-sr">Open {{a.name}} (opens in a new tab)</span></a> }
           <button class="lp-star secondary" [attr.aria-label]="(favourite(a.id) ? 'Remove ' : 'Add ') + a.name + (favourite(a.id) ? ' from favourites' : ' to favourites')" [attr.aria-pressed]="favourite(a.id)" [disabled]="busy()" (click)="toggle(a)">{{favourite(a.id) ? '★' : '☆'}}</button>
           <div class="lp-head">
             @if (a.logo && !failedImages().includes(a.id)) { <img class="lp-logo" [src]="a.logo" alt="" (error)="imageFailed(a.id)" /> }
