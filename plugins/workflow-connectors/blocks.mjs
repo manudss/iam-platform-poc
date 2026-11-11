@@ -88,7 +88,11 @@ const httpRequest = {
       timeout: Math.min(30, Math.max(1, Number(cfg.timeout ?? 10) || 10)),
     };
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(out.method)) bad('http-request.method: GET, POST, PUT, PATCH or DELETE');
-    if (out.headers && !out.headers.includes('{{')) { try { JSON.parse(out.headers); } catch { bad('http-request.headers: a JSON object (or placeholders)'); } }
+    if (out.headers && !out.headers.includes('{{')) {
+      let headers; try { headers = JSON.parse(out.headers); } catch { bad('http-request.headers: a JSON object'); }
+      if (!headers || typeof headers !== 'object' || Array.isArray(headers) || Object.values(headers).some(v => typeof v !== 'string')) bad('HTTP headers must be a string-valued object');
+      if (Object.keys(headers).some(k => /^(authorization|cookie|host|proxy-authorization|x-api-key)$/i.test(k))) bad('credentials must come from the managed connection');
+    }
     if (!out.url.includes('{{')) guardUrl(out.url, {}, false);
     return out;
   },
@@ -104,7 +108,7 @@ const httpRequest = {
     }
     if (ctx.settings.httpConnectionBase) {
       if (!withinConnection(ctx.settings.httpConnectionBase, url)) bad('HTTP URL is outside the selected connection');
-      if (Object.keys(headers).some(k => /^(authorization|cookie|host|proxy-authorization)$/i.test(k))) bad('credentials must come from the managed connection');
+      if (Object.keys(headers).some(k => /^(authorization|cookie|host|proxy-authorization|x-api-key)$/i.test(k))) bad('credentials must come from the managed connection');
       if (ctx.settings.httpConnectionToken) headers.Authorization = `Bearer ${ctx.settings.httpConnectionToken}`;
     }
     const result = await safeHttp(url, { method: c.method, headers, body: c.body || '', timeout: c.timeout * 1000 });

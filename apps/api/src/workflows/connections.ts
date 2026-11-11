@@ -26,10 +26,12 @@ export function validateConnection(body: Record<string, unknown>) {
     if (provider === 'jira' && url.pathname !== '/') throw new BadRequestException('Jira URL must be its site origin');
     config[provider === 'jira' ? 'instanceUrl' : 'baseUrl'] = url.toString();
   }
+  if (provider === 'jira' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.email ?? '')) throw new BadRequestException('Jira account email required');
+  if (provider === 'google-sheets' && config.sheetId && !/^\d{1,12}$/.test(config.sheetId)) throw new BadRequestException('sheet ID must be numeric');
   if (body.secret !== undefined && (typeof body.secret !== 'string' || !body.secret || body.secret.length > 20000)) throw new BadRequestException('invalid write-only secret');
   if (provider === 'google-sheets' && body.secret) {
     let key: Record<string, unknown>; try { key = JSON.parse(String(body.secret)); } catch { throw new BadRequestException('service account must be JSON'); }
-    if (key.type !== 'service_account' || typeof key.client_email !== 'string' || !key.client_email.endsWith('.gserviceaccount.com') || typeof key.private_key !== 'string' || !key.private_key.includes('PRIVATE KEY') || !['https://oauth2.googleapis.com/token', 'https://accounts.google.com/o/oauth2/token'].includes(String(key.token_uri))) throw new BadRequestException('invalid Google service-account fields');
+    if ((key.universe_domain !== undefined && key.universe_domain !== 'googleapis.com') || key.type !== 'service_account' || typeof key.client_email !== 'string' || !key.client_email.endsWith('.gserviceaccount.com') || typeof key.private_key !== 'string' || !key.private_key.includes('PRIVATE KEY') || !['https://oauth2.googleapis.com/token', 'https://accounts.google.com/o/oauth2/token'].includes(String(key.token_uri))) throw new BadRequestException('invalid Google service-account fields');
   }
   return { name, provider, config, secret: body.secret as string | undefined };
 }

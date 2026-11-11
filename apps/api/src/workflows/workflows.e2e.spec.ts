@@ -415,6 +415,24 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(!all2.templates.some((t) => t.id === t1.template.id), 'the deleted template leaves the gallery');
     await ok('DELETE', `/workflows/${def.definition.id}`);
   });
+  it('connection CRUD and draft probes stay behind tenant/auth/admin and never reveal credentials', async()=>{
+    for(const [method,path,body] of [['GET','/workflow-connections',undefined],['POST','/workflow-connections/probe',{name:'API',provider:'http',config:{baseUrl:'https://127.0.0.1'}}]] as const) {
+      assert.equal((await call(method,path,body,{token:null})).status,401);
+      assert.equal((await call(method,path,body,{admin:null})).status,403);
+      assert.equal((await call(method,path,body,{token:'another:demo-alice'})).status,403);
+    }
+    const create=await ok('POST','/workflow-connections',{name:'Local refused',provider:'http',config:{baseUrl:'https://127.0.0.1'}}) as any;
+    assert.equal(create.connection.secretConfigured,false);assert.ok(!JSON.stringify(create).includes('secretRef'));
+    const probe=await ok('POST','/workflow-connections/probe',{name:'Unsaved',provider:'http',config:{baseUrl:'https://127.0.0.1'},secret:'FICTIONAL-PROBE-SECRET'}) as any;
+    assert.equal(probe.status,'Failed');assert.equal(probe.readOnly,true);assert.ok(!JSON.stringify(probe).includes('FICTIONAL'));
+    const list=await ok('GET','/workflow-connections') as any;assert.equal(list.connections.filter((c:any)=>c.name==='Unsaved').length,0);
+    assert.equal((await call('POST','/workflow-connections',{name:'Fail closed',provider:'jira',config:{instanceUrl:'https://team.atlassian.net',email:'test@example.invalid'},secret:'FICTIONAL-PROBE-SECRET'})).status,503);
+    await ok('PUT',`/workflow-connections/${create.connection.id}`,{name:'Edited',provider:'http',config:{baseUrl:'https://127.0.0.1/api'}});
+    const checked=await ok('POST',`/workflow-connections/${create.connection.id}/test`) as any;assert.equal(checked.status,'Failed');assert.equal(checked.readOnly,true);
+    await ok('DELETE',`/workflow-connections/${create.connection.id}`);
+    assert.equal((await call('POST',`/workflow-connections/${create.connection.id}/test`)).status,404);
+  });
+
 });
 
 let testBus: TestBus | undefined;
