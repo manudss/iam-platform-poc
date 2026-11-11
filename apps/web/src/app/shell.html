@@ -1,4 +1,4 @@
-<div class="layout" [class.open]="menu()">
+<div class="layout" [class.workflow-workbench]="workflowEditor()" [class.open]="menu()">
   <aside class="side" aria-label="Main navigation">
     <div class="brand"><app-brand [forceDark]="true" /></div>
     <nav>
@@ -51,7 +51,7 @@
       @if(review();as r){<div class="panel review" id="review-panel"><h3>Apply {{r.branch}} to main</h3><ul>@for(t of r.diff?.tables??[];track t.table){<li>{{t.table}} · {{t.kind}}@if(t.rows){ · <span class="rowc">+{{t.rows.added}} ~{{t.rows.modified}} -{{t.rows.removed}}</span>}</li>}@empty{<li>No new data changes. Apply can retry a failed permission activation.</li>}</ul>@if(r.diff?.rows;as n){<p class="hint" id="review-rows"><b>{{n.total}}</b> row{{n.total===1?'':'s'}} changed (+{{n.added}} added, ~{{n.modified}} modified, -{{n.removed}} removed). <a routerLink="/review" id="review-full" (click)="review.set(null)">Open the full diff</a></p>}<button id="workspace-apply" (click)="apply()" [disabled]="workingBusy()">Apply to main</button><button class="secondary" (click)="review.set(null)">Cancel</button></div>}
     }
     @if (s.testBranch()) {<section class="test-bar" aria-label="Branch test"><span>Testing data branch <b>{{ s.testBranch() }}</b> - sign-in and the whole app use its unpublished data and settings. Nothing here changes main.</span><button type="button" class="secondary" id="exit-test" (click)="exitTest()">Exit test</button></section>}
-    @if (s.message()) { <p class="msg bar" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
+    @if (s.message() && (!workflowEditor() || s.tone() === 'error')) { <p class="msg bar" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
     <main class="content">@if(s.branch() || !isAdmin()){@for(epoch of [s.branchEpoch()];track epoch){<router-outlet />}}@else{<section class="card"><h3>Choose your working branch</h3><p>Select an existing branch above, or create one from main. No administration data is edited until you choose.</p></section>}</main>
   </div>
 </div>

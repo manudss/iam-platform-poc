@@ -1,4 +1,4 @@
-import { Component, Injectable, inject, signal } from '@angular/core';
+import { Component, Injectable, inject, input, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 
 /** One open object in the workflows workbench: a workflow being edited or a run being watched. */
@@ -77,12 +77,13 @@ export class WbTabs {
 <div class="wbt-bar" role="tablist">
   @for (t of tabs.tabs(); track t.kind + ':' + t.id) {
     <a class="wbt-tab" role="tab" [class.current]="tabs.isActive(t)" [routerLink]="tabs.urlOf(t)">
-      <span class="wbt-ico" aria-hidden="true">{{t.kind === 'run' ? '▶' : '✎'}}</span><span class="wbt-label">{{t.label}}</span><button class="wbt-x" (click)="tabs.close(t, $event)" [attr.aria-label]="'Close ' + t.label" title="Close">×</button>
+      <span class="wbt-ico" aria-hidden="true">{{t.kind === 'run' ? '▶' : '✎'}}</span><span class="wbt-label">{{t.label}}</span>@if (t.kind === 'workflow' && dirtyId() === t.id) {<span class="wbt-dirty" aria-label="Unsaved changes">●</span>}<button class="wbt-x" (click)="tabs.close(t, $event)" [attr.aria-label]="'Close ' + t.label" title="Close">×</button>
     </a>
   }
   <a class="wbt-tab wbt-add" routerLink="/workflows" title="Open a workflow from the list">+</a>
 </div>
 ` })
 export class WbTabsBar {
+  readonly dirtyId = input('');
   protected readonly tabs = inject(WbTabs);
 }

@@ -1,4 +1,4 @@
-import { Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, OnDestroy, OnInit, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Connection, Edge, MiniMapComponent, Node, Vflow, VflowComponent } from 'ngx-vflow';
@@ -23,7 +23,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 // canvas with minimap / zoom / insert-on-link, right config drawer (Settings / Input / Output), bottom
 // status bar with live validation, and a test bar that runs the graph on a disposable branch. ----
 
-@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrl: '../pages.css', styles: [
+@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrls: ['../pages.css', './editor-workbench.css'], styles: [
   '.wb-active { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 600; } .wb-active.paused { color: var(--bad); }',
   '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
   '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
@@ -35,12 +35,89 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 ], template: `
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="wb">
-  <app-wb-tabs />
-  <div class="wb-top card">
+  <div class="wb-top">
     <a class="btn secondary" routerLink="/workflows" title="Back to the list">←</a>
     <input class="wb-name" name="wfName" [(ngModel)]="name" maxlength="80" placeholder="Workflow name" aria-label="Workflow name" />
-    <details class="wb-trigger"><summary>Start trigger: {{triggerEvent() ? triggerLabel() : 'manual'}}</summary>
-      <div class="wb-trigger-body">
+    <span class="wb-branch" [title]="s.branch()">⑂ {{s.branch() || 'main'}}</span>
+    <span class="spacer"></span>
+    <label class="wb-active" [class.paused]="!active"><input type="checkbox" role="switch" name="wfActive" [(ngModel)]="active" /> Active</label>
+    <button class="secondary wb-export" (click)="exportDef()">↓ Export</button>
+    <button (click)="save()" [disabled]="busy() || errorCount() > 0">Save</button>
+    <button class="wb-test-toggle" (click)="testOpen.set(!testOpen())" [attr.aria-expanded]="testOpen()">▶ Test run</button>
+    <details class="wb-tools"><summary aria-label="More workflow actions">⋯</summary><div class="wb-tools-body">
+      <label>Description<input class="wb-desc" name="wfDesc" [(ngModel)]="description" maxlength="500" /></label>
+      <label>Tags<input class="wb-tags" name="wfTags" [(ngModel)]="tags" maxlength="200" placeholder="Tags (comma-separated)" aria-label="Tags, comma-separated" /></label>
+    <button class="secondary" (click)="undo()" [disabled]="!undoStack.length" title="Undo (Ctrl+Z)">↺</button>
+    <button class="secondary" (click)="redo()" [disabled]="!redoStack.length" title="Redo (Ctrl+Shift+Z)">↻</button>
+    <button class="secondary" (click)="copySelection()" [disabled]="!selectedIds().length" title="Copy selection (Ctrl+C)">Copy</button>
+    <button class="secondary" (click)="paste()" [disabled]="!clipboard.nodes.length" title="Paste (Ctrl+V)">Paste</button>
+    <button class="secondary" (click)="doAutoLayout()" title="Re-arrange the graph left to right">Auto-layout</button>
+    <button class="secondary" (click)="exportDef()" title="Download the definition as JSON">Export</button>
+    <label class="btn secondary wb-import" title="Load a definition JSON into the canvas">Import<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
+    @if (id !== 'new') {<button class="secondary" (click)="duplicateWorkflow()" [disabled]="busy()">Duplicate</button>}
+    <button class="secondary" (click)="openSaveTpl()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save the current canvas as a gallery template'">Save as template</button>
+    </div></details>
+  </div>
+  <app-wb-tabs [dirtyId]="dirty() ? id : ''" />
+  <div class="wb-mobile-tools"><button class="secondary" (click)="mobilePanel.set(mobilePanel() === 'blocks' ? 'canvas' : 'blocks')" [attr.aria-expanded]="mobilePanel() === 'blocks'">☰ Blocks</button><button class="secondary" (click)="openTrigger()">ϟ Trigger</button><button class="secondary" (click)="mobilePanel.set(mobilePanel() === 'settings' ? 'canvas' : 'settings')" [attr.aria-expanded]="mobilePanel() === 'settings'">⚙ Settings</button></div>
+  <div class="wb-main" [attr.data-panel]="mobilePanel()">
+    <aside class="wb-rail" aria-label="Block palette">
+      <button class="secondary wb-panel-close" (click)="mobilePanel.set('canvas')">Close blocks</button>
+      <input name="paletteSearch" [(ngModel)]="paletteQuery" placeholder="Search blocks…" aria-label="Search blocks" />
+      <p class="hint wb-palette-hint">Click or drag to add. Use + on a link to insert.</p>
+      <div class="wf-family">Triggers <span>2</span></div>
+      <button class="secondary wf-pal wf-pal-trigger" (click)="openTrigger()"><span class="wb-pal-icon">◷</span><span><b>Schedule</b><small>cron · Europe/Paris</small></span><small class="wb-pal-category">TRIG</small></button>
+      <button class="secondary wf-pal wf-pal-trigger" (click)="openTrigger()"><span class="wb-pal-icon">ϟ</span><span><b>App event / Webhook</b><small>Configure the start trigger</small></span><small class="wb-pal-category">TRIG</small></button>
+      @for (g of palette(); track g.family) {<div class="wf-family">{{g.family}} <span>{{g.blocks.length}}</span></div>
+        @for (t of g.blocks; track t.type) {<button class="secondary wf-pal" draggable="true" (dragstart)="onPaletteDrag($event, t.type)" (click)="addNode(t.type); mobilePanel.set('canvas')" [title]="t.description"><span class="wb-pal-icon" [attr.data-category]="categoryOf(t)">{{blockIcon(t.type)}}</span><span class="wb-pal-copy"><b>{{paletteLabel(t.label)}}</b><small>{{t.description}}</small></span><small class="wb-pal-category" [attr.data-category]="categoryOf(t)">{{categoryLabel(categoryOf(t))}}</small></button>}
+      }
+      <details class="wb-samples"><summary>Samples</summary>
+      @for (sm of samples; track sm.name) {<button class="secondary wf-pal" (click)="loadSample(sm)">{{sm.name}}</button>}</details>
+    </aside>
+
+    <div class="wb-canvas" (dragover)="$event.preventDefault()" (drop)="onCanvasDrop($event)">
+      <vflow [nodes]="allNodes()" [edges]="allEdges()" [view]="'auto'" [minZoom]="0.3" [maxZoom]="1.8" [background]="{ type: 'dots', gap: 22, size: 1.5, color: 'var(--line)', backgroundColor: 'var(--bg)' }"
+             [keyboardShortcuts]="{ multiSelection: ['Shift', 'Control', 'Meta'] }" [selectionBox]="{ mode: 'partial' }"
+             (connect)="onConnect($event)" (componentNodeEvent)="noop($event)">
+        <ng-template edgeLabelHtml let-ctx>
+          <div class="wb-edge" (click)="$event.stopPropagation()" (mousedown)="$event.stopPropagation()">
+            @if (labelChoices(ctx.edge).length > 1 || edgeLabelOf(ctx.edge)) {
+              <select class="wb-edge-label" [attr.aria-label]="'Branch of link ' + ctx.edge.id" [ngModel]="edgeLabelOf(ctx.edge) ?? ''" (ngModelChange)="setEdgeLabel(ctx.edge.id, $event)" (click)="$event.stopPropagation()">
+                @for (c of labelChoices(ctx.edge); track c.value) {<option [value]="c.value">{{c.text}}</option>}
+              </select>
+            }
+            <button class="wb-edge-add" title="Insert a block on this link" (click)="openInsert(ctx.edge); $event.stopPropagation()">+</button>
+          </div>
+        </ng-template>
+        <mini-map position="bottom-left" [maskColor]="'var(--panel)'" [strokeColor]="'var(--line)'" [scaleOnHover]="false" />
+      </vflow>
+      <button class="wb-trigger-edit secondary" (click)="openTrigger()" [attr.aria-expanded]="triggerSelected()">ϟ {{triggerEvent() ? triggerLabel() : 'Manual start'}} · Edit</button>
+      <div class="wb-zoom"><span aria-label="Canvas zoom">{{zoomPercent()}}%</span>
+        <button class="secondary" (click)="zoom(1.25)" title="Zoom in">+</button>
+        <button class="secondary" (click)="zoom(0.8)" title="Zoom out">−</button>
+        <button class="secondary" (click)="fitCanvas(false)" title="Fit the whole graph">Fit</button>
+      </div>
+      @if (testOpen()) {<section class="wb-test" aria-label="Test run">
+        <div class="wb-test-head"><b>Test run</b><span class="spacer"></span><button class="secondary" (click)="testOpen.set(false)" aria-label="Close test run">×</button></div>
+        <p class="hint">Business data uses a disposable branch. External connectors may make real calls: inspect their settings first.</p>
+        @if (triggerEvent() && triggerEvent() !== '__cron') {<label>Event payload (JSON)<textarea class="wb-payload" name="testPayload" rows="2" [(ngModel)]="testPayload"></textarea></label>}
+        <div class="wb-test-head"><button (click)="runTest()" [disabled]="testRunning()">{{testRunning() ? 'Running…' : 'Run test'}}</button>
+        @if (testView(); as tv) {<span class="chip" [attr.data-status]="tv.run.status">{{tv.run.status}}</span><small>{{testDuration()}}</small><progress [value]="testProgress()" max="100" aria-label="Test steps complete"></progress><a [routerLink]="['/workflows/runs']" [queryParams]="{ run: tv.run.id }">Open run</a>}
+        </div>@if (testError()) {<p class="req">{{testError()}}</p>}@if (testView()?.run?.error) {<p class="req">{{testView()!.run.error}}</p>}
+      </section>}
+      @if (insertEdge(); as ie) {<div class="wb-insert card">
+        <b>Insert a block on {{ie.source}} → {{ie.target}}</b>
+        <input name="insertSearch" [(ngModel)]="insertQuery" placeholder="Search…" aria-label="Search blocks to insert" />
+        <div class="wb-insert-list">
+        @for (t of insertBlocks(); track t.type) {<button class="secondary" (click)="insertOnEdge(t.type)">{{t.label}} <small>{{categoryLabel(categoryOf(t))}}</small></button>}
+        </div>
+        <button class="secondary" (click)="insertEdge.set(null)">Cancel</button>
+      </div>}
+    </div>
+
+    <aside class="wb-drawer" aria-label="Step inspector" (focusin)="phFocus($event)" (input)="phInput($event)" (keydown)="phKey($event)">
+      <button class="secondary wb-panel-close" (click)="mobilePanel.set('canvas')">Back to canvas</button>
+      @if (triggerSelected()) {<h3>Start trigger</h3><p class="hint">One start trigger per workflow. Configure when this graph starts.</p>      <div class="wb-trigger-fields">
       <label>Event<select name="wfTrigger" [ngModel]="triggerEvent()" (ngModelChange)="onTriggerChange($event)">
         <option value="">Manual start only</option>
         <option value="__cron">Scheduled (cron, Europe/Paris)</option>
@@ -59,92 +136,20 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
         }
       }
       </div>
-    </details>
-    <input class="wb-desc" name="wfDesc" [(ngModel)]="description" maxlength="500" placeholder="Description" aria-label="Description" />
-    <input class="wb-tags" name="wfTags" [(ngModel)]="tags" maxlength="200" placeholder="Tags (comma-separated)" aria-label="Tags, comma-separated" title="Free-form labels used to filter the list, e.g. hr, finance, spike" />
-    <span class="spacer"></span>
-    <button class="secondary" (click)="undo()" [disabled]="!undoStack.length" title="Undo (Ctrl+Z)">↺</button>
-    <button class="secondary" (click)="redo()" [disabled]="!redoStack.length" title="Redo (Ctrl+Shift+Z)">↻</button>
-    <button class="secondary" (click)="copySelection()" [disabled]="!selectedIds().length" title="Copy selection (Ctrl+C)">Copy</button>
-    <button class="secondary" (click)="paste()" [disabled]="!clipboard.nodes.length" title="Paste (Ctrl+V)">Paste</button>
-    <button class="secondary" (click)="doAutoLayout()" title="Re-arrange the graph left to right">Auto-layout</button>
-    <button class="secondary" (click)="exportDef()" title="Download the definition as JSON">Export</button>
-    <label class="btn secondary wb-import" title="Load a definition JSON into the canvas">Import<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
-    @if (id !== 'new') {<button class="secondary" (click)="duplicateWorkflow()" [disabled]="busy()">Duplicate</button>}
-    <button class="secondary" (click)="openSaveTpl()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save the current canvas as a gallery template'">Save as template</button>
-    <button class="secondary" (click)="testOpen.set(!testOpen())" [class.active-tool]="testOpen()">Test</button>
-    <label class="wb-active" [class.paused]="!active" title="A paused workflow never starts from an event; Run still works"><input type="checkbox" name="wfActive" [(ngModel)]="active" /> Active</label>
-    <button (click)="save()" [disabled]="busy() || errorCount() > 0" [title]="errorCount() ? 'Fix the validation errors first' : 'Save'">Save</button>
-  </div>
-
-  @if (testOpen()) {<div class="wb-test card">
-    <b>Test run</b><span class="hint">Runs the CURRENT canvas (unsaved changes included) with a test event. Real steps write on a disposable branch, dropped when the run ends.</span>
-    @if (triggerEvent() && triggerEvent() !== '__cron') {<label>Event payload (JSON)<textarea class="wb-payload" name="testPayload" rows="3" [(ngModel)]="testPayload"></textarea></label>}
-    <button (click)="runTest()" [disabled]="testRunning()">{{testRunning() ? 'Running…' : 'Run test'}}</button>
-    @if (testView(); as tv) {
-      <span class="chip" [attr.data-status]="tv.run.status">{{tv.run.status}}</span>
-      <small>{{tv.run.branch}} (disposable)</small>
-      @if (tv.run.error) {<span class="msg error">{{tv.run.error}}</span>}
-      <a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ run: tv.run.id }">Open the run</a>
-    }
-    @if (testError()) {<span class="msg error">{{testError()}}</span>}
-  </div>}
-
-  <div class="wb-main">
-    <aside class="wb-rail card">
-      <input name="paletteSearch" [(ngModel)]="paletteQuery" placeholder="Search blocks…" aria-label="Search blocks" />
-      <p class="hint">Drag a block onto the canvas, or click it. Draw links between handles. The + on a link inserts a block.</p>
-      @for (g of palette(); track g.family) {<div class="wf-family">{{g.family}}</div>
-        @for (t of g.blocks; track t.type) {<button class="secondary wf-pal" draggable="true" (dragstart)="onPaletteDrag($event, t.type)" (click)="addNode(t.type)"><b>{{t.label}}</b> <small>{{categoryLabel(categoryOf(t))}}</small>@if (t.provider && !t.providerActive) { <small class="req">(plugin disabled)</small>}<br /><small>{{t.description}}</small></button>}
-      }
-      <div class="wf-family">Samples</div>
-      @for (sm of samples; track sm.name) {<button class="secondary wf-pal" (click)="loadSample(sm)">{{sm.name}}</button>}
-    </aside>
-
-    <div class="wb-canvas card" (dragover)="$event.preventDefault()" (drop)="onCanvasDrop($event)">
-      <vflow [nodes]="allNodes()" [edges]="allEdges()" [view]="'auto'" [minZoom]="0.3" [maxZoom]="1.8" [background]="'var(--bg)'"
-             [keyboardShortcuts]="{ multiSelection: ['Shift', 'Control', 'Meta'] }" [selectionBox]="{ mode: 'partial' }"
-             (connect)="onConnect($event)" (componentNodeEvent)="noop($event)">
-        <ng-template edgeLabelHtml let-ctx>
-          <div class="wb-edge" (click)="$event.stopPropagation()" (mousedown)="$event.stopPropagation()">
-            @if (labelChoices(ctx.edge).length > 1 || edgeLabelOf(ctx.edge)) {
-              <select class="wb-edge-label" [attr.aria-label]="'Branch of link ' + ctx.edge.id" [ngModel]="edgeLabelOf(ctx.edge) ?? ''" (ngModelChange)="setEdgeLabel(ctx.edge.id, $event)" (click)="$event.stopPropagation()">
-                @for (c of labelChoices(ctx.edge); track c.value) {<option [value]="c.value">{{c.text}}</option>}
-              </select>
-            }
-            <button class="wb-edge-add" title="Insert a block on this link" (click)="openInsert(ctx.edge); $event.stopPropagation()">+</button>
-          </div>
-        </ng-template>
-        <mini-map />
-      </vflow>
-      <div class="wb-zoom">
-        <button class="secondary" (click)="zoom(1.25)" title="Zoom in">+</button>
-        <button class="secondary" (click)="zoom(0.8)" title="Zoom out">−</button>
-        <button class="secondary" (click)="fitCanvas()" title="Fit the whole graph">Fit</button>
-      </div>
-      @if (insertEdge(); as ie) {<div class="wb-insert card">
-        <b>Insert a block on {{ie.source}} → {{ie.target}}</b>
-        <input name="insertSearch" [(ngModel)]="insertQuery" placeholder="Search…" aria-label="Search blocks to insert" />
-        <div class="wb-insert-list">
-        @for (t of insertBlocks(); track t.type) {<button class="secondary" (click)="insertOnEdge(t.type)">{{t.label}} <small>{{categoryLabel(categoryOf(t))}}</small></button>}
-        </div>
-        <button class="secondary" (click)="insertEdge.set(null)">Cancel</button>
-      </div>}
-    </div>
-
-    <aside class="wb-drawer card" (focusin)="phFocus($event)" (input)="phInput($event)" (keydown)="phKey($event)">
-      @if (selectedIds().length > 1) {
+<button class="secondary" (click)="triggerSelected.set(false)">Done</button>
+      } @else if (selectedIds().length > 1) {
         <h3>{{selectedIds().length}} steps selected</h3>
         <button class="secondary" (click)="copySelection()">Copy</button>
         <button class="secondary" (click)="deleteSelection()">Delete</button>
       } @else if (selectedNode(); as nid) {@if (state.get(nid); as st) {
+        <div class="wb-inspector-head"><h3>{{st.name}}</h3><small>{{categoryLabel(typeOf(st.type).category)}} · {{typeOf(st.type).label}}</small></div>
         <div class="wb-tabs">
           @for (tab of ['settings', 'input', 'output']; track tab) {<button class="wb-tab" [class.on]="drawerTab() === tab" (click)="drawerTab.set($any(tab))">{{tab === 'settings' ? 'Settings' : tab === 'input' ? 'Input' : 'Output'}}</button>}
         </div>
         @if (drawerTab() === 'settings') {
           <label>Step name<input name="stepName" [ngModel]="st.name" (ngModelChange)="rename(nid, $event)" maxlength="80" /></label>
-          <p class="hint">{{typeOf(st.type).label}} — {{typeOf(st.type).category === 'computed' ? 'COMPUTED: really runs and computes its output, but has no external effect.' : typeOf(st.type).category === 'real' ? 'REAL: data or external effect. Read the block description before running.' : 'SIMULATED: demonstrates the flow, no external effect.'}}</p>
-          @if (blockOf(st.type)?.description) {<p class="hint">{{blockOf(st.type)!.description}}</p>}
+          <details class="wb-block-help"><summary>About this block</summary><p class="hint">{{typeOf(st.type).label}} - {{typeOf(st.type).category === 'computed' ? 'COMPUTED: really runs and computes its output, but has no external effect.' : typeOf(st.type).category === 'real' ? 'REAL: data or external effect. Read the block description before running.' : 'SIMULATED: demonstrates the flow, no external effect.'}}</p>
+          @if (blockOf(st.type)?.description) {<p class="hint">{{blockOf(st.type)!.description}}</p>}</details>
           @for (f of blockOf(st.type)?.fields ?? []; track f.key) {
             @switch (f.type) {
             @case ('text') {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<textarea rows="3" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)"></textarea>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
@@ -169,6 +174,8 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
             <p class="hint">Insert a placeholder:</p>
             <div>@for (ph of placeholdersFor(nid); track ph) {<button class="ph-chip" (mousedown)="$event.preventDefault(); insertIntoField(ph)">{{ph}}</button>}</div>
           }
+          <label>On error<select name="errorRoute" [ngModel]="errorTarget(nid)" (ngModelChange)="setErrorTarget(nid, $event)"><option value="">Stop the run</option>@for (target of errorTargets(nid); track target.id) {<option [value]="target.id">Route to {{target.name}}</option>}</select><span class="hint">Uses the existing on-error link. Validation checks the resulting graph.</span></label>
+          @for (i of issuesFor(nid); track i.message) {<p class="wb-inline-issue" [class.err]="i.level === 'error'">{{i.message}}</p>}
           <div class="row"><button class="secondary" (click)="duplicateNode(nid)">Duplicate step</button> <button class="secondary" (click)="deleteNode(nid)">Delete step</button></div>
         }
         @if (drawerTab() === 'input') {
@@ -193,15 +200,17 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
     </aside>
   </div>
 
-  <div class="wb-status card">
+  <div class="wb-status">
+    <span class="wb-status-branch">⑂ {{s.branch() || 'main'}}</span>
     <span>{{state.size}} step(s), {{vfEdges().length}} link(s)</span>
     @if (errorCount()) {<span class="wb-err">{{errorCount()}} error(s)</span>}
     @if (warnCount()) {<span class="wb-warn">{{warnCount()}} warning(s)</span>}
     @if (!errorCount() && !warnCount()) {<span class="hint">Validation OK</span>}
     <span class="spacer"></span>
-    <span class="hint">Real steps write on the run branch - the merge stays a human review.</span>
+    <span class="hint wb-status-help">Business writes: run branch · external effects are not reverted by Dolt</span>
+    <span>{{blocks().length}} blocks · {{events().length}} events</span><span class="wb-saved" [class.unsaved]="dirty()">{{busy() ? 'Saving…' : dirty() ? '● Unsaved' : '● Saved'}}</span>
   </div>
-  @if (issues().length) {<div class="wb-issues card">
+  @if (issues().length) {<div class="wb-issues">
     @for (i of issues(); track i.message) {<button class="wb-issue" [class.err]="i.level === 'error'" (click)="focusIssue(i)"><b>{{i.level === 'error' ? 'Error' : 'Warning'}}</b> {{i.message}}</button>}
   </div>}
   @if (phPopup(); as pp) {
@@ -263,8 +272,9 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected palette(): { family: string; blocks: WfBlock[] }[] {
     const src: WfBlock[] = this.blocks().length ? this.blocks() : STEP_TYPES.map((t) => ({ type: t.type, family: 'Core', label: t.label, simulated: t.simulated, description: t.hint, provider: null, providerActive: true }));
     const byFamily = new Map<string, WfBlock[]>();
-    for (const b of src.filter((b) => `${b.label} ${b.family} ${b.type} ${b.description}`.toLowerCase().includes(this.paletteQuery.trim().toLowerCase()))) { const g = byFamily.get(b.family) ?? []; g.push(b); byFamily.set(b.family, g); }
-    return [...byFamily.entries()].sort((a, b) => (a[0] === 'Core' ? -1 : b[0] === 'Core' ? 1 : a[0].localeCompare(b[0]))).map(([family, blocks]) => ({ family, blocks }));
+    for (const b of src.filter((b) => `${b.label} ${b.family} ${b.type} ${b.description}`.toLowerCase().includes(this.paletteQuery.trim().toLowerCase()))) { const family = /^(if|switch|loop|merge)$/.test(b.type) ? 'Logic' : /^(assign-role|revoke-role|set-department|set-profile-field|lyam-create-user)$/.test(b.type) ? 'Data (lyam)' : /^(jira|http|google)/.test(b.type) ? 'Connectors' : b.family === 'Core' ? 'Utilities' : b.family; const g = byFamily.get(family) ?? []; g.push(b); byFamily.set(family, g); }
+    const order = ['Logic', 'Data (lyam)', 'Connectors', 'Text', 'Utilities'];
+    return [...byFamily.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([family, blocks]) => ({ family, blocks }));
   }
   protected blockOf(t: string): WfBlock | undefined { return this.blocks().find((b) => b.type === t); }
   /** Blocks offered by the insert-on-link picker (logic blocks excluded: they need branch labels, add them from the palette). */
@@ -357,42 +367,43 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     this.stateVersion.update((v) => v + 1);
   }
 
-  private fitCanvas() {
+  private fitCanvas(readable = true) {
     // Deterministic initial framing (no blind fixed timeouts): wait until the canvas is initialized and
     // every node is really measured in the DOM, fit the whole graph, then verify the visible result.
-    this.frameWhenReady(1, 0);
+    this.frameWhenReady(1, 0, readable);
   }
   private nodeRects(): DOMRect[] {
     return [...this.host.nativeElement.querySelectorAll('.wf-node')].map((el) => el.getBoundingClientRect());
   }
-  private frameWhenReady(attempt: number, waitedFrames: number) {
+  private frameWhenReady(attempt: number, waitedFrames: number, readable = true) {
     const v = this.vflow();
     const canvas = this.host.nativeElement.querySelector('vflow');
     if (!v || !canvas) return; // the page was left before the framing finished
     const rects = this.nodeRects();
     const ready = v.initialized() && canvas.clientWidth > 0 && rects.length === this.allNodes().length && rects.every((r) => r.width > 0 && r.height > 0);
     if (!ready) {
-      if (waitedFrames < 600) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt, waitedFrames + 1)));
+      if (waitedFrames < 600) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt, waitedFrames + 1, readable)));
       else v.fitView({ padding: 0.14, duration: 120 }); // last-resort best effort, same as the old behavior
       return;
     }
     v.fitView({ padding: 0.14, duration: 120 });
-    this.verifyFraming(attempt, performance.now());
+    this.verifyFraming(attempt, performance.now(), readable);
   }
-  private verifyFraming(attempt: number, fitAt: number) {
+  private verifyFraming(attempt: number, fitAt: number, readable = true) {
     const v = this.vflow();
     const canvas = this.host.nativeElement.querySelector('vflow');
     if (!v || !canvas) return;
-    if (performance.now() - fitAt < 200) { requestAnimationFrame(() => this.verifyFraming(attempt, fitAt)); return; } // let the fit animation finish and the DOM catch up
+    if (performance.now() - fitAt < 200) { requestAnimationFrame(() => this.verifyFraming(attempt, fitAt, readable)); return; } // let the fit animation finish and the DOM catch up
     if (!rectsWithin(this.nodeRects(), canvas.getBoundingClientRect())) {
       // The fit ran on stale sizes: retry from the readiness gate, bounded, until the framing is right.
-      if (attempt < 12) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt + 1, 0)));
+      if (attempt < 12) requestAnimationFrame(() => requestAnimationFrame(() => this.frameWhenReady(attempt + 1, 0, readable)));
       return;
     }
     // Fit everything first so the shape of the graph is visible; if the fit had to shrink the nodes
     // below comfortable reading size, zoom back toward 1:1 anchored on the leftmost node (the user pans).
-    const anchor = v.viewport().zoom < 0.9 ? anchorViewport(this.vfNodes()) : null;
-    if (anchor) v.viewportTo(anchor);
+    const canvasWidth = canvas.clientWidth;
+    const anchor = readable && canvasWidth < 500 && v.viewport().zoom < 0.65 ? anchorViewport(this.allNodes(), 0.65) : null;
+    if (anchor) v.viewportTo({ ...anchor, zoom: 0.65 });
   }
   protected state = new Map<string, NodeState>();
   /** Selection is tracked by the library on each entity's own `selected` signal. */
@@ -400,6 +411,26 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected selectedNode = computed(() => { const ids = this.selectedIds(); return ids.length === 1 ? ids[0] : null; });
   protected selectedEdge = computed(() => (this.selectedNode() ? null : this.vfEdges().find((e) => e.selected?.())?.id ?? null));
   private seq = 0;
+  protected readonly mobilePanel = signal<'canvas' | 'blocks' | 'settings'>('canvas');
+  protected readonly triggerSelected = signal(false);
+  private savedDefinition = '';
+  protected dirty() { return this.id === 'new' || (!this.savedDefinition || this.definitionStamp() !== this.savedDefinition); }
+  private definitionStamp() { return JSON.stringify({ name: this.name, description: this.description, tags: this.tagList(), active: this.active, trigger: this.triggerPayload(), graph: this.graph() }); }
+  protected openTrigger() { this.triggerSelected.set(true); this.mobilePanel.set('settings'); }
+  protected zoomPercent() { return Math.round((this.vflow()?.viewport().zoom ?? 1) * 100); }
+  protected paletteLabel(label: string) { return label.replace(/\s*\([^)]*\)/g, '').trim(); }
+  protected blockIcon(t: string) { return /jira/.test(t) ? 'J' : /google|sheet/.test(t) ? '▦' : /http/.test(t) ? '↗' : /if|switch/.test(t) ? '⑂' : /loop/.test(t) ? '↻' : /user|role/.test(t) ? '♙' : /text/.test(t) ? 'Aa' : '◇'; }
+  protected issuesFor(id: string) { return this.issues().filter(i => i.nodeId === id); }
+  protected errorTarget(id: string) { return this.vfEdges().find(e => e.source === id && edgeLabelOf(e) === 'error')?.target ?? ''; }
+  protected errorTargets(id: string) { return [...this.state.entries()].filter(([key]) => key !== id).map(([key, st]) => ({ id: key, name: st.name })); }
+  protected setErrorTarget(id: string, target: string) {
+    if (!this.state.has(id) || target === id || (target && !this.state.has(target)) || this.errorTarget(id) === target) return;
+    this.pushHistory();
+    this.vfEdges.update(edges => [...edges.filter(e => !(e.source === id && edgeLabelOf(e) === 'error')), ...(target ? [this.makeEdge(`${id}->${target}#error`, id, target, undefined, 'error')] : [])]);
+  }
+  protected testProgress() { const steps = this.testView()?.steps ?? []; return steps.length ? Math.round(100 * steps.filter(s => ['done', 'failed', 'skipped', 'canceled'].includes(s.status)).length / steps.length) : 0; }
+  protected testDuration() { const r = this.testView()?.run; if (!r?.started_at || !r.finished_at) return ''; const ms = Date.parse(r.finished_at) - Date.parse(r.started_at); return Number.isFinite(ms) ? `${Math.max(0, ms / 1000).toFixed(1)} s` : ''; }
+  private readonly selectionPanel = effect(() => { if (this.selectedNode()) { this.triggerSelected.set(false); this.mobilePanel.set('settings'); } });
 
   ngOnInit() {
     this.id = this.route.snapshot.paramMap.get('id') ?? 'new';
@@ -459,7 +490,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private makeNode(id: string, st: NodeState, i: number, at?: { x: number; y: number }): Node {
     return {
       id, type: WfNodeComponent,
-      data: signal<WfNodeData>({ name: st.name, category: this.typeOf(st.type).category, runStatus: this.testStatusOf(id) }),
+      data: signal<WfNodeData>({ name: st.name, category: this.typeOf(st.type).category, icon: this.blockIcon(st.type), runStatus: this.testStatusOf(id) }),
       point: signal(at ?? { x: 320 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
       selected: signal(false),
     } as Node;
@@ -717,6 +748,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       this.vfNodes.set(nodes);
       this.vfEdges.set(definition.graph.edges.map((e) => this.makeEdge(`${e.from}->${e.to}${e.label ? `#${e.label}` : ''}`, e.from, e.to, undefined, e.label)));
       this.stateVersion.update((v) => v + 1);
+      this.savedDefinition = this.definitionStamp();
       this.fitCanvas();
     } catch (e) { this.note.set((e as Error).message); }
   }
@@ -753,6 +785,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     try {
       const c = clientOf(this.s);
       const trigger = this.triggerPayload();
+      const savingStamp = this.definitionStamp();
       if (this.id === 'new') {
         const r = await c.create(this.name, this.description, this.graph(), trigger, this.active, this.tagList());
         this.tabs.replace({ kind: 'workflow', id: 'new', label: 'New workflow' }, { kind: 'workflow', id: r.definition.id, label: this.name || r.definition.id });
@@ -760,6 +793,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
         this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`);
       }
       else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active, this.tagList()); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
+      this.savedDefinition = savingStamp;
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
 
@@ -816,7 +850,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private tintNode(n: Node) {
     if (n.type !== WfNodeComponent) return;
     const st = this.state.get(n.id); if (!st) return;
-    (n.data as { set(v: WfNodeData): void } | undefined)?.set({ name: st.name, category: this.typeOf(st.type).category, runStatus: this.testStatusOf(n.id) });
+    (n.data as { set(v: WfNodeData): void } | undefined)?.set({ name: st.name, category: this.typeOf(st.type).category, icon: this.blockIcon(st.type), runStatus: this.testStatusOf(n.id) });
   }
   protected async runTest() {
     let payload: Record<string, unknown> = {};

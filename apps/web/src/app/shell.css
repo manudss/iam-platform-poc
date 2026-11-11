@@ -66,3 +66,12 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 @media (max-width: 900px) { .pop.inline { padding: .7rem 1rem; } }
 /* DOM order keeps the identity first (scripts and screen readers find it first); flex order puts it after the branch controls. */
 .who { order: 1; } .top > .secondary:last-child { order: 2; } .top > .pillwrap, .top > .icon { order: 0; }
+
+/* Direction C: editor owns its workspace; other pages keep the normal document layout. */
+.workflow-workbench{height:100dvh;min-height:0;overflow:hidden;grid-template-columns:170px minmax(0,1fr)}
+.workflow-workbench .main{height:100dvh;overflow:hidden;min-height:0}
+.workflow-workbench .top{flex:none;padding:8px 14px;min-height:49px}
+.workflow-workbench .content{flex:1;min-height:0;max-width:none;padding:0;display:flex;flex-direction:column;overflow:hidden}
+.workflow-workbench .bar{flex:none;margin:0;border-radius:0;padding:4px 12px;font-size:11px;max-height:42px;overflow:auto}
+.workflow-workbench .side{padding:12px 8px}.workflow-workbench nav a{font-size:11px;padding:6px 8px;gap:6px}.workflow-workbench .group{margin-top:16px;font-size:9px}
+@media(max-width:900px){.workflow-workbench{grid-template-columns:1fr}.workflow-workbench .side{width:230px}.workflow-workbench .top{padding:6px 8px}.workflow-workbench .top h1{font-size:12px}}

@@ -28,6 +28,7 @@ export class Shell {
 
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
+  protected workflowEditor() { return this.router.url.startsWith('/workflows/edit/'); }
   protected branches=signal<BranchInfo[]>([]);protected newBranch='';protected working='';protected review=signal<any>(null);protected workingBusy=signal(false);
   /** Compact bar state: the ⋯ menu, the "Manage branches" panel, and the number of changed ROWS on the working branch (the badge). */
   protected readonly more=signal(false);protected readonly manage=signal(false);protected readonly changes=signal<number|null>(null);
