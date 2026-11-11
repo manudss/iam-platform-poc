@@ -55,7 +55,16 @@ export class Session implements OnDestroy {
     // The render then answers with the signed-in page directly instead of bouncing to sign-in.
     const req = inject(REQUEST, { optional: true });
     if (req) { const t = sessionCookieToken(req.headers.get('cookie') ?? ''); if (t && this.api.adoptServer(t)) this.signedIn(); }
-    else if (this.api.restore()) this.signedIn(); // a visit within the token's lifetime skips a new sign-in
+  }
+  /**
+   * Browser start (an app initializer, before the first navigation, so the route guards see the session):
+   * the hosted edge re-reads the HttpOnly cookie; in local development (no edge) the localStorage copy serves.
+   */
+  async restoreSession() {
+    if (typeof window === 'undefined' || this.loggedIn()) return; // SSR already adopted the cookie token
+    const r = await this.api.restoreFromEdge();
+    if (r === 'restored') this.signedIn();
+    else if (r === 'no-edge' && this.api.restore()) this.signedIn();
   }
   readonly loggedIn = signal(false);
   readonly user = signal('');
@@ -119,7 +128,7 @@ export class Session implements OnDestroy {
 
   signOut() {
     this.expired.set(false); clearTimeout(this.expiryTimer); clearInterval(this.tick); this.timing.set(null); this.dismissed.set(false);
-    this.api.logout();this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.testBranch.set(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
+    this.api.endEdgeSession(); this.api.logout();this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.testBranch.set(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
     this.assignments.set([]); this.activations.set([]); this.adminToken.set(''); this.say('Signed out.');
   }
 

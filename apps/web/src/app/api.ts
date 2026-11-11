@@ -37,10 +37,15 @@ export interface Change { branch: string; commit: string; violations: Violation[
 
 /**
  * Thin client. /core and /api are proxied by `ng serve` (proxy.conf.json) to the Rust core (8081) and the NestJS API (3000),
- * so no CORS is needed. The token is also kept in localStorage so coming back within its lifetime skips a new sign-in (docs/session.md); it is dropped at logout and an expired one is never restored. POC prototype flow, not standard OIDC.
+ * so no CORS is needed. The durable copy of the session is the HttpOnly cookie the hosted edge sets at the token
+ * exchange (docs/session.md); the console then keeps the token in memory only. In local development (no edge) the
+ * token is kept in localStorage instead, so coming back within its lifetime skips a new sign-in; it is dropped at
+ * logout and an expired one is never restored. POC prototype flow, not standard OIDC.
  */
 export class ApiClient {
   private token = '';
+  /** True once the hosted edge answered: the session cookie is the durable copy and localStorage stays out of it. */
+  private cookieBacked = false;
   /** Counts sign-ins and sign-outs. A renewal (docs/session.md) replaces the token but keeps the same sign-in, so it does not change this. */
   private epoch = 0;
   branch = '';
@@ -60,15 +65,43 @@ export class ApiClient {
     try { const b = this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return (JSON.parse(atob(b)) as { sub?: string }).sub ?? ''; } catch { return ''; }
   }
   private static readonly STORE = 'iam.session';
-  /** Keeps the stored copy in step with the token in use (storage may be blocked: the session then lives in memory only). */
-  private persist() { try { if (this.token) localStorage.setItem(ApiClient.STORE, this.token); else localStorage.removeItem(ApiClient.STORE); } catch { /* storage blocked */ } }
+  /** Keeps the stored copy in step with the token in use, in local development only: behind the hosted edge the
+   *  HttpOnly cookie is the durable copy and the token never touches localStorage (storage may be blocked: the
+   *  session then lives in memory only). */
+  private persist() { try { if (this.cookieBacked) { localStorage.removeItem(ApiClient.STORE); return; } if (this.token) localStorage.setItem(ApiClient.STORE, this.token); else localStorage.removeItem(ApiClient.STORE); } catch { /* storage blocked */ } }
+  /** The hosted edge owns the session: no localStorage copy, and any legacy one is dropped. */
+  private markCookieBacked() { this.cookieBacked = true; try { localStorage.removeItem(ApiClient.STORE); } catch { /* storage blocked */ } }
   /** Server-side render only: adopts the token carried by the session cookie (the edge owns the durable copy,
    *  docs/session.md). Nothing is written to localStorage. True when the token was adopted. */
   adoptServer(token: string): boolean {
     this.token = token;
     if (!this.expiresAt || this.expiresAt <= Date.now()) { this.token = ''; return false; }
     this.epoch++;
+    this.markCookieBacked();
     return true;
+  }
+  /**
+   * Browser start behind the hosted edge: re-reads the session from the HttpOnly cookie (docs/session.md).
+   * 'restored' = a live session, 'no-session' = the edge is there and there is no (valid) cookie, 'no-edge' =
+   * the endpoint does not answer as the edge (local development): the caller falls back to localStorage.
+   */
+  async restoreFromEdge(): Promise<'restored' | 'no-session' | 'no-edge'> {
+    let r: Response;
+    try { r = await this.f('/session/bootstrap', { headers: { 'x-requested-with': 'XMLHttpRequest' } }); }
+    catch { return 'no-edge'; }
+    if (r.status === 401 || r.status === 403) { this.markCookieBacked(); return 'no-session'; }
+    if (!r.ok || !(r.headers.get('content-type') ?? '').includes('application/json')) return 'no-edge';
+    const t = ((await r.json().catch(() => ({}))) as { id_token?: string }).id_token;
+    if (!t) return 'no-edge';
+    this.token = t;
+    this.epoch++;
+    this.markCookieBacked();
+    return 'restored';
+  }
+  /** Ends the edge-held session cookie when there is one (best effort: the cookie dies with the token's exp anyway). */
+  endEdgeSession() {
+    if (!this.cookieBacked) return;
+    void this.f('/session/logout', { method: 'POST', headers: { 'x-requested-with': 'XMLHttpRequest' } }).catch(() => { /* best effort */ });
   }
   /** Adopts the token kept from an earlier visit while it is still valid; an expired or unreadable one is dropped. True when a token was restored. */
   restore(): boolean {
