@@ -4,6 +4,8 @@
 //   /api/*      -> 127.0.0.1:3000 (prefix stripped)
 //   /authorize*, /token, /jwks.json, /.well-known/* -> 127.0.0.1:8081 (IdP form posts relatively)
 //   /healthz    -> 200 (platform health check)
+// GET / (the guarded console home) redirects to /login, so the anonymous landing gets the server-rendered
+// sign-in page directly instead of bootstrapping the SPA and bouncing to it client-side.
 // Everything else goes to the Angular SSR server (127.0.0.1:4000): it serves the static assets and renders
 // /login server-side (the methods list is in the first HTML); the other routes stay client-rendered.
 import http from 'node:http';
@@ -49,6 +51,11 @@ const server = http.createServer(async (req, res) => {
     // answered HTML, the browser refused it as a script, and "Use my passkey" did nothing.
     if (p === '/authorize' || p.startsWith('/authorize/') || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false, undefined, signinTimeoutMs(p));
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('method not allowed'); }
+    // The console home is guarded: opening it anonymously bootstraps the SPA, bounces to /login client-side
+    // and shows "Loading the sign-in methods..." while the browser fetches the list. Redirect the first
+    // document straight to the server-rendered sign-in page so the methods list is in the first HTML.
+    // A signed-in visitor follows the same redirect: the login page routes itself back into the console.
+    if (p === '/') { res.writeHead(302, { location: `/login${url.search}` }); return res.end(); }
     // The SSR render waits for the API options; a cold Dolt can need ~30 s on the first hit, well over the default proxy timeout.
     return proxy(req, res, SSR, false, () => ({ 'cache-control': 'no-store', ...framingHeaders(p, url.search) }), 75000);
   } catch (e) {

@@ -47,7 +47,7 @@ export class Shell {
     await this.s.loadAccess();
     // Branch test: no personal branch, no workspace bar, no admin init; the app simply runs on the tested branch.
     if(this.s.testBranch()){if(!this.router.url.startsWith('/my-profile')&&!this.router.url.startsWith('/overview'))void this.router.navigateByUrl('/my-profile');return;}
-    if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();void this.loadChanges();await this.s.refreshWorkflowsEnabled();}else if(!this.router.url.startsWith('/my-profile')&&this.router.url!=='/')void this.router.navigateByUrl('/');
+    if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();void this.loadChanges();await this.s.refreshWorkflowsEnabled();}else if(!this.router.url.startsWith('/my-profile')&&this.router.url!=='/my-applications')void this.router.navigateByUrl('/my-applications');
     void this.loadPluginMenu();
   }
   /** Opens a sign-in test of the selected data branch in a new tab (docs/branch-test.md). The API issues the short-lived ticket. */
@@ -71,7 +71,7 @@ export class Shell {
     // Branch test shows the ordinary experience only: administration stays in the normal console.
     if (this.s.testBranch()) return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/overview' || i.path === '/my-profile') })).filter((g: NavGroup) => g.items.length);
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
-    const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/' || i.path === '/my-profile' || canOpen(a, screenOf(i.path))).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
+    const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-applications' || i.path === '/my-profile' || canOpen(a, screenOf(i.path))).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
     // Plugin menu entries (step 2): declared in the plugin's manifest, present only while the plugin is active.
     const pluginEntries = this.pluginMenu?.(); // test harnesses can render before the field settles: no entries = static console
     if (Array.isArray(pluginEntries)) for (const m of pluginEntries) {
@@ -93,7 +93,7 @@ export class Shell {
   protected readonly title = signal('');
   protected readonly nav = computed<NavGroup[]>(() => {
     const groups: NavGroup[] = [
-    { title: 'Overview', items: [{ path: '/', label: 'My applications', icon: '▦' }, { path: '/overview', label: 'Dashboard', icon: '◧' }] },
+    { title: 'Overview', items: [{ path: '/my-applications', label: 'My applications', icon: '▦' }, { path: '/overview', label: 'Dashboard', icon: '◧' }] },
     // Plugin screens (organizations, applications, policies, workflows, ...) are NOT here: they come from the
     // tenant's active plugins through GET /plugins/menu (step 2), grouped and ordered by their manifests.
     { title: 'Access (IAM)', items: [
