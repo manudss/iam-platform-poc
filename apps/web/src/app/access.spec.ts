@@ -12,7 +12,7 @@ describe('screen access in the console', () => {
     expect(canOpen(lucie, 'assignments')).toBe(true); expect(canOpen(lucie, 'policies')).toBe(false); expect(canOpen(lucie, 'dolt-sql')).toBe(false);
     expect(canOpen(noemie, 'dolt-branches')).toBe(true); expect(canOpen(noemie, 'users')).toBe(false); expect(canOpen(noemie, 'dolt-data')).toBe(false);
     expect(canOpen(bob, 'my-profile')).toBe(true); expect(canOpen(bob, 'users')).toBe(false);
-    expect(firstAllowedPath(lucie)).toBe('/users'); expect(firstAllowedPath(noemie)).toBe('/database/pulls'); expect(firstAllowedPath(bob)).toBe('/my-profile');
+    expect(firstAllowedPath(lucie)).toBe('/'); expect(firstAllowedPath(noemie)).toBe('/'); expect(firstAllowedPath(bob)).toBe('/'); // the launchpad is every signed-in person's landing
   });
   it('without screen access the legacy rule applies', () => {
     expect(canOpen({ subject: 'x', admin: false, restricted: true, plugins: {} }, 'users')).toBe(false);

@@ -31,9 +31,9 @@ Production code: 40 points. Test code: 84 points.
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:375 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:379 |
-| plugin deps.emit (durable app event) | emitter | app.registered | plugins/app-connector/handlers.mjs:81 |
-| plugin deps.emit (durable app event) | emitter | app.updated | plugins/app-connector/handlers.mjs:87 |
-| plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:93 |
+| plugin deps.emit (durable app event) | emitter | app.registered | plugins/app-connector/handlers.mjs:82 |
+| plugin deps.emit (durable app event) | emitter | app.updated | plugins/app-connector/handlers.mjs:88 |
+| plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:94 |
 | plugin deps.emit (durable app event) | emitter | signup.requested | plugins/directory/signup.mjs:74 |
 | plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:91 |
 | plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/oidc-provider/handlers.mjs:169 |

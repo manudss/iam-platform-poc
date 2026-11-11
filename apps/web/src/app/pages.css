@@ -169,3 +169,15 @@ td input { width: 100%; box-sizing: border-box; }
 .wb-replay { height: 320px; }
 .wb-replay vflow { display: block; width: 100%; height: calc(100% - 2rem); }
 @media (max-width: 1100px) { .wb-main { grid-template-columns: 1fr; } .wb-rail, .wb-drawer { max-height: none; } .wb-canvas { height: 420px; } }
+
+/* Launchpad: the applications a person may open (home of the signed-in console) */
+.lp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 1rem; }
+.lp-card { display: flex; flex-direction: column; gap: .5rem; text-decoration: none; color: inherit; margin: 0; transition: transform .1s, box-shadow .1s; }
+.lp-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px var(--shadow-color); border-color: var(--accent); }
+.lp-head { display: flex; justify-content: space-between; align-items: center; gap: .6rem; }
+.lp-proto { flex: none; }
+.lp-desc { color: var(--muted); font-size: .88rem; flex: 1; }
+.lp-open { color: var(--accent-dark); font-weight: 600; font-size: .88rem; }
+/* Grid cards own their gap; the shared vertical-panel rule must not offset siblings. */
+.lp-grid > .lp-card + .lp-card { margin-top: 0; }
+.lp-head { flex-wrap: wrap; }

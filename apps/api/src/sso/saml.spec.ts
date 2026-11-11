@@ -140,6 +140,21 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     await eventually(() => events.some((e) => e.type === 'sso.login.succeeded' && e.payload.app === 'payroll'));
   });
 
+  it('IdP-initiated: ?app= starts SSO without an SP request, the response carries no InResponseTo and the SP accepts it', async () => {
+    const r = await fetch(`${ISS}/login?app=payroll`, { redirect: 'manual' });
+    assert.equal(r.status, 302);
+    const rid = (r.headers.get('location') ?? '').split('/')[2].split('?')[0];
+    const det = await (await api(`/sso/${T}/saml-interaction/${rid}`, 'yanis-leroy')).json() as any;
+    assert.equal(det.app.id, 'payroll'); assert.equal(det.allowed, true);
+    const done = await (await api(`/sso/${T}/saml-interaction/${rid}/complete`, 'yanis-leroy', { decision: 'allow' })).json() as any;
+    assert.equal(done.acsUrl, PAYROLL_ACS);
+    const xml = Buffer.from(done.samlResponse, 'base64').toString('utf8');
+    assert.ok(!xml.includes('InResponseTo'), 'unsolicited: no request is answered');
+    const parsed = await makeSp().parseLoginResponse(await idpForSp(), 'post', { body: { SAMLResponse: done.samlResponse } });
+    assert.equal(parsed.extract.nameID, 'yanis@example.invalid');
+    await eventually(() => events.some((e) => e.type === 'sso.login.succeeded' && e.payload.app === 'payroll' && e.payload.subject === 'yanis-leroy'));
+  });
+
   it('passes RelayState back unchanged', async () => {
     const { rid } = await begin('yanis-leroy', { relay: 'opaque-state-42' });
     const done = await (await api(`/sso/${T}/saml-interaction/${rid}/complete`, 'yanis-leroy', { decision: 'allow' })).json() as any;

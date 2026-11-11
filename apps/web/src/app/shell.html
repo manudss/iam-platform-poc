@@ -4,7 +4,7 @@
     <nav>
       @for (g of visibleNav(); track g.title) {        <p class="group">{{ g.title }}</p>
         @for (i of g.items; track i.path) {
-          <a [routerLink]="i.path" routerLinkActive="active" [attr.data-nav]="i.path"><span class="ico" aria-hidden="true">{{ i.icon }}</span>{{ i.label }}</a>
+          <a [routerLink]="i.path" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: i.path === '/' }" [attr.data-nav]="i.path"><span class="ico" aria-hidden="true">{{ i.icon }}</span>{{ i.label }}</a>
         }
       }
     </nav>

@@ -33,6 +33,8 @@ export interface AppConnector {
   allowed_roles: string[];
   /** Name of the secret in the secret store (client secret or signing key). Never the secret itself. */
   secret_ref: string | null;
+  /** Where a user opens the application (OIDC: the app's own URL, which starts the sign-in). SAML apps open IdP-initiated, no URL needed. */
+  launch_url: string | null;
 }
 type State = { apps: AppConnector[] };
 export interface AppConnectorStore {
@@ -78,7 +80,7 @@ export class MemoryAppConnectorStore implements AppConnectorStore {
 }
 
 type Row = { id: string; name: string; description: string; protocol: Protocol; enabled: number; config: string };
-const fromRow = (r: Row): AppConnector => { const c = JSON.parse(r.config) as Pick<AppConnector, 'redirect_uris' | 'entity_id' | 'acs_url' | 'attribute_mapping' | 'allowed_roles' | 'secret_ref'>; return { id: r.id, name: r.name, description: r.description, protocol: r.protocol, enabled: !!r.enabled, ...c }; };
+const fromRow = (r: Row): AppConnector => { const c = JSON.parse(r.config) as Partial<Pick<AppConnector, 'redirect_uris' | 'entity_id' | 'acs_url' | 'attribute_mapping' | 'allowed_roles' | 'secret_ref' | 'launch_url'>>; return { id: r.id, name: r.name, description: r.description, protocol: r.protocol, enabled: !!r.enabled, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, ...c } as AppConnector; };
 
 /** Dolt: table `app_connectors`, written on the working branch, live after Apply like every other administrator change. Fictional data only. */
 export class DoltAppConnectorStore implements AppConnectorStore {
