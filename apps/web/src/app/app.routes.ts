@@ -31,7 +31,7 @@ export const routes: Routes = [
   { path: 'admin-preview', loadComponent: () => import('./admin-preview').then(m => m.AdminPreviewPage), title: 'Console preview' },
   {
     path: '', component: Shell, canActivate: [authGuard], children: [
-      { path: '', pathMatch: 'full', redirectTo: 'overview' },
+      { path: '', pathMatch: 'full', loadComponent: () => import('./launchpad').then(m => m.LaunchpadPage), title: 'My applications' },
       { path: 'overview', component: OverviewPage, title: 'Dashboard', canActivate: [accessGuard] },
       { path: 'users', component: UsersPage, title: 'Users', canActivate: [accessGuard] },
       { path: 'profile-fields', canActivate: [accessGuard], loadComponent: () => import('./profile-fields').then(m => m.ProfileFieldsPage), title: 'Profile fields' },

@@ -5,7 +5,7 @@ import { Session } from './session';
 export type Protocol = 'oidc' | 'saml';
 export interface AppConnector {
   id: string; name: string; description: string; protocol: Protocol; enabled: boolean; redirect_uris: string[];
-  entity_id: string | null; acs_url: string | null; attribute_mapping: Record<string, string>; allowed_roles: string[]; secret_ref: string | null;
+  entity_id: string | null; acs_url: string | null; attribute_mapping: Record<string, string>; allowed_roles: string[]; secret_ref: string | null; launch_url: string | null;
 }
 
 /** "name=profileKey" lines <-> mapping object. */
@@ -37,7 +37,8 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   <div class="row"><label>ID<input name="aid" [(ngModel)]="id" pattern="[a-z0-9-]{1,32}" [disabled]="editing()" /></label><label>Name<input name="aname" [(ngModel)]="name" maxlength="80" /></label>
   <label>Protocol<select name="aproto" [(ngModel)]="protocol"><option value="oidc">OpenID Connect</option><option value="saml">SAML 2.0</option></select></label></div>
   <div class="row"><label>Description<input name="adesc" [(ngModel)]="description" maxlength="240" /></label></div>
-  @if (protocol === 'oidc') { <div class="row"><label>Redirect URIs (one per line, exact, https)<textarea name="auris" rows="3" [(ngModel)]="uris"></textarea></label></div> }
+  @if (protocol === 'oidc') { <div class="row"><label>Redirect URIs (one per line, exact, https)<textarea name="auris" rows="3" [(ngModel)]="uris"></textarea></label>
+  <label>Launch URL (where users open the app; shown on their home page)<input name="alaunch" [(ngModel)]="launch" placeholder="https://app.example.com/" /></label></div> }
   @else { <div class="row"><label>SP entity ID<input name="aent" [(ngModel)]="entity" /></label><label>ACS URL (https)<input name="aacs" [(ngModel)]="acs" /></label></div> }
   <div class="row"><label>Attributes sent (name=profile key, one per line)<textarea name="amap" rows="3" [(ngModel)]="mapping"></textarea></label>
   <label>Roles allowed (comma or one per line)<textarea name="aroles" rows="3" [(ngModel)]="roles"></textarea></label></div>
@@ -48,7 +49,7 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
 export class ApplicationsPage {
   protected readonly s = inject(Session);
   protected apps = signal<AppConnector[]>([]); protected note = signal(''); protected problem = signal(''); protected off = signal(false); protected editing = signal(false);
-  protected id = ''; protected name = ''; protected description = ''; protected protocol: Protocol = 'oidc'; protected uris = ''; protected entity = ''; protected acs = ''; protected mapping = ''; protected roles = ''; protected ref = '';
+  protected id = ''; protected name = ''; protected description = ''; protected protocol: Protocol = 'oidc'; protected uris = ''; protected entity = ''; protected acs = ''; protected mapping = ''; protected roles = ''; protected ref = ''; protected launch = '';
   constructor() { effect(() => { this.s.branchEpoch(); this.s.adminToken(); void this.load(); }); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   private fail(r: { status: number; data: any }) { if (r.status < 400) return false; this.problem.set(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused'); return true; }
@@ -62,11 +63,11 @@ export class ApplicationsPage {
   private async run(method: string, path: string, body: object | undefined, ok: string) { const r = await this.s.api.raw<any>(method, path, body, this.h()); if (this.fail(r)) return false; this.note.set(ok + ' Saved on the working branch; live after Apply.'); this.problem.set(''); await this.load(); return true; }
   protected edit(a: AppConnector) {
     this.editing.set(true); this.id = a.id; this.name = a.name; this.description = a.description; this.protocol = a.protocol; this.uris = a.redirect_uris.join('\n');
-    this.entity = a.entity_id ?? ''; this.acs = a.acs_url ?? ''; this.mapping = formatMapping(a.attribute_mapping); this.roles = a.allowed_roles.join('\n'); this.ref = a.secret_ref ?? '';
+    this.entity = a.entity_id ?? ''; this.acs = a.acs_url ?? ''; this.mapping = formatMapping(a.attribute_mapping); this.roles = a.allowed_roles.join('\n'); this.ref = a.secret_ref ?? ''; this.launch = a.launch_url ?? '';
   }
-  protected reset() { this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = ''; this.protocol = 'oidc'; }
+  protected reset() { this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; }
   private body(): Record<string, unknown> {
-    return { name: this.name, description: this.description, protocol: this.protocol, redirect_uris: this.protocol === 'oidc' ? parseList(this.uris) : [], entity_id: this.protocol === 'saml' ? this.entity : null, acs_url: this.protocol === 'saml' ? this.acs : null, attribute_mapping: parseMapping(this.mapping), allowed_roles: parseList(this.roles), secret_ref: this.ref || null };
+    return { name: this.name, description: this.description, protocol: this.protocol, redirect_uris: this.protocol === 'oidc' ? parseList(this.uris) : [], entity_id: this.protocol === 'saml' ? this.entity : null, acs_url: this.protocol === 'saml' ? this.acs : null, attribute_mapping: parseMapping(this.mapping), allowed_roles: parseList(this.roles), secret_ref: this.ref || null, launch_url: this.protocol === 'oidc' ? this.launch || null : null };
   }
   protected async save() {
     const ok = this.editing() ? await this.run('PATCH', `/app-connectors/${encodeURIComponent(this.id)}`, this.body(), 'Application saved.') : await this.run('POST', '/app-connectors', { id: this.id, ...this.body() }, 'Application added.');
