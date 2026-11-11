@@ -108,6 +108,8 @@ export function createOidcEngine(deps) {
     if (a.secret_ref) { try { const s = await deps.secretGet(a.secret_ref); secret = s?.client_secret ?? s?.value; } catch (e) { warn(`secret of ${a.id} unreadable: ${e.message}`); } }
     return {
       client_id: a.id, client_name: a.name, redirect_uris: a.redirect_uris, response_types: ['code'], grant_types: ['authorization_code', ...(a.allow_refresh_tokens === false ? [] : ['refresh_token'])],
+      // the scopes this application may ask for: a request beyond the list is refused with invalid_scope
+      scope: ['openid', ...(Array.isArray(a.scopes) ? a.scopes : ['profile', 'email', 'roles'])].join(' '),
       // without a readable secret the application is a public client: it must use PKCE (always required here anyway)
       token_endpoint_auth_method: secret ? 'client_secret_basic' : 'none', ...(secret ? { client_secret: secret } : {}), application_type: 'web',
     };
