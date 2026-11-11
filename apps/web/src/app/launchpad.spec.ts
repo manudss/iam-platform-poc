@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { LaunchpadPage, moveApplication, orderedApps, type LaunchpadApp } from './launchpad';
+import { prefetchLaunchpad, resetLaunchpadPrefetch } from './launchpad-preload';
 import { Session } from './session';
+import type { ApiClient } from './api';
 
 const APPS = [
   { id: 'peoplehub', name: 'PeopleHub', description: 'HR portal (fictional).', protocol: 'oidc', url: 'https://peoplehub.apps.dss.name/' },
@@ -10,7 +12,7 @@ const APPS = [
 ];
 
 describe('launchpad (the signed-in home)', () => {
-  beforeEach(async () => { sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter([])] }).compileComponents(); });
+  beforeEach(async () => { sessionStorage.clear(); resetLaunchpadPrefetch(); await TestBed.configureTestingModule({ providers: [provideRouter([])] }).compileComponents(); });
   const as = (data: object) => { const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('demo-alice'); s.api.raw = (async () => ({ status: 200, data })) as never; return s; };
 
   it('lists the permitted application links without SSO helper text', async () => {
@@ -40,6 +42,31 @@ describe('launchpad (the signed-in home)', () => {
     el.querySelector<HTMLButtonElement>('#lp-cancel')!.click(); f.detectChanges();
     expect(el.querySelector('[aria-label="Favourites"] [data-app="peoplehub"]')).toBeNull();
     expect(el.querySelectorAll('.lp-launch').length).toBe(2);
+  });
+
+  it('uses the response requested at sign-in instead of asking again, once', async () => {
+    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('demo-alice');
+    let calls = 0;
+    s.api.raw = (async () => { calls++; throw new Error('the page must reuse the early response'); }) as never;
+    prefetchLaunchpad({ raw: async () => ({ status: 200, data: { apps: APPS } }) } as unknown as ApiClient);
+    const f = TestBed.createComponent(LaunchpadPage); f.detectChanges(); await f.whenStable(); f.detectChanges();
+    expect((f.nativeElement as HTMLElement).querySelectorAll('.lp-card').length).toBe(2);
+    expect(calls).toBe(0);
+    // Consumed once: the next visit asks the API again.
+    const g = TestBed.createComponent(LaunchpadPage); g.detectChanges(); await g.whenStable(); g.detectChanges();
+    expect(calls).toBe(1);
+  });
+
+  it('a failed early request falls back to a live load', async () => {
+    const s = as({ apps: APPS });
+    prefetchLaunchpad({ raw: async () => { throw new Error('early failure'); } } as unknown as ApiClient);
+    const f = TestBed.createComponent(LaunchpadPage);
+    // The fallback reload settles a few microtask hops after the rejection: flush twice.
+    for (let i = 0; i < 3; i++) { f.detectChanges(); await f.whenStable(); }
+    f.detectChanges();
+    const el = f.nativeElement as HTMLElement;
+    expect(el.querySelectorAll('.lp-card').length).toBe(2);
+    expect(el.textContent).not.toContain('early failure');
   });
 
   it('an account with no application sees the empty state, not an error', async () => {

@@ -2,6 +2,7 @@ import { isPlatformBrowser } from '@angular/common';
 import { Component, PLATFORM_ID, PendingTasks, TransferState, computed, effect, inject, makeStateKey, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Session } from './session';
+import { consumeLaunchpadPrefetch } from './launchpad-preload';
 
 export interface LaunchpadApp { id: string; name: string; description: string; protocol: 'oidc' | 'saml'; url: string; logo?: string | null }
 export interface LaunchpadPreferences { favourites: string[]; order: string[] }
@@ -117,7 +118,12 @@ export class LaunchpadPage {
       return;
     }
     try {
-      const r = await this.s.api.raw<{ apps?: LaunchpadApp[]; preferences?: LaunchpadPreferences; message?: string }>('GET', '@/sso/{t}/launchpad');
+      type LaunchpadResponse = { status: number; data?: { apps?: LaunchpadApp[]; preferences?: LaunchpadPreferences; message?: string } };
+      // The response requested during sign-in/bootstrap, when it is still fresh; a failed early request falls back to a live one.
+      const early = consumeLaunchpadPrefetch<LaunchpadResponse>();
+      let r: LaunchpadResponse | undefined;
+      if (early) { try { r = await early; } catch { r = undefined; } }
+      r ??= await this.s.api.raw<{ apps?: LaunchpadApp[]; preferences?: LaunchpadPreferences; message?: string }>('GET', '@/sso/{t}/launchpad');
       if (epoch !== this.loadEpoch) return;
       if (r.status >= 400) throw Error(r.data?.message || 'Could not load applications');
       this.apps.set(Array.isArray(r.data?.apps) ? r.data.apps : []);

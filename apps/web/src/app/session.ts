@@ -3,6 +3,7 @@ import { ApiClient, Change, sessionCookieToken } from './api';
 import { computed } from '@angular/core';
 import type { Access } from './access';
 import { Router } from '@angular/router';
+import { preloadLaunchpadChunk, prefetchLaunchpad } from './launchpad-preload';
 
 export type Tone = 'info' | 'error';
 export interface Assignment { identity_id: string; role_id: string }
@@ -110,6 +111,8 @@ export class Session implements OnDestroy {
 
   /** Marks the session signed in after a successful token exchange (browser or legacy flow). */
   signedIn(fallbackName = '') {
+    // My applications is the landing page: its chunk and its data load while the rest of the console starts.
+    void preloadLaunchpadChunk(); prefetchLaunchpad(this.api);
     this.expired.set(false); this.loggedIn.set(true); this.user.set(this.api.identity || fallbackName);
     this.dismissed.set(false); this.refreshTiming(); this.scheduleExpiry();
     clearInterval(this.tick); if (this.timing()) this.tick = setInterval(() => this.now.set(Date.now()), 1000);
