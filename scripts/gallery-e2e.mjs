@@ -47,7 +47,20 @@ try {
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.click('#lp-organise'); await page.waitForSelector('#lp-save'); await page.screenshot({path:out+'/mobile-edit.png',fullPage:true});
   assert.equal(await page.locator('.lp-move button').first().evaluate(x=>x.getBoundingClientRect().height>=44),true);
-  await page.click('#lp-cancel');
+  const mobileOther=page.locator('[aria-label="Other applications"] .lp-card');
+  const mobileIds=await mobileOther.evaluateAll(xs=>xs.map(x=>x.dataset.app));
+  await mobileOther.nth(1).locator('.lp-move button').nth(1).click();
+  await page.waitForFunction(id=>document.querySelector('[aria-label="Other applications"] .lp-card')?.dataset.app===id,mobileIds[1]);
+  // Touch drag on a real mobile viewport, using Chrome's input stack.
+  await mobileOther.first().scrollIntoViewIfNeeded();
+  const touchFrom=await mobileOther.first().locator('.lp-handle').boundingBox(), touchTo=await mobileOther.nth(1).boundingBox();
+  const cdp=await page.context().newCDPSession(page); await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+  const touch=async(type,x,y)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'?[]:[{x,y,id:1}]});
+  await touch('touchStart',touchFrom.x+touchFrom.width/2,touchFrom.y+touchFrom.height/2);
+  for(let n=1;n<=8;n++) await touch('touchMove',touchFrom.x+touchFrom.width/2+(touchTo.x+touchTo.width/2-touchFrom.x-touchFrom.width/2)*n/8,touchFrom.y+touchFrom.height/2+(touchTo.y+30-touchFrom.y-touchFrom.height/2)*n/8);
+  await touch('touchEnd',0,0); await cdp.detach();
+  await page.waitForFunction(id=>document.querySelector('[aria-label="Other applications"] .lp-card')?.dataset.app===id,mobileIds[0]);
+  await page.click('#lp-cancel'); await page.waitForSelector('#lp-organise');
   await page.addStyleTag({content:teal}); await page.evaluate(()=>{document.documentElement.dataset.theme='dark';});
   await page.screenshot({path:out+'/mobile-dark-teal.png',fullPage:true});
   await page.setViewportSize({width:320,height:800}); assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
