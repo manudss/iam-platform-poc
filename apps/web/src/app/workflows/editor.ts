@@ -10,6 +10,8 @@ import {
 } from './wf-model';
 import { ValidationIssue, autoLayout, defaultLabel, edgeLabelChoices, outgoingLabels, validateGraph } from './graph-utils';
 import { WbTabs, WbTabsBar } from './workbench-tabs';
+import { managedProvider, editedAction, simulatedAction } from './execution-policy';
+import { WorkflowConnection } from './wf-model';
 import { filterPlaceholders, insertPlaceholder, phTokenAt } from './placeholder-pick';
 
 interface NodeState { type: StepType; name: string; config: Record<string, unknown> }
@@ -24,6 +26,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 // status bar with live validation, and a test bar that runs the graph on a disposable branch. ----
 
 @Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrls: ['../pages.css', './editor-workbench.css'], styles: [
+  '.wb-managed {border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);padding:.8rem;margin:.8rem 0;} .wb-mode {display:flex;gap:.4rem;margin:.6rem 0;} .wb-mode .on {background:var(--accent-soft);color:var(--accent);border-color:var(--accent);} .wb-real-dialog {box-sizing:border-box;width:min(520px,calc(100% - 2rem));max-height:90dvh;overflow:auto;padding:1.4rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);color:var(--ink);} .wb-real-dialog::backdrop {background:var(--scrim);} .wb-real-note {padding:.8rem;border:1px solid var(--warn-line);background:var(--warn-soft);color:var(--ink);border-radius:var(--radius);}',
   '.wb-active { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 600; } .wb-active.paused { color: var(--bad); }',
   '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
   '.ph-popup button { text-align: left; background: none; border: 0; border-radius: 0; padding: .3rem .6rem; min-height: 0; font-family: ui-monospace, monospace; font-size: .78rem; color: var(--ink); cursor: pointer; }',
@@ -142,7 +145,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
         <button class="secondary" (click)="copySelection()">Copy</button>
         <button class="secondary" (click)="deleteSelection()">Delete</button>
       } @else if (selectedNode(); as nid) {@if (state.get(nid); as st) {
-        <div class="wb-inspector-head"><h3>{{st.name}}</h3><small>{{categoryLabel(typeOf(st.type).category)}} · {{typeOf(st.type).label}}</small></div>
+        <div class="wb-inspector-head"><h3>{{st.name}}</h3><small>{{categoryLabel(actionCategory(st))}} · {{typeOf(st.type).label}}</small></div>
         <div class="wb-tabs">
           @for (tab of ['settings', 'input', 'output']; track tab) {<button class="wb-tab" [class.on]="drawerTab() === tab" (click)="drawerTab.set($any(tab))">{{tab === 'settings' ? 'Settings' : tab === 'input' ? 'Input' : 'Output'}}</button>}
         </div>
@@ -150,7 +153,17 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
           <label>Step name<input name="stepName" [ngModel]="st.name" (ngModelChange)="rename(nid, $event)" maxlength="80" /></label>
           <details class="wb-block-help"><summary>About this block</summary><p class="hint">{{typeOf(st.type).label}} - {{typeOf(st.type).category === 'computed' ? 'COMPUTED: really runs and computes its output, but has no external effect.' : typeOf(st.type).category === 'real' ? 'REAL: data or external effect. Read the block description before running.' : 'SIMULATED: demonstrates the flow, no external effect.'}}</p>
           @if (blockOf(st.type)?.description) {<p class="hint">{{blockOf(st.type)!.description}}</p>}</details>
-          @for (f of blockOf(st.type)?.fields ?? []; track f.key) {
+          @if (managed(st.type)) {
+          <section class="wb-managed" aria-label="External action safety">
+          <label>Connection<select name="managedConnection" [ngModel]="st.config['connectionId'] || ''" (ngModelChange)="setCfg(nid,'connectionId',$event)"><option value="">Select a connection</option>@for(c of connectionsFor(st.type);track c.id) {<option [value]="c.id">{{c.name}} · {{c.status}}</option>}</select></label>
+          <p class="hint"><a routerLink="/workflows/connections">Manage in Connections</a> · no credential visible here.</p>
+          <b>Execution mode</b><div class="wb-mode"><button class="secondary" [class.on]="st.config['executionMode'] !== 'real'" (click)="simulate(nid)">Simulation</button><button class="secondary" [class.on]="st.config['executionMode'] === 'real'" [disabled]="!realConnection(st)" (click)="requestReal(nid)">Real</button></div>
+          <p class="hint">{{st.config['executionMode'] === 'real' ? 'Real enabled for future manual and scheduled runs. External effects are not reverted by discarding a Dolt branch.' : 'Simulation is the default. No remote call or external write. Computed steps still compute; lyam business writes stay on their own data branch.'}}</p>
+          <b>Simulation preview</b><p class="hint">{{simulationPreview(st)}} No external action has been executed by this preview.</p>
+          <p class="hint">Editor tests always simulate external actions. An uncertain creation stops for review; retry and error-route continuation are blocked.</p>
+          </section>
+          }
+          @for (f of actionFields(st.type); track f.key) {
             @switch (f.type) {
             @case ('text') {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<textarea rows="3" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)"></textarea>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
             @case ('boolean') {<label><input type="checkbox" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? false" (ngModelChange)="setCfg(nid, f.key, $event)" /> {{f.label}}</label>}
@@ -218,6 +231,14 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       @for (sugg of pp.list; track sugg; let i = $index) {<button type="button" role="option" [attr.aria-selected]="i === pp.index" [class.on]="i === pp.index" (mousedown)="$event.preventDefault(); pickPlaceholder(sugg)">{{sugg}}</button>}
     </div>
   }
+  @if (realRequest(); as request) {
+    <dialog #realDialog class="wb-real-dialog" aria-labelledby="real-title" (cancel)="$event.preventDefault(); realRequest.set(null)" (keydown)="realDialogKey($event)">
+    <h2 id="real-title">Enable Real execution?</h2><p>Future manual and scheduled runs of this action can call <b>{{request.connection.name}}</b> outside lyam.</p>
+    <p class="wb-real-note">External effects are not isolated in a Dolt branch and cannot be undone by discarding it.</p>
+    <p>Check the connection and action fields. Editor tests still simulate external calls.</p><p class="hint">If a creation response is uncertain, the run stops for review. Retry and error-route continuation are blocked to avoid duplicates.</p>
+    <div class="row"><button autofocus class="secondary" (click)="realRequest.set(null)">Keep Simulation</button><button (click)="confirmReal()">Confirm Real</button></div><p class="hint">Changing connection or action fields resets confirmation to Simulation.</p>
+    </dialog>
+  }
   @if (saveTplOpen()) {
     <div class="tpl-modal" (click)="saveTplOpen.set(false)">
       <div class="tpl-dialog" (click)="$event.stopPropagation()" role="dialog" aria-modal="true" aria-label="Save as template">
@@ -244,6 +265,23 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected readonly samples = SAMPLE_WORKFLOWS;
   protected events = signal<WfEvent[]>([]);
   protected blocks = signal<WfBlock[]>([]);
+  protected connections = signal<WorkflowConnection[]>([]);
+  protected managed = managedProvider;
+  protected actionCategory(st:NodeState):StepCategory { return managedProvider(st.type) ? st.config['executionMode']==='real' ? 'real' : 'simulated' : this.typeOf(st.type).category; }
+  private refreshNode(id:string) {const n=this.vfNodes().find(n=>n.id===id);if(n)this.tintNode(n);}
+  protected realRequest = signal<{id: string; connection: WorkflowConnection; configStamp: string} | null>(null);
+  private readonly realDialog = viewChild<ElementRef<HTMLDialogElement>>('realDialog');
+  private readonly realDialogEffect = effect(() => { const d=this.realDialog()?.nativeElement; if(d && !d.open)d.showModal(); });
+  private connectionEpoch=0;
+  private readonly connectionRefresh = effect(() => { this.s.branchEpoch(); const epoch=++this.connectionEpoch;this.connections.set([]); this.realRequest.set(null); void clientOf(this.s).connections().then(r=>{if(epoch===this.connectionEpoch)this.connections.set(r.connections);}).catch(()=>{if(epoch===this.connectionEpoch)this.connections.set([]);}); });
+  protected connectionsFor(type:string) { return this.connections().filter(c=>c.provider===managedProvider(type)); }
+  protected actionFields(type:string) { return (this.blockOf(type)?.fields ?? []).filter(f=>!managedProvider(type) || !['dryRun','source'].includes(f.key)); }
+  protected realConnection(st:NodeState) { return this.connectionsFor(st.type).find(c=>c.id===st.config['connectionId'] && (c.secretConfigured || c.provider==='http')); }
+  protected simulate(id:string) { const st=this.state.get(id); if(!st)return; st.config=simulatedAction(st.config);this.refreshNode(id);this.stateVersion.update(v=>v+1); }
+  protected realDialogKey(event:KeyboardEvent) {event.stopPropagation();if(event.key!=='Tab')return;const d=this.realDialog()?.nativeElement,buttons=d?.querySelectorAll('button');if(!d||!buttons?.length)return;const first=buttons[0],last=buttons[buttons.length-1];if(event.shiftKey&&d.ownerDocument.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&d.ownerDocument.activeElement===last){event.preventDefault();first.focus();}}
+  protected requestReal(id:string) { const st=this.state.get(id);if(!st)return;const connection=this.realConnection(st);if(!connection)return;this.simulate(id);this.realRequest.set({id,connection,configStamp:JSON.stringify(st.config)}); }
+  protected confirmReal() { const r=this.realRequest();if(!r)return;const st=this.state.get(r.id);const c=st?this.realConnection(st):null;if(st && c?.id===r.connection.id && c.revision===r.connection.revision && JSON.stringify(st.config)===r.configStamp){st.config={...st.config,executionMode:'real',realConfirmed:true};this.refreshNode(r.id);this.stateVersion.update(v=>v+1);}this.realRequest.set(null); }
+  protected simulationPreview(st:NodeState) { return st.type==='jira-create-issue' ? 'Would create one Jira issue in '+String(st.config['project'] || 'the selected project')+'.' : st.type==='http-request' ? 'Would send '+String(st.config['method'] || 'GET')+' to '+String(st.config['url'] || 'the configured URL')+'.' : st.type==='google-sheets-add-row' ? 'Would append one Google Sheets row.' : st.type==='google-sheets-update-row' ? 'Would update one Google Sheets row.' : 'Would run '+this.paletteLabel(this.typeOf(st.type).label)+'.'; }
   protected paletteQuery = '';
   protected insertQuery = '';
   protected insertEdge = signal<Edge | null>(null);
@@ -490,7 +528,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private makeNode(id: string, st: NodeState, i: number, at?: { x: number; y: number }): Node {
     return {
       id, type: WfNodeComponent,
-      data: signal<WfNodeData>({ name: st.name, category: this.typeOf(st.type).category, icon: this.blockIcon(st.type), runStatus: this.testStatusOf(id) }),
+      data: signal<WfNodeData>({ name: st.name, category: this.actionCategory(st), icon: this.blockIcon(st.type), runStatus: this.testStatusOf(id) }),
       point: signal(at ?? { x: 320 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
       selected: signal(false),
     } as Node;
@@ -525,7 +563,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     };
     const blk = this.blockOf(type);
     const fieldDefaults = Object.fromEntries((blk?.fields ?? []).filter((f) => f.default !== undefined).map((f) => [f.key, f.default as unknown]));
-    return { ...fieldDefaults, ...defaults[type] };
+    return { ...fieldDefaults, ...defaults[type], ...(managedProvider(type) ? {executionMode:'simulation',realConfirmed:false,connectionId:'',...(type.startsWith('google-sheets-')?{source:'google'}:{})} : {}) };
   }
 
   // ---- Drag & drop from the palette ----
@@ -583,7 +621,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     if (n) this.tintNode(n);
     this.stateVersion.update((v) => v + 1);
   }
-  protected setCfg(id: string, k: string, v: unknown) { this.state.get(id)!.config[k] = k === 'seconds' || k === 'maxItems' ? Number(v) : v; this.stateVersion.update((x) => x + 1); }
+  protected setCfg(id: string, k: string, v: unknown) { const st=this.state.get(id)!; st.config=editedAction(st.type,st.config,k,k === 'seconds' || k === 'maxItems' ? Number(v) : v);this.realRequest.set(null);this.refreshNode(id); this.stateVersion.update((x) => x + 1); }
   protected noop(_e: unknown) {}
   protected onConnect(c: Connection) {
     if (!c.source || !c.target) return;
@@ -850,7 +888,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private tintNode(n: Node) {
     if (n.type !== WfNodeComponent) return;
     const st = this.state.get(n.id); if (!st) return;
-    (n.data as { set(v: WfNodeData): void } | undefined)?.set({ name: st.name, category: this.typeOf(st.type).category, icon: this.blockIcon(st.type), runStatus: this.testStatusOf(n.id) });
+    (n.data as { set(v: WfNodeData): void } | undefined)?.set({ name: st.name, category: this.actionCategory(st), icon: this.blockIcon(st.type), runStatus: this.testStatusOf(n.id) });
   }
   protected async runTest() {
     let payload: Record<string, unknown> = {};

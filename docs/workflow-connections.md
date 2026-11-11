@@ -1,6 +1,6 @@
 # Workflow Connections
 
-Implementation in progress. The backend is implemented; the Connections screen and action panel are in progress from the confirmed reconstructed design boards in `docs/design/workflow-connections/`. These boards contain illustrative states, not verified accounts. Editor C (#84) is a separate PR and must reach main before UI integration.
+Connections and managed action settings follow the confirmed design boards in `docs/design/workflow-connections/`. These boards contain illustrative states, not verified accounts. The branch is based on main after editor C (#84).
 
 ## Security model
 
@@ -20,7 +20,9 @@ HTTP uses an HTTPS-only, public-address-pinned transport. Redirects, URL credent
 
 `POST /tenants/:tenant/workflow-connections/probe` tests unsaved form fields in memory without a credential write. It may reuse an unchanged secret from an existing same-tenant/provider connection id. `POST /tenants/:tenant/workflow-connections/:id/test` is an explicit read-only check: Jira reads the current account, Google reads configured sheet rows, HTTP sends HEAD. It returns status/revision/time, never provider response contents. A success is only the observed result of that check, not a permanent promise of access.
 
-Before a non-idempotent external creation or HTTP mutation, the runner persists `EXTERNAL_EFFECT_REVIEW_REQUIRED`. A returned action and its output are persisted as done together with clearing the marker. If the call fails or the process restarts before completion is recorded, the run stops for review. Retry, rerun and error-route continuation cannot bypass that marker. Reconcile at the provider and author a new deliberate run instead of blindly duplicating the effect.
+Changing action fields or a connection returns the editor to Simulation. Real requires an explicit dialog confirmation and applies to future scheduled/manual runs, not editor tests.
+
+Before a non-idempotent external creation or HTTP mutation, the runner persists `EXTERNAL_EFFECT_REVIEW_REQUIRED`. A creation response must include a provider receipt (Jira key or appended row number). A returned action and its output are persisted as done together with clearing the marker. If the call fails or the process restarts before completion is recorded, the run stops for review. Retry, rerun and error-route continuation cannot bypass that marker. Reconcile at the provider and author a new deliberate run instead of blindly duplicating the effect.
 
 ## Verification
 
@@ -33,3 +35,14 @@ cd apps/api
 npx tsc -p tsconfig.json
 DOLT_BIN=/path/to/dolt BAO_BIN=/path/to/bao node --test dist/workflows/connections*.spec.js dist/workflows/connection-secrets.spec.js dist/workflows/http-transport.spec.js dist/workflows/execution-safety.spec.js
 ```
+
+## UI verification
+
+The browser suite drives the real built Angular bundle with isolated API fixtures, not connected third-party accounts:
+
+```sh
+cd apps/web && npm run build && cd ../..
+NODE_PATH=/path/to/node_modules node scripts/workflow-connections-ui-e2e.cjs /tmp/connection-shots
+```
+
+It checks list/form and action settings on desktop/mobile in light/dark, test-before-save without persistence, result invalidation, keeping an existing blank credential field, native dialog focus/Escape, Real confirmation and reset on edits. Backend service integration separately exercises the real API, NATS, core and Dolt. No test sends a real Google/Jira action.

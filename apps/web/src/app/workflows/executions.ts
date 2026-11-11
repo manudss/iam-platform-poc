@@ -80,8 +80,9 @@ const duration = (r: { startedAt?: string; finishedAt?: string | null; started_a
   <button class="secondary" (click)="close()" title="Close the detail">✕</button>
   @if (v.run.status === 'running' || v.run.status === 'queued') {<button class="secondary" (click)="cancel()">Cancel</button>}
   @if (v.run.status !== 'running' && v.run.status !== 'queued') {
-    @if (v.run.status === 'failed' || v.run.status === 'canceled') {<button (click)="retry()">Retry from the failed step</button>}
-    <button class="secondary" (click)="rerun()" title="Start a fresh run of the same workflow">Re-run</button>
+    @if (uncertain(v)) {<p class="msg" role="status">External effect uncertain. Check the provider before starting any new run. Retry and re-run from a step are blocked to avoid duplicates.</p>}
+    @if (!uncertain(v) && (v.run.status === 'failed' || v.run.status === 'canceled')) {<button (click)="retry()">Retry from the failed step</button>}
+    <button class="secondary" [disabled]="uncertain(v)" (click)="rerun()" title="Start a fresh run of the same workflow">Re-run</button>
     <button class="secondary" (click)="exportLog()" title="Download the run view as JSON">Export log</button>
     <button class="secondary" style="color:var(--bad);border-color:var(--bad-line)" (click)="removeRun()">Delete run</button>
   }
@@ -96,7 +97,7 @@ const duration = (r: { startedAt?: string; finishedAt?: string | null; started_a
   <section class="card"><h3>Steps</h3>
   @for (st of v.steps; track st.node_id) {<div class="wf-step" [attr.data-status]="st.status">
   <div class="row"><span class="chip" [attr.data-status]="st.status">{{st.status}}</span><b>{{st.name}}</b><span class="chip" [attr.data-status]="categoryOf(st)">{{categoryLabel(categoryOf(st))}}</span><small>attempts: {{st.attempts}} — {{dur(st)}}</small><span class="spacer"></span>
-  @if ((v.run.status === 'completed' || v.run.status === 'failed' || v.run.status === 'canceled') && st.status !== 'skipped') {<button class="secondary" (click)="rerunFrom(st.node_id)" title="Re-run the workflow from this step">Re-run from here</button>}</div>
+  @if (!uncertain(v) && (v.run.status === 'completed' || v.run.status === 'failed' || v.run.status === 'canceled') && st.status !== 'skipped') {<button class="secondary" (click)="rerunFrom(st.node_id)" title="Re-run the workflow from this step">Re-run from here</button>}</div>
   @if (st.error) {<p class="msg error">{{st.error}}</p>}
   @if (dataLinkOf(v, st); as l) {<p style="margin:.3rem 0"><a class="btn secondary" [routerLink]="['/database', 'data']" [queryParams]="{ table: l.table, ref: l.ref, filter: l.filter }">{{l.removed ? 'Open the table in Data (row removed)' : 'Open the row in Data'}}</a> <span class="hint">{{l.table}} on {{l.ref}}</span></p>}
   <details><summary>Input</summary><pre class="wf-log">{{st.input | json}}</pre></details>
@@ -182,6 +183,7 @@ export class WorkflowExecutionsPage implements OnInit, OnDestroy {
       if ((e as Error).message.includes('unknown run')) { this.tabs.drop('run', id); this.close(); }
     }
   }
+  protected uncertain(v:RunView) {return v.steps.some(s=>s.error==='EXTERNAL_EFFECT_REVIEW_REQUIRED');}
   protected async retry() { try { this.view.set(await clientOf(this.s).retry(this.selected()!)); } catch (e) { this.note.set((e as Error).message); } }
   protected async rerunFrom(nodeId: string) { try { this.view.set(await clientOf(this.s).rerunFrom(this.selected()!, nodeId)); this.note.set(`Re-running from ${nodeId}.`); } catch (e) { this.note.set((e as Error).message); } }
   protected async cancel() { try { this.view.set(await clientOf(this.s).cancel(this.selected()!)); } catch (e) { this.note.set((e as Error).message); } }

@@ -1,3 +1,4 @@
+import {managedProvider} from './execution-policy';
 import { StepCategory, WfBlock, WfEdge, WfEvent, WfNode, categoryOfType } from './wf-model';
 
 // ---- Graph helpers for the editor: logic-block metadata, client-side validation (mirrors the server
@@ -87,6 +88,7 @@ export function validateGraph(
 
   for (const n of nodes) {
     const blk = blockOf(n.type);
+    if(managedProvider(n.type) && n.config['executionMode']==='real' && (!n.config['connectionId'] || n.config['realConfirmed']!==true)) issues.push({level:'error',nodeId:n.id,message:'Real execution requires a managed connection and explicit confirmation.'});
     for (const f of blk?.fields ?? []) {
       const v = n.config[f.key];
       if (f.required && (v === undefined || v === null || String(v).trim() === ''))
