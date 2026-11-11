@@ -174,7 +174,7 @@ export function createOidcEngine(deps) {
     const grant = new p.provider.Grant({ accountId: sub, clientId: app.id });
     grant.addOIDCScope(String(i.params.scope ?? 'openid').split(' ').filter((s) => SCOPES.includes(s) && appScopes(app).has(s)).join(' ') || 'openid');
     const grantId = await grant.save();
-    i.result = { login: { accountId: sub, remember: false }, consent: { grantId } };
+    i.result = { login: { accountId: sub, remember: true }, consent: { grantId } }; // remember: the session survives the browser closing, for the configured Session ttl
     await i.save(i.exp - Math.floor(Date.now() / 1000));
     deps.emit('sso.login.succeeded', t, { app: app.id, subject: sub });
     return { redirectTo: i.returnTo };

@@ -138,6 +138,21 @@ describe('OIDC provider: a local relying party signs in (code + PKCE) through th
     assert.deepEqual(info, { sub: 'demo-alice', name: 'Alice Martin' }, 'userinfo serves only claims of the granted scopes');
   });
 
+  it('an application opens without a new sign-in while the session lives (SSO session persistence)', async () => {
+    const config = await cfg();
+    const { v, c } = await pkce();
+    const s = await start(config, c, 'openid profile email roles', 'st6') as { uid: string };
+    const done = await (await api(`/sso/${T}/interaction/${s.uid}/complete`, 'demo-alice', { decision: 'allow' })).json() as any;
+    const t1 = await oc.authorizationCodeGrant(config, await finish(done.redirectTo), { pkceCodeVerifier: v, expectedState: 'st6' });
+    assert.equal(t1.claims()!.sub, 'demo-alice');
+    // the session cookie the sign-in left in the jar answers the next authorization straight away: no interaction, no credentials
+    const { v: v2, c: c2 } = await pkce();
+    const url = oc.buildAuthorizationUrl(config, { redirect_uri: CB, scope: 'openid profile', state: 'st7', code_challenge: c2, code_challenge_method: 'S256' });
+    const cb2 = await finish(url.href);
+    const t2 = await oc.authorizationCodeGrant(config, cb2, { pkceCodeVerifier: v2, expectedState: 'st7' });
+    assert.equal(t2.claims()!.sub, 'demo-alice', 'the living session answered: no second sign-in');
+  });
+
   it('refuses a user without an allowed role (access_denied) and records it', async () => {
     const config = await cfg(), { c } = await pkce();
     const s = await start(config, c, 'openid', 'st3') as { uid: string };
