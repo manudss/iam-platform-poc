@@ -32,6 +32,40 @@ Verified on 2026-10-29 in a real browser (headless Chrome):
    console field can be left empty. In the local/Codespaces path instead,
    `demo-start.sh` prints the token for the operator to type into that field.
 
+### Sign-in cold-start readiness (2026-11-11)
+
+The demo start script now requires both the public methods list and the core's
+Password only form to answer before it starts the edge. The methods request goes
+directly to `:3000/tenants/acme-demo/signin/options` (no `/api` prefix). The former
+warm-up called the wrong path, received 404 and treated it as success.
+`demo/warm-signin.mjs` validates the JSON, then exercises core -> internal gate ->
+`auth.prepare` over the real bus. It does not submit a username, password or
+one-time code and does not mint a signed-in session. Three bounded attempts are
+allowed; persistent failure stops startup instead of exposing a misleading green
+edge health check. Sign-in proxy routes allow the configured core gate budget
+plus 15 seconds; other proxy routes keep their existing budgets. No authentication
+check is bypassed and a gate refusal remains a refusal.
+
+Context: after the #83 deployment, the live free instance returned an upstream
+timeout and then `sign-in is temporarily unavailable` during its cold start. It
+recovered without any intervention. The exact cause of the transient gate refusal
+was not established: both exact GHCR images (before #83, `5d3fac7`, and after,
+`0f8e489`) passed the real local entry and login checks. The wrong warm-up route
+and the 15-second proxy cutting off a 30-second gate budget are independently
+reproduced defects, not evidence that #83 broke authentication.
+
+After recovery, the deployed `0f8e489` passed one browser login, My applications ->
+PeopleHub (OIDC), return to Lyam -> ExpenseFlow (SAML), and a second return plus a
+new Lyam tab without another login. Consent was still explicit. This is a demo
+validation, not a guarantee against future free-tier delays. Provider state is
+still in memory and disappears on restart. Internal API/core logs remain in the
+container's `/data` directory; Render Free has no web shell, so the public stdout
+alone cannot explain every gate failure.
+
+Run the readiness, slow-upstream and routing regression tests with
+`node --test demo/*.test.mjs`. The demo Docker CI job also boots the actual image
+and completes a real fictional-account login after readiness passes.
+
 ### What the live demo is (and is not)
 
 - A public privacy policy page (French + English summary) is served at `/privacy`, no sign-in required; the e-mail sending configuration needs a reachable privacy URL.

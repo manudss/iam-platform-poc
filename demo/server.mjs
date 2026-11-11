@@ -13,6 +13,8 @@ const PORT = Number(process.env.PORT ?? 8080);
 const CORE = { host: '127.0.0.1', port: Number(process.env.IAM_CORE_PORT ?? 8081) };
 const API = { host: '127.0.0.1', port: Number(process.env.API_PORT ?? 3000) };
 const SSR = { host: '127.0.0.1', port: Number(process.env.SSR_PORT ?? 4000) };
+// The gate may legitimately use its 30 s budget on the free tier. The edge must not cut it at 15 s.
+const signinTimeoutMs = (path, env = process.env) => /^\/(?:core\/)?authorize(?:\/login)?$/.test(path) ? Math.max(15000, Number(env.IAM_GATE_TIMEOUT_MS) || 30000) + 15000 : 15000;
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain' };
 
 function proxy(req, res, target, strip, htmlHeaders, timeoutMs = 15000) {
@@ -35,7 +37,7 @@ const server = http.createServer(async (req, res) => {
   if (/^\/(api|core)\/internal(?:\/|$)/i.test(p)) { res.writeHead(404); return res.end('not found'); }
   try {
     if (p === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('ok'); }
-    if (p === '/core' || p.startsWith('/core/')) return proxy(req, res, CORE, true);
+    if (p === '/core' || p.startsWith('/core/')) return proxy(req, res, CORE, true, undefined, signinTimeoutMs(p));
     if (p === '/api' || p.startsWith('/api/')) {
       // The admin capability token lives only server-side: the edge attaches it to proxied API calls so
       // signed-in demo visitors can use simulation / plugin admin without ever seeing the secret.
@@ -45,7 +47,7 @@ const server = http.createServer(async (req, res) => {
     // /authorize and everything under it (login post, theme toggle, the passkey ceremony script
     // /authorize/webauthn.js): an exact-match here once sent the ceremony script to the SPA, which
     // answered HTML, the browser refused it as a script, and "Use my passkey" did nothing.
-    if (p === '/authorize' || p.startsWith('/authorize/') || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false);
+    if (p === '/authorize' || p.startsWith('/authorize/') || p === '/token' || p === '/jwks.json' || p.startsWith('/.well-known/')) return proxy(req, res, CORE, false, undefined, signinTimeoutMs(p));
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('method not allowed'); }
     // The SSR render waits for the API options; a cold Dolt can need ~30 s on the first hit, well over the default proxy timeout.
     return proxy(req, res, SSR, false, () => ({ 'cache-control': 'no-store', ...framingHeaders(p, url.search) }), 75000);

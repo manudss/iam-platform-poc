@@ -81,8 +81,9 @@ if [ "$api_up" != 1 ]; then echo '[demo] FATAL: NestJS API never came up on :300
 # edge. Its server-side API calls go through the edge (same public paths as the browser).
 # Warm the public sign-in options cache (first real call pays a cold Dolt, ~30 s on the free tier): the first
 # /login SSR render must find it warm, or it would render the error state.
+# Also exercise the real core -> gate -> plugin bus before exposing the edge (no user is signed in).
 echo '[demo] warming the sign-in options cache'
-node -e "fetch('http://127.0.0.1:3000/api/tenants/acme-demo/signin/options', { headers: { 'x-api-admin-token': process.env.IAM_API_ADMIN_TOKEN ?? '' }, signal: AbortSignal.timeout(60000) }).then(r => { console.log('[demo] options warm-up:', r.status); process.exit(0); }).catch(e => { console.log('[demo] options warm-up failed (the first visit will pay it):', e.message); process.exit(0); })"
+PUBLIC_ORIGIN="$PUBLIC_ORIGIN" node /app/demo/warm-signin.mjs
 echo '[demo] starting Angular SSR server on 127.0.0.1:4000'
 IAM_WEB_API_ORIGIN="http://127.0.0.1:${PORT:-8080}" PORT=4000 supervise node /app/web/dist/web/server/server.mjs >"$HOME_DIR/ssr.log" 2>&1 &
 ssr_up=0

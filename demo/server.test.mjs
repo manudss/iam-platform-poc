@@ -69,3 +69,19 @@ test('the edge routes the core, API and SPA paths to the right upstream', async 
     for (const s of [core, api, ssr]) s.close();
   }
 });
+
+test('sign-in routes do not time out at 15 s before the 30 s core gate budget', { timeout: 23000 }, async () => {
+  const core = http.createServer((_req, res) => { setTimeout(() => res.end('gate form ready'), 16000); });
+  await new Promise((ok) => core.listen(0, '127.0.0.1', ok));
+  const edgePort = await freePort();
+  const edge = spawn(process.execPath, [join(here, 'server.mjs')], {
+    env: { ...process.env, PORT: String(edgePort), IAM_CORE_PORT: String(core.address().port), IAM_GATE_TIMEOUT_MS: '30000' }, stdio: 'ignore',
+  });
+  try {
+    for (let i = 0; i < 50; i++) { try { if ((await req(edgePort, 'GET', '/healthz')).status === 200) break; } catch {} await new Promise((r) => setTimeout(r, 50)); }
+    for (const r of await Promise.all(['/core/authorize', '/core/authorize/login', '/authorize', '/authorize/login'].map((p) => req(edgePort, 'GET', p)))) {
+      assert.equal(r.status, 200, 'a slow but valid gate answer must reach the browser');
+      assert.equal(r.body, 'gate form ready');
+    }
+  } finally { edge.kill('SIGKILL'); core.closeAllConnections(); await new Promise((ok) => core.close(ok)); }
+});
