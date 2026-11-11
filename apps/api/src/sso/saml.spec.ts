@@ -58,6 +58,12 @@ describe('saml attribute mapping and response template (pure)', () => {
     const { nameID, nameIDFormat } = samlAttributesFor({ attribute_mapping: { email: 'email' } }, yanis);
     assert.equal(nameID, 'yanis-leroy'); assert.equal(nameIDFormat, 'urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified');
   });
+  it('an explicit nameid_format overrides the mapping-derived NameID', () => {
+    const email = samlAttributesFor({ attribute_mapping: { NameID: 'id' }, nameid_format: 'emailAddress' } as never, yanis);
+    assert.equal(email.nameID, 'yanis@example.invalid'); assert.equal(email.nameIDFormat, 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress');
+    const persistent = samlAttributesFor({ attribute_mapping: { NameID: 'email' }, nameid_format: 'persistent' } as never, yanis);
+    assert.equal(persistent.nameID, 'yanis-leroy'); assert.equal(persistent.nameIDFormat, 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent');
+  });
   it('the template filler escapes XML and drops InResponseTo for an IdP-initiated response', () => {
     const t = '<samlp:Response Destination="{Destination}" InResponseTo="{InResponseTo}"><saml:Issuer>{Issuer}</saml:Issuer>{AttributeStatement}</samlp:Response>';
     const out = fillResponseTemplate(t, { Destination: 'https://a.example/acs?x=1&y=2', InResponseTo: null, Issuer: 'me', AttributeStatement: '<raw/>' });
@@ -83,13 +89,13 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
   after(async () => { process.env.IAM_SSO_BASE_URL = saved.b; await app.close(); });
 
   /** The IdP as the SP sees it: entity id and signing certificate from the published metadata. */
-  async function idpForSp() {
+  async function idpForSp(wantSigned = false) {
     const meta = await (await fetch(`${ISS}/metadata`)).text();
     const cert = meta.match(/<ds:X509Certificate>([^<]+)<\/ds:X509Certificate>/)![1];
     return samlify.IdentityProvider({
       entityID: ISS, signingCert: `-----BEGIN CERTIFICATE-----\n${cert}\n-----END CERTIFICATE-----`,
       singleSignOnService: [{ Binding: BIND_REDIRECT, Location: `${ISS}/login` }, { Binding: BIND_POST, Location: `${ISS}/login` }],
-      wantAuthnRequestsSigned: false,
+      wantAuthnRequestsSigned: wantSigned,
     });
   }
   const makeSp = (entityID = PAYROLL_ENTITY, acs = PAYROLL_ACS) =>
@@ -179,6 +185,28 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     const done = await (await api(`/sso/${T}/saml-interaction/${rid}/complete`, 'demo-alice', { decision: 'allow' })).json() as any;
     assert.ok(Buffer.from(done.samlResponse, 'base64').toString('utf8').includes('RequestDenied'));
     await eventually(() => events.some((e) => e.type === 'sso.login.denied' && e.payload.subject === 'demo-alice' && e.payload.reason === 'not-allowed'));
+  });
+
+  it('signed AuthnRequests: verified against the registered SP certificate, unsigned refused when required', async () => {
+    // @ts-expect-error - the plugin's demo self-signed helper is a plain .mjs without type declarations
+    const { selfSignedCert } = await import('../../../../plugins/saml-idp/selfsigned.mjs') as any;
+    const spKey = selfSignedCert('SP test (fictional)');
+    await apps.create(T, 'admin', { id: 'signed-sp', name: 'Signed SP', protocol: 'saml', entity_id: 'https://signed.example.invalid/saml', acs_url: 'https://signed.example.invalid/acs', enabled: true, allowed_roles: ['hr-partner'], attribute_mapping: MAPPING, sp_certificate: spKey.certPem, want_signed_requests: true });
+    const idp = await idpForSp(true);
+    const signedSp = samlify.ServiceProvider({ entityID: 'https://signed.example.invalid/saml', signingCert: spKey.certPem, privateKey: spKey.privateKeyPem, authnRequestsSigned: true, assertionConsumerService: [{ Binding: BIND_POST, Location: 'https://signed.example.invalid/acs' }] });
+    // a signed request is accepted and signs the user in
+    const r = signedSp.createLoginRequest(idp, 'redirect', {});
+    const res = await fetch(String(typeof r === 'string' ? r : r.context), { redirect: 'manual' });
+    assert.equal(res.status, 302, `signed request accepted, got ${res.status}: ${await res.text()}`);
+    // A request signed by a different private key is refused too.
+    const wrongKey = selfSignedCert('Wrong SP test (fictional)');
+    const wrongSp = samlify.ServiceProvider({ entityID: 'https://signed.example.invalid/saml', signingCert: wrongKey.certPem, privateKey: wrongKey.privateKeyPem, authnRequestsSigned: true, assertionConsumerService: [{ Binding: BIND_POST, Location: 'https://signed.example.invalid/acs' }] });
+    const wrongRequest = wrongSp.createLoginRequest(idp, 'redirect', {});
+    assert.equal((await fetch(String(typeof wrongRequest === 'string' ? wrongRequest : wrongRequest.context), { redirect: 'manual' })).status, 400, 'wrong signing key refused');
+    // the same entity without a signature is refused
+    const unsigned = makeSp('https://signed.example.invalid/saml', 'https://signed.example.invalid/acs').createLoginRequest(await idpForSp(), 'redirect', {});
+    const res2 = await fetch(String(typeof unsigned === 'string' ? unsigned : unsigned.context), { redirect: 'manual' });
+    assert.equal(res2.status, 400, 'unsigned AuthnRequest refused while the application requires a signature');
   });
 
   it('negative tests: unknown service provider, ACS mismatch, disabled application, bad decision, single use', async () => {

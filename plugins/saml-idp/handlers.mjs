@@ -45,6 +45,7 @@ const BIND_REDIRECT = 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect';
 const BIND_POST = 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST';
 const NID_EMAIL = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
 const NID_UNSPEC = 'urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified';
+const NID_PERSISTENT = 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent';
 const STATUS_SUCCESS = 'urn:oasis:names:tc:SAML:2.0:status:Success';
 const STATUS_RESPONDER = 'urn:oasis:names:tc:SAML:2.0:status:Responder';
 const STATUS_DENIED = 'urn:oasis:names:tc:SAML:2.0:status:RequestDenied';
@@ -70,6 +71,9 @@ export function samlAttributesFor(app, u) {
     const values = Array.isArray(v) ? v.filter((x) => x) : typeof v === 'string' && v !== '' ? [v] : [];
     if (values.length) attributes.push({ name, values });
   }
+  if (app.nameid_format === 'emailAddress' && u.email) { nameID = u.email; nameIDFormat = NID_EMAIL; }
+  else if (app.nameid_format === 'persistent') { nameID = u.id; nameIDFormat = NID_PERSISTENT; }
+  else if (app.nameid_format === 'unspecified') { nameIDFormat = NID_UNSPEC; }
   return { nameID, nameIDFormat, attributes };
 }
 
@@ -115,15 +119,17 @@ export function createSamlEngine(deps) {
     if (!k) { k = selfSignedCert(`IAM POC SAML IdP (${t})`); warn(`saml-idp: no signing key in the secret store, a self-signed one was generated for this process (demo); a restart invalidates the metadata`); }
     keys.set(t, k); return k;
   }
-  async function idp(t, baseUrl) {
-    const entityID = `${baseUrl}/sso/${t}/saml`, k = `${t}|${entityID}`;
+  /** The IdP entity. `wantSigned` makes signed AuthnRequests mandatory for the application being served
+   * (verified against its registered certificate); without it requests are accepted unsigned (demo default). */
+  async function idp(t, baseUrl, wantSigned = false) {
+    const entityID = `${baseUrl}/sso/${t}/saml`, k = `${t}|${entityID}|${wantSigned}`;
     let e = idps.get(k); if (e) return e;
     const { certPem, privateKeyPem } = await keyMaterial(t);
     const i = samlify.IdentityProvider({
       entityID, signingCert: certPem, privateKey: privateKeyPem,
       singleSignOnService: [{ Binding: BIND_REDIRECT, Location: `${entityID}/login` }, { Binding: BIND_POST, Location: `${entityID}/login` }],
       nameIDFormat: [NID_EMAIL, NID_UNSPEC],
-      wantAuthnRequestsSigned: false, // demo: the registry holds no SP certificate, AuthnRequests are accepted unsigned
+      wantAuthnRequestsSigned: wantSigned,
     });
     e = { idp: i, entityID }; idps.set(k, e); return e;
   }
@@ -131,7 +137,10 @@ export function createSamlEngine(deps) {
     const { entity_id, acs_url } = app;
     if (!entity_id || !acs_url) throw new BadRequestException('the application has no SAML entity id or ACS URL');
     return samlify.ServiceProvider({
-      entityID: entity_id, authnRequestsSigned: false, wantAssertionsSigned: true,
+      entityID: entity_id, wantAssertionsSigned: true,
+      // With the SP certificate registered, AuthnRequests can be signature-verified; `want_signed_requests`
+      // makes a signature mandatory (an unsigned or badly signed request is then refused at parse).
+      ...(app.sp_certificate ? { signingCert: app.sp_certificate, authnRequestsSigned: !!app.want_signed_requests } : { authnRequestsSigned: false }),
       assertionConsumerService: [{ Binding: BIND_POST, Location: acs_url }],
     });
   }
@@ -160,9 +169,19 @@ export function createSamlEngine(deps) {
       try { issuer = decodeIssuer(q.SAMLRequest, req.method === 'GET'); } catch { return fail(400, 'invalid_request', 'the SAMLRequest cannot be decoded'); }
       app = await samlAppByEntity(t, issuer);
       if (!app) { deps.emit('sso.login.failed', t, { app: issuer.slice(0, 80), subject: '', reason: 'unknown-service-provider' }); return fail(400, 'invalid_request', 'unknown service provider'); }
-      const { idp: i } = await idp(t, base(req));
+      const { idp: i } = await idp(t, base(req), !!app.want_signed_requests);
       let info;
-      try { info = await i.parseLoginRequest(spFor(app), req.method === 'GET' ? 'redirect' : 'post', req.method === 'GET' ? { query: req.query } : { body }); }
+      try {
+        // Redirect signatures cover the original percent-encoded values, not re-serialized query values.
+        const rawQuery = String(req.originalUrl ?? req.url ?? '').split('?')[1] ?? '';
+        const parts = rawQuery.split('&');
+        const signedParts = ['SAMLRequest', 'RelayState', 'SigAlg'].flatMap((key) => {
+          const matches = parts.filter((part) => part.startsWith(`${key}=`));
+          if (matches.length > 1) throw new Error('duplicate SAML query parameter');
+          return matches;
+        });
+        info = await i.parseLoginRequest(spFor(app), req.method === 'GET' ? 'redirect' : 'post', req.method === 'GET' ? { query: req.query, octetString: signedParts.join('&') } : { body });
+      }
       catch (e) { deps.emit('sso.login.failed', t, { app: app.id, subject: '', reason: String(e.message).slice(0, 80) }); return fail(400, 'invalid_request', 'the SAMLRequest is not valid'); }
       const r = info?.extract?.request ?? {};
       requestId = r.id ?? null;
