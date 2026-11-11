@@ -18,6 +18,13 @@ Stored in the tenant's core settings under the key `core-session`, so it is bran
 API: `GET /tenants/:tenant/session` (effective values), `PUT /tenants/:tenant/session` (admin token, body `{config}`).
 Console: Authentication methods, section "Session".
 
+## Persistence
+
+The console token is also kept in localStorage (`iam.session`): coming back to the console - or answering an SSO
+sign-in request, which rides the console session - within the token's lifetime skips a new sign-in. Sign-out clears it
+and an expired token is never restored (the check reads the token's own `exp`; the server verifies every request
+anyway). With `allowExtend` off, the session simply ends at `ttlSeconds`.
+
 ## Renewal
 
 `POST /core/session/extend` with the current token returns a fresh one for the same sign-in (same `auth_time`, new `iat`/`exp`).

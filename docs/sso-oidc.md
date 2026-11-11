@@ -36,11 +36,26 @@ The decision is taken on the **live** data (Dolt main), not on an unapplied bran
 
 Any other claim name is ignored, and a claim whose profile value is empty is left out. Only the claims the application mapped are sent (a claim not mapped is never sent, whatever the scope). `email_verified` is always `false`: the directory does not verify addresses. Scopes: `openid`, `profile`, `email`, `roles`, `offline_access`.
 
+## Per-application options
+
+Each OIDC application carries, next to its redirect URIs and launch URL:
+
+- **Scopes**: which scopes it may receive on top of `openid` (`profile`, `email`, `roles`, `offline_access`). The
+  consent screen and the issued grant are filtered to that list: asking for more is not an error, the extra scopes are
+  simply not granted. Applications registered before this option keep `profile email roles`.
+- **Allow refresh tokens**: without it the `refresh_token` grant is closed for the application and `offline_access` is
+  refused (the two go together). Older applications keep it on.
+
+The `sso-config-oidc` seed exercises the full set (all scopes, refresh allowed).
+
 ## Secrets and keys
 
 - **Client secret**: the application's `secret_ref` names an entry in the secret store (OpenBao, field `client_secret` or `value`). If it can be read, the application is a *confidential* client (`client_secret_basic`). If there is no secret store or the entry is missing, it is a **public client**: no secret, PKCE is what protects the code. The seeded demo has no secret store, so its applications are public clients.
 - **Signing key**: read from the secret store (`sso/<tenant>/oidc-signing-key`, field `jwk`, a private ES256 JWK) so it survives restarts. Without one, a key is **generated at each start** (ES256): tokens issued before a restart cannot be verified afterwards. Only the public key is published (JWKS).
 - Sessions, codes, tokens and grants are **in memory** (runtime state, not Dolt), so they are lost at restart. Cookie keys: `IAM_SSO_COOKIE_KEY` (16+ characters) or random at start.
+- **SSO session persistence**: the provider session is remembered across a browser restart (`remember me`), for the
+  Session ttl (8h). While it lives, opening another application does not ask for credentials again. The console token
+  is likewise kept across visits while valid (docs/session.md), which also covers SP-initiated SAML sign-in requests.
 
 ## Events and audit
 
