@@ -9,7 +9,7 @@ export interface Assignment { identity_id: string; role_id: string }
 export interface Activation { seq: number; commit: string }
 
 /**
- * State shared by all pages of the console: the API client (token in memory only, lost on reload), the signed-in flag, the last
+ * State shared by all pages of the console: the API client (token kept across visits while valid, docs/session.md), the signed-in flag, the last
  * message shown in the status bar and the data of the IAM pages. Pages never keep their own copy of the token.
  */
 @Injectable({ providedIn: 'root' })
@@ -50,6 +50,7 @@ export class Session implements OnDestroy {
     if (expires !== null) this.expiryTimer = setTimeout(() => this.expire(), Math.max(0, expires - Date.now()));
   }
   readonly api = new ApiClient('acme-demo', (...args) => fetch(...args), () => this.expire());
+  constructor() { if (this.api.restore()) this.signedIn(); } // a visit within the token's lifetime skips a new sign-in
   readonly loggedIn = signal(false);
   readonly user = signal('');
   readonly branch = signal('');
