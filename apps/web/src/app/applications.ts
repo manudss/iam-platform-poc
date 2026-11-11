@@ -55,9 +55,9 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   <div class="row"><label>Description<input name="adesc" [(ngModel)]="description" maxlength="240" /></label></div>
   <div class="panel app-logo-editor"><h4>Application logo</h4>
   <p class="hint">PNG, JPEG or WebP up to 64 KB, or SVG up to 50 KB. Stored in Dolt with the application, versioned on this branch and live after Apply.</p>
-  @if (logo) { <img class="app-logo-preview" [src]="logo" alt="Application logo preview" /> }
+  @if (logo()) { <img class="app-logo-preview" [src]="logo()" alt="Application logo preview" /> }
   <label>Upload image<input type="file" name="alogo" accept="image/png,image/jpeg,image/webp,image/svg+xml" (change)="uploadLogo($event)" [disabled]="s.branch()==='main'" /></label>
-  @if (logo) { <button class="secondary" (click)="logo=null" [disabled]="s.branch()==='main'">Remove logo</button> }
+  @if (logo()) { <button class="secondary" (click)="logo.set(null)" [disabled]="s.branch()==='main'">Remove logo</button> }
   </div>
   @if (protocol === 'oidc') { <div class="row"><label>Redirect URIs (one per line, exact, https)<textarea name="auris" rows="3" [(ngModel)]="uris"></textarea></label>
   <label>Launch URL (where users open the app; shown on their home page)<input name="alaunch" [(ngModel)]="launch" placeholder="https://app.example.com/" /></label></div>
@@ -85,11 +85,11 @@ export class ApplicationsPage {
   protected readonly s = inject(Session);
   protected apps = signal<AppConnector[]>([]); protected note = signal(''); protected problem = signal(''); protected off = signal(false); protected editing = signal(false);
   protected id = ''; protected name = ''; protected description = ''; protected protocol: Protocol = 'oidc'; protected uris = ''; protected entity = ''; protected acs = ''; protected mapping = ''; protected roles = ''; protected ref = ''; protected launch = '';
-  protected logo: string | null = null;
+  protected logo = signal<string | null>(null);
   protected async uploadLogo(event: Event) {
     const input = event.target as HTMLInputElement, file = input.files?.[0]; if (!file) return;
     if (file.size > 65536 || !['image/png','image/jpeg','image/webp','image/svg+xml'].includes(file.type)) { this.problem.set('Choose a PNG, JPEG, WebP or SVG image under 64 KB.'); input.value = ''; return; }
-    try { this.logo = await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(Error('Could not read image')); r.readAsDataURL(file); }); this.problem.set(''); } catch (e) { this.problem.set((e as Error).message); } finally { input.value = ''; }
+    try { this.logo.set(await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(Error('Could not read image')); r.readAsDataURL(file); })); this.problem.set(''); } catch (e) { this.problem.set((e as Error).message); } finally { input.value = ''; }
   }
   protected nameid = 'emailAddress'; protected cert = ''; protected signedReq = false; protected spMeta = '';
   protected scopeChecks: OidcScopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); protected allowRefresh = false;
@@ -105,14 +105,14 @@ export class ApplicationsPage {
   }
   private async run(method: string, path: string, body: object | undefined, ok: string) { const r = await this.s.api.raw<any>(method, path, body, this.h()); if (this.fail(r)) return false; this.note.set(ok + ' Saved on the working branch; live after Apply.'); this.problem.set(''); await this.load(); return true; }
   protected edit(a: AppConnector) {
-    this.logo = a.logo ?? null; this.editing.set(true); this.id = a.id; this.name = a.name; this.description = a.description; this.protocol = a.protocol; this.uris = a.redirect_uris.join('\n');
+    this.logo.set(a.logo ?? null); this.editing.set(true); this.id = a.id; this.name = a.name; this.description = a.description; this.protocol = a.protocol; this.uris = a.redirect_uris.join('\n');
     this.entity = a.entity_id ?? ''; this.acs = a.acs_url ?? ''; this.mapping = formatMapping(a.attribute_mapping); this.roles = a.allowed_roles.join('\n'); this.ref = a.secret_ref ?? ''; this.launch = a.launch_url ?? '';
     this.nameid = a.nameid_format ?? 'emailAddress'; this.cert = a.sp_certificate ?? ''; this.signedReq = a.want_signed_requests; this.spMeta = '';
     this.scopeChecks = scopeChecksFromList(a.scopes ?? []); this.allowRefresh = a.allow_refresh_tokens;
   }
-  protected reset() { this.logo = null; this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; this.scopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); this.allowRefresh = false; }
+  protected reset() { this.logo.set(null); this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; this.scopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); this.allowRefresh = false; }
   private body(): Record<string, unknown> {
-    return { logo: this.logo, name: this.name, description: this.description, protocol: this.protocol, redirect_uris: this.protocol === 'oidc' ? parseList(this.uris) : [], entity_id: this.protocol === 'saml' ? this.entity : null, acs_url: this.protocol === 'saml' ? this.acs : null, attribute_mapping: parseMapping(this.mapping), allowed_roles: parseList(this.roles), secret_ref: this.ref || null, launch_url: this.protocol === 'oidc' ? this.launch || null : null,
+    return { logo: this.logo(), name: this.name, description: this.description, protocol: this.protocol, redirect_uris: this.protocol === 'oidc' ? parseList(this.uris) : [], entity_id: this.protocol === 'saml' ? this.entity : null, acs_url: this.protocol === 'saml' ? this.acs : null, attribute_mapping: parseMapping(this.mapping), allowed_roles: parseList(this.roles), secret_ref: this.ref || null, launch_url: this.protocol === 'oidc' ? this.launch || null : null,
       nameid_format: this.protocol === 'saml' ? this.nameid : null, sp_certificate: this.protocol === 'saml' ? this.cert.trim() || null : null, want_signed_requests: this.protocol === 'saml' ? this.signedReq : false,
       scopes: this.protocol === 'oidc' ? scopeListFromChecks(this.scopeChecks) : [], allow_refresh_tokens: this.protocol === 'oidc' ? this.allowRefresh : false };
   }

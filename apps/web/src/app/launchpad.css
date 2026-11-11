@@ -1,4 +1,5 @@
 :host { display:block; }
+.lp-intro h1 { font-size:1.8rem; line-height:1.2; margin:.5rem 0; }
 .lp-intro { margin-bottom:1.25rem; }
 .lp-eyebrow { font-size:.7rem; letter-spacing:.15em; font-weight:600; color:var(--accent-dark); }
 .lp-lead,.lp-demo,.lp-empty { color:var(--muted); }
@@ -43,4 +44,4 @@
   .lp-search { flex-basis:100%; }
   .lp-move { gap:.15rem; }
 }
-@media(max-width:359px) { .lp-head { flex-wrap:wrap; } .lp-move button.secondary { min-width:40px; width:40px; } }
+@media(max-width:359px) { .lp-head { gap:.3rem; } .lp-logo { width:1.5rem; height:1.5rem; } .lp-head h3 { font-size:.73rem; } .lp-move { display:grid; grid-template-columns:1fr 1fr; } .lp-move .lp-handle { grid-column:1 / -1; width:100%; } }

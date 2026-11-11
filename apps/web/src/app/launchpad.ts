@@ -26,7 +26,7 @@ const LAUNCHPAD_KEY = makeStateKey<{ user?: { name?: string }; apps?: LaunchpadA
 @Component({
   selector: 'app-launchpad', imports: [FormsModule], styleUrl: './launchpad.css',
   template: `
-  <div class="lp-intro"><p class="lp-eyebrow">YOUR WORKSPACE</p><p class="lp-lead">Your apps, in your order.</p></div>
+  <div class="lp-intro"><p class="lp-eyebrow">YOUR WORKSPACE</p><h1>My applications</h1><p class="lp-lead">Your apps, in your order.</p></div>
   <div class="lp-toolbar">
     <label class="lp-search">Search applications<input type="search" name="applicationSearch" [(ngModel)]="query" [disabled]="editing()" placeholder="Search applications" /></label>
     @if (editing()) {
@@ -49,7 +49,7 @@ const LAUNCHPAD_KEY = makeStateKey<{ user?: { name?: string }; apps?: LaunchpadA
           <div class="lp-head">
             @if (a.logo && !failedImages().includes(a.id)) { <img class="lp-logo" [src]="a.logo" alt="" (error)="imageFailed(a.id)" /> }
             @else { <span class="lp-logo lp-initials" aria-hidden="true">{{initials(a.name)}}</span> }
-            <h3>{{a.name}}</h3>
+            <h3>@for (part of nameParts(a.name); track $index; let last = $last) {{{part}}@if (!last) {<wbr>} }</h3>
           </div>
           <p class="lp-desc">{{a.description}}</p>
           @if (editing()) {
@@ -101,6 +101,7 @@ export class LaunchpadPage {
   });
   constructor() { effect(() => { this.s.branchEpoch(); void this.pending.run(() => this.load()); }); }
   protected favourite(id: string) { return this.preferences().favourites.includes(id); }
+  protected nameParts(name: string) { return name.split(/(?<=[a-z])(?=[A-Z])/); }
   protected initials(name: string) { return name.split(/[\s:-]+/).filter(Boolean).slice(0,2).map(x => x[0]).join('').toUpperCase(); }
   protected imageFailed(id: string) { this.failedImages.update(xs => [...xs,id]); }
   private async load() {
@@ -130,12 +131,13 @@ export class LaunchpadPage {
     this.preferences.update(p => ({ ...p, order: orderedApps(this.apps(),p.order).map(a => a.id) }));
     this.editing.set(true); this.announcement.set('Organisation mode. Use drag handles or move buttons.');
   }
-  protected cancel() { if (this.beforeEdit) this.preferences.set(this.beforeEdit); this.beforeEdit = null; this.editing.set(false); this.stopDrag(); this.problem.set(''); this.announcement.set('Changes cancelled.'); }
+  protected cancel() { if (this.beforeEdit) this.preferences.set(this.beforeEdit); this.beforeEdit = null; this.editing.set(false); this.stopDrag(); this.problem.set(''); this.announcement.set('Changes cancelled.'); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#lp-organise')?.focus()); }
   protected async toggle(a: LaunchpadApp) {
     const before = this.preferences(), added = !this.favourite(a.id);
     this.preferences.set({ ...before, favourites: added ? [...before.favourites,a.id] : before.favourites.filter(id => id !== a.id) });
     if (!this.editing() && !(await this.persist())) { this.preferences.set(before); return; }
     this.announcement.set(a.name + (added ? ' added to favourites.' : ' removed from favourites.'));
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-app="'+a.id+'"] .lp-star')?.focus());
   }
   private async persist(): Promise<boolean> {
     this.busy.set(true); this.problem.set('');
@@ -146,7 +148,7 @@ export class LaunchpadPage {
     } catch (e) { this.problem.set((e as Error).message); return false; }
     finally { this.busy.set(false); }
   }
-  protected async save() { if (await this.persist()) { this.editing.set(false); this.beforeEdit = null; this.stopDrag(); this.announcement.set('Application order saved.'); } }
+  protected async save() { if (await this.persist()) { this.editing.set(false); this.beforeEdit = null; this.stopDrag(); this.announcement.set('Application order saved.'); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#lp-organise')?.focus()); } }
   protected move(id: string, delta: number, apps: LaunchpadApp[]) {
     const i = apps.findIndex(a => a.id === id), target = apps[i+delta]; if (!target) return;
     this.reorder(id,target.id,apps);
