@@ -50,8 +50,28 @@ type State = { apps: AppConnector[] };
 export interface AppConnectorStore {
   list(t: string, ref: 'live' | 'work'): Promise<State>;
   write(t: string, actor: string, fn: (s: State) => void): Promise<void>;
+  /** Revision naming the current live data (Dolt: the main head commit), when the store can read one cheaply.
+   * Null or absent: callers must not cache. After an Apply the revision moves, which rebuilds every derived cache. */
+  liveRevision?(): Promise<string | null>;
 }
 export const APP_CONNECTOR_STORE = 'APP_CONNECTOR_STORE';
+
+/**
+ * In-memory cache keyed on a data revision: same revision serves the remembered value, a new one recomputes.
+ * Per API process only - nothing is shared between deployments, so a preview always reads its own data.
+ */
+export class RevisionCache<V> {
+  private readonly entries = new Map<string, { revision: string; value: Promise<V> }>();
+  get(key: string, revision: string | null, compute: () => Promise<V>): Promise<V> {
+    if (!revision) return compute();
+    const hit = this.entries.get(key);
+    if (hit?.revision === revision) return hit.value;
+    const value = compute();
+    this.entries.set(key, { revision, value });
+    value.catch(() => { if (this.entries.get(key)?.value === value) this.entries.delete(key); });
+    return value;
+  }
+}
 
 interface AppConnectorPluginModule {
   APP_CONNECTOR_PLUGIN: string;
@@ -97,6 +117,15 @@ const fromRow = (r: Row): AppConnector => { const c = JSON.parse(r.config) as Pa
 /** Dolt: table `app_connectors`, written on the working branch, live after Apply like every other administrator change. Fictional data only. */
 export class DoltAppConnectorStore implements AppConnectorStore {
   constructor(private readonly v: VersioningService, private readonly workBranch: (write: boolean) => string) {}
+  /** The main head commit: one light read, used by readers to cache the live registry until the next Apply. */
+  async liveRevision(): Promise<string | null> {
+    try {
+      return await this.v.at('main', async (c) => {
+        const [r] = await c.query("select hash from dolt_branches where name='main'");
+        return (r as { hash: string }[])[0]?.hash ?? null;
+      });
+    } catch { return null; }
+  }
   async list(t: string, ref: 'live' | 'work'): Promise<State> {
     return this.v.at(ref === 'live' ? 'main' : this.workBranch(false), async (c) => {
       const [ex] = await c.query("select count(*) n from information_schema.tables where table_schema=database() and table_name='app_connectors'");
@@ -122,7 +151,7 @@ export class DoltAppConnectorStore implements AppConnectorStore {
 @Injectable()
 export class AppConnectorService {
   private readonly deps: Parameters<AppConnectorPluginModule['createAppRegistry']>[0];
-  constructor(profile: ProfileService, @Inject(APP_CONNECTOR_STORE) store: AppConnectorStore,
+  constructor(profile: ProfileService, @Inject(APP_CONNECTOR_STORE) private readonly store: AppConnectorStore,
     private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() events?: ApplicationBus) {
     this.deps = {
       pluginActive: (t, id, ref) => profile.pluginActive(t, id, ref),
@@ -139,8 +168,14 @@ export class AppConnectorService {
   private async branchRegistry(): Promise<EngineRegistry> { return workspaceMode() && this.branches ? this.branches.get(branchContext.getStore()?.branch ?? 'main') : this.reg; }
 
   async list(t: string) { try { return await (await this.engine(t)).list(t); } catch (e) { engineHttpError(e); } }
-  /** Applications as they are LIVE (Dolt main): what the protocol plugins serve. Empty while the plugin is off. */
-  async liveApps(t: string) { return (await this.engine(t)).liveApps(t); }
+  private readonly liveCache = new RevisionCache<AppConnector[]>();
+  /** Applications as they are LIVE (Dolt main): what the protocol plugins serve. Empty while the plugin is off.
+   * The read is remembered per tenant until the main head moves (an Apply), which is what makes My applications fast;
+   * stores without a revision (memory, tests) never cache. */
+  async liveApps(t: string) {
+    const revision = this.store.liveRevision ? await this.store.liveRevision() : null;
+    return this.liveCache.get(t, revision, () => this.engine(t).then((e) => e.liveApps(t)));
+  }
   async get(t: string, id: string) { try { return await (await this.engine(t)).get(t, id); } catch (e) { engineHttpError(e); } }
   async create(t: string, actor: string, b: Record<string, unknown>) { try { return await (await this.engine(t)).create(t, actor, b); } catch (e) { engineHttpError(e); } }
   async update(t: string, actor: string, id: string, b: Record<string, unknown>) { try { return await (await this.engine(t)).update(t, actor, id, b); } catch (e) { engineHttpError(e); } }

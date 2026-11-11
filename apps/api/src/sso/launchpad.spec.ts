@@ -60,6 +60,23 @@ describe('launchpad: the applications a signed-in person may open, with their SS
     assert.equal(byId.get('payroll').protocol, 'saml');
   });
 
+  it('caches privately per user: a matching ETag answers 304, another user never reuses it', async () => {
+    const first = await api('demo-alice');
+    assert.equal(first.status, 200);
+    assert.match(first.headers.get('cache-control') ?? '', /^private/);
+    const etag = first.headers.get('etag');
+    assert.ok(etag);
+    const again = await fetch(`${BASE}/sso/${T}/launchpad`, { headers: { 'x-test-sub': 'demo-alice', 'if-none-match': etag! } });
+    assert.equal(again.status, 304);
+    assert.equal(await again.text(), '');
+    // The stamp belongs to alice's filtered payload: yanis (HR) gets his own full list, never her 304.
+    const other = await fetch(`${BASE}/sso/${T}/launchpad`, { headers: { 'x-test-sub': 'yanis-leroy', 'if-none-match': etag! } });
+    assert.equal(other.status, 200);
+    const mine = (await first.json() as { apps: { id: string }[] }).apps.map(a => a.id);
+    const his = (await other.json() as { apps: { id: string }[] }).apps.map(a => a.id);
+    assert.notDeepEqual(his, mine);
+  });
+
   it('persists preferences for the signed-in user only, rejects inaccessible IDs and body-supplied identities', async () => {
     const put = (sub: string, body: unknown) => fetch(`${BASE}/sso/${T}/launchpad/preferences`, { method: 'PUT', headers: { 'x-test-sub': sub, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     assert.equal((await put('demo-alice', { favourites: ['wiki'], order: ['wiki','payroll'] })).status, 200);

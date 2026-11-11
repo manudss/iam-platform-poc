@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Inject, Param, Put, Req, UseGuards } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { BadRequestException, Body, Controller, Get, Inject, Param, Put, Req, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { PROFILE_STORE } from '../profile/profile.service.js';
 import type { ProfileValueStore } from '../profile/store.js';
@@ -24,8 +26,20 @@ export class LaunchpadController {
     @Inject(SSO_DIRECTORY) private readonly dir: SsoDirectory,
   ) {}
 
-  @Get() async list(@Param('tenant') t: string, @Req() r: { user: { sub: string; branch?: string }; headers: Record<string, unknown>; protocol?: string }) {
+  @Get() async list(@Param('tenant') t: string, @Req() r: { user: { sub: string; branch?: string }; headers: Record<string, unknown>; protocol?: string }, @Res() res: Response) {
     assertNotBranchTest(r);
+    const body = await this.build(t, r);
+    // Private per-user HTTP cache: the ETag stamps THIS person's filtered payload, so a 304 only ever
+    // stands in for the same user's own list - nothing personalised is shared between users or roles.
+    const etag = '"' + createHash('sha256').update(JSON.stringify(body)).digest('base64url') + '"';
+    res.setHeader('Cache-Control', 'private, must-revalidate');
+    res.setHeader('ETag', etag);
+    if (String(r.headers?.['if-none-match'] ?? '') === etag) { res.status(304).end(); return; }
+    res.json(body);
+  }
+
+  /** The person's filtered launchpad payload: rights filtering (mayOpen) runs here, on every request. */
+  private async build(t: string, r: { user: { sub: string }; headers: Record<string, unknown>; protocol?: string }) {
     const u = await this.dir.user(t, r.user.sub);
     const [oidcOn, samlOn, live] = await Promise.all([
       this.profile.pluginActive(t, 'oidc-provider', 'live'),
@@ -50,7 +64,7 @@ export class LaunchpadController {
    * They use the existing live profile value store so they survive reloads and follow the user between devices. */
   @Put('preferences') async savePreferences(@Param('tenant') t: string, @Req() r: any, @Body() body: unknown) {
     assertNotBranchTest(r);
-    const current = await this.list(t, r);
+    const current = await this.build(t, r);
     const preferences = validatePreferences(body, current.apps.map(a => a.id));
     await this.preferences.put(t, r.user.sub, { 'console.launchpad': JSON.stringify(preferences) }, 'live', r.user.sub);
     return { preferences };
