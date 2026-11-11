@@ -130,7 +130,7 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     const v = new VersioningService(); const branch = 'work-apps';
     await v.lock(() => v.at('main', async (c) => { await c.query('call dolt_branch(?)', [branch]); }));
     const st = new DoltAppConnectorStore(v, () => branch);
-    const app = { id: 'wiki', name: 'Wiki', description: 'd', protocol: 'oidc' as const, enabled: true, redirect_uris: ['https://wiki.example.invalid/cb'], entity_id: null, acs_url: null, attribute_mapping: { sub: 'id' }, allowed_roles: ['employee'], secret_ref: 'apps/wiki/client-secret', launch_url: 'https://wiki.example.invalid/' };
+    const app = { id: 'wiki', name: 'Wiki', description: 'd', protocol: 'oidc' as const, enabled: true, redirect_uris: ['https://wiki.example.invalid/cb'], entity_id: null, acs_url: null, attribute_mapping: { sub: 'id' }, allowed_roles: ['employee'], secret_ref: 'apps/wiki/client-secret', launch_url: 'https://wiki.example.invalid/', sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: ['profile', 'email', 'roles'], allow_refresh_tokens: true };
     await st.write(T, 'admin', (x) => { x.apps.push(app); });
     assert.deepEqual(await st.list(T, 'live'), { apps: [] });
     assert.deepEqual((await st.list(T, 'work')).apps, [app]);

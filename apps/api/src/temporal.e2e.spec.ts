@@ -41,7 +41,20 @@ describe('Temporal activation workflow (real Temporal dev server + real Dolt)', 
     mod = await Test.createTestingModule({ imports: [AppModule] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile(); // guard covered elsewhere
     await mod.init();
   });
-  after(async () => { await mod?.close(); delete process.env.IAM_TEMPORAL_ADDR; temporal?.kill(); dolt?.kill(); rmSync(dir, { recursive: true, force: true }); });
+  after(async () => {
+    await mod?.close(); delete process.env.IAM_TEMPORAL_ADDR;
+    // Wait for database writers to exit before removing their files. kill() only sends a signal.
+    const stop = async (child?: ChildProcess) => {
+      if (!child || child.exitCode !== null || child.signalCode !== null) return;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+        child.kill('SIGTERM');
+      });
+    };
+    await Promise.all([stop(temporal), stop(dolt)]);
+    if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
 
   it('workflow verifies the Dolt commit, then journals the activation', async () => {
     const head = await mod.get(DoltService).head();

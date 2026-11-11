@@ -1,11 +1,11 @@
 # SSO: applications that sign in through the platform (plugin `app-connector`)
 
-Status: step 1 of the SSO plan: the registry of applications. The OpenID Connect endpoints are served by the separate `oidc-provider` plugin (`docs/sso-oidc.md`); SAML is still to come. Fictional data. Not production.
+Status: step 1 of the SSO plan: the registry of applications. The OpenID Connect endpoints are served by the separate `oidc-provider` plugin (`docs/sso-oidc.md`); SAML endpoints are served by `saml-idp` (`docs/sso-saml.md`). Fictional data. Not production.
 
 ## Direction and decisions
 
 - The platform is the **identity provider** (IdP / OpenID Provider). Third-party applications connect to it as service providers (SAML) or relying parties (OIDC).
-- Both OIDC and SAML are planned. Each protocol library will live inside its own plugin that can be enabled or disabled. This plugin (`app-connector`) only holds the registry of applications; the protocol plugins read it.
+- Both OIDC and SAML are available. Each protocol library lives inside its own plugin that can be enabled or disabled. This plugin (`app-connector`) only holds the registry of applications; the protocol plugins read it.
 - Federation toward an external IdP (Entra, Google) is a later phase and is not part of this plugin.
 - Order of the work: registry (this PR), OIDC provider, SAML IdP, then the rest of the plan.
 
@@ -19,6 +19,9 @@ One row per application in the Dolt table `app_connectors` (per tenant), so a ch
 | `protocol` | `oidc` or `saml` |
 | `enabled` | a new application starts **disabled**; an enabled one cannot be deleted |
 | `redirect_uris` | OIDC only. Exact URIs, `https` (or `http` on localhost), no wildcard, no fragment, no credentials, at most 10 |
+| `launch_url` | OIDC application home URL, used by My applications (`sso-launchpad.md`) |
+| `scopes`, `allow_refresh_tokens` | OIDC allowed scopes beyond openid and refresh grant switch (`sso-oidc.md`) |
+| `sp_certificate`, `want_signed_requests`, `nameid_format` | SAML public certificate, required request signatures and NameID format (`sso-saml.md`) |
 | `entity_id`, `acs_url` | SAML only. SP entity id and assertion consumer service URL (`https`) |
 | `attribute_mapping` | name sent to the application -> profile key it is read from |
 | `allowed_roles` | roles that may open the application. Empty means nobody: closed by default |
@@ -30,7 +33,7 @@ One row per application in the Dolt table `app_connectors` (per tenant), so a ch
 
 1. Enable the plugin: Plugins > Application connectors (SSO). It is enabled in the seeded demo.
 2. Choose a working branch (not main), open **Applications** in the menu, add or edit an application, then Apply the branch.
-3. The seeded demo has three fictional applications: `wiki` (OIDC), `payroll` (SAML) and `crm` (OIDC, disabled).
+3. The seeded demo has 13 fictional applications: ten working gallery apps plus `wiki` (OIDC), `payroll` (SAML) and `crm` (OIDC, disabled).
 
 Admin API (needs the sign-in and the administrator capability, 404 while the plugin is off):
 
@@ -52,6 +55,6 @@ After a successful write the plugin emits `app.registered`, `app.updated` and `a
 - `apps/api/src/profile/profile-dolt.e2e.spec.ts`: real Dolt (branch, merge, round trip) and the seed.
 - `apps/web/src/app/applications.spec.ts`: form helpers.
 
-## Not done yet
+## Limits
 
-SAML endpoints, the access decision "may this user open this application" in the core, audit of issued tokens, import/export of metadata, and the MCP tools. See the SSO plan.
+The access decision is currently in the protocol plugins, not a core policy check. SP metadata import is structural, not XSD-validated. Runtime sessions are in memory and disappear on restart. This remains a demonstration, not a production identity service.
