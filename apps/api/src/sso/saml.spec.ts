@@ -198,6 +198,11 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     const r = signedSp.createLoginRequest(idp, 'redirect', {});
     const res = await fetch(String(typeof r === 'string' ? r : r.context), { redirect: 'manual' });
     assert.equal(res.status, 302, `signed request accepted, got ${res.status}: ${await res.text()}`);
+    // A request signed by a different private key is refused too.
+    const wrongKey = selfSignedCert('Wrong SP test (fictional)');
+    const wrongSp = samlify.ServiceProvider({ entityID: 'https://signed.example.invalid/saml', signingCert: wrongKey.certPem, privateKey: wrongKey.privateKeyPem, authnRequestsSigned: true, assertionConsumerService: [{ Binding: BIND_POST, Location: 'https://signed.example.invalid/acs' }] });
+    const wrongRequest = wrongSp.createLoginRequest(idp, 'redirect', {});
+    assert.equal((await fetch(String(typeof wrongRequest === 'string' ? wrongRequest : wrongRequest.context), { redirect: 'manual' })).status, 400, 'wrong signing key refused');
     // the same entity without a signature is refused
     const unsigned = makeSp('https://signed.example.invalid/saml', 'https://signed.example.invalid/acs').createLoginRequest(await idpForSp(), 'redirect', {});
     const res2 = await fetch(String(typeof unsigned === 'string' ? unsigned : unsigned.context), { redirect: 'manual' });
