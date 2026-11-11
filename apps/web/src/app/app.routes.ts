@@ -48,6 +48,7 @@ export const routes: Routes = [
       { matcher: pluginsMatcher, canActivate: [accessGuard], component: PluginsPage, title: 'Plugins' },
       { path: 'event-bus', canActivate: [accessGuard], loadComponent: () => import('./bus-observer').then(m => m.BusObserverPage), title: 'Event bus' },
       { path: 'mcp', canActivate: [accessGuard], loadComponent: () => import('./mcp').then(m => m.McpPage), title: 'MCP (AI access)' },
+      { path: 'workflows/connections', loadComponent: () => import('./workflows/connections').then(m => m.WorkflowConnectionsPage), title: 'Workflow connections', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows', loadComponent: () => import('./workflows').then(m => m.WorkflowsPage), title: 'Workflows', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/templates', loadComponent: () => import('./workflows').then(m => m.WorkflowTemplatesPage), title: 'Workflow templates', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/edit/:id', loadComponent: () => import('./workflows').then(m => m.WorkflowEditPage), title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },

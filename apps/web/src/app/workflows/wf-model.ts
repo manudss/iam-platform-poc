@@ -143,6 +143,10 @@ export interface WfTriggerNodeData { name: string }
 })
 export class WfTriggerNodeComponent extends CustomNodeComponent<WfTriggerNodeData> {}
 
+export type ConnectionProvider = 'google-sheets' | 'jira' | 'http';
+export interface WorkflowConnection { id: string; name: string; provider: ConnectionProvider; config: Record<string, string>; revision: string; secretConfigured: boolean; status: string; }
+export interface ConnectionProbe { id: string; revision: string; status: string; checkedAt: string; readOnly: boolean; message?: string; }
+export interface ConnectionInput { name: string; provider: ConnectionProvider; config: Record<string, string>; secret?: string; }
 export class WorkflowClient {
   constructor(private readonly api: ApiClient, private readonly adminToken: () => string) {}
   private req<T>(method: string, path: string, body?: object) {
@@ -151,6 +155,11 @@ export class WorkflowClient {
       return r.data;
     });
   }
+  connections() { return this.req<{connections: WorkflowConnection[]; secretStoreConfigured: boolean}>('GET', '/workflow-connections'); }
+  saveConnection(body: ConnectionInput, id?: string) { return this.req<{connection: WorkflowConnection}>(id ? 'PUT' : 'POST', '/workflow-connections' + (id ? '/' + encodeURIComponent(id) : ''), body); }
+  probeConnection(body: ConnectionInput & {existingId?: string}) { return this.req<Omit<ConnectionProbe, 'id' | 'revision'>>('POST', '/workflow-connections/probe', body); }
+  testConnection(id: string) { return this.req<ConnectionProbe>('POST', `/workflow-connections/${encodeURIComponent(id)}/test`); }
+  removeConnection(id: string) { return this.req('DELETE', `/workflow-connections/${encodeURIComponent(id)}`); }
   list() { return this.req<{ definitions: DefinitionSummary[] }>('GET', '/workflows'); }
   get(id: string) { return this.req<{ definition: { id: string; name: string; description: string; trigger: WfTrigger | null; active: boolean; graph: { nodes: WfNode[]; edges: WfEdge[] }; order: string[] } }>('GET', `/workflows/${id}`); }
   events() { return this.req<{ events: WfEvent[] }>('GET', '/workflows-events'); }
