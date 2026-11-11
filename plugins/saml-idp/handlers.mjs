@@ -6,8 +6,9 @@
  *
  * The protocol is the embedded library samlify (MIT, pinned >= 2.15.1: earlier versions could accept a
  * response signed with an attacker's certificate). DEMONSTRATION GRADE, not production: AuthnRequests are
- * accepted unsigned (the registry holds no SP certificate), assertions are signed (RSA-SHA256) with a
- * per-process demo key unless the secret store provides one, and pending sign-in requests live in memory.
+ * accepted unsigned (the registry holds no SP certificate), assertions are signed (RSA-SHA256) with the
+ * secret-store key, or with the committed demonstration key (demo-key.mjs, public by design) when the
+ * secret store has none, and pending sign-in requests live in memory.
  * Sessions stay the console's: the user signs in with the normal authentication chain on /sso-saml/<rid>,
  * then consents; the browser posts the SAMLResponse to the application's ACS. Turning the plugin off removes
  * every /sso/:tenant/saml endpoint (404) without touching the registry.
@@ -15,7 +16,7 @@
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { selfSignedCert } from './selfsigned.mjs';
+import { DEMO_SAML_IDP_CERT_PEM, DEMO_SAML_IDP_PRIVATE_KEY_PEM } from './demo-key.mjs';
 
 // Self-contained copy of the access rule (same rule as the oidc-provider plugin; plugins never import each other).
 const mayOpen = (app, u) => !!u && app.enabled && app.allowed_roles.some((r) => u.roles.includes(r));
@@ -112,11 +113,11 @@ export function createSamlEngine(deps) {
   }
   async function active(t) { return (await deps.pluginActive(t, SAML_PLUGIN)) && (await deps.pluginActive(t, 'app-connector')); }
 
-  /** Signing key: from the secret store (`sso/<tenant>/saml-signing-key`, fields `cert` and `privateKey`, PEM) so it survives restarts; else a self-signed one generated for this process (demo). */
+  /** Signing key: from the secret store (`sso/<tenant>/saml-signing-key`, fields `cert` and `privateKey`, PEM) so it survives restarts; else the committed DEMONSTRATION key (demo-key.mjs), stable across restarts, redeploys and preview environments so the demo applications keep trusting the metadata they fetched. */
   async function keyMaterial(t) {
     let k = keys.get(t); if (k) return k;
     try { const s = await deps.secretGet(`sso/${t}/saml-signing-key`); if (s?.cert && s?.privateKey) k = { certPem: String(s.cert), privateKeyPem: String(s.privateKey) }; } catch (e) { warn(`signing key not read from the secret store: ${e.message}`); }
-    if (!k) { k = selfSignedCert(`IAM POC SAML IdP (${t})`); warn(`saml-idp: no signing key in the secret store, a self-signed one was generated for this process (demo); a restart invalidates the metadata`); }
+    if (!k) { k = { certPem: DEMO_SAML_IDP_CERT_PEM, privateKeyPem: DEMO_SAML_IDP_PRIVATE_KEY_PEM }; warn(`saml-idp: no signing key in the secret store for ${t}, using the committed DEMONSTRATION key (anyone can sign as this demo IdP); configure sso/${t}/saml-signing-key in the secret store for a private, per-deployment key`); }
     keys.set(t, k); return k;
   }
   /** The IdP entity. `wantSigned` makes signed AuthnRequests mandatory for the application being served
