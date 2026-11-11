@@ -37,7 +37,7 @@ export class LaunchpadController {
         ? (samlOn ? `${base}/sso/${encodeURIComponent(t)}/saml/login?app=${encodeURIComponent(a.id)}` : null)
         : (oidcOn ? a.launch_url : null);
       if (!url) continue;
-      apps.push({ id: a.id, name: a.name, description: a.description, protocol: a.protocol, url });
+      apps.push({ id: a.id, name: a.name, description: a.description, logo: a.logo ?? null, protocol: a.protocol, url });
     }
     return { user: { sub: r.user.sub, name: u?.display_name || r.user.sub }, apps };
   }

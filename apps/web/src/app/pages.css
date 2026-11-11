@@ -183,3 +183,7 @@ td input { width: 100%; box-sizing: border-box; }
 .lp-head { flex-wrap: wrap; }
 
 #app-form .app-wide { flex: 1 1 24rem; min-width: 0; }
+
+/* Versioned application artwork in the administrator form. */
+.app-logo-preview { width: 4rem; height: 4rem; object-fit: contain; border-radius: .75rem; background: var(--card); }
+.app-logo-editor { margin-block: var(--panel-gap); }
