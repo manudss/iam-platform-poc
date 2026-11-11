@@ -41,6 +41,10 @@ export interface AppConnector {
   want_signed_requests: boolean;
   /** SAML: NameID format override ('emailAddress' | 'unspecified' | 'persistent'); unset = derived from the attribute mapping. */
   nameid_format: string | null;
+  /** OIDC: scopes the application may receive on top of openid (subset of profile, email, roles, offline_access). */
+  scopes: string[];
+  /** OIDC: allow the refresh_token grant (needed for offline_access). */
+  allow_refresh_tokens: boolean;
 }
 type State = { apps: AppConnector[] };
 export interface AppConnectorStore {
@@ -88,7 +92,7 @@ export class MemoryAppConnectorStore implements AppConnectorStore {
 }
 
 type Row = { id: string; name: string; description: string; protocol: Protocol; enabled: number; config: string };
-const fromRow = (r: Row): AppConnector => { const c = JSON.parse(r.config) as Partial<Pick<AppConnector, 'redirect_uris' | 'entity_id' | 'acs_url' | 'attribute_mapping' | 'allowed_roles' | 'secret_ref' | 'launch_url' | 'sp_certificate' | 'want_signed_requests' | 'nameid_format'>>; return { id: r.id, name: r.name, description: r.description, protocol: r.protocol, enabled: !!r.enabled, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, sp_certificate: null, want_signed_requests: false, nameid_format: null, ...c } as AppConnector; };
+const fromRow = (r: Row): AppConnector => { const c = JSON.parse(r.config) as Partial<Pick<AppConnector, 'redirect_uris' | 'entity_id' | 'acs_url' | 'attribute_mapping' | 'allowed_roles' | 'secret_ref' | 'launch_url' | 'sp_certificate' | 'want_signed_requests' | 'nameid_format' | 'scopes' | 'allow_refresh_tokens'>>; return { id: r.id, name: r.name, description: r.description, protocol: r.protocol, enabled: !!r.enabled, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: r.protocol === 'oidc' ? ['profile', 'email', 'roles'] : [], allow_refresh_tokens: r.protocol === 'oidc', ...c } as AppConnector; };
 
 /** Dolt: table `app_connectors`, written on the working branch, live after Apply like every other administrator change. Fictional data only. */
 export class DoltAppConnectorStore implements AppConnectorStore {

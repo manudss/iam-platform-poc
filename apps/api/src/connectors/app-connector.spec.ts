@@ -48,6 +48,16 @@ describe('app-connector validation', () => {
     assert.throws(() => build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', want_signed_requests: true }), /certificate is required/);
     assert.throws(() => build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', sp_certificate: 'not a pem' }), /PEM/);
     assert.throws(() => build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', nameid_format: 'transient' }), /nameid_format/);
+    // OIDC options: known scopes only, openid is implied, offline_access needs refresh tokens, SAML clears them
+    assert.deepEqual(build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['profile', 'offline_access'], allow_refresh_tokens: true }).scopes, ['profile', 'offline_access']);
+    assert.throws(() => build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['openid'] }), /always granted/);
+    assert.throws(() => build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['admin'] }), /unknown scope/);
+    assert.throws(() => build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['offline_access'], allow_refresh_tokens: false }), /needs allow_refresh_tokens/);
+    const samlCleared = build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', scopes: ['profile'], allow_refresh_tokens: true });
+    assert.deepEqual([samlCleared.scopes, samlCleared.allow_refresh_tokens], [[], false]);
+    // an OIDC application without the new fields keeps the compatible defaults
+    const dflt = build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'] });
+    assert.deepEqual([dflt.scopes, dflt.allow_refresh_tokens], [['profile', 'email', 'roles'], true]);
     const oidcCleared = build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], sp_certificate: pem, want_signed_requests: true, nameid_format: 'persistent' });
     assert.deepEqual([oidcCleared.sp_certificate, oidcCleared.want_signed_requests, oidcCleared.nameid_format], [null, false, null]);
   });
