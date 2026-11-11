@@ -1,7 +1,8 @@
+import { REQUEST } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Session } from './session';
-import { ApiClient } from './api';
+import { ApiClient, sessionCookieToken } from './api';
 
 /** A structurally valid JWT whose only claim that matters here is exp (seconds). */
 const jwt = (exp: number, sub = 'demo-alice') => `h.${btoa(JSON.stringify({ sub, exp })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}.s`;
@@ -33,5 +34,26 @@ describe('session token persistence (docs/session.md)', () => {
     expect(c.restore()).toBe(false);
     expect(c.loggedIn).toBe(false);
     expect(localStorage.getItem('iam.session')).toBeNull();
+  });
+
+  it('server-side render: adopts the session cookie and never touches localStorage', () => {
+    const valid = jwt(Math.floor(Date.now() / 1000) + 600);
+    const request = new Request('http://localhost/my-applications', { headers: { cookie: `iam_theme=dark; iam_session=${valid}` } });
+    TestBed.configureTestingModule({ providers: [provideRouter([]), { provide: REQUEST, useValue: request }] });
+    localStorage.setItem('iam.session', jwt(Math.floor(Date.now() / 1000) - 10)); // a stale copy must not be read
+    const session = TestBed.inject(Session);
+    expect(session.loggedIn()).toBe(true);
+    expect(session.user()).toBe('demo-alice');
+    expect(session.api.bearerToken).toBe(valid);
+  });
+
+  it('sessionCookieToken: only a still-valid iam_session cookie, nothing else', () => {
+    const valid = jwt(Math.floor(Date.now() / 1000) + 600);
+    expect(sessionCookieToken(`iam_session=${valid}`)).toBe(valid);
+    expect(sessionCookieToken(`x=y; iam_session=${valid}; z=w`)).toBe(valid);
+    expect(sessionCookieToken(`iam_session=${jwt(Math.floor(Date.now() / 1000) - 10)}`)).toBe('');
+    expect(sessionCookieToken('iam_session=not-a-jwt')).toBe('');
+    expect(sessionCookieToken('')).toBe('');
+    expect(sessionCookieToken('other=1')).toBe('');
   });
 });

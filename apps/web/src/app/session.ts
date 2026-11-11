@@ -1,5 +1,5 @@
-import { Injectable, OnDestroy, inject, signal } from '@angular/core';
-import { ApiClient, Change } from './api';
+import { Injectable, OnDestroy, REQUEST, inject, signal } from '@angular/core';
+import { ApiClient, Change, sessionCookieToken } from './api';
 import { computed } from '@angular/core';
 import type { Access } from './access';
 import { Router } from '@angular/router';
@@ -50,7 +50,13 @@ export class Session implements OnDestroy {
     if (expires !== null) this.expiryTimer = setTimeout(() => this.expire(), Math.max(0, expires - Date.now()));
   }
   readonly api = new ApiClient('acme-demo', (...args) => fetch(...args), () => this.expire());
-  constructor() { if (this.api.restore()) this.signedIn(); } // a visit within the token's lifetime skips a new sign-in
+  constructor() {
+    // SSR: the session cookie (docs/session.md) is the only token source - there is no localStorage here.
+    // The render then answers with the signed-in page directly instead of bouncing to sign-in.
+    const req = inject(REQUEST, { optional: true });
+    if (req) { const t = sessionCookieToken(req.headers.get('cookie') ?? ''); if (t && this.api.adoptServer(t)) this.signedIn(); }
+    else if (this.api.restore()) this.signedIn(); // a visit within the token's lifetime skips a new sign-in
+  }
   readonly loggedIn = signal(false);
   readonly user = signal('');
   readonly branch = signal('');

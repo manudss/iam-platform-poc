@@ -12,6 +12,21 @@ export const CORE_PUBLIC = `${ORIGIN}/core`;
 const SSR_API = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.['IAM_WEB_API_ORIGIN'] ?? '';
 export function apiUrl(path: string): string { return SSR_API && typeof location === 'undefined' ? `${SSR_API}${path}` : path; }
 
+/** Reads the session cookie of an incoming document request, for the server-side render (docs/session.md).
+ *  '' when the cookie is absent, unreadable or already expired (the server still verifies every API call). */
+export function sessionCookieToken(cookieHeader: string): string {
+  for (const part of cookieHeader.split(';')) {
+    const i = part.indexOf('=');
+    if (i <= 0 || part.slice(0, i).trim() !== 'iam_session') continue;
+    const t = part.slice(i + 1).trim();
+    try {
+      const p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { exp?: unknown };
+      return typeof p.exp === 'number' && p.exp * 1000 > Date.now() ? t : '';
+    } catch { return ''; }
+  }
+  return '';
+}
+
 export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
 export interface SigninOptions { mode: 'choice' | 'legacy'; chains: SigninChain[]; note?: string }
 export interface SsoRequest { app: { id: string; name: string; description: string }; scopes: string[]; user: { sub: string; name: string }; allowed: boolean }
@@ -47,6 +62,14 @@ export class ApiClient {
   private static readonly STORE = 'iam.session';
   /** Keeps the stored copy in step with the token in use (storage may be blocked: the session then lives in memory only). */
   private persist() { try { if (this.token) localStorage.setItem(ApiClient.STORE, this.token); else localStorage.removeItem(ApiClient.STORE); } catch { /* storage blocked */ } }
+  /** Server-side render only: adopts the token carried by the session cookie (the edge owns the durable copy,
+   *  docs/session.md). Nothing is written to localStorage. True when the token was adopted. */
+  adoptServer(token: string): boolean {
+    this.token = token;
+    if (!this.expiresAt || this.expiresAt <= Date.now()) { this.token = ''; return false; }
+    this.epoch++;
+    return true;
+  }
   /** Adopts the token kept from an earlier visit while it is still valid; an expired or unreadable one is dropped. True when a token was restored. */
   restore(): boolean {
     let t: string | null = null;
@@ -150,7 +173,8 @@ export class ApiClient {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
     const sentToken = this.token, sentEpoch = this.epoch, sentBranch=this.branch;
     // '@/sso/{t}/...' addresses an API route outside /tenants (SSO sign-in requests); {t} is this tenant.
-    const r = await this.f(path.startsWith('@') ? `/api${path.slice(1).replace('{t}', encodeURIComponent(this.tenant))}` : `/api/tenants/${this.tenant}${path}`, {
+    // apiUrl makes the same call work server-side (SSR reaches the API through the local edge).
+    const r = await this.f(apiUrl(path.startsWith('@') ? `/api${path.slice(1).replace('{t}', encodeURIComponent(this.tenant))}` : `/api/tenants/${this.tenant}${path}`), {
       method, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.token}`, ...(this.branch ? {'x-iam-branch':this.branch} : {}), ...extra }, body: body ? JSON.stringify(body) : undefined,
     });
     const data = (await r.json().catch(() => ({}))) as T;

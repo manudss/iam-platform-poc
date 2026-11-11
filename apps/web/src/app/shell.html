@@ -52,6 +52,6 @@
     }
     @if (s.testBranch()) {<section class="test-bar" aria-label="Branch test"><span>Testing data branch <b>{{ s.testBranch() }}</b> - sign-in and the whole app use its unpublished data and settings. Nothing here changes main.</span><button type="button" class="secondary" id="exit-test" (click)="exitTest()">Exit test</button></section>}
     @if (s.message() && (!workflowEditor() || s.tone() === 'error')) { <p class="msg bar" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
-    <main class="content">@if(s.branch() || !isAdmin()){@for(epoch of [s.branchEpoch()];track epoch){<router-outlet />}}@else{<section class="card"><h3>Choose your working branch</h3><p>Select an existing branch above, or create one from main. No administration data is edited until you choose.</p></section>}</main>
+    <main class="content">@if(s.branch() || !isAdmin() || launchpadRoute()){@for(epoch of [s.branchEpoch()];track epoch){<router-outlet />}}@else{<section class="card"><h3>Choose your working branch</h3><p>Select an existing branch above, or create one from main. No administration data is edited until you choose.</p></section>}</main>
   </div>
 </div>

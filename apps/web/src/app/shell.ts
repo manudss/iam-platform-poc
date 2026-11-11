@@ -89,6 +89,9 @@ export class Shell {
   }
   /** The branch selector and Manage branches: only where a screen:open policy gives branch-manage (the super admin). Everyone else works on their own personal branch, opened for them. */
   protected canBranches() { const a = this.s.access(); return this.isAdmin() && (!a || !a.screenAccess || !a.screens || a.screens.includes('branch-manage')); }
+  /** My applications is everyone's home and edits nothing: it renders without a chosen data branch (this is
+   *  also what lets the server render it from the session cookie, docs/session.md). */
+  protected launchpadRoute() { return this.router.url.split('?')[0] === '/my-applications'; }
   protected isAdmin() { const a = this.s.access(); return !a || a.admin || !a.restricted; }
   protected readonly title = signal('');
   protected readonly nav = computed<NavGroup[]>(() => {
