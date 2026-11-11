@@ -85,4 +85,9 @@ describe('external execution safety boundary',()=>{
     try {const h=await settle(makeHarness({nodes:[node('loop','loop',{items:'[1,2]',maxItems:2}),node('a','jira-create-issue',{...config,executionMode:'real',connectionId:'conn-test',realConfirmed:true}),node('end','notify',{recipient:'hr',message:'must not continue'})],edges:[{from:'loop',to:'a',label:'each'},{from:'loop',to:'end',label:'error'}]}));assert.equal(h.row.status,'failed');assert.equal(calls,1);assert.equal(st(h,'loop').error,'EXTERNAL_EFFECT_REVIEW_REQUIRED');assert.notEqual(st(h,'end').status,'done');} finally {stub.mock.restore();}
   });
 
+  it('a returned creation without provider receipt stays uncertain instead of clearing the marker',async()=>{
+    const b=externalBlock('jira-create-issue')!;const stub=mock.method(b,'run',async()=>({}));
+    try{const h=await settle(makeHarness({nodes:[node('a','jira-create-issue',{...config,executionMode:'real',connectionId:'conn-test',realConfirmed:true})],edges:[]}));assert.equal(h.row.status,'failed');assert.equal(st(h,'a').error,'EXTERNAL_EFFECT_REVIEW_REQUIRED');}finally{stub.mock.restore();}
+  });
+
 });

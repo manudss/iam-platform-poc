@@ -398,6 +398,7 @@ export function createWorkflowEngine(deps) {
     };
     let output;
     try { output = await block.run(ctx); } catch { throw new Error('External action failed; check connection and provider status.'); }
+    if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
     if (managed && !simulation) { try { output = JSON.parse(safe(JSON.stringify(output ?? {}))); } catch { output = {}; } }
 
     if (output !== undefined && output !== null && typeof output !== 'object') return { value: String(output) };
