@@ -189,7 +189,7 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
 
   it('signed AuthnRequests: verified against the registered SP certificate, unsigned refused when required', async () => {
     // @ts-expect-error - the plugin's demo self-signed helper is a plain .mjs without type declarations
-    const { selfSignedCert } = await import('../../plugins/saml-idp/selfsigned.mjs') as any;
+    const { selfSignedCert } = await import('../../../../plugins/saml-idp/selfsigned.mjs') as any;
     const spKey = selfSignedCert('SP test (fictional)');
     await apps.create(T, 'admin', { id: 'signed-sp', name: 'Signed SP', protocol: 'saml', entity_id: 'https://signed.example.invalid/saml', acs_url: 'https://signed.example.invalid/acs', enabled: true, allowed_roles: ['hr-partner'], attribute_mapping: MAPPING, sp_certificate: spKey.certPem, want_signed_requests: true });
     const idp = await idpForSp();
