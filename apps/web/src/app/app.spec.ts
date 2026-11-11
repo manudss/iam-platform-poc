@@ -91,16 +91,18 @@ describe('personal space and plugin visibility', () => {
   const as = (access: object) => { const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('x'); s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? access : { fields: [], values: {}, sections: {} } })) as never; return s; };
   it('an ordinary account lands on its applications: no administration menu, admin URLs lead back to the launchpad', async () => {
     as({ subject: 'demo-bob', admin: false, restricted: true, plugins: { organizations: true } });
-    const h = await RouterTestingHarness.create(); await h.navigateByUrl('/roles'); await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
-    expect(TestBed.inject(Router).url).toBe('/');
+    const h = await RouterTestingHarness.create(); await h.navigateByUrl('/');
+    expect(TestBed.inject(Router).url).toBe('/my-applications');
+    await h.navigateByUrl('/roles'); await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+    expect(TestBed.inject(Router).url).toBe('/my-applications');
     const el = h.routeNativeElement as HTMLElement;
-    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'))).toEqual(['/', '/my-profile']);
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'))).toEqual(['/my-applications', '/my-profile']);
     expect(el.textContent).not.toContain('Working data branch'); expect(el.textContent).not.toContain('Admin capability');
   });
   it('a plugin that is not enabled has no menu entry and no page', async () => {
     as({ subject: 'demo-alice', admin: true, restricted: true, plugins: {} });
     const h = await RouterTestingHarness.create(); await h.navigateByUrl('/organizations'); await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
-    expect(TestBed.inject(Router).url).toBe('/');
+    expect(TestBed.inject(Router).url).toBe('/my-applications');
     expect([...(h.routeNativeElement as HTMLElement).querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'))).not.toContain('/organizations');
   });
 });
@@ -119,10 +121,10 @@ describe('chosen chain', () => {
 describe('safeReturn', () => {
   it('only accepts local app paths and never loops back to sign-in', () => {
     expect(safeReturn('/database/pulls')).toBe('/database/pulls');
-    expect(safeReturn('//evil.example/x')).toBe('/overview');
-    expect(safeReturn('https://evil.example')).toBe('/overview');
-    expect(safeReturn('/login')).toBe('/overview'); expect(safeReturn('/callback?code=1')).toBe('/overview');
-    expect(safeReturn(null)).toBe('/overview');
+    expect(safeReturn('//evil.example/x')).toBe('/my-applications');
+    expect(safeReturn('https://evil.example')).toBe('/my-applications');
+    expect(safeReturn('/login')).toBe('/my-applications'); expect(safeReturn('/callback?code=1')).toBe('/my-applications');
+    expect(safeReturn(null)).toBe('/my-applications');
   });
 });
 
@@ -166,6 +168,15 @@ describe('routing and sign-in guard', () => {
     } finally { globalThis.fetch = real; }
   });
 
+  it('sends an already signed-in visitor from /login to the launchpad route', async () => {
+    const s = TestBed.inject(Session);
+    s.loggedIn.set(true); s.user.set('demo-bob');
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-bob', admin: false, restricted: true, plugins: {} } : { apps: [] } })) as never;
+    const h = await RouterTestingHarness.create();
+    await h.navigateByUrl('/login'); await new Promise((r) => setTimeout(r, 0));
+    expect(TestBed.inject(Router).url).toBe('/my-applications');
+  });
+
   it('falls back to one plain Sign in button when the live configuration has no enabled chain', async () => {
     const real = globalThis.fetch;
     globalThis.fetch = (async () => new Response(JSON.stringify({ mode: 'legacy', chains: [] }))) as typeof fetch;
@@ -186,7 +197,7 @@ describe('routing and sign-in guard', () => {
     await new Promise((r) => setTimeout(r, 0)); h.detectChanges(); // the plugin menu loads asynchronously (GET /plugins/menu)
     const el = h.routeNativeElement as HTMLElement;
     const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
-    expect(nav).toEqual(['/', '/overview', '/users', '/profile-fields', '/screens/organizations/orgs', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/home', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
+    expect(nav).toEqual(['/my-applications', '/overview', '/users', '/profile-fields', '/screens/organizations/orgs', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/home', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
     expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
     expect(el.textContent).toContain('Choose your working branch');
   });

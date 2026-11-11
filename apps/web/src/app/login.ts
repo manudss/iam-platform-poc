@@ -73,7 +73,9 @@ export class LoginPage {
       try { sessionStorage.setItem(TEST_KEY, JSON.stringify(t)); } catch { /* storage blocked: the callback will stay on main */ }
       if (this.s.loggedIn()) this.s.signOut();
       void this.pending.run(() => this.load());
-    } else if (this.s.loggedIn()) void this.router.navigateByUrl('/overview');
+    // Already signed in: go to the launchpad's own route. The hosted edge redirects '/' to this page,
+    // so authenticated visitors must land on a real console page instead of returning to '/'.
+    } else if (this.s.loggedIn()) void this.router.navigateByUrl('/my-applications');
     else void this.pending.run(() => this.load());
   }
 

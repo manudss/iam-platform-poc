@@ -22,7 +22,7 @@ const stub = (name) => new Promise((ok) => {
 });
 const freePort = () => new Promise((ok) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => ok(p)); }); });
 const req = (port, method, path) => new Promise((ok, ko) => {
-  const r = http.request({ host: '127.0.0.1', port, path, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => ok({ status: res.statusCode, type: res.headers['content-type'], body: b })); });
+  const r = http.request({ host: '127.0.0.1', port, path, method }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => ok({ status: res.statusCode, type: res.headers['content-type'], location: res.headers['location'], body: b })); });
   r.on('error', ko);
   r.end();
 });
@@ -64,6 +64,31 @@ test('the edge routes the core, API and SPA paths to the right upstream', async 
     assert.equal((await req(edgePort, 'GET', '/api/internal/plugins')).status, 404);
     assert.equal((await req(edgePort, 'GET', '/core/internal/plugins')).status, 404);
     assert.equal((await req(edgePort, 'POST', '/login')).status, 405);
+  } finally {
+    edge.kill('SIGKILL');
+    for (const s of [core, api, ssr]) s.close();
+  }
+});
+
+test('GET / redirects to the server-rendered sign-in page, keeping the query string', async () => {
+  const [core, api, ssr] = await Promise.all([stub('core'), stub('api'), stub('ssr')]);
+  const edgePort = await freePort();
+  const edge = spawn(process.execPath, [join(here, 'server.mjs')], {
+    env: { ...process.env, PORT: String(edgePort), IAM_CORE_PORT: String(core.address().port), API_PORT: String(api.address().port), SSR_PORT: String(ssr.address().port) },
+    stdio: 'ignore',
+  });
+  try {
+    for (let i = 0; i < 50; i++) { try { const h = await req(edgePort, 'GET', '/healthz'); if (h.status === 200) break; } catch {} await new Promise((r) => setTimeout(r, 100)); }
+    // The anonymous landing must reach the sign-in page server-side: no client-side bounce, no "Loading..." flash.
+    const root = await req(edgePort, 'GET', '/');
+    assert.equal(root.status, 302);
+    assert.equal(root.location, '/login');
+    const withQuery = await req(edgePort, 'GET', '/?branch=personal%2Falice&ticket=abcdefghij');
+    assert.equal(withQuery.status, 302);
+    assert.equal(withQuery.location, '/login?branch=personal%2Falice&ticket=abcdefghij');
+    assert.equal((await req(edgePort, 'HEAD', '/')).status, 302, 'health checks over HEAD follow the same rule');
+    // The redirect target itself keeps proxying to the SSR app.
+    assert.ok((await req(edgePort, 'GET', '/login')).body.startsWith('ssr '), '/login still goes to the SSR app');
   } finally {
     edge.kill('SIGKILL');
     for (const s of [core, api, ssr]) s.close();
