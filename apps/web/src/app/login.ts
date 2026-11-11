@@ -1,5 +1,5 @@
 import { Brand, Branding } from './branding';
-import { Component, PLATFORM_ID, PendingTasks, TransferState, inject, makeStateKey, signal } from '@angular/core';
+import { Component, PLATFORM_ID, PendingTasks, REQUEST, TransferState, inject, makeStateKey, signal } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
@@ -67,6 +67,10 @@ export class LoginPage {
       return;
     }
     const t = testParams(new URLSearchParams(this.isBrowser ? location.search : ''));
+    // Server-side with a session cookie, /login?preview=1 (the admin branding frame) must still render the
+    // page instead of bouncing to the console: the frame test needs the frame itself, which only the browser
+    // knows, so the query is honored as is.
+    const serverPreview = (() => { try { return new URL(inject(REQUEST, { optional: true })?.url ?? 'http://localhost/login').searchParams.get('preview') === '1'; } catch { return false; } })();
     if (t) {
       // A test link opens a fresh, branch-bound session: any current sign-in ends here, explicitly.
       this.test.set(t);
@@ -75,7 +79,7 @@ export class LoginPage {
       void this.pending.run(() => this.load());
     // Already signed in: go to the launchpad's own route. The hosted edge redirects '/' to this page,
     // so authenticated visitors must land on a real console page instead of returning to '/'.
-    } else if (this.s.loggedIn()) void this.router.navigateByUrl('/my-applications');
+    } else if (this.s.loggedIn() && !serverPreview) void this.router.navigateByUrl('/my-applications');
     else void this.pending.run(() => this.load());
   }
 
