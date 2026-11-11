@@ -16,7 +16,7 @@ const errors=[];page.on('pageerror',e=>errors.push(e.message));
 try {
   await page.goto(base+'/login'); await page.locator('#signin-browser, [data-chain=password-only]').first().click();
   await page.fill('[name=username]','demo-alice'); await page.fill('[name=password]','demo-only-not-a-secret');
-  await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]'); await page.locator('nav a[data-nav="/"]').click(); await page.waitForSelector('.lp-card');
+  await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]'); await page.locator('nav a[data-nav="/my-applications"]').click(); await page.waitForSelector('.lp-card');
   assert.ok(await page.locator('.lp-card').count()>=10);
   assert.equal(await page.getByText('Open with SSO',{exact:false}).count(),0);
   // Launching opens a new tab, never replaces the launchpad, and stays keyboard reachable.
@@ -90,7 +90,7 @@ try {
   assert.notEqual(await page.locator('.app-logo-preview').getAttribute('src'),before);
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply'); await page.click('#workspace-apply');
   await page.waitForFunction(()=>document.body.textContent.includes('Applied personal/'));
-  await page.locator('nav a[data-nav="/"]').click(); await page.waitForSelector('[data-app=peoplehub] img');
+  await page.locator('nav a[data-nav="/my-applications"]').click(); await page.waitForSelector('[data-app=peoplehub] img');
   const after=await page.locator('[data-app=peoplehub] img').getAttribute('src'); assert.notEqual(after,before);
   await page.waitForFunction(()=>document.querySelector('[data-app=peoplehub] img')?.naturalWidth>0);
   // A second authenticated user must not inherit Alice's favourites.
