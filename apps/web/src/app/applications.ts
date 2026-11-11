@@ -64,9 +64,9 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   @else {
   <div class="row"><label>SP entity ID<input name="aent" [(ngModel)]="entity" /></label><label>ACS URL (https)<input name="aacs" [(ngModel)]="acs" /></label>
   <label>NameID format<select name="anameid" [(ngModel)]="nameid"><option value="emailAddress">emailAddress</option><option value="unspecified">unspecified</option><option value="persistent">persistent</option></select></label></div>
-  <div class="row"><label>SP signing certificate (PEM)<textarea name="acert" rows="4" [(ngModel)]="cert" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label></div>
+  <div class="row"><label class="app-wide">SP signing certificate (PEM)<textarea name="acert" rows="4" [(ngModel)]="cert" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label></div>
   <div class="row"><label class="row"><input type="checkbox" name="asigned" [(ngModel)]="signedReq" /> Require signed AuthnRequests (needs the certificate above)</label></div>
-  <div class="row"><label>Import SP metadata (paste the XML)<textarea name="aspmeta" rows="3" [(ngModel)]="spMeta"></textarea></label>
+  <div class="row"><label class="app-wide">Import SP metadata (paste the XML)<textarea name="aspmeta" rows="3" [(ngModel)]="spMeta"></textarea></label>
   <div><button class="secondary" id="app-spmeta-import" (click)="importSpMetadata()" [disabled]="!spMeta.trim()">Read metadata</button><br>
   <a class="hint" [href]="idpMetadataUrl()" target="_blank" rel="noopener">Download this platform's IdP metadata to register in the application</a></div></div> }
   <div class="row"><label>Attributes sent (name=profile key, one per line)<textarea name="amap" rows="3" [(ngModel)]="mapping"></textarea></label>
