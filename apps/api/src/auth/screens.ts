@@ -48,7 +48,7 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'plugins': return ['plugins'];
     case 'mcp': case 'mcp-grants': case 'mcp-sessions': case 'mcp-upstreams': return ['mcp'];
     case 'bus': case 'event-bus': return ['event-bus'];
-    case 'workflows': case 'temporal': case 'activation-workflows': return ['workflows'];
+    case 'workflow-connections': case 'workflows': case 'temporal': case 'activation-workflows': return ['workflows'];
     case 'branding': return ['customisation'];
     case 'mail-templates': case 'templates': return ['templates'];
     case 'signup': return ['users'];

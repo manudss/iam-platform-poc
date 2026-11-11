@@ -1,9 +1,9 @@
+import { WorkflowConnections } from './connections.js';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { branchContext, workspaceMode } from '../workspace/context.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
-import { validateSettings } from '../plugins/v1/settings.js';
 import { externalEvent } from './model.js';
 import { WorkflowStore } from './store.js';
 import { WorkflowsService } from './workflows.service.js';
@@ -24,7 +24,7 @@ export class WorkflowSheetPollerService implements OnModuleInit, OnModuleDestroy
   private timer?: NodeJS.Timeout;
   private first?: NodeJS.Timeout;
   private busy = false;
-  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
+  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections) {}
 
   onModuleInit() {
     this.timer = setInterval(() => void this.tick(), 60_000);
@@ -52,11 +52,15 @@ export class WorkflowSheetPollerService implements OnModuleInit, OnModuleDestroy
       if (!registry.isActive(d.tenant, 'workflows-iga') || !registry.isActive(d.tenant, 'workflow-connectors')) continue;
       const impl = registry.impl('workflow-connectors');
       if (!impl) continue;
-      const settings = validateSettings(impl.manifest.settings, (await registry.settingsFor(d.tenant, 'workflow-connectors')) ?? {}).values;
+      let settings: Record<string, unknown> = {};
       let rows;
       try {
+        if (d.trigger?.config?.source === 'google') {
+          if (!this.connections || !d.trigger.config.connectionId) { this.log.warn(`${d.id}: managed Google connection required; watcher idle`); continue; }
+          settings = (await this.connections.resolve(d.tenant, this.store.liveRef, String(d.trigger.config.connectionId), 'google-sheets')).settings;
+        }
         rows = await desc.poll(d.trigger?.config ?? {}, { settings, log: (m) => this.log.log(`${d.id}: ${m}`) });
-      } catch (e) { this.log.warn(`${d.id}: poll failed: ${(e as Error).message}`); continue; }
+      } catch { this.log.warn(`${d.id}: read-only sheet poll failed; check the managed connection`); continue; }
       for (const row of rows.slice(0, 3)) {
         const payload: Record<string, string> = { rownumber: String(row.rowNumber) };
         for (const [k, v] of Object.entries(row.values)) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) payload[k.toLowerCase()] = String(v ?? '').slice(0, 500);

@@ -10,7 +10,7 @@
   "provides": [
     "workflows.blocks"
   ],
-  "description": "SPIKE: a catalogue of workflow blocks (HTTP request, text helpers, Google Sheets, Jira, lyam user provisioning) backed by real Activepieces pieces (MIT) through a local adapter, plus two start triggers (a public HTTP webhook and a Google-Sheet-style row watcher). External effects are honest: a block without its credentials, or Jira with dryRun on, only logs what it WOULD do; the Google demo source is a built-in simulated sheet until a service account is typed in the console. Secrets are console-typed secret settings, never code, never seed.",
+  "description": "Reusable managed workflow connections with write-only OpenBao credentials. External actions default to Simulation; Real requires a selected connection and explicit confirmation. Legacy credential settings are no longer accepted. Demo sheet remains simulated.",
   "hooks": [],
   "settings": [
     {
@@ -20,40 +20,6 @@
       "default": "",
       "help": "Exact destination host names this block may call. Empty refuses all outbound calls. Redirects are not followed. Only add hosts you trust; local/private hosts expose local services.",
       "group": "HTTP"
-    },
-    {
-      "key": "jiraInstanceUrl",
-      "type": "url",
-      "label": "Jira instance URL",
-      "help": "e.g. https://example.atlassian.net (the demo uses the sandbox site).",
-      "group": "Jira"
-    },
-    {
-      "key": "jiraEmail",
-      "type": "string",
-      "label": "Jira account email",
-      "group": "Jira"
-    },
-    {
-      "key": "jiraApiToken",
-      "type": "secret",
-      "label": "Jira API token",
-      "help": "Typed here in the console, masked afterwards, never in code, seed or chat.",
-      "group": "Jira"
-    },
-    {
-      "key": "googleServiceAccount",
-      "type": "secret",
-      "label": "Google service account JSON key",
-      "help": "The whole JSON key of a service account the spreadsheet is shared with. Without it, the Google blocks only serve the built-in DEMO sheet (simulated).",
-      "group": "Google Sheets"
-    },
-    {
-      "key": "googleUserEmail",
-      "type": "string",
-      "label": "Google user to impersonate (optional)",
-      "help": "Only for domain-wide delegation; leave empty otherwise.",
-      "group": "Google Sheets"
     }
   ],
   "httpRoutes": [

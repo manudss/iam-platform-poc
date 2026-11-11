@@ -10,6 +10,7 @@ export class WorkflowConnectionsController {
   @Get() list(@Param('tenant') t: string) { return this.connections.list(t); }
   @Post() create(@Param('tenant') t: string, @Body() b: Record<string, unknown>) { return this.connections.save(t, undefined, b ?? {}); }
   @Put(':id') update(@Param('tenant') t: string, @Param('id') id: string, @Body() b: Record<string, unknown>) { return this.connections.save(t, id, b ?? {}); }
+  @Post('probe') probe(@Param('tenant') t: string, @Body() b: Record<string, unknown>) { return this.connections.testDraft(t, b ?? {}); }
   @Post(':id/test') test(@Param('tenant') t: string, @Param('id') id: string) { return this.connections.test(t, id); }
   @Delete(':id') remove(@Param('tenant') t: string, @Param('id') id: string) { return this.connections.remove(t, id); }
 }

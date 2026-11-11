@@ -159,9 +159,12 @@ export class WorkflowStore {
   }
   async listConnections(tenant: string, ref: string): Promise<WorkflowConnection[]> {
     const m = await this.meta(); await m.end();
-    return this.defsRead(ref, async c => { const [rows] = await c.query('select metadata from workflow_connections where tenant = ?', [tenant]); return (rows as {metadata: string | WorkflowConnection}[]).map(r => typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata); });
+    return this.defsRead(ref, async c => { const [tables] = await c.query("show tables like 'workflow_connections'"); if (!(tables as unknown[]).length) return []; const [rows] = await c.query('select metadata from workflow_connections where tenant = ? order by id limit 200', [tenant]); return (rows as {metadata: string | WorkflowConnection}[]).map(r => typeof r.metadata === 'string' ? JSON.parse(r.metadata) : r.metadata); });
   }
-  async getConnection(tenant: string, id: string, ref: string): Promise<WorkflowConnection | null> { return (await this.listConnections(tenant, ref)).find(c => c.id === id) ?? null; }
+  async getConnection(tenant: string, id: string, ref: string): Promise<WorkflowConnection | null> {
+    const m = await this.meta(); await m.end();
+    return this.defsRead(ref, async c => { const [tables] = await c.query("show tables like 'workflow_connections'"); if (!(tables as unknown[]).length) return null; const [rows] = await c.query('select metadata from workflow_connections where tenant = ? and id = ?', [tenant, id]); const row = (rows as {metadata: string | WorkflowConnection}[])[0]; return row ? typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata : null; });
+  }
   async putConnection(connection: WorkflowConnection, ref: string) {
     const m = await this.meta(); await m.end();
     await this.defsWrite(ref, async c => { await WorkflowStore.ensureConnectionsTable(c); await c.query('insert into workflow_connections (tenant, id, metadata) values (?,?,?) on duplicate key update metadata=values(metadata)', [connection.tenant, connection.id, JSON.stringify(connection)]); await c.query("call dolt_add('workflow_connections')"); await c.query("call dolt_commit('-m', 'workflows: save connection metadata')"); });

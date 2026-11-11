@@ -61,31 +61,59 @@ export class WorkflowConnections {
   async test(tenant: string, id: string) {
     const ref = currentBranch(), c = await this.store.getConnection(tenant, connectionId(id), ref);
     if (!c) throw new NotFoundException('unknown connection');
-    const { settings } = await this.resolve(tenant, ref, id, c.provider);
+    try { const {settings} = await this.resolve(tenant, ref, id, c.provider); return {...await this.probe(c.provider, c.config, settings), id: c.id, revision: c.revision}; }
+    catch { return {...this.probeFailed(), id: c.id, revision: c.revision}; }
+  }
+  /** Tests unsaved form values in memory only. An optional existing id supplies its unchanged secret. */
+  async testDraft(tenant: string, body: Record<string, unknown>) {
+    const {existingId, ...input} = body;
+    const clean = validateConnection(input);
+    let secret = clean.secret ?? '';
+    if (existingId !== undefined) {
+      const id = connectionId(existingId);
+      const c = await this.store.getConnection(tenant, id, currentBranch());
+      if (!c || c.provider !== clean.provider) throw new NotFoundException('connection missing or wrong provider');
+      if (!secret) { try { secret = (await this.resolve(tenant, currentBranch(), id, clean.provider)).secret; } catch { return this.probeFailed(); } }
+    }
+    if (clean.provider !== 'http' && !secret) return this.probeFailed();
+    // Raw form secrets never enter Dolt, OpenBao, response bodies or error strings.
+    const settings = this.settings(clean.provider, clean.config, secret);
+    return this.probe(clean.provider, clean.config, settings);
+  }
+  private settings(provider: ConnectionProvider, config: Record<string,string>, secret: string): Record<string, unknown> {
+    return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
+  }
+  private probeFailed() { return {status: 'Failed', checkedAt: new Date().toISOString(), readOnly: true, message: 'Read-only check failed. Check connection configuration and service access.'}; }
+  protected async httpProbe(url: string, options: unknown) {
+    const transport = loadPluginModule('workflow-connectors', 'http-transport.mjs') as {safeHttp: (url: string, opts: unknown) => Promise<{status:number}>};
+    return transport.safeHttp(url, options);
+  }
+  private async probe(provider: ConnectionProvider, config: Record<string,string>, settings: Record<string,unknown>) {
     try {
-      if (c.provider === 'google-sheets') {
-        if (!c.config.spreadsheetId || !/^[A-Za-z0-9_-]{10,200}$/.test(c.config.spreadsheetId)) throw new Error('missing spreadsheet');
+      if (provider === 'google-sheets') {
+        if (!config.spreadsheetId || !/^[A-Za-z0-9_-]{10,200}$/.test(config.spreadsheetId)) throw new Error('missing spreadsheet');
         const adapter = loadPluginModule('workflow-connectors', 'adapter.mjs') as {runPieceAction: (pkg: string, action: string, values: unknown) => Promise<unknown>};
-        await adapter.runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', { auth: { props: { serviceAccount: settings.googleServiceAccount, userEmail: settings.googleUserEmail || undefined } }, propsValue: { spreadsheetId: c.config.spreadsheetId, sheetId: Number(c.config.sheetId || 0), includeTeamDrives: false, first_row_headers: true } });
+        await adapter.runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', {auth: {props: {serviceAccount: settings.googleServiceAccount, userEmail: settings.googleUserEmail || undefined}}, propsValue: {spreadsheetId: config.spreadsheetId, sheetId: Number(config.sheetId || 0), includeTeamDrives: false, first_row_headers: true}});
       } else {
-        const transport = loadPluginModule('workflow-connectors', 'http-transport.mjs') as {safeHttp: (url: string, opts: unknown) => Promise<{status: number}>};
-        const headers: Record<string, string> = c.provider === 'jira' ? { Authorization: 'Basic ' + Buffer.from(`${settings.jiraEmail}:${settings.jiraApiToken}`).toString('base64') } : settings.httpConnectionToken ? { Authorization: `Bearer ${settings.httpConnectionToken}` } : {};
-        const result = await transport.safeHttp(c.provider === 'jira' ? new URL('/rest/api/3/myself', c.config.instanceUrl).toString() : c.config.baseUrl, { method: c.provider === 'jira' ? 'GET' : 'HEAD', headers });
+        const headers: Record<string,string> = provider === 'jira' ? {Authorization: 'Basic ' + Buffer.from(`${settings.jiraEmail}:${settings.jiraApiToken}`).toString('base64')} : settings.httpConnectionToken ? {Authorization: `Bearer ${settings.httpConnectionToken}`} : {};
+        const result = await this.httpProbe(provider === 'jira' ? new URL('/rest/api/3/myself', config.instanceUrl).toString() : config.baseUrl, {method: provider === 'jira' ? 'GET' : 'HEAD', headers});
         if (result.status < 200 || result.status >= 300) throw new Error('probe unsuccessful');
       }
-      return { id: c.id, revision: c.revision, status: 'Verified', checkedAt: new Date().toISOString(), readOnly: true };
-    } catch { return { id: c.id, revision: c.revision, status: 'Failed', checkedAt: new Date().toISOString(), readOnly: true, message: 'Read-only check failed. Check connection configuration and service access.' }; }
+      return {status: 'Verified', checkedAt: new Date().toISOString(), readOnly: true};
+    } catch { return this.probeFailed(); }
   }
   async resolve(tenant: string, ref: string, id: string, provider: ConnectionProvider) {
     const c = await this.store.getConnection(tenant, connectionId(id), ref);
-    if (!c || c.provider !== provider) throw new NotFoundException('connection missing or wrong provider');
+    if (!c || c.tenant !== tenant || c.id !== id || c.provider !== provider) throw new NotFoundException('connection missing or wrong provider');
     let secret = '';
     if (c.secretRef) {
       if (!new RegExp(`^iam/workflow-connections/${tenantId(tenant)}/${connectionId(c.id)}/[a-f0-9-]{36}$`).test(c.secretRef)) throw new ConflictException('invalid scoped secret reference');
       try { secret = (await this.secrets.get(c.secretRef))?.value ?? ''; } catch { throw new ServiceUnavailableException('connection secret unavailable'); }
     }
     if (provider !== 'http' && !secret) throw new ServiceUnavailableException('connection secret not configured');
-    const settings: Record<string, unknown> = provider === 'jira' ? { jiraInstanceUrl: c.config.instanceUrl, jiraEmail: c.config.email, jiraApiToken: secret } : provider === 'google-sheets' ? { googleServiceAccount: secret, googleUserEmail: c.config.userEmail } : { httpAllowlist: new URL(c.config.baseUrl).hostname, httpConnectionBase: c.config.baseUrl, httpConnectionToken: secret };
+    // Revalidate persisted config and credentials too: versioned metadata is not trusted input.
+    validateConnection({name: c.name, provider, config: c.config, ...(secret ? {secret} : {})});
+    const settings = this.settings(provider, c.config, secret);
     return { settings, secret, connection: c };
   }
 }

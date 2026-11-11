@@ -85,6 +85,11 @@ export function createWorkflowEngine(deps) {
     const run = await store.getRunById(runId);
     if (!run || run.status === 'canceled' || run.status === 'completed') return;
     await store.updateRun(runId, { status: 'running', error: null });
+    // A restarted call may already have reached the remote service. Never continue past it.
+    for (const st of await store.steps(runId)) if (st.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED' && st.status !== 'done') {
+      await store.patchStep(runId, st.node_id, { status: 'failed', finished_at: now() });
+      await store.updateRun(runId, { status: 'failed', error: 'External effect uncertain: reconcile at the provider before creating a new run.', finished_at: now() }); return;
+    }
     const { order } = validateGraph(run.graph);
     const nodes = new Map(run.graph.nodes.map((n) => [n.id, n]));
     const edges = run.graph.edges;
@@ -119,7 +124,7 @@ export function createWorkflowEngine(deps) {
     };
     /** A failure ends the run UNLESS the step has an error link: then that path continues instead. */
     const failOrBranch = async (node, message) => {
-      if (edges.some((e) => e.from === node.id && e.label === 'error')) {
+      if (message !== 'EXTERNAL_EFFECT_REVIEW_REQUIRED' && edges.some((e) => e.from === node.id && e.label === 'error')) {
         for (const s of await store.steps(runId)) if (s.output?.branch) chosen.set(s.node_id, s.output.branch);
         return true; // error links read taken from the step's failed status; the walk continues
       }
@@ -195,6 +200,11 @@ export function createWorkflowEngine(deps) {
       return { ok: true, output: { count: capped.length } };
     } catch (e) {
       if (e instanceof Canceled) { await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs }); return { canceled: true }; }
+      if ((await store.steps(run.id)).some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) {
+        const message = 'EXTERNAL_EFFECT_REVIEW_REQUIRED'; say('External effect uncertain. Automatic retry and error-route continuation are blocked; reconcile at the provider.');
+        await store.patchStep(run.id, node.id, { status: 'failed', error: message, finished_at: now(), log: logs });
+        return { ok: false, error: message };
+      }
       say(`FAILED: ${e.message}`);
       await store.patchStep(run.id, node.id, { status: 'failed', error: e.message.slice(0, 500), finished_at: now(), log: logs });
       return { ok: false, error: e.message };
@@ -275,12 +285,17 @@ export function createWorkflowEngine(deps) {
       else if (STEP_TYPES[node.type].simulated && !externalBlock(node.type)) await simulated(run, node, step.attempts, say);
       else if (externalBlock(node.type)) output = await externalStep(run, node, say);
       else output = await dataStep(run, node, say);
-      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: output ?? null });
+      await store.patchStep(run.id, node.id, { status: 'done', error: null, finished_at: now(), log: logs, output: output ?? null });
       return { ok: true, output: output ?? null };
     } catch (e) {
       if (e instanceof Canceled) {
         await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs });
         return { canceled: true };
+      }
+      if ((await store.step(run.id, node.id))?.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED') {
+        const message = 'EXTERNAL_EFFECT_REVIEW_REQUIRED'; say('External effect uncertain. Automatic retry and error-route continuation are blocked; reconcile at the provider.');
+        await store.patchStep(run.id, node.id, { status: 'failed', error: message, finished_at: now(), log: logs });
+        return { ok: false, error: message };
       }
       say(`FAILED: ${e.message}`);
       await store.patchStep(run.id, node.id, { status: 'failed', error: e.message.slice(0, 500), finished_at: now(), log: logs });
@@ -343,15 +358,32 @@ export function createWorkflowEngine(deps) {
     const outputs = {};
     for (const s of await store.steps(run.id)) if (s.output) outputs[s.node_id] = s.output;
     const resolved = substituteStepOutputs(node, outputs);
-    const settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
+    const managed = /^(google-sheets-|jira-)/.test(node.type) || node.type === 'http-request';
+    const simulation = managed && (run.test || resolved.config.executionMode !== 'real');
+    let settings = {}, secret = '';
+    if (managed && !simulation) {
+      if (!resolved.config.connectionId || resolved.config.realConfirmed !== true || !deps.connectionFor) throw new Error('Real execution requires a confirmed managed connection');
+      // The base ref is the approved configuration context, not the lazily created business-write branch.
+      const connected = await deps.connectionFor(run.tenant, run.base_branch ?? deps.versioning.defaultBranch, resolved.config.connectionId, node.type);
+      settings = connected.settings; secret = connected.secret;
+      const creation = node.type === 'google-sheets-add-row' || node.type === 'jira-create-issue' || (node.type === 'http-request' && !['GET', 'HEAD'].includes(resolved.config.method));
+      if (creation) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
+    } else if (!managed) settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
+    const sensitive = [secret];
+    if (secret) {
+      sensitive.push(Buffer.from(`${settings.jiraEmail ?? ''}:${secret}`).toString('base64'));
+      try { for (const value of Object.values(JSON.parse(secret))) if (typeof value === 'string' && value.length > 8) sensitive.push(value); } catch {}
+    }
+    const safe = value => { let text = String(value); for (const part of sensitive.filter(Boolean)) for (const variant of [part, JSON.stringify(part).slice(1, -1), encodeURIComponent(part)]) text = text.split(variant).join('[redacted]'); return text; };
+
     say(`block "${block.label ?? node.type}" provided by the ${provider} plugin`);
     const author = deps.authorOf(`wf-${run.started_by}`);
     const ctx = {
       tenant: run.tenant,
-      config: resolved.config,
+      config: managed ? { ...resolved.config, dryRun: simulation, ...(node.type.startsWith('google-sheets-') && !simulation ? { source: 'google' } : {}) } : resolved.config,
       settings,
-      dryRun: false,
-      log: say,
+      dryRun: simulation,
+      log: line => say(safe(line)),
       outputs,
       branchWrite: async (fn, message) => {
         const branch = await ensureBranch(run, say);
@@ -364,7 +396,10 @@ export function createWorkflowEngine(deps) {
         }));
       },
     };
-    const output = await block.run(ctx);
+    let output;
+    try { output = await block.run(ctx); } catch { throw new Error('External action failed; check connection and provider status.'); }
+    if (managed && !simulation) { try { output = JSON.parse(safe(JSON.stringify(output ?? {}))); } catch { output = {}; } }
+
     if (output !== undefined && output !== null && typeof output !== 'object') return { value: String(output) };
     return output ?? {};
   }

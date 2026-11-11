@@ -124,7 +124,7 @@ describe('workflow-connectors spike + real Dolt', { skip: !have && 'dolt binary 
     assert.equal((again.body as { run: string }).run, runId, 'same _dedupe key returns the same run');
   });
 
-  it('sheet watcher: a ready demo row starts the onboarding chain and the row is marked done', async () => {
+  it('sheet watcher: a ready demo row starts the onboarding chain; default Simulation does not mutate the sheet', async () => {
     const def = (await ok('POST', '/workflows', {
       name: 'watcher test',
       trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } },
@@ -148,8 +148,9 @@ describe('workflow-connectors spike + real Dolt', { skip: !have && 'dolt binary 
     assert.ok(create.log.some((l) => l.includes('created on the run branch')), `lyam write on the run branch: ${create.log}`);
     const sheet = (await ok('GET', '/plugins/workflow-connectors/demo-sheet')) as { rows: { rowNumber: number; values: Record<string, string> }[] };
     const martin = sheet.rows.find((r) => r.values.nom === 'Martin')!;
-    assert.equal(martin.values.cree, 'ok', 'the sheet row is marked done by the workflow');
-    // A second tick starts nothing new: both ready rows are done and deduplicated.
+    assert.notEqual(martin.values.cree, 'ok', 'Simulation never marks a sheet row done');
+    assert.ok(v.steps.find(s => s.node_id === 'mark')!.log.some(l => l.includes('SIMULATION')));
+    // A second tick starts nothing new: the same ready values are deduplicated.
     await app.get(WorkflowSheetPollerService).tick();
     const runs2 = (await ok('GET', `/workflow-runs?definition=${def.definition.id}`)) as { runs: unknown[] };
     assert.equal(runs2.runs.length, runs.runs.length);
