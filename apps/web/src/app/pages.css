@@ -178,3 +178,6 @@ td input { width: 100%; box-sizing: border-box; }
 .lp-proto { flex: none; }
 .lp-desc { color: var(--muted); font-size: .88rem; flex: 1; }
 .lp-open { color: var(--accent-dark); font-weight: 600; font-size: .88rem; }
+/* Grid cards own their gap; the shared vertical-panel rule must not offset siblings. */
+.lp-grid > .lp-card + .lp-card { margin-top: 0; }
+.lp-head { flex-wrap: wrap; }
