@@ -124,7 +124,8 @@ const server = http.createServer(async (req, res) => {
     // is in the first HTML). With a session cookie: straight to the server-rendered launchpad. Both avoid the
     // SPA bootstrap bouncing client-side.
     const session = parseCookies(req)[SESSION_COOKIE];
-    if (p === '/') { res.writeHead(302, { location: `${session ? '/my-applications' : '/login'}${url.search}` }); return res.end(); }
+    // A branch-test link (?branch=...&ticket=...) always opens a fresh sign-in, session or not.
+    if (p === '/') { const test = url.searchParams.has('branch') && url.searchParams.has('ticket'); res.writeHead(302, { location: `${session && !test ? '/my-applications' : '/login'}${url.search}` }); return res.end(); }
     // Same decision at the two document routes themselves: /login with a live session goes to the console
     // (a query string - sign-in preview, branch test - still renders the page), /my-applications without a
     // session goes to sign-in.

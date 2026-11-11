@@ -147,10 +147,12 @@ test('session cookie: issued at the token exchange, refreshed at renewal, cleare
     const authed = { cookie: `iam_session=${jwt}` };
     assert.equal((await req(edgePort, 'GET', '/', undefined, undefined)).location, '/login');
     assert.equal((await req(edgePort, 'GET', '/', authed)).location, '/my-applications');
+    assert.equal((await req(edgePort, 'GET', '/?branch=personal%2Falice&ticket=abcdefghij', authed)).location, '/login?branch=personal%2Falice&ticket=abcdefghij', 'a branch-test link opens a fresh sign-in even with a session');
     assert.equal((await req(edgePort, 'GET', '/login', authed)).location, '/my-applications');
     assert.ok((await req(edgePort, 'GET', '/login?preview=1', authed)).body.startsWith('ssr '), 'the framed sign-in preview still renders');
     assert.equal((await req(edgePort, 'GET', '/my-applications')).location, '/login');
     assert.ok((await req(edgePort, 'GET', '/my-applications', authed)).body.startsWith('ssr '), 'the launchpad renders with a session');
+    assert.ok((await req(edgePort, 'GET', '/login?branch=personal%2Falice&ticket=abcdefghij', authed)).body.startsWith('ssr '), 'a branch-test link renders the sign-in page even with a session');
   } finally {
     edge.kill('SIGKILL');
     core.closeAllConnections(); await new Promise((ok) => core.close(ok));
