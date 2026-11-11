@@ -35,6 +35,16 @@ export interface AppConnector {
   secret_ref: string | null;
   /** Where a user opens the application (OIDC: the app's own URL, which starts the sign-in). SAML apps open IdP-initiated, no URL needed. */
   launch_url: string | null;
+  /** SAML: the SP's public signing certificate (PEM). Public key material, never a secret: it only verifies what the SP signs. */
+  sp_certificate: string | null;
+  /** SAML: require signed AuthnRequests (needs sp_certificate; an unsigned or badly signed request is refused). */
+  want_signed_requests: boolean;
+  /** SAML: NameID format override ('emailAddress' | 'unspecified' | 'persistent'); unset = derived from the attribute mapping. */
+  nameid_format: string | null;
+  /** OIDC: scopes the application may receive on top of openid (subset of profile, email, roles, offline_access). */
+  scopes: string[];
+  /** OIDC: allow the refresh_token grant (needed for offline_access). */
+  allow_refresh_tokens: boolean;
 }
 type State = { apps: AppConnector[] };
 export interface AppConnectorStore {
@@ -63,6 +73,7 @@ interface AppConnectorPluginModule {
     remove: (t: string, actor: string, id: string) => Promise<State>;
   };
   DEMO_APP_CONNECTORS: AppConnector[];
+  parseSpMetadata: (xml: unknown) => { entity_id: string; acs_url: string; sp_certificate: string | null };
 }
 const plugin = loadPluginModule('app-connector', 'handlers.mjs') as AppConnectorPluginModule;
 
@@ -72,6 +83,7 @@ export const appConnectorConfig = plugin.appConnectorConfig;
 export const checkUrl = plugin.checkUrl;
 export const build = plugin.build;
 export const DEMO_APP_CONNECTORS = plugin.DEMO_APP_CONNECTORS;
+export const parseSpMetadata = plugin.parseSpMetadata;
 
 export class MemoryAppConnectorStore implements AppConnectorStore {
   private live = new Map<string, State>(); private work = new Map<string, State>();
@@ -80,7 +92,7 @@ export class MemoryAppConnectorStore implements AppConnectorStore {
 }
 
 type Row = { id: string; name: string; description: string; protocol: Protocol; enabled: number; config: string };
-const fromRow = (r: Row): AppConnector => { const c = JSON.parse(r.config) as Partial<Pick<AppConnector, 'redirect_uris' | 'entity_id' | 'acs_url' | 'attribute_mapping' | 'allowed_roles' | 'secret_ref' | 'launch_url'>>; return { id: r.id, name: r.name, description: r.description, protocol: r.protocol, enabled: !!r.enabled, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, ...c } as AppConnector; };
+const fromRow = (r: Row): AppConnector => { const c = JSON.parse(r.config) as Partial<Pick<AppConnector, 'redirect_uris' | 'entity_id' | 'acs_url' | 'attribute_mapping' | 'allowed_roles' | 'secret_ref' | 'launch_url' | 'sp_certificate' | 'want_signed_requests' | 'nameid_format' | 'scopes' | 'allow_refresh_tokens'>>; return { id: r.id, name: r.name, description: r.description, protocol: r.protocol, enabled: !!r.enabled, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: r.protocol === 'oidc' ? ['profile', 'email', 'roles'] : [], allow_refresh_tokens: r.protocol === 'oidc', ...c } as AppConnector; };
 
 /** Dolt: table `app_connectors`, written on the working branch, live after Apply like every other administrator change. Fictional data only. */
 export class DoltAppConnectorStore implements AppConnectorStore {
@@ -142,6 +154,8 @@ export class AppConnectorController {
   @Get() list(@Param('tenant') t: string) { return this.a.list(t); }
   @Get(':id') get(@Param('tenant') t: string, @Param('id') id: string) { return this.a.get(t, id); }
   @Post() create(@Param('tenant') t: string, @Body() b: any, @Req() r: { user: { sub: string } }) { return this.a.create(t, r.user.sub, b); }
+  /** Reads a pasted SP metadata document into the registry fields (entity id, ACS URL, public signing certificate). Nothing is stored. */
+  @Post('parse-sp-metadata') parse(@Param('tenant') _t: string, @Body() b: { metadata?: string }) { return parseSpMetadata(b?.metadata); }
   @Patch(':id') update(@Param('tenant') t: string, @Param('id') id: string, @Body() b: any, @Req() r: { user: { sub: string } }) { return this.a.update(t, r.user.sub, id, b); }
   @Delete(':id') remove(@Param('tenant') t: string, @Param('id') id: string, @Req() r: { user: { sub: string } }) { return this.a.remove(t, r.user.sub, id); }
 }

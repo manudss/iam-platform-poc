@@ -57,9 +57,10 @@ describe('OIDC provider: a local relying party signs in (code + PKCE) through th
     (app.get(SSO_DIRECTORY) as MemorySsoDirectory).users.push(alice, bob);
     app.get(ApplicationBus).consumeOnBus('sso-test', ['sso.login.succeeded', 'sso.login.denied', 'sso.login.failed', 'sso.token.issued', 'sso.assertion.issued'], (e) => { events.push({ type: e.type, payload: e.payload }); });
     await reg.install(T, 'app-connector', {}); await reg.enable(T, 'app-connector', {});
-    await apps.create(T, 'admin', { id: 'wiki', name: 'Company wiki', protocol: 'oidc', redirect_uris: [CB], enabled: true, allowed_roles: ['employee'], attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', groups: 'roles' } });
+    await apps.create(T, 'admin', { id: 'wiki', name: 'Company wiki', protocol: 'oidc', redirect_uris: [CB], enabled: true, allowed_roles: ['employee'], attribute_mapping: { sub: 'id', email: 'email', name: 'display_name', groups: 'roles' }, scopes: ['profile', 'email', 'roles', 'offline_access'] });
     await apps.update(T, 'admin', 'wiki', { enabled: true, allowed_roles: ['employee'] });
     await apps.create(T, 'admin', { id: 'off', name: 'Off', protocol: 'oidc', redirect_uris: [CB] });
+    await apps.create(T, 'admin', { id: 'limited', name: 'Limited', protocol: 'oidc', redirect_uris: [CB], enabled: true, allowed_roles: ['employee'], attribute_mapping: { sub: 'id', name: 'display_name' }, scopes: ['profile'], allow_refresh_tokens: false });
   });
   after(async () => { process.env.IAM_SSO_BASE_URL = saved.b; await app.close(); });
 
@@ -121,6 +122,40 @@ describe('OIDC provider: a local relying party signs in (code + PKCE) through th
     assert.ok(t1.refresh_token);
     const t2 = await oc.refreshTokenGrant(config, t1.refresh_token!);
     assert.ok(t2.access_token && t2.access_token !== t1.access_token);
+  });
+
+  it('grants only the scopes the application allows, and no refresh token when the grant is off', async () => {
+    const config = await oc.discovery(new URL(ISS), 'limited', undefined, oc.None(), { execute: [oc.allowInsecureRequests] });
+    // asking for a scope the application does not allow is refused at authorize, before any sign-in
+    const { c: c0 } = await pkce();
+    const refused = await start(config, c0, 'openid profile email', 'st5x') as { cb?: URL };
+    assert.equal(refused.cb?.searchParams.get('error'), 'invalid_scope', 'email is outside the application list');
+    // asking for exactly what it allows signs in; the token carries only those scopes and no refresh token
+    const { v, c } = await pkce();
+    const s = await start(config, c, 'openid profile', 'st5') as { uid: string };
+    const det = await (await api(`/sso/${T}/interaction/${s.uid}`, 'demo-alice')).json() as any;
+    assert.deepEqual(det.scopes, ['openid', 'profile'], 'the consent screen shows only what the application may receive');
+    const done = await (await api(`/sso/${T}/interaction/${s.uid}/complete`, 'demo-alice', { decision: 'allow' })).json() as any;
+    const tokens = await oc.authorizationCodeGrant(config, await finish(done.redirectTo), { pkceCodeVerifier: v, expectedState: 'st5' });
+    assert.equal(tokens.scope, 'openid profile');
+    assert.equal(tokens.refresh_token, undefined, 'no refresh token: the application does not allow the grant');
+    const info = await oc.fetchUserInfo(config, tokens.access_token, 'demo-alice') as any;
+    assert.deepEqual(info, { sub: 'demo-alice', name: 'Alice Martin' }, 'userinfo serves only claims of the granted scopes');
+  });
+
+  it('an application opens without a new sign-in while the session lives (SSO session persistence)', async () => {
+    const config = await cfg();
+    const { v, c } = await pkce();
+    const s = await start(config, c, 'openid profile email roles', 'st6') as { uid: string };
+    const done = await (await api(`/sso/${T}/interaction/${s.uid}/complete`, 'demo-alice', { decision: 'allow' })).json() as any;
+    const t1 = await oc.authorizationCodeGrant(config, await finish(done.redirectTo), { pkceCodeVerifier: v, expectedState: 'st6' });
+    assert.equal(t1.claims()!.sub, 'demo-alice');
+    // the session cookie the sign-in left in the jar answers the next authorization straight away: no interaction, no credentials
+    const { v: v2, c: c2 } = await pkce();
+    const url = oc.buildAuthorizationUrl(config, { redirect_uri: CB, scope: 'openid profile', state: 'st7', code_challenge: c2, code_challenge_method: 'S256' });
+    const cb2 = await finish(url.href);
+    const t2 = await oc.authorizationCodeGrant(config, cb2, { pkceCodeVerifier: v2, expectedState: 'st7' });
+    assert.equal(t2.claims()!.sub, 'demo-alice', 'the living session answered: no second sign-in');
   });
 
   it('refuses a user without an allowed role (access_denied) and records it', async () => {

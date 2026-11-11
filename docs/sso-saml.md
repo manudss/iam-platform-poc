@@ -2,12 +2,13 @@
 
 Step 3 of the SSO plan (`sso-decision.md`, `sso-oidc.md` for the OIDC sibling): the platform acts as a SAML 2.0 identity
 provider for the applications declared in `app-connector` (`protocol: 'saml'`, with `entity_id`, `acs_url`,
-`attribute_mapping`, `allowed_roles`). The protocol is the embedded library **samlify** (MIT, pinned exactly at 2.15.1:
+`attribute_mapping`, `allowed_roles`, and the SP options below). The protocol is the embedded library **samlify** (MIT, pinned exactly at 2.15.1:
 earlier versions could accept a response signed with an attacker's certificate).
 
 **Demonstration grade, like the rest of the POC.** Not production:
 
-- AuthnRequests are accepted unsigned (the registry holds no SP certificate);
+- AuthnRequests are accepted unsigned by default; register the SP signing certificate on the application and switch on
+  "Require signed AuthnRequests" to make signatures mandatory (an unsigned or badly signed request is then refused);
 - assertions are signed (RSA-SHA256) with a self-signed certificate generated per process (pure TypeScript, no openssl
   in the free container) unless the secret store provides `sso/<tenant>/saml-signing-key` (`cert` and `privateKey`, PEM).
   A restart without the secret store changes the key: applications must re-read the metadata;
@@ -43,14 +44,29 @@ touching the application registry.
 4. On **Cancel** (or no allowed role), the application still gets a well-formed, **signed** response with the
    `RequestDenied` status, so it can trust the refusal.
 
+## Configuring a service provider (Applications screen)
+
+The full SAML configuration of an application:
+
+- **SP entity ID** and **ACS URL** (exact, https), as before;
+- **Import SP metadata**: paste the application's metadata XML - the entity ID, the HTTP-POST ACS URL and the signing
+  certificate are read out of it (`POST /tenants/:t/app-connectors/parse-sp-metadata`, a structural read, not an XSD
+  validation). The IdP metadata (`GET /sso/<tenant>/saml/metadata`) is one link away to register on the SP side;
+- **SP signing certificate** (PEM, checked): the certificate the application signs its AuthnRequests with;
+- **Require signed AuthnRequests**: with the certificate registered, unsigned or badly signed requests are refused;
+- **NameID format**: `emailAddress` (default), `unspecified` or `persistent` - the assertion NameID is built in that
+  format from the application's `NameID` attribute mapping.
+
+OIDC applications never carry the SAML-only fields (and conversely).
+
 Events: `sso.login.succeeded`, `sso.login.denied` (reason), `sso.login.failed` (malformed request, unknown SP, ACS
 mismatch), `sso.assertion.issued`.
 
 ## Demo data
 
-The seed (`demo-data.service.ts`) enables `saml-idp` and declares **Payroll** (`payroll`): entity id
-`https://payroll.example.invalid/saml/metadata`, ACS `https://payroll.example.invalid/saml/acs`, role `hr-partner`
-(Yanis Leroy holds it; the demo accounts do not).
+The seed (`demo-data.service.ts`) enables `saml-idp` and declares fictional SAML applications: **Payroll** plus the
+SAML half of the demo gallery (ExpenseFlow, Ticketly, TimeSheet, TravelOps, SSO Config: SAML - see `demo.md`). The
+gallery applications point at their real demo addresses under `apps.dss.name`; Payroll stays on `.invalid` names.
 
 ## Testing a service provider against it
 

@@ -22,7 +22,7 @@ export interface Change { branch: string; commit: string; violations: Violation[
 
 /**
  * Thin client. /core and /api are proxied by `ng serve` (proxy.conf.json) to the Rust core (8081) and the NestJS API (3000),
- * so no CORS is needed. The token is kept in memory only (never localStorage), lost on reload. POC prototype flow, not standard OIDC.
+ * so no CORS is needed. The token is also kept in localStorage so coming back within its lifetime skips a new sign-in (docs/session.md); it is dropped at logout and an expired one is never restored. POC prototype flow, not standard OIDC.
  */
 export class ApiClient {
   private token = '';
@@ -31,7 +31,7 @@ export class ApiClient {
   branch = '';
 
   constructor(readonly tenant = 'acme-demo', private readonly f: typeof fetch = (...a) => fetch(...a), private readonly onUnauthorized: () => void = () => {}) {}
-  /** Packaged plugin screens call the API with the same session; the token stays in memory (never localStorage). */
+  /** Packaged plugin screens call the API with the same session (same token, same persistence). */
   get bearerToken() { return this.token; }
 
   get loggedIn() { return !!this.token; }
@@ -40,12 +40,24 @@ export class ApiClient {
     try { const b = this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); const exp = JSON.parse(atob(b)).exp; return typeof exp === 'number' && Number.isFinite(exp) ? exp * 1000 : null; } catch { return null; }
   }
   private unauthorized() { this.logout(); this.onUnauthorized(); return new Error('Session expired or invalid. Sign in again. Your action was not retried.'); }
-  /** Display name of the signed-in identity: the `sub` claim of the in-memory token (display only, nothing is trusted from it). */
+  /** Display name of the signed-in identity: the `sub` claim of the session token (display only, nothing is trusted from it). */
   get identity(): string {
     try { const b = this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); return (JSON.parse(atob(b)) as { sub?: string }).sub ?? ''; } catch { return ''; }
   }
-  logout() { this.token = ''; this.epoch++; }
-  private signIn(token: string) { this.token = token; this.epoch++; }
+  private static readonly STORE = 'iam.session';
+  /** Keeps the stored copy in step with the token in use (storage may be blocked: the session then lives in memory only). */
+  private persist() { try { if (this.token) localStorage.setItem(ApiClient.STORE, this.token); else localStorage.removeItem(ApiClient.STORE); } catch { /* storage blocked */ } }
+  /** Adopts the token kept from an earlier visit while it is still valid; an expired or unreadable one is dropped. True when a token was restored. */
+  restore(): boolean {
+    let t: string | null = null;
+    try { t = localStorage.getItem(ApiClient.STORE); } catch { return false; }
+    if (!t) return false;
+    this.token = t;
+    if (!this.expiresAt || this.expiresAt <= Date.now()) { this.logout(); return false; }
+    this.epoch++; return true;
+  }
+  logout() { this.token = ''; this.epoch++; this.persist(); }
+  private signIn(token: string) { this.token = token; this.epoch++; this.persist(); }
 
   private claims(): Record<string, unknown> {
     try { const b = this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); const c = JSON.parse(atob(b)); return c && typeof c === 'object' ? c : {}; } catch { return {}; }
@@ -75,6 +87,7 @@ export class ApiClient {
     if (!t) throw new Error('session renewal failed');
     if (this.epoch !== epoch || this.token !== sent) return 'expired'; // signed out or in again while waiting: the new token is not ours to use
     this.token = t;
+    this.persist();
     return 'extended';
   }
 

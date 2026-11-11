@@ -4,7 +4,7 @@ import { Session } from './session';
 
 export const RETURN_KEY = 'iam.return';
 
-/** Pages need a token. The token lives in memory only, so a reload (or a pasted deep link) lands here: go to sign-in and come back to the same page. */
+/** Pages need a token. A still-valid saved token is restored on startup; otherwise sign in and come back to the requested page. */
 export const authGuard: CanActivateFn = (_route, state) => {
   const s = inject(Session);
   if (s.loggedIn()) return true;

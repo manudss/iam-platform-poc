@@ -79,6 +79,7 @@ export function createOidcEngine(deps) {
   const env = deps.env ?? process.env;
   const warn = deps.warn ?? (() => {});
   const providers = new Map();
+  const sessionSeconds = new Map();
   const signing = new Map();
   const cookieKeys = (env.IAM_SSO_COOKIE_KEY ?? '').length >= 16 ? [env.IAM_SSO_COOKIE_KEY] : [randomBytes(32).toString('base64url')];
 
@@ -91,6 +92,7 @@ export function createOidcEngine(deps) {
   async function active(t) { return (await deps.pluginActive(t, OIDC_PLUGIN)) && (await deps.pluginActive(t, 'app-connector')); }
   async function forTenant(t, req) {
     if (!/^[a-z0-9-]{1,32}$/.test(t) || !(await active(t))) return undefined;
+    sessionSeconds.set(t, deps.sessionSeconds ? await deps.sessionSeconds(t) : 1800);
     const issuer = `${base(req)}/sso/${t}/oidc`; const k = `${t}|${issuer}`;
     let p = providers.get(k); if (!p) { p = await build(t, issuer); providers.set(k, p); }
     return p;
@@ -107,7 +109,9 @@ export function createOidcEngine(deps) {
     let secret;
     if (a.secret_ref) { try { const s = await deps.secretGet(a.secret_ref); secret = s?.client_secret ?? s?.value; } catch (e) { warn(`secret of ${a.id} unreadable: ${e.message}`); } }
     return {
-      client_id: a.id, client_name: a.name, redirect_uris: a.redirect_uris, response_types: ['code'], grant_types: ['authorization_code', 'refresh_token'],
+      client_id: a.id, client_name: a.name, redirect_uris: a.redirect_uris, response_types: ['code'], grant_types: ['authorization_code', ...(a.allow_refresh_tokens === false ? [] : ['refresh_token'])],
+      // the scopes this application may ask for: a request beyond the list is refused with invalid_scope
+      scope: ['openid', ...(Array.isArray(a.scopes) ? a.scopes : ['profile', 'email', 'roles'])].join(' '),
       // without a readable secret the application is a public client: it must use PKCE (always required here anyway)
       token_endpoint_auth_method: secret ? 'client_secret_basic' : 'none', ...(secret ? { client_secret: secret } : {}), application_type: 'web',
     };
@@ -124,7 +128,7 @@ export function createOidcEngine(deps) {
       pkce: { required: () => true },
       clientDefaults: { id_token_signed_response_alg: 'ES256' },
       features: { devInteractions: { enabled: false }, revocation: { enabled: true }, rpInitiatedLogout: { enabled: true } },
-      ttl: { AccessToken: 600, AuthorizationCode: 60, IdToken: 600, RefreshToken: 14 * 24 * 3600, Interaction: 600, Session: 8 * 3600, Grant: 14 * 24 * 3600 },
+      ttl: { AccessToken: 600, AuthorizationCode: 60, IdToken: 600, RefreshToken: 14 * 24 * 3600, Interaction: 600, Session: (_ctx, session) => Math.max(1, (session.loginTs ?? Math.floor(Date.now() / 1000)) + sessionSeconds.get(t) - Math.floor(Date.now() / 1000)), Grant: 14 * 24 * 3600 },
       interactions: { url: (_ctx, i) => `/sso-interaction/${i.uid}?tenant=${encodeURIComponent(t)}` },
       issueRefreshToken: async (_ctx, client, code) => client.grantTypeAllowed('refresh_token') && code.scopes.has('offline_access'),
       findAccount: async (ctx, sub) => {
@@ -156,10 +160,12 @@ export function createOidcEngine(deps) {
     const app = (await deps.liveApps(t)).find((x) => x.id === i.params.client_id); if (!app) throw new NotFoundException('unknown application');
     return { p, i, app };
   }
+  /** The scopes an application may receive: openid plus its configured list; an unconfigured (older) application keeps the profile scopes. */
+  const appScopes = (a) => new Set(['openid', ...(Array.isArray(a.scopes) ? a.scopes : ['profile', 'email', 'roles'])]);
   /** What the console shows after the user signed in: which application asks for what, and whether the user may open it. */
   async function details(t, uid, sub, req) {
     const { i, app } = await interaction(t, uid, req); const u = await deps.directoryUser(t, sub);
-    const scopes = String(i.params.scope ?? '').split(' ').filter((s) => SCOPES.includes(s));
+    const scopes = String(i.params.scope ?? '').split(' ').filter((s) => SCOPES.includes(s) && appScopes(app).has(s));
     return { app: { id: app.id, name: app.name, description: app.description }, scopes, user: { sub, name: u?.display_name || sub }, allowed: mayOpen(app, u) };
   }
   /** The signed-in user answers. Returns where the browser must go next (the library resumes the authorization request there). */
@@ -170,9 +176,9 @@ export function createOidcEngine(deps) {
     if (!mayOpen(app, u)) return deny('access_denied', 'not-allowed');
     if (decision === 'deny') return deny('access_denied', 'user-declined');
     const grant = new p.provider.Grant({ accountId: sub, clientId: app.id });
-    grant.addOIDCScope(String(i.params.scope ?? 'openid').split(' ').filter((s) => SCOPES.includes(s)).join(' ') || 'openid');
+    grant.addOIDCScope(String(i.params.scope ?? 'openid').split(' ').filter((s) => SCOPES.includes(s) && appScopes(app).has(s)).join(' ') || 'openid');
     const grantId = await grant.save();
-    i.result = { login: { accountId: sub, remember: false }, consent: { grantId } };
+    i.result = { login: { accountId: sub, remember: true }, consent: { grantId } }; // Same per-tenant lifetime as the console; requests do not slide the sign-in deadline.
     await i.save(i.exp - Math.floor(Date.now() / 1000));
     deps.emit('sso.login.succeeded', t, { app: app.id, subject: sub });
     return { redirectTo: i.returnTo };

@@ -181,3 +181,5 @@ td input { width: 100%; box-sizing: border-box; }
 /* Grid cards own their gap; the shared vertical-panel rule must not offset siblings. */
 .lp-grid > .lp-card + .lp-card { margin-top: 0; }
 .lp-head { flex-wrap: wrap; }
+
+#app-form .app-wide { flex: 1 1 24rem; min-width: 0; }

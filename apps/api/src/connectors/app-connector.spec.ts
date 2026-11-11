@@ -8,7 +8,7 @@ import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
-import { AppConnectorService, MemoryAppConnectorStore, build, checkUrl, DEMO_APP_CONNECTORS } from './app-connector.js';
+import { AppConnectorService, MemoryAppConnectorStore, build, checkUrl, parseSpMetadata, DEMO_APP_CONNECTORS } from './app-connector.js';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
 
 // Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
@@ -42,6 +42,24 @@ describe('app-connector validation', () => {
   it('the demo seed is valid and fictional', () => {
     for (const d of DEMO_APP_CONNECTORS) { assert.deepEqual(build(d.id, d as never), d); assert.ok(JSON.stringify(d).includes('example.invalid') || JSON.stringify(d).includes('localhost') || JSON.stringify(d).includes('apps.dss.name')); } // apps.dss.name: the owner's demo gallery domain, no real company
     assert.equal(DEMO_APP_CONNECTORS.length, 13);
+    // SAML options: certificate PEM checked, signed requests need the certificate, NameID format enumerated, OIDC clears SAML-only fields
+    const pem = '-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----';
+    assert.equal(build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', sp_certificate: pem, want_signed_requests: true, nameid_format: 'persistent' }).sp_certificate, pem);
+    assert.throws(() => build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', want_signed_requests: true }), /certificate is required/);
+    assert.throws(() => build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', sp_certificate: 'not a pem' }), /PEM/);
+    assert.throws(() => build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', nameid_format: 'transient' }), /nameid_format/);
+    // OIDC options: known scopes only, openid is implied, offline_access needs refresh tokens, SAML clears them
+    assert.deepEqual(build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['profile', 'offline_access'], allow_refresh_tokens: true }).scopes, ['profile', 'offline_access']);
+    assert.throws(() => build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['openid'] }), /always granted/);
+    assert.throws(() => build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['admin'] }), /unknown scope/);
+    assert.throws(() => build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], scopes: ['offline_access'], allow_refresh_tokens: false }), /needs allow_refresh_tokens/);
+    const samlCleared = build('x', { name: 'x', protocol: 'saml', entity_id: 'e', acs_url: 'https://x.example.invalid/acs', scopes: ['profile'], allow_refresh_tokens: true });
+    assert.deepEqual([samlCleared.scopes, samlCleared.allow_refresh_tokens], [[], false]);
+    // an OIDC application without the new fields keeps the compatible defaults
+    const dflt = build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'] });
+    assert.deepEqual([dflt.scopes, dflt.allow_refresh_tokens], [['profile', 'email', 'roles'], true]);
+    const oidcCleared = build('x', { name: 'x', protocol: 'oidc', redirect_uris: ['https://x.example.invalid/cb'], sp_certificate: pem, want_signed_requests: true, nameid_format: 'persistent' });
+    assert.deepEqual([oidcCleared.sp_certificate, oidcCleared.want_signed_requests, oidcCleared.nameid_format], [null, false, null]);
   });
 });
 
@@ -103,5 +121,16 @@ describe('app-connector events', () => {
     await svc.remove(T, 'demo-alice', 'wiki');
     await new Promise((r) => setTimeout(r, 20));
     assert.deepEqual(seen.map((e) => `${e.type}:${e.payload.app}:${e.payload.protocol}:${e.payload.actor}`), ['app.registered:wiki:oidc:demo-alice', 'app.updated:wiki:oidc:demo-alice', 'app.removed:wiki:oidc:demo-alice']);
+  });
+});
+
+describe('parseSpMetadata: SP metadata import for the admin form', () => {
+  it('reads entity id, POST ACS and the signing certificate (PEM-wrapped)', () => {
+    const xml = '<md:EntityDescriptor entityID="https://sp.example.invalid/saml"><md:SPSSODescriptor><md:KeyDescriptor use="signing"><ds:KeyInfo><ds:X509Data><ds:X509Certificate>  MIIB\n  CERT </ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://sp.example.invalid/acs" index="0"/></md:SPSSODescriptor></md:EntityDescriptor>';
+    assert.deepEqual(parseSpMetadata(xml), { entity_id: 'https://sp.example.invalid/saml', acs_url: 'https://sp.example.invalid/acs', sp_certificate: '-----BEGIN CERTIFICATE-----\nMIIBCERT\n-----END CERTIFICATE-----' });
+  });
+  it('refuses a document without entity id or ACS, and a non-SAML document', () => {
+    assert.throws(() => parseSpMetadata('<EntityDescriptor >'), /missing/);
+    assert.throws(() => parseSpMetadata('hello'), /EntityDescriptor/);
   });
 });
