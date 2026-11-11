@@ -45,6 +45,7 @@ const BIND_REDIRECT = 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect';
 const BIND_POST = 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST';
 const NID_EMAIL = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
 const NID_UNSPEC = 'urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified';
+const NID_PERSISTENT = 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent';
 const STATUS_SUCCESS = 'urn:oasis:names:tc:SAML:2.0:status:Success';
 const STATUS_RESPONDER = 'urn:oasis:names:tc:SAML:2.0:status:Responder';
 const STATUS_DENIED = 'urn:oasis:names:tc:SAML:2.0:status:RequestDenied';
@@ -70,6 +71,9 @@ export function samlAttributesFor(app, u) {
     const values = Array.isArray(v) ? v.filter((x) => x) : typeof v === 'string' && v !== '' ? [v] : [];
     if (values.length) attributes.push({ name, values });
   }
+  if (app.nameid_format === 'emailAddress' && u.email) { nameID = u.email; nameIDFormat = NID_EMAIL; }
+  else if (app.nameid_format === 'persistent') { nameID = u.id; nameIDFormat = NID_PERSISTENT; }
+  else if (app.nameid_format === 'unspecified') { nameIDFormat = NID_UNSPEC; }
   return { nameID, nameIDFormat, attributes };
 }
 
@@ -131,7 +135,10 @@ export function createSamlEngine(deps) {
     const { entity_id, acs_url } = app;
     if (!entity_id || !acs_url) throw new BadRequestException('the application has no SAML entity id or ACS URL');
     return samlify.ServiceProvider({
-      entityID: entity_id, authnRequestsSigned: false, wantAssertionsSigned: true,
+      entityID: entity_id, wantAssertionsSigned: true,
+      // With the SP certificate registered, AuthnRequests can be signature-verified; `want_signed_requests`
+      // makes a signature mandatory (an unsigned or badly signed request is then refused at parse).
+      ...(app.sp_certificate ? { signingCert: app.sp_certificate, authnRequestsSigned: !!app.want_signed_requests } : { authnRequestsSigned: false }),
       assertionConsumerService: [{ Binding: BIND_POST, Location: acs_url }],
     });
   }
