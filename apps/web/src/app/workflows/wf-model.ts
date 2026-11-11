@@ -47,14 +47,15 @@ export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; ca
 
 // ---- Visual node for the workflow canvas: readable name, wrapped text, SIMULATED/COMPUTED/REAL badge, side handles.
 // `runStatus` (editor test run / executions replay) tints the frame with the step outcome. ----
-export interface WfNodeData { name: string; category: StepCategory; runStatus?: string | null }
+export interface WfNodeData { name: string; category: StepCategory; icon?: string; runStatus?: string | null }
 
 @Component({
   selector: 'app-wf-node',
   imports: [HandleComponent, SelectableDirective],
   template: `
     <div selectable class="wf-node" [class.real]="data()?.category === 'real'" [class.computed]="data()?.category === 'computed'" [class.selected]="selected()" [attr.data-run]="data()?.runStatus ?? null">
-      <span class="wf-node-name">{{ data()?.name }}</span>
+      <span class="wf-node-title"><span class="wf-node-icon" aria-hidden="true">{{data()?.icon || '◇'}}</span><span class="wf-node-name">{{ data()?.name }}</span></span>
+      @if (data()?.runStatus) {<span class="wf-run-dot" [attr.aria-label]="data()?.runStatus">{{data()?.runStatus === 'done' ? '✓' : data()?.runStatus === 'failed' ? '!' : data()?.runStatus === 'running' ? '◌' : '−'}}</span>}
       <span class="wf-node-badge" [class.real]="data()?.category === 'real'" [class.computed]="data()?.category === 'computed'">{{ badgeLabel() }}</span>
     </div>
     <handle type="target" position="left" />
@@ -75,6 +76,12 @@ export interface WfNodeData { name: string; category: StepCategory; runStatus?: 
     .wf-node[data-run="failed"] { border-color: var(--bad-line); }
     .wf-node[data-run="running"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
     .wf-node[data-run="skipped"] { opacity: .55; }
+    .wf-node-title { display: flex; align-items: center; gap: 7px; }
+    .wf-node-icon { flex-shrink: 0; display: grid; place-items: center; width: 21px; height: 21px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+    .wf-run-dot { position: absolute; right: -7px; top: -7px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: var(--panel); color: var(--muted); font-size: 11px; }
+    .wf-node[data-run="done"] .wf-run-dot { background: var(--ok); color: var(--card); }
+    .wf-node[data-run="failed"] .wf-run-dot { background: var(--bad); color: var(--on-bad); }
+    .wf-node[data-run="running"] .wf-run-dot { background: var(--accent); color: var(--accent-ink); }
     .wf-node-name {
       font-size: 14px; font-weight: 600; line-height: 1.35; color: var(--ink);
       overflow-wrap: anywhere; white-space: normal;
