@@ -60,6 +60,15 @@ describe('launchpad: the applications a signed-in person may open, with their SS
     assert.equal(byId.get('payroll').protocol, 'saml');
   });
 
+  it('persists preferences for the signed-in user only, rejects inaccessible IDs and body-supplied identities', async () => {
+    const put = (sub: string, body: unknown) => fetch(`${BASE}/sso/${T}/launchpad/preferences`, { method: 'PUT', headers: { 'x-test-sub': sub, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await put('demo-alice', { favourites: ['wiki'], order: ['wiki','payroll'] })).status, 200);
+    assert.deepEqual((await (await api('demo-alice')).json() as any).preferences, { favourites: ['wiki'], order: ['wiki','payroll'] });
+    assert.deepEqual((await (await api('yanis-leroy')).json() as any).preferences, { favourites: [], order: [] });
+    assert.equal((await put('yanis-leroy', { favourites: ['wiki'], order: [] })).status, 400);
+    assert.equal((await put('demo-alice', { favourites: [], order: [], subject: 'yanis-leroy' })).status, 400);
+  });
+
   it('filters by role: the HR-only application appears for the HR user, not for alice', async () => {
     const body = await (await api('yanis-leroy')).json() as any;
     assert.deepEqual(body.apps.map((a: any) => a.id), ['people']);
