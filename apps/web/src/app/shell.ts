@@ -32,7 +32,7 @@ export class Shell {
   protected branches=signal<BranchInfo[]>([]);protected newBranch='';protected working='';protected review=signal<any>(null);protected workingBusy=signal(false);
   /** Compact bar state: the ⋯ menu, the "Manage branches" panel, and the number of changed ROWS on the working branch (the badge). */
   protected readonly more=signal(false);protected readonly manage=signal(false);protected readonly changes=signal<number|null>(null);
-  protected dot(){const b=this.s.branch();return !b||b==='main'?'grey':b===this.personal()?'green':'orange';}
+  protected dot(){if(this.branchState()==='error')return 'red';const b=this.s.branch();return !b||b==='main'?'grey':b===this.personal()?'green':'orange';}
   protected async loadChanges(){const b=this.s.branch();if(!b||b==='main'||!this.isAdmin()){this.changes.set(null);return;}try{const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());if(r.status<400)this.changes.set(r.data?.diff?.rows?.total??r.data?.diff?.tables?.length??0);}catch{/* the badge is a hint; Review & Apply still reads the diff itself */}}
   /** Menu entries declared by the tenant's active plugins (GET /plugins/menu): a screen joins the sidebar with its plugin and leaves with it. */
   protected readonly pluginMenu=signal<{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]>([]);
@@ -40,7 +40,24 @@ export class Shell {
   protected openManage(){this.more.set(false);this.manage.set(!this.manage());}
   protected personal=signal('');protected renameTo='';
   /** Opens (or reuses) the signed-in user's own working branch so the console is ready to use on arrival. */
-  protected async ensurePersonal(){try{const r=await this.s.api.raw<{branch:string;status:string}>('POST','/workspace/personal',undefined,this.headers());this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;if(this.s.branch()!==r.data.branch)this.s.selectBranch(r.data.branch);this.s.say(r.data.status==='reused'?'Back on your personal branch '+r.data.branch+'. Your work in progress is kept.':'Your personal branch '+r.data.branch+' is ready. Changes stay on it until Apply.');}catch(e){const m=(e as Error).message;this.s.say(/admin capability|disabled/.test(m)?'Enter the admin capability token, then press Refresh branches to open your personal branch.':m,/admin capability|disabled/.test(m)?'info':'error');}}
+  /** State of opening the personal branch, shown in the branch selector pill (never as a banner): idle, creating, ready, error. */
+  protected readonly branchState=signal<'idle'|'creating'|'ready'|'error'>('idle');
+  /** Plain-language detail for the pill tooltip (also announced to screen readers). */
+  protected readonly branchTip=signal('');
+  protected async ensurePersonal(){
+    this.branchState.set('creating');this.branchTip.set('Opening your personal branch…');
+    try{
+      const r=await this.s.api.raw<{branch:string;status:string}>('POST','/workspace/personal',undefined,this.headers());
+      this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;if(this.s.branch()!==r.data.branch)this.s.selectBranch(r.data.branch);
+      this.branchState.set('ready');
+      this.branchTip.set(r.data.status==='reused'?'Back on your personal branch '+r.data.branch+'. Your work in progress is kept.':'Your personal branch '+r.data.branch+' is ready. Changes stay on it until Apply.');
+    }catch(e){
+      const m=(e as Error).message;const token=/admin capability|disabled/.test(m);
+      const text=token?'Enter the admin capability token, then press Refresh branches to open your personal branch.':m;
+      this.branchState.set('error');this.branchTip.set(text);
+      this.s.say(text,token?'info':'error');
+    }
+  }
   protected async refresh(){if(!this.personal())await this.ensurePersonal();await this.loadBranches();}
   protected async rename(){try{const r=await this.s.api.raw<{branch:string}>('POST','/workspace/personal/rename',{name:this.renameTo},this.headers());this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;this.s.selectBranch(r.data.branch);await this.loadBranches();this.manage.set(false);this.s.say('Personal branch renamed to '+r.data.branch+'.');}catch(e){this.s.say((e as Error).message,'error');}}
   async ngOnInit(){

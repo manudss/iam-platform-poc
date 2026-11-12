@@ -202,6 +202,53 @@ describe('routing and sign-in guard', () => {
     expect(el.textContent).toContain('Choose your working branch');
   });
 
+  describe('personal branch state lives in the branch pill, not in a banner', () => {
+    const access = { subject: 'demo-alice', admin: true, restricted: true, plugins: {} };
+    const open = async (personal: () => unknown) => {
+      const s = TestBed.inject(Session);
+      s.loggedIn.set(true); s.user.set('demo-alice');
+      s.api.raw = (async (_m: string, path: string) => path === '/me/access' ? { status: 200, data: access } : path === '/workspace/personal' ? { status: 200, data: await personal() } : { status: 200, data: [] }) as never;
+      const h = await RouterTestingHarness.create();
+      await h.navigateByUrl('/activation');
+      await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+      return { s, el: h.routeNativeElement as HTMLElement, h };
+    };
+
+    it('ready: no banner, the message is the pill tooltip and a polite status for screen readers', async () => {
+      const { s, el } = await open(() => ({ branch: 'personal/demo-alice', status: 'created' }));
+      expect(s.message()).not.toContain('personal branch');
+      expect(el.querySelector('p.msg.bar')?.textContent ?? '').not.toContain('personal branch');
+      expect(el.querySelector('#branch-tip')?.textContent).toContain('Your personal branch personal/demo-alice is ready. Changes stay on it until Apply.');
+      expect(el.querySelector('[role=status]')?.textContent).toContain('is ready');
+      expect(el.querySelector('.pillwrap .dot')?.className).toContain('green');
+      expect(el.textContent).not.toContain('Choose your working branch');
+    });
+
+    it('creating: the pill shows the opening state and the page shows no "Choose your working branch" card', async () => {
+      let release!: (v: unknown) => void;
+      const { el, h } = await open(() => new Promise((r) => { release = r; }));
+      expect(el.querySelector('#branch-pill')?.classList.contains('busy')).toBe(true);
+      expect(el.querySelector('select[name=globalBranch] option')?.textContent).toContain('Opening your branch');
+      expect(el.textContent).not.toContain('Choose your working branch');
+      release({ branch: 'personal/demo-alice', status: 'created' });
+      await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+      expect(el.querySelector('#branch-pill')?.classList.contains('busy')).toBe(false);
+    });
+
+    it('error: red pill with Retry, the error stays visible, and Retry opens the branch', async () => {
+      let fail = true;
+      const { s, el, h } = await open(() => { if (fail) throw new Error('Dolt is not reachable'); return { branch: 'personal/demo-alice', status: 'reused' }; });
+      expect(el.querySelector('.pillwrap .dot')?.className).toContain('red');
+      expect(el.querySelector('#branch-tip')?.textContent).toContain('Dolt is not reachable');
+      expect(s.tone()).toBe('error');
+      fail = false;
+      (el.querySelector('#branch-retry') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
+      expect(el.querySelector('#branch-retry')).toBeNull();
+      expect(el.querySelector('#branch-tip')?.textContent).toContain('Back on your personal branch personal/demo-alice');
+    });
+  });
+
   it('workflows-iga plugin disabled: the Workflows menu entry is hidden and its routes fall back to /plugins', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');

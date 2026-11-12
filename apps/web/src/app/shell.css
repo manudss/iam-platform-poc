@@ -75,3 +75,18 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .workflow-workbench .bar{flex:none;margin:0;border-radius:0;padding:4px 12px;font-size:11px;max-height:42px;overflow:auto}
 .workflow-workbench .side{padding:12px 8px}.workflow-workbench nav a{font-size:11px;padding:6px 8px;gap:6px}.workflow-workbench .group{margin-top:16px;font-size:9px}
 @media(max-width:900px){.workflow-workbench{grid-template-columns:1fr}.workflow-workbench .side{width:230px}.workflow-workbench .top{padding:6px 8px}.workflow-workbench .top h1{font-size:12px}}
+
+/* Branch pill states: opening (spinner), ready (green, message in the tooltip), error (red + Retry). No banner. */
+.pillwrap { position: relative; }
+.dot.red { background: var(--bad); }
+.pillwrap.failed { background: var(--bad-soft); }
+.pillwrap.busy .dot { background: none; border: 2px solid var(--line); border-top-color: var(--accent); animation: pill-spin .9s linear infinite; box-sizing: border-box; }
+@keyframes pill-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pillwrap.busy .dot { animation: none; } }
+.retry { border: 0; background: transparent; font: inherit; font-size: .8rem; font-weight: 600; text-decoration: underline; cursor: pointer; padding: .2rem .5rem .2rem 0; color: inherit; }
+.tip { position: absolute; top: calc(100% + .5rem); right: 0; width: max-content; max-width: 18rem; padding: .6rem .75rem; border-radius: .5rem; background: #1f1b33; color: #fff; font-size: .8rem; font-weight: 400; line-height: 1.4; box-shadow: 0 6px 20px rgba(0,0,0,.25); opacity: 0; visibility: hidden; transition: opacity .12s; z-index: 20; pointer-events: none; }
+.tip .muted { opacity: .7; }
+.pillwrap:hover .tip, .pillwrap:focus-within .tip { opacity: 1; visibility: visible; }
+.pillwrap:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 900px) { .pillwrap { position: static; } .tip { left: .75rem; right: .75rem; top: calc(100% - .2rem); width: auto; max-width: none; } }

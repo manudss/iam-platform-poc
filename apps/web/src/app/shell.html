@@ -27,8 +27,11 @@
       <app-theme-switch class="top-theme" />
       <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
       @if (isAdmin() && !s.testBranch()) {
-      @if (canBranches()) {<span class="pillwrap" title="The data branch you are working on. Main is read only. Your own branch is green, other branches are orange."><span class="dot" [class]="dot()"></span>
-        <select class="pill" name="globalBranch" aria-label="Data branch" [(ngModel)]="working" (ngModelChange)="select()"><option value="">Choose a branch</option>@for(b of branches();track b.name){<option [value]="b.name">{{b.name}}{{b.name==='main'?' (read only)':''}}{{b.name===personal()?' (yours)':''}}</option>}</select></span>}
+      @if (canBranches()) {<span class="pillwrap" [class.busy]="branchState()==='creating'" [class.failed]="branchState()==='error'" id="branch-pill" tabindex="-1"><span class="dot" [class]="dot()"></span>
+        <select class="pill" name="globalBranch" aria-label="Data branch" aria-describedby="branch-tip" [(ngModel)]="working" (ngModelChange)="select()"><option value="">{{branchState()==='creating'?'Opening your branch…':branchState()==='error'?'Branch unavailable':'Choose a branch'}}</option>@for(b of branches();track b.name){<option [value]="b.name">{{b.name}}{{b.name==='main'?' (read only)':''}}{{b.name===personal()?' (yours)':''}}</option>}</select>
+        @if(branchState()==='error'){<button type="button" class="retry" id="branch-retry" (click)="ensurePersonal()">Retry</button>}
+        <span class="tip" id="branch-tip" role="tooltip"><b>{{branchState()==='error'?'Could not open your branch':branchState()==='creating'?'Opening your branch':'Data branch'}}</b>@if(branchTip()){<br />{{branchTip()}}}<br /><span class="muted">Main is read only. Your own branch is green, other branches are orange.</span></span></span>
+      <span class="sr-only" role="status">{{branchTip()}}</span>}
       <button type="button" class="icon review" id="review-apply" (click)="prepareApply()" [disabled]="workingBusy()||!s.branch()||s.branch()==='main'" aria-label="Review and apply changes"
         title="Review &amp; Apply: see what you changed on this branch, compared with main, then publish it to main. Disabled on main, which is read only.">⇄@if(changes();as n){<span class="badge" id="changes-badge" [attr.aria-label]="n+' changed rows'">{{n}}</span>}</button>
       @if (canBranches()) {<button type="button" class="icon" id="more-menu" (click)="more.set(!more())" [attr.aria-expanded]="more()" aria-label="More branch actions" title="Test sign-in, stable test link, manage branches">⋯</button>}
@@ -52,6 +55,6 @@
     }
     @if (s.testBranch()) {<section class="test-bar" aria-label="Branch test"><span>Testing data branch <b>{{ s.testBranch() }}</b> - sign-in and the whole app use its unpublished data and settings. Nothing here changes main.</span><button type="button" class="secondary" id="exit-test" (click)="exitTest()">Exit test</button></section>}
     @if (s.message() && (!workflowEditor() || s.tone() === 'error')) { <p class="msg bar" [class.error]="s.tone() === 'error'" role="status">{{ s.message() }}</p> }
-    <main class="content">@if(s.branch() || !isAdmin() || launchpadRoute()){@for(epoch of [s.branchEpoch()];track epoch){<router-outlet />}}@else{<section class="card"><h3>Choose your working branch</h3><p>Select an existing branch above, or create one from main. No administration data is edited until you choose.</p></section>}</main>
+    <main class="content">@if(s.branch() || !isAdmin() || launchpadRoute()){@for(epoch of [s.branchEpoch()];track epoch){<router-outlet />}}@else if(branchState()!=='creating' && branchState()!=='idle'){<section class="card"><h3>Choose your working branch</h3><p>Select an existing branch above, or create one from main. No administration data is edited until you choose.</p></section>}</main>
   </div>
 </div>
