@@ -245,6 +245,7 @@ describe('routing and sign-in guard', () => {
       (el.querySelector('#branch-retry') as HTMLButtonElement).click();
       await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
       expect(el.querySelector('#branch-retry')).toBeNull();
+      expect(s.message()).not.toContain('Dolt is not reachable'); // the failure notice is cleared once the branch opens
       expect(el.querySelector('#branch-tip')?.textContent).toContain('Back on your personal branch personal/demo-alice');
     });
   });

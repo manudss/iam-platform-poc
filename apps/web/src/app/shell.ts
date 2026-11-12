@@ -44,18 +44,20 @@ export class Shell {
   protected readonly branchState=signal<'idle'|'creating'|'ready'|'error'>('idle');
   /** Plain-language detail for the pill tooltip (also announced to screen readers). */
   protected readonly branchTip=signal('');
+  private branchBarText='';
   protected async ensurePersonal(){
     this.branchState.set('creating');this.branchTip.set('Opening your personal branch…');
     try{
       const r=await this.s.api.raw<{branch:string;status:string}>('POST','/workspace/personal',undefined,this.headers());
       this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;if(this.s.branch()!==r.data.branch)this.s.selectBranch(r.data.branch);
       this.branchState.set('ready');
+      if(this.s.message()===this.branchBarText){this.s.message.set('');this.branchBarText='';} // the failure notice we showed earlier is obsolete now
       this.branchTip.set(r.data.status==='reused'?'Back on your personal branch '+r.data.branch+'. Your work in progress is kept.':'Your personal branch '+r.data.branch+' is ready. Changes stay on it until Apply.');
     }catch(e){
       const m=(e as Error).message;const token=/admin capability|disabled/.test(m);
       const text=token?'Enter the admin capability token, then press Refresh branches to open your personal branch.':m;
       this.branchState.set('error');this.branchTip.set(text);
-      this.s.say(text,token?'info':'error');
+      this.branchBarText=text;this.s.say(text,token?'info':'error');
     }
   }
   protected async refresh(){if(!this.personal())await this.ensurePersonal();await this.loadBranches();}
