@@ -133,6 +133,7 @@ export function userStats(users: UserProfile[]): UserStats {
     </span>
     <button class="secondary x" type="button" (click)="cancel()" title="Close">✕</button>
   </div>
+  @if (partialSave()) { <p role="alert" class="msg bad" id="user-partial-save">User details were saved to this branch, but the additional profile fields were not saved. Your field edits are kept below. Retry saves those fields without repeating unchanged user details. Nothing becomes live until Review &amp; Apply.</p> }
   <form (ngSubmit)="save()">
   <h4>Identity</h4>
   <label>User ID<input name="uid" [(ngModel)]="form.id" [disabled]="!!key" required pattern="[a-z0-9-]{1,32}" />@if(!key){<small>Lowercase letters, digits and dashes; cannot change later.</small>}</label>
@@ -177,6 +178,8 @@ export class UsersPage {
   protected search = signal(''); protected fdept = signal(''); protected fstatus = signal<'' | UserStatus>('');
   protected sortKey = signal<SortKey>('name'); protected sortDir = signal<1 | -1>(1);
   protected menuFor = signal<string | null>(null);
+  protected partialSave = signal(false);
+  private savedDetails = '';
   protected key: string | null = null; protected password = ''; protected form = { id: '', display_name: '', email: '', department: '', manager_id: '', login_enabled: true };
 
   protected readonly initials = initials; protected readonly deptColor = deptColor;
@@ -204,12 +207,12 @@ export class UsersPage {
   @HostListener('document:click') closeMenu() { this.menuFor.set(null); }
 
   protected async load() { try { const r = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}); this.users.set(r.data.users); } catch (e) { this.note.set((e as Error).message); } }
-  protected start(u?: UserProfile) { this.menuFor.set(null); this.key = u?.id ?? null; this.form = { id: u?.id ?? '', display_name: u?.display_name ?? '', email: u?.email ?? '', department: u?.department ?? '', manager_id: u?.manager_id ?? '', login_enabled: u?.login_enabled ?? true }; this.password = ''; this.editing.set(true); this.pfields.set([]); this.pvals.set({}); this.pchanged = {}; this.pvalsFor = u?.id ?? null; ++this.profileRequest; if (u) void this.loadP(u.id); }
+  protected start(u?: UserProfile) { this.partialSave.set(false); this.savedDetails = ''; this.menuFor.set(null); this.key = u?.id ?? null; this.form = { id: u?.id ?? '', display_name: u?.display_name ?? '', email: u?.email ?? '', department: u?.department ?? '', manager_id: u?.manager_id ?? '', login_enabled: u?.login_enabled ?? true }; this.password = ''; this.editing.set(true); this.pfields.set([]); this.pvals.set({}); this.pchanged = {}; this.pvalsFor = u?.id ?? null; ++this.profileRequest; if (u) void this.loadP(u.id); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   private async loadP(id: string) { const request = this.profileRequest, branch = this.s.branch(); try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400 && this.editing() && this.pvalsFor === id && this.key === id && request === this.profileRequest && branch === this.s.branch()) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }
   protected setP(k: string, v: unknown) { this.pvals.update((x) => ({ ...x, [k]: v })); this.pchanged[k] = v === '' ? null : v; }
   protected boolStr(k: string) { const v = this.pvals()[k]; return v === true ? 'true' : v === false ? 'false' : ''; }
-  protected cancel() { this.password = ''; this.editing.set(false); this.pvals.set({}); this.pfields.set([]); this.pvalsFor = null; ++this.profileRequest; }
+  protected cancel() { this.partialSave.set(false); this.savedDetails = ''; this.password = ''; this.editing.set(false); this.pvals.set({}); this.pfields.set([]); this.pvalsFor = null; ++this.profileRequest; }
   ngOnDestroy() { this.cancel(); }
   protected disableAndSave() { this.form.login_enabled = false; void this.save(); }
   protected async quickToggle(u: UserProfile) {
@@ -223,9 +226,16 @@ export class UsersPage {
     this.busy.set(true);
     try {
       const b: Record<string, unknown> = { ...this.form }; if (this.password) b['password'] = this.password;
-      await this.s.api.saveUser(this.key, b, this.s.adminToken());
+      // The directory and plugin stores use separate requests. Keep a checkpoint so an error in the
+      // second cannot look like an all-or-nothing failure, and retries do not repeat a password reset.
+      const details = JSON.stringify([this.s.branch(), this.key, this.form]);
+      if (this.savedDetails !== details || this.password) {
+        await this.s.api.saveUser(this.key, b, this.s.adminToken());
+        this.savedDetails = details; this.password = '';
+      }
       if (this.key && Object.keys(this.pchanged).length) { const r = await this.s.api.raw<any>('PATCH', '/users/' + encodeURIComponent(this.key) + '/profile', { values: this.pchanged }, this.h()); if (r.status >= 400) throw new Error(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Profile fields refused'); }
+      this.partialSave.set(false);
       this.cancel(); await this.load(); this.note.set('User saved on the working branch. Apply is required before live sign-in changes.');
-    } catch (e) { this.note.set((e as Error).message); } finally { this.password = ''; this.busy.set(false); }
+    } catch (e) { this.partialSave.set(!!this.savedDetails); this.note.set((this.savedDetails ? 'Additional profile fields not saved: ' : 'User details not saved: ') + (e as Error).message); } finally { this.password = ''; this.busy.set(false); }
   }
 }
