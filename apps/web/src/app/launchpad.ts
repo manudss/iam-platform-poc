@@ -1,7 +1,11 @@
-import { Component, effect, inject, signal } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
+import { Component, PLATFORM_ID, PendingTasks, TransferState, effect, inject, makeStateKey, signal } from '@angular/core';
 import { Session } from './session';
 
 export interface LaunchpadApp { id: string; name: string; description: string; protocol: 'oidc' | 'saml'; url: string }
+
+/** Hydration handoff: the applications the server fetched to render this page, so the browser does not refetch them (and flash "Loading...") on startup. */
+const LAUNCHPAD_KEY = makeStateKey<{ user?: { name?: string }; apps?: LaunchpadApp[] }>('iam-launchpad');
 
 /** Home of the signed-in console: the applications this person's roles open, one click away through single
  *  sign-on. SAML applications launch IdP-initiated (the IdP posts the assertion to the application); OIDC
@@ -30,13 +34,29 @@ export class LaunchpadPage {
   protected userName = signal('');
   protected problem = signal('');
   protected loaded = signal(false);
-  constructor() { effect(() => { this.s.branchEpoch(); void this.load(); }); }
+  /** SSR: the launchpad renders on the server (docs/session.md, the session cookie). The tracked load lets the
+   *  server render wait for the applications, so the first HTML already carries them. */
+  private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
+  private readonly pending = inject(PendingTasks);
+  private readonly transfer = inject(TransferState);
+  constructor() { effect(() => { this.s.branchEpoch(); void this.pending.run(() => this.load()); }); }
   private async load() {
+    // Hydration: reuse what the server fetched to render this very page instead of refetching it.
+    if (this.isBrowser && this.transfer.hasKey(LAUNCHPAD_KEY)) {
+      const d = this.transfer.get(LAUNCHPAD_KEY, {});
+      this.apps.set(Array.isArray(d.apps) ? d.apps : []);
+      this.userName.set(d.user?.name ?? '');
+      this.problem.set('');
+      this.transfer.remove(LAUNCHPAD_KEY);
+      this.loaded.set(true);
+      return;
+    }
     try {
       const r = await this.s.api.raw<{ user?: { name?: string }; apps?: LaunchpadApp[] }>('GET', '@/sso/{t}/launchpad');
       this.apps.set(Array.isArray(r.data?.apps) ? r.data.apps : []);
       this.userName.set(r.data?.user?.name ?? '');
       this.problem.set('');
+      if (!this.isBrowser) this.transfer.set(LAUNCHPAD_KEY, r.data ?? {});
     } catch (e) { this.problem.set((e as Error).message); } finally { this.loaded.set(true); }
   }
 }
