@@ -98,6 +98,8 @@ jobs:
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/branding-e2e.mjs /tmp/branding-shots
       - name: Connections UI safety (real bundle, isolated API fixtures, light/dark desktop/mobile)
         run: NODE_PATH=/tmp/pw/node_modules node scripts/workflow-connections-ui-e2e.cjs /tmp/workflow-connections-shots
+      - name: Workflow tag overflow and placeholder hover (isolated API fixtures)
+        run: NODE_PATH=/tmp/pw/node_modules node scripts/workflow-visual-fixes-e2e.cjs /tmp/workflow-visual-fixes
       - name: Browser sign-in flow end-to-end (headless Chrome, real core, local client on localhost:4200)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/authz-browser-e2e.mjs /tmp/authz-shots
   web:

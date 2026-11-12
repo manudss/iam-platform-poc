@@ -631,3 +631,12 @@
 .wb .wb-saved.unsaved {
   color: var(--sidebar-ink);
 }
+
+/* Pair both colors: the global primary-button hover otherwise hides placeholder text. */
+.wb-drawer .ph-chip:hover,
+.wb-drawer .ph-chip:focus-visible {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+.wb-drawer .ph-chip { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
