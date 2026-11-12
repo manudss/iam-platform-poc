@@ -1,5 +1,6 @@
 import { Component, inject, signal } from '@angular/core';
 import { CustomNodeComponent, HandleComponent, Node, SelectableDirective, ViewportState } from 'ngx-vflow';
+import { WorkflowPort } from './logic-ports';
 import { Session } from '../session';
 import { ApiClient } from '../api';
 
@@ -47,19 +48,22 @@ export const STEP_TYPES: { type: StepType; label: string; simulated: boolean; ca
 
 // ---- Visual node for the workflow canvas: readable name, wrapped text, SIMULATED/COMPUTED/REAL badge, side handles.
 // `runStatus` (editor test run / executions replay) tints the frame with the step outcome. ----
-export interface WfNodeData { name: string; category: StepCategory; icon?: string; runStatus?: string | null }
+export interface WfNodeData { name: string; category: StepCategory; icon?: string; logic?:boolean; onPort?:(direction:string,id:string)=>void; inputs?:WorkflowPort[]; outputs?:WorkflowPort[]; runStatus?: string | null }
 
 @Component({
   selector: 'app-wf-node',
   imports: [HandleComponent, SelectableDirective],
   template: `
-    <div selectable class="wf-node" [class.real]="data()?.category === 'real'" [class.computed]="data()?.category === 'computed'" [class.selected]="selected()" [attr.data-run]="data()?.runStatus ?? null">
+    <div selectable class="wf-node" [class.logic]="data()?.logic" [class.real]="data()?.category === 'real'" [class.computed]="data()?.category === 'computed'" [class.selected]="selected()" [attr.data-run]="data()?.runStatus ?? null">
       <span class="wf-node-title"><span class="wf-node-icon" aria-hidden="true">{{data()?.icon || '◇'}}</span><span class="wf-node-name">{{ data()?.name }}</span></span>
       @if (data()?.runStatus) {<span class="wf-run-dot" [attr.aria-label]="data()?.runStatus">{{data()?.runStatus === 'done' ? '✓' : data()?.runStatus === 'failed' ? '!' : data()?.runStatus === 'running' ? '◌' : '−'}}</span>}
       <span class="wf-node-badge" [class.real]="data()?.category === 'real'" [class.computed]="data()?.category === 'computed'">{{ badgeLabel() }}</span>
+      @if(data()?.logic){<span class="wf-logic-label">◇ LOGIC</span>}
+      @if(data()?.inputs && data()?.outputs){<div class="wf-ports">
+      <div class="wf-inputs">@for(p of data()?.inputs ?? [];track p.id){<div class="wf-port" [attr.data-port]="p.id"><handle type="target" position="left" [id]="p.id" [attr.aria-label]="'Input from '+p.label" /><button class="wf-port-label" [title]="p.label" [attr.aria-label]="'Edit input from '+p.label" (pointerdown)="$event.stopPropagation()" (click)="data()?.onPort?.('input',p.id);$event.stopPropagation()">{{data()?.logic ? p.label : 'Input'}}</button></div>}</div>
+      <div class="wf-outputs">@for(p of data()?.outputs ?? [];track p.id){<div class="wf-port" [attr.data-kind]="p.kind" [attr.data-port]="p.id"><button class="wf-port-label" [title]="p.label" [attr.aria-label]="'Connect output '+p.label" (pointerdown)="$event.stopPropagation()" (click)="data()?.onPort?.('output',p.id);$event.stopPropagation()">{{data()?.logic || p.branch ? p.label : 'Output'}}</button><handle type="source" position="right" [id]="p.id" [attr.aria-label]="'Output '+p.label" /></div>}</div>
+      </div>}@else{<handle type="target" position="left" /><handle type="source" position="right" />}
     </div>
-    <handle type="target" position="left" />
-    <handle type="source" position="right" />
   `,
   styles: [`
     :host { display: block; position: relative; }
@@ -69,6 +73,23 @@ export interface WfNodeData { name: string; category: StepCategory; icon?: strin
       box-shadow: 0 1px 3px var(--shadow-color); cursor: pointer;
       display: flex; flex-direction: column; gap: 6px;
     }
+    .wf-node.logic.computed,.wf-node.logic.real,.wf-node.logic { width:250px;background:var(--accent-soft);border-color:var(--accent);border-left-color:var(--accent); }
+    .wf-logic-label{font-size:11px;font-weight:700;color:var(--accent);}
+    .wf-ports{display:flex;justify-content:space-between;gap:12px;margin:2px -12px -4px;}
+    .wf-inputs,.wf-outputs{display:flex;flex-direction:column;min-width:0;max-width:50%;flex:1;}
+    .wf-port{position:relative;min-height:36px;display:flex;align-items:center;font-size:11px;color:var(--muted);padding:0 12px;}
+    .wf-port-label{background:transparent;border:0;color:inherit;padding:4px 0;min-height:30px;max-width:100%;font:inherit;text-align:inherit;cursor:pointer;}
+    .wf-port-label:focus-visible,.wf-port-label:hover{outline:1px solid var(--accent);background:var(--card);color:var(--ink);}
+    .wf-port span,.wf-port-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .wf-outputs .wf-port{justify-content:flex-end;text-align:right;}
+    .wf-port[data-kind="false"] handle,.wf-port[data-kind="default"] handle{border-radius:2px;}
+    .wf-port[data-kind="error"]{color:var(--bad);}
+    .wf-port[data-kind="true"]{color:var(--ok);}.wf-port[data-kind="true"] handle{border-color:var(--ok);}
+    .wf-port[data-kind="each"]{color:var(--warn-ink);}.wf-port[data-kind="each"] handle{border-color:var(--warn-line);}
+    .wf-node.logic.selected{border-color:var(--accent);box-shadow:0 0 0 3px var(--shadow-color);}
+    .wf-node.logic[data-run="done"]{border-color:var(--ok);}.wf-node.logic[data-run="failed"]{border-color:var(--bad-line);}.wf-node.logic[data-run="running"]{border-color:var(--accent);}
+    @media(max-width:700px){.wf-port,.wf-port-label{min-height:52px;}}
+    .wf-port handle{width:18px;height:18px;}
     .wf-node.real { border-left-color: var(--ok); }
     .wf-node.computed { border-left-color: var(--warn-line); }
     .wf-node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--shadow-color); }

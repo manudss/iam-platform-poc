@@ -226,3 +226,9 @@ label a plain step may use.
 - The local runner has exactly-once *effects* per run attempt but a retry re-runs the failed step: data steps are
   idempotent by construction (INSERT IGNORE / checked DELETE / no-change detection).
 - Definitions and runs live in `_meta`: durable while the Dolt data dir lives, wiped with it on the free hosted demo.
+
+### Logic ports in the editor
+
+Logic blocks (If, Switch, Loop and Merge) have a theme-based violet surface and a LOGIC label, separate from the COMPUTED / REAL / SIMULATED effect badge. If exposes True/False; Switch exposes every configured case and Default; Loop exposes Each/Done. A logic block has one named input port per incoming link. Input names include the source step and branch when present, so parallel links remain distinct.
+
+Branch links use text and line patterns, not color alone. Normal links have no permanent main-flow selector. Select a link to edit its branch, insert a step or delete it. On touch devices, tap an output's label to edit its existing connections or connect it to a target from a list; drag is optional. Escape closes the connection panel. Jump to step pans to a readable node; Fit restores the overview. Initial placement follows the graph horizontally on desktop and vertically on phones. Ports and handle IDs are display state only: saved definitions keep the existing from/to/label schema, and execution semantics do not change.
