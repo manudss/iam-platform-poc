@@ -1,6 +1,7 @@
+import { ApplyDialog } from './apply-dialog';
 import { Brand, Branding } from './branding';
 import { canOpen, screenOf } from './access';
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal, ViewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
@@ -14,8 +15,9 @@ interface NavItem { path: string; label: string; icon: string; order?: number }
 interface NavGroup { title: string; items: NavItem[] }
 
 /** Administration layout: grouped sidebar, top bar with the signed-in identity, status bar and the page outlet. */
-@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer, ThemeSwitch, Brand], templateUrl: './shell.html', styleUrl: './shell.css' })
+@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer, ThemeSwitch, Brand, ApplyDialog], templateUrl: './shell.html', styleUrl: './shell.css' })
 export class Shell {
+  @ViewChild(ApplyDialog) protected applyDialog!: ApplyDialog;
   private readonly branding = inject(Branding);
   private brandingRequest = 0;
   private async loadBranding(){
@@ -81,8 +83,10 @@ export class Shell {
   protected async loadBranches(){void this.loadStableLinks();try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
   protected async select(){this.s.selectBranch(this.working);this.review.set(null);this.more.set(false);void this.loadChanges();this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
   protected async create(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();await v.createBranch(this.newBranch,'main');this.working=this.newBranch;this.newBranch='';await this.loadBranches();await this.select();this.manage.set(false);}catch(e){this.s.say((e as Error).message,'error');}}
-  protected async prepareApply(){this.workingBusy.set(true);try{await this.loadBranches();const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());this.review.set(r.data);}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
-  protected async apply(){if(!confirm('Apply '+this.s.branch()+' into Dolt main? Its users, plugins and role permissions will become live.'))return;this.workingBusy.set(true);try{const head=this.branches().find(b=>b.name===this.s.branch())?.commit;const r=await this.s.api.raw<any>('POST','/workspace/apply',{confirm:true,expectedHead:head},this.headers());if(r.status>=400 || !r.data.applied)throw new Error(r.data.message??'Apply refused');this.review.set(null);this.s.branchEpoch.update(x=>x+1);this.s.say('Applied '+this.s.branch()+' into main: '+r.data.commit);await this.loadBranches();void this.loadChanges();void this.loadPluginMenu();}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
+  protected async prepareApply(){this.workingBusy.set(true);try{await this.loadBranches();const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());this.review.set({...r.data,expectedHead:this.branches().find(b=>b.name===r.data.branch)?.commit});}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
+  /** Confirm the reviewed change with an HTML dialog, without blocking browser clients.
+   * Bind the action to the reviewed branch/head; the server still checks permission, conflicts and SoD. */
+  protected async apply(){const review=this.review();if(this.workingBusy()||!review||review.branch!==this.s.branch()||review.branch==='main'||!review.expectedHead)return;this.workingBusy.set(true);try{if(!await this.applyDialog.confirm(review.branch)||this.s.branch()!==review.branch)return;const head=review.expectedHead;const r=await this.s.api.raw<any>('POST','/workspace/apply',{confirm:true,expectedHead:head},this.headers());if(r.status>=400 || !r.data.applied)throw new Error(r.data.message??'Apply refused');this.review.set(null);this.s.branchEpoch.update(x=>x+1);this.s.say('Applied '+this.s.branch()+' into main: '+r.data.commit);await this.loadBranches();void this.loadChanges();void this.loadPluginMenu();}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
   protected readonly menu = signal(false);
   /** Ordinary accounts see only their own space. Administration items need the administrator, plugin items need the plugin live. */
   protected visibleNav(): NavGroup[] {

@@ -58,3 +58,5 @@
     <main class="content">@if(s.branch() || !isAdmin() || launchpadRoute()){@for(epoch of [s.branchEpoch()];track epoch){<router-outlet />}}@else if(branchState()!=='creating' && branchState()!=='idle'){<section class="card"><h3>Choose your working branch</h3><p>Select an existing branch above, or create one from main. No administration data is edited until you choose.</p></section>}</main>
   </div>
 </div>
+
+<app-apply-dialog />
