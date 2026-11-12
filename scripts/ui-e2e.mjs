@@ -59,7 +59,7 @@ if (!process.env.WEB_ALREADY_SERVED) run('npx', ['ng', 'serve', '--host', '127.0
 let browser;
 try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
-  browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
+  browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1, MAP *picsum.photos ~NOTFOUND'] });
   const page = await browser.newPage({ viewport: { width: 900, height: 900 } });
   const errors = []; page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() => { // records every distinct [role=status] text of the current document

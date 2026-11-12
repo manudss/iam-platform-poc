@@ -53,7 +53,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let browser;
 try {
   for(let i=0;i<120;i++){try{if((await fetch('http://127.0.0.1:4200/api/health')).ok)break;}catch{}await sleep(500);}
-  browser=await chromium.launch({executablePath:chrome,args:['--no-sandbox','--host-resolver-rules=MAP localhost 127.0.0.1']});
+  browser=await chromium.launch({executablePath:chrome,args:['--no-sandbox','--host-resolver-rules=MAP localhost 127.0.0.1, MAP *picsum.photos ~NOTFOUND']});
   const page=await browser.newPage({viewport:{width:1440,height:1050}}); const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
   const BASE='http://localhost:4200';
   const verifier='dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';

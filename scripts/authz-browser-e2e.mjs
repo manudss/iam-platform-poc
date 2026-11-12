@@ -59,7 +59,7 @@ const client = createServer(async (req, res) => {
 await new Promise((r) => client.listen(4200, '127.0.0.1', r));
 for (let i = 0; i < 100; i++) { try { if ((await fetch(`${CORE}/health`)).ok) break; } catch { await sleep(100); } }
 
-const browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
+const browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1, MAP *picsum.photos ~NOTFOUND'] });
 let failed = false;
 const fin = async () => { await browser.close(); core.kill(); client.close(); process.exit(failed ? 1 : 0); };
 try {

@@ -59,7 +59,7 @@ run('node',['demo/server.mjs'],{cwd:root,env:{...process.env,PORT:'4200',IAM_API
 let browser;
 try {
   for (let i = 0; i < 120; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
-  browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--no-proxy-server', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
+  browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--no-proxy-server', '--host-resolver-rules=MAP localhost 127.0.0.1, MAP *picsum.photos ~NOTFOUND'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1040 } });
   page.setDefaultTimeout(60000);
 
