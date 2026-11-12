@@ -1,3 +1,4 @@
+import {WorkflowCardTags} from './card-tags';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
@@ -46,7 +47,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
   return out;
 }
 
-@Component({ selector: 'app-workflows', imports: [FormsModule, RouterLink], styleUrl: '../pages.css', styles: [`
+@Component({ selector: 'app-workflows', imports: [FormsModule, RouterLink, WorkflowCardTags], styleUrl: '../pages.css', styles: [`
 .wlc-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
 .wlc-head h3 { flex: 1; margin: 0; }
 .wlc-tools { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .8rem; }
@@ -58,7 +59,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-tagchip { cursor: pointer; border: 1px solid transparent; }
 .wlc-tagchip.on { border-color: var(--accent); color: var(--accent); }
 .wlc-sort { display: inline-flex; flex-direction: row; align-items: center; gap: .3rem; margin: 0; }
-.wlc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: .8rem; margin-bottom: 1rem; }
+.wlc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: .8rem; margin-bottom: 1rem; }
 .wlc-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; height: 100%; }
 .wlc-grid > .wlc-card { margin: 0; }
 .wlc-chips button { margin: 0; }
@@ -121,7 +122,7 @@ External actions default to <b>Simulation</b>. <b>Real external actions</b> requ
         <label class="wlc-switch" [title]="d.active ? 'Active: its triggers start runs' : 'Paused: triggers never start a run'"><input type="checkbox" [attr.name]="'on-'+d.id" [checked]="d.active" [disabled]="busy()" (change)="toggleActive(d)" /><i></i></label>
       </div>
       <span class="chip wlc-trigger" [attr.data-status]="d.trigger ? 'real' : null">{{triggerOf(d)}}</span>
-      @for (t of d.tags ?? []; track t) {<button class="chip wlc-tagchip" [class.on]="tag() === t" (click)="tag.set(tag() === t ? '' : t)" title="Filter on this tag">#{{t}}</button>}
+      @if(d.tags?.length){<app-workflow-card-tags [tags]="d.tags" [selected]="tag()" (choose)="tag.set(tag() === $event ? '' : $event)" />}
       <svg class="wlc-mini" [attr.viewBox]="miniOf(d).viewBox" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         @for (e of miniOf(d).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
         @for (n of miniOf(d).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
