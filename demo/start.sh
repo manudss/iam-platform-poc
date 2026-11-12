@@ -65,6 +65,24 @@ supervise /app/iam-core >"$HOME_DIR/core.log" 2>&1 &
 export IAM_CORE_URL="http://127.0.0.1:8081"
 export DOLT_HOST=127.0.0.1 DOLT_PORT=3307 DOLT_USER=root DOLT_PASSWORD='' DOLT_DATABASE=iam
 export API_PORT=3000
+# Demo-only secret store: loopback, RAM-only, scoped API token, no root token in API.
+# An externally configured OpenBao always wins. Opt out with IAM_DEMO_LOCAL_BAO=0.
+if [ -z "${IAM_BAO_ADDR:-}" ] && [ -z "${IAM_BAO_TOKEN:-}" ] && [ "${IAM_DEMO_LOCAL_BAO:-1}" = 1 ]; then
+  BAO_TOKEN_FILE="$HOME_DIR/bao-api-token"
+  rm -f "$BAO_TOKEN_FILE"
+  node /app/demo/secret-store.mjs "$BAO_TOKEN_FILE" >"$HOME_DIR/bao-bootstrap.log" 2>&1 &
+  BAO_PID=$!
+  for i in $(seq 1 30); do
+    [ -s "$BAO_TOKEN_FILE" ] && break
+    kill -0 "$BAO_PID" 2>/dev/null || break
+    sleep 1
+  done
+  if [ ! -s "$BAO_TOKEN_FILE" ]; then echo '[demo] FATAL: demo secret store failed'; cat "$HOME_DIR/bao-bootstrap.log"; exit 1; fi
+  export IAM_BAO_ADDR=http://127.0.0.1:8200
+  IAM_BAO_TOKEN="$(cat "$BAO_TOKEN_FILE")"
+  export IAM_BAO_TOKEN
+  rm -f "$BAO_TOKEN_FILE"
+fi
 echo '[demo] starting NestJS API on 127.0.0.1:3000 (activation journal in memory: IAM_PG_URL unset on purpose)'
 (cd /app/api && node --max-old-space-size="${API_MAX_OLD_SPACE:-192}" dist/main.js) >"$HOME_DIR/api.log" 2>&1 &
 

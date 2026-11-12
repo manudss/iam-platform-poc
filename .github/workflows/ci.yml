@@ -69,6 +69,8 @@ jobs:
           echo "TEMPORAL_BIN=$(find /tmp/svc/temporal -name temporal -type f | head -1)" >> $GITHUB_ENV
           mkdir /tmp/pgtry && cd /tmp/pgtry && npm init -y >/dev/null && npm i embedded-postgres >/dev/null
           echo "PG_BIN=/tmp/pgtry/node_modules/@embedded-postgres/linux-x64/native/bin" >> $GITHUB_ENV
+      - name: Demo secret store security (real OpenBao, no Google account)
+        run: node --test scripts/demo-secret-store.test.mjs
       - name: Check every binary is really there
         run: |
           for v in DOLT_BIN NATS_SERVER_BIN BAO_BIN TEMPORAL_BIN; do p="${!v}"; test -x "$p" && echo "$v=$p" || { echo "$v missing"; exit 1; }; done

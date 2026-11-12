@@ -47,11 +47,13 @@ RUN --mount=type=cache,target=/root/.npm \
 # track dolt releases 1:1; nats alpine ships /usr/local/bin/nats-server (paths verified in the image layers).
 FROM dolthub/dolt-sql-server:2.6.1 AS doltbin
 FROM nats:2.15.2-alpine AS natsbin
+FROM openbao/openbao:2.7.2 AS baobin
 
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=doltbin /usr/local/bin/dolt /usr/local/bin/dolt
 COPY --from=natsbin /usr/local/bin/nats-server /usr/local/bin/nats-server
+COPY --from=baobin /usr/bin/bao /usr/local/bin/bao
 WORKDIR /app
 COPY --from=corebuild /iam-core-bin /app/iam-core
 COPY policies/ /app/policies/
@@ -69,7 +71,7 @@ RUN ln -sfn ../../api/node_modules/@nestjs/common /app/node_modules/@nestjs/comm
 COPY --from=apibuild /src/plugins /app/plugins
 COPY --from=apibuild /src/conf/plugin-trust.json /app/conf/plugin-trust.json
 COPY --from=webbuild /src/apps/web/dist /app/web/dist
-COPY demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs demo/frame-policy.mjs demo/warm-signin.mjs /app/demo/
+COPY demo/secret-store.mjs demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs demo/frame-policy.mjs demo/warm-signin.mjs /app/demo/
 ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json
 # Free-tier hosts (shared CPU) make every bus delivery slow (activity checks read Dolt on each one): give the
 # plugin hook calls and the core's gate client much larger budgets than the local defaults. Fail-closed
