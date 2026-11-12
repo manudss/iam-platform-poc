@@ -14,6 +14,8 @@ import { managedProvider, editedAction, simulatedAction } from './execution-poli
 import { WorkflowConnection } from './wf-model';
 import { filterPlaceholders, insertPlaceholder, phTokenAt } from './placeholder-pick';
 
+import { branchStyle, workflowPorts, logicType } from './logic-ports';
+
 interface NodeState { type: StepType; name: string; config: Record<string, unknown> }
 
 /** Branch label carried on a vflow edge's data bag. */
@@ -82,18 +84,17 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
       <vflow [nodes]="allNodes()" [edges]="allEdges()" [view]="'auto'" [minZoom]="0.3" [maxZoom]="1.8" [background]="{ type: 'dots', gap: 22, size: 1.5, color: 'var(--line)', backgroundColor: 'var(--bg)' }"
              [keyboardShortcuts]="{ multiSelection: ['Shift', 'Control', 'Meta'] }" [selectionBox]="{ mode: 'partial' }"
              (connect)="onConnect($event)" (componentNodeEvent)="noop($event)">
+        <ng-template edge let-ctx><svg:path class="wf-typed-link" [attr.d]="ctx.path()" fill="none" [attr.stroke]="branchStyle(edgeLabelOf(ctx.edge)).color" [attr.stroke-dasharray]="branchStyle(edgeLabelOf(ctx.edge)).dash" [attr.stroke-width]="ctx.selected() ? 4 : 2.5" [attr.marker-end]="ctx.markerEnd()" />
+          <svg:path [attr.d]="ctx.path()" fill="none" stroke="transparent" stroke-width="20" style="cursor:pointer" (click)="activeEdge.set(ctx.edge.id)" />
+        </ng-template>
         <ng-template edgeLabelHtml let-ctx>
-          <div class="wb-edge" (click)="$event.stopPropagation()" (mousedown)="$event.stopPropagation()">
-            @if (labelChoices(ctx.edge).length > 1 || edgeLabelOf(ctx.edge)) {
-              <select class="wb-edge-label" [attr.aria-label]="'Branch of link ' + ctx.edge.id" [ngModel]="edgeLabelOf(ctx.edge) ?? ''" (ngModelChange)="setEdgeLabel(ctx.edge.id, $event)" (click)="$event.stopPropagation()">
-                @for (c of labelChoices(ctx.edge); track c.value) {<option [value]="c.value">{{c.text}}</option>}
-              </select>
-            }
-            <button class="wb-edge-add" title="Insert a block on this link" (click)="openInsert(ctx.edge); $event.stopPropagation()">+</button>
+          <div class="wb-edge" [class.editing]="activeEdge()===ctx.edge.id" (click)="$event.stopPropagation()" (mousedown)="$event.stopPropagation()">
+            <button class="wb-link-chip" [class.main]="!edgeLabelOf(ctx.edge)" [style.color]="branchStyle(edgeLabelOf(ctx.edge)).color" [attr.aria-label]="'Edit '+branchStyle(edgeLabelOf(ctx.edge)).text+' link from '+ctx.edge.source+' to '+ctx.edge.target" (click)="activeEdge.set(activeEdge()===ctx.edge.id ? '' : ctx.edge.id)">{{edgeLabelOf(ctx.edge) ? branchStyle(edgeLabelOf(ctx.edge)).text : '⋯'}}</button>
           </div>
         </ng-template>
         <mini-map position="bottom-left" [maskColor]="'var(--panel)'" [strokeColor]="'var(--line)'" [scaleOnHover]="false" />
       </vflow>
+      <select class="wb-step-jump" aria-label="Jump to step" (change)="jumpStep($any($event.target).value)"><option value="">Jump to step…</option>@for(n of stepOptions();track n.id){<option [value]="n.id">{{n.name}}</option>}</select>
       <button class="wb-trigger-edit secondary" (click)="openTrigger()" [attr.aria-expanded]="triggerSelected()">ϟ {{triggerEvent() ? triggerLabel() : 'Manual start'}} · Edit</button>
       <div class="wb-zoom"><span aria-label="Canvas zoom">{{zoomPercent()}}%</span>
         <button class="secondary" (click)="zoom(1.25)" title="Zoom in">+</button>
@@ -107,6 +108,16 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
         <div class="wb-test-head"><button (click)="runTest()" [disabled]="testRunning()">{{testRunning() ? 'Running…' : 'Run test'}}</button>
         @if (testView(); as tv) {<span class="chip" [attr.data-status]="tv.run.status">{{tv.run.status}}</span><small>{{testDuration()}}</small><progress [value]="testProgress()" max="100" aria-label="Test steps complete"></progress><a [routerLink]="['/workflows/runs']" [queryParams]="{ run: tv.run.id }">Open run</a>}
         </div>@if (testError()) {<p class="req">{{testError()}}</p>}@if (testView()?.run?.error) {<p class="req">{{testView()!.run.error}}</p>}
+      </section>}
+      @if(editingEdge();as edge){<div class="wb-link-actions wb-connect">
+              <label>Branch<select class="wb-edge-label" [attr.aria-label]="'Branch of link ' + edge.id" [ngModel]="edgeLabelOf(edge) ?? ''" (ngModelChange)="setEdgeLabel(edge.id, $event)">@for(c of labelChoices(edge);track c.value){<option [value]="c.value">{{c.text}}</option>}</select></label>
+              <button class="secondary" (click)="openInsert(edge)">+ Add step</button><button class="secondary" (click)="removeLink(edge.id)">Delete link</button><button class="secondary" (click)="activeEdge.set('')">Close</button>
+
+          </div>}
+      @if(pendingPort();as port){<section class="wb-connect card" role="dialog" aria-label="Connect output">
+        <b>Output {{branchStyle(port.branch).text}}</b>
+        @for(e of portLinks();track e.id){<button class="secondary" (click)="activeEdge.set(e.id);pendingPort.set(null)">Edit link to {{state.get(e.target)?.name || e.target}}</button>}
+<label>Target step<select aria-label="Target step" [(ngModel)]="connectTarget"><option value="">Choose a step</option>@for(n of connectTargets();track n.id){<option [value]="n.id">{{n.name}}</option>}</select></label><button (click)="connectPort()" [disabled]="!connectTarget">Connect</button><button class="secondary" (click)="pendingPort.set(null)">Cancel</button>
       </section>}
       @if (insertEdge(); as ie) {<div class="wb-insert card">
         <b>Insert a block on {{ie.source}} → {{ie.target}}</b>
@@ -292,6 +303,20 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected drawerTab = signal<'settings' | 'input' | 'output'>('settings');
   protected readonly categoryLabel = categoryLabel;
   protected readonly categoryOf = categoryOf;
+  protected activeEdge=signal('');
+  protected editingEdge(){return this.vfEdges().find(e=>e.id===this.activeEdge());}
+  protected portLinks(){const p=this.pendingPort();return p?this.vfEdges().filter(e=>e.source===p.source&&edgeLabelOf(e)===p.branch):[];}
+  protected pendingPort=signal<{source:string;branch?:string}|null>(null);
+  protected connectTarget='';
+  protected stepOptions(){this.stateVersion();return [...this.state].map(([id,s])=>({id,name:s.name}));}
+  protected jumpStep(id:string){const node=this.vfNodes().find(n=>n.id===id),v=this.vflow();if(!node||!v)return;const p=node.point();v.viewportTo({x:30-p.x*.9,y:70-p.y*.9,zoom:.9});this.mobilePanel.set('canvas');}
+
+  protected connectTargets(){const source=this.pendingPort()?.source;return [...this.state].filter(([id])=>id!==source).map(([id,s])=>({id,name:s.name}));}
+  protected connectPort(){const p=this.pendingPort();if(p&&this.connectTarget)this.onConnect({source:p.source,target:this.connectTarget,sourceHandle:`out:${p.branch??''}`});this.pendingPort.set(null);}
+  private portAction(nodeId:string,direction:string,portId:string){if(direction==='input'){if(portId.startsWith('in:'))this.activeEdge.set(portId.slice(3));}else{this.connectTarget='';this.pendingPort.set({source:nodeId,branch:portId.slice(4)||undefined});}}
+
+  protected readonly branchStyle=branchStyle;
+  protected removeLink(id:string){this.pushHistory();this.vfEdges.update(es=>es.filter(e=>e.id!==id));this.activeEdge.set('');this.stateVersion.update(v=>v+1);}
   protected readonly edgeLabelOf = edgeLabelOf;
   protected readonly json = (v: unknown) => JSON.stringify(v ?? null, null, 2);
   protected onTriggerChange(v: string) { this.triggerEvent.set(v); this.match.set({}); this.triggerCfg.set({}); }
@@ -440,8 +465,8 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     // Fit everything first so the shape of the graph is visible; if the fit had to shrink the nodes
     // below comfortable reading size, zoom back toward 1:1 anchored on the leftmost node (the user pans).
     const canvasWidth = canvas.clientWidth;
-    const anchor = readable && canvasWidth < 500 && v.viewport().zoom < 0.65 ? anchorViewport(this.allNodes(), 0.65) : null;
-    if (anchor) v.viewportTo({ ...anchor, zoom: 0.65 });
+    const anchor = readable && canvasWidth < 500 && v.viewport().zoom < 0.85 ? anchorViewport(this.allNodes(), 0.85) : null;
+    if (anchor) v.viewportTo({ ...anchor, zoom: 0.85 });
   }
   protected state = new Map<string, NodeState>();
   /** Selection is tracked by the library on each entity's own `selected` signal. */
@@ -482,6 +507,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   ngOnDestroy() { window.removeEventListener('keydown', this.keyHandler); clearInterval(this.testTimer); }
   private keyHandler!: (ev: KeyboardEvent) => void;
   private onKey(ev: KeyboardEvent) {
+    if(ev.key==='Escape'){this.activeEdge.set('');this.pendingPort.set(null);}
     const tag = (ev.target as HTMLElement)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return; // typing in a field
     const mod = ev.ctrlKey || ev.metaKey;
@@ -523,20 +549,24 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     const incoming = new Set(this.vfEdges().map((e) => e.target));
     return this.vfNodes().filter((n) => !incoming.has(n.id)).map((n) => this.makeEdge(`${TRIGGER_NODE_ID}->${n.id}`, TRIGGER_NODE_ID, n.id, 'var(--warn-line)'));
   });
-  protected allEdges = computed(() => [...this.triggerEdges(), ...this.vfEdges()]);
+  protected allEdges = computed(() => {
+    this.stateVersion();
+    return [...this.triggerEdges(), ...this.vfEdges()].map(e=>{const label=edgeLabelOf(e);return {...e,sourceHandle:e.source===TRIGGER_NODE_ID?undefined:`out:${label??''}`,targetHandle:e.source!==TRIGGER_NODE_ID&&logicType(this.state.get(e.target)?.type??'')?`in:${e.id}`:'in'};});
+  });
+  private readonly refreshPorts=effect(()=>{this.stateVersion();this.vfEdges().forEach(e=>e.data?.());this.testView();this.blocks();for(const n of this.vfNodes())this.tintNode(n);});
 
   private makeNode(id: string, st: NodeState, i: number, at?: { x: number; y: number }): Node {
     return {
       id, type: WfNodeComponent,
-      data: signal<WfNodeData>({ name: st.name, category: this.actionCategory(st), icon: this.blockIcon(st.type), runStatus: this.testStatusOf(id) }),
+      data: signal<WfNodeData>({ name: st.name, category: logicType(st.type)?'computed':this.actionCategory(st), icon: this.blockIcon(st.type), runStatus: this.testStatusOf(id) }),
       point: signal(at ?? { x: 320 + (i % 3) * 260, y: 40 + Math.floor(i / 3) * 130 }),
       selected: signal(false),
     } as Node;
   }
   private makeEdge(id: string, source: string, target: string, color?: string, label?: string): Edge {
-    const branch = label === 'error' ? 'var(--warn-line)' : label ? 'var(--accent)' : undefined;
+    const branch=branchStyle(label).color;
     return {
-      id, source, target, selected: signal(false),
+      id, source, target, type:'template', selected: signal(false),
       data: signal<Record<string, unknown>>(label ? { label } : {}),
       edgeLabels: signal(label || source !== TRIGGER_NODE_ID ? { center: { type: 'html-template', data: { edgeId: id } } } : {}),
       markers: signal({ end: { type: 'arrow-closed', width: 16, height: 16, color: color ?? branch ?? 'var(--muted)' } }),
@@ -589,8 +619,10 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected setEdgeLabel(edgeId: string, label: string) {
     const e = this.vfEdges().find((x) => x.id === edgeId);
     if (!e) return;
+    if(this.vfEdges().some(other=>other.id!==edgeId&&other.source===e.source&&other.target===e.target&&edgeLabelOf(other)===(label||undefined))){this.note.set('This branch already connects these steps.');return;}
     this.pushHistory();
     e.data?.set(label ? { label } : {});
+    e.markers?.set({end:{type:'arrow-closed',width:16,height:16,color:branchStyle(label).color}});
     this.stateVersion.update((v) => v + 1);
   }
   protected openInsert(edge: Edge) { if (edge.source === TRIGGER_NODE_ID) return; this.insertQuery = ''; this.insertEdge.set(edge); }
@@ -628,9 +660,11 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     if (c.source === TRIGGER_NODE_ID || c.target === TRIGGER_NODE_ID) return; // trigger links are drawn automatically to the root steps
     const st = this.state.get(c.source);
     const used = this.vfEdges().filter((e) => e.source === c.source).map((e) => edgeLabelOf(e));
-    const label = st ? defaultLabel(st.type, st.config, used) : undefined;
-    const id = `${c.source}->${c.target}${label ? `#${label}` : ''}`;
-    if (this.vfEdges().some((e) => e.id === id)) return;
+    const selected=c.sourceHandle?.startsWith('out:')?c.sourceHandle.slice(4):undefined;
+    const label = selected!==undefined ? selected||undefined : st ? defaultLabel(st.type, st.config, used) : undefined;
+    if(this.vfEdges().some(e=>e.source===c.source&&e.target===c.target&&edgeLabelOf(e)===label))return;
+    const baseId = `${c.source}->${c.target}${label ? `#${label}` : ''}`;
+    let id=baseId,suffix=1;while(this.vfEdges().some(e=>e.id===id))id=`${baseId}:${suffix++}`;
     this.pushHistory();
     this.vfEdges.update((es) => [...es, this.makeEdge(id, c.source!, c.target!, undefined, label)]);
     this.stateVersion.update((v) => v + 1);
@@ -660,13 +694,16 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     this.stateVersion.update((v) => v + 1);
   }
   protected doAutoLayout() {
-    this.pushHistory();
+    this.pushHistory();this.arrangeNodes();this.fitCanvas();
+  }
+  private arrangeNodes() {
     const pos = autoLayout(
       [...this.state.entries()].map(([id, st]) => ({ id, type: st.type, name: st.name, config: st.config })),
       this.vfEdges().map((e) => ({ from: e.source, to: e.target })),
     );
-    for (const n of this.vfNodes()) { const p = pos.get(n.id); if (p) n.point.set(p); }
-    this.fitCanvas();
+    if(typeof window!=='undefined'&&window.innerWidth<700){let y=220;for(const n of this.vfNodes()){const st=this.state.get(n.id)!;const ports=workflowPorts(n.id,st.type,outgoingLabels(st.type,st.config),this.vfEdges().map(e=>({id:e.id,source:e.source,target:e.target,label:edgeLabelOf(e)})),{});n.point.set({x:40,y});y+=160+Math.max(ports.inputs.length,ports.outputs.length)*52;}return;}
+    const layerY=new Map<number,number>();
+    for (const n of this.vfNodes()) { const p=pos.get(n.id);if(!p)continue;const y=layerY.get(p.x)??40;const st=this.state.get(n.id)!;const ports=workflowPorts(n.id,st.type,outgoingLabels(st.type,st.config),this.vfEdges().map(e=>({id:e.id,source:e.source,target:e.target,label:edgeLabelOf(e)})),{});n.point.set({x:320+p.x*1.45,y});layerY.set(p.x,y+140+Math.max(ports.inputs.length,ports.outputs.length)*36); }
   }
   protected zoom(factor: number) { const v = this.vflow(); if (v) v.zoomTo(Math.min(1.8, Math.max(0.3, v.viewport().zoom * factor))); }
 
@@ -786,6 +823,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       this.vfNodes.set(nodes);
       this.vfEdges.set(definition.graph.edges.map((e) => this.makeEdge(`${e.from}->${e.to}${e.label ? `#${e.label}` : ''}`, e.from, e.to, undefined, e.label)));
       this.stateVersion.update((v) => v + 1);
+      this.arrangeNodes();
       this.savedDefinition = this.definitionStamp();
       this.fitCanvas();
     } catch (e) { this.note.set((e as Error).message); }
@@ -888,7 +926,11 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private tintNode(n: Node) {
     if (n.type !== WfNodeComponent) return;
     const st = this.state.get(n.id); if (!st) return;
-    (n.data as { set(v: WfNodeData): void } | undefined)?.set({ name: st.name, category: this.actionCategory(st), icon: this.blockIcon(st.type), runStatus: this.testStatusOf(n.id) });
+    const edges=this.vfEdges().map(e=>({id:e.id,source:e.source,target:e.target,label:edgeLabelOf(e)}));
+    const names=Object.fromEntries([...this.state].map(([id,s])=>[id,s.name]));
+    const ports=workflowPorts(n.id,st.type,outgoingLabels(st.type,st.config),edges,names);
+    (n.data as { set(v: WfNodeData): void } | undefined)?.set({ logic:logicType(st.type),onPort:(direction,portId)=>this.portAction(n.id,direction,portId),...ports,name: st.name, category: logicType(st.type)?'computed':this.actionCategory(st), icon: this.blockIcon(st.type), runStatus: this.testStatusOf(n.id) });
+
   }
   protected async runTest() {
     let payload: Record<string, unknown> = {};

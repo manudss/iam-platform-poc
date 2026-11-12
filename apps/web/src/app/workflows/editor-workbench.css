@@ -640,3 +640,18 @@
   border-color: var(--accent);
 }
 .wb-drawer .ph-chip { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+/* Links are quiet at rest; each remains reachable by keyboard and touch. */
+.wb-edge{position:relative;background:transparent;border:0;padding:0;}
+.wb-link-chip{min-width:28px;min-height:28px;padding:3px 8px;background:var(--card);border:1px solid var(--line);border-radius:8px;font-size:11px;white-space:nowrap;}
+.wb-link-chip.main{opacity:.18;}
+.wb-link-chip:hover,.wb-link-chip:focus-visible,.wb-edge.editing .wb-link-chip{opacity:1;background:var(--accent-soft);}
+.wb-link-actions{position:absolute;top:100%;left:0;z-index:20;width:180px;display:flex;flex-direction:column;gap:6px;padding:10px;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px var(--shadow-color);}
+.wb-link-actions select{width:100%;max-width:none;color:var(--ink);}
+@media(max-width:700px){.wb-link-chip{min-height:44px;min-width:44px;}.wb-link-actions button{min-height:44px;}}
+
+.wb-connect{position:absolute;top:56px;left:16px;z-index:35;display:flex;flex-direction:column;gap:10px;width:min(300px,calc(100% - 32px));max-height:70%;overflow:auto;background:var(--card);color:var(--ink);padding:14px;}
+
+.wb-step-jump{position:absolute;top:8px;right:8px;z-index:8;width:160px;max-width:45%;min-height:36px;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;font-size:12px;}
+
+.wb-link-actions.wb-connect{top:56px;left:16px;width:min(300px,calc(100% - 32px));}
+@media(max-width:700px){.wb-edge .wb-link-chip{display:none;}}
