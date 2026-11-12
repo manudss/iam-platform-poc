@@ -10,6 +10,7 @@
     "@activepieces/piece-text-helper": "0.6.7",
     "@simplewebauthn/server": "^14.1.0",
     "@xmldom/xmldom": "0.9.12",
+    "ipaddr.js": "2.2.0",
     "oidc-provider": "9.13.3",
     "resend": "^6.37.0",
     "samlify": "2.15.1",

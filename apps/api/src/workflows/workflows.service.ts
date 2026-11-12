@@ -293,6 +293,7 @@ export class WorkflowsService {
     const down = new Set([nid]);
     let grew = true;
     while (grew) { grew = false; for (const e of view.run.edges) if (down.has(e.from) && !down.has(e.to)) { down.add(e.to); grew = true; } }
+    if (view.steps.some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) throw new ConflictException('External effect uncertain: rerun is blocked');
     for (const s of view.steps) if (down.has(s.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, output: null, finished_at: null });
     await this.store.updateRun(r.id, { status: 'queued', error: null, finished_at: null });
     this.engine.kick(r.id);
@@ -329,6 +330,7 @@ export class WorkflowsService {
     const view = await this.runView(tenant, runId);
     const r = view.run;
     if (r.status !== 'failed' && r.status !== 'canceled') throw new ConflictException(`only a failed or canceled run can be retried (this one is ${r.status})`);
+    if (view.steps.some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) throw new ConflictException('External effect uncertain: reconcile at the provider; retry is blocked');
     const failed = view.steps.find((s) => s.status === 'failed');
     for (const s of view.steps) {
       if (s.status === 'skipped' || (failed && s.node_id === failed.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, finished_at: null });

@@ -1,3 +1,6 @@
+import { IntegrationsModule } from '../integrations/integrations.module.js';
+import { WorkflowConnections } from './connections.js';
+import { WorkflowConnectionsController } from './connections.controller.js';
 import { Module } from '@nestjs/common';
 import { EventsModule } from '../events/events.module.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
@@ -13,5 +16,5 @@ import { WorkflowSheetPollerService } from './sheet-poller.js';
 import { WorkflowCronService } from './cron.js';
 import { WorkflowDemoSeed } from './demo-seed.js';
 
-@Module({ imports: [EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowsController, WorkflowHooksController], providers: [WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService, WorkflowCronService], exports: [WorkflowsService] })
+@Module({ imports: [IntegrationsModule, EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowConnectionsController, WorkflowsController, WorkflowHooksController], providers: [WorkflowConnections, WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService, WorkflowCronService], exports: [WorkflowsService] })
 export class WorkflowsModule {}

@@ -1,3 +1,4 @@
+import { WorkflowConnections, connectionProvider } from './connections.js';
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { validateSettings } from '../plugins/v1/settings.js';
@@ -30,6 +31,7 @@ interface EngineDeps {
   authorOf: (actor: string) => string;
   branchRun: <T>(branch: string, fn: () => Promise<T>) => Promise<T>;
   settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
+  connectionFor?: (tenant: string, ref: string, id: string, type: string) => Promise<{ settings: Record<string, unknown>; secret: string }>;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 interface WorkflowEngineApi {
@@ -44,13 +46,18 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
       authorOf,
       branchRun: (b, fn) => branchContext.run({ branch: b }, fn),
       settingsFor: (tenant, branch, pluginId) => this.settingsFor(tenant, branch, pluginId),
+      connectionFor: async (tenant, ref, id, type) => {
+        const provider = connectionProvider(type);
+        if (!this.connections || !provider) throw new Error('managed connections unavailable');
+        return this.connections.resolve(tenant, ref, id, provider);
+      },
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
   }

@@ -92,13 +92,14 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .tpl-dialog h3 { margin-top: 0; }
 `], template: `
 <p class="lead">IGA workflows: build a scenario as a graph of steps, run it, follow every step, retry after an error.
-<b>Simulated</b> steps never touch anything; <b>real</b> steps write business data on the run's own Dolt branch, which a human then reviews and merges.</p>
+External actions default to <b>Simulation</b>. <b>Real external actions</b> require a managed connection and confirmation; their effects are outside Dolt. lyam business writes stay on the run's own branch for human review.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="wlc-head"><h3>Workflows</h3>
   <label class="btn secondary" title="Load a definition JSON">⇑ Import JSON<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
   <a class="btn secondary" routerLink="/workflows/templates" title="Start from a template">+ Templates</a>
   <a class="btn" routerLink="/workflows/edit/new">+ New workflow</a>
   <a class="btn secondary" routerLink="/workflows/runs">Executions</a>
+  <a class="btn secondary" routerLink="/workflows/connections">Connections</a>
 </div>
 <div class="wlc-tools">
   <input type="search" name="wlcSearch" [(ngModel)]="query" placeholder="Search name, block, trigger…" aria-label="Search workflows" />

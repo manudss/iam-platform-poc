@@ -1,0 +1,41 @@
+// Real Angular bundle + isolated API fixtures: no external service or account is contacted.
+// Build apps/web, then run with playwright-core available via NODE_PATH.
+const {chromium}=require('playwright-core');
+const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'../apps/web/dist/web/browser'), out=path.resolve(process.argv[2]||'/tmp/workflow-connections-shots');fs.mkdirSync(out,{recursive:true});
+const server=http.createServer((req,res)=>{let f=path.join(root,req.url.split('?')[0]);if(!path.extname(f)) f=path.join(root,'index.csr.html');if(!fs.existsSync(f))f=path.join(root,'index.html');res.setHeader('Content-Type',f.endsWith('.js')?'text/javascript':f.endsWith('.css')?'text/css':f.endsWith('.svg')?'image/svg+xml':f.endsWith('.png')?'image/png':'text/html');res.end(fs.readFileSync(f));});
+(async()=>{await new Promise(r=>server.listen(14210,'127.0.0.1',r));const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',args:['--no-sandbox']});try{for(const mobile of [false,true])for(const theme of ['light','dark']){
+const page=await browser.newPage({viewport:{width:mobile?390:1440,height:mobile?844:1100}});let probes=0,saves=0;const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await page.addInitScript(({theme})=>{localStorage.setItem('iam.session','x.'+btoa(JSON.stringify({sub:'demo-alice',tenant:'acme-demo',iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+3600}))+'.x');localStorage.setItem('iam.theme',theme);},{theme});
+let rows=[{id:'conn-jira',name:'Jira Support',provider:'jira',config:{instanceUrl:'https://team.atlassian.net/',email:'support@example.invalid'},revision:'r1',secretConfigured:true,status:'Needs test'},{id:'conn-google',name:'Google Sheets HR',provider:'google-sheets',config:{},revision:'r1',secretConfigured:false,status:'Not configured'},{id:'conn-http',name:'Internal API',provider:'http',config:{baseUrl:'https://example.com/api/'},revision:'r1',secretConfigured:false,status:'Needs test'}];
+await page.route('**/api/**',async route=>{const req=route.request(),url=new URL(req.url()),p=url.pathname;let j={};
+if(p.endsWith('/workflow-blocks'))j={blocks:[{type:'jira-create-issue',label:'Create Jira issue',family:'Connectors',provider:'workflow-connectors',providerActive:true,simulated:false,category:'real',description:'Creates one Jira issue',fields:[{key:'project',label:'Project key',type:'string',required:true},{key:'issueTypeId',label:'Issue type ID',type:'string',required:true},{key:'summary',label:'Summary',type:'string',required:true}]}]};
+else if(p.endsWith('/workflows-events'))j={events:[]};
+else if(p.endsWith('/workflows/wf-test'))j={definition:{id:'wf-test',name:'HR onboarding',description:'',active:false,trigger:null,tags:[],graph:{nodes:[{id:'jira',type:'jira-create-issue',name:'Create Jira issue',config:{project:'HR',issueTypeId:'10001',summary:'Onboard new colleague',executionMode:'simulation',connectionId:'conn-jira'}}],edges:[]}}};
+else if(p.endsWith('/me/access'))j={admin:true,restricted:false,plugins:{},screenAccess:false};
+else if(p.endsWith('/workspace/personal'))j={branch:'demo-alice',status:'reused'};
+else if(p.endsWith('/workspace'))j={diff:{rows:{total:0},tables:[]}};
+else if(p.endsWith('/versioning/branches'))j={branches:[{name:'main'},{name:'demo-alice'}]};
+else if(p.endsWith('/plugins/menu'))j={entries:[]};
+else if(p.endsWith('/plugins'))j={plugins:[{id:'workflows-iga',enabled:true}]};
+else if(p.endsWith('/workflow-connections/probe')){probes++; const b=req.postDataJSON();assert.equal(b.secret,'FICTIONAL-TEST-TOKEN');j={status:probes===1?'Verified':'Failed',checkedAt:new Date().toISOString(),readOnly:true,...(probes>1?{message:'Read-only check failed. Check connection configuration and service access.'}:{})};}
+else if(p.endsWith('/workflow-connections/conn-jira/test'))j={id:'conn-jira',revision:'r1',status:'Verified',checkedAt:new Date().toISOString(),readOnly:true};
+else if(p.endsWith('/workflow-connections') && req.method()==='GET')j={connections:rows,secretStoreConfigured:true};
+else if(p.endsWith('/workflow-connections/conn-jira')&&req.method()==='PUT'){saves++;const b=req.postDataJSON();assert.ok(!('secret' in b),'blank secret omitted');rows=rows.map(c=>c.id==='conn-jira'?{...c,name:b.name,revision:'r2'}:c);j={connection:rows[0]};}
+else if(p.includes('branding')){await route.fulfill({status:404,json:{}});return;}
+await route.fulfill({json:j});});
+await page.goto('http://127.0.0.1:14210/workflows/connections');await page.getByRole('heading',{name:'Connections',exact:true}).waitFor();await page.locator('.wfc-item').first().waitFor();await page.locator('[data-theme-mode='+theme+']').first().evaluate(e=>e.click());
+await page.screenshot({path:`${out}/${mobile?'mobile':'desktop'}-${theme}-list.png`,fullPage:true});
+assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no horizontal overflow');
+await page.getByRole('button',{name:'Configure',exact:true}).first().click();await page.locator('dialog[open]').waitFor();assert.equal(await page.locator('input[name=connectionSecret]').inputValue(),'');assert.equal(await page.locator('input[name=connectionName]').evaluate(e=>e===document.activeElement),true);await page.keyboard.press('Shift+Tab');assert.equal(await page.locator('dialog').evaluate(e=>e.contains(document.activeElement)),true);
+await page.locator('input[name=connectionSecret]').fill('FICTIONAL-TEST-TOKEN');await page.getByRole('button',{name:'Test read-only',exact:true}).last().click();await page.locator('dialog [role=status]').filter({hasText:'Verified'}).waitFor();assert.equal(saves,0);
+await page.screenshot({path:`${out}/${mobile?'mobile':'desktop'}-${theme}-form.png`,fullPage:true});
+await page.locator('input[name=connectionName]').fill('Jira updated');assert.equal(await page.locator('dialog [role=status]').count(),0);await page.getByRole('button',{name:'Test read-only',exact:true}).last().click();await page.locator('dialog [role=status]').filter({hasText:'Failed'}).waitFor();
+await page.locator('input[name=connectionSecret]').fill('');await page.getByRole('button',{name:'Save connection'}).click();await page.locator('dialog').waitFor({state:'detached'});await page.getByRole('heading',{name:'Jira updated'}).waitFor();assert.equal(saves,1);
+await page.getByRole('button',{name:'Configure',exact:true}).first().click();assert.equal(await page.locator('input[name=connectionSecret]').inputValue(),'');await page.keyboard.press('Escape');await page.locator('dialog').waitFor({state:'detached'});
+await page.goto('http://127.0.0.1:14210/workflows/edit/wf-test');await page.locator('.wf-node').first().waitFor();await page.locator('.wf-node').first().click();await page.locator('select[name=managedConnection]').waitFor();assert.equal(await page.locator('select[name=managedConnection]').inputValue(),'conn-jira');
+await page.locator('.wb-mode').getByRole('button',{name:'Real',exact:true}).click();await page.locator('dialog[open]').waitFor();await page.screenshot({path:`${out}/${mobile?'mobile':'desktop'}-${theme}-real-dialog.png`,fullPage:true});await page.getByRole('button',{name:'Confirm Real',exact:true}).click();await page.locator('dialog').waitFor({state:'detached'});assert.ok(await page.locator('.wb-managed').textContent().then(t=>t.includes('Real enabled')));
+await page.screenshot({path:`${out}/${mobile?'mobile':'desktop'}-${theme}-action.png`,fullPage:true});await page.locator('input[name=g-summary]').fill('Changed action');assert.ok(await page.locator('.wb-managed').textContent().then(t=>t.includes('Simulation is the default')));
+await page.locator('.wb-mode').getByRole('button',{name:'Real',exact:true}).click();await page.locator('dialog[open]').waitFor();await page.getByRole('button',{name:'Keep Simulation',exact:true}).click();assert.ok(await page.locator('.wb-managed').textContent().then(t=>t.includes('Simulation is the default')));
+assert.deepEqual(errors,[]);console.log('PASS',mobile?'mobile':'desktop',theme,'test-before-save, result clear/fail, blank-secret save, modal focus/Escape, no overflow');await page.close();
+}}finally{await browser.close();await new Promise(r=>server.close(r));}})().catch(e=>{console.error(e);process.exit(1)});

@@ -1,3 +1,4 @@
+import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { runPieceAction } from './adapter.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
@@ -65,7 +66,7 @@ const httpRequest = {
   family: 'Connectors',
   label: 'HTTP request (Activepieces)',
   simulated: false,
-  description: 'Real HTTP call through the Activepieces http piece. Every destination host must be explicitly allow-listed. Redirects are not followed. {{event.x}} / {{steps.x.y}} placeholders OK in url, headers, body.',
+  description: 'Real HTTPS call through a pinned public transport. Every destination host must be explicitly allow-listed. Redirects are not followed. {{event.x}} / {{steps.x.y}} placeholders OK in url, headers, body.',
   fields: [
     { key: 'method', label: 'Method', type: 'select', options: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'GET', required: true },
     { key: 'url', label: 'URL', type: 'string', required: true, help: 'https://… (placeholders allowed)' },
@@ -87,30 +88,32 @@ const httpRequest = {
       timeout: Math.min(30, Math.max(1, Number(cfg.timeout ?? 10) || 10)),
     };
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(out.method)) bad('http-request.method: GET, POST, PUT, PATCH or DELETE');
-    if (out.headers && !out.headers.includes('{{')) { try { JSON.parse(out.headers); } catch { bad('http-request.headers: a JSON object (or placeholders)'); } }
+    if (out.headers && !out.headers.includes('{{')) {
+      let headers; try { headers = JSON.parse(out.headers); } catch { bad('http-request.headers: a JSON object'); }
+      if (!headers || typeof headers !== 'object' || Array.isArray(headers) || Object.values(headers).some(v => typeof v !== 'string')) bad('HTTP headers must be a string-valued object');
+      if (Object.keys(headers).some(k => /^(authorization|cookie|host|proxy-authorization|x-api-key)$/i.test(k))) bad('credentials must come from the managed connection');
+    }
     if (!out.url.includes('{{')) guardUrl(out.url, {}, false);
     return out;
   },
   async run(ctx) {
     const c = ctx.config;
-    const url = guardUrl(c.url, ctx.settings);
+    const url = guardUrl(c.url, ctx.settings, !ctx.dryRun);
     let headers = {};
     if (c.headers) { try { headers = JSON.parse(c.headers); } catch { bad('http-request.headers: not a JSON object after substitution'); } }
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers) || Object.values(headers).some(v => typeof v !== 'string')) bad('HTTP headers must be a string-valued object');
     if (ctx.dryRun) {
       ctx.log(`DRY-RUN: would send ${c.method} ${url}${c.body ? ` with ${c.body.length} chars of body` : ''} (nothing sent)`);
       return { status: 0, body: null, ok: true, dryRun: true };
     }
-    const result = await runPieceAction('@activepieces/piece-http', 'send_request', {
-      auth: undefined,
-      propsValue: {
-        method: c.method, url, headers, queryParams: {},
-        authType: 'none', body_type: 'raw', body: c.body || '',
-        response_is_binary: false, use_proxy: false,
-        timeout: c.timeout, followRedirects: false, failureMode: 'retry_none',
-      },
-    });
+    if (ctx.settings.httpConnectionBase) {
+      if (!withinConnection(ctx.settings.httpConnectionBase, url)) bad('HTTP URL is outside the selected connection');
+      if (Object.keys(headers).some(k => /^(authorization|cookie|host|proxy-authorization|x-api-key)$/i.test(k))) bad('credentials must come from the managed connection');
+      if (ctx.settings.httpConnectionToken) headers.Authorization = `Bearer ${ctx.settings.httpConnectionToken}`;
+    }
+    const result = await safeHttp(url, { method: c.method, headers, body: c.body || '', timeout: c.timeout * 1000 });
     const body = typeof result?.body === 'string' ? result.body.slice(0, 2000) : result?.body ?? null;
-    ctx.log(`HTTP ${result?.status} from ${url} (real call, Activepieces http piece)`);
+    ctx.log(`HTTP ${result?.status} from ${url} (real call, pinned public HTTPS transport)`);
     return { status: Number(result?.status ?? 0), body, ok: Number(result?.status ?? 500) < 400 };
   },
 };
@@ -172,7 +175,7 @@ const textTransform = {
 
 // ----------------------------------------------------------------- Google Sheets (piece-google-sheets) ----
 const sheetSourceFields = [
-  { key: 'source', label: 'Source', type: 'select', options: ['demo-sheet', 'google'], default: 'demo-sheet', required: true, help: 'demo-sheet = the built-in SIMULATED sheet; google = the real API (needs the service account in the plugin settings)' },
+  { key: 'source', label: 'Source', type: 'select', options: ['demo-sheet', 'google'], default: 'demo-sheet', required: true, help: 'demo-sheet = the built-in SIMULATED sheet; google = the real API (requires a managed Google connection in Real mode)' },
   { key: 'spreadsheetId', label: 'Spreadsheet ID (google)', type: 'string' },
   { key: 'sheetId', label: 'Sheet ID, numeric (google)', type: 'number', default: 0 },
 ];
@@ -215,6 +218,7 @@ const sheetsRead = {
   },
   async run(ctx) {
     const c = ctx.config;
+    if (ctx.dryRun) { ctx.log('SIMULATION: Google Sheets read, no call or sheet mutation'); return { rows: [], row: null, rowNumber: 0, count: 0, dryRun: true }; }
     if (c.source === 'demo-sheet') {
       let found = demoSheet.rows();
       if (c.mode === 'find-row') found = found.filter((r) => String(r.values[c.columnName] ?? '') === String(c.searchValue));
@@ -259,6 +263,7 @@ const sheetsUpdate = {
   },
   async run(ctx) {
     const c = ctx.config;
+    if (ctx.dryRun) { ctx.log('SIMULATION: Google Sheets update, no call or sheet mutation'); return { updated: false, dryRun: true }; }
     const rowNumber = Number(c.rowNumber);
     if (!Number.isInteger(rowNumber) || rowNumber < 2) bad(`google-sheets-update.rowNumber: an integer >= 2 (got "${c.rowNumber}")`);
     if (c.source === 'demo-sheet') {
@@ -293,6 +298,7 @@ const sheetsAddRow = {
   },
   async run(ctx) {
     const c = ctx.config;
+    if (ctx.dryRun) { ctx.log('SIMULATION: Google Sheets append, no call or sheet mutation'); return { rowNumber: 0, dryRun: true }; }
     const values = {};
     for (const line of String(c.values).split('\n')) {
       const m = /^\s*([A-Za-z][A-Za-z0-9_ ]{0,40}?)\s*=\s*(.*)$/.exec(line);
@@ -464,6 +470,7 @@ export const TRIGGER_EVENTS = {
     label: 'A sheet row becomes ready (watched every minute)',
     payload: ['*'],
     configFields: [
+      { key: 'connectionId', label: 'Managed Google connection (real source)', type: 'string' },
       { key: 'source', label: 'Source', type: 'select', options: ['demo-sheet', 'google'], default: 'demo-sheet', required: true },
       { key: 'spreadsheetId', label: 'Spreadsheet ID (google)', type: 'string' },
       { key: 'sheetId', label: 'Sheet ID, numeric (google)', type: 'number', default: 0 },

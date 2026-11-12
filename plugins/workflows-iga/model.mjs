@@ -444,7 +444,17 @@ function configFor(type, cfg) {
         default: {
             const external = EXTERNAL_BLOCK_IMPL.get(type);
             if (external) {
-                const clean = external.validate(cfg);
+                const managed = /^(google-sheets-|jira-)/.test(type) || type === 'http-request';
+                const actionCfg = { ...cfg };
+                if (managed) for (const k of ['executionMode', 'connectionId', 'realConfirmed']) delete actionCfg[k];
+                const clean = external.validate(actionCfg);
+                if (managed) {
+                    const mode = cfg.executionMode ?? 'simulation';
+                    if (!['simulation', 'real'].includes(mode)) throw new BadRequestException('executionMode: simulation or real');
+                    if (cfg.connectionId !== undefined && cfg.connectionId !== '' && (typeof cfg.connectionId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,38}$/.test(cfg.connectionId))) throw new BadRequestException('invalid connection id');
+                    if (mode === 'real' && (!cfg.connectionId || cfg.realConfirmed !== true)) throw new BadRequestException('Real requires a managed connection and explicit confirmation');
+                    clean.executionMode = mode; clean.connectionId = cfg.connectionId ?? ''; clean.realConfirmed = mode === 'real' && cfg.realConfirmed === true;
+                }
                 const known = new Set(Object.keys(clean));
                 for (const k of Object.keys(cfg))
                     if (!known.has(k))
