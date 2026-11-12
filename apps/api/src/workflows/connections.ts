@@ -95,7 +95,7 @@ export class WorkflowConnections {
       if (provider === 'google-sheets') {
         if (!config.spreadsheetId || !/^[A-Za-z0-9_-]{10,200}$/.test(config.spreadsheetId)) throw new Error('missing spreadsheet');
         const adapter = loadPluginModule('workflow-connectors', 'adapter.mjs') as {runPieceAction: (pkg: string, action: string, values: unknown) => Promise<unknown>};
-        await adapter.runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', {auth: {props: {serviceAccount: settings.googleServiceAccount, userEmail: settings.googleUserEmail || undefined}}, propsValue: {spreadsheetId: config.spreadsheetId, sheetId: Number(config.sheetId || 0), includeTeamDrives: false, first_row_headers: true}});
+        await adapter.runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', {auth: {type: 'CUSTOM_AUTH', props: {serviceAccount: settings.googleServiceAccount, userEmail: settings.googleUserEmail || undefined}}, propsValue: {spreadsheetId: config.spreadsheetId, sheetId: Number(config.sheetId || 0), includeTeamDrives: false, first_row_headers: true}});
       } else {
         const headers: Record<string,string> = provider === 'jira' ? {Authorization: 'Basic ' + Buffer.from(`${settings.jiraEmail}:${settings.jiraApiToken}`).toString('base64')} : settings.httpConnectionToken ? {Authorization: `Bearer ${settings.httpConnectionToken}`} : {};
         const result = await this.httpProbe(provider === 'jira' ? new URL('/rest/api/3/myself', config.instanceUrl).toString() : config.baseUrl, {method: provider === 'jira' ? 'GET' : 'HEAD', headers});

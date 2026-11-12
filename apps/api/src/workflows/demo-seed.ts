@@ -7,7 +7,8 @@ import { DefinitionRow, WorkflowStore } from './store.js';
  * definitions so the feature is alive out of the box - a joiner, a mover and a leaver scenario that
  * start from durable application-bus events. Redelivery reuses the same run ID. Idempotent (fixed ids, never overwritten).
  */
-export const SEEDS: { id: string; name: string; description: string; trigger: WfTrigger; tags?: string[]; nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] }[] = [
+export type DemoWorkflowSeed = { active?: boolean; id: string; name: string; description: string; trigger: WfTrigger; tags?: string[]; nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string }[] };
+export const SEEDS: DemoWorkflowSeed[] = [
   {
     id: 'wf-joiner', tags: ['hr', 'joiner'], name: 'Joiner: new hire baseline', description: 'Starts from user.created on the durable bus: grants the employee baseline role (real, on the run branch) and informs the manager (simulated).',
     trigger: { event: 'user.created' },
@@ -80,7 +81,7 @@ export const SEEDS: { id: string; name: string; description: string; trigger: Wf
     edges: [],
   },
   {
-    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SIMULATED candidates sheet: process=OK builds nom.prenom@lyam.demo (without accents), creates a lyam account and grants the row role on a run branch, then marks cree=ok. Login stays disabled; a human reviews the branch. No Google credential is needed for the demo. For a real sheet, configure the service account in plugin settings and select source google.',
+    id: 'wf-hr-onboarding', name: 'HR: a candidate row provisions the account (spike)', description: 'SIMULATED candidates sheet: process=OK builds nom.prenom@lyam.demo (without accents), creates a lyam account and grants the row role on a run branch, then marks cree=ok. Login stays disabled; a human reviews the branch. No Google credential is needed for the demo. For a real sheet, use a managed Google connection and explicit Real mode.',
     trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } },
     nodes: [
       { id: 'join', type: 'text-transform', name: 'Join nom.prenom', config: { operation: 'concat', values: '{{event.nom}}\n.\n{{event.prenom}}', separator: '' } },
@@ -115,6 +116,21 @@ export const SEEDS: { id: string; name: string; description: string; trigger: Wf
   },
 ];
 
+/** Optional demo content uses the existing seed path, never an API test button or migration. */
+export function realGoogleDemoSeed(spreadsheetId: string, sheetId: string, connectionId: string): DemoWorkflowSeed {
+  if (!/^[A-Za-z0-9_-]{10,200}$/.test(spreadsheetId) || !/^\d{1,12}$/.test(sheetId) || !/^[a-z0-9][a-z0-9-]{0,38}$/.test(connectionId)) throw new Error('invalid Google demo metadata');
+  const base = structuredClone(SEEDS.find(s => s.id === 'wf-hr-onboarding')!);
+  const source = { source: 'google', spreadsheetId, sheetId: Number(sheetId), connectionId };
+  return {
+    ...base, id: 'wf-hr-google-demo', name: 'HR: real Google Sheet to reviewed lyam account', active: false,
+    tags: ['hr', 'google', 'real-demo'],
+    description: 'Real Google Sheet process=OK stages a disabled-login account and employee role on a run branch, then writes cree=ok to Google. External write is not undone by abandoning the branch. Activate deliberately after verifying the connection. Review before publication.',
+    trigger: { event: 'google-sheets.row-ready', config: { ...source, watchColumn: 'process', watchValue: 'OK', doneColumn: 'cree', doneValue: 'ok' } },
+    nodes: base.nodes.filter(n => n.id !== 'tell').map(n => n.id === 'mark' ? { ...n, config: { ...n.config, ...source, executionMode: 'real', realConfirmed: true } } : n.id === 'role' ? { ...n, name: 'Grant employee on the run branch', config: { ...n.config, role: 'employee' } } : n),
+    edges: base.edges.filter(e => e.to !== 'tell'),
+  };
+}
+
 @Injectable()
 export class WorkflowDemoSeed implements OnApplicationBootstrap {
   private readonly log = new Logger('workflow-demo-seed');
@@ -123,11 +139,17 @@ export class WorkflowDemoSeed implements OnApplicationBootstrap {
     if (process.env.IAM_DEMO_DATA_SEED !== '1') return;
     const tenant = process.env.IAM_AUTHN_DEMO_SEED_TENANT || 'acme-demo';
     const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
-    for (const s of SEEDS) {
+    const seeds = [...SEEDS];
+    const sheet = process.env.IAM_DEMO_GOOGLE_SPREADSHEET_ID;
+    if (sheet) {
+      try { seeds.push(realGoogleDemoSeed(sheet, process.env.IAM_DEMO_GOOGLE_SHEET_ID || '0', process.env.IAM_DEMO_GOOGLE_CONNECTION_ID || '')); }
+      catch { this.log.warn('Google demo seed requires valid non-secret spreadsheet, sheet and managed connection IDs'); }
+    }
+    for (const s of seeds) {
       try {
         if (await this.store.getDefinition(tenant, s.id, this.store.liveRef)) continue;
         const { graph } = validateGraph({ nodes: s.nodes, edges: s.edges });
-        const def: DefinitionRow = { id: s.id, tenant, name: s.name, description: s.description, graph, trigger: s.trigger, active: true, tags: s.tags ?? [], created_by: 'demo-seed', created_at: now(), updated_at: now() };
+        const def: DefinitionRow = { id: s.id, tenant, name: s.name, description: s.description, graph, trigger: s.trigger, active: s.active !== false, tags: s.tags ?? [], created_by: 'demo-seed', created_at: now(), updated_at: now() };
         await this.store.putDefinition(def, this.store.liveRef);
         this.log.log(`seeded triggered workflow "${s.name}" (${s.trigger.event})`);
       } catch (e) { this.log.warn(`seed ${s.id} skipped: ${(e as Error).message}`); }

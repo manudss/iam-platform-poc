@@ -69,6 +69,8 @@ jobs:
           echo "TEMPORAL_BIN=$(find /tmp/svc/temporal -name temporal -type f | head -1)" >> $GITHUB_ENV
           mkdir /tmp/pgtry && cd /tmp/pgtry && npm init -y >/dev/null && npm i embedded-postgres >/dev/null
           echo "PG_BIN=/tmp/pgtry/node_modules/@embedded-postgres/linux-x64/native/bin" >> $GITHUB_ENV
+      - name: Demo secret store security (real OpenBao, no Google account)
+        run: node --test scripts/demo-secret-store.test.mjs
       - name: Check every binary is really there
         run: |
           for v in DOLT_BIN NATS_SERVER_BIN BAO_BIN TEMPORAL_BIN; do p="${!v}"; test -x "$p" && echo "$v=$p" || { echo "$v missing"; exit 1; }; done
@@ -168,7 +170,8 @@ jobs:
         run: docker build -f demo/Dockerfile -t iam-demo:ci .
       - name: Boot it and wait for the API health check
         run: |
-          docker run -d --name iam-demo-ci -p 8080:8080 iam-demo:ci
+          # Keep the all-in-one image within the free Render instance memory budget.
+          docker run -d --memory=512m --name iam-demo-ci -p 8080:8080 iam-demo:ci
           ok=0; for i in $(seq 1 90); do code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true); [ "$code" = 200 ] && { ok=1; break; }; sleep 2; done
           echo "healthz ok=$ok"; [ $ok = 1 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
           # /healthz is the EDGE answering; the API must also be alive behind it (proxy /api -> :3000).
