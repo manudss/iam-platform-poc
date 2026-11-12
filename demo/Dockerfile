@@ -2,8 +2,8 @@
 # All-in-one hosted-demo image (fictional data only). Build context = repository root.
 # One container: Dolt sql-server + Rust core + NestJS API + Angular console (static, same-origin proxy).
 # Core bus: a local nats-server runs INSIDE this container (loopback, per-boot random password; required for API startup).
-# Optional pieces of the local stack (PostgreSQL journal, Temporal, OpenBao) are OFF here:
-# the API runs on its in-memory fallbacks, documented in docs/demo.md.
+# PostgreSQL journal and Temporal remain OFF. OpenBao is demo-only, loopback and RAM-only:
+# the API uses a scoped token, never the bootstrap root. See docs/real-google-sheet-demo.md.
 #
 # BuildKit cache mounts (cargo registry + target, npm cache) make REBUILDS on
 # warm runners (GitHub Actions cache, see .github/workflows/demo-image.yml) much
@@ -71,7 +71,7 @@ RUN ln -sfn ../../api/node_modules/@nestjs/common /app/node_modules/@nestjs/comm
 COPY --from=apibuild /src/plugins /app/plugins
 COPY --from=apibuild /src/conf/plugin-trust.json /app/conf/plugin-trust.json
 COPY --from=webbuild /src/apps/web/dist /app/web/dist
-COPY demo/secret-store.mjs demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs demo/frame-policy.mjs demo/warm-signin.mjs /app/demo/
+COPY demo/server.mjs demo/start.sh demo/public-redirect-uris.mjs demo/frame-policy.mjs demo/secret-store.mjs demo/warm-signin.mjs /app/demo/
 ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json
 # Free-tier hosts (shared CPU) make every bus delivery slow (activity checks read Dolt on each one): give the
 # plugin hook calls and the core's gate client much larger budgets than the local defaults. Fail-closed
