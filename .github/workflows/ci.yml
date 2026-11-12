@@ -180,6 +180,18 @@ jobs:
           echo "login answer: $body"
           [ "$(echo "$body" | tail -1)" = 200 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
           echo "$body" | head -n -1 | grep -q '"code"' || { docker logs iam-demo-ci --tail=150; exit 1; }
+      - name: Gallery browser end-to-end (real seeded demo, desktop and mobile)
+        run: |
+          mkdir -p /tmp/gallery-pw
+          npm install --prefix /tmp/gallery-pw playwright-core
+          NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
+      - name: Gallery screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gallery-screenshots
+          path: /tmp/gallery-shots
+          if-no-files-found: ignore
       - name: Container logs on failure
         if: failure()
         run: docker logs iam-demo-ci --tail=150

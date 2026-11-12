@@ -14,6 +14,8 @@
  *   branch()                     -> current workspace branch, for the audit event
  * }
  */
+import { readFileSync } from 'node:fs';
+import { validateLogo } from './logo.mjs';
 import { createRequire } from 'node:module';
 
 // No top-level await: the loader and the core adapter sync-load this module with createRequire.
@@ -23,7 +25,7 @@ const { BadRequestException, ConflictException, NotFoundException } = require('@
 export const APP_CONNECTOR_PLUGIN = 'app-connector';
 export const APP_CONNECTOR_DDL = 'create table if not exists app_connectors (tenant varchar(32) not null, id varchar(32) not null, name varchar(80) not null, description varchar(240) not null, protocol varchar(8) not null, enabled tinyint not null, config longtext not null, primary key (tenant, id))';
 
-export const appConnectorConfig = (a) => JSON.stringify({ redirect_uris: a.redirect_uris, entity_id: a.entity_id, acs_url: a.acs_url, attribute_mapping: a.attribute_mapping, allowed_roles: a.allowed_roles, secret_ref: a.secret_ref, launch_url: a.launch_url, sp_certificate: a.sp_certificate, want_signed_requests: a.want_signed_requests, nameid_format: a.nameid_format, scopes: a.scopes, allow_refresh_tokens: a.allow_refresh_tokens });
+export const appConnectorConfig = (a) => JSON.stringify({ logo: a.logo ?? null, redirect_uris: a.redirect_uris, entity_id: a.entity_id, acs_url: a.acs_url, attribute_mapping: a.attribute_mapping, allowed_roles: a.allowed_roles, secret_ref: a.secret_ref, launch_url: a.launch_url, sp_certificate: a.sp_certificate, want_signed_requests: a.want_signed_requests, nameid_format: a.nameid_format, scopes: a.scopes, allow_refresh_tokens: a.allow_refresh_tokens });
 
 const ID = /^[a-z0-9-]{1,32}$/, KEY = /^[A-Za-z0-9_.:-]{1,64}$/, REF = /^[a-z0-9][a-z0-9/_.-]{0,63}$/;
 const FORBIDDEN = ['secret', 'client_secret', 'private_key', 'password', 'token'];
@@ -44,8 +46,9 @@ const strs = (v, what, max) => { if (!Array.isArray(v) || v.length > max || v.so
 /** Validates a full or partial body and returns the new connector. `base` is the existing one for a partial update. */
 export function build(id, b, base) {
   for (const k of Object.keys(b ?? {})) if (FORBIDDEN.includes(k.toLowerCase())) throw new BadRequestException(`${k}: secrets are never stored here; save it in the secret store and give its name in secret_ref`);
-  const a = base ? structuredClone(base) : { id, name: '', description: '', protocol: 'oidc', enabled: false, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [...DEFAULT_OIDC_SCOPES], allow_refresh_tokens: true };
+  const a = base ? structuredClone(base) : { id, name: '', description: '', logo: null, protocol: 'oidc', enabled: false, redirect_uris: [], entity_id: null, acs_url: null, attribute_mapping: {}, allowed_roles: [], secret_ref: null, launch_url: null, sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [...DEFAULT_OIDC_SCOPES], allow_refresh_tokens: true };
   if (b.name !== undefined) { if (typeof b.name !== 'string' || !b.name.trim() || b.name.length > 80) throw new BadRequestException('name: 1 to 80 characters'); a.name = b.name.trim(); }
+  if (b.logo !== undefined) { try { a.logo = validateLogo(b.logo); } catch (e) { throw new BadRequestException(e.message); } }
   if (b.description !== undefined) { if (typeof b.description !== 'string' || b.description.length > 240) throw new BadRequestException('description: at most 240 characters'); a.description = b.description; }
   if (b.protocol !== undefined) { if (b.protocol !== 'oidc' && b.protocol !== 'saml') throw new BadRequestException("protocol: 'oidc' or 'saml'"); a.protocol = b.protocol; }
   if (b.enabled !== undefined) { if (typeof b.enabled !== 'boolean') throw new BadRequestException('enabled: true or false'); a.enabled = b.enabled; }
@@ -188,6 +191,9 @@ export const DEMO_APP_CONNECTORS = [
     redirect_uris: [], entity_id: 'https://sso-config-saml.apps.dss.name/saml/metadata', acs_url: 'https://sso-config-saml.apps.dss.name/saml/acs',
     attribute_mapping: { NameID: 'email', givenName: 'display_name', email: 'email', department: 'department', roles: 'roles' }, allowed_roles: ['employee'], sp_certificate: null, want_signed_requests: false, nameid_format: null, scopes: [], allow_refresh_tokens: false, launch_url: null, secret_ref: 'apps/sso-config-saml/signing-key' },
 ];
+
+// Seed-only assets, embedded in the Dolt configuration by the existing demo seed.
+for (const a of DEMO_APP_CONNECTORS) a.logo = validateLogo('data:image/svg+xml;base64,' + readFileSync(new URL('./seed-assets/' + a.id + '.svg', import.meta.url)).toString('base64'));
 
 // No bus hooks: the plugin serves its registry through the engine the core adapter wires.
 export default {};
