@@ -41,8 +41,10 @@ const plugin = loadPluginModule('directory', 'signup.mjs') as SignupPluginModule
 
 @Injectable()
 export class SignupService {
+  private readonly notifier?: PluginRegistry;
   private readonly manager: ReturnType<SignupPluginModule['createSignupManager']>;
   constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry) {
+    this.notifier = reg;
     this.manager = plugin.createSignupManager({
       signupOpen: (t) => profile.signupOpen(t),
       schema: (t, ctx, ref) => profile.schema(t, ctx, ref) as never,
@@ -68,6 +70,14 @@ export class SignupService {
   /** Exposed for tests and operational inspection (same objects the plugin engine mutates). */
   get hits() { return this.manager.hits; }
   get pending() { return this.manager.pending; }
+  /** Read the live notifier only. A real capability declares delivery support, not a delivery guarantee. */
+  async deliveryStatus(tenant: string): Promise<{ mode: 'real' | 'simulated' | 'unknown'; source: 'live' }> {
+    if (!this.notifier) return { mode: 'simulated', source: 'live' };
+    try {
+      const capability = (await this.notifier.callSlot<{ real?: boolean }>(tenant, 'notify.default', 'notify.capability', {})).result;
+      return { mode: capability?.real === true ? 'real' : capability?.real === false ? 'simulated' : 'unknown', source: 'live' };
+    } catch { return { mode: 'unknown', source: 'live' }; }
+  }
   schema(tenant: string) { return this.manager.schema(tenant); }
   submit(tenant: string, body: unknown, ip: string) { return this.manager.submit(tenant, body, ip); }
   confirm(tenant: string, token: unknown) { return this.manager.confirm(tenant, token); }

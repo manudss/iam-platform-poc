@@ -51,7 +51,7 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'workflow-connections': case 'workflows': case 'temporal': case 'activation-workflows': return ['workflows'];
     case 'branding': return ['customisation'];
     case 'mail-templates': case 'templates': return ['templates'];
-    case 'signup': return ['users'];
+    case 'signup': return seg[1] === 'delivery-status' ? ['profile-fields'] : ['users'];
     case 'auth': case 'authn': case 'session': case 'sessions': case 'enrollments': return ['authentication'];
     case 'app-connectors': case 'applications': return ['applications'];
     default: return [];

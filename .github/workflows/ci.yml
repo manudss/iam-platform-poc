@@ -96,6 +96,8 @@ jobs:
         run: |
           (cd apps/web && npm run build)
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/branding-e2e.mjs /tmp/branding-shots
+      - name: Profile reliability regression (real bundle, light/dark desktop/mobile)
+        run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/profile-priorities-ui-e2e.cjs /tmp/profile-priorities-shots
       - name: Connections UI safety (real bundle, isolated API fixtures, light/dark desktop/mobile)
         run: NODE_PATH=/tmp/pw/node_modules node scripts/workflow-connections-ui-e2e.cjs /tmp/workflow-connections-shots
       - name: Workflow tag overflow and placeholder hover (isolated API fixtures)
