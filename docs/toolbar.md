@@ -15,3 +15,13 @@ Goal (validated mockup): one thin bar with the title, the session timer, the bra
 ## Limits
 - Branch search in the pill is not done. Panels open below the bar, not as floating popovers (the menu floats).
 - Not run locally: the browser e2e scripts need Dolt, so they run in CI.
+
+## Personal branch state (branch pill)
+
+Opening the personal branch never shows a banner or a "Choose your working branch" card while it works. The state lives in the branch pill of the top bar:
+
+- **Opening**: spinner and "Opening your branch…"; the page loads normally.
+- **Ready**: green dot and the branch name. The message ("Your personal branch … is ready. Changes stay on it until Apply." or "Back on your personal branch …") is the pill tooltip (hover or keyboard focus) and is also announced once to screen readers (`role="status"`).
+- **Error** (or admin capability token missing): red pill "Branch unavailable" with **Retry**; the detail is in the tooltip, the message bar and the "Choose your working branch" card stay as the visible fallback.
+
+My applications needs no branch and renders without waiting for it.
