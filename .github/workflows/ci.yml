@@ -96,6 +96,8 @@ jobs:
         run: |
           (cd apps/web && npm run build)
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/branding-e2e.mjs /tmp/branding-shots
+      - name: Profile reliability regression (real bundle, light/dark desktop/mobile)
+        run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/profile-priorities-ui-e2e.cjs /tmp/profile-priorities-shots
       - name: Connections UI safety (real bundle, isolated API fixtures, light/dark desktop/mobile)
         run: NODE_PATH=/tmp/pw/node_modules node scripts/workflow-connections-ui-e2e.cjs /tmp/workflow-connections-shots
       - name: Workflow tag overflow and placeholder hover (isolated API fixtures)
@@ -186,7 +188,9 @@ jobs:
         run: |
           mkdir -p /tmp/gallery-pw
           npm install --prefix /tmp/gallery-pw playwright-core
-          NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
+          export NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome)
+          node --test scripts/gallery-launch-popup.test.mjs
+          node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
       - name: Gallery screenshots
         if: always()
         uses: actions/upload-artifact@v4

@@ -16,7 +16,8 @@ interface Review { id?: string; subject: string; branch?: string; changes: { key
       <div class="scroll"><table><thead><tr><th>Field</th><th>Live now</th><th>Proposed</th></tr></thead><tbody>
       @for (c of r.changes; track c.key) { <tr><td>{{c.label}}<br><small>{{c.key}}</small></td><td>{{c.from ?? '-'}}</td><td>{{c.to ?? '(removed)'}}</td></tr> }
       </tbody></table></div>
-      <div class="row"><button class="primary" (click)="decide(r.id ?? r.subject, true)">Accept (merge into main)</button><button class="secondary" (click)="decide(r.id ?? r.subject, false)">Refuse</button></div>
+      <p class="hint">Accepting publishes these edits directly to <b>{{r.branch || 'main'}}</b>. No separate Review &amp; Apply step. Refusing deletes only the proposed edits.</p>
+      <div class="row"><button class="primary" (click)="decide(r.id ?? r.subject, true)">Accept &amp; publish to {{r.branch || 'main'}}</button><button class="secondary" (click)="decide(r.id ?? r.subject, false)">Refuse</button></div>
     </section>
   } @empty { <section class="card"><p id="pr-empty">{{loaded() ? 'Nothing is waiting for validation.' : 'Loading...'}}</p></section> }`,
 })
@@ -30,6 +31,7 @@ export class ProfileReviewsPage {
     this.loaded.set(true);
   }
   protected async decide(id: string, accept: boolean) {
-    try { const r = await this.s.api.raw<any>('POST', `/profile-reviews/${encodeURIComponent(id)}/${accept ? 'accept' : 'refuse'}`, {}, this.h()); if (r.status >= 400) throw new Error(r.data.message ?? 'Refused'); this.note.set(accept ? `Accepted: ${id}'s edits are live.` : `Refused: ${id}'s change set was deleted.`); await this.load(); } catch (e) { this.problem.set((e as Error).message); }
+    const target = this.reviews().find(r => (r.id ?? r.subject) === id)?.branch ?? 'main';
+    try { const r = await this.s.api.raw<any>('POST', `/profile-reviews/${encodeURIComponent(id)}/${accept ? 'accept' : 'refuse'}`, {}, this.h()); if (r.status >= 400) throw new Error(r.data.message ?? 'Refused'); this.note.set(accept ? `Accepted: ${id}'s edits were published to ${target}. No Review & Apply step is needed.` : `Refused: ${id}'s change set was deleted.`); await this.load(); } catch (e) { this.problem.set((e as Error).message); }
   }
 }

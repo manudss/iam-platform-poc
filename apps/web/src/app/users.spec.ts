@@ -101,3 +101,52 @@ describe('users drawer profile request isolation', () => {
     page.ngOnDestroy();
   });
 });
+
+describe('users drawer partial save and safe retry', () => {
+  let page: any;
+  let detailsCalls: number, fieldCalls: number;
+  let failDetails: boolean, failFields: boolean;
+  const FIELD = 'hr-attributes.phone';
+  beforeEach(() => {
+    detailsCalls = fieldCalls = 0; failDetails = false; failFields = true;
+    TestBed.configureTestingModule({ providers: [{ provide: Session, useValue: {
+      branch: signal('work-a'), adminToken: () => '', api: {
+        saveUser: async () => { detailsCalls++; if (failDetails) throw new Error('Core refused'); },
+        raw: async (method: string) => {
+          if (method === 'PATCH') { fieldCalls++; return { status: failFields ? 400 : 200, data: { message: 'Invalid field' } }; }
+          return { status: 200, data: { users: USERS, fields: [], values: {} } };
+        },
+      },
+    } }] });
+    page = TestBed.runInInjectionContext(() => new UsersPage()) as any;
+    page.start(USERS[0]); page.setP(FIELD, 'draft phone'); page.password = 'fictional-new-password';
+  });
+  it('shows a partial save, retains fields, and retries only the second request', async () => {
+    await page.save();
+    expect(detailsCalls).toBe(1); expect(fieldCalls).toBe(1);
+    expect(page.partialSave()).toBe(true); expect(page.editing()).toBe(true);
+    expect(page.pchanged[FIELD]).toBe('draft phone');
+    expect(page.note()).toContain('Additional profile fields not saved: Invalid field');
+    expect(page.password).toBe(''); // never retain/repeat a successful credential change
+    failFields = false; await page.save();
+    expect(detailsCalls).toBe(1); expect(fieldCalls).toBe(2);
+    expect(page.partialSave()).toBe(false); expect(page.editing()).toBe(false);
+    expect(page.note()).toContain('saved on the working branch');
+  });
+  it('does not save plugin fields when the initial user-details request fails', async () => {
+    failDetails = true; await page.save();
+    expect(detailsCalls).toBe(1); expect(fieldCalls).toBe(0);
+    expect(page.partialSave()).toBe(false);
+    expect(page.note()).toContain('User details not saved: Core refused');
+  });
+  it('saves newly edited details on retry instead of pretending they were already saved', async () => {
+    await page.save(); page.form.display_name = 'Changed again'; failFields = false;
+    await page.save(); expect(detailsCalls).toBe(2); expect(fieldCalls).toBe(2);
+  });
+  it('does not reuse a checkpoint across branches or after reopening a drawer', async () => {
+    await page.save(); (TestBed.inject(Session).branch as any).set('work-b');
+    await page.save(); expect(detailsCalls).toBe(2);
+    page.cancel(); page.start(USERS[0]); page.setP(FIELD, 'retry');
+    await page.save(); expect(detailsCalls).toBe(3);
+  });
+});

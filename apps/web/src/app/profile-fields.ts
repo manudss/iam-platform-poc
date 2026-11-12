@@ -134,8 +134,10 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
   </section> }
 
   @if (tab()==='preview') {
-  <section class="card" id="pf-preview"><h3>Preview (working branch)</h3>
-    <p class="hint">The forms the current draft produces on each surface. Live surfaces keep the applied configuration until Apply.</p>
+  <section class="card" id="pf-preview"><h3>Preview (saved working branch)</h3>
+    <p class="hint">These forms use the configuration already saved on the working branch, not unsaved edits in this screen. Live forms keep the applied configuration until Review &amp; Apply.</p>
+    @if (dirty()) { <p class="msg" role="status" id="pf-preview-unsaved">Unsaved edits are not shown in this preview. Save to this branch below to refresh it; this does not publish to main.</p> }
+    @else { <p class="hint" id="pf-preview-saved">Preview is up to date with the saved working branch.</p> }
     <div class="pf-preview-cols">
       @for (p of preview(); track p.context) { <div class="pf-preview-col pf-form-preview"><h4>{{p.title}}</h4>
         @for (sec of previewSections(p.fields); track sec.name) {
@@ -158,7 +160,14 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
   </section>
   <section class="card" id="pf-signup"><h3>Public sign-up</h3>
     <label class="inline"><input type="checkbox" name="signupopen" [(ngModel)]="signupOpen" (ngModelChange)="dirty.set(true)" /> Open the sign-up form (off by default)</label>
-    <p class="hint">Live only after Save and Apply. Anyone with the link can then send a request: it needs e-mail confirmation (simulated here: the code goes to the demo outbox, not to a mailbox) and your approval. Approval creates an account with <b>no role, department or manager</b>. Fictional data only; do not open this on a public demo with real people.</p>
+    <p class="hint">Live only after Save and Apply. Anyone with the link can then send a request: it needs e-mail confirmation and your approval. Approval creates an account with <b>no role, department or manager</b>. Fictional data only; do not open this on a public demo with real people.</p>
+    <p class="hint" id="pf-delivery" role="status">Confirmation delivery (live configuration):
+      @switch (deliveryMode()) {
+        @case ('real') { <b>real delivery configured</b>. The live notifier declares real e-mail support; this is not a delivery test or guarantee. }
+        @case ('simulated') { <b>simulated</b>. Confirmation messages use the demo outbox, not a mailbox. }
+        @default { <b>unavailable</b>. The live notifier capability could not be verified; no delivery guarantee is shown. }
+      }
+    </p>
     <p class="hint">Live status: sign-up is <b id="pf-live">{{liveOpen() ? 'open' : 'closed'}}</b>.</p>
     @if (requests().length) { <div class="scroll"><table id="pf-requests"><thead><tr><th>Request</th><th>E-mail</th><th>Confirmed</th><th></th></tr></thead><tbody>
     @for (q of requests(); track q.id) { <tr><td>{{q.display_name}}<br><small>{{q.id}}</small></td><td>{{q.email}}</td><td>{{q.confirmed ? 'yes' : 'no'}}</td>
@@ -166,7 +175,7 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
     </tbody></table></div> } @else { <p class="hint">No pending request.</p> }
   </section> }
 
-  <section class="card"><div class="row"><button id="pf-save" (click)="save()" [disabled]="busy() || !loaded() || s.branch()==='main'">Save on this branch</button>
+  <section class="card"><div class="row"><button id="pf-save" (click)="save()" [disabled]="busy() || !loaded() || s.branch()==='main'">Save to branch</button>
   @if (dirty()) { <span class="pill warn">Unsaved edits</span> }</div>
   @if (s.branch()==='main') { <p class="hint">Choose a working branch (not main) to save. Changes become live only after Apply.</p> }
   <p class="hint">Plugins that declare fields or components must be enabled in Plugins to appear here. Disabling a plugin hides its contributions; stored values are kept. Uninstalling removes them with the plugin's configuration.</p></section>`,
@@ -179,6 +188,7 @@ export class ProfileFieldsPage {
   protected comps = signal<ComponentInv[]>([]); protected compsCfg = signal<Record<string, { self?: string; admin?: string; order?: number }>>({});
   protected preview = signal<{ context: string; title: string; fields: EField[] }[]>([]);
   protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected dirty = signal(false); protected loaded = signal(false); protected signupOpen = false; protected policy: 'immediate' | 'review' = 'immediate'; protected livePolicy = signal('immediate'); protected liveOpen = signal(false); protected requests = signal<{ id: string; display_name: string; email: string; confirmed: boolean }[]>([]);
+  protected deliveryMode = signal<'real' | 'simulated' | 'unknown'>('unknown');
   protected readonly surfaces = SURFACES;
   protected readonly tab = signal<Tab>('fields');
   protected readonly sel = signal<string>('');
@@ -310,7 +320,7 @@ export class ProfileFieldsPage {
       this.cat.set(r.data.catalogue); this.cfg.set(eff); this.compsCfg.set({ ...(r.data.working.config.components ?? {}) });
       if (!this.sel() && r.data.catalogue.length) this.sel.set((r.data.catalogue as CatField[])[0].fullKey);
       this.dirty.set(false); this.problem.set(''); this.loaded.set(true);
-      void this.loadComps(); void this.loadPreview(); void this.loadStats();
+      void this.loadComps(); void this.loadPreview(); void this.loadStats(); void this.loadDeliveryStatus();
     } catch (e) { this.problem.set((e as Error).message); }
   }
   protected async loadComps() {
@@ -329,6 +339,13 @@ export class ProfileFieldsPage {
       } catch { out.push({ context, title: titles[context], fields: [] }); }
     }
     this.preview.set(out);
+  }
+  protected async loadDeliveryStatus() {
+    this.deliveryMode.set('unknown');
+    try {
+      const r = await this.s.api.raw<any>('GET', '/signup/delivery-status', undefined, this.h());
+      if (r.status < 400 && r.data.source === 'live' && ['real', 'simulated'].includes(r.data.mode)) this.deliveryMode.set(r.data.mode);
+    } catch { /* unknown is not simulated and never implies real delivery */ }
   }
   protected async loadRequests() { try { const r = await this.s.api.raw<any>('GET', '/signup/requests', undefined, this.h()); this.requests.set(r.status < 400 ? r.data.requests : []); } catch { this.requests.set([]); } }
   protected async decide(id: string, ok: boolean) {
