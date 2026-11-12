@@ -87,14 +87,6 @@ export class LaunchpadPage {
   private readonly isBrowser = isPlatformBrowser(inject(PLATFORM_ID));
   private readonly pending = inject(PendingTasks);
   private readonly transfer = inject(TransferState);
-  protected editing = signal(false); protected busy = signal(false);
-  protected problem = signal(''); protected loaded = signal(false); protected announcement = signal('');
-  protected failedImages = signal<string[]>([]); protected dragging = signal('');
-  protected query = signal('');
-  private beforeEdit: LaunchpadPreferences | null = null;
-  private loadEpoch = 0;
-  private pointer?: { id: number; x: number; y: number; moved: boolean };
-  protected hasApps = (s: { apps: LaunchpadApp[] }) => s.apps.length > 0;
   protected sections = computed(() => {
     const p = this.preferences(), q = this.query().trim().toLocaleLowerCase();
     const apps = orderedApps(this.apps(), p.order).filter(a => !q || (a.name+' '+a.description).toLocaleLowerCase().includes(q));
