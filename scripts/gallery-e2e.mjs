@@ -18,6 +18,9 @@ try {
   await page.goto(base+'/login',{waitUntil:'domcontentloaded'}); await page.locator('#signin-browser, [data-chain=password-only]').first().click();
   await page.fill('[name=username]','demo-alice'); await page.fill('[name=password]','demo-only-not-a-secret');
   await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]'); await page.locator('nav a[data-nav="/my-applications"]').click(); await page.waitForSelector('.lp-card');
+  // The first visible card is not the complete seeded gallery render. Wait for the same
+  // minimum the assertion requires; do not inspect a transient first paint synchronously.
+  await page.waitForFunction(()=>document.querySelectorAll('.lp-card').length>=10);
   assert.ok(await page.locator('.lp-card').count()>=10);
   assert.equal(await page.getByText('Open with SSO',{exact:false}).count(),0);
   // Launching opens a new tab, never replaces the launchpad, and stays keyboard reachable.
