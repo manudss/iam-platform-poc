@@ -456,8 +456,13 @@ try {
   await page.getByRole('tab', { name: 'SoD rules', exact: true }).click();
   assert.ok((await page.locator('#sod').innerText()).includes('payment-approver'));
   await page.getByRole('button', { name: 'Close role editor' }).click();
-  await nav('/assignments'); await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  await nav('/assignments');
+  // Wait for the page's initial data/model render before typing. Filling while the branch screen
+  // is still mounting can be overwritten by its first ngModel render. The filter assertion below
+  // remains strict: exactly Bob, not merely a row containing Bob among unfiltered results.
   await page.waitForSelector('#assignments tbody tr:has-text("demo-bob") button');
+  await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  assert.equal(await page.inputValue('input[name=assignmentSearch]'), 'demo-bob');
   await page.waitForFunction(() => document.querySelectorAll('#assignments tbody tr:has(button)').length === 1);
   assert.equal(await page.locator('#assignments tbody tr:has(button)').count(), 1);
   await page.getByRole('link', { name: 'Bulk edit matrix' }).click();
