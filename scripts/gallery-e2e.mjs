@@ -86,7 +86,7 @@ try {
   await page.reload(); await page.waitForSelector('#app-table');
   await page.locator('#app-table tr').filter({hasText:'PeopleHub'}).getByRole('button',{name:'Edit',exact:true}).click();
   assert.notEqual(await page.locator('.app-logo-preview').getAttribute('src'),before);
-  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply'); await page.click('#workspace-apply');
+  await page.click('#review-apply'); await page.waitForSelector('#workspace-apply'); await page.click('#workspace-apply');await page.locator('app-apply-dialog dialog[open]').getByRole('button',{name:'Apply to main',exact:true}).click();
   await page.waitForFunction(()=>document.body.textContent.includes('Applied personal/'));
   await page.locator('nav a[data-nav="/my-applications"]').click(); await page.waitForSelector('[data-app=peoplehub] img');
   const after=await page.locator('[data-app=peoplehub] img').getAttribute('src'); assert.notEqual(after,before);

@@ -145,7 +145,7 @@ try {
   await page.getByRole('button', { name: 'Close assignment editor' }).click();
   await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
-  await page.click('#workspace-apply'); await status('Apply refused');
+  await page.click('#workspace-apply');await page.locator('app-apply-dialog dialog[open]').getByRole('button',{name:'Apply to main',exact:true}).click(); await status('Apply refused');
   // The refused change stays on its branch. A clean change goes from a fresh branch to main and is journaled as an activation.
   await openManage(page); await page.fill('input[name=workspaceNewBranch]', 'ui-clean'); await page.getByRole('button', { name: 'Create & select' }).click();
   await status('Working on ui-clean');
@@ -156,7 +156,7 @@ try {
   await page.getByRole('button', { name: 'Close assignment editor' }).click();
   await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
-  await page.click('#workspace-apply'); await status('Applied');
+  await page.click('#workspace-apply');await page.locator('app-apply-dialog dialog[open]').getByRole('button',{name:'Apply to main',exact:true}).click(); await status('Applied');
   await nav('/assignments'); await page.waitForSelector('#assignments .pill:text-is("accountant")');
   await nav('/activation'); await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
   await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');

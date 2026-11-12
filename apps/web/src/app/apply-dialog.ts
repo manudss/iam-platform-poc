@@ -12,7 +12,7 @@ import { Component, ElementRef, ViewChild, signal } from '@angular/core';
   </dialog>
 `, styles: [`
   dialog { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: .7rem; padding: 1.25rem; max-width: min(32rem, calc(100vw - 2rem)); }
-  dialog::backdrop { background: #0006; }
+  dialog::backdrop { background: var(--scrim); }
   h3 { margin-top: 0; overflow-wrap: anywhere; }
   form { display: flex; justify-content: flex-end; gap: .5rem; }
 `] })
