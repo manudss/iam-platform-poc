@@ -14,7 +14,7 @@ const page = await browser.newPage({viewport:{width:1440,height:1050}}); page.se
 page.on('dialog',d=>d.accept());
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 try {
-  await page.goto(base+'/login'); await page.locator('#signin-browser, [data-chain=password-only]').first().click();
+  await page.goto(base+'/login',{waitUntil:'domcontentloaded'}); await page.locator('#signin-browser, [data-chain=password-only]').first().click();
   await page.fill('[name=username]','demo-alice'); await page.fill('[name=password]','demo-only-not-a-secret');
   await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]'); await page.locator('nav a[data-nav="/my-applications"]').click(); await page.waitForSelector('.lp-card');
   assert.ok(await page.locator('.lp-card').count()>=10);
