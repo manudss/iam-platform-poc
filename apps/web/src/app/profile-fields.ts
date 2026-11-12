@@ -134,8 +134,10 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
   </section> }
 
   @if (tab()==='preview') {
-  <section class="card" id="pf-preview"><h3>Preview (working branch)</h3>
-    <p class="hint">The forms the current draft produces on each surface. Live surfaces keep the applied configuration until Apply.</p>
+  <section class="card" id="pf-preview"><h3>Preview (saved working branch)</h3>
+    <p class="hint">These forms use the configuration already saved on the working branch, not unsaved edits in this screen. Live forms keep the applied configuration until Review &amp; Apply.</p>
+    @if (dirty()) { <p class="msg" role="status" id="pf-preview-unsaved">Unsaved edits are not shown in this preview. Save to this branch below to refresh it; this does not publish to main.</p> }
+    @else { <p class="hint" id="pf-preview-saved">Preview is up to date with the saved working branch.</p> }
     <div class="pf-preview-cols">
       @for (p of preview(); track p.context) { <div class="pf-preview-col pf-form-preview"><h4>{{p.title}}</h4>
         @for (sec of previewSections(p.fields); track sec.name) {
