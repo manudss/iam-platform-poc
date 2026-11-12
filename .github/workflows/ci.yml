@@ -186,7 +186,9 @@ jobs:
         run: |
           mkdir -p /tmp/gallery-pw
           npm install --prefix /tmp/gallery-pw playwright-core
-          NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
+          export NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome)
+          node --test scripts/gallery-launch-popup.test.mjs
+          node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
       - name: Gallery screenshots
         if: always()
         uses: actions/upload-artifact@v4
