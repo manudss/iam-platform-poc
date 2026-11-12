@@ -115,14 +115,16 @@ export class MyProfilePage {
     try {
       const r = await this.s.api.raw<any>('PATCH', '/me/profile', { values: { [PICTURE]: value } });
       if (r.status >= 400) throw new Error(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused');
-      this.note.set(value ? 'Picture saved.' : 'Picture removed.'); this.problem.set(''); await this.load();
-    } catch (e) { this.problem.set((e as Error).message); }
+      this.note.set(value ? 'Picture saved.' : 'Picture removed.'); this.problem.set(''); await this.load(true);
+    } catch (e) { this.problem.set((e as Error).message); this.note.set(''); }
   }
-  protected async load() {
+  protected async load(preserveEdits = false) {
     try {
       const r = await this.s.api.raw<any>('GET', '/me/profile');
       if (r.status >= 400) throw new Error(r.data.message ?? 'Cannot load');
-      this.orgs.set(r.data.sections?.organizations); this.roles.set(r.data.sections?.roles); this.policy.set(r.data.policy ?? 'immediate'); this.pending.set(r.data.pending ?? []); this.fields.set(r.data.fields); this.vals.set(r.data.values); this.changed = {}; this.problem.set(''); this.loaded.set(true);
+      this.orgs.set(r.data.sections?.organizations); this.roles.set(r.data.sections?.roles); this.policy.set(r.data.policy ?? 'immediate'); this.pending.set(r.data.pending ?? []); this.fields.set(r.data.fields); // Read pending edits after the request: typing during a picture upload must survive too.
+      const edits = preserveEdits ? { ...this.changed } : {};
+      this.vals.set({ ...r.data.values, ...edits }); this.changed = edits; this.problem.set(''); this.loaded.set(true);
     } catch (e) { this.problem.set((e as Error).message); this.loaded.set(true); }
   }
   protected async save() {
