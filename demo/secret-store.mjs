@@ -27,7 +27,7 @@ export async function startDemoBao({ binary = 'bao', port = 8200, onLog = () => 
       await new Promise(r => setTimeout(r, 100));
     }
     if (!ready) throw new Error('demo secret store did not become ready');
-    await call('sys/policies/acl/lyam-demo-connections', { policy: 'path "secret/data/iam/workflow-connections/*" { capabilities = ["create", "update", "read"] }' });
+    await call('sys/policies/acl/lyam-demo-connections', { policy: 'path "secret/data/iam/workflow-connections/*" { capabilities = ["create", "update", "read"] } path "secret/data/iam/pg" { capabilities = ["read"] }' });
     const result = await call('auth/token/create-orphan', { policies: ['lyam-demo-connections'], no_default_policy: true, ttl: '24h', renewable: false, display_name: 'lyam-ephemeral-demo' });
     const token = result.auth?.client_token;
     if (!token) throw new Error('demo secret store returned no scoped token');

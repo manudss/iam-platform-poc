@@ -30,7 +30,7 @@ Google writes are outside Dolt and are not undone when a run branch is abandoned
 
 ## Secret-store prerequisite
 
-Real connections fail closed if OpenBao is not configured. The hosted demo now includes an optional, loopback-only, RAM-only OpenBao child process, using the pinned 2.7.2 binary. Its bootstrap root token is revoked; the API receives a scoped, non-renewable 24-hour token for `secret/data/iam/workflow-connections/*` only. The raw OpenBao development output (which contains root/unseal credentials) is never persisted or forwarded.
+Real connections fail closed if OpenBao is not configured. The hosted demo now includes an optional, loopback-only, RAM-only OpenBao child process, using the pinned 2.7.2 binary. Its bootstrap root token is revoked; the API receives a scoped, non-renewable 24-hour token for `secret/data/iam/workflow-connections/*`, plus read-only access to the absent optional `secret/data/iam/pg` probe required at API bootstrap. The demo never creates PostgreSQL credentials. The raw OpenBao development output (which contains root/unseal credentials) is never persisted or forwarded.
 
 This is demo infrastructure, not production infrastructure. Restart/spin-down loses credentials; surviving Dolt references then fail closed until the key is entered again. A continuously running demo also needs a restart/re-entry after the scoped token expires. `IAM_DEMO_LOCAL_BAO=0` disables the embedded server. An existing external `IAM_BAO_ADDR`/`IAM_BAO_TOKEN` pair takes precedence. Do not configure only half of that pair.
 

@@ -14,6 +14,10 @@ it('demo OpenBao: immutable scoped credentials, no admin/outside access, no root
     assert.equal((await (await call(path)).json()).data.data.value, 'FICTIONAL-TEST-ONLY');
     assert.equal((await call(path, 'POST', value)).status, 400);
     assert.equal((await call('secret/data/unrelated', 'POST', value)).status, 403);
+    // Activation probes optional PostgreSQL credentials on bootstrap. The demo
+    // has none: scoped read must return absent, not 403 that aborts startup.
+    assert.equal((await call('secret/data/iam/pg')).status, 404);
+    assert.equal((await call('secret/data/iam/pg', 'POST', value)).status, 403);
     assert.equal((await call('sys/mounts')).status, 403);
     assert.equal((await call('auth/token/create', 'POST', { policies: ['root'] })).status, 403);
     assert.equal((await call(path, 'DELETE')).status, 403);
