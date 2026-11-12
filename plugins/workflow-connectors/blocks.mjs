@@ -1,6 +1,7 @@
 import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { runPieceAction } from './adapter.mjs';
+import { serviceAccountAuth, readGoogleRows, writeGoogleRow } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 
 /**
@@ -57,7 +58,7 @@ function guardUrl(raw, settings, checkAllowed = true) {
 const googleAuth = (settings) => {
   const serviceAccount = str(settings?.googleServiceAccount, 'google service account', 20000, false);
   if (!serviceAccount) return null;
-  return { props: { serviceAccount, userEmail: str(settings?.googleUserEmail, 'google user', 200, false) || undefined } };
+  return serviceAccountAuth(serviceAccount, str(settings?.googleUserEmail, 'google user', 200, false));
 };
 
 // ---------------------------------------------------------------- HTTP request (Activepieces piece-http) ----
@@ -227,21 +228,11 @@ const sheetsRead = {
       return { rows: found.map((r) => r.values), row: first?.values ?? null, rowNumber: first?.rowNumber ?? 0, count: found.length };
     }
     const auth = googleAuth(ctx.settings);
-    if (!auth) bad('google-sheets-read: type the Google service account JSON key in the workflow-connectors plugin settings first (console)');
-    if (c.mode === 'find-row') {
-      const rows = await runPieceAction('@activepieces/piece-google-sheets', 'find_rows', {
-        auth, propsValue: { spreadsheetId: c.spreadsheetId, sheetId: c.sheetId, columnName: c.columnName, searchValue: c.searchValue, matchCase: false, headerRow: 1, useHeaderNames: true, includeTeamDrives: false },
-      });
-      const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
-      ctx.log(`Google Sheets find_rows: ${list.length} match(es) (real API call)`);
-      return { rows: list, row: list[0] ?? null, rowNumber: 0, count: list.length };
-    }
-    const values = await runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', {
-      auth, propsValue: { spreadsheetId: c.spreadsheetId, sheetId: c.sheetId, includeTeamDrives: false, first_row_headers: true },
-    });
-    const list = Array.isArray(values) ? values : values ? [values] : [];
-    ctx.log(`Google Sheets get-many-rows: ${list.length} row(s) (real API call)`);
-    return { rows: list, row: list[0] ?? null, rowNumber: 0, count: list.length };
+    if (!auth) bad('google-sheets-read: configure a managed Google Sheets connection first');
+    let rows = await readGoogleRows(auth, c);
+    if (c.mode === 'find-row') rows = rows.filter(r => String(r.values[c.columnName] ?? '') === c.searchValue);
+    ctx.log(`Google Sheets: ${rows.length} row(s) (real API call)`);
+    return { rows: rows.map(r => r.values), row: rows[0]?.values ?? null, rowNumber: rows[0]?.rowNumber ?? 0, count: rows.length };
   },
 };
 
@@ -272,10 +263,8 @@ const sheetsUpdate = {
       return { updated: true };
     }
     const auth = googleAuth(ctx.settings);
-    if (!auth) bad('google-sheets-update: type the Google service account JSON key in the workflow-connectors plugin settings first (console)');
-    await runPieceAction('@activepieces/piece-google-sheets', 'update_row', {
-      auth, propsValue: { spreadsheetId: c.spreadsheetId, sheetId: c.sheetId, row_id: rowNumber, first_row_headers: true, includeTeamDrives: false, values: { [c.column]: c.value } },
-    });
+    if (!auth) bad('google-sheets-update: configure a managed Google Sheets connection first');
+    await writeGoogleRow(auth, c, { [c.column]: c.value }, rowNumber);
     ctx.log(`Google Sheets: row ${rowNumber}, column "${c.column}" <- "${c.value}" (REAL external write, not reverted by the run branch)`);
     return { updated: true };
   },
@@ -312,10 +301,8 @@ const sheetsAddRow = {
       return { rowNumber: added.rowNumber };
     }
     const auth = googleAuth(ctx.settings);
-    if (!auth) bad('google-sheets-add-row: type the Google service account JSON key in the workflow-connectors plugin settings first (console)');
-    const result = await runPieceAction('@activepieces/piece-google-sheets', 'insert_row', {
-      auth, propsValue: { spreadsheetId: c.spreadsheetId, sheetId: c.sheetId, first_row_headers: true, includeTeamDrives: false, as_string: false, values },
-    });
+    if (!auth) bad('google-sheets-add-row: configure a managed Google Sheets connection first');
+    const result = await writeGoogleRow(auth, c, values);
     ctx.log(`Google Sheets: row ${result?.row ?? '?'} appended (REAL external write, not reverted by the run branch, not idempotent)`);
     return { rowNumber: Number(result?.row ?? 0) || undefined };
   },
@@ -489,14 +476,10 @@ export const TRIGGER_EVENTS = {
       }
       const auth = googleAuth(settings);
       if (!auth) { log?.('google source but no service account configured: watcher idle'); return []; }
-      const values = await runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', {
-        auth, propsValue: { spreadsheetId: src.spreadsheetId, sheetId: src.sheetId, includeTeamDrives: false, first_row_headers: true },
-      });
-      const list = Array.isArray(values) ? values : values ? [values] : [];
+      const list = await readGoogleRows(auth, src);
       const watch = config.watchColumn ?? 'process', watchValue = config.watchValue ?? 'OK';
       const done = config.doneColumn ?? 'cree', doneValue = config.doneValue ?? 'ok';
       return list
-        .map((v, i) => ({ rowNumber: i + 2, values: v }))
         .filter((r) => String(r.values[watch] ?? '') === watchValue && String(r.values[done] ?? '') !== doneValue);
     },
   },
