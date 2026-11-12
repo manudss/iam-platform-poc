@@ -164,7 +164,7 @@ export function userStats(users: UserProfile[]): UserStats {
   <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>
   <p class="hint">12 to 128 characters. Sent only in the request body; never returned in the table, SQL, history or logs. Do not use a real password in this public demo.</p>
   @if (key && form.login_enabled) {<div class="danger-zone"><p>Disabling sign-in applies on the working branch and takes effect only after Review &amp; Apply.</p><button type="button" class="danger" id="user-disable" (click)="disableAndSave()" [disabled]="busy()">Disable sign-in</button></div>}
-  <div class="foot"><button class="grow" id="user-save" [disabled]="busy()">Save user</button><button type="button" class="secondary" (click)="cancel()">Cancel</button></div>
+  <div class="foot"><button class="grow" id="user-save" [disabled]="busy()">Save user to branch</button><button type="button" class="secondary" (click)="cancel()">Cancel</button></div>
   </form>
 </aside>}
 ` })

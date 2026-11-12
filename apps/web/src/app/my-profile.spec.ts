@@ -12,7 +12,7 @@ describe('My profile picture and unsaved edits', () => {
   beforeEach(() => {
     live = { [PHONE]: 'old phone', [PHOTO]: 'old picture' }; calls = []; policy = 'immediate';
     TestBed.configureTestingModule({ providers: [{ provide: Session, useValue: {
-      branchEpoch: signal(0), user: () => 'alice', api: { raw: async (method: string, _path: string, body?: any) => {
+      branchEpoch: signal(0), testBranch: signal(''), branch: signal('admin-draft'), user: () => 'alice', api: { raw: async (method: string, _path: string, body?: any) => {
         calls.push({ method, body });
         if (method === 'PATCH') { live = { ...live, ...body.values }; return { status: 200, data: {} }; }
         return { status: 200, data: { values: { ...live }, fields: [
@@ -51,6 +51,18 @@ describe('My profile picture and unsaved edits', () => {
     page.set(PHONE, 'typed while waiting'); release({}); await saving;
     expect(page.vals()[PHONE]).toBe('typed while waiting');
     expect(page.changed[PHONE]).toBe('typed while waiting');
+  });
+  it('reports picture changes as pending, not active, when review is required', async () => {
+    policy = 'review'; await page.load(); await page.savePicture('new picture');
+    expect(page.note()).toContain('sent for validation');
+    expect(page.note()).toContain('active picture is unchanged');
+    expect(page.note()).not.toContain('Picture saved.');
+  });
+  it('names main for immediate personal edits even while an administrator has a draft selected', async () => {
+    await page.load(); page.set(PHONE, 'new'); await page.save();
+    expect(page.note()).toContain('saved on main');
+    expect(page.note()).not.toContain('admin-draft');
+    expect(page.note()).toContain('no Review & Apply');
   });
   it('does not discard edits or claim a saved photo after a failed upload', async () => {
     await page.load(); page.set(PHONE, 'draft');

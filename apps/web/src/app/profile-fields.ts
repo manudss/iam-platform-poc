@@ -168,7 +168,7 @@ type Tab = 'fields' | 'components' | 'preview' | 'publish';
     </tbody></table></div> } @else { <p class="hint">No pending request.</p> }
   </section> }
 
-  <section class="card"><div class="row"><button id="pf-save" (click)="save()" [disabled]="busy() || !loaded() || s.branch()==='main'">Save on this branch</button>
+  <section class="card"><div class="row"><button id="pf-save" (click)="save()" [disabled]="busy() || !loaded() || s.branch()==='main'">Save to branch</button>
   @if (dirty()) { <span class="pill warn">Unsaved edits</span> }</div>
   @if (s.branch()==='main') { <p class="hint">Choose a working branch (not main) to save. Changes become live only after Apply.</p> }
   <p class="hint">Plugins that declare fields or components must be enabled in Plugins to appear here. Disabling a plugin hides its contributions; stored values are kept. Uninstalling removes them with the plugin's configuration.</p></section>`,

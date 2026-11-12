@@ -50,8 +50,8 @@ const PICTURE = 'profile-picture.picture';
       }
     }
   } @empty { <p>{{loaded() ? 'No profile field is shown to you.' : 'Loading...'}}</p> }
-  <div class="row"><button id="mp-save" [disabled]="busy() || !editable()">Save my profile</button>
-  @if (policy()==='immediate') { <small class="hint">takes effect immediately</small> }</div>
+  <div class="row"><button id="mp-save" [disabled]="busy() || !editable()">{{policy()==='review' ? 'Send for validation' : 'Save my profile now'}}</button>
+  @if (policy()==='immediate') { <small class="hint">takes effect immediately on {{target()}}; no Review &amp; Apply step</small> }</div>
   </form></section>
   <div class="mp-side">
   <section class="card" id="mp-security"><h3>Security</h3>
@@ -69,6 +69,7 @@ export class MyProfilePage {
   protected fields = signal<EField[]>([]); protected vals = signal<Record<string, unknown>>({}); protected changed: Record<string, unknown> = {};
   protected orgs = signal<{ id: string; name: string }[] | undefined>(undefined); protected roles = signal<{ id: string; label: string | null }[] | undefined>(undefined);
   protected orgNames() { return this.orgs()!.map((o) => o.name).join(', '); } protected roleNames() { return this.roles()!.map((r) => r.label || r.id).join(', '); }
+  protected target = signal('main');
   protected policy = signal('immediate'); protected pending = signal<string[]>([]); protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected loaded = signal(false);
   protected readonly pictureKey = PICTURE;
   constructor() { effect(() => { this.s.branchEpoch(); void this.load(); }); }
@@ -115,14 +116,14 @@ export class MyProfilePage {
     try {
       const r = await this.s.api.raw<any>('PATCH', '/me/profile', { values: { [PICTURE]: value } });
       if (r.status >= 400) throw new Error(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused');
-      this.note.set(value ? 'Picture saved.' : 'Picture removed.'); this.problem.set(''); await this.load(true);
+      this.note.set(this.policy()==='review' ? 'Picture change sent for validation. The active picture is unchanged until a validator accepts.' : `Picture ${value ? 'saved' : 'removed'} on ${this.target()}. It takes effect immediately.`); this.problem.set(''); await this.load(true);
     } catch (e) { this.problem.set((e as Error).message); this.note.set(''); }
   }
   protected async load(preserveEdits = false) {
     try {
       const r = await this.s.api.raw<any>('GET', '/me/profile');
       if (r.status >= 400) throw new Error(r.data.message ?? 'Cannot load');
-      this.orgs.set(r.data.sections?.organizations); this.roles.set(r.data.sections?.roles); this.policy.set(r.data.policy ?? 'immediate'); this.pending.set(r.data.pending ?? []); this.fields.set(r.data.fields); // Read pending edits after the request: typing during a picture upload must survive too.
+      this.orgs.set(r.data.sections?.organizations); this.roles.set(r.data.sections?.roles); this.policy.set(r.data.policy ?? 'immediate'); this.target.set(r.data.branchTest ? this.s.testBranch() || this.s.branch() : 'main'); this.pending.set(r.data.pending ?? []); this.fields.set(r.data.fields); // Read pending edits after the request: typing during a picture upload must survive too.
       const edits = preserveEdits ? { ...this.changed } : {};
       this.vals.set({ ...r.data.values, ...edits }); this.changed = edits; this.problem.set(''); this.loaded.set(true);
     } catch (e) { this.problem.set((e as Error).message); this.loaded.set(true); }
@@ -132,7 +133,7 @@ export class MyProfilePage {
     try {
       const r = await this.s.api.raw<any>('PATCH', '/me/profile', { values: this.changed });
       if (r.status >= 400) throw new Error(Array.isArray(r.data.message) ? r.data.message.join(' ') : r.data.message ?? 'Refused');
-      this.note.set(this.policy()==='review' ? 'Sent for validation. Your live profile does not change until a validator accepts.' : 'Profile saved.'); await this.load();
+      this.note.set(this.policy()==='review' ? 'Sent for validation. Your live profile does not change until a validator accepts.' : `Profile saved on ${this.target()}. It takes effect immediately; no Review & Apply is needed.`); await this.load();
     } catch (e) { this.problem.set((e as Error).message); this.note.set(''); } finally { this.busy.set(false); }
   }
 }
