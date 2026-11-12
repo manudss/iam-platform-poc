@@ -14,7 +14,7 @@ export function fittingTags(widths:number[], available:number, overflowWidth:(co
 @Component({selector:'app-workflow-card-tags',template:`
 <div class="tag-row" #row>
  @for(t of tags().slice(0,visible());track t){<button class="tag" [class.on]="selected()===t" (click)="choose.emit(t)" [title]="'Filter by #' + t">#{{t}}</button>}
- @if(visible()<tags().length){<span class="more" (mouseenter)="open.set(true)" (mouseleave)="open.set(false)" (focusout)="leave($event)"><button class="tag" [attr.aria-expanded]="open()" [attr.aria-label]="'Show ' + (tags().length-visible()) + ' more tags'" (focus)="open.set(true)" (click)="open.set(true)" (keydown.escape)="open.set(false)">+{{tags().length-visible()}}</button>
+ @if(visible()<tags().length){<span class="more" (mouseenter)="enter()" (mouseleave)="exit()" (focusout)="leave($event)"><button class="tag" [attr.aria-expanded]="open()" [attr.aria-label]="'Show ' + (tags().length-visible()) + ' more tags'" (focus)="open.set(true)" (click)="open.set(true)" (keydown.escape)="open.set(false)">+{{tags().length-visible()}}</button>
  @if(open()){<span class="tip" role="group" aria-label="More workflow tags">@for(t of tags().slice(visible());track t){<button class="tag" [class.on]="selected()===t" (click)="choose.emit(t);open.set(false)">#{{t}}</button>}</span>}</span>}
 </div>
 <div class="measure" aria-hidden="true" #measure>@for(t of tags();track t){<span class="tag">#{{t}}</span>}<span class="tag count">+{{tags().length}}</span></div>
@@ -32,12 +32,15 @@ export function fittingTags(widths:number[], available:number, overflowWidth:(co
 export class WorkflowCardTags implements AfterViewInit,OnDestroy {
  readonly tags=input<string[]>([]);readonly selected=input('');readonly choose=output<string>();
  protected visible=signal(0);protected open=signal(false);
+ private closeTimer?:ReturnType<typeof setTimeout>;
+ protected enter(){clearTimeout(this.closeTimer);this.open.set(true);}
+ protected exit(){this.closeTimer=setTimeout(()=>this.open.set(false),150);}
  private row=viewChild<ElementRef<HTMLElement>>('row');private measure=viewChild<ElementRef<HTMLElement>>('measure');private observer?:ResizeObserver;
  constructor(private host:ElementRef<HTMLElement>){effect(()=>{this.tags();this.open.set(false);queueMicrotask(()=>this.fit());});}
  ngAfterViewInit(){this.observer=new ResizeObserver(()=>this.fit());this.observer.observe(this.row()!.nativeElement);this.fit();}
  @HostListener('document:click',['$event']) outside(event:MouseEvent){if(!this.host.nativeElement.contains(event.target as Node))this.open.set(false);}
  @HostListener('keydown.escape') escape(){this.open.set(false);}
- ngOnDestroy(){this.observer?.disconnect();}
+ ngOnDestroy(){clearTimeout(this.closeTimer);this.observer?.disconnect();}
  protected leave(event:FocusEvent){if(!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node))this.open.set(false);}
  private fit(){const row=this.row()?.nativeElement,rack=this.measure()?.nativeElement;if(!row||!rack)return;const children=Array.from(rack.children) as HTMLElement[];const count=children.pop();if(!count)return;const widths=children.map(e=>e.getBoundingClientRect().width);this.visible.set(fittingTags(widths,row.clientWidth,()=>count.getBoundingClientRect().width));}
 }
