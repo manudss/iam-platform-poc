@@ -56,8 +56,6 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-fchip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 1rem; padding: .2rem .8rem; cursor: pointer; min-height: 0; }
 .wlc-fchip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .wlc-fchip b { margin-left: .25rem; font-weight: 600; }
-.wlc-tagchip { cursor: pointer; border: 1px solid transparent; }
-.wlc-tagchip.on { border-color: var(--accent); color: var(--accent); }
 .wlc-sort { display: inline-flex; flex-direction: row; align-items: center; gap: .3rem; margin: 0; }
 .wlc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: .8rem; margin-bottom: 1rem; }
 .wlc-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; height: 100%; }

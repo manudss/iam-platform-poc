@@ -25,6 +25,10 @@ else if(p.includes('branding')||p.includes('demo-sheet')){await route.fulfill({s
 await route.fulfill({json:j});});
 await page.goto('http://127.0.0.1:14211/workflows');await page.locator('.wlc-card').first().waitFor();await page.waitForTimeout(100);
 const row=page.locator('.wlc-card').first().locator('.tag-row');await row.getByRole('button',{name:/Show .* more tags/}).click();await row.locator('.tip').waitFor();
+await page.keyboard.press('Escape');await row.locator('.tip').waitFor({state:'hidden'});
+await row.getByRole('button',{name:/Show .* more tags/}).hover();await row.locator('.tip').getByRole('button',{name:'#daily',exact:true}).hover();await row.locator('.tip').waitFor();
+await page.locator('h2').first().click();await row.locator('.tip').waitFor({state:'hidden'});
+await row.getByRole('button',{name:/Show .* more tags/}).click();await row.locator('.tip').waitFor();
 const layout=await row.evaluate(e=>{const chips=[...e.querySelectorAll(':scope > button,:scope > .more > button')];return chips.map(c=>({top:c.getBoundingClientRect().top,bottom:c.getBoundingClientRect().bottom,right:c.getBoundingClientRect().right}));});assert.equal(new Set(layout.map(c=>Math.round(c.top))).size,1,'chips one row');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no overflow');
 await page.screenshot({path:path.join(out,`${mobile?'mobile':'desktop'}-${theme}-tags.png`),fullPage:true});await row.locator('.tip').getByRole('button',{name:'#daily',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.wlc-card').length===1);assert.equal(await page.locator('.wlc-card').count(),1,'hidden tag still filters');
 await page.goto('http://127.0.0.1:14211/workflows/edit/wf-test');await page.locator('.wf-node.computed').waitFor();await page.locator('.wf-node.computed').click();const field=page.locator('input[name=g-left]');await field.fill('');await field.focus();const chip=page.locator('.ph-chip').filter({hasText:'event.subject'}).first();await chip.hover();
