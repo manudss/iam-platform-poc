@@ -40,13 +40,13 @@ Production code: 40 points. Test code: 84 points.
 | plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/oidc-provider/handlers.mjs:183 |
 | plugin deps.emit (durable app event) | emitter | organization.member-added | plugins/organizations/handlers.mjs:72 |
 | plugin deps.emit (durable app event) | emitter | policy.changed | plugins/policy-studio/handlers.mjs:122 |
-| plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:172 |
-| plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:186 |
-| plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:190 |
-| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/saml-idp/handlers.mjs:195 |
-| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/saml-idp/handlers.mjs:233 |
-| plugin deps.emit (durable app event) | emitter | sso.assertion.issued | plugins/saml-idp/handlers.mjs:256 |
-| plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/saml-idp/handlers.mjs:257 |
+| plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:182 |
+| plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:196 |
+| plugin deps.emit (durable app event) | emitter | sso.login.failed | plugins/saml-idp/handlers.mjs:200 |
+| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/saml-idp/handlers.mjs:205 |
+| plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/saml-idp/handlers.mjs:243 |
+| plugin deps.emit (durable app event) | emitter | sso.assertion.issued | plugins/saml-idp/handlers.mjs:266 |
+| plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/saml-idp/handlers.mjs:267 |
 | plugin oidc/saml provider event hook | listener | - | plugins/oidc-provider/handlers.mjs:143 |
 | plugins.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
