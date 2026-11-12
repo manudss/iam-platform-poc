@@ -9,9 +9,13 @@ earlier versions could accept a response signed with an attacker's certificate).
 
 - AuthnRequests are accepted unsigned by default; register the SP signing certificate on the application and switch on
   "Require signed AuthnRequests" to make signatures mandatory (an unsigned or badly signed request is then refused);
-- assertions are signed (RSA-SHA256) with a self-signed certificate generated per process (pure TypeScript, no openssl
-  in the free container) unless the secret store provides `sso/<tenant>/saml-signing-key` (`cert` and `privateKey`, PEM).
-  A restart without the secret store changes the key: applications must re-read the metadata;
+- assertions are signed (RSA-SHA256) with the first key source configured, in order: the secret-store entry
+  `sso/<tenant>/saml-signing-key` (`cert` and `privateKey`, PEM); the environment variables
+  `IAM_SAML_SIGNING_CERT` + `IAM_SAML_SIGNING_PRIVATE_KEY` (PEM pair, a private per-deployment key without a
+  secret store; single-line values with escaped \n accepted, as dashboards paste PEMs that way); else the
+  committed DEMONSTRATION key (`plugins/saml-idp/demo-key.mjs`, public by design): the published certificate
+  is stable across restarts, redeploys and preview environments, so applications never have to re-read the
+  metadata. Anyone can sign as the demo IdP - fine for fictional tenants, never for a real deployment;
 - pending sign-in requests live in memory (10 min, single use);
 - samlify requires a schema validator: the documented XSD validator compiles a Java program at install, which the free
   container does not have. A structural check (well-formed XML rooted in a SAML namespace) stands in for it; the

@@ -124,6 +124,12 @@ describe('SAML identity provider: a service provider signs a user in (Web SSO, P
     assert.ok(meta.includes('<md:EntityDescriptor') || meta.includes('<EntityDescriptor'), 'an EntityDescriptor');
     assert.ok(meta.includes(`entityID="${ISS}"`), 'the public entity id');
     assert.ok(meta.includes('X509Certificate') && meta.includes('SingleSignOnService'));
+    // Without a key in the secret store, the published certificate is the committed demonstration key
+    // (stable across restarts and environments): a redeploy must not invalidate the metadata applications fetched.
+    // @ts-expect-error - the plugin's demo key module is a plain .mjs without type declarations
+    const { DEMO_SAML_IDP_CERT_PEM } = await import('../../../../plugins/saml-idp/demo-key.mjs') as any;
+    const served = meta.match(/<ds:X509Certificate>([^<]+)<\/ds:X509Certificate>/)![1];
+    assert.equal(served, DEMO_SAML_IDP_CERT_PEM.replace(/-----[^-]+-----/g, '').replace(/\s/g, ''));
   });
 
   it('signs an HR user in end to end: consent, then a signed response the SP verifies with the published certificate', async () => {
