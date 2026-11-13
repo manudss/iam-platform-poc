@@ -81,9 +81,10 @@ try {
   // Install goes through the wizard (1 what it asks, 2 your permissions, 3 recap + Install).
   const wizardInstall = async (id) => {
     await page.click('#plugin-install-open'); await page.click('.modal .modal-foot button:has-text("Continue")');
+    await page.waitForSelector('.modal .w.on:has-text("2 ·")'); // step 2 rendered: counting its checkboxes earlier races the render and skips the grant
     if (await page.locator('.modal input[name=gi]').count()) await page.locator('.modal input[name=gi]').check();
     await Promise.all([page.waitForResponse((r) => r.url().includes(`/plugins/${id}/install`)), (async () => { await page.click('.modal .modal-foot button:has-text("Continue")'); await page.click('#plugin-install'); })()]);
-    await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
+    await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? '')).catch(async (e) => { throw new Error('install note never showed Installed, note was: ' + JSON.stringify(await page.textContent('#plugin-note').catch(() => null)) + ' / ' + e.message); });
   };
   // the core login form: wrong password first when asked, then the right one; returns to the console
   const coreLogin = async (wrongFirst = false) => {
