@@ -1,15 +1,20 @@
-import { Component, EventEmitter, Input, Output, inject, signal } from '@angular/core';
+import { Component, EventEmitter, Input, Output, computed, inject, signal } from '@angular/core';
 import { Session } from './session';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { ApiClient, FormModel, PluginAdminClient, PluginInfo, formValues, visibleFields } from './api';
 
 /**
  * Generic plugin administration. Nothing here is specific to one plugin: the list, the grant prompts and the settings form
  * are all built from what the API returns (the plugin manifests). A new plugin shows up here with no change to the console.
+ *
+ * The gallery (validated mockup, sheet A): searchable/filterable cards grouped by family, slot, state or publisher,
+ * a fault banner while a plugin is refusing requests, and a pending panel fed by /plugins/pending (changes staged
+ * on the working branch but not applied to main yet).
  */
 @Component({
   selector: 'app-plugins-admin',
-  imports: [FormsModule],
+  imports: [FormsModule, RouterLink],
   templateUrl: './plugins-admin.html',
   styleUrl: './plugins-admin.css',
 })
@@ -27,10 +32,61 @@ export class PluginsAdmin {
   protected readonly confirmingUninstall = signal(false);
   protected readonly heldValues = signal<number | null>(null);
   protected readonly busyExport = signal(false);
+  /** Gallery controls. */
+  protected search = '';
+  protected grouping: 'family' | 'slot' | 'state' | 'publisher' = 'family';
+  protected stateFilter: 'all' | 'enabled' | 'installed' | 'not-installed' | 'faulted' | 'pending' = 'all';
+  protected hideBase = false;
+  protected readonly pending = signal<{ id: string; name: string; changes: { kind: string; detail: string }[] }[]>([]);
+  protected readonly pendingBranch = signal('main');
+  /** Drawer tab (validated mockup, sheet A): overview, settings, lifecycle & permissions, dependencies, activity. */
+  protected readonly tab = signal<'apercu' | 'reglages' | 'cycle' | 'deps' | 'activite'>('apercu');
+  /** Install wizard (parcours 1): 0 closed, 1 what it asks, 2 your permissions, 3 recap. */
+  protected readonly wizardStep = signal<0 | 1 | 2 | 3>(0);
+  /** Uninstall confirmation: the admin types the plugin id (parcours 2). */
+  protected confirmText = '';
   protected edited: Record<string, unknown> = {};
   protected grantInstall = false;
   protected grantComponents = false;
   protected grantHooks: Record<string, boolean> = {};
+
+  /** Family label from the manifest kinds (directory/profile/auth-method…), as in the validated mockup. */
+  private static readonly FAMILY_ORDER = ['Authentication', 'Profile & directory', 'Notifications', 'Workflows', 'Connectors & SSO', 'Policies & risk', 'Interfaces', 'Other'];
+  protected family(p: PluginInfo): string {
+    const k = p.kinds;
+    if (k.includes('auth-method') || k.includes('authn')) return 'Authentication';
+    if (k.includes('directory') || k.includes('profile')) return 'Profile & directory';
+    if (k.includes('notify') || k.includes('mail')) return 'Notifications';
+    if (k.includes('workflow')) return 'Workflows';
+    if (k.includes('connector') || k.includes('sso')) return 'Connectors & SSO';
+    if (k.includes('policy') || k.includes('risk')) return 'Policies & risk';
+    if (k.includes('ui')) return 'Interfaces';
+    return 'Other';
+  }
+  protected stateLabel(p: PluginInfo): string {
+    return p.base ? 'Base · always on' : p.faulted ? 'Faulted' : p.enabled ? 'Enabled' : p.installed ? 'Installed' : 'Not installed';
+  }
+  private matches(p: PluginInfo): boolean {
+    if (this.hideBase && p.base) return false;
+    if (this.stateFilter !== 'all') {
+      const st = this.stateFilter === 'enabled' ? p.enabled || p.base : this.stateFilter === 'installed' ? p.installed && !p.enabled : this.stateFilter === 'not-installed' ? !p.installed : this.stateFilter === 'faulted' ? !!p.faulted : this.pendingIds().has(p.id);
+      if (!st) return false;
+    }
+    const q = this.search.trim().toLowerCase();
+    if (!q) return true;
+    return [p.name, p.id, p.description, p.publisher, ...p.kinds, ...p.provides].filter(Boolean).join(' ').toLowerCase().includes(q);
+  }
+  /** The grouped, filtered gallery. */
+  protected readonly grouped = computed(() => {
+    const key = (p: PluginInfo) => this.grouping === 'family' ? this.family(p) : this.grouping === 'slot' ? (p.provides[0] ? `Slot ${p.provides[0]}` : 'No slot') : this.grouping === 'publisher' ? (p.publisher || 'Inconnu') : this.stateLabel(p);
+    const map = new Map<string, PluginInfo[]>();
+    for (const p of this.plugins()) if (this.matches(p)) { const k = key(p); if (!map.has(k)) map.set(k, []); map.get(k)!.push(p); }
+    const order = this.grouping === 'family' ? PluginsAdmin.FAMILY_ORDER : undefined;
+    return [...map.entries()].sort((a, b) => order ? order.indexOf(a[0]) - order.indexOf(b[0]) : a[0].localeCompare(b[0])).map(([label, items]) => ({ label, items }));
+  });
+  protected readonly faulted = computed(() => this.plugins().filter((p) => p.faulted));
+  protected readonly pendingIds = computed(() => new Set(this.pending().map((x) => x.id)));
+
 
   async ngOnInit() {
     this.admin = new PluginAdminClient(this.api); await this.refresh();
@@ -38,16 +94,31 @@ export class PluginsAdmin {
   }
 
   protected async refresh() {
-    try { this.plugins.set(await this.admin.list()); } catch (e) { this.note.set((e as Error).message); }
+    try {
+      this.plugins.set(await this.admin.list());
+      try { const r = await this.admin.pending(); this.pending.set(r.pending ?? []); this.pendingBranch.set(r.branch ?? 'main'); } catch { this.pending.set([]); }
+    } catch (e) { this.note.set((e as Error).message); }
   }
   protected async open(p: PluginInfo, announce = true) {
     if (announce) this.opened.emit(p.id);
-    this.selected.set(p); this.note.set(''); this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null);
+    const same = this.selected()?.id === p.id; this.selected.set(p); if (!same) { this.tab.set('apercu'); this.note.set(''); } // re-opening the same plugin after an action keeps its tab and its result message
+    this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
       this.edited = Object.fromEntries(m.groups.flatMap((g) => g.fields).map((f) => [f.key, f.type === 'list' && Array.isArray(f.value) ? f.value.join(', ') : f.value]));
     } catch (e) { this.note.set((e as Error).message); }
   }
+  protected close() { this.selected.set(null); this.opened.emit(null); }
+  /** What the admin already granted this plugin (the permissions list of the lifecycle tab). */
+  protected grantedPermissions(p: PluginInfo): { label: string; detail: string }[] {
+    const out: { label: string; detail: string }[] = [];
+    if (p.grants.install) out.push({ label: 'Install migrations', detail: 'Tables prefixed with its id, created at install.' });
+    for (const h of p.grants.hooks ?? []) out.push({ label: `Sensitive hook: ${h}`, detail: 'Receives the event on every call.' });
+    if (p.grants.uiComponents) out.push({ label: 'Packaged UI components', detail: 'Can show its screens and components in the console.' });
+    return out;
+  }
+  /** The change staged on the working branch for this plugin, when any (the drawer shows it as a warning). */
+  protected pendingChange(p: PluginInfo) { return this.pending().find((x) => x.id === p.id); }
   protected fields(g: { fields: import('./api').FormField[] }) { return visibleFields(g.fields, this.edited); }
 
   protected async act(fn: () => Promise<unknown>, ok: string) {
@@ -56,7 +127,10 @@ export class PluginsAdmin {
     catch (e) { this.note.set((e as Error).message); }
   }
   protected grants() { return { install: this.grantInstall, uiComponents: this.grantComponents, hooks: Object.keys(this.grantHooks).filter((h) => this.grantHooks[h]) }; }
-  protected install() { const p = this.selected()!; return this.act(() => this.admin.install(p.id, this.grants()), `Installed ${p.name}.`); }
+  protected install() { const p = this.selected()!; return this.act(() => this.admin.install(p.id, this.grants()), `Installed ${p.name}.`).then(() => this.wizardStep.set(0)); }
+  protected wizardGo(delta: 1 | -1) { this.wizardStep.update((s) => (s + delta) as 1 | 2 | 3); }
+  /** The fault banner's entry point: open the drawer straight on the recovery tab. */
+  protected treat(p: PluginInfo) { return this.open(p).then(() => this.tab.set('cycle')); }
   protected save() { const p = this.selected()!; return this.act(() => this.admin.save(p.id, formValues(this.model()!, this.edited)), 'Settings saved.'); }
   protected enable() { const p = this.selected()!; return this.act(() => this.admin.enable(p.id, this.grants()), `Enabled ${p.name}.`); }
   protected disable() { const p = this.selected()!; return this.act(() => this.admin.disable(p.id), `Disabled ${p.name}: its slots are served by the base plugin again.`); }
@@ -72,29 +146,22 @@ export class PluginsAdmin {
     ];
   }
   protected startUninstall() {
-    this.confirmingUninstall.set(true); this.heldValues.set(null);
+    this.confirmingUninstall.set(true); this.heldValues.set(null); this.confirmText = '';
     const p = this.selected()!;
     this.admin.adminToken = this.session.adminToken();
     this.admin.profileValues(p.id).then((r) => this.heldValues.set(r.values)).catch(() => this.heldValues.set(null));
   }
-  /** CSV of the plugin's profile values, one row per user and field, before the destructive uninstall. */
-  protected async exportCsv() {
-    const p = this.selected()!; const keys = (p.profileFields ?? []).map((k) => `${p.id}.${k}`);
-    if (!keys.length) return;
+  /** CSV of the plugin's profile values, one row per user and field, generated server side before the destructive uninstall. */
+  protected exportCsv() {
+    const p = this.selected()!;
     this.busyExport.set(true);
-    try {
-      const h: Record<string, string> = {}; const tok = this.session.adminToken(); if (tok) h['x-api-admin-token'] = tok;
-      const users = (await this.api.raw<{ users: { id: string }[] }>('GET', '/users', undefined, h)).data.users;
-      const csv = ['user,field,value'];
-      for (const u of users) {
-        const r = await this.api.raw<{ values?: Record<string, unknown> }>('GET', `/users/${encodeURIComponent(u.id)}/profile`, undefined, h);
-        for (const k of keys) { const v = r.data.values?.[k]; if (v !== undefined && v !== null && v !== '') csv.push(`${u.id},${k},"${String(v).replace(/"/g, '""')}"`); }
-      }
+    const h: Record<string, string> = {}; const tok = this.session.adminToken(); if (tok) h['x-api-admin-token'] = tok;
+    this.api.rawText('GET', `/plugins/${p.id}/export`, h).then((csv) => {
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([csv.join('\n')], { type: 'text/csv' }));
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
       a.download = `${p.id}-export.csv`; a.click(); URL.revokeObjectURL(a.href);
-      this.note.set(`Export downloaded: ${csv.length - 1} value(s).`);
-    } catch (e) { this.note.set((e as Error).message); } finally { this.busyExport.set(false); }
+      this.note.set('Export downloaded.');
+    }).catch((e) => this.note.set((e as Error).message)).finally(() => this.busyExport.set(false));
   }
   protected confirmUninstall() { const p = this.selected()!; return this.act(() => this.admin.uninstall(p.id), `Uninstalled ${p.id}: its tables and stored values are gone.`).then(() => this.confirmingUninstall.set(false)); }
   /** Manual cache refresh (Emmanuel's requirement): re-verify the shipped plugins and re-derive every inventory server-side, then reload. */

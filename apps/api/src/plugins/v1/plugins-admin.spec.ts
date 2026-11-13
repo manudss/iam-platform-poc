@@ -6,6 +6,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginsV1Module } from './plugins-v1.module.js';
 import { AuthGuard } from '../../auth/auth.guard.js';
+import { ProfileService } from '../../profile/profile.service.js';
+import { pluginChanges } from './pending-diff.js';
 import { startTestBus, TestBus } from '../../testing/test-bus.js';
 
 // Step 3 cleanup (decision 6): PluginsV1Module requires a reachable bus - one nats+core pair for this spec file.
@@ -67,6 +69,38 @@ describe('plugin admin API', () => {
     await s().post('/tenants/t2/plugins/org-manager/ping').expect(404); // method not declared
     // tenant isolation: t3 sees nothing enabled
     assert.deepEqual((await s().get('/tenants/t3/plugins/screens')).body.screens.map((x: any) => x.plugin), ['branding-base']);
+  });
+  it('the gallery list carries description, publisher, signature, dependencies and fault detail', async () => {
+    const r = await s().get('/tenants/t1/plugins').expect(200);
+    const by = Object.fromEntries(r.body.plugins.map((p: any) => [p.id, p]));
+    assert.equal(typeof by['org-manager'].description, 'string');
+    assert.ok(Object.hasOwn(by['org-manager'], 'publisher'));
+    assert.ok(Object.hasOwn(by['org-manager'], 'signed'));
+    assert.ok(Array.isArray(by['org-manager'].requires));
+    assert.equal(by['org-manager'].fault, null);
+  });
+  it('pending is empty outside workspace mode', async () => {
+    const r = await s().get('/tenants/t1/plugins/pending').expect(200);
+    assert.deepEqual(r.body, { workspace: false, branch: 'main', pending: [] });
+  });
+  it('uninstall export downloads the plugin values as a CSV attachment (no call per user)', async () => {
+    const profile = app.get(ProfileService);
+    await profile.putWorking('t6', 'user-1', { 'org-manager.department': 'Sales "West"', 'org-manager.size': 12 }, 'admin');
+    const r = await s().get('/tenants/t6/plugins/org-manager/export').set(adm).expect(200);
+    assert.match(r.headers['content-type'], /text\/csv/);
+    assert.match(r.headers['content-disposition'], /attachment; filename="org-manager-values\.csv"/);
+    assert.equal(r.text, 'subject,field,value\n"user-1","org-manager.department","Sales ""West"""\n"user-1","org-manager.size","12"\n');
+  });
+  it('pluginChanges diffs branch and main (install/enable/disable/settings/uninstall)', () => {
+    const main = [{ id: 'a', name: 'A', enabled: true }, { id: 'b', name: 'B', enabled: true }, { id: 'c', name: 'C', enabled: true }];
+    const work = [{ id: 'a', name: 'A', enabled: false }, { id: 'c', name: 'C', enabled: true }, { id: 'd', name: 'D', enabled: true }];
+    const changes = pluginChanges(work, main, { c: { maxDepth: '6' } }, { c: { maxDepth: '4' } });
+    assert.deepEqual(changes, [
+      { id: 'a', name: 'A', kind: 'disable', detail: 'Désactivé sur la branche' },
+      { id: 'b', name: 'B', kind: 'uninstall', detail: 'Désinstallé sur la branche, encore présent sur main' },
+      { id: 'c', name: 'C', kind: 'settings', detail: 'Réglages modifiés: maxDepth' },
+      { id: 'd', name: 'D', kind: 'install', detail: 'Installé sur la branche, absent de main' },
+    ]);
   });
   it('sensitive hooks are refused until granted; base plugin cannot be disabled; unknown is 404', async () => {
     await s().post('/tenants/t4/plugins/auth-password-lockout/install').set(adm).send({ grants: { install: true } }).expect(201);

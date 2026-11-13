@@ -201,7 +201,17 @@ export class ApiClient {
 
   /** Same call as the typed helpers below, with extra headers (used by the plugin administration client). */
   raw<T>(method: string, path: string, body?: object, headers: Record<string, string> = {}) { return this.call<T>(method, path, body, headers); }
-
+  /** A raw text response (the server-generated plugin export CSV), with the same auth/branch handling as call(). */
+  async rawText(method: string, path: string, headers: Record<string, string> = {}): Promise<string> {
+    if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
+    const sentToken = this.token, sentEpoch = this.epoch, sentBranch = this.branch;
+    const r = await this.f(apiUrl(`/api/tenants/${this.tenant}${path}`), { method, headers: { authorization: `Bearer ${this.token}`, ...(this.branch ? { 'x-iam-branch': this.branch } : {}), ...headers } });
+    if (this.branch !== sentBranch) throw new Error('Working branch changed. Request result ignored.');
+    if (this.epoch !== sentEpoch) throw new Error('Session changed. Request result ignored; check the current state.');
+    if (r.status === 401) { if (this.token === sentToken) throw this.unauthorized(); throw new Error('Your session was just renewed. Please try the action again.'); }
+    if (!r.ok) { const d = (await r.json().catch(() => ({}))) as { message?: string }; throw Object.assign(new Error(d.message ?? `HTTP ${r.status}`), { body: d, status: r.status }); }
+    return r.text();
+  }
   private async call<T>(method: string, path: string, body?: object, extra: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
     const sentToken = this.token, sentEpoch = this.epoch, sentBranch=this.branch;
@@ -234,7 +244,9 @@ export class ApiClient {
 
 // ---- Plugin administration (generic, schema-driven; see docs/plugins.md) ----
 export interface PluginInfo {
-  id: string; name: string; version: string; kinds: string[]; base: boolean; provides: string[]; extends?: string; enabled: boolean; installed: boolean; faulted?: boolean;
+  id: string; name: string; description: string; version: string; publisher?: string; signed?: boolean; kinds: string[]; base: boolean; provides: string[]; extends?: string; requires?: string[]; enabled: boolean; installed: boolean; faulted?: boolean;
+  /** Why the plugin is faulted (message + time), when it is. Drives the console's fault dialog. */
+  fault?: { message: string; at: string } | null;
   requests: { install: boolean; sensitiveHooks: string[]; uiComponents: boolean };
   grants: { install?: boolean; hooks?: string[]; uiComponents?: boolean };
   /** Profile field keys the plugin declares (drives the uninstall export offer). */
@@ -258,6 +270,10 @@ export class PluginAdminClient {
   uninstall(id: string) { return this.admin('POST', `/plugins/${id}/uninstall`); }
   /** How much profile data the plugin holds for the tenant (shown in the uninstall confirmation). */
   profileValues(id: string) { return this.admin<{ values: number }>('GET', `/plugins/${id}/profile-values`).then((r) => r.data); }
+  /** Plugin changes staged on the working branch but not yet applied to main (the pending panel and card badges). */
+  pending() { return this.api.raw<{ branch: string; pending: { id: string; name: string; changes: { kind: string; detail: string }[] }[] }>('GET', '/plugins/pending').then((r) => r.data); }
+  /** Server-generated uninstall export: one CSV row per user and profile field the plugin holds. */
+  exportUrl(id: string) { return apiUrl(`/plugins/${id}/export`); }
   /** Re-verify every shipped plugin and rebuild the catalogue + inventories (manual cache refresh). */
   refresh() { return this.admin<{ verified: string[] }>('POST', '/plugins/refresh'); }
 }

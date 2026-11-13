@@ -10,6 +10,7 @@ import { Grants, PluginError, PluginRegistry } from './registry.js';
 import { installArchive, loadInstalledPlugin, removeInstalledPlugin } from './archive.js';
 import { defaultPluginsDir, refreshPluginCatalogue } from './loader.js';
 import { ProfileService } from '../../profile/profile.service.js';
+import { pluginChanges } from './pending-diff.js';
 
 const STATUS: Record<string, number> = { 'unknown-plugin': 404, 'grant-required': 403, 'base-required': 409, 'in-use': 409, 'not-installed': 409, 'missing-dependency': 409, 'invalid-settings': 400, 'invalid-manifest': 400, 'migration-changed': 409, 'base-config-invalid': 409, 'plugin-failed': 503, 'invalid-archive': 400, 'already-exists': 409, 'signature-invalid': 400 };
 function wrap<T>(f: () => Promise<T> | T): Promise<T> {
@@ -38,11 +39,37 @@ export class PluginsAdminController {
   @Get() async list(@Param('tenant') t: string) { return { tenant: t, plugins: (await this.registry()).list(t) }; }
   @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
   @Get('menu') async menu(@Param('tenant') t: string) { return { tenant: t, entries: (await this.registry()).menu(t) }; }
+  /** Plugins modified on the current workspace branch but not yet on main; the console shows them in the
+   * pending panel and badges their gallery cards. Empty outside workspace mode or on main. */
+  @Get('pending') async pending(@Param('tenant') t: string) {
+    if (!workspaceMode()) return { workspace: false, branch: 'main', pending: [] };
+    const branch = currentBranch();
+    if (branch === 'main') return { workspace: true, branch, pending: [] };
+    const [work, main] = await Promise.all([this.branches.get(branch), this.branches.get('main')]);
+    const [workList, mainList] = [work.list(t), main.list(t)];
+    const ids = [...new Set([...workList, ...mainList].map((p) => p.id))];
+    const cfg = async (reg: typeof work) => Object.fromEntries(await Promise.all(ids.map(async (id) => {
+      try { const c = await reg.exportConfig(t, id); return [id, Object.fromEntries(Object.entries(c.settings).map(([k, v]) => [k, String(v)]))] as const; } catch { return [id, {}] as const; }
+    })));
+    const [ws, ms] = await Promise.all([cfg(work), cfg(main)]);
+    return { workspace: true, branch, pending: pluginChanges(workList, mainList, ws, ms) };
+  }
+
   @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
   /** How much profile data a plugin holds for this tenant; the console shows it in the uninstall confirmation.
    * Lives here, not on ProfileController: the plugin HTTP catch-all (@All(':id/{*path}')) is registered before it. */
   @UseGuards(AdminGuard) @Get(':id/profile-values') async pluginValues(@Param('tenant') t: string, @Param('id') id: string) {
     return { plugin: id, values: this.profile ? await this.profile.pluginValueCount(t, id) : 0 };
+  }
+
+  /** The plugin's stored values as a CSV attachment: the uninstall confirmation exports everything before
+   * the data disappears, without one HTTP call per user. Values are CSV-escaped and quoted, never raw. */
+  @UseGuards(AdminGuard) @Get(':id/export') async exportCsv(@Param('tenant') t: string, @Param('id') id: string, @Res() res: { setHeader: (k: string, v: string) => void; type: (c: string) => { send: (b: unknown) => void } }) {
+    const rows = this.profile ? await this.profile.pluginValues(t, id) : [];
+    const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = ['subject,field,value', ...rows.map((r) => [cell(r.subject), cell(r.field), cell(r.value)].join(','))].join('\n') + '\n';
+    res.setHeader('Content-Disposition', `attachment; filename="${id}-values.csv"`);
+    res.type('text/csv; charset=utf-8').send(csv);
   }
 
   /** Packaged component screens (constat 4): the console import()s a screen's .mjs straight from the plugin's

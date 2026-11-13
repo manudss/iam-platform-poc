@@ -73,8 +73,19 @@ try {
   const path = () => new URL(page.url()).pathname;
   const status = (txt) => page.waitForFunction((t) => [...document.querySelectorAll('[role=status]')].some((e) => e.textContent?.includes(t)), txt);
   const noBanner = async (label) => { const alerts = await page.locator('[role=alert]').allTextContents(); assert.equal(alerts.length, 0, label + ': no alert (got: ' + JSON.stringify(alerts) + ')'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch|admin capability required/.test(t), label + ': no error banner'); };
-  const nav = (p) => page.click(`nav a[data-nav="${p}"]`);
+  const nav = async (p) => { if (await page.locator('#plugin-close').count()) await page.click('#plugin-close'); await page.click(`nav a[data-nav="${p}"]`); }; // the plugin drawer is modal: close it like a user would before using the sidebar
   const setToken = async () => { await page.evaluate(() => { document.querySelector('details.token').open = true; }); await page.fill('input[name=admintoken]', ADMIN_TOKEN); };
+  // The plugins page is a card gallery: open a plugin's drawer (its first card button), then its tabs.
+  const openPlugin = async (id) => { await page.locator(`.pcard[data-plugin=${id}] button`).first().click(); await page.waitForSelector('.drawer'); };
+  const drawerTab = async (label) => { await page.click(`.drawer .dtabs button:has-text("${label}")`); };
+  // Install goes through the wizard (1 what it asks, 2 your permissions, 3 recap + Install).
+  const wizardInstall = async (id) => {
+    await page.click('#plugin-install-open'); await page.click('.modal .modal-foot button:has-text("Continue")');
+    await page.waitForSelector('.modal .w.on:has-text("2 ·")'); // step 2 rendered: counting its checkboxes earlier races the render and skips the grant
+    if (await page.locator('.modal input[name=gi]').count()) await page.locator('.modal input[name=gi]').check();
+    await Promise.all([page.waitForResponse((r) => r.url().includes(`/plugins/${id}/install`)), (async () => { await page.click('.modal .modal-foot button:has-text("Continue")'); await page.click('#plugin-install'); })()]);
+    await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? '')).catch(async (e) => { throw new Error('install note never showed Installed, note was: ' + JSON.stringify(await page.textContent('#plugin-note').catch(() => null)) + ' / ' + e.message); });
+  };
   // the core login form: wrong password first when asked, then the right one; returns to the console
   const coreLogin = async (wrongFirst = false) => {
     await page.waitForSelector('#signin-browser');
@@ -179,23 +190,22 @@ try {
   }
 
   // ---- plugins ----
-  await nav('/plugins'); await page.waitForSelector('#plugins table');
+  await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
   await setToken(); await noBanner('plugins list'); await shot('5-plugins-list');
-  const row = page.locator('tr[data-plugin=auth-password-lockout]');
-  await row.getByRole('button', { name: 'Manage' }).click();
+  await openPlugin('auth-password-lockout');
   await page.waitForFunction(() => location.pathname === '/plugins/auth-password-lockout');
   // Every action re-opens the plugin afterwards and rebuilds the form from the server, so wait for that re-open (the GET of
   // the form that follows the action) before typing or asserting: filling earlier races the rebuild and the save would send defaults.
-  await page.locator('input[name=gi]').check();
+  await drawerTab('Lifecycle');
+  await wizardInstall('auth-password-lockout');
   const formGet = () => page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/form') && r.status() === 200);
-  await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/install')), page.click('#plugin-install')]);
-  await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
-  await formGet(); await page.waitForSelector('#plugin-form');
+  await formGet(); await drawerTab('Settings'); await page.waitForSelector('#plugin-form');
   await page.locator('label[data-field=maxFailures] input').fill('3');
   await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/settings') && r.request().method() === 'PUT'), page.click('#plugin-save')]);
   await page.waitForFunction(() => /saved|Saved|configured/i.test(document.querySelector('#plugin-note')?.textContent ?? ''));
   await formGet();
   assert.equal(await page.locator('label[data-field=maxFailures] input').inputValue(), '3', 'the saved value comes back from the API');
+  await drawerTab('Lifecycle');
   await page.locator('[data-hook="auth.authenticate"]').check(); await page.click('#plugin-enable');
   await page.waitForSelector('#plugin-disable');
   await noBanner('enabled'); await shot('6-plugin-enabled');
@@ -211,22 +221,20 @@ try {
   await setToken();
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
-  await page.waitForSelector('#plugins table'); assert.equal(path(), '/plugins/auth-password-lockout');
-  await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
+  await page.waitForSelector('#plugins .pcard'); assert.equal(path(), '/plugins/auth-password-lockout');
+  await drawerTab('Settings'); await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
 
   // ---- packaged plugin screen (constat 4 acceptance): the Organizations page ships in the plugin's signed folder ----
   // The console has no Organizations page of its own: the sidebar entry comes from the plugin manifest and the
   // generic host route imports the screen module from the plugin package through the assets route.
   // This stack seeds nothing: install organizations on the working branch and enable it with the packaged-components
   // grant its screen needs (the menu entry and the route only exist while the plugin is enabled).
-  await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
+  await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
+  await openPlugin('organizations');
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
-  await page.locator('#plugin-install, #plugin-enable, #plugin-disable').first().waitFor(); await page.waitForTimeout(500);
-  if (await page.locator('#plugin-install').count()) {
-    if (await page.locator('input[name=gi]').count()) await page.locator('input[name=gi]').check({ timeout: 5000 }).catch(() => page.locator('input[name=gi]').check());
-    await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/organizations/install')), page.click('#plugin-install')]);
-    await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
-  }
+  await drawerTab('Lifecycle'); await page.waitForTimeout(500);
+  if (await page.locator('#plugin-install-open').count()) await wizardInstall('organizations');
+  await drawerTab('Lifecycle');
   await page.locator('input[name=gc]').waitFor(); await page.locator('input[name=gc]').check();
   await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
   await noBanner('organizations enabled'); await shot('7b2-organizations-enabled');
@@ -246,8 +254,10 @@ try {
   assert.equal(visAlerts.length, 0, 'packaged organizations screen: no visible alert ' + JSON.stringify(visAlerts));
   await shot('7c-packaged-organizations-screen');
   // Disabling the plugin retires the route and the menu: the host says the screen is gone, the sidebar drops the entry.
-  await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
+  await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
+  await openPlugin('organizations');
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
+  await drawerTab('Lifecycle');
   await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
   await page.goto(`${BASE}/screens/organizations/orgs`); // the user session survives the full reload
   await page.waitForSelector('header .who');
@@ -260,10 +270,14 @@ try {
   assert.equal(await page.locator('nav a[data-nav="/screens/organizations/orgs"]').count(), 0, 'the menu entry left with the plugin');
   await shot('7d-packaged-screen-disabled');
   // Re-enabling asks for the packaged-components grant explicitly, then the same screen comes back, still with zero apps/web change.
-  await nav('/plugins'); await page.locator('tr[data-plugin=organizations]').getByRole('button', { name: 'Manage' }).click();
+  await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
+  await openPlugin('organizations');
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
+  await drawerTab('Lifecycle');
   await page.locator('input[name=gc]').check();
-  await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
+  await page.click('#plugin-enable');
+  // real failures stay visible: on timeout, say what the page showed (note text and the grant checkbox state) instead of a bare selector timeout
+  await page.waitForSelector('#plugin-disable').catch(async (e) => { throw new Error('re-enable of organizations did not reach the enabled state; note=' + JSON.stringify(await page.textContent('#plugin-note').catch(() => null)) + ' gc.checked=' + JSON.stringify(await page.locator('input[name=gc]').isChecked().catch(() => null)) + ' alerts=' + JSON.stringify(await page.locator('[role=alert]').allTextContents()) + ' / ' + e.message); });
   await nav('/screens/organizations/orgs'); await page.waitForSelector('plg-organizations-orgs #org-table');
   await shot('7e-packaged-screen-back');
 
@@ -338,12 +352,10 @@ try {
 
   // ---- Profile plugin components in the user sheet (profile-plugins): the PIN plugin's packaged component ----
   // renders inside the drawer. Enable it with its packaged-components grant (no install step, no sensitive hooks).
-  await nav('/plugins'); await page.locator('tr[data-plugin=auth-digit-code]').getByRole('button', { name: 'Manage' }).click();
-  await page.locator('#plugin-install, #plugin-enable, #plugin-disable').first().waitFor(); await page.waitForTimeout(500);
-  if (await page.locator('#plugin-install').count()) {
-    await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-digit-code/install')), page.click('#plugin-install')]);
-    await page.locator('#plugin-enable').waitFor();
-  }
+  await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
+  await openPlugin('auth-digit-code');
+  await drawerTab('Lifecycle'); await page.waitForTimeout(500);
+  if (await page.locator('#plugin-install-open').count()) { await wizardInstall('auth-digit-code'); await drawerTab('Lifecycle'); }
   await page.locator('input[name=gc]').check(); // allow its packaged UI components in the console
   await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-digit-code/enable') && r.status() < 300), page.click('#plugin-enable')]);
   await page.waitForSelector('#plugin-disable');

@@ -19,6 +19,8 @@ export interface ProfileValueStore {
   resolvePending(tenant: string, subject: string, accept: boolean, actor: string, base?: string): Promise<void>;
   /** How much profile data a plugin holds for a tenant (legacy rows under its key prefix plus filled columns of its tables). Feeds the uninstall confirmation. */
   countForPlugin?(tenant: string, keyPrefix: string, routes: FieldRoute[], ref: 'live' | 'work'): Promise<number>;
+  /** Every stored value of the plugin (legacy generic rows under the key prefix + filled columns of its tables): the server-side uninstall export. */
+  rowsForPlugin?(tenant: string, keyPrefix: string, routes: FieldRoute[], ref: 'live' | 'work'): Promise<{ subject: string; field: string; value: string | number | boolean }[]>;
   /** Moves legacy generic-store rows into a plugin's own tables (declared storage adopted at install/enable). Returns the number of moved values. */
   adopt?(tenant: string, routes: FieldRoute[]): Promise<number>;
 }
@@ -47,6 +49,11 @@ export class MemoryProfileStore implements ProfileValueStore {
     let n = 0;
     for (const [k, vals] of this.rows) if (k.split('/')[1] === t) for (const key of Object.keys(vals)) if (key.startsWith(keyPrefix)) n++;
     return n;
+  }
+  async rowsForPlugin(t: string, keyPrefix: string): Promise<{ subject: string; field: string; value: string | number | boolean }[]> {
+    const out: { subject: string; field: string; value: string | number | boolean }[] = [];
+    for (const [k, vals] of this.rows) if (k.split('/')[1] === t) for (const [key, value] of Object.entries(vals)) if (key.startsWith(keyPrefix)) out.push({ subject: k.split('/').slice(2).join('/'), field: key, value });
+    return out;
   }
   async adopt(): Promise<number> { return 0; }
 }
@@ -176,6 +183,24 @@ export class DoltProfileStore implements ProfileValueStore {
         n += Number((rows as { n: number }[])[0].n);
       }
       return n;
+    });
+  }
+  async rowsForPlugin(t: string, keyPrefix: string, routes: FieldRoute[], ref: 'live' | 'work'): Promise<{ subject: string; field: string; value: string | number | boolean }[]> {
+    return this.v.at(ref === 'live' ? 'main' : this.workBranch(false), async (c) => {
+      const out: { subject: string; field: string; value: string | number | boolean }[] = [];
+      if (await this.tableExists(c, 'profile_field_values')) {
+        const [rows] = await c.query('select subject, field_key, value from profile_field_values where tenant=? and field_key like ? order by subject, field_key', [t, `${keyPrefix}%`]);
+        for (const r of rows as { subject: string; field_key: string; value: unknown }[]) { const v = typeof r.value === 'string' ? (() => { try { return JSON.parse(r.value); } catch { return r.value; } })() : r.value; out.push({ subject: r.subject, field: r.field_key, value: v as string | number | boolean }); }
+      }
+      const byTable = new Map<string, FieldRoute[]>();
+      for (const r of routes) byTable.set(r.table, [...(byTable.get(r.table) ?? []), r]);
+      for (const [table, rs] of byTable) {
+        if (!(await this.tableExists(c, table))) continue;
+        const cols = rs.map((r) => `\`${r.column}\``).join(', ');
+        const [rows] = await c.query(`select subject, ${cols} from \`${table}\` where tenant=?`, [t]);
+        for (const row of rows as Record<string, unknown>[]) for (const r of rs) if (row[r.column] !== null && row[r.column] !== undefined) out.push({ subject: String(row.subject), field: r.fullKey, value: row[r.column] as string | number | boolean });
+      }
+      return out;
     });
   }
   /** The personal branch is cut from the base (main, or the tested branch in a branch test) on first use and reused for later edits against the same base. */
