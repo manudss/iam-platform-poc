@@ -73,7 +73,7 @@ try {
   const path = () => new URL(page.url()).pathname;
   const status = (txt) => page.waitForFunction((t) => [...document.querySelectorAll('[role=status]')].some((e) => e.textContent?.includes(t)), txt);
   const noBanner = async (label) => { const alerts = await page.locator('[role=alert]').allTextContents(); assert.equal(alerts.length, 0, label + ': no alert (got: ' + JSON.stringify(alerts) + ')'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch|admin capability required/.test(t), label + ': no error banner'); };
-  const nav = (p) => page.click(`nav a[data-nav="${p}"]`);
+  const nav = async (p) => { if (await page.locator('#plugin-close').count()) await page.click('#plugin-close'); await page.click(`nav a[data-nav="${p}"]`); }; // the plugin drawer is modal: close it like a user would before using the sidebar
   const setToken = async () => { await page.evaluate(() => { document.querySelector('details.token').open = true; }); await page.fill('input[name=admintoken]', ADMIN_TOKEN); };
   // The plugins page is a card gallery: open a plugin's drawer (its first card button), then its tabs.
   const openPlugin = async (id) => { await page.locator(`.pcard[data-plugin=${id}] button`).first().click(); await page.waitForSelector('.drawer'); };
