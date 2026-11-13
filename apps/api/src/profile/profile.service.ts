@@ -230,4 +230,11 @@ export class ProfileService {
     const routes = cat.filter((f) => f.plugin === pluginId && f.storage === 'table').map((f) => ({ fullKey: f.fullKey, type: f.type, table: f.table!, column: f.column! }));
     return this.store.countForPlugin(tenant, `${pluginId}.`, routes, ref);
   }
+  /** The plugin's stored values, one row per user and field: the uninstall export CSV is generated server side (was: one HTTP call per user from the console). */
+  async pluginValues(tenant: string, pluginId: string, ref: 'live' | 'work' = 'work'): Promise<{ subject: string; field: string; value: string | number | boolean }[]> {
+    if (!this.store.rowsForPlugin) return [];
+    const cat = await this.catalogue(tenant, ref);
+    const routes = cat.filter((f) => f.plugin === pluginId && f.storage === 'table').map((f) => ({ fullKey: f.fullKey, type: f.type, table: f.table!, column: f.column! }));
+    return this.store.rowsForPlugin(tenant, `${pluginId}.`, routes, ref);
+  }
 }

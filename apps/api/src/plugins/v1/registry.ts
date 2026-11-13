@@ -79,6 +79,8 @@ export class PluginRegistry {
   private chosen = new Map<string, string>(); // key: tenant/slot
   /** Replacements that failed at runtime (key tenant/plugin). A faulted replacement keeps its slot but answers every call with a refusal until an admin acts. */
   private faulted = new Set<string>();
+  /** Why each faulted plugin refuses requests (message + time), kept in memory like the flag itself. */
+  private faultInfo = new Map<string, { message: string; at: string }>();
 
   /** Derived inventories (list/menu/screens/profileFields), computed once and cached per tenant (P1 cache):
    * every state or registration mutation clears the whole map - these views are small and recomputed lazily. */
@@ -188,7 +190,7 @@ export class PluginRegistry {
     return this.derive(`list:${tenant}`, () => [...this.impls.values()].map((i) => {
       const s = this.state.get(this.k(tenant, i.manifest.id));
       const base = !!i.manifest.base;
-      return { id: i.manifest.id, name: i.manifest.name, version: i.manifest.version, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), installed: base ? true : !!s?.installed,
+      return { id: i.manifest.id, name: i.manifest.name, description: i.manifest.description ?? '', version: i.manifest.version, publisher: i.manifest.publisher, signed: !!i.manifest.security?.signed, kinds: i.manifest.kinds, base, provides: i.manifest.provides ?? [], extends: i.manifest.extends, requires: i.manifest.requires ?? [], enabled: base ? true : !!s?.enabled, faulted: this.faulted.has(this.k(tenant, i.manifest.id)), fault: this.faultInfo.get(this.k(tenant, i.manifest.id)) ?? null, installed: base ? true : !!s?.installed,
         /** What enabling would ask the admin to grant. Shown in the console before the admin decides. */
         requests: { install: !!(i.manifest.install?.migrations.length || i.manifest.install?.seed?.length), sensitiveHooks: i.manifest.hooks.map((h) => h.name).filter((n) => SENSITIVE_HOOKS.has(n)), uiComponents: !!i.manifest.screens?.some((x) => x.render === 'component') || !!i.manifest.profileComponents?.length },
         grants: s?.grants ?? {},
@@ -285,7 +287,7 @@ export class PluginRegistry {
     st.grants = g; st.enabled = true;
     // A replacement takes over its slots, the base keeps its own settings and data untouched.
     if (p.manifest.extends) for (const s of p.manifest.provides ?? []) this.chosen.set(this.k(tenant, s), id);
-    this.faulted.delete(this.k(tenant, id));
+    this.faulted.delete(this.k(tenant, id)); this.faultInfo.delete(this.k(tenant, id));
     this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.enable', plugin: id });
@@ -328,7 +330,7 @@ export class PluginRegistry {
       if (!v.ok) throw new PluginError('base-config-invalid', `the base plugin ${base.manifest.id} has no valid configuration: ${v.errors.join('; ')}`);
     }
     st.enabled = false;
-    this.faulted.delete(this.k(tenant, id));
+    this.faulted.delete(this.k(tenant, id)); this.faultInfo.delete(this.k(tenant, id));
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
     this.invalidateInventories();
     await this.persist(tenant, id);
@@ -369,7 +371,7 @@ export class PluginRegistry {
     st.installed = false;
     st.enabled = false;
     st.grants = {};
-    this.faulted.delete(this.k(tenant, id));
+    this.faulted.delete(this.k(tenant, id)); this.faultInfo.delete(this.k(tenant, id));
     for (const s of p.manifest.provides ?? []) if (this.chosen.get(this.k(tenant, s)) === id) this.chosen.delete(this.k(tenant, s));
     this.invalidateInventories();
     await this.persist(tenant, id);
@@ -410,6 +412,7 @@ export class PluginRegistry {
   async markFaulted(tenant: string, id: string, detail: string) {
     if (this.faulted.has(this.k(tenant, id))) return;
     this.faulted.add(this.k(tenant, id));
+    this.faultInfo.set(this.k(tenant, id), { message: detail, at: new Date().toISOString() });
     this.invalidateInventories();
     await this.persist(tenant, id);
     this.emitAudit({ tenant, action: 'plugin.fault.closed', plugin: id, detail });
