@@ -222,7 +222,7 @@ try {
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();
   await status('personal branch');
   await page.waitForSelector('#plugins .pcard'); assert.equal(path(), '/plugins/auth-password-lockout');
-  await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
+  await drawerTab('Settings'); await page.waitForSelector('#plugin-form'); await noBanner('plugin deep link after refresh'); await shot('7b-plugin-deep-link-after-refresh');
 
   // ---- packaged plugin screen (constat 4 acceptance): the Organizations page ships in the plugin's signed folder ----
   // The console has no Organizations page of its own: the sidebar entry comes from the plugin manifest and the
