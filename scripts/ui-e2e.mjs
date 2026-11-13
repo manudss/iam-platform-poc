@@ -80,9 +80,9 @@ try {
   const drawerTab = async (label) => { await page.click(`.drawer .dtabs button:has-text("${label}")`); };
   // Install goes through the wizard (1 what it asks, 2 your permissions, 3 recap + Install).
   const wizardInstall = async (id) => {
-    await page.click('#plugin-install-open'); await page.click('.modal .modal-foot button:has-text("Continuer")');
+    await page.click('#plugin-install-open'); await page.click('.modal .modal-foot button:has-text("Continue")');
     if (await page.locator('.modal input[name=gi]').count()) await page.locator('.modal input[name=gi]').check();
-    await Promise.all([page.waitForResponse((r) => r.url().includes(`/plugins/${id}/install`)), (async () => { await page.click('.modal .modal-foot button:has-text("Continuer")'); await page.click('#plugin-install'); })()]);
+    await Promise.all([page.waitForResponse((r) => r.url().includes(`/plugins/${id}/install`)), (async () => { await page.click('.modal .modal-foot button:has-text("Continue")'); await page.click('#plugin-install'); })()]);
     await page.waitForFunction(() => /Installed/.test(document.querySelector('#plugin-note')?.textContent ?? ''));
   };
   // the core login form: wrong password first when asked, then the right one; returns to the console
@@ -195,16 +195,16 @@ try {
   await page.waitForFunction(() => location.pathname === '/plugins/auth-password-lockout');
   // Every action re-opens the plugin afterwards and rebuilds the form from the server, so wait for that re-open (the GET of
   // the form that follows the action) before typing or asserting: filling earlier races the rebuild and the save would send defaults.
-  await drawerTab('Cycle de vie');
+  await drawerTab('Lifecycle');
   await wizardInstall('auth-password-lockout');
   const formGet = () => page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/form') && r.status() === 200);
-  await formGet(); await drawerTab('Réglages'); await page.waitForSelector('#plugin-form');
+  await formGet(); await drawerTab('Settings'); await page.waitForSelector('#plugin-form');
   await page.locator('label[data-field=maxFailures] input').fill('3');
   await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-password-lockout/settings') && r.request().method() === 'PUT'), page.click('#plugin-save')]);
   await page.waitForFunction(() => /saved|Saved|configured/i.test(document.querySelector('#plugin-note')?.textContent ?? ''));
   await formGet();
   assert.equal(await page.locator('label[data-field=maxFailures] input').inputValue(), '3', 'the saved value comes back from the API');
-  await drawerTab('Cycle de vie');
+  await drawerTab('Lifecycle');
   await page.locator('[data-hook="auth.authenticate"]').check(); await page.click('#plugin-enable');
   await page.waitForSelector('#plugin-disable');
   await noBanner('enabled'); await shot('6-plugin-enabled');
@@ -231,9 +231,9 @@ try {
   await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
   await openPlugin('organizations');
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
-  await drawerTab('Cycle de vie'); await page.waitForTimeout(500);
+  await drawerTab('Lifecycle'); await page.waitForTimeout(500);
   if (await page.locator('#plugin-install-open').count()) await wizardInstall('organizations');
-  await drawerTab('Cycle de vie');
+  await drawerTab('Lifecycle');
   await page.locator('input[name=gc]').waitFor(); await page.locator('input[name=gc]').check();
   await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
   await noBanner('organizations enabled'); await shot('7b2-organizations-enabled');
@@ -256,7 +256,7 @@ try {
   await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
   await openPlugin('organizations');
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
-  await drawerTab('Cycle de vie');
+  await drawerTab('Lifecycle');
   await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
   await page.goto(`${BASE}/screens/organizations/orgs`); // the user session survives the full reload
   await page.waitForSelector('header .who');
@@ -272,7 +272,7 @@ try {
   await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
   await openPlugin('organizations');
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
-  await drawerTab('Cycle de vie');
+  await drawerTab('Lifecycle');
   await page.locator('input[name=gc]').check();
   await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
   await nav('/screens/organizations/orgs'); await page.waitForSelector('plg-organizations-orgs #org-table');
@@ -351,8 +351,8 @@ try {
   // renders inside the drawer. Enable it with its packaged-components grant (no install step, no sensitive hooks).
   await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
   await openPlugin('auth-digit-code');
-  await drawerTab('Cycle de vie'); await page.waitForTimeout(500);
-  if (await page.locator('#plugin-install-open').count()) { await wizardInstall('auth-digit-code'); await drawerTab('Cycle de vie'); }
+  await drawerTab('Lifecycle'); await page.waitForTimeout(500);
+  if (await page.locator('#plugin-install-open').count()) { await wizardInstall('auth-digit-code'); await drawerTab('Lifecycle'); }
   await page.locator('input[name=gc]').check(); // allow its packaged UI components in the console
   await Promise.all([page.waitForResponse((r) => r.url().includes('/plugins/auth-digit-code/enable') && r.status() < 300), page.click('#plugin-enable')]);
   await page.waitForSelector('#plugin-disable');

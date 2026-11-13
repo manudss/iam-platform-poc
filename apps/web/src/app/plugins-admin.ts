@@ -51,20 +51,20 @@ export class PluginsAdmin {
   protected grantHooks: Record<string, boolean> = {};
 
   /** Family label from the manifest kinds (directory/profile/auth-method…), as in the validated mockup. */
-  private static readonly FAMILY_ORDER = ['Authentification', 'Profil & annuaire', 'Notifications', 'Workflows', 'Connecteurs & SSO', 'Politiques & risque', 'Interfaces', 'Autres'];
+  private static readonly FAMILY_ORDER = ['Authentication', 'Profile & directory', 'Notifications', 'Workflows', 'Connectors & SSO', 'Policies & risk', 'Interfaces', 'Other'];
   protected family(p: PluginInfo): string {
     const k = p.kinds;
-    if (k.includes('auth-method') || k.includes('authn')) return 'Authentification';
-    if (k.includes('directory') || k.includes('profile')) return 'Profil & annuaire';
+    if (k.includes('auth-method') || k.includes('authn')) return 'Authentication';
+    if (k.includes('directory') || k.includes('profile')) return 'Profile & directory';
     if (k.includes('notify') || k.includes('mail')) return 'Notifications';
     if (k.includes('workflow')) return 'Workflows';
-    if (k.includes('connector') || k.includes('sso')) return 'Connecteurs & SSO';
-    if (k.includes('policy') || k.includes('risk')) return 'Politiques & risque';
+    if (k.includes('connector') || k.includes('sso')) return 'Connectors & SSO';
+    if (k.includes('policy') || k.includes('risk')) return 'Policies & risk';
     if (k.includes('ui')) return 'Interfaces';
-    return 'Autres';
+    return 'Other';
   }
   protected stateLabel(p: PluginInfo): string {
-    return p.base ? 'Base · toujours actif' : p.faulted ? 'En défaut' : p.enabled ? 'Activé' : p.installed ? 'Installé' : 'Non installé';
+    return p.base ? 'Base · always on' : p.faulted ? 'Faulted' : p.enabled ? 'Enabled' : p.installed ? 'Installed' : 'Not installed';
   }
   private matches(p: PluginInfo): boolean {
     if (this.hideBase && p.base) return false;
@@ -78,7 +78,7 @@ export class PluginsAdmin {
   }
   /** The grouped, filtered gallery. */
   protected readonly grouped = computed(() => {
-    const key = (p: PluginInfo) => this.grouping === 'family' ? this.family(p) : this.grouping === 'slot' ? (p.provides[0] ? `Slot ${p.provides[0]}` : 'Sans slot') : this.grouping === 'publisher' ? (p.publisher || 'Inconnu') : this.stateLabel(p);
+    const key = (p: PluginInfo) => this.grouping === 'family' ? this.family(p) : this.grouping === 'slot' ? (p.provides[0] ? `Slot ${p.provides[0]}` : 'No slot') : this.grouping === 'publisher' ? (p.publisher || 'Inconnu') : this.stateLabel(p);
     const map = new Map<string, PluginInfo[]>();
     for (const p of this.plugins()) if (this.matches(p)) { const k = key(p); if (!map.has(k)) map.set(k, []); map.get(k)!.push(p); }
     const order = this.grouping === 'family' ? PluginsAdmin.FAMILY_ORDER : undefined;
@@ -111,9 +111,9 @@ export class PluginsAdmin {
   /** What the admin already granted this plugin (the permissions list of the lifecycle tab). */
   protected grantedPermissions(p: PluginInfo): { label: string; detail: string }[] {
     const out: { label: string; detail: string }[] = [];
-    if (p.grants.install) out.push({ label: "Migrations d'installation", detail: 'Tables préfixées par son id, créées à l\'installation.' });
-    for (const h of p.grants.hooks ?? []) out.push({ label: `Hook sensible : ${h}`, detail: 'Reçoit l\'événement à chaque appel.' });
-    if (p.grants.uiComponents) out.push({ label: 'Composants UI packagés', detail: 'Peut afficher ses écrans et composants dans la console.' });
+    if (p.grants.install) out.push({ label: 'Install migrations', detail: 'Tables prefixed with its id, created at install.' });
+    for (const h of p.grants.hooks ?? []) out.push({ label: `Sensitive hook: ${h}`, detail: 'Receives the event on every call.' });
+    if (p.grants.uiComponents) out.push({ label: 'Packaged UI components', detail: 'Can show its screens and components in the console.' });
     return out;
   }
   /** The change staged on the working branch for this plugin, when any (the drawer shows it as a warning). */

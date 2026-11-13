@@ -51,7 +51,8 @@ button.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad
 .pending .pend-item b { margin-right: .3rem; }
 .pending .pend-item small { color: var(--muted); }
 .pending .review-link { margin-top: auto; }
-button.ghost { background: transparent; }
+button.ghost { background: transparent; color: var(--link); border-color: var(--field-line); }
+button.ghost:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
 @media (max-width: 70rem) {
   .gallery-wrap { flex-direction: column; }
   .pending { width: 100%; position: static; }
@@ -68,13 +69,13 @@ button.ghost { background: transparent; }
 
 /* Detail drawer with tabs (validated mockup, sheet A) */
 .drawer-veil { position: fixed; inset: 0; background: var(--scrim); z-index: 10; }
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(30rem, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 11; box-shadow: -8px 0 30px var(--shadow-color); display: flex; flex-direction: column; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(34rem, 100vw); background: var(--panel); border-left: 1px solid var(--line); z-index: 11; box-shadow: -8px 0 30px var(--shadow-color); display: flex; flex-direction: column; }
 .drawer .dhead { padding: 1rem 1.2rem; border-bottom: 1px solid var(--line); display: flex; gap: .8rem; align-items: flex-start; }
 .drawer .dhead .mono { width: 2rem; height: 2rem; border-radius: .5rem; background: var(--accent-soft); color: var(--accent-dark); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
 .drawer .dhead .dhead-t { flex: 1; }
 .drawer .dhead .meta { color: var(--muted); font-size: .78rem; }
 .drawer .dtabs { display: flex; gap: 2px; padding: 0 1.2rem; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.drawer .dtabs button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: .55rem .75rem; font-size: .82rem; color: var(--muted); white-space: nowrap; }
+.drawer .dtabs button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: .55rem .5rem; font-size: .8rem; color: var(--muted); white-space: nowrap; }
 .drawer .dtabs button.on { color: var(--ink); font-weight: 700; border-bottom-color: var(--accent); }
 .drawer .dbody { padding: 1.1rem 1.2rem; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: .9rem; }
 .section-t { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; margin: 0 0 .4rem; }
@@ -105,3 +106,11 @@ button.ghost { background: transparent; }
 .modal .export-row .perm-t { flex: 1; }
 .modal .export-row .perm-t small { display: block; color: var(--muted); }
 .modal .confirm-label { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; margin-top: .6rem; }
+.toolbar label.filter { margin: 0; flex-direction: row; }
+.toolbar select { width: auto; }
+.toolbar input[type=checkbox] { width: auto; margin: 0; }
+.pcard .head { padding-right: 6.5rem; }
+.pend-line { margin-bottom: .35rem; }
+.msg:empty { display: none; }
+.confirm-label b { display: inline; }
+.confirm-label { display: block; }

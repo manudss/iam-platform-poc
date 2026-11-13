@@ -3,25 +3,25 @@
     <div class="banner" role="alert">
       <span class="fico">!</span>
       <div class="banner-body">
-        <b>{{ faulted().length === 1 ? '1 plugin en défaut : ' + faulted()[0].name + '.' : faulted().length + ' plugins en défaut.' }}</b>
-        <small>Il refuse ses demandes (fail-closed) ; la base ne reprend pas la main automatiquement. Rétablissement = action admin explicite, tracée.</small>
+        <b>{{ faulted().length === 1 ? '1 plugin faulted: ' + faulted()[0].name + '.' : faulted().length + ' plugins faulted.' }}</b>
+        <small>It refuses requests (fail-closed); the base does not take over automatically. Recovery is an explicit, traced admin action.</small>
       </div>
-      <button type="button" class="danger" id="fault-open" (click)="treat(faulted()[0])">Traiter</button>
+      <button type="button" class="danger" id="fault-open" (click)="treat(faulted()[0])">Review</button>
     </div>
   }
   <div class="toolbar">
-    <input class="search" id="plugin-search" placeholder="Rechercher un plugin, un slot, un éditeur…" [(ngModel)]="search" />
-    <label class="filter">Regrouper par :
+    <input class="search" id="plugin-search" placeholder="Search a plugin, slot or publisher…" [(ngModel)]="search" />
+    <label class="filter">Group by:
       <select id="plugin-grouping" [(ngModel)]="grouping">
-        <option value="family">Famille</option><option value="slot">Slot</option><option value="state">Statut</option><option value="publisher">Éditeur</option>
+        <option value="family">Family</option><option value="slot">Slot</option><option value="state">Status</option><option value="publisher">Publisher</option>
       </select>
     </label>
     <select class="filter" id="plugin-state" [(ngModel)]="stateFilter">
-      <option value="all">État : tous</option><option value="enabled">Activés</option><option value="installed">Installés</option><option value="not-installed">Non installés</option><option value="faulted">En défaut</option><option value="pending">Modifiés non publiés</option>
+      <option value="all">State: all</option><option value="enabled">Enabled</option><option value="installed">Installed</option><option value="not-installed">Not installed</option><option value="faulted">Faulted</option><option value="pending">Changed, not applied</option>
     </select>
-    <label class="hint filter"><input type="checkbox" id="plugin-hide-base" [(ngModel)]="hideBase" /> Masquer les bases techniques</label>
+    <label class="hint filter"><input type="checkbox" id="plugin-hide-base" [(ngModel)]="hideBase" /> Hide base plugins</label>
     <span class="spacer"></span>
-    <button type="button" class="secondary" id="plugins-refresh" (click)="refreshPlugins()">⟳ Rafraîchir le catalogue</button>
+    <button type="button" class="secondary" id="plugins-refresh" (click)="refreshPlugins()">⟳ Refresh catalogue</button>
   </div>
 
   <div class="gallery-wrap">
@@ -33,37 +33,37 @@
             <div class="pcard" [class.faulted]="p.faulted" [attr.data-plugin]="p.id">
               <span class="state"><span class="chip" [class.ok]="p.base || p.enabled" [class.bad]="p.faulted">{{ stateLabel(p) }}</span></span>
               <div class="head"><span class="mono">{{ p.name.charAt(0) }}</span>
-                <div><h3>{{ p.name }}</h3><div class="meta">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signature vérifiée ✓ }@if (p.extends) { · extends {{ p.extends }} }</div></div>
+                <div><h3>{{ p.name }}</h3><div class="meta">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signed ✓ }@if (p.extends) { · extends {{ p.extends }} }</div></div>
               </div>
               <div class="chips">
                 @for (k of p.kinds; track k) { <span class="chip kind">{{ k }}</span> }
                 @for (s of p.provides; track s) { <span class="chip slot">slot {{ s }}</span> }
-                @if (pendingIds().has(p.id)) { <span class="chip warn" [attr.data-pending]="p.id">modifié sur la branche</span> }
+                @if (pendingIds().has(p.id)) { <span class="chip warn" [attr.data-pending]="p.id">changed on branch</span> }
               </div>
               @if (p.faulted && p.fault) { <div class="hint">{{ p.fault.message }}</div> }
               @else if (p.description) { <div class="hint">{{ p.description }}</div> }
               <div class="foot">
-                @if (!p.base && !p.installed) { <button type="button" (click)="open(p)">Installer…</button> }
-                @else if (!p.base && p.installed && !p.enabled) { <button type="button" (click)="open(p)">Activer…</button> }
-                <button type="button" class="ghost" (click)="open(p)">Détails</button>
+                @if (!p.base && !p.installed) { <button type="button" (click)="open(p)">Install…</button> }
+                @else if (!p.base && p.installed && !p.enabled) { <button type="button" (click)="open(p)">Enable…</button> }
+                <button type="button" class="ghost" (click)="open(p)">Details</button>
               </div>
             </div>
           }
         </div>
       }
-      @if (!grouped().length) { <p class="hint">Aucun plugin ne correspond.</p> }
+      @if (!grouped().length) { <p class="hint">No plugin matches.</p> }
     </div>
 
     @if (pending().length) {
       <aside class="pending" id="pending-panel">
-        <b>En attente sur « {{ pendingBranch() }} »</b>
-        <span class="hint">{{ pending().length }} plugin{{ pending().length > 1 ? 's' : '' }} modifié{{ pending().length > 1 ? 's' : '' }} non appliqué{{ pending().length > 1 ? 's' : '' }} à main</span>
+        <b>Pending on “{{ pendingBranch() }}”</b>
+        <span class="hint">{{ pending().length }} plugin{{ pending().length > 1 ? 's' : '' }} changed, not applied to main yet</span>
         @for (it of pending(); track it.id) {
           <div class="pend-item" [attr.data-pending-plugin]="it.id">
-            @for (c of it.changes; track c.kind) { <b>{{ c.kind === 'settings' ? 'Réglage' : c.kind === 'install' ? 'Installer' : c.kind === 'uninstall' ? 'Désinstaller' : c.kind === 'enable' ? 'Activer' : 'Désactiver' }}</b> <span>{{ it.name }}<small> · {{ c.detail }}</small></span> }
+            @for (c of it.changes; track c.kind) { <div class="pend-line"><b>{{ c.kind === 'settings' ? 'Settings' : c.kind === 'install' ? 'Install' : c.kind === 'uninstall' ? 'Uninstall' : c.kind === 'enable' ? 'Enable' : 'Disable' }}</b> <span>{{ it.name }}<small> · {{ c.detail }}</small></span></div> }
           </div>
         }
-        <a class="review-link" routerLink="/review">Ouvrir Review &amp; Apply ({{ pending().length }})</a>
+        <a class="review-link" routerLink="/review">Open Review &amp; Apply ({{ pending().length }})</a>
       </aside>
     }
   </div>
@@ -74,27 +74,27 @@
     <div class="dhead">
       <span class="mono">{{ p.name.charAt(0) }}</span>
       <div class="dhead-t"><b>{{ p.name }}</b>
-        <div class="meta hint">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signature vérifiée ✓ }@if (p.extends) { · extends {{ p.extends }} }</div>
+        <div class="meta hint">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signed ✓ }@if (p.extends) { · extends {{ p.extends }} }</div>
       </div>
-      <button type="button" class="ghost" id="plugin-close" aria-label="Fermer" (click)="close()">✕</button>
+      <button type="button" class="ghost" id="plugin-close" aria-label="Close" (click)="close()">✕</button>
     </div>
     <div class="dtabs">
-      <button type="button" [class.on]="tab()==='apercu'" (click)="tab.set('apercu')">Aperçu</button>
-      <button type="button" [class.on]="tab()==='reglages'" (click)="tab.set('reglages')">Réglages</button>
-      <button type="button" [class.on]="tab()==='cycle'" (click)="tab.set('cycle')">Cycle de vie &amp; permissions</button>
-      <button type="button" [class.on]="tab()==='deps'" (click)="tab.set('deps')">Dépendances</button>
-      <button type="button" [class.on]="tab()==='activite'" (click)="tab.set('activite')">Activité</button>
+      <button type="button" [class.on]="tab()==='apercu'" (click)="tab.set('apercu')">Overview</button>
+      <button type="button" [class.on]="tab()==='reglages'" (click)="tab.set('reglages')">Settings</button>
+      <button type="button" [class.on]="tab()==='cycle'" (click)="tab.set('cycle')">Lifecycle &amp; permissions</button>
+      <button type="button" [class.on]="tab()==='deps'" (click)="tab.set('deps')">Dependencies</button>
+      <button type="button" [class.on]="tab()==='activite'" (click)="tab.set('activite')">Activity</button>
     </div>
     <div class="dbody">
     @if (tab()==='apercu') {
       @if (p.faulted) {
         <div class="banner" role="alert"><span class="fico">!</span>
-          <div class="banner-body"><b>{{ p.fault?.message || 'Le plugin refuse ses demandes (fail-closed).' }}</b>
-            <small>La base ne reprend pas la main automatiquement. Rétablissement = action admin explicite, tracée (onglet Cycle de vie).</small></div>
+          <div class="banner-body"><b>{{ p.fault?.message || 'The plugin refuses requests (fail-closed).' }}</b>
+            <small>The base does not take over automatically. Recovery is an explicit, traced admin action (Lifecycle tab).</small></div>
         </div>
       }
       @if (pendingChange(p); as pc) {
-        <div class="pend-note" role="note"><b>Changement en attente</b> : @for (c of pc.changes; track c.kind) { {{ c.detail }}@if (!$last) {, } } — réglé sur la branche <b>{{ pendingBranch() }}</b>. Effectif après Review &amp; Apply.</div>
+        <div class="pend-note" role="note"><b>Pending change on <i>{{ pendingBranch() }}</i></b><br>@for (c of pc.changes; track c.kind) { {{ c.detail }}@if (!$last) {; } }. Effective on main after Review &amp; Apply.</div>
       }
       @if (p.description) { <p>{{ p.description }}</p> }
       <div class="chips">
@@ -113,16 +113,16 @@
     }
     @if (tab()==='cycle' && p.faulted) {
       <div>
-        <p class="section-t">Rétablissement (action tracée)</p>
-        <div class="perm"><div class="perm-t"><b>Réactiver le remplacement</b><small>Efface le défaut, conserve son état. À choisir si l'erreur est passagère.</small></div>
-          <button type="button" [disabled]="session.branch()==='main'" id="plugin-reenable" (click)="enable()">Réactiver</button></div>
-        <div class="perm"><div class="perm-t"><b>Revenir à la base</b><small>Le slot est servi par la base avec sa propre configuration ; l'état du remplacement est conservé mais plus appliqué.</small></div>
-          <button type="button" class="secondary" [disabled]="session.branch()==='main'" id="plugin-fallback" (click)="disable()">Revenir à la base</button></div>
+        <p class="section-t">Recovery (traced action)</p>
+        <div class="perm"><div class="perm-t"><b>Re-enable the replacement</b><small>Clears the fault and keeps its state. Pick this if the error was temporary.</small></div>
+          <button type="button" [disabled]="session.branch()==='main'" id="plugin-reenable" (click)="enable()">Re-enable</button></div>
+        <div class="perm"><div class="perm-t"><b>Return to base</b><small>The slot is served by the base with its own configuration; the replacement's state is kept but no longer applied.</small></div>
+          <button type="button" class="secondary" [disabled]="session.branch()==='main'" id="plugin-fallback" (click)="disable()">Return to base</button></div>
       </div>
     }
     @if (tab()==='cycle' && !p.base && !p.installed) {
       <p>Installing runs this plugin's own migrations (tables prefixed with its id). The install wizard asks for each capability explicitly.</p>
-      <button type="button" [disabled]="session.branch()==='main'" id="plugin-install-open" (click)="wizardStep.set(1)">Installer…</button>
+      <button type="button" [disabled]="session.branch()==='main'" id="plugin-install-open" (click)="wizardStep.set(1)">Install…</button>
     }
     @if (tab()==='reglages' && model(); as m) {
       <form (ngSubmit)="save()" id="plugin-form">
@@ -165,73 +165,73 @@
     }
     @if (tab()==='cycle' && !p.base && grantedPermissions(p).length) {
       <div>
-        <p class="section-t">Permissions accordées</p>
+        <p class="section-t">Granted permissions</p>
         @for (g of grantedPermissions(p); track g.label) {
           <div class="perm"><span class="box">✓</span><div class="perm-t"><b>{{ g.label }}</b><small>{{ g.detail }}</small></div></div>
         }
       </div>
     }
     @if (tab()==='deps') {
-      @if (p.extends) { <div class="perm"><div class="perm-t"><b>Étend</b><small>{{ p.extends }} (remplace son plugin de base sur ses slots)</small></div></div> }
-      @for (s of p.provides; track s) { <div class="perm"><div class="perm-t"><b>Fournit le slot</b><small>{{ s }}</small></div></div> }
-      @for (r of p.requires ?? []; track r) { <div class="perm"><div class="perm-t"><b>Requiert</b><small>{{ r }}</small></div></div> }
-      @if (!p.extends && !p.provides.length && !(p.requires ?? []).length) { <p class="hint">Aucune dépendance déclarée.</p> }
+      @if (p.extends) { <div class="perm"><div class="perm-t"><b>Extends</b><small>{{ p.extends }} (replaces its base plugin on its slots)</small></div></div> }
+      @for (s of p.provides; track s) { <div class="perm"><div class="perm-t"><b>Provides slot</b><small>{{ s }}</small></div></div> }
+      @for (r of p.requires ?? []; track r) { <div class="perm"><div class="perm-t"><b>Requires</b><small>{{ r }}</small></div></div> }
+      @if (!p.extends && !p.provides.length && !(p.requires ?? []).length) { <p class="hint">No dependency declared.</p> }
     }
     @if (tab()==='activite') {
-      <p class="hint">Chaque transition de cycle de vie publie un événement sur le bus : suivez-les dans l'observateur d'événements.</p>
+      <p class="hint">Every lifecycle transition publishes an event on the bus: follow them in the event observer.</p>
     }
     <p class="msg" role="status" id="plugin-note">{{ note() }}</p>
     </div>
     </div>
     @if (wizardStep(); as step) {
       <div class="drawer-veil veil-top" (click)="wizardStep.set(0)"></div>
-      <div class="modal" role="dialog" aria-modal="true" aria-label="Installation">
-        <b class="modal-t">Installer « {{ p.name }} » <span class="hint">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signature vérifiée ✓ }</span></b>
-        <div class="wiz"><div class="w" [class.on]="step===1">1 · Ce qu'il demande</div><div class="w" [class.on]="step===2">2 · Vos permissions</div><div class="w" [class.on]="step===3">3 · Récapitulatif</div></div>
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Install">
+        <b class="modal-t">Install “{{ p.name }}” <span class="hint">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signed ✓ }</span></b>
+        <div class="wiz"><div class="w" [class.on]="step===1">1 · What it asks</div><div class="w" [class.on]="step===2">2 · Your permissions</div><div class="w" [class.on]="step===3">3 · Summary</div></div>
         @if (step === 1) {
-          <p class="hint">Une déclaration ne vaut jamais autorisation. Vous accordez chaque capacité une à une à l'étape suivante.</p>
-          @if (p.requests.install) { <div class="perm"><div class="perm-t"><b>Créer ses tables</b><small>Migrations d'installation, tables préfixées par son id. Aucune suppression.</small></div></div> }
-          @for (h of p.requests.sensitiveHooks; track h) { <div class="perm"><div class="perm-t"><b>Hook sensible : {{ h }}</b><small>Reçoit l'événement à chaque appel.</small></div></div> }
-          @if (p.requests.uiComponents) { <div class="perm"><div class="perm-t"><b>Écrans packagés (composant UI)</b><small>Exécute du code du plugin dans la console.</small></div></div> }
-          @if (!p.requests.install && !p.requests.sensitiveHooks.length && !p.requests.uiComponents) { <p class="hint">Ce plugin ne demande aucune capacité particulière.</p> }
+          <p class="hint">A declaration is never a permission. You grant each capability one by one in the next step.</p>
+          @if (p.requests.install) { <div class="perm"><div class="perm-t"><b>Create its tables</b><small>Install migrations, tables prefixed with its id. Nothing is deleted.</small></div></div> }
+          @for (h of p.requests.sensitiveHooks; track h) { <div class="perm"><div class="perm-t"><b>Sensitive hook: {{ h }}</b><small>Receives the event on every call.</small></div></div> }
+          @if (p.requests.uiComponents) { <div class="perm"><div class="perm-t"><b>Packaged screens (UI component)</b><small>Runs plugin code in the console.</small></div></div> }
+          @if (!p.requests.install && !p.requests.sensitiveHooks.length && !p.requests.uiComponents) { <p class="hint">This plugin asks for no particular capability.</p> }
         }
         @if (step === 2) {
-          @if (p.requests.install) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> <span><b>Créer ses tables</b><small>Accorder les migrations d'installation.</small></span></label></div> }
-          @for (h of p.requests.sensitiveHooks; track h) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" [attr.data-hook]="h" [ngModelOptions]="{ standalone: true }" [(ngModel)]="grantHooks[h]" /> <span><b>Hook sensible : {{ h }}</b><small>L'activation est refusée tant qu'il n'est pas tranché.</small></span></label></div> }
-          @if (p.requests.uiComponents) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" name="gc" [(ngModel)]="grantComponents" /> <span><b>Écrans packagés</b><small>Allow its packaged UI components to run in the console. Refusé : ses écrans restent visibles, le composant est masqué.</small></span></label></div> }
+          @if (p.requests.install) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> <span><b>Create its tables</b><small>Grant the install migrations.</small></span></label></div> }
+          @for (h of p.requests.sensitiveHooks; track h) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" [attr.data-hook]="h" [ngModelOptions]="{ standalone: true }" [(ngModel)]="grantHooks[h]" /> <span><b>Sensitive hook: {{ h }}</b><small>Enabling is refused until this is decided.</small></span></label></div> }
+          @if (p.requests.uiComponents) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" name="gc" [(ngModel)]="grantComponents" /> <span><b>Packaged screens</b><small>Allow its packaged UI components to run in the console. If refused, its screens stay visible and the component is hidden.</small></span></label></div> }
         }
         @if (step === 3) {
-          <p class="hint">L'installation est réglée sur la branche <b>{{ pendingBranch() }}</b> ; effective après Review &amp; Apply.</p>
+          <p class="hint">The install is staged on branch <b>{{ pendingBranch() }}</b>; effective after Review &amp; Apply.</p>
           @if (grants().install || grants().uiComponents || grants().hooks?.length) {
-            @if (grants().install) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Migrations d'installation</b></div></div> }
-            @for (h of grants().hooks ?? []; track h) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Hook sensible : {{ h }}</b></div></div> }
-            @if (grants().uiComponents) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Écrans packagés</b></div></div> }
-          } @else { <p class="hint">Aucune capacité accordée.</p> }
+            @if (grants().install) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Install migrations</b></div></div> }
+            @for (h of grants().hooks ?? []; track h) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Sensitive hook: {{ h }}</b></div></div> }
+            @if (grants().uiComponents) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Packaged screens</b></div></div> }
+          } @else { <p class="hint">No capability granted.</p> }
         }
         <div class="modal-foot">
-          @if (step > 1) { <button type="button" class="secondary" (click)="wizardGo(-1)">← Retour</button> }
+          @if (step > 1) { <button type="button" class="secondary" (click)="wizardGo(-1)">← Back</button> }
           <span class="spacer"></span>
-          <button type="button" class="secondary" (click)="wizardStep.set(0)">Annuler</button>
-          @if (step < 3) { <button type="button" (click)="wizardGo(1)">Continuer →</button> }
-          @else { <button type="button" id="plugin-install" [disabled]="session.branch()==='main'" (click)="install()">Installer</button> }
+          <button type="button" class="secondary" (click)="wizardStep.set(0)">Cancel</button>
+          @if (step < 3) { <button type="button" (click)="wizardGo(1)">Continue →</button> }
+          @else { <button type="button" id="plugin-install" [disabled]="session.branch()==='main'" (click)="install()">Install</button> }
         </div>
       </div>
     }
     @if (confirmingUninstall()) {
       <div class="drawer-veil veil-top" (click)="confirmingUninstall.set(false)"></div>
-      <div class="modal modal-danger" role="alertdialog" aria-modal="true" aria-label="Désinstallation">
-        <b class="modal-t danger-t">Désinstaller « {{ p.name }} » ?</b>
-        <p class="hint">Le plugin est désactivé. La désinstallation <b>supprime ses tables et les {{ heldValues() === null ? 'valeurs stockées' : heldValues() + ' valeur(s) stockée(s)' }}</b> pour tous les utilisateurs. Irréversible : l'opération s'applique au prochain Apply.</p>
+      <div class="modal modal-danger" role="alertdialog" aria-modal="true" aria-label="Uninstall">
+        <b class="modal-t danger-t">Uninstall “{{ p.name }}”?</b>
+        <p class="hint">The plugin is disabled. Uninstalling <b>deletes its tables and the {{ heldValues() === null ? 'stored values' : heldValues() + ' stored value(s)' }}</b> for all users. Irreversible: it takes effect at the next Apply.</p>
         @if (p.profileFields?.length) {
-          <div class="export-row"><span class="export-ico">↓</span><div class="perm-t"><b>{{ p.id }}-export.csv</b><small>une ligne par utilisateur et champ · généré côté serveur</small></div>
-            <button type="button" class="secondary" id="plugin-export" (click)="exportCsv()" [disabled]="busyExport()">Télécharger</button></div>
+          <div class="export-row"><span class="export-ico">↓</span><div class="perm-t"><b>{{ p.id }}-export.csv</b><small>one row per user and field · generated server-side</small></div>
+            <button type="button" class="secondary" id="plugin-export" (click)="exportCsv()" [disabled]="busyExport()">Download</button></div>
         }
-        <label class="confirm-label">Tapez <b>{{ p.id }}</b> pour confirmer
+        <label class="confirm-label">Type <b>{{ p.id }}</b> to confirm
           <input id="plugin-uninstall-confirm-text" [ngModelOptions]="{ standalone: true }" [(ngModel)]="confirmText" [placeholder]="p.id" autocomplete="off" />
         </label>
         <div class="modal-foot"><span class="spacer"></span>
-          <button type="button" class="secondary" (click)="confirmingUninstall.set(false)">Annuler</button>
-          <button type="button" class="danger" id="plugin-uninstall-confirm" [disabled]="confirmText !== p.id" (click)="confirmUninstall()">Désinstaller définitivement</button>
+          <button type="button" class="secondary" (click)="confirmingUninstall.set(false)">Cancel</button>
+          <button type="button" class="danger" id="plugin-uninstall-confirm" [disabled]="confirmText !== p.id" (click)="confirmUninstall()">Uninstall permanently</button>
         </div>
       </div>
     }

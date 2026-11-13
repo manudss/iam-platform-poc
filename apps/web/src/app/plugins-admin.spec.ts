@@ -60,16 +60,16 @@ describe('PluginsAdmin component', () => {
     fx.componentRef.setInput('api', new ApiClient('acme-demo', f));
     fx.detectChanges(); await settle(fx);
     const el = fx.nativeElement as HTMLElement;
-    expect(el.querySelector('[data-plugin=risk-geo]')?.textContent).toContain('Installé');
+    expect(el.querySelector('[data-plugin=risk-geo]')?.textContent).toContain('Installed');
     (el.querySelector('[data-plugin=risk-geo] button') as HTMLButtonElement).click();
     await settle(fx);
     const tabs = () => el.querySelectorAll('.drawer .dtabs button');
-    (tabs()[1] as HTMLButtonElement).click(); // Réglages
+    (tabs()[1] as HTMLButtonElement).click(); // Settings
     await settle(fx);
     expect(el.querySelector('[data-field=maxDepth] input[type=number]')).toBeTruthy();
     expect(el.querySelector('[data-field=apiKey] input[type=password]')).toBeTruthy();
     expect(el.querySelector('[data-field=extra]')).toBeNull(); // visibleIf: mode is not b
-    (tabs()[2] as HTMLButtonElement).click(); // Cycle de vie & permissions
+    (tabs()[2] as HTMLButtonElement).click(); // Lifecycle & permissions
     await settle(fx);
     expect(el.textContent).toContain('risk.score');
     expect(el.textContent).toContain('packaged UI components');
