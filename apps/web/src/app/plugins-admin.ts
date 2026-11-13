@@ -101,7 +101,8 @@ export class PluginsAdmin {
   }
   protected async open(p: PluginInfo, announce = true) {
     if (announce) this.opened.emit(p.id);
-    this.selected.set(p); this.tab.set('apercu'); this.note.set(''); this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
+    const same = this.selected()?.id === p.id; this.selected.set(p); this.tab.set('apercu'); if (!same) this.note.set(''); // re-opening the same plugin after an action keeps its result message
+    this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
       this.edited = Object.fromEntries(m.groups.flatMap((g) => g.fields).map((f) => [f.key, f.type === 'list' && Array.isArray(f.value) ? f.value.join(', ') : f.value]));
