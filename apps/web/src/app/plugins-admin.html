@@ -69,9 +69,41 @@
   </div>
 
   @if (selected(); as p) {
-    <div class="card detail">
-    <h3>{{ p.name }} <small>v{{ p.version }}</small></h3>
-    @if (!p.base) {
+    <div class="drawer-veil" (click)="close()"></div>
+    <div class="drawer" role="dialog" aria-modal="true" [attr.aria-label]="p.name">
+    <div class="dhead">
+      <span class="mono">{{ p.name.charAt(0) }}</span>
+      <div class="dhead-t"><b>{{ p.name }}</b>
+        <div class="meta hint">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signature vérifiée ✓ }@if (p.extends) { · extends {{ p.extends }} }</div>
+      </div>
+      <button type="button" class="ghost" id="plugin-close" aria-label="Fermer" (click)="close()">✕</button>
+    </div>
+    <div class="dtabs">
+      <button type="button" [class.on]="tab()==='apercu'" (click)="tab.set('apercu')">Aperçu</button>
+      <button type="button" [class.on]="tab()==='reglages'" (click)="tab.set('reglages')">Réglages</button>
+      <button type="button" [class.on]="tab()==='cycle'" (click)="tab.set('cycle')">Cycle de vie &amp; permissions</button>
+      <button type="button" [class.on]="tab()==='deps'" (click)="tab.set('deps')">Dépendances</button>
+      <button type="button" [class.on]="tab()==='activite'" (click)="tab.set('activite')">Activité</button>
+    </div>
+    <div class="dbody">
+    @if (tab()==='apercu') {
+      @if (p.faulted) {
+        <div class="banner" role="alert"><span class="fico">!</span>
+          <div class="banner-body"><b>{{ p.fault?.message || 'Le plugin refuse ses demandes (fail-closed).' }}</b>
+            <small>La base ne reprend pas la main automatiquement. Rétablissement = action admin explicite, tracée (onglet Cycle de vie).</small></div>
+        </div>
+      }
+      @if (pendingChange(p); as pc) {
+        <div class="pend-note" role="note"><b>Changement en attente</b> : @for (c of pc.changes; track c.kind) { {{ c.detail }}@if (!$last) {, } } — réglé sur la branche <b>{{ pendingBranch() }}</b>. Effectif après Review &amp; Apply.</div>
+      }
+      @if (p.description) { <p>{{ p.description }}</p> }
+      <div class="chips">
+        <span class="chip" [class.ok]="p.base || p.enabled" [class.bad]="p.faulted">{{ stateLabel(p) }}</span>
+        @for (k of p.kinds; track k) { <span class="chip kind">{{ k }}</span> }
+        @for (s of p.provides; track s) { <span class="chip slot">slot {{ s }}</span> }
+      </div>
+    }
+    @if (tab()==='cycle' && !p.base) {
       <ol class="lifecycle" aria-label="Plugin lifecycle">
         @for (step of lifecycle(p); track step.n) {
           <li [class.on]="step.cur"><b>{{ step.n }} · {{ step.label }}</b><small>{{ step.help }}</small></li>
@@ -79,12 +111,21 @@
       </ol>
       <p class="hint">Transitions are staged on the working branch and become live after Apply; each one publishes an event on the bus (watch them in the event observer).</p>
     }
-    @if (!p.base && !p.installed) {
+    @if (tab()==='cycle' && p.faulted) {
+      <div>
+        <p class="section-t">Rétablissement (action tracée)</p>
+        <div class="perm"><div class="perm-t"><b>Réactiver le remplacement</b><small>Efface le défaut, conserve son état. À choisir si l'erreur est passagère.</small></div>
+          <button type="button" [disabled]="session.branch()==='main'" id="plugin-reenable" (click)="enable()">Réactiver</button></div>
+        <div class="perm"><div class="perm-t"><b>Revenir à la base</b><small>Le slot est servi par la base avec sa propre configuration ; l'état du remplacement est conservé mais plus appliqué.</small></div>
+          <button type="button" class="secondary" [disabled]="session.branch()==='main'" id="plugin-fallback" (click)="disable()">Revenir à la base</button></div>
+      </div>
+    }
+    @if (tab()==='cycle' && !p.base && !p.installed) {
       <p>Installing runs this plugin's own migrations (tables prefixed with its id). Grant that explicitly.</p>
       @if (p.requests.install) { <label class="row"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> Allow its install migrations</label> }
       <button type="button" [disabled]="session.branch()==='main'" id="plugin-install" (click)="install()">Install</button>
     }
-    @if (model(); as m) {
+    @if (tab()==='reglages' && model(); as m) {
       <form (ngSubmit)="save()" id="plugin-form">
         @for (g of m.groups; track g.name) {
           <fieldset>
@@ -107,7 +148,7 @@
         <button type="submit" id="plugin-save" [disabled]="session.branch()==='main' || (!p.installed && !p.base)">Save settings</button>
       </form>
     }
-    @if (!p.base && p.installed) {
+    @if (tab()==='cycle' && !p.base && p.installed) {
       @if (!p.enabled) {
         @if (p.requests.sensitiveHooks.length) {
           <p>This plugin asks to receive sensitive hooks. A declaration alone grants nothing; tick what you accept.</p>
@@ -132,7 +173,25 @@
         </div>
       }
     }
+    @if (tab()==='cycle' && !p.base && grantedPermissions(p).length) {
+      <div>
+        <p class="section-t">Permissions accordées</p>
+        @for (g of grantedPermissions(p); track g.label) {
+          <div class="perm"><span class="box">✓</span><div class="perm-t"><b>{{ g.label }}</b><small>{{ g.detail }}</small></div></div>
+        }
+      </div>
+    }
+    @if (tab()==='deps') {
+      @if (p.extends) { <div class="perm"><div class="perm-t"><b>Étend</b><small>{{ p.extends }} (remplace son plugin de base sur ses slots)</small></div></div> }
+      @for (s of p.provides; track s) { <div class="perm"><div class="perm-t"><b>Fournit le slot</b><small>{{ s }}</small></div></div> }
+      @for (r of p.requires ?? []; track r) { <div class="perm"><div class="perm-t"><b>Requiert</b><small>{{ r }}</small></div></div> }
+      @if (!p.extends && !p.provides.length && !(p.requires ?? []).length) { <p class="hint">Aucune dépendance déclarée.</p> }
+    }
+    @if (tab()==='activite') {
+      <p class="hint">Chaque transition de cycle de vie publie un événement sur le bus : suivez-les dans l'observateur d'événements.</p>
+    }
     <p class="msg" role="status" id="plugin-note">{{ note() }}</p>
+    </div>
     </div>
   }
 </section>

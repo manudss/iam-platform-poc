@@ -63,9 +63,14 @@ describe('PluginsAdmin component', () => {
     expect(el.querySelector('[data-plugin=risk-geo]')?.textContent).toContain('Installé');
     (el.querySelector('[data-plugin=risk-geo] button') as HTMLButtonElement).click();
     await settle(fx);
+    const tabs = () => el.querySelectorAll('.drawer .dtabs button');
+    (tabs()[1] as HTMLButtonElement).click(); // Réglages
+    await settle(fx);
     expect(el.querySelector('[data-field=maxDepth] input[type=number]')).toBeTruthy();
     expect(el.querySelector('[data-field=apiKey] input[type=password]')).toBeTruthy();
     expect(el.querySelector('[data-field=extra]')).toBeNull(); // visibleIf: mode is not b
+    (tabs()[2] as HTMLButtonElement).click(); // Cycle de vie & permissions
+    await settle(fx);
     expect(el.textContent).toContain('risk.score');
     expect(el.textContent).toContain('packaged UI components');
     expect(el.querySelector('#plugin-enable')).toBeTruthy();

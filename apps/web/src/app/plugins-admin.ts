@@ -39,6 +39,8 @@ export class PluginsAdmin {
   protected hideBase = false;
   protected readonly pending = signal<{ id: string; name: string; changes: { kind: string; detail: string }[] }[]>([]);
   protected readonly pendingBranch = signal('main');
+  /** Drawer tab (validated mockup, sheet A): overview, settings, lifecycle & permissions, dependencies, activity. */
+  protected readonly tab = signal<'apercu' | 'reglages' | 'cycle' | 'deps' | 'activite'>('apercu');
   protected edited: Record<string, unknown> = {};
   protected grantInstall = false;
   protected grantComponents = false;
@@ -95,13 +97,23 @@ export class PluginsAdmin {
   }
   protected async open(p: PluginInfo, announce = true) {
     if (announce) this.opened.emit(p.id);
-    this.selected.set(p); this.note.set(''); this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null);
+    this.selected.set(p); this.tab.set('apercu'); this.note.set(''); this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null);
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
       this.edited = Object.fromEntries(m.groups.flatMap((g) => g.fields).map((f) => [f.key, f.type === 'list' && Array.isArray(f.value) ? f.value.join(', ') : f.value]));
     } catch (e) { this.note.set((e as Error).message); }
   }
   protected close() { this.selected.set(null); this.opened.emit(null); }
+  /** What the admin already granted this plugin (the permissions list of the lifecycle tab). */
+  protected grantedPermissions(p: PluginInfo): { label: string; detail: string }[] {
+    const out: { label: string; detail: string }[] = [];
+    if (p.grants.install) out.push({ label: "Migrations d'installation", detail: 'Tables préfixées par son id, créées à l\'installation.' });
+    for (const h of p.grants.hooks ?? []) out.push({ label: `Hook sensible : ${h}`, detail: 'Reçoit l\'événement à chaque appel.' });
+    if (p.grants.uiComponents) out.push({ label: 'Composants UI packagés', detail: 'Peut afficher ses écrans et composants dans la console.' });
+    return out;
+  }
+  /** The change staged on the working branch for this plugin, when any (the drawer shows it as a warning). */
+  protected pendingChange(p: PluginInfo) { return this.pending().find((x) => x.id === p.id); }
   protected fields(g: { fields: import('./api').FormField[] }) { return visibleFields(g.fields, this.edited); }
 
   protected async act(fn: () => Promise<unknown>, ok: string) {
