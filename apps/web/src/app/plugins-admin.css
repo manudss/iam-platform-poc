@@ -14,3 +14,45 @@ input[type=text], input[type=number], input[type=password], select { max-width: 
 .uninstall-confirm .row { display: flex; gap: .5rem; flex-wrap: wrap; }
 button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
 button.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad); }
+
+/* Gallery (validated mockup, sheet A): fault banner, toolbar, grouped cards, pending panel */
+.banner { display: flex; gap: .8rem; align-items: center; border: 1px solid var(--bad); border-left-width: 4px; border-radius: .6rem; background: var(--bad-soft); color: var(--bad-ink); padding: .7rem 1rem; margin-bottom: 1rem; }
+.banner .fico { font-weight: 700; border: 2px solid var(--bad); border-radius: 50%; width: 1.4rem; height: 1.4rem; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.banner .banner-body { flex: 1; }
+.banner .banner-body small { display: block; color: var(--bad-ink); }
+.toolbar { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+.toolbar .search { flex: 1; max-width: 22rem; }
+.toolbar .filter { font-size: .9rem; color: var(--muted); display: inline-flex; gap: .4rem; align-items: center; }
+.toolbar .spacer { flex: 1; }
+.gallery-wrap { display: flex; gap: 1rem; align-items: flex-start; }
+.gallery { flex: 1; min-width: 0; }
+.fam { display: flex; align-items: baseline; gap: .7rem; margin: 1.1rem 0 .5rem; }
+.fam h2 { margin: 0; font-size: 1rem; }
+.fam .count { color: var(--muted); font-size: .82rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: .8rem; }
+.pcard { position: relative; border: 1px solid var(--line); border-radius: .7rem; background: var(--card, #fff); padding: .9rem 1rem; display: flex; flex-direction: column; gap: .5rem; }
+.pcard.faulted { border-color: var(--bad); }
+.pcard .state { position: absolute; top: .7rem; right: .7rem; }
+.pcard .head { display: flex; gap: .6rem; align-items: center; }
+.pcard .head .mono { width: 2rem; height: 2rem; border-radius: .5rem; background: var(--accent-soft); color: var(--accent-dark); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
+.pcard.faulted .head .mono { background: var(--bad-soft); color: var(--bad); }
+.pcard .head h3 { margin: 0; font-size: .98rem; }
+.pcard .head .meta { color: var(--muted); font-size: .78rem; }
+.pcard .chips { display: flex; gap: .35rem; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: .1rem .55rem; font-size: .74rem; color: var(--muted); background: var(--field-bg); }
+.chip.ok { color: var(--ok-ink, var(--accent-dark)); border-color: var(--ok, var(--accent)); background: var(--ok-soft, var(--accent-soft)); }
+.chip.bad { color: var(--bad-ink); border-color: var(--bad); background: var(--bad-soft); }
+.chip.warn { color: var(--warn-ink, #8a5a00); border-color: var(--warn, #d9a000); background: var(--warn-soft, #fdf3d7); }
+.chip.kind, .chip.slot { font-family: var(--mono, monospace); }
+.pcard .hint { color: var(--muted); font-size: .82rem; }
+.pcard .foot { margin-top: auto; display: flex; gap: .5rem; }
+.pending { width: 20rem; flex: none; border: 1px solid var(--line); border-radius: .7rem; padding: .9rem 1rem; display: flex; flex-direction: column; gap: .6rem; position: sticky; top: 1rem; }
+.pending .pend-item { border-top: 1px solid var(--line); padding-top: .5rem; font-size: .88rem; }
+.pending .pend-item b { margin-right: .3rem; }
+.pending .pend-item small { color: var(--muted); }
+.pending .review-link { margin-top: auto; }
+button.ghost { background: transparent; }
+@media (max-width: 70rem) {
+  .gallery-wrap { flex-direction: column; }
+  .pending { width: 100%; position: static; }
+}

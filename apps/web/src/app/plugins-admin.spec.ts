@@ -60,7 +60,7 @@ describe('PluginsAdmin component', () => {
     fx.componentRef.setInput('api', new ApiClient('acme-demo', f));
     fx.detectChanges(); await settle(fx);
     const el = fx.nativeElement as HTMLElement;
-    expect(el.querySelector('[data-plugin=risk-geo]')?.textContent).toContain('installed');
+    expect(el.querySelector('[data-plugin=risk-geo]')?.textContent).toContain('Installé');
     (el.querySelector('[data-plugin=risk-geo] button') as HTMLButtonElement).click();
     await settle(fx);
     expect(el.querySelector('[data-field=maxDepth] input[type=number]')).toBeTruthy();
