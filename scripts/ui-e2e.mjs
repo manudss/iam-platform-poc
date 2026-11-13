@@ -273,9 +273,11 @@ try {
   await nav('/plugins'); await page.waitForSelector('#plugins .pcard');
   await openPlugin('organizations');
   await page.waitForFunction(() => location.pathname === '/plugins/organizations');
-  await drawerTab('Lifecycle'); await page.waitForTimeout(500); // same settle as the first install: the deep-link re-open resets the grants, so tick after it
+  await drawerTab('Lifecycle');
   await page.locator('input[name=gc]').check();
-  await page.click('#plugin-enable'); await page.waitForSelector('#plugin-disable');
+  await page.click('#plugin-enable');
+  // real failures stay visible: on timeout, say what the page showed (note text and the grant checkbox state) instead of a bare selector timeout
+  await page.waitForSelector('#plugin-disable').catch(async (e) => { throw new Error('re-enable of organizations did not reach the enabled state; note=' + JSON.stringify(await page.textContent('#plugin-note').catch(() => null)) + ' gc.checked=' + JSON.stringify(await page.locator('input[name=gc]').isChecked().catch(() => null)) + ' alerts=' + JSON.stringify(await page.locator('[role=alert]').allTextContents()) + ' / ' + e.message); });
   await nav('/screens/organizations/orgs'); await page.waitForSelector('plg-organizations-orgs #org-table');
   await shot('7e-packaged-screen-back');
 
