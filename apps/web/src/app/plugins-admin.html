@@ -6,7 +6,7 @@
         <b>{{ faulted().length === 1 ? '1 plugin en défaut : ' + faulted()[0].name + '.' : faulted().length + ' plugins en défaut.' }}</b>
         <small>Il refuse ses demandes (fail-closed) ; la base ne reprend pas la main automatiquement. Rétablissement = action admin explicite, tracée.</small>
       </div>
-      <button type="button" class="danger" id="fault-open" (click)="open(faulted()[0])">Traiter</button>
+      <button type="button" class="danger" id="fault-open" (click)="treat(faulted()[0])">Traiter</button>
     </div>
   }
   <div class="toolbar">
@@ -121,9 +121,8 @@
       </div>
     }
     @if (tab()==='cycle' && !p.base && !p.installed) {
-      <p>Installing runs this plugin's own migrations (tables prefixed with its id). Grant that explicitly.</p>
-      @if (p.requests.install) { <label class="row"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> Allow its install migrations</label> }
-      <button type="button" [disabled]="session.branch()==='main'" id="plugin-install" (click)="install()">Install</button>
+      <p>Installing runs this plugin's own migrations (tables prefixed with its id). The install wizard asks for each capability explicitly.</p>
+      <button type="button" [disabled]="session.branch()==='main'" id="plugin-install-open" (click)="wizardStep.set(1)">Installer…</button>
     }
     @if (tab()==='reglages' && model(); as m) {
       <form (ngSubmit)="save()" id="plugin-form">
@@ -162,16 +161,7 @@
       @if (!p.enabled && !confirmingUninstall()) {
         <button type="button" class="danger" id="plugin-uninstall" [disabled]="session.branch()==='main'" (click)="startUninstall()">Uninstall…</button>
       }
-      @if (confirmingUninstall()) {
-        <div class="uninstall-confirm" role="alert">
-          <p><b>Uninstalling {{ p.id }} permanently removes its tables and the {{ heldValues() === null ? 'stored values' : heldValues() + ' stored value(s)' }} it holds. This cannot be undone.</b></p>
-          <div class="row">
-            @if (p.profileFields?.length) { <button type="button" class="secondary" id="plugin-export" (click)="exportCsv()" [disabled]="busyExport()">Export the values (CSV)</button> }
-            <button type="button" class="danger" id="plugin-uninstall-confirm" (click)="confirmUninstall()">Confirm the uninstall</button>
-            <button type="button" class="secondary" (click)="confirmingUninstall.set(false)">Cancel</button>
-          </div>
-        </div>
-      }
+
     }
     @if (tab()==='cycle' && !p.base && grantedPermissions(p).length) {
       <div>
@@ -193,5 +183,57 @@
     <p class="msg" role="status" id="plugin-note">{{ note() }}</p>
     </div>
     </div>
+    @if (wizardStep(); as step) {
+      <div class="drawer-veil veil-top" (click)="wizardStep.set(0)"></div>
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Installation">
+        <b class="modal-t">Installer « {{ p.name }} » <span class="hint">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signature vérifiée ✓ }</span></b>
+        <div class="wiz"><div class="w" [class.on]="step===1">1 · Ce qu'il demande</div><div class="w" [class.on]="step===2">2 · Vos permissions</div><div class="w" [class.on]="step===3">3 · Récapitulatif</div></div>
+        @if (step === 1) {
+          <p class="hint">Une déclaration ne vaut jamais autorisation. Vous accordez chaque capacité une à une à l'étape suivante.</p>
+          @if (p.requests.install) { <div class="perm"><div class="perm-t"><b>Créer ses tables</b><small>Migrations d'installation, tables préfixées par son id. Aucune suppression.</small></div></div> }
+          @for (h of p.requests.sensitiveHooks; track h) { <div class="perm"><div class="perm-t"><b>Hook sensible : {{ h }}</b><small>Reçoit l'événement à chaque appel.</small></div></div> }
+          @if (p.requests.uiComponents) { <div class="perm"><div class="perm-t"><b>Écrans packagés (composant UI)</b><small>Exécute du code du plugin dans la console.</small></div></div> }
+          @if (!p.requests.install && !p.requests.sensitiveHooks.length && !p.requests.uiComponents) { <p class="hint">Ce plugin ne demande aucune capacité particulière.</p> }
+        }
+        @if (step === 2) {
+          @if (p.requests.install) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" name="gi" [(ngModel)]="grantInstall" /> <span><b>Créer ses tables</b><small>Accorder les migrations d'installation.</small></span></label></div> }
+          @for (h of p.requests.sensitiveHooks; track h) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" [attr.data-hook]="h" [ngModelOptions]="{ standalone: true }" [(ngModel)]="grantHooks[h]" /> <span><b>Hook sensible : {{ h }}</b><small>L'activation est refusée tant qu'il n'est pas tranché.</small></span></label></div> }
+          @if (p.requests.uiComponents) { <div class="perm"><label class="perm-t perm-check"><input type="checkbox" name="gc" [(ngModel)]="grantComponents" /> <span><b>Écrans packagés</b><small>Allow its packaged UI components to run in the console. Refusé : ses écrans restent visibles, le composant est masqué.</small></span></label></div> }
+        }
+        @if (step === 3) {
+          <p class="hint">L'installation est réglée sur la branche <b>{{ pendingBranch() }}</b> ; effective après Review &amp; Apply.</p>
+          @if (grants().install || grants().uiComponents || grants().hooks?.length) {
+            @if (grants().install) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Migrations d'installation</b></div></div> }
+            @for (h of grants().hooks ?? []; track h) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Hook sensible : {{ h }}</b></div></div> }
+            @if (grants().uiComponents) { <div class="perm"><span class="box">✓</span><div class="perm-t"><b>Écrans packagés</b></div></div> }
+          } @else { <p class="hint">Aucune capacité accordée.</p> }
+        }
+        <div class="modal-foot">
+          @if (step > 1) { <button type="button" class="secondary" (click)="wizardGo(-1)">← Retour</button> }
+          <span class="spacer"></span>
+          <button type="button" class="secondary" (click)="wizardStep.set(0)">Annuler</button>
+          @if (step < 3) { <button type="button" (click)="wizardGo(1)">Continuer →</button> }
+          @else { <button type="button" id="plugin-install" [disabled]="session.branch()==='main'" (click)="install()">Installer</button> }
+        </div>
+      </div>
+    }
+    @if (confirmingUninstall()) {
+      <div class="drawer-veil veil-top" (click)="confirmingUninstall.set(false)"></div>
+      <div class="modal modal-danger" role="alertdialog" aria-modal="true" aria-label="Désinstallation">
+        <b class="modal-t danger-t">Désinstaller « {{ p.name }} » ?</b>
+        <p class="hint">Le plugin est désactivé. La désinstallation <b>supprime ses tables et les {{ heldValues() === null ? 'valeurs stockées' : heldValues() + ' valeur(s) stockée(s)' }}</b> pour tous les utilisateurs. Irréversible : l'opération s'applique au prochain Apply.</p>
+        @if (p.profileFields?.length) {
+          <div class="export-row"><span class="export-ico">↓</span><div class="perm-t"><b>{{ p.id }}-export.csv</b><small>une ligne par utilisateur et champ · généré côté serveur</small></div>
+            <button type="button" class="secondary" id="plugin-export" (click)="exportCsv()" [disabled]="busyExport()">Télécharger</button></div>
+        }
+        <label class="confirm-label">Tapez <b>{{ p.id }}</b> pour confirmer
+          <input id="plugin-uninstall-confirm-text" [ngModelOptions]="{ standalone: true }" [(ngModel)]="confirmText" [placeholder]="p.id" autocomplete="off" />
+        </label>
+        <div class="modal-foot"><span class="spacer"></span>
+          <button type="button" class="secondary" (click)="confirmingUninstall.set(false)">Annuler</button>
+          <button type="button" class="danger" id="plugin-uninstall-confirm" [disabled]="confirmText !== p.id" (click)="confirmUninstall()">Désinstaller définitivement</button>
+        </div>
+      </div>
+    }
   }
 </section>

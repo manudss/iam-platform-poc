@@ -41,6 +41,10 @@ export class PluginsAdmin {
   protected readonly pendingBranch = signal('main');
   /** Drawer tab (validated mockup, sheet A): overview, settings, lifecycle & permissions, dependencies, activity. */
   protected readonly tab = signal<'apercu' | 'reglages' | 'cycle' | 'deps' | 'activite'>('apercu');
+  /** Install wizard (parcours 1): 0 closed, 1 what it asks, 2 your permissions, 3 recap. */
+  protected readonly wizardStep = signal<0 | 1 | 2 | 3>(0);
+  /** Uninstall confirmation: the admin types the plugin id (parcours 2). */
+  protected confirmText = '';
   protected edited: Record<string, unknown> = {};
   protected grantInstall = false;
   protected grantComponents = false;
@@ -97,7 +101,7 @@ export class PluginsAdmin {
   }
   protected async open(p: PluginInfo, announce = true) {
     if (announce) this.opened.emit(p.id);
-    this.selected.set(p); this.tab.set('apercu'); this.note.set(''); this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null);
+    this.selected.set(p); this.tab.set('apercu'); this.note.set(''); this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
       this.edited = Object.fromEntries(m.groups.flatMap((g) => g.fields).map((f) => [f.key, f.type === 'list' && Array.isArray(f.value) ? f.value.join(', ') : f.value]));
@@ -122,7 +126,10 @@ export class PluginsAdmin {
     catch (e) { this.note.set((e as Error).message); }
   }
   protected grants() { return { install: this.grantInstall, uiComponents: this.grantComponents, hooks: Object.keys(this.grantHooks).filter((h) => this.grantHooks[h]) }; }
-  protected install() { const p = this.selected()!; return this.act(() => this.admin.install(p.id, this.grants()), `Installed ${p.name}.`); }
+  protected install() { const p = this.selected()!; return this.act(() => this.admin.install(p.id, this.grants()), `Installed ${p.name}.`).then(() => this.wizardStep.set(0)); }
+  protected wizardGo(delta: 1 | -1) { this.wizardStep.update((s) => (s + delta) as 1 | 2 | 3); }
+  /** The fault banner's entry point: open the drawer straight on the recovery tab. */
+  protected treat(p: PluginInfo) { return this.open(p).then(() => this.tab.set('cycle')); }
   protected save() { const p = this.selected()!; return this.act(() => this.admin.save(p.id, formValues(this.model()!, this.edited)), 'Settings saved.'); }
   protected enable() { const p = this.selected()!; return this.act(() => this.admin.enable(p.id, this.grants()), `Enabled ${p.name}.`); }
   protected disable() { const p = this.selected()!; return this.act(() => this.admin.disable(p.id), `Disabled ${p.name}: its slots are served by the base plugin again.`); }
@@ -138,7 +145,7 @@ export class PluginsAdmin {
     ];
   }
   protected startUninstall() {
-    this.confirmingUninstall.set(true); this.heldValues.set(null);
+    this.confirmingUninstall.set(true); this.heldValues.set(null); this.confirmText = '';
     const p = this.selected()!;
     this.admin.adminToken = this.session.adminToken();
     this.admin.profileValues(p.id).then((r) => this.heldValues.set(r.values)).catch(() => this.heldValues.set(null));
