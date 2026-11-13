@@ -145,7 +145,7 @@ try {
   await page.getByRole('button', { name: 'Close assignment editor' }).click();
   await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
-  await page.click('#workspace-apply'); await status('Apply refused');
+  await page.click('#workspace-apply');await page.locator('app-apply-dialog dialog[open]').getByRole('button',{name:'Apply to main',exact:true}).click(); await status('Apply refused');
   // The refused change stays on its branch. A clean change goes from a fresh branch to main and is journaled as an activation.
   await openManage(page); await page.fill('input[name=workspaceNewBranch]', 'ui-clean'); await page.getByRole('button', { name: 'Create & select' }).click();
   await status('Working on ui-clean');
@@ -156,7 +156,7 @@ try {
   await page.getByRole('button', { name: 'Close assignment editor' }).click();
   await page.waitForSelector('#assignment-editor', { state: 'detached' });
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
-  await page.click('#workspace-apply'); await status('Applied');
+  await page.click('#workspace-apply');await page.locator('app-apply-dialog dialog[open]').getByRole('button',{name:'Apply to main',exact:true}).click(); await status('Applied');
   await nav('/assignments'); await page.waitForSelector('#assignments .pill:text-is("accountant")');
   await nav('/activation'); await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
   await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');
@@ -456,8 +456,13 @@ try {
   await page.getByRole('tab', { name: 'SoD rules', exact: true }).click();
   assert.ok((await page.locator('#sod').innerText()).includes('payment-approver'));
   await page.getByRole('button', { name: 'Close role editor' }).click();
-  await nav('/assignments'); await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  await nav('/assignments');
+  // Wait for the page's initial data/model render before typing. Filling while the branch screen
+  // is still mounting can be overwritten by its first ngModel render. The filter assertion below
+  // remains strict: exactly Bob, not merely a row containing Bob among unfiltered results.
   await page.waitForSelector('#assignments tbody tr:has-text("demo-bob") button');
+  await page.fill('input[name=assignmentSearch]', 'demo-bob');
+  assert.equal(await page.inputValue('input[name=assignmentSearch]'), 'demo-bob');
   await page.waitForFunction(() => document.querySelectorAll('#assignments tbody tr:has(button)').length === 1);
   assert.equal(await page.locator('#assignments tbody tr:has(button)').count(), 1);
   await page.getByRole('link', { name: 'Bulk edit matrix' }).click();

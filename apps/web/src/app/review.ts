@@ -1,4 +1,5 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { ApplyDialog } from './apply-dialog';
+import { Component, computed, inject, signal, ViewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { DiffSummary, RowDiff, VersioningClient, cellText } from './api';
 import { Session } from './session';
@@ -11,8 +12,9 @@ interface TableView { table: string; kind: string; rows: { added: number; modifi
  */
 @Component({
   selector: 'app-review',
-  imports: [RouterLink],
+  imports: [RouterLink, ApplyDialog],
   template: `
+  <app-apply-dialog />
   <section class="card" id="review-page">
     <h2>Changes on <b>{{ branch() }}</b> compared with <b>main</b></h2>
     @if (applied()) { <p class="ok" role="status">{{ applied() }}</p> }
@@ -73,6 +75,7 @@ interface TableView { table: string; kind: string; rows: { added: number; modifi
   `],
 })
 export class ReviewPage {
+  @ViewChild(ApplyDialog) protected applyDialog!: ApplyDialog;
   private readonly session = inject(Session);
   protected readonly cell = cellText;
   protected readonly branch = computed(() => this.session.branch());
@@ -100,9 +103,9 @@ export class ReviewPage {
   /** Publishes the working branch into main through the same guarded endpoint as the toolbar's Review & Apply (server re-checks conflicts and separation of duties). */
   protected async apply() {
     const b = this.branch(); if (!b || b === 'main' || this.acting()) return;
-    if (!confirm('Apply ' + b + ' into Dolt main? Its users, plugins and role permissions will become live.')) return;
     this.acting.set(true); this.actionError.set('');
     try {
+      if (!await this.applyDialog.confirm(b) || this.branch() !== b) return;
       const head = (await this.v.branches()).branches.find((x) => x.name === b)?.commit;
       const r = await this.session.api.raw<{ applied?: boolean; commit?: string; message?: string }>('POST', '/workspace/apply', { confirm: true, expectedHead: head }, this.headers());
       if (r.status >= 400 || !r.data.applied) throw new Error(r.data?.message ?? 'Apply refused');

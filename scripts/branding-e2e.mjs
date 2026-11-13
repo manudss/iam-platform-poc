@@ -148,7 +148,7 @@ try {
   await inner.locator('section.hero').screenshot({path:join(out,'branding-mobile-card.png')});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no page overflow on 390px');
   await page.setViewportSize({width:1440,height:1040});
-  await page.click('#review-apply');await page.waitForSelector('#workspace-apply');await page.click('#workspace-apply');await status('Applied');
+  await page.click('#review-apply');await page.waitForSelector('#workspace-apply');await page.click('#workspace-apply');await page.locator('app-apply-dialog dialog[open]').getByRole('button',{name:'Apply to main',exact:true}).click();await status('Applied');
   assert.equal((await(await fetch(BASE+'/api/tenants/acme-demo/branding')).json()).productName,'Acme Identity','Apply publishes branding');
   const css=await fetch(BASE+'/api/tenants/acme-demo/branding/theme.css');assert.equal(css.status,200);
   assert.ok((await css.text()).includes('--accent-ink'));

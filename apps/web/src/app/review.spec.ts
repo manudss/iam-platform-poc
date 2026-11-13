@@ -48,7 +48,7 @@ describe('Review changes page', () => {
     expect(prCall?.body).toMatchObject({ source: 'demo-alice', target: 'main' });
     expect(el.textContent).toContain('Pull request #7 opened');
     // apply: the same guarded endpoint as the toolbar, with confirm and the branch head
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn((f.componentInstance as any).applyDialog, 'confirm').mockResolvedValue(true);
     applyBtn.click(); await f.whenStable(); f.detectChanges();
     const applyCall = calls.find((c) => c.m === 'POST' && c.path === '/workspace/apply');
     expect(applyCall?.body).toMatchObject({ confirm: true, expectedHead: 'bbb' });
