@@ -212,7 +212,6 @@ export class ApiClient {
     if (!r.ok) { const d = (await r.json().catch(() => ({}))) as { message?: string }; throw Object.assign(new Error(d.message ?? `HTTP ${r.status}`), { body: d, status: r.status }); }
     return r.text();
   }
-
   private async call<T>(method: string, path: string, body?: object, extra: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
     const sentToken = this.token, sentEpoch = this.epoch, sentBranch=this.branch;
