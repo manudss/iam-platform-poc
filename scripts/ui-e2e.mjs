@@ -206,7 +206,7 @@ try {
   await formGet();
   assert.equal(await page.locator('label[data-field=maxFailures] input').inputValue(), '3', 'the saved value comes back from the API');
   await drawerTab('Lifecycle');
-  await page.locator('[data-hook="auth.authenticate"]').check(); await page.click('#plugin-enable');
+  await page.locator('[data-hook="auth.authenticate"]').check(); await page.locator('[data-hook="auth.password.validate"]').check(); await page.click('#plugin-enable');
   await page.waitForSelector('#plugin-disable');
   await noBanner('enabled'); await shot('6-plugin-enabled');
   await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
