@@ -8,7 +8,7 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /** Profiles are business data on Dolt main. Password hashes NEVER enter Dolt or SQL, including history. */
 @Injectable()
@@ -27,25 +27,28 @@ export class UsersService {
   private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string }>> {
     try { return JSON.parse(await readFile(this.path, 'utf8')); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw e; }
   }
-  /** Salted hashes of previous passwords, per subject, newest first (entry 0 = current). Same storage rule as the
-   * credential file: a local JSON file, never Dolt or SQL, mode 0600, written atomically (tmp + rename). Capped at
-   * 25 entries per subject (the policy plugin checks at most 1 + historyCount = 25). Same concurrency contract as
-   * the credential store: a single API process writes it; no cross-process lock. */
-  private get historyPath() { return process.env.IAM_PASSWORD_HISTORY_FILE ?? '/tmp/iam-poc-password-history.json'; }
+  /** Salted hashes of previous passwords, keyed by `tenant:id`, newest first (entry 0 = current). Same storage
+   * rule and guarantees as the credential file: a local JSON file, never Dolt or SQL, mode 0600, written
+   * atomically (tmp + rename). It inherits the credential store's persistence: by default it sits NEXT TO the
+   * credential file (pin IAM_CREDENTIAL_FILE to persistent storage and the history follows; IAM_PASSWORD_HISTORY_FILE
+   * overrides). Capped at 25 entries per subject (the policy plugin checks at most 1 + historyCount = 25). Same
+   * concurrency contract as the credential store: a single API process writes it; no cross-process lock. */
+  private get historyPath() { return process.env.IAM_PASSWORD_HISTORY_FILE ?? join(dirname(this.path), 'iam-poc-password-history.json'); }
   private async history(): Promise<Record<string, { salt: string; hash: string; at: number }[]>> {
     try { return JSON.parse(await readFile(this.historyPath, 'utf8')); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw e; }
   }
-  private async recordHistory(id: string, salt: string, hash: string) {
+  private async recordHistory(tenant: string, id: string, salt: string, hash: string) {
     const all = await this.history();
-    const list = all[id] ?? [];
+    const key = `${tenant}:${id}`;
+    const list = all[key] ?? [];
     list.unshift({ salt, hash, at: Date.now() });
-    all[id] = list.slice(0, 25);
+    all[key] = list.slice(0, 25);
     await mkdir(dirname(this.historyPath), { recursive: true, mode: 0o700 });
     await writeFile(this.historyPath + '.tmp', JSON.stringify(all), { mode: 0o600 }); await rename(this.historyPath + '.tmp', this.historyPath);
   }
-  private async passwordHistory(id: string) { return (await this.history())[id] ?? []; }
+  private async passwordHistory(tenant: string, id: string) { return (await this.history())[`${tenant}:${id}`] ?? []; }
   /** Change date of the current password, when it was set while the history was active (undefined otherwise). */
-  async passwordChangedAt(_tenant: string, id: string) { return (await this.passwordHistory(id))[0]?.at; }
+  async passwordChangedAt(tenant: string, id: string) { return (await this.passwordHistory(tenant, id))[0]?.at; }
   /** The password policy of the auth.password slot (base or an enabled replacement), checked before ANY password
    * is stored. Falls back to the historical rule (12..128) when the serving plugin predates the hook; a faulted
    * plugin fails closed (the error propagates and the change is refused). */
@@ -55,17 +58,21 @@ export class UsersService {
     let declares = false;
     try { const p = reg.resolve(tenant, 'auth.password'); declares = !!p.manifest.hooks?.some((h) => h.name === 'auth.password.validate') && reg.isActive(tenant, p.manifest.id); } catch { declares = false; }
     if (!declares) return candidate.length >= 12 ? { ok: true, errors: [] } : { ok: false, errors: ['password: 12 to 128 characters'] };
-    const r = await reg.callSlot<PasswordValidateResult>(tenant, 'auth.password', 'auth.password.validate', { tenant, subject: id, candidate, userInfo: { login: id, displayName: String(user?.display_name ?? ''), email: String(user?.email ?? '') }, history: await this.passwordHistory(id), now: Date.now() } satisfies PasswordValidatePayload);
+    const r = await reg.callSlot<PasswordValidateResult>(tenant, 'auth.password', 'auth.password.validate', { tenant, subject: id, candidate, userInfo: { login: id, displayName: String(user?.display_name ?? ''), email: String(user?.email ?? '') }, history: await this.passwordHistory(tenant, id), now: Date.now() } satisfies PasswordValidatePayload);
     return { ok: !!r.result.ok, errors: Array.isArray(r.result.errors) ? r.result.errors.map(String).slice(0, 8) : [] };
   }
-  private async password(id: string, password: string, pre?: { salt: string; hash: string }) {
+  private async password(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }) {
     const all = await this.credentials(), salt = pre?.salt ?? randomBytes(24).toString('hex');
     const revision = randomBytes(20).toString('hex');
     const hash = pre?.hash ?? scryptSync(password, salt, 64).toString('hex');
+    // History FIRST, then the credential: if the history write fails the password is never stored (a change we
+    // cannot track is refused, fail closed). A crash between the two writes leaves one extra history entry whose
+    // password never became current: the reuse rule only gets stricter, never weaker, and the next successful
+    // change restores the dates. The reverse order would silently lose the entry and weaken reuse prevention.
     all[revision] = { subject:id, salt, hash };
+    await this.recordHistory(tenant, id, salt, hash);
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     await writeFile(this.path + '.tmp', JSON.stringify(all), { mode: 0o600 }); await rename(this.path + '.tmp', this.path);
-    await this.recordHistory(id, salt, hash);
     return revision;
   }
   init() { return this.ready ??= this.v.lock(async () => {
@@ -83,7 +90,7 @@ export class UsersService {
         await c.query('alter table identities add column credential_revision varchar(40)');
         const all = await this.credentials();
         for (const id of ['demo-alice','demo-bob']) {
-          const revision = all[id] ? id : await this.password(id,'demo-only-not-a-secret');
+          const revision = all[id] ? id : await this.password('acme-demo', id, 'demo-only-not-a-secret');
           await c.query('update identities set credential_revision=? where id=?',[revision,id]);
         }
         await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m','users: credential revision references (no secrets)')");
@@ -106,7 +113,7 @@ export class UsersService {
     await this.init();
     return this.v.lock(() => this.v.at('main', async (c) => {
       const [rows] = await c.query('select id from identities where id=?', [a.id]); if ((rows as unknown[]).length) return false;
-      const revision = await this.password(a.id, password);
+      const revision = await this.password('acme-demo', a.id, password);
       await c.query('insert into identities (id,display_name,manager_id,department,email,login_enabled,credential_revision) values (?,?,?,?,?,true,?)', [a.id, a.display_name, a.manager_id, a.department, a.email, revision]);
       await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`demo seed: account ${a.id}`]);
       return true;
@@ -120,7 +127,7 @@ export class UsersService {
       const r = { display_name:'', department:'', manager_id:null, email:null, login_enabled:true, ...prev, ...b };
       if (r.manager_id) { let cur: unknown = r.manager_id; for (let n = 0; cur && n < 100; n++) { if (cur === id) throw new BadRequestException(`${r.manager_id} already reports (directly or not) to ${id}: this would make a loop in the management chain`); const [up] = await c.query('select manager_id from identities where id=?', [cur]); cur = (up as { manager_id: string | null }[])[0]?.manager_id; } const [m] = await c.query('select id from identities where id=?', [r.manager_id]); if (!(m as unknown[]).length || r.manager_id === id) throw new BadRequestException('manager must be another existing user'); }
       if (!pre && typeof b.password === 'string') { const check = await this.checkPasswordPolicy(tenant, id, b.password, r); if (!check.ok) throw new BadRequestException(check.errors.join('; ') || 'the password does not respect the policy'); }
-      const revision = pre ? await this.password(id, '', pre) : b.password !== undefined ? await this.password(id, b.password as string) : prev?.credential_revision ?? null;
+      const revision = pre ? await this.password(tenant, id, '', pre) : b.password !== undefined ? await this.password(tenant, id, b.password as string) : prev?.credential_revision ?? null;
       await c.query('insert into identities (id,display_name,manager_id,department,email,login_enabled,credential_revision) values (?,?,?,?,?,?,?) on duplicate key update display_name=values(display_name),manager_id=values(manager_id),department=values(department),email=values(email),login_enabled=values(login_enabled),credential_revision=values(credential_revision)', [id,r.display_name,r.manager_id || null,r.department,r.email || null,r.login_enabled,revision]);
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query('call dolt_commit(\'-m\',?)', [`users: ${create ? 'create' : 'update'} ${id}`]); }
@@ -146,7 +153,7 @@ export class UsersService {
     const check = await this.checkPasswordPolicy(tenant, id, next, me);
     if (!check.ok) throw new BadRequestException(check.errors.join('; ') || 'the password does not respect the policy');
     await this.init();
-    const revision = await this.password(id, next);
+    const revision = await this.password(tenant, id, next);
     await this.v.lock(() => this.v.at('main', async (c) => {
       await c.query('update identities set credential_revision=? where id=?', [revision, id]);
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
