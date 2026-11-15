@@ -35,7 +35,7 @@ In test mode the personal profile writes **directly to the tested branch** (the 
 
 ## Test accounts (create an account to test the sign-in)
 
-To try the whole sign-in with a fresh person, the test sign-in page offers **Create a test account on this branch** (`/signup?branch=&ticket=`). It calls `POST /api/tenants/:tenant/signup/test` with the test ticket, the branch, an id, a display name and a password (12 to 128 characters):
+To try the whole sign-in with a fresh person, the test sign-in page offers **Create a test account on this branch** (`/signup?branch=&ticket=`). It calls `POST /api/tenants/:tenant/signup/test` with the test ticket, the branch, an id, a display name and a password (12 to 128 characters by default, or whatever the active `auth.password` plugin's policy requires):
 
 - the ticket is the only authorization: it must be valid for exactly that branch (same check as the sign-in options); a branch-test *token* is not accepted here, only the ticket;
 - the account is written **on the tested branch only** (identity row, credential revision), never on `main`; the route refuses `main`;
