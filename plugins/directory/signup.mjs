@@ -57,7 +57,11 @@ export function createSignupManager(deps) {
       if (typeof b.id !== 'string' || !ID.test(b.id)) throw new BadRequestException('id: lowercase letters, digits, hyphens; max 32');
       if (typeof b.display_name !== 'string' || !b.display_name.trim() || b.display_name.length > 80) throw new BadRequestException('display_name: 1 to 80 characters');
       if (typeof b.email !== 'string' || !EMAIL.test(b.email)) throw new BadRequestException('invalid email address');
-      if (typeof b.password !== 'string' || b.password.length < 12 || b.password.length > 128) throw new BadRequestException('password: 12 to 128 characters');
+      if (typeof b.password !== 'string' || b.password.length > 128) throw new BadRequestException('password: at most 128 characters');
+      // The password policy of the auth.password slot (base rule, or the enabled replacement's policy). Without a
+      // wired checker the historical 12..128 rule applies.
+      if (deps.passwordCheck) { const errors = await deps.passwordCheck(tenant, { id: b.id, password: b.password, display_name: b.display_name, email: b.email }); if (errors?.length) throw new BadRequestException(errors.slice(0, 8).join('; ')); }
+      else if (b.password.length < 12) throw new BadRequestException('password: 12 to 128 characters');
       const values = await deps.signupValues(tenant, b.values);
       // Neutral answers: a taken id, a pending request and a full queue look exactly like success (no account enumeration).
       const taken = deps.usersList ? (await deps.usersList('main')).some((u) => u.id === b.id || (u.email && u.email.toLowerCase() === b.email.toLowerCase())) : false;

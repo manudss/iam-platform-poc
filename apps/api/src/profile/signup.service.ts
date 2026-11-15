@@ -20,6 +20,8 @@ interface SignupPluginModule {
     putWorking: (tenant: string, id: string, values: Record<string, string | number | boolean | null>, actor: string) => Promise<void>;
     usersList?: (ref: string) => Promise<{ id: string; email?: string | null }[]>;
     usersSave?: (id: string, body: Record<string, unknown>, create: boolean, pre: { salt: string; hash: string }, tenant: string) => Promise<unknown>;
+    /** The password policy of the auth.password slot (base rule or the enabled replacement). Returns refusal reasons. */
+    passwordCheck?: (tenant: string, input: { id: string; password: string; display_name: string; email: string }) => Promise<string[]>;
     outboxSend?: (message: { tenant: string; to: string; subject: string; text: string; subjectUser: string }) => Promise<void>;
     /** Templated delivery (docs/mail-templates.md): render via notify.templates, real send via notify.default
      * when its capability is real, otherwise the rendered text lands in the demo outbox. */
@@ -52,6 +54,8 @@ export class SignupService {
       putWorking: (t, id, values, actor) => profile.putWorking(t, id, values, actor),
       usersList: users ? (ref) => users.list(ref) as never : undefined,
       usersSave: users ? (id, body, create, pre, tenant) => users.save(id, body, create, pre, tenant) : undefined,
+      // Sign-up is a live path: the policy check runs against the live slot configuration, like the delivery above.
+      passwordCheck: users ? async (tenant, x) => (await users.checkPasswordPolicy(tenant, x.id, x.password, { display_name: x.display_name, email: x.email })).errors : undefined,
       outboxSend: authn ? (m) => authn.outbox.send(m) : undefined,
       // Sign-up mails render through the notify.templates slot and deliver through notify.default when it really
       // delivers (same rule as the sign-in code, P1-E); otherwise the rendered text lands in the demo outbox.

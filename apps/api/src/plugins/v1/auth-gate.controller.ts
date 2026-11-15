@@ -9,6 +9,7 @@ import { branchName } from '../../versioning/guards.js';
 import { timingSafeEqual } from 'node:crypto';
 import { PluginRegistry } from './registry.js';
 import type { AuthenticateResult } from './hooks.js';
+import { UsersService } from '../../users/users.service.js';
 
 /**
  * Sign-in gate called by the Rust core (loopback, shared token IAM_AUTH_GATE_TOKEN) before the IdP checks a password.
@@ -19,7 +20,7 @@ import type { AuthenticateResult } from './hooks.js';
  */
 @Controller('internal/auth')
 export class AuthGateController {
-  constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries, @Optional() private readonly authn?: AuthnService, @Optional() private readonly branchTest?: BranchTestService) {}
+  constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries, @Optional() private readonly authn?: AuthnService, @Optional() private readonly branchTest?: BranchTestService, @Optional() private readonly users?: UsersService) {}
   /** A branch test proceeds only with a well-formed branch and its valid admin-issued ticket; the refusal message is generic on purpose. */
   private async testRefusal(b: { branch?: unknown; ticket?: unknown }): Promise<string | null> {
     if (typeof b?.branch !== 'string' || !b.branch) return null;
@@ -68,7 +69,9 @@ export class AuthGateController {
     { const refuse = await this.testRefusal(b); if (refuse) return { outcome: 'deny', reason: 'branch-test', message: refuse }; }
     try {
       const registry = workspaceMode() ? await this.branches.get(typeof b.branch === 'string' && b.branch ? b.branch : 'main') : this.reg;
-      const r = await registry.callSlot<AuthenticateResult>(b.tenant, 'auth.password', 'auth.authenticate', { tenant: b.tenant, subject: b.subject, credential: { password: b.password } });
+      let passwordChangedAt: number | undefined;
+      if (this.users) { try { passwordChangedAt = await this.users.passwordChangedAt(b.tenant, b.subject); } catch { passwordChangedAt = undefined; } }
+      const r = await registry.callSlot<AuthenticateResult>(b.tenant, 'auth.password', 'auth.authenticate', { tenant: b.tenant, subject: b.subject, credential: { password: b.password }, ...(passwordChangedAt ? { passwordChangedAt } : {}) });
       return r.result.outcome === 'allow' ? { outcome: 'allow', servedBy: r.servedBy, ...(this.authn ? { claims: sessionClaims(await this.authn.signinSession(b.tenant, typeof b.branch === 'string' && b.branch ? b.branch : undefined)) } : {}) } : { outcome: 'deny', reason: r.result.outcome === 'deny' ? r.result.reason : 'challenge-unsupported', servedBy: r.servedBy };
     } catch (e) {
       throw new HttpException({ outcome: 'error', code: (e as { code?: string }).code ?? 'plugin-failed' }, 503);

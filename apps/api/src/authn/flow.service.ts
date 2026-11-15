@@ -184,13 +184,20 @@ export class AuthnService implements OnApplicationBootstrap {
     try { return await (await reg.callSlot<{ real: boolean; note?: string }>(tenant, 'notify.default', 'notify.capability', {})).result; }
     catch (e) { console.error('[authn] notify capability lookup failed:', (e as Error).message); return undefined; } // the plugin then takes the simulated path
   }
+  /** Change date of the current directory password, when the credential history knows it (password expiry policies). */
+  private async passwordChangedAt(tenant: string, subject: string) {
+    if (!this.users) return undefined;
+    try { return await this.users.passwordChangedAt(tenant, subject); } catch { return undefined; }
+  }
   private async methodPayload(reg: PluginRegistry, s: Session, st: Session['steps'][number], state: Record<string, any>, answers?: Record<string, string>) {
+    const passwordChangedAt = st.type === 'password' ? await this.passwordChangedAt(s.tenant, s.subject) : undefined;
     return {
       tenant: s.tenant, subject: s.subject, known: s.known, instanceId: st.id, config: st.config as Record<string, any>,
       state, answers, now: this.now(), ...(s.origin ? { origin: s.origin } : {}),
       enrollment: await this.enrollment(s.tenant, s.subject, st),
       ...(st.type === 'email-otp' ? { profileEmail: await this.profileEmail(s.subject, s.branch), notifyCapability: await this.notifyCapability(reg, s.tenant) } : {}),
-      ...(st.type === 'password' && answers ? { passwordOutcome: (await reg.callSlot<AuthenticateResult>(s.tenant, 'auth.password', 'auth.authenticate', { tenant: s.tenant, subject: s.subject, credential: { password: answers.password ?? '' } })).result.outcome } : {}),
+      ...(passwordChangedAt ? { passwordChangedAt } : {}),
+      ...(st.type === 'password' && answers ? { passwordOutcome: (await reg.callSlot<AuthenticateResult>(s.tenant, 'auth.password', 'auth.authenticate', { tenant: s.tenant, subject: s.subject, credential: { password: answers.password ?? '' }, ...(passwordChangedAt ? { passwordChangedAt } : {}) })).result.outcome } : {}),
     };
   }
   private audit(e: Record<string, unknown>) { console.log('[authn]', JSON.stringify(e)); }
