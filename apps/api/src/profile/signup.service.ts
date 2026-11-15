@@ -55,7 +55,8 @@ export class SignupService {
       usersList: users ? (ref) => users.list(ref) as never : undefined,
       usersSave: users ? (id, body, create, pre, tenant) => users.save(id, body, create, pre, tenant) : undefined,
       // Sign-up is a live path: the policy check runs against the live slot configuration, like the delivery above.
-      passwordCheck: users ? async (tenant, x) => (await users.checkPasswordPolicy(tenant, x.id, x.password, { display_name: x.display_name, email: x.email })).errors : undefined,
+      // A stubbed or older UsersService without the check falls back to the plugin's historical 12..128 rule.
+      passwordCheck: users && typeof users.checkPasswordPolicy === 'function' ? async (tenant, x) => (await users.checkPasswordPolicy(tenant, x.id, x.password, { display_name: x.display_name, email: x.email })).errors : undefined,
       outboxSend: authn ? (m) => authn.outbox.send(m) : undefined,
       // Sign-up mails render through the notify.templates slot and deliver through notify.default when it really
       // delivers (same rule as the sign-in code, P1-E); otherwise the rendered text lands in the demo outbox.
