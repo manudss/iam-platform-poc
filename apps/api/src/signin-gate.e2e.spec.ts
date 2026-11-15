@@ -59,7 +59,7 @@ describe('sign-in gate (real core + API + plugins)', { skip: !existsSync(bin) &&
   it('lockout replacement: denial stays a denial, the counter is kept, admin disable returns to base explicitly', async () => {
     await reg.install(T, 'auth-password-lockout', { install: true });
     await reg.configure(T, 'auth-password-lockout', { maxFailures: 2 });
-    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] });
+    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] });
     assert.equal((await signIn('demo-bob', 'nope-nope-1')).status, 401);
     assert.equal((await signIn('demo-bob', 'nope-nope-2')).status, 401);
     const locked = await signIn('demo-bob', GOOD);

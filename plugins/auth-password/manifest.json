@@ -27,6 +27,10 @@
     {
       "name": "auth.verification",
       "mode": "blocking"
+    },
+    {
+      "name": "auth.password.validate",
+      "mode": "blocking"
     }
   ],
   "settings": [

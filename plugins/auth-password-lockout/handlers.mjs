@@ -7,6 +7,8 @@ export default function createHandlers() {
     'auth.prepare': (p, c) => c.base['auth.prepare'](p, c),
     'auth.verify': (p, c) => c.base['auth.verify'](p, c),
     'auth.verification': (p, c) => c.base['auth.verification'](p, c),
+  // The policy check stays the base's (or another replacement's): the lockout only guards the credential check.
+  'auth.password.validate': (p, c) => c.base['auth.password.validate'](p, c),
     'auth.authenticate': async (p, c) => {
       const n = failures.get(p.subject) ?? 0;
       if (n >= c.settings.maxFailures) return { outcome: 'deny', reason: 'locked' };

@@ -46,7 +46,7 @@ describe('plugin registry v1', () => {
     reg2.register(directoryAuth); reg2.register(authPasswordLockout());
     reg2.setBus(fakeBusBridge(reg2));
     await reg2.install(T, 'auth-password-lockout', { install: true });
-    await reg2.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] });
+    await reg2.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] });
     const ok = await reg2.callSlot<any>(T, 'auth.password', 'auth.authenticate', { subject: 'demo-user-1', credential: { password: 'directory-pass' } });
     assert.equal(ok.result.outcome, 'allow', 'the lockout checked the credential against the registered (directory) base');
     const ko = await reg2.callSlot<any>(T, 'auth.password', 'auth.authenticate', good); // demo credential: the disk base would accept it
@@ -60,7 +60,7 @@ describe('plugin registry v1', () => {
     assert.equal(mig.log.length, 1);
     await assert.rejects(reg.enable(T, 'auth-password-lockout'), (e: PluginError) => e.code === 'grant-required'); // sensitive hook not granted
     await reg.configure(T, 'auth-password-lockout', { minLength: 14, maxFailures: 2 });
-    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] });
+    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] });
     assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good)).servedBy, 'auth-password-lockout');
     // lockout works
     await reg.callSlot(T, 'auth.password', 'auth.authenticate', bad); await reg.callSlot(T, 'auth.password', 'auth.authenticate', bad);
@@ -79,7 +79,7 @@ describe('plugin registry v1', () => {
     reg.register(impl);
     await reg.install(T, impl.manifest.id, { install: true });
     await reg.configure(T, impl.manifest.id, {});
-    await reg.enable(T, impl.manifest.id, { hooks: ['auth.authenticate'] });
+    await reg.enable(T, impl.manifest.id, { hooks: ['auth.authenticate', 'auth.password.validate'] });
     return impl;
   };
 
@@ -112,7 +112,7 @@ describe('plugin registry v1', () => {
     await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good, 30), (e: PluginError) => e.code === 'plugin-failed');
     hang = false;
     await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'plugin-failed'); // faulted: still refused
-    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] }); // explicit admin re-enable clears the fault, not the counters
+    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] }); // explicit admin re-enable clears the fault, not the counters
     assert.equal((await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good)).result.reason, 'locked');
   });
 
@@ -136,7 +136,7 @@ describe('plugin registry v1', () => {
     m.settings = [{ key: 'realm', type: 'string', label: 'Realm', required: true }]; m.install = undefined;
     reg.register({ manifest: m, handlers: authPasswordLockout().handlers });
     await reg.install(T, 'auth-strict-x', {}); await reg.configure(T, 'auth-strict-x', { realm: 'r' });
-    await reg.enable(T, 'auth-strict-x', { hooks: ['auth.authenticate'] });
+    await reg.enable(T, 'auth-strict-x', { hooks: ['auth.authenticate', 'auth.password.validate'] });
     await assert.rejects(reg.disable(T, 'auth-strict-x'), (e: PluginError) => e.code === 'base-config-invalid');
     await reg.configure(T, 'auth-strict', { realm: 'r' });
     await reg.disable(T, 'auth-strict-x');
