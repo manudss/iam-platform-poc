@@ -37,7 +37,7 @@ describe('plugin config versioned in real Dolt', { skip: !have && 'dolt binary m
   let commit = '';
   it('a proposal lives on a branch; main only changes at the explicit merge; other tenants see nothing', async () => {
     const reg = newRegistry();
-    await reg.install(T, LOCK, { install: true }); await reg.configure(T, LOCK, { maxFailures: 4 }); await reg.enable(T, LOCK, { hooks: ['auth.authenticate'] });
+    await reg.install(T, LOCK, { install: true }); await reg.configure(T, LOCK, { maxFailures: 4 }); await reg.enable(T, LOCK, { hooks: ['auth.authenticate', 'auth.password.validate'] });
     const cfg = await reg.exportConfig(T, LOCK);
     assert.deepEqual(cfg, { enabled: true, settings: { minLength: 12, allowedDomains: [], maxFailures: 4 } });
     const p = await svc.proposePluginConfig(T, LOCK, cfg);
@@ -52,7 +52,7 @@ describe('plugin config versioned in real Dolt', { skip: !have && 'dolt binary m
   it('applying a merged version uses the grants an admin already gave and never widens them', async () => {
     const [row] = await svc.pluginConfigAt(T, 'main');
     const ok = newRegistry();
-    await ok.install(T, LOCK, { install: true, hooks: ['auth.authenticate'] } as never); // admin granted the sensitive hook earlier
+    await ok.install(T, LOCK, { install: true, hooks: ['auth.authenticate', 'auth.password.validate'] } as never); // admin granted the sensitive hooks earlier
     await ok.applyVersionedConfig(T, LOCK, row);
     assert.equal(ok.isActive(T, LOCK), true);
     assert.equal((await ok.exportConfig(T, LOCK)).settings.maxFailures, 4);
