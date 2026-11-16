@@ -101,6 +101,10 @@ export async function exchangeOidc(s: ExternalStart, clientSecret: string, cbUrl
     s.clientId!, clientSecret || undefined);
   const tokenUrl = new URL(s.tokenEndpoint!);
   if (tokenUrl.protocol === 'http:') client.allowInsecureRequests(cfg);   // local fake provider in dev/e2e only
+  // v6 validates id_token CLAIMS in every grant but verifies the SIGNATURE only when asked (the spec treats a
+  // back-channel id_token as TLS-authenticated). We always ask: a provider key rotation or a poisoned cache must
+  // never be enough to mint an identity here.
+  client.enableNonRepudiationChecks(cfg);
   const current = new URL(cbUrl);
   for (const k of ['code', 'state', 'iss']) if (cb[k]) current.searchParams.set(k, cb[k]);
   const tokens = await client.authorizationCodeGrant(cfg, current, {
