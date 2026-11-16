@@ -4,7 +4,9 @@ import { PluginManifest, validateManifest } from './manifest.js';
 import { settingsExtend, toFormModel, validateSettings, FormModel } from './settings.js';
 
 /** Hooks that sit on the sign-in or decision path. Declaring one is not enough: an admin must grant it. */
-export const SENSITIVE_HOOKS = new Set(['auth.authenticate', 'auth.challenge', 'auth.password.validate', 'access.decide', 'risk.score']);
+export const SENSITIVE_HOOKS = new Set(['auth.authenticate', 'auth.challenge', 'auth.password.validate', 'access.decide', 'risk.score',
+  // The federated sign-in hooks (docs/sso-federation.md): they sit on the sign-in path like auth.authenticate.
+  'auth.external.start', 'auth.external.verify']);
 
 export interface PluginImpl { manifest: PluginManifest; handlers: Record<string, HookHandler>; }
 

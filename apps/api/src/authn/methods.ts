@@ -2,9 +2,12 @@ import type { SettingField } from '../plugins/v1/manifest.js';
 import { pluginCatalogue } from '../plugins/v1/loader.js';
 import type { HookHandler } from '../plugins/v1/hooks.js';
 
-export type Factor = 'knowledge' | 'possession' | 'inherence';
+export type Factor = 'knowledge' | 'possession' | 'inherence' | 'other';   // 'other': federation (a federated step never counts toward MFA by itself)
 export interface KeypadKey { id: string; digit: string; letters: string }
-export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits' | 'keypad' | 'webauthn'; maxLength?: number; hint?: string;
+export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits' | 'keypad' | 'webauthn' | 'link'; maxLength?: number; hint?: string;
+  /** link only: an external-provider step. The core builds the href itself (its own /authorize/external route);
+   * the plugin supplies ONLY the label. No URL ever travels in the field. */
+  external?: boolean;
   /** keypad only: buttons in display order (opaque ids, valid for this page only), digits entered so far, digits needed. */
   keys?: KeypadKey[]; entered?: number; length?: number;
   /** webauthn only: the PublicKeyCredentialRequestOptionsJSON the core-rendered ceremony feeds to the browser. */
