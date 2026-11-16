@@ -86,17 +86,27 @@ export class Session implements OnDestroy {
   readonly change = signal<Change | null>(null);
 
   /** Feature flags from the plugin registry (workflows-iga gates the Workflows feature). Refreshed by the shell; bumped via pluginsVersion after enable/disable. */
+  private personalBranchLoad?: Promise<{ branch: string; status: string }>;
+  /** Shared by the shell and deep-link guards: pick the workspace BEFORE branch-scoped reads. */
+  ensurePersonalBranch(): Promise<{ branch: string; status: string }> {
+    if (this.testBranch()) return Promise.resolve({ branch: this.testBranch(), status: 'reused' });
+    return this.personalBranchLoad ??= this.api.raw<{ branch: string; status: string }>(
+      'POST', '/workspace/personal', undefined, this.adminToken() ? { 'x-api-admin-token': this.adminToken() } : {},
+    ).then(r => { if (!this.branch()) this.selectBranch(r.data.branch); return r.data; })
+      .finally(() => { this.personalBranchLoad = undefined; });
+  }
   readonly pluginsVersion = signal(0);
   readonly workflowsEnabled = signal<boolean | null>(null);
   private pluginsLoadedAt = 0;
+  private pluginsLoadedBranch = '';
   async refreshWorkflowsEnabled(force = false): Promise<boolean> {
-    if (!force && this.workflowsEnabled() !== null && Date.now() - this.pluginsLoadedAt < 15000) return this.workflowsEnabled()!;
+    if (!force && this.pluginsLoadedBranch === this.branch() && this.workflowsEnabled() !== null && Date.now() - this.pluginsLoadedAt < 15000) return this.workflowsEnabled()!;
     try {
       const r = await this.api.raw<{ plugins: { id: string; enabled: boolean }[] }>('GET', '/plugins');
       const on = !!r.data.plugins?.find((p) => p.id === 'workflows-iga')?.enabled;
-      this.workflowsEnabled.set(on); this.pluginsLoadedAt = Date.now();
+      this.workflowsEnabled.set(on); this.pluginsLoadedAt = Date.now(); this.pluginsLoadedBranch = this.branch();
       return on;
-    } catch { return this.workflowsEnabled() ?? false; }
+    } catch { return this.pluginsLoadedBranch === this.branch() ? this.workflowsEnabled() ?? false : false; }
   }
   readonly access = signal<Access | null>(null);
   private accessLoad?: Promise<Access>;

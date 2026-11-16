@@ -131,3 +131,10 @@ export function blockCatalogue(): { type: string; family: string; label: string;
   }
   return out;
 }
+
+/** Execution badge, not the block catalogue's capability. Never label a dry-run external effect Real. */
+export function runStepCategory(node: WfNode, test = false, output?: Record<string, unknown> | null): StepCategory {
+  const category = stepCategoryOf(node.type);
+  const managed = /^(google-sheets-|jira-)/.test(node.type) || node.type === 'http-request';
+  return managed && (test || node.config.executionMode !== 'real' || node.config.dryRun === true || output?.['dryRun'] === true) ? 'simulated' : category;
+}

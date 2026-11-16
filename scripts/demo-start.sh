@@ -13,6 +13,16 @@ else
 fi
 export IAM_IDP_EXTRA_REDIRECT_URIS="${IAM_IDP_EXTRA_REDIRECT_URIS:-${PUBLIC_ORIGIN}/callback}"
 echo "console public origin: $PUBLIC_ORIGIN (share port 4200 to make it reachable)"
+# Same opt-in data/authentication setup as demo/start.sh. Existing data is not reset or repaired.
+export IAM_WORKSPACE_MODE=1 IAM_PLUGIN_STORE=dolt IAM_DIRECTORY_AUTH=1
+export IAM_AUTHN_DEMO_SEED=1 IAM_DEMO_DATA_SEED=1
+export IAM_SCREEN_ACCESS="${IAM_SCREEN_ACCESS:-1}" IAM_API_ADMIN_SUBJECTS="${IAM_API_ADMIN_SUBJECTS:-demo-alice}"
+export IAM_CREDENTIAL_FILE="${IAM_CREDENTIAL_FILE:-/tmp/iam-core-state/credentials.json}"
+export IAM_ISSUER="${PUBLIC_ORIGIN}/core" IAM_SSO_BASE_URL="${PUBLIC_ORIGIN}/api"
+export IAM_AUTH_GATE_ADDR=127.0.0.1:3000
+IAM_AUTH_GATE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+export IAM_AUTH_GATE_TOKEN
+mkdir -p /tmp/iam-core-state
 TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 # NATS is a required base process. Supervise it and the core, never switch to local handlers.
 NATS_BIN="${NATS_SERVER_BIN:-$(command -v nats-server || true)}"

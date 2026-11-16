@@ -161,7 +161,7 @@ External actions default to <b>Simulation</b>. <b>Real external actions</b> requ
 </tbody></table></div>
 <div class="row" style="margin-top:.5rem"><button class="secondary" (click)="sheetAdd()" [disabled]="busy()">+ Add a candidate row</button><button (click)="sheetSave()" [disabled]="busy()">Save changes</button>@if (sheetNote()) {<span class="hint">{{sheetNote()}}</span>}</div>
 </section>}
-<section class="card"><h3>Recent runs <a class="btn secondary" routerLink="/workflows/runs">All executions</a></h3>
+<section class="card"><h3>Recent runs <button class="secondary" (click)="refreshRuns()">Refresh runs</button> <a class="btn secondary" routerLink="/workflows/runs">All executions</a></h3>
 <div class="scroll"><table><thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Branch</th><th>Started</th><th></th></tr></thead><tbody>
 @for (r of runs(); track r.id) {<tr><td>{{r.id}}</td><td>{{r.name}}</td><td><span class="chip" [attr.data-status]="r.status">{{r.status}}</span></td><td>{{r.branch || '-'}}</td><td>{{r.startedAt}}</td><td><a class="btn secondary" [routerLink]="['/workflows/runs']" [queryParams]="{ run: r.id }">Open</a></td></tr>}
 @empty {<tr><td colspan="6">No run yet.</td></tr>}
@@ -204,6 +204,12 @@ export class WorkflowsPage implements OnInit {
     catch (e) { this.note.set((e as Error).message); }
     try { const sh = await clientOf(this.s).demoSheet(); this.sheet.set(sh); this.sheetSaved = JSON.stringify(sh.rows.map((r) => r.values)); }
     catch { this.sheet.set(null); } // the workflow-connectors plugin is disabled: no demo sheet section
+  }
+
+  /** Refresh only runs and statistics, never replace an unsaved candidate-sheet edit. */
+  protected async refreshRuns() {
+    try { const c = clientOf(this.s); this.defs.set((await c.list()).definitions); this.runs.set((await c.runs()).runs.slice(0, 15)); }
+    catch (e) { this.note.set((e as Error).message); }
   }
 
   // ---- Card helpers ----

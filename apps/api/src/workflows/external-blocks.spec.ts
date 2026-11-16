@@ -119,9 +119,12 @@ describe('contributed block runs (simulated contexts)', () => {
 
     const poll = externalEvent('google-sheets.row-ready')!.poll!;
     const ready = await poll({ source: 'demo-sheet' }, { settings: {} });
-    assert.deepEqual(ready.map((r) => r.values.nom), ['Martin', 'Dubois']); // Bernard is "En cours"
+    assert.deepEqual(ready, [], 'fresh demo never starts candidate runs before the presenter');
 
     const update = externalBlock('google-sheets-update')!;
+    await update.run(ctx({ config: update.validate({ source: 'demo-sheet', rowNumber: '2', column: 'process', value: 'OK' }) }));
+    await update.run(ctx({ config: update.validate({ source: 'demo-sheet', rowNumber: '4', column: 'process', value: 'OK' }) }));
+    assert.deepEqual((await poll({ source: 'demo-sheet' }, { settings: {} })).map(r => r.values.nom), ['Martin', 'Dubois']);
     const c = ctx({ config: update.validate({ source: 'demo-sheet', rowNumber: '2', column: 'cree', value: 'ok' }) });
     assert.equal((await update.run(c))!.updated, true);
     assert.ok(c.lines[0].includes('DEMO sheet'));

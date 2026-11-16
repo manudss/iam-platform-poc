@@ -193,6 +193,13 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
       assert.equal(await seed.seed(ST), true); assert.equal(await seed.seed(ST), false, 'second start does nothing');
       const reg = await br.get('main');
       assert.equal(reg.isActive(ST, 'organizations'), true); assert.equal(reg.isActive(ST, 'hr-attributes'), true);
+      for (const id of ['workflows-iga', 'workflow-connectors', 'app-connector', 'oidc-provider', 'mcp-gateway']) assert.equal(reg.isActive(ST, id), true, `${id} ready without manual setup`);
+      assert.equal(reg.list(ST).find(p => p.id === 'workflows-iga')!.grants.install, true, 'fresh install grant retained after enable');
+      assert.equal(reg.list(ST).find(p => p.id === 'auth-password-lockout')!.installed, false, 'leave plugin lifecycle demo for the presenter');
+      // This is a fresh-data seed, not an automatic permission repair or reset on a later boot.
+      await reg.disable(ST, 'workflow-connectors');
+      assert.equal(await seed.seed(ST), false);
+      assert.equal(reg.isActive(ST, 'workflow-connectors'), false, 'restart respects deliberate existing configuration');
       const list = await users.list('main'); assert.ok(list.length >= 10 && list.filter((u) => u.hasCredential && u.login_enabled).length >= 10);
       const orgs = await new DoltOrgStore(v, () => 'main').list(ST, 'live'); assert.ok(orgs.orgs.length >= 6 && orgs.members.length >= 10);
       const apps = (await new DoltAppConnectorStore(v, () => 'main').list(ST, 'live')).apps; assert.deepEqual(apps.map((a) => a.id), ['clientdesk', 'crm', 'expenseflow', 'learnup', 'payroll', 'peoplehub', 'sso-config-oidc', 'sso-config-saml', 'stockroom', 'ticketly', 'timesheet', 'travelops', 'wiki']); assert.equal(reg.isActive(ST, 'app-connector'), true);

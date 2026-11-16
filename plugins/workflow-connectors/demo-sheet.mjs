@@ -2,8 +2,8 @@
  * The built-in DEMO sheet: a simulated "HR candidates" Google Sheet so the onboarding workflow runs
  * end-to-end without any Google credential. It is clearly labelled SIMULATED everywhere it shows up:
  * nothing here is a real Google document, and a restart resets it to the seed rows below.
- * Switch a block (or the row-watcher trigger) to source "google" once a service account JSON key is
- * typed in the plugin settings: the same blocks then talk to the real Google Sheets API.
+ * All candidates start pending so boot does not create rehearsal runs. Set process=OK explicitly.
+ * Real Google execution uses a managed connection and explicit Real confirmation, never plugin settings.
  */
 
 export const DEMO_SHEET_NAME = 'Candidats RH (démo simulée)';
@@ -11,9 +11,9 @@ export const DEMO_SHEET_NAME = 'Candidats RH (démo simulée)';
 export const DEMO_SHEET_COLUMNS = ['nom', 'prenom', 'departement', 'role', 'process', 'cree'];
 
 const SEED_ROWS = [
-  { nom: 'Martin', prenom: 'Camille', departement: 'finance', role: 'accountant', process: 'OK', cree: '' },
+  { nom: 'Martin', prenom: 'Camille', departement: 'finance', role: 'accountant', process: 'En cours', cree: '' },
   { nom: 'Bernard', prenom: 'Léa', departement: 'engineering', role: 'employee', process: 'En cours', cree: '' },
-  { nom: 'Dubois', prenom: 'Hugo', departement: 'finance', role: 'payment-creator', process: 'OK', cree: '' },
+  { nom: 'Dubois', prenom: 'Hugo', departement: 'finance', role: 'payment-creator', process: 'En cours', cree: '' },
 ];
 
 /** In-memory rows, 1-based row numbers with the header on row 1 (data starts at row 2), like a real sheet. */
