@@ -47,3 +47,36 @@ Si aucun accès opérateur existant n'est disponible, la restauration reste bloq
 - Test HTTP de non-régression ajouté dans `plugins-admin.spec.ts` ; nécessite NATS + core, non disponibles sur l'environnement de ce correctif. À exécuter par la CI complète.
 - Script de restauration : tests négatifs + test sur vrai Dolt isolé. Vérifie que seule la branche est corrigée, main et un autre tenant restent inchangés, deuxième exécution refusée.
 - `workflows-deeplink-ui-check.mjs` : vrai bundle web production + API **simulée locale**, ouverture directe et rechargement, plugin désactivé toujours bloqué. Ce n'est pas un test live après déploiement.
+
+## Extension demandée : départ de démonstration reproductible
+
+Cette PR prépare un **nouveau jeu de données**. Elle ne déploie rien et ne restaure pas les grants de l'instance existante. Emmanuel a indiqué ne pas disposer de l'accès opérateur Dolt : la restauration ciblée ci-dessus reste bloquée. Ne pas supprimer les données ou redémarrer le service pour obtenir une « réparation » par réinitialisation.
+
+### Configuration de départ
+
+Le lanceur hébergé `demo/start.sh` activait déjà workspace mode, store plugins Dolt, authentification annuaire, seeds d'authentification et métier, contrôle des écrans et administrateur de démonstration. Aucune manipulation préalable dans Plugins ou Apply n'est nécessaire sur une base vide. `scripts/demo-start.sh` utilise désormais ces mêmes opt-ins, le gate d'authentification et un issuer commun core/API. `scripts/demo-setup.sh` installe aussi les dépendances plugins à la racine. Ces scripts locaux ne sont pas un lanceur de production.
+
+Le seed existant prépare les personnes fictives, organisations, rôles, affectations, applications SSO et plugins métier. Workflows conserve son grant d'installation après Enable. Le plugin `auth-password-lockout` reste disponible mais **non installé** pour garder le geste Install / Enable / Disable pendant la séance, uniquement sur la branche personnelle si aucun Apply n'est voulu.
+
+Les 11 définitions de workflows sont conservées. Aucun scénario Google réel n'est ajouté pour atteindre artificiellement 12. Le scénario Google optionnel existant reste conditionné à des métadonnées explicites et inactif ; cette PR ne le configure pas.
+
+Les trois candidats simulés démarrent désormais avec `process=En cours`, `cree` vide. Le watcher ne doit donc créer aucun run RH au démarrage. La feuille est en RAM : un redémarrage de processus réinitialise ces lignes, même si Dolt persiste. Ce n'est pas un journal durable de l'état RH.
+
+Les blocs Google/Jira du seed par défaut portent explicitement `executionMode=simulation`. Les transformations et écritures IAM sont réelles sur la branche du run, mais la mise à jour Google est simulée : sortie attendue `dryRun:true, updated:false`, cellule `cree` inchangée. Le webhook d'intake simule lui aussi l'ajout, il n'ajoute pas de ligne. Les textes du seed le disent, même si le badge générique du catalogue/run indique encore qu'un type de bloc est « REAL-capable ». Ne pas présenter ce badge comme preuve d'un effet externe.
+
+### Ce qui n'est pas semé
+
+Aucun compte `bernard.lea`, rôle de répétition, branche `workflow/*` ou `ai/*`, run terminé, session MCP, trace ni pull request de données. Ces résultats doivent être produits et observés pendant la démonstration. Aucun jeton, clé Google/Jira ou session de répétition n'est ajouté au dépôt.
+
+### Second démarrage et limites
+
+`DemoDataService` ne fait rien si les organisations du tenant existent déjà sur main. Il ne répare donc ni un plugin désactivé ni un grant existant : les choix de configuration ne sont pas écrasés. `WorkflowDemoSeed` ajoute les définitions manquantes avec leurs IDs fixes et ne réécrit aucune définition existante. Les nouveaux textes/configs de workflows ne remplacent donc pas les anciennes définitions d'une instance déjà initialisée. Il n'y a pas de migration de droits cachée dans cette PR.
+
+### Vérifications après un futur déploiement choisi par Emmanuel
+
+1. Conserver/sauvegarder les données existantes et déterminer si le stockage est réellement vide ou conservé. Un redéploiement sur stockage éphémère peut perdre branches, runs et historique : ce n'est pas une restauration ciblée.
+2. Sur une base réellement neuve : connexion `demo-alice`, accès direct `/workflows` puis rechargement sans redirection, 11 définitions par défaut, graphe RH 8 nœuds / 7 liens ; workflows et connecteurs activés, grant Workflows `install:true`, lockout non installé. Aucun run RH lancé spontanément après le premier tick du watcher.
+3. Modifier la ligne Bernard : `En cours` vers `OK`. Attendre le watcher (premier tick vers 12 secondes après boot, puis environ chaque minute). Vérifier le run terminé, le compte `bernard.lea` à login désactivé et le rôle employee sur une branche isolée. Main doit rester inchangé. Vérifier `dryRun:true, updated:false` à l'étape mark. Ouvrir la revue, sans merge.
+4. Le chemin SSO local n'exige pas de rediriger PeopleHub : utiliser `node demo/oidc-test-client.mjs <origine>/api/sso/acme-demo/oidc wiki 4300` et suivre le vrai consentement/PKCE. Le callback localhost:4300 est déjà enregistré. Ne pas modifier les destinations des applications hébergées en douce.
+5. Vérifier Cedar SoD (refus), puis une vraie session MCP : écriture sur sa branche IA, `mysql.user` refusé, revue sans merge. Ne pas semer ces preuves à l'avance.
+6. Au second démarrage avec les mêmes données : pas de réécriture des définitions personnalisées, pas de réactivation d'un plugin volontairement désactivé. Vérifier séparément les lignes RAM réinitialisées et la conservation effective des données Dolt. La restauration de la ligne d'incident existante demeure un sujet distinct.
