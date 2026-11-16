@@ -9,7 +9,16 @@ import { Session } from '../session';
 export const workflowsEnabledGuard: CanActivateFn = async () => {
   const s = inject(Session);
   const router = inject(Router);
-  if (await s.refreshWorkflowsEnabled()) return true;
+  // Child guards run before Shell.ngOnInit. A fresh deep link has no branch yet;
+  // /plugins then refuses the read rather than reporting that the plugin is disabled.
+  if (!s.branch()) {
+    try { await s.ensurePersonalBranch(); }
+    catch {
+      s.say('Could not open your working branch. Retry from the branch selector.', 'error');
+      return router.parseUrl('/plugins');
+    }
+  }
+  if (await s.refreshWorkflowsEnabled(true)) return true;
   s.say('The Workflows (IGA) plugin is disabled. Enable it from the Plugins page to use workflows.', 'info');
   return router.parseUrl('/plugins');
 };

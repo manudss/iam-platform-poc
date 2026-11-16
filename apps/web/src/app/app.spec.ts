@@ -256,7 +256,7 @@ describe('routing and sign-in guard', () => {
     s.api.raw = (async (m: string, path: string) => path === '/plugins'
       ? { status: 200, data: { plugins: [{ id: 'workflows-iga', enabled: false }] } }
       : { status: 200, data: [] }) as never;
-    s.workflowsEnabled.set(false);
+    s.workflowsEnabled.set(false); s.selectBranch('personal/demo-alice');
     const h = await RouterTestingHarness.create();
     await h.navigateByUrl('/overview');
     const el = h.routeNativeElement as HTMLElement;

@@ -49,7 +49,7 @@ export class Shell {
   protected async ensurePersonal(){
     this.branchState.set('creating');this.branchTip.set('Opening your personal branch…');
     try{
-      const r=await this.s.api.raw<{branch:string;status:string}>('POST','/workspace/personal',undefined,this.headers());
+      const r={data:await this.s.ensurePersonalBranch()};
       this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;if(this.s.branch()!==r.data.branch)this.s.selectBranch(r.data.branch);
       this.branchState.set('ready');
       this.s.message.set(''); // success used to replace whatever the bar showed (e.g. an earlier "admin capability required"); now it simply clears it, the state is in the pill
