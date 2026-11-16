@@ -75,4 +75,15 @@ describe('PluginsAdmin component', () => {
     expect(el.textContent).toContain('packaged UI components');
     expect(el.querySelector('#plugin-enable')).toBeTruthy();
   });
+  it('re-enable keeps existing runtime permissions and never resubmits the install grant', async () => {
+    await TestBed.configureTestingModule({ imports: [PluginsAdmin] }).compileComponents();
+    const fx = TestBed.createComponent(PluginsAdmin); const c = fx.componentInstance as any;
+    const p = { id: 'workflows-iga', name: 'Workflows', grants: { install: true, uiComponents: true, hooks: ['risk.score'] } };
+    c.admin = { form: async () => model, enable: async (_id: string, g: unknown) => { expect(g).toEqual({ uiComponents: true, hooks: ['risk.score'] }); } };
+    await c.open(p, false);
+    expect(c.grantInstall).toBe(true); expect(c.grantComponents).toBe(true);
+    c.act = async (fn: () => Promise<unknown>) => fn();
+    await c.enable();
+  });
+
 });

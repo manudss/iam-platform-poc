@@ -70,6 +70,20 @@ describe('plugin admin API', () => {
     // tenant isolation: t3 sees nothing enabled
     assert.deepEqual((await s().get('/tenants/t3/plugins/screens')).body.screens.map((x: any) => x.plugin), ['branding-base']);
   });
+  it('disable/re-enable preserves existing grants, including install, without granting install via enable', async () => {
+    const root = '/tenants/grants-regression/plugins/org-manager';
+    await s().post(root + '/install').set(adm).send({ grants: { install: true } }).expect(201);
+    await s().post(root + '/enable').set(adm).send({}).expect(201);
+    await s().post(root + '/disable').set(adm).expect(201);
+    await s().post(root + '/enable').set(adm).send({ grants: { install: false } }).expect(201);
+    const list = await s().get('/tenants/grants-regression/plugins').expect(200);
+    assert.deepEqual(list.body.plugins.find((p: any) => p.id === 'org-manager').grants, { install: true });
+    const other = '/tenants/grants-no-escalation/plugins/workflows-iga';
+    await s().post(other + '/install').set(adm).send({}).expect(201);
+    await s().post(other + '/enable').set(adm).send({ grants: { install: true } }).expect(201);
+    const second = await s().get('/tenants/grants-no-escalation/plugins').expect(200);
+    assert.notEqual(second.body.plugins.find((p: any) => p.id === 'workflows-iga').grants.install, true);
+  });
   it('the gallery list carries description, publisher, signature, dependencies and fault detail', async () => {
     const r = await s().get('/tenants/t1/plugins').expect(200);
     const by = Object.fromEntries(r.body.plugins.map((p: any) => [p.id, p]));

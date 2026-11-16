@@ -21,8 +21,13 @@ function wrap<T>(f: () => Promise<T> | T): Promise<T> {
 }
 /** Only the grants the console form can express; anything else in the body is ignored. */
 function grants(b: unknown): Grants {
-  const o = (b && typeof b === 'object' ? (b as { grants?: Grants }).grants : undefined) ?? {};
-  return { install: o.install === true, uiComponents: o.uiComponents === true, hooks: Array.isArray(o.hooks) ? o.hooks.filter((h): h is string => typeof h === 'string') : [] };
+  const input = b && typeof b === 'object' ? (b as { grants?: unknown }).grants : undefined;
+  const o = input && typeof input === 'object' && !Array.isArray(input) ? input as Grants : {};
+  return {
+    ...('install' in o ? { install: o.install === true } : {}),
+    ...('uiComponents' in o ? { uiComponents: o.uiComponents === true } : {}),
+    ...('hooks' in o ? { hooks: Array.isArray(o.hooks) ? o.hooks.filter((h): h is string => typeof h === 'string') : [] } : {}),
+  };
 }
 
 /**
@@ -103,7 +108,7 @@ export class PluginsAdminController {
   }
 
   @UseGuards(AdminGuard) @Post(':id/enable')
-  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { await (await this.registry(true)).enable(t, id, grants(b)); const adopted = this.profile ? await this.profile.adoptPlugin(t, id) : 0; return { enabled: id, ...(adopted ? { adoptedValues: adopted } : {}) }; }); }
+  enable(@Param('tenant') t: string, @Param('id') id: string, @Body() b: unknown) { return wrap(async () => { const { install: _install, ...runtimeGrants } = grants(b); await (await this.registry(true)).enable(t, id, runtimeGrants); const adopted = this.profile ? await this.profile.adoptPlugin(t, id) : 0; return { enabled: id, ...(adopted ? { adoptedValues: adopted } : {}) }; }); }
 
   /** Plan step 8: imports a signed plugin archive (zip from scripts/plugin-pack.mjs --zip, base64 in { archive }).
    * The package is validated, verified against the trust store (Ed25519, decision 3), written into the plugins

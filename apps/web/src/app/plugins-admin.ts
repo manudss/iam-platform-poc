@@ -102,7 +102,7 @@ export class PluginsAdmin {
   protected async open(p: PluginInfo, announce = true) {
     if (announce) this.opened.emit(p.id);
     const same = this.selected()?.id === p.id; this.selected.set(p); if (!same) { this.tab.set('apercu'); this.note.set(''); } // re-opening the same plugin after an action keeps its tab and its result message
-    this.grantInstall = false; this.grantComponents = false; this.grantHooks = {}; this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
+    this.grantInstall = !!p.grants.install; this.grantComponents = !!p.grants.uiComponents; this.grantHooks = Object.fromEntries((p.grants.hooks ?? []).map(h => [h, true])); this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
       this.edited = Object.fromEntries(m.groups.flatMap((g) => g.fields).map((f) => [f.key, f.type === 'list' && Array.isArray(f.value) ? f.value.join(', ') : f.value]));
@@ -132,7 +132,7 @@ export class PluginsAdmin {
   /** The fault banner's entry point: open the drawer straight on the recovery tab. */
   protected treat(p: PluginInfo) { return this.open(p).then(() => this.tab.set('cycle')); }
   protected save() { const p = this.selected()!; return this.act(() => this.admin.save(p.id, formValues(this.model()!, this.edited)), 'Settings saved.'); }
-  protected enable() { const p = this.selected()!; return this.act(() => this.admin.enable(p.id, this.grants()), `Enabled ${p.name}.`); }
+  protected enable() { const p = this.selected()!; return this.act(() => this.admin.enable(p.id, { uiComponents: this.grantComponents, hooks: Object.keys(this.grantHooks).filter(h => this.grantHooks[h]) }), `Enabled ${p.name}.`); }
   protected disable() { const p = this.selected()!; return this.act(() => this.admin.disable(p.id), `Disabled ${p.name}: its slots are served by the base plugin again.`); }
   /** The mockup's lifecycle strip: 1 not installed, 2 installed, 3 enabled, 4 disabled (data kept), 5 uninstalled (table dropped). */
   protected lifecycle(p: PluginInfo) {
