@@ -62,6 +62,7 @@ button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;c
 .pad .go{grid-column:1/-1;background:var(--accent);color:var(--accent-ink);min-height:0;padding:.75rem}
 .pad .go:disabled{background:var(--line);color:var(--muted);cursor:default}
 .demo{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:.55rem;padding:.5rem .7rem;color:var(--warn-ink)}
+.demo.tag{display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.78rem;line-height:1.5;vertical-align:middle}
 .foot{margin:1.2rem 0 0;font-size:.78rem;color:var(--muted)}
 @media (max-width:480px){.login{padding:1rem}.card{padding:1.4rem}}"#;
 
@@ -301,7 +302,7 @@ fn choice_page(p: &HashMap<String, String>, chains: &[Value], theme: &str) -> Re
         let id = c["id"].as_str().filter(|i| !i.is_empty() && i.len() <= 40 && i.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))?;
         let steps = c["steps"].as_array().map(|a| a.iter().filter_map(|s| s["name"].as_str().map(esc)).collect::<Vec<_>>().join(" &rarr; ")).unwrap_or_default();
         let lvl = c["effectiveLevel"].as_u64().unwrap_or(0);
-        let sim = if c["simulated"].as_bool().unwrap_or(false) { " <span class=\"demo\">includes a simulated step (no real e-mail)</span>" } else { "" };
+        let sim = if c["simulated"].as_bool().unwrap_or(false) { " <span class=\"demo tag\">includes a simulated step (no real e-mail)</span>" } else { "" };
         let rec = if c["recommended"].as_bool().unwrap_or(false) { " <b>(recommended)</b>" } else { "" };
         Some(format!("<li><a class=\"chain\" href=\"/authorize?{base}&amp;chain={}\"><b>{}</b>{rec}</a><br><small>{steps} &middot; declared level {lvl} of 10{sim}</small></li>", pct(id), esc(c["name"].as_str().unwrap_or(id))))
     }).collect::<String>();
