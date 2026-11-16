@@ -73,7 +73,6 @@ const planned = (id: string, name: string, description: string, factor: Factor, 
 });
 const PLANNED: AuthMethodType[] = [
   planned('recovery-code', 'Recovery codes', 'One-time printed codes for account recovery. Not built.', 'knowledge', 5, 'otp'),
-  planned('federation', 'External identity provider (OIDC/SAML)', 'Delegate sign-in to another IdP and map its claims. Not built.', 'other' as Factor, 6, 'fed'),
 ];
 
 /**

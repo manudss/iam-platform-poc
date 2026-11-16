@@ -1,0 +1,10 @@
+/** Refusing base of the auth.sso-facebook slot (step 2): the slot always has a base, so with NO method plugin enabled
+ * every call fails CLOSED - a configured sign-in method that lost its provider can never be satisfied instead of
+ * failing open. Enabling the method plugin (auth-sso-facebook) chooses it as the slot's replacement. */
+const unavailable = () => { throw new Error("auth method 'sso-facebook' has no provider enabled on the slot"); };
+export default {
+  'auth.prepare': unavailable,
+  'auth.external.start': unavailable,
+  'auth.external.verify': unavailable,
+  'auth.verification': () => ({ real: false, note: 'No provider enabled on this slot: the method is disabled.' }),
+};

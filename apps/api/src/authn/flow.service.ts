@@ -9,14 +9,25 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
+import { ExternalIdentity, ExternalProfile, ExternalStart, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, mint, pkceChallenge } from './federation.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
-export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string>; origin?: string }
+export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string>; origin?: string;
+  /** Federated sign-in (docs/sso-federation.md): start the provider round-trip of the running session's current step. */
+  externalStart?: boolean;
+  /** The provider (or DEMO chooser) callback parameters. */
+  externalCallback?: Record<string, string>;
+  /** The authorize params the core captured (the fixed provider callback URL cannot carry them; re-validated by the core on resume). */
+  authorize?: Record<string, string> }
 export type GateResponse =
-  | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string }
+  | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string; resume?: Record<string, string> }
   | { outcome: 'deny'; reason: string; message: string }
-  | { outcome: 'challenge'; session: string; step: { index: number; total: number; methodId: string; type: string } & Prompt; error?: string };
+  | { outcome: 'challenge'; session: string; step: { index: number; total: number; methodId: string; type: string } & Prompt; error?: string; resume?: Record<string, string> }
+  /** Start the provider round-trip in the browser (the core 302s to the url). */
+  | { outcome: 'external-redirect'; url: string }
+  /** SIMULATED provider: the core renders the marked DEMO chooser from these fictional identities. */
+  | { outcome: 'external-sim'; title: string; identities: ExternalIdentity[]; state: string };
 
 interface Session {
   id: string; tenant: string; subject: string; known: boolean; exp: number; index: number;
@@ -30,6 +41,10 @@ interface Session {
   done: { id: string; type: string; real: boolean }[];
   prepared?: { prompt: Prompt; state: Record<string, any> };
   tries: number;
+  /** The authorize params captured by the core at the external start (returned as `resume` after the callback). */
+  authorize?: Record<string, string>;
+  /** The running external round-trip: state/nonce/verifier live HERE, never in the browser beyond the state itself. */
+  pendingExternal?: { instanceId: string; mode: 'oidc' | 'oauth2-userinfo' | 'simulated'; state: string; nonce: string; verifier?: string; start: ExternalStart };
 }
 const SESSION_MS = 5 * 60_000, MAX_TRIES = 3, THROTTLE_N = 10, THROTTLE_MS = 10 * 60_000;
 
@@ -322,6 +337,8 @@ export class AuthnService implements OnApplicationBootstrap {
   /** Returns null when no chain is live: the caller then uses the single base-password path unchanged. */
   async authenticate(b: GateRequest): Promise<GateResponse | null> {
     this.sweep();
+    if (b.externalStart) return this.startExternal(b);
+    if (b.externalCallback) return this.completeExternal(b);
     if (b.session) return this.answer(b);
     const reg = await this.signinRegistry(b.branch);
     const cfg = await this.signinConfig(b.tenant, b.branch);
@@ -347,6 +364,91 @@ export class AuthnService implements OnApplicationBootstrap {
     if (s.branch && typeof b.branch === 'string' && b.branch && b.branch !== s.branch) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };   // a running sign-in stays bound to its branch
     if (!b.answers || typeof b.answers !== 'object') return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     return this.check(s, b.answers);
+  }
+
+  /** The session a start/callback leg belongs to, with the same expiry and tenant rules as a form answer. */
+  private externalSession(b: GateRequest): Session | GateResponse {
+    const s = b.session ? this.sessions.get(String(b.session)) : undefined;
+    if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired', message: 'Your sign-in session expired. Start again.' }; }
+    if (s.branch && typeof b.branch === 'string' && b.branch && b.branch !== s.branch) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
+    return s;
+  }
+
+  /** Federated sign-in, leg 1 (docs/sso-federation.md): the plugin on the slot returns its provider's metadata as
+   * DATA (auth.external.start); this service mints state/nonce/PKCE, keeps them server-side in the session, and
+   * answers with the provider URL (the core 302s) or the DEMO chooser data of a SIMULATED provider. */
+  private async startExternal(b: GateRequest): Promise<GateResponse> {
+    const found = this.externalSession(b);
+    if ('outcome' in found) return found;
+    const s = found;
+    const st = s.steps[s.index], t = methodType(st.type);
+    if (!t || t.factor !== 'other') return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };   // the current step is not a federation step
+    if (b.authorize && typeof b.authorize === 'object') {
+      const keys = ['response_type', 'client_id', 'redirect_uri', 'state', 'code_challenge', 'code_challenge_method', 'branch', 'ticket'];
+      s.authorize = Object.fromEntries(keys.map((k) => [k, b.authorize![k]]).filter(([, v]) => typeof v === 'string' && (v as string).length <= 512)) as Record<string, string>;
+    }
+    const reg = await this.signinRegistry(s.branch);
+    const payload = await this.methodPayload(reg, s, st, s.prepared?.state ?? {});
+    const start = checkStart((await reg.callSlot<ExternalStart>(s.tenant, `auth.${st.type}`, 'auth.external.start', { ...payload, callbackUrl: externalCallbackUrl() })).result);
+    if (!start.ok) { this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-refused', reason: start.reason }); return { outcome: 'deny', reason: 'external-unavailable', message: 'This sign-in method is not available. Try another one.' }; }
+    const state = mint();
+    if (start.mode === 'simulated') {
+      s.pendingExternal = { instanceId: st.id, mode: 'simulated', state, nonce: '', start };
+      this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-start', mode: 'simulated' });
+      return { outcome: 'external-sim', title: start.title!, identities: start.identities!, state };
+    }
+    const cbUrl = externalCallbackUrl();
+    if (!cbUrl) throw new Error('IAM_EXTERNAL_CALLBACK_URL is not configured: a real external provider cannot be reached');   // technical misconfiguration: fail closed (503)
+    const nonce = mint(), verifier = mint();
+    const url = buildAuthorizeUrl(start, cbUrl, { state, nonce, challenge: pkceChallenge(verifier) });
+    s.pendingExternal = { instanceId: st.id, mode: start.mode!, state, nonce, verifier, start };
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-start', mode: start.mode });
+    return { outcome: 'external-redirect', url };
+  }
+
+  /** Federated sign-in, leg 2: the provider state resolves the session when the fixed callback URL could not
+   * carry it; the token exchange runs HERE (openid-client for OIDC, a plain token+userinfo read for OAuth2-only
+   * providers); the plugin decides ok/deny from the resolved profile and the EXPLICIT link only. */
+  private async completeExternal(b: GateRequest): Promise<GateResponse> {
+    const cb = b.externalCallback!;
+    let s = b.session ? this.sessions.get(String(b.session)) : undefined;
+    if (!s && typeof cb.state === 'string' && cb.state) s = [...this.sessions.values()].find((x) => x.pendingExternal?.state === cb.state);
+    if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired', message: 'Your sign-in session expired. Start again.' }; }
+    const deny = (message: string): GateResponse => ({ outcome: 'deny', reason: 'external-failed', message });
+    const p = s.pendingExternal;
+    if (!p || typeof cb.state !== 'string' || cb.state !== p.state) return deny('External sign-in failed. Try again.');
+    const st = s.steps[s.index];
+    if (st.id !== p.instanceId) return deny('External sign-in failed. Try again.');
+    if (cb.error) { this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-denied-by-provider', error: cb.error.slice(0, 80) }); return deny('The provider refused the sign-in. Try again.'); }
+    let profile: ExternalProfile;
+    if (p.mode === 'simulated') {
+      const id = p.start.identities!.find((x) => x.sub === cb.sim);
+      if (!id) return deny('External sign-in failed. Try again.');
+      profile = { sub: id.sub, ...(id.email ? { email: id.email, emailVerified: true } : {}), name: id.label };
+    } else {
+      const cbUrl = externalCallbackUrl();
+      const secret = typeof st.config.clientSecret === 'string' ? st.config.clientSecret : '';
+      profile = p.mode === 'oidc' ? await exchangeOidc(p.start, secret, cbUrl, cb, p) : await exchangeUserinfo(p.start, secret, cbUrl, cb, p);   // a throw is a technical failure: 503, fail closed
+    }
+    const reg = await this.signinRegistry(s.branch);
+    const link = s.subject ? await this.enroll.externalLink(s.tenant, s.subject, st.id) : undefined;
+    const linked = await this.enroll.findExternalLink(s.tenant, st.id, profile.sub);
+    const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(s.tenant, `auth.${st.type}`, 'auth.external.verify',
+      { ...await this.methodPayload(reg, s, st, s.prepared?.state ?? {}), external: profile, link: link ?? null, linkedSubject: linked?.user ?? null })).result;
+    const key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
+    // The link is the ONLY way in (docs/sso-federation.md): no link for this provider subject, no sign-in,
+    // whatever the plugin answered. A linked account that is not the session's account is refused too.
+    if (!verdict?.ok || !linked || (s.subject && linked.user !== s.subject)) {
+      this.fail(key); s.tries++;
+      this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'step-failed', via: 'external' });
+      const message = verdict?.ok ? 'No account is linked to this provider sign-in.' : (typeof verdict?.message === 'string' && verdict.message.length <= 160 ? verdict.message : 'External sign-in failed. Try again.');
+      if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return deny('Sign-in failed. Check your details and try again.'); }
+      return deny(message);
+    }
+    if (!s.subject) { s.subject = linked.user; s.known = await this.known(s.tenant, linked.user, s.branch); }
+    s.pendingExternal = undefined;
+    const r = await this.advance(s);
+    return { ...r, ...(s.authorize ? { resume: s.authorize } : {}) };
   }
   private async prepare(s: Session) {
     const st = s.steps[s.index];
@@ -404,10 +506,17 @@ export class AuthnService implements OnApplicationBootstrap {
       if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
       return this.challenge(s, `Incorrect answer. ${MAX_TRIES - s.tries} attempt(s) left.`);
     }
+    return this.advance(s);
+  }
+  /** The accepted step is recorded and the chain moves on: next step's challenge, or the final allow with the claims. */
+  private async advance(s: Session): Promise<GateResponse> {
+    const st = s.steps[s.index];
     s.done.push({ id: st.id, type: st.type, real: st.real }); s.index++;
     if (s.index < s.steps.length) { await this.prepare(s); return this.challenge(s); }
-    this.sessions.delete(s.id); this.fails.delete(key);
-    const real = s.done.filter((d) => d.real), factors = new Set(real.map((d) => methodType(d.type)!.factor));
+    this.sessions.delete(s.id); this.fails.delete(`${s.tenant}/${s.branch ?? 'live'}/${s.subject}`);
+    // Factor 'other' (federation) never counts toward MFA by itself: a federated step asserts a sign-in happened
+    // at the provider, not an independent factor of THIS service (docs/sso-federation.md).
+    const real = s.done.filter((d) => d.real), factors = new Set(real.map((d) => methodType(d.type)!.factor).filter((f) => f !== 'other'));
     const claims = {
       amr: [...new Set(real.map((d) => methodType(d.type)!.amr))],
       auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',

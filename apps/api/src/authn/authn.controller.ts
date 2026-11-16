@@ -60,10 +60,17 @@ export class AuthnAdminController {
    * DEMO provisioning by an administrator. The secret or PIN is returned once and never again. A real product enrolls from the user's own session.
    * Body: { email } for e-mail codes; { pin } or { length } for digit codes (a PIN typed here goes to the server over this request only).
    */
-  @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number }, @Req() req: { user?: { branch?: string } }) {
+  @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number; externalSub?: string; externalEmail?: string }, @Req() req: { user?: { branch?: string } }) {
     assertNotBranchTest(req); // enrollments are shared, unversioned secrets: never written from a branch-test session
     this.user(u); const { m, type } = await this.instance(t, inst);
     await this.assertSurfaceAllows(t, type.id, 'admin');
+    if (type.factor === 'other') {
+      // Federated sign-in: EXPLICITLY link the provider subject to this account (docs/sso-federation.md). Never by e-mail match.
+      if (typeof b?.externalSub !== 'string' || !b.externalSub || b.externalSub.length > 255) throw new BadRequestException('externalSub required: the provider subject to link to this account');
+      const email = typeof b?.externalEmail === 'string' && /^[^\s@]{1,64}@[^\s@]{1,120}$/.test(b.externalEmail) ? b.externalEmail : undefined;
+      await this.authn.enroll.setExternalLink(t, u, inst, { sub: b.externalSub, ...(email ? { email } : {}) });
+      return { instance: inst, type: type.id, linked: { sub: b.externalSub } };
+    }
     if (type.id === 'totp') {
       const secret = newTotpSecret(); await this.authn.enroll.setTotp(t, u, inst, secret);
       return { instance: inst, type: type.id, shownOnce: { secret, otpauthUri: otpauthUri(String(m.config.issuer ?? 'IAM POC'), u, secret, Number(m.config.periodSeconds ?? 30), Number(m.config.digits ?? 6)) }, note: 'Shown once. Demo provisioning only.' };

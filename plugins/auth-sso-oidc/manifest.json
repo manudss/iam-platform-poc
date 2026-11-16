@@ -1,0 +1,105 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-sso-oidc",
+  "version": "1.0.0",
+  "name": "Sign in with an OpenID Connect provider",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "provides": [
+    "auth.sso-oidc"
+  ],
+  "extends": "auth-sso-oidc-base",
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.start",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.verify",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "providerName",
+      "type": "string",
+      "label": "Provider name (shown on the button)",
+      "default": "SSO",
+      "group": "Provider"
+    },
+    {
+      "key": "issuer",
+      "type": "url",
+      "label": "Issuer URL",
+      "help": "The exact iss of the provider's tokens.",
+      "default": "",
+      "group": "Provider"
+    },
+    {
+      "key": "authorizeEndpoint",
+      "type": "url",
+      "label": "Authorization endpoint",
+      "default": "",
+      "group": "Endpoints"
+    },
+    {
+      "key": "tokenEndpoint",
+      "type": "url",
+      "label": "Token endpoint",
+      "default": "",
+      "group": "Endpoints"
+    },
+    {
+      "key": "jwksUri",
+      "type": "url",
+      "label": "JWKS URI",
+      "default": "",
+      "group": "Endpoints"
+    },
+    {
+      "key": "clientId",
+      "type": "string",
+      "label": "Client ID",
+      "default": "",
+      "group": "Client"
+    },
+    {
+      "key": "clientSecret",
+      "type": "secret",
+      "label": "Client secret",
+      "group": "Client"
+    },
+    {
+      "key": "scopes",
+      "type": "string",
+      "label": "Scopes (space-separated)",
+      "default": "openid email profile",
+      "group": "Client"
+    }
+  ],
+  "authMethod": {
+    "name": "External provider (OpenID Connect)",
+    "description": "Federated sign-in with any OpenID Connect provider (issuer, audience, signature and nonce checks). Covers providers without a dedicated plugin. The account must be explicitly linked to a local account.",
+    "factor": "other",
+    "amr": "fed",
+    "maturity": "implemented",
+    "suggestedLevel": 6,
+    "provisioning": "admin-demo"
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

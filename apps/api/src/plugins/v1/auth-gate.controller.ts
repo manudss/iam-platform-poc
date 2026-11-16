@@ -48,11 +48,30 @@ export class AuthGateController {
   }
 
   @Post('authenticate') @HttpCode(200)
-  async authenticate(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string; subject?: string; password?: string; session?: string; chain?: string; branch?: string; ticket?: string; origin?: string; answers?: Record<string, string> }) {
+  async authenticate(@Headers('x-gate-token') tok: string | undefined, @Body() b: { tenant?: string; subject?: string; password?: string; session?: string; chain?: string; branch?: string; ticket?: string; origin?: string; answers?: Record<string, string>; externalStart?: boolean; externalCallback?: Record<string, string>; authorize?: Record<string, string> }) {
     const want = process.env.IAM_AUTH_GATE_TOKEN;
     if (!want || want.length < 8) throw new NotFoundException();
     const a = Buffer.from(tok ?? ''), w = Buffer.from(want);
     if (a.length !== w.length || !timingSafeEqual(a, w)) throw new HttpException({ outcome: 'error', code: 'bad-gate-token' }, 401);
+    // The external-provider round-trip legs (docs/sso-federation.md): start needs the running session; the
+    // callback resolves the session from the provider state when the fixed provider URL could not carry it.
+    if (this.authn && typeof b?.tenant === 'string' && (b.externalStart === true || (b.externalCallback && typeof b.externalCallback === 'object' && !Array.isArray(b.externalCallback)))) {
+      const str = (o: Record<string, unknown> | undefined, keys: string[], max: number) => {
+        const out: Record<string, string> = {};
+        for (const k of keys) { const v = o?.[k]; if (typeof v === 'string' && v && v.length <= max) out[k] = v; }
+        return out;
+      };
+      try {
+        const r = await this.authn.authenticate({ tenant: b.tenant, session: typeof b.session === 'string' ? b.session : undefined,
+          externalStart: b.externalStart === true || undefined,
+          externalCallback: b.externalCallback ? str(b.externalCallback, ['code', 'state', 'iss', 'sim', 'error', 'error_description'], 2048) : undefined,
+          authorize: b.authorize ? str(b.authorize, ['response_type', 'client_id', 'redirect_uri', 'state', 'code_challenge', 'code_challenge_method', 'branch', 'ticket'], 512) : undefined });
+        if (r) return r;
+      } catch (e) {
+        throw new HttpException({ outcome: 'error', code: (e as { code?: string }).code ?? 'plugin-failed' }, 503);
+      }
+      return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
+    }
     if (this.authn && typeof b?.tenant === 'string' && (typeof b.session === 'string' || typeof b.subject === 'string')) {
       // Chain mode: the control plane runs the steps (a bare password is the first step's answer when that step is a password). null = no chain is live, fall through to the base password path.
       // A first page that names a branch needs its valid ticket; a running session is bound to its branch on the service side.

@@ -1,0 +1,71 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-sso-microsoft",
+  "version": "1.0.0",
+  "name": "Sign in with Microsoft",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "provides": [
+    "auth.sso-microsoft"
+  ],
+  "extends": "auth-sso-microsoft-base",
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.start",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.verify",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "clientId",
+      "type": "string",
+      "label": "Application (client) ID",
+      "help": "Of a Microsoft Entra app registration. Empty = SIMULATED demonstration mode.",
+      "default": "",
+      "group": "Microsoft Entra"
+    },
+    {
+      "key": "clientSecret",
+      "type": "secret",
+      "label": "Client secret",
+      "group": "Microsoft Entra"
+    },
+    {
+      "key": "tenant",
+      "type": "string",
+      "label": "Directory (tenant) ID",
+      "help": "The tenant GUID. Token issuers are tenant-specific: a specific GUID is required, 'common'/'organizations' cannot be validated.",
+      "default": "",
+      "group": "Microsoft Entra"
+    }
+  ],
+  "authMethod": {
+    "name": "Microsoft",
+    "description": "Federated sign-in with a Microsoft Entra account (OpenID Connect: issuer, audience, signature and nonce checks; the tenant GUID pins the issuer). The account must be explicitly linked to a local account.",
+    "factor": "other",
+    "amr": "fed",
+    "maturity": "implemented",
+    "suggestedLevel": 6,
+    "provisioning": "admin-demo"
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}
