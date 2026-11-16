@@ -62,7 +62,7 @@ Les 11 définitions de workflows sont conservées. Aucun scénario Google réel 
 
 Les trois candidats simulés démarrent désormais avec `process=En cours`, `cree` vide. Le watcher ne doit donc créer aucun run RH au démarrage. La feuille est en RAM : un redémarrage de processus réinitialise ces lignes, même si Dolt persiste. Ce n'est pas un journal durable de l'état RH.
 
-Les blocs Google/Jira du seed par défaut portent explicitement `executionMode=simulation`. Les transformations et écritures IAM sont réelles sur la branche du run, mais la mise à jour Google est simulée : sortie attendue `dryRun:true, updated:false`, cellule `cree` inchangée. Le webhook d'intake simule lui aussi l'ajout, il n'ajoute pas de ligne. Les textes du seed le disent, même si le badge générique du catalogue/run indique encore qu'un type de bloc est « REAL-capable ». Ne pas présenter ce badge comme preuve d'un effet externe.
+Les blocs Google/Jira du seed par défaut portent explicitement `executionMode=simulation`. Les transformations et écritures IAM sont réelles sur la branche du run, mais la mise à jour Google est simulée : sortie attendue `dryRun:true, updated:false`, cellule `cree` inchangée. Le webhook d'intake simule lui aussi l'ajout, il n'ajoute pas de ligne. Les textes du seed le disent, Le catalogue décrit la capacité du type de bloc ; la vue d'exécution calcule désormais son badge depuis le mode du run et les reçus dryRun, donc mark apparaît SIMULATED dans le replay et la liste des étapes.
 
 ### Ce qui n'est pas semé
 
@@ -80,3 +80,13 @@ Aucun compte `bernard.lea`, rôle de répétition, branche `workflow/*` ou `ai/*
 4. Le chemin SSO local n'exige pas de rediriger PeopleHub : utiliser `node demo/oidc-test-client.mjs <origine>/api/sso/acme-demo/oidc wiki 4300` et suivre le vrai consentement/PKCE. Le callback localhost:4300 est déjà enregistré. Ne pas modifier les destinations des applications hébergées en douce.
 5. Vérifier Cedar SoD (refus), puis une vraie session MCP : écriture sur sa branche IA, `mysql.user` refusé, revue sans merge. Ne pas semer ces preuves à l'avance.
 6. Au second démarrage avec les mêmes données : pas de réécriture des définitions personnalisées, pas de réactivation d'un plugin volontairement désactivé. Vérifier séparément les lignes RAM réinitialisées et la conservation effective des données Dolt. La restauration de la ligne d'incident existante demeure un sujet distinct.
+
+
+### Écarts relevés pendant la validation et suivis
+
+La validation locale intégrée du SHA `7f8ac37` a vérifié, avec Dolt/NATS/core/API/web réels, le seed vide, le geste RH, les données isolées et un second démarrage. Elle ne constitue pas une validation de l'instance en ligne. Le lanceur `scripts/demo-start.sh` lui-même n'a pas encore été exécuté de bout en bout.
+
+- Le badge REAL de mark venait de la catégorie du bloc, pas du mode exécuté. La réponse runView expose maintenant SIMULATED pour les blocs externes en simulation, les tests éditeur et les reçus dryRun. Les écritures IAM restent REAL ; les transformations restent COMPUTED.
+- Recent runs était une photographie au chargement. Un bouton Refresh runs recharge uniquement les runs/statistiques, sans toucher aux modifications non sauvegardées de la feuille. Pas de polling implicite ni de déclenchement du watcher ajouté.
+- Après redémarrage du core, les anciens tokens peuvent être refusés (clé de signature de démo renouvelée). L'edge utilisait la simple présence du cookie pour renvoyer le login vers l'application ; après refus SSR, cela pouvait boucler. Quand SSR redirige déjà vers `/login`, l'edge efface maintenant le cookie durable refusé. Aucune vérification n'est contournée, aucune action n'est rejouée, aucune clé n'est persistée par ce correctif. Tests edge avec cookie artificiel expiré et avec exp futur refusé ; nouvelle connexion explicite requise.
+- Deux anciens tests de watcher présumaient des candidats OK au boot. Ils préparent désormais explicitement leurs lignes prêtes, avec contrôle du non-déclenchement avant ce geste pour le test Dolt.

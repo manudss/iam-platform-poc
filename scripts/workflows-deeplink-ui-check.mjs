@@ -27,6 +27,7 @@ const server = createServer(async (req, res) => {
     if (p === '/versioning/branches') return json({ branches: [{ name: 'main' }, { name: 'personal/demo-alice' }] });
     if (p === '/workflows') return json({ definitions: [{ id: 'wf-local-fixture', name: 'Local regression fixture', description: 'Mocked API: no external effects', active: true, tags: [], trigger: null, graph: { nodes: [], edges: [] }, stats: { runs: 0, succeeded: 0, failed: 0, successRate: 0, lastStatus: null, lastAt: null }, updatedAt: '2026-11-16T00:00:00Z' }] });
     if (p === '/workflow-runs') return json({ runs: [] });
+    if (p === '/workflow-runs/run-simulation') return json({ run: { id: 'run-simulation', definition_id: 'wf-local-fixture', name: 'Local simulation badge regression', branch: 'workflow/local', status: 'completed', simulatedOnly: false, started_by: 'local-test', started_at: '2026-11-16T18:00:00Z', finished_at: '2026-11-16T18:00:01Z', order: ['mark'], edges: [] }, steps: [{ node_id: 'mark', name: 'Simulate marking cree=ok (sheet unchanged)', type: 'google-sheets-update', label: 'Google Sheets update', status: 'done', category: 'simulated', simulated: false, attempts: 1, error: null, log: ['SIMULATION: no sheet mutation'], output: { dryRun: true, updated: false } }] });
     if (p.endsWith('/demo-sheet')) return json({ name: 'Local test fixture', source: 'demo', columns: [], rows: [] });
     if (p === '/versioning/branches/personal%2Fdemo-alice') return json({});
     return json({ branches: [], changes: [], tables: [], links: [], settings: {}, values: {} });
@@ -49,7 +50,21 @@ try {
   assert.ok(calls.filter(c => c.p === '/workflows').every(c => c.branch === 'personal/demo-alice'));
   await page.waitForFunction(() => !document.body.innerText.includes('Opening your branch'));
   await page.screenshot({ path: join(out, 'workflows-deeplink-fixed.png'), fullPage: true });
+  const beforeSheetReads = calls.filter(c => c.p.endsWith('/demo-sheet')).length;
+  const beforeRuns = calls.filter(c => c.p === '/workflow-runs').length;
+  await page.getByRole('button', { name: 'Refresh runs', exact: true }).click();
+  await page.waitForTimeout(200);
+  assert.ok(calls.filter(c => c.p === '/workflow-runs').length > beforeRuns);
+  assert.equal(calls.filter(c => c.p.endsWith('/demo-sheet')).length, beforeSheetReads, 'run refresh leaves candidate edits alone');
+  await page.goto(origin+'/workflows/runs?run=run-simulation');
+  await page.getByText('Simulate marking cree=ok (sheet unchanged)', { exact: true }).first().waitFor();
+  await page.locator('.wf-step .chip:has-text("SIMULATED")').waitFor();
+  for (const mode of ['light', 'dark']) {
+    await page.evaluate(m => document.documentElement.dataset.theme = m, mode);
+    await page.screenshot({ path: join(out, `workflows-simulation-${mode}.png`), fullPage: true });
+  }
   enabled = false;
+  await page.goto(origin+'/workflows');
   await page.reload(); await page.waitForURL('**/plugins');
   await page.screenshot({ path: join(out, 'workflows-disabled-redirect.png'), fullPage: true });
   console.log(JSON.stringify({ passed: true, directAndRefresh: true, disabledStillBlocked: true, branchScopedCalls: calls.filter(c => c.p === '/plugins' || c.p === '/workflows'), screenshots: out }));

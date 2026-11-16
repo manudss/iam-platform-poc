@@ -69,6 +69,13 @@ function proxy(req, res, target, strip, htmlHeaders, timeoutMs = 15000) {
   const path = strip ? req.url.replace(/^\/(core|api)/, '') || '/' : req.url;
   const upstream = http.request({ host: target.host, port: target.port, path, method: req.method, headers: { ...req.headers, host: `${target.host}:${target.port}`, 'x-forwarded-host': req.headers['x-forwarded-host'] ?? req.headers.host, 'x-forwarded-proto': req.headers['x-forwarded-proto'] ?? 'http' }, timeout: timeoutMs }, (u) => {
     const headers = { ...u.headers };
+    // SSR has rejected the session and asks for sign-in. Drop its durable cookie before following
+    // that redirect, otherwise /login sees the stale cookie and bounces straight back to the app.
+    // This does not authenticate a token or retry an action; verification remains upstream.
+    if (target === SSR && [301, 302, 303, 307, 308].includes(u.statusCode) && /^\/login(?:[?#]|$)/.test(String(headers.location ?? '')) && parseCookies(req)[SESSION_COOKIE]) {
+      const prev = headers['set-cookie'];
+      headers['set-cookie'] = [...(Array.isArray(prev) ? prev : prev ? [prev] : []), clearSessionCookie()];
+    }
     // Page responses keep the edge's policy headers (frame rules, no HTML caching): they stay the edge's job.
     if (htmlHeaders && /text\/html/i.test(String(u.headers['content-type'] ?? ''))) Object.assign(headers, htmlHeaders());
     res.writeHead(u.statusCode ?? 502, headers);

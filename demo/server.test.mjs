@@ -175,3 +175,29 @@ test('sign-in routes do not time out at 15 s before the 30 s core gate budget', 
     }
   } finally { edge.kill('SIGKILL'); core.closeAllConnections(); await new Promise((ok) => core.close(ok)); }
 });
+
+test('a session rejected by SSR clears the cookie before redirecting to login, including after core restart', async () => {
+  const ssr = http.createServer((rq, res) => {
+    if (rq.url === '/my-applications' && rq.headers.cookie) {
+      res.writeHead(302, { location: '/login', 'set-cookie': 'upstream=kept; Path=/' });
+      return res.end();
+    }
+    res.end('sign-in form');
+  });
+  await new Promise(ok => ssr.listen(0, '127.0.0.1', ok));
+  const edgePort = await freePort();
+  const edge = spawn(process.execPath, [join(here, 'server.mjs')], { env: { ...process.env, PORT: String(edgePort), SSR_PORT: String(ssr.address().port) }, stdio: 'ignore' });
+  try {
+    for (let i = 0; i < 50; i++) { try { if ((await req(edgePort, 'GET', '/healthz')).status === 200) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
+    for (const exp of [1, Math.floor(Date.now() / 1000) + 1800]) {
+      // Artificial token, never a credential. A future exp models the old signing key after reboot.
+      const cookie = `iam_session=h.${Buffer.from(JSON.stringify({ exp })).toString('base64url')}.invalid`;
+      const rejected = await req(edgePort, 'GET', '/my-applications', { cookie });
+      assert.equal(rejected.status, 302); assert.equal(rejected.location, '/login');
+      assert.ok(rejected.cookies.includes('upstream=kept; Path=/'));
+      assert.ok(rejected.cookies.some(c => c.startsWith('iam_session=;') && c.includes('Max-Age=0') && c.includes('HttpOnly')), 'rejected cookie cleared, no authentication bypass');
+      const login = await req(edgePort, 'GET', rejected.location);
+      assert.equal(login.status, 200); assert.equal(login.body, 'sign-in form');
+    }
+  } finally { edge.kill('SIGKILL'); ssr.closeAllConnections(); await new Promise(ok => ssr.close(ok)); }
+});

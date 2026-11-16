@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
-import { blockCatalogue, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
+import { blockCatalogue, runStepCategory, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
@@ -321,7 +321,7 @@ export class WorkflowsService {
       steps: order.map((nodeId) => {
         const s = steps.find((x) => x.node_id === nodeId);
         const n = nodes.get(nodeId)!;
-        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label, category: stepCategoryOf(n.type) };
+        return { ...(s ?? { run_id: r.id, node_id: nodeId, status: 'pending' as const, simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null }), name: n.name, type: n.type, label: STEP_TYPES[n.type].label, category: runStepCategory(n, r.test, s?.output) };
       }),
     };
   }

@@ -46,3 +46,15 @@ it('every default external action explicitly stays simulated without a connectio
   }
   assert.equal(actions, 4);
 });
+
+it('run badges use execution mode and dry-run receipts rather than external block capability', async () => {
+  const { runStepCategory } = await import('./model.js');
+  const mark = SEEDS.find(s => s.id === 'wf-hr-onboarding')!.nodes.find(n => n.id === 'mark')!;
+  assert.equal(runStepCategory(mark), 'simulated');
+  assert.equal(runStepCategory({ ...mark, config: { executionMode: 'real' } }), 'real');
+  assert.equal(runStepCategory({ ...mark, config: { executionMode: 'real' } }, true), 'simulated');
+  assert.equal(runStepCategory({ ...mark, config: { executionMode: 'real' } }, false, { dryRun: true, updated: false }), 'simulated');
+  assert.equal(runStepCategory({ ...mark, type: 'jira-create-issue', config: { executionMode: 'real', dryRun: true } }), 'simulated');
+  assert.equal(runStepCategory({ ...mark, type: 'text-transform' }), 'computed');
+  assert.equal(runStepCategory({ ...mark, type: 'assign-role' }), 'real');
+});

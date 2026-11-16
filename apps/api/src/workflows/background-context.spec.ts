@@ -13,12 +13,13 @@ it('public webhook and background sheet watcher select main registry and establi
   const active = { isActive: () => true, impl: () => ({ manifest: { settings: [] } }), settingsFor: async () => ({}) };
   const disabled = { isActive: () => false };
   const branches = { get: async (ref: string) => { selected.push(ref); return active; } };
-  const store = { liveRef: 'main', getDefinition: async () => ({ id: 'wf', trigger: { event: 'http.webhook-received', config: { token: 'test-only-token' } } }), listAllDefinitions: async () => [{ id: 'sheet', tenant: 'acme', trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet' } } }] };
+  const store = { liveRef: 'main', getDefinition: async () => ({ id: 'wf', trigger: { event: 'http.webhook-received', config: { token: 'test-only-token' } } }), listAllDefinitions: async () => [{ id: 'sheet', tenant: 'acme', trigger: { event: 'google-sheets.row-ready', config: { source: 'demo-sheet', watchValue: 'En cours' } } }] };
   const wf = { start: async () => { assert.equal(currentBranch(), 'main'); starts++; return { run: { id: 'test-run', status: 'completed' } }; } };
   try {
     const hook = new WorkflowHooksController(store as never, wf as never, disabled as never, branches as never);
     assert.equal((await hook.fire('acme', 'wf', 'test-only-token', {})).run, 'test-run');
     const poller = new WorkflowSheetPollerService(store as never, wf as never, disabled as never, branches as never);
+    // Test-specific readiness: shipped rows intentionally start pending.
     await poller.tick();
     assert.ok(starts >= 2, 'watcher used enabled main registry rather than disabled legacy registry');
     assert.deepEqual(selected, ['main', 'main']);

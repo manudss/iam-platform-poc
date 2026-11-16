@@ -140,6 +140,9 @@ describe('workflow-connectors spike + real Dolt', { skip: !have && 'dolt binary 
       },
     })) as { definition: { id: string } };
     await app.get(WorkflowSheetPollerService).tick();
+    assert.equal(((await ok('GET', `/workflow-runs?definition=${def.definition.id}`)) as { runs: unknown[] }).runs.length, 0, 'pending seed rows do not trigger');
+    for (const row of [2, 4]) await ok('PUT', `/plugins/workflow-connectors/demo-sheet/rows/${row}`, { column: 'process', value: 'OK' });
+    await app.get(WorkflowSheetPollerService).tick();
     const runs = (await ok('GET', `/workflow-runs?definition=${def.definition.id}`)) as { runs: { id: string; status: string }[] };
     assert.ok(runs.runs.length >= 2, `rows Martin + Dubois are ready, got ${runs.runs.length} run(s)`);
     const completed = await Promise.all(runs.runs.map((r) => waitRun(r.id, ['completed'])));
