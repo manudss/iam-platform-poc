@@ -34,7 +34,20 @@ pub enum Step {
     Deny(Option<String>),
     /// A further step is needed: the JSON of the step (title, message, fields) and the opaque session id.
     Challenge(Value),
+    /// An external provider step starts here: the control plane minted the provider URL (state/nonce/PKCE live
+    /// server-side in the flow session). The core only redirects to it (docs/sso-federation.md).
+    ExternalRedirect(String),
+    /// An external provider step in SIMULATED mode: the control plane describes the fictional identities and the
+    /// core renders the DEMO chooser page. Never produced when a real client id is configured.
+    ExternalSim(Value),
     Unavailable,
+}
+
+/// A provider redirect URL the core may send the browser to: https, or a loopback http URL (local fake provider
+/// in dev/e2e). Anything else is treated as a malformed gate answer.
+fn provider_url_ok(u: &str) -> bool {
+    !u.is_empty() && u.len() <= 2048 && (u.starts_with("https://")
+        || u.starts_with("http://localhost") || u.starts_with("http://127.0.0.1") || u.starts_with("http://[::1]"))
 }
 
 /// Budget for one gate answer. 3s is comfortable locally; the hosted demo (tiny shared CPU, several bus
@@ -48,15 +61,32 @@ fn gate_timeout() -> Duration {
         .unwrap_or(Duration::from_secs(3))
 }
 
+fn parse_step(v: &Value) -> Step {
+    match v["outcome"].as_str() {
+        Some("allow") => Step::Allow { subject: v["subject"].as_str().map(String::from), claims: v["claims"].clone() },
+        Some("challenge") if v["session"].is_string() && v["step"]["fields"].is_array() => Step::Challenge(v.clone()),
+        Some("external-redirect") => match v["url"].as_str() { Some(u) if provider_url_ok(u) => Step::ExternalRedirect(u.to_string()), _ => Step::Unavailable },
+        Some("external-sim") if v["identities"].is_array() && v["state"].is_string() => Step::ExternalSim(v.clone()),
+        Some("external-sim") => Step::Unavailable,
+        _ => Step::Deny(v["message"].as_str().map(String::from)),
+    }
+}
+
 /// Asks the gate (loopback) for the next step. FAIL CLOSED: anything but a clear 200 answer is `Unavailable`.
 pub async fn step(addr: &str, token: &str, body: Value) -> Step {
     match tokio::time::timeout(gate_timeout(), post(addr, token, "/internal/auth/authenticate", &body)).await {
-        Ok(Some(v)) => match v["outcome"].as_str() {
-            Some("allow") => Step::Allow { subject: v["subject"].as_str().map(String::from), claims: v["claims"].clone() },
-            Some("challenge") if v["session"].is_string() && v["step"]["fields"].is_array() => Step::Challenge(v),
-            _ => Step::Deny(v["message"].as_str().map(String::from)),
-        },
+        Ok(Some(v)) => parse_step(&v),
         _ => Step::Unavailable,
+    }
+}
+
+/// The callback leg of an external-provider round-trip: the step plus `resume`, the authorize params the control
+/// plane captured at start (a provider calls back on ONE fixed registered URL, so the request cannot carry them;
+/// the params are untrusted here and the core re-validates them before use).
+pub async fn external_callback_step(addr: &str, token: &str, body: Value) -> (Step, Option<Value>) {
+    match tokio::time::timeout(gate_timeout(), post(addr, token, "/internal/auth/authenticate", &body)).await {
+        Ok(Some(v)) => (parse_step(&v), if v["resume"].is_object() { Some(v["resume"].clone()) } else { None }),
+        _ => (Step::Unavailable, None),
     }
 }
 

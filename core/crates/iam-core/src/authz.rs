@@ -48,6 +48,7 @@ label{display:block;margin:.8rem 0 0;font-weight:600;color:var(--ink)}
 input{display:block;width:100%;margin-top:.25rem;padding:.65rem .75rem;font:inherit;border:1px solid var(--line);border-radius:.55rem;background:var(--auth-field);color:var(--ink)}
 input:focus{outline:2px solid var(--accent);border-color:var(--accent)}
 button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:var(--accent-ink);background:var(--accent);border:0;border-radius:.55rem;cursor:pointer}
+.linkbtn{display:block;box-sizing:border-box;margin-top:1.1rem;width:100%;padding:.7rem;font-weight:600;text-align:center;text-decoration:none;color:var(--accent-ink);background:var(--accent);border-radius:.55rem}
 .err{color:var(--bad)}
 .back{display:inline-block;margin-top:1rem}
 .dots{display:flex;gap:.5rem;justify-content:center;margin:1rem 0}
@@ -199,6 +200,31 @@ fn keypad_html(f: &Value, label: &str) -> Option<String> {
 /// True when one of the fields is a passkey ceremony: the page then loads the core's ceremony script.
 fn has_webauthn(fields: Option<&[Value]>) -> bool { fields.is_some_and(|fs| fs.iter().any(|f| f["type"].as_str() == Some("webauthn"))) }
 
+/// A `link` field: the step continues at an external provider, so the core renders a button-like anchor to its own
+/// /authorize/external route. The href is built HERE from the already validated authorize params plus the running
+/// session id: the control plane supplies only the label (provider name), never a URL.
+fn link_html(f: &Value, p: &HashMap<String, String>, session: &str) -> Option<String> {
+    if f["type"].as_str() != Some("link") { return None; }
+    let label = f["label"].as_str()?.trim();
+    if label.is_empty() || label.len() > 60 { return None; }
+    let href = format!("/authorize/external?{}", external_query(p, session));
+    Some(format!("<a class=\"linkbtn\" href=\"{}\">{}</a>", esc(&href), esc(label)))
+}
+
+/// The query string the external routes and their pages carry: the validated authorize params plus the running
+/// flow session id, all percent-encoded here. Callers prepend the route and append their own parameters.
+fn external_query(p: &HashMap<String, String>, session: &str) -> String {
+    let mut q: Vec<String> = Vec::new();
+    for k in ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain", "branch", "ticket"] {
+        if let Some(v) = p.get(k) { if !v.is_empty() { q.push(format!("{k}={}", pct(v))); } }
+    }
+    q.push(format!("session={}", pct(session)));
+    q.join("&")
+}
+
+/// An opaque flow session id on the external routes: minted by the control plane, carried untouched by the core.
+fn session_ok(s: &str) -> bool { !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') }
+
 /// Passkey step (WebAuthn): the request options travel as JSON in a data attribute of this block; the ceremony
 /// script (WA_JS, the only script these pages ever run, inlined and pinned by its CSP hash on this page only)
 /// runs the browser ceremony, writes the signed answer into the hidden field and submits the form. A malformed
@@ -290,9 +316,11 @@ fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>, theme:
     let (i, n) = (st["index"].as_u64().unwrap_or(0) + 1, st["total"].as_u64().unwrap_or(1));
     let msg = st["message"].as_str().map(|m| format!("<p{}>{}</p>", if m.starts_with("DEMO") { " class=\"demo\"" } else { "" }, esc(m))).unwrap_or_default();
     let err = error.or(v["error"].as_str()).map(|e| format!("<p class=\"err\" role=\"alert\">{}</p>", esc(e))).unwrap_or_default();
-    let inputs = st["fields"].as_array().map(|f| f.iter().filter_map(input_html).collect::<String>()).unwrap_or_default();
+    let session = v["session"].as_str().unwrap_or("");
+    let has_link = st["fields"].as_array().is_some_and(|fs| fs.iter().any(|f| f["type"].as_str() == Some("link")));
+    let inputs = st["fields"].as_array().map(|f| f.iter().filter_map(|f| if f["type"].as_str() == Some("link") { link_html(f, p, session) } else { input_html(f) }).collect::<String>()).unwrap_or_default();
     let script = has_webauthn(st["fields"].as_array().map(Vec::as_slice));
-    let cont = if inputs.contains("class=\"pad\"") || script { "" } else { "<button type=\"submit\">Continue</button>" };
+    let cont = if inputs.contains("class=\"pad\"") || script || has_link { "" } else { "<button type=\"submit\">Continue</button>" };
     let card = format!("<h1 class=\"page-title\">{}</h1><p class=\"lead\">Step {i} of {n}.</p>{msg}{err}\
          <form method=\"post\" action=\"/authorize/login\">{}<input type=\"hidden\" name=\"session\" value=\"{}\">{inputs}{cont}</form>{}",
         esc(title), hidden(p), esc(v["session"].as_str().unwrap_or("")), back_link(p));
@@ -363,6 +391,8 @@ pub async fn login(State(c): State<Arc<Core>>, headers: HeaderMap, Form(p): Form
             }
             crate::gate::Step::Challenge(v) => return step_page(&p, &v, None, &theme),
             crate::gate::Step::Unavailable => return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
+            // An external-provider answer to a form post is a malformed answer here: fail closed.
+            _ => return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
         }
     }
     let test_branch = if g("branch").is_empty() { None } else { Some(g("branch")) };
@@ -381,6 +411,116 @@ pub async fn login(State(c): State<Arc<Core>>, headers: HeaderMap, Form(p): Form
         }
         Err(_) => error_page(StatusCode::BAD_REQUEST, "invalid request", &theme),
     }
+}
+
+/// GET /authorize/external: a `link` step starts here. The core asks the control plane to begin the provider
+/// round-trip for the running session and redirects the browser to the provider URL it returns (state, nonce and
+/// the PKCE verifier never touch the browser URL: they live server-side in the flow session). FAIL CLOSED: no
+/// gate, a malformed answer or an unreachable control plane never produces a redirect.
+pub async fn external_start(State(c): State<Arc<Core>>, headers: HeaderMap, Query(p): Query<HashMap<String, String>>) -> Response {
+    let theme = theme_of(&headers);
+    if let Err(r) = validate(&c, &p, &theme) { return r; }
+    let session = p.get("session").map(String::as_str).unwrap_or("");
+    if !session_ok(session) { return error_page(StatusCode::BAD_REQUEST, "invalid sign-in session", &theme); }
+    let Some((addr, tok)) = &c.gate else { return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme); };
+    // The control plane captures the (validated) authorize params: the provider callback URL is fixed and cannot carry them.
+    let mut body = json!({"tenant": "acme-demo", "session": session, "externalStart": true});
+    body["authorize"] = json!({"response_type": "code", "client_id": g(&p, "client_id"), "redirect_uri": g(&p, "redirect_uri"), "state": g(&p, "state"), "code_challenge": g(&p, "code_challenge"), "code_challenge_method": g(&p, "code_challenge_method"), "branch": g(&p, "branch"), "ticket": g(&p, "ticket")});
+    match crate::gate::step(addr, tok, body).await {
+        crate::gate::Step::ExternalRedirect(url) => {
+            let mut r = (StatusCode::FOUND, [(header::LOCATION, url)]).into_response();
+            r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            r
+        }
+        crate::gate::Step::ExternalSim(v) => sim_page(&p, session, &v, &theme),
+        crate::gate::Step::Deny(m) => error_page(StatusCode::UNAUTHORIZED, m.as_deref().unwrap_or("Sign-in failed. Check your details and try again."), &theme),
+        _ => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
+    }
+}
+
+fn g(p: &HashMap<String, String>, k: &str) -> String { p.get(k).cloned().unwrap_or_default() }
+
+/// GET /authorize/external/callback: the provider (or the DEMO chooser) returns the browser here.
+/// Two entry shapes: the fixed provider callback URL (only code/state/iss: the control plane resolves the session
+/// from the provider state and returns the captured authorize params as `resume`, which the core re-validates),
+/// and the DEMO chooser links (which carry the authorize params, the session id and `pstate`, the provider state,
+/// kept apart from the authorize `state`). On allow the core mints the authorization code exactly like a
+/// completed password sign-in.
+pub async fn external_callback(State(c): State<Arc<Core>>, headers: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Response {
+    let theme = theme_of(&headers);
+    let mut p: HashMap<String, String> = ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "chain", "branch", "ticket"].iter()
+        .filter_map(|k| q.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+    let mut validated = false;
+    if p.contains_key("client_id") {
+        if let Err(r) = validate(&c, &p, &theme) { return r; }
+        validated = true;
+    }
+    let session = q.get("session").map(String::as_str).unwrap_or("");
+    if !session.is_empty() && !session_ok(session) { return error_page(StatusCode::BAD_REQUEST, "invalid sign-in session", &theme); }
+    let Some((addr, tok)) = &c.gate else { return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme); };
+    let getq = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+    let mut cb = serde_json::Map::new();
+    for k in ["code", "iss", "sim", "error", "error_description"] {
+        let v = getq(k);
+        if !v.is_empty() && v.len() <= 2048 { cb.insert(k.to_string(), json!(v)); }
+    }
+    // The provider state: `pstate` on chooser links (the authorize `state` sits in the same URL), `state` on a real provider callback.
+    let pstate = if !getq("pstate").is_empty() { getq("pstate") } else if !validated { getq("state") } else { "" };
+    if !pstate.is_empty() && pstate.len() <= 2048 { cb.insert("state".to_string(), json!(pstate)); }
+    let mut body = json!({"tenant": "acme-demo", "externalCallback": Value::Object(cb)});
+    if !session.is_empty() { body["session"] = json!(session); }
+    let (step, resume) = crate::gate::external_callback_step(addr, tok, body).await;
+    // A denial needs no authorize params (its page carries nothing); allow and challenge do.
+    if matches!(step, crate::gate::Step::Allow { .. } | crate::gate::Step::Challenge(_)) {
+        if let Some(r) = resume {
+            p = r.as_object().map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect()).unwrap_or_default();
+            if let Err(r) = validate(&c, &p, &theme) { return r; } // resumed params are untrusted input, like hidden fields
+            validated = true;
+        }
+        if !validated { return error_page(StatusCode::BAD_REQUEST, "invalid sign-in session", &theme); }
+    }
+    let g = |k: &str| p.get(k).map(String::as_str).unwrap_or("");
+    match step {
+        crate::gate::Step::Allow { subject: Some(who), claims } => {
+            let test_branch = if g("branch").is_empty() { None } else { Some(g("branch")) };
+            match c.idp.authorize_verified_on(g("client_id"), g("redirect_uri"), g("code_challenge"), &who, &claims, test_branch) {
+                Ok(code) => {
+                    c.bus_emit("signin.succeeded", json!({"subject": who, "client_id": g("client_id")}), None);
+                    let sep = if g("redirect_uri").contains('?') { '&' } else { '?' };
+                    let loc = format!("{}{sep}code={}&state={}", g("redirect_uri"), pct(&code), pct(g("state")));
+                    let mut r = (StatusCode::FOUND, [(header::LOCATION, loc)]).into_response();
+                    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                    r
+                }
+                Err(_) => error_page(StatusCode::BAD_REQUEST, "invalid request", &theme),
+            }
+        }
+        // An external step always resolves a subject: an allow without one is a malformed answer.
+        crate::gate::Step::Allow { subject: None, .. } => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
+        crate::gate::Step::Challenge(v) => step_page(&p, &v, None, &theme),
+        crate::gate::Step::Deny(m) => {
+            c.bus_emit("signin.refused", json!({"client_id": g("client_id")}), None);
+            error_page(StatusCode::UNAUTHORIZED, m.as_deref().unwrap_or("Sign-in failed. Check your details and try again."), &theme)
+        }
+        _ => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
+    }
+}
+
+/// The SIMULATED provider chooser (DEMO mode only): the control plane listed fictional identities and the core
+/// renders them as callback links. Clearly marked as a simulation; never shown when a real client id is configured.
+fn sim_page(p: &HashMap<String, String>, session: &str, v: &Value, theme: &str) -> Response {
+    let state = v["state"].as_str().unwrap_or("");
+    let mut items = String::new();
+    for id in v["identities"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        let (sub, label) = (id["sub"].as_str().unwrap_or(""), id["label"].as_str().unwrap_or(""));
+        if sub.is_empty() || sub.len() > 128 || label.is_empty() || label.len() > 60 { continue; }
+        let href = format!("/authorize/external/callback?{}&pstate={}&sim={}", external_query(p, session), pct(state), pct(sub));
+        items.push_str(&format!("<a class=\"linkbtn\" href=\"{}\">{}</a>", esc(&href), esc(label)));
+    }
+    if items.is_empty() { return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", theme); }
+    let card = format!("<h1 class=\"page-title\">{}</h1><p class=\"demo\">DEMO: simulated provider. No real account is contacted; these identities are fictional.</p>{}",
+        esc(v["title"].as_str().unwrap_or("Simulated provider")), items);
+    page(StatusCode::OK, frame("Simulated provider (DEMO)", &card, theme, &authorize_back(p), false), Some(&origin_of(p)), false)
 }
 
 #[cfg(test)]
@@ -523,6 +663,123 @@ mod tests {
     }
     fn post_login_host(body: &str) -> Request<Body> {
         Request::builder().method("POST").uri("/authorize/login").header("content-type", "application/x-www-form-urlencoded").header("host", "idp.test").body(Body::from(body.to_string())).unwrap()
+    }
+
+    // ---- external-provider steps through a fake control-plane gate ----
+    /// A gate whose second step is an external provider. `mode`: "redirect" (https provider URL), "http" (non-https
+    /// provider URL the core must refuse), or "sim" (DEMO chooser). The callback allows only state "st-ok".
+    async fn fake_gate_external(mode: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let addr = l.local_addr().unwrap().to_string();
+        tokio::spawn(async move { loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut buf = Vec::new(); let mut tmp = [0u8; 4096];
+            loop { let n = s.read(&mut tmp).await.unwrap(); buf.extend_from_slice(&tmp[..n]); let t = String::from_utf8_lossy(&buf).to_string();
+                if let Some(h) = t.find("\r\n\r\n") { let cl = t[..h].lines().find_map(|l| l.to_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap())).unwrap_or(0); if buf.len() >= h + 4 + cl { break; } } if n == 0 { break; } }
+            let t = String::from_utf8_lossy(&buf).to_string(); let path = t.split_whitespace().nth(1).unwrap().to_string();
+            let body: Value = serde_json::from_str(t.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            let out = if path.ends_with("/entry") { json!({"mode":"chain","fields":[{"name":"password","label":"Password","type":"password"}]}) }
+            else if body["externalStart"] == true && body["session"] == "sess1" {
+                match mode {
+                    "redirect" => json!({"outcome":"external-redirect","url":"https://provider.example/auth?client_id=c1&state=st-ok"}),
+                    "http" => json!({"outcome":"external-redirect","url":"http://evil.example/auth"}),
+                    _ => json!({"outcome":"external-sim","title":"Fakebook (simulated)","state":"st-ok","identities":[{"sub":"sim-ada","label":"Ada Lovelace <fictional>"},{"sub":"","label":"broken"},{"sub":"sim-grace","label":"Grace Hopper"}]}),
+                }
+            }
+            else if body["externalCallback"].is_object() {
+                let cb = &body["externalCallback"];
+                if cb["state"] == "st-ok" && cb["sim"] == "sim-ada" && body["session"] == "sess1" { json!({"outcome":"allow","subject":"demo-alice","claims":{"amr":["pwd","fed"],"iss":"evil","role":"admin"}}) }
+                else if cb["state"] == "st-ok" && cb["code"] == "code-1" { json!({"outcome":"allow","subject":"demo-alice","claims":{"amr":["pwd","fed"],"iss":"evil","role":"admin"},"resume":{"client_id":"demo-web","redirect_uri":"http://localhost:4200/callback","state":"st ate","code_challenge":CH,"code_challenge_method":"S256"}}) }
+                else if cb["state"] == "st-ok" && cb["code"] == "code-evil" { json!({"outcome":"allow","subject":"demo-alice","claims":{},"resume":{"client_id":"demo-web","redirect_uri":"http://evil.example/cb","state":"st ate","code_challenge":CH,"code_challenge_method":"S256"}}) }
+                else { json!({"outcome":"deny","message":"External sign-in failed. Try again."}) }
+            }
+            else if body["password"] == "pw" && body["subject"] == "demo-alice" {
+                json!({"outcome":"challenge","session":"sess1","step":{"index":1,"total":2,"title":"Continue with Fakebook","fields":[{"type":"link","label":"Continue with <Fakebook>"}]}})
+            }
+            else { json!({"outcome":"deny","reason":"bad-credentials","message":"Sign-in failed. Check your details and try again."}) };
+            let o = out.to_string(); s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{o}", o.len()).as_bytes()).await.unwrap();
+        } });
+        addr
+    }
+    fn core_at(addr: &str) -> Arc<Core> {
+        let mut c = Core::new(Engine::new(include_str!("../../../../policies/demo.cedar")).unwrap(), None, Idp::demo("http://idp.test")); c.gate = Some((addr.to_string(), "tok-12345678".into())); Arc::new(c)
+    }
+    fn ext_get(path: &str) -> Request<Body> { Request::builder().uri(path).header("host", "idp.test").body(Body::empty()).unwrap() }
+    /// The authorize params the link field and the external routes carry (same values the form tests use).
+    fn ext_params(session: &str) -> String {
+        format!("response_type=code&client_id=demo-web&redirect_uri=http%3A%2F%2Flocalhost%3A4200%2Fcallback&state=st%20ate&code_challenge={CH}&code_challenge_method=S256&session={session}")
+    }
+
+    #[tokio::test]
+    async fn link_step_renders_a_core_external_button_never_a_control_plane_url() {
+        let c = core_at(&fake_gate_external("redirect").await);
+        let (st, _, body) = send(&c, post_login_host(&login_body("demo-alice", "pw"))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(body.contains("class=\"linkbtn\""), "{body}");
+        let href = body.split("class=\"linkbtn\" href=\"").nth(1).unwrap().split('\"').next().unwrap().to_string();
+        assert!(href.starts_with("/authorize/external?") && href.contains("session=sess1") && href.contains("client_id=demo-web") && !href.contains("provider.example"), "{href}");
+        // label is escaped, and the form has no submit button next to a link step
+        assert!(body.contains("&lt;Fakebook&gt;") && !body.contains("<Fakebook>") && !body.contains("<button type=\"submit\">Continue</button>"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn external_start_redirects_only_to_an_https_or_loopback_provider_url() {
+        let c = core_at(&fake_gate_external("redirect").await);
+        let (st, h, _) = send(&c, ext_get(&format!("/authorize/external?{}", ext_params("sess1")))).await;
+        assert_eq!(st, StatusCode::FOUND);
+        assert_eq!(h[header::LOCATION].to_str().unwrap(), "https://provider.example/auth?client_id=c1&state=st-ok");
+        // an http (non-loopback) provider URL from the gate is a malformed answer: refused, never redirected
+        let c2 = core_at(&fake_gate_external("http").await);
+        let (st2, h2, _) = send(&c2, ext_get(&format!("/authorize/external?{}", ext_params("sess1")))).await;
+        assert_eq!(st2, StatusCode::SERVICE_UNAVAILABLE); assert!(h2.get(header::LOCATION).is_none());
+        // unknown client / bad session shape: 400 page, no Location, gate never asked
+        let (st3, h3, _) = send(&c, ext_get(&format!("/authorize/external?{}", ext_params("sess1").replace("localhost%3A4200", "evil.example")))).await;
+        assert_eq!(st3, StatusCode::BAD_REQUEST); assert!(h3.get(header::LOCATION).is_none());
+        for bad in ["", "bad%20session!", &"x".repeat(65)] {
+            assert_eq!(send(&c, ext_get(&format!("/authorize/external?{}", ext_params(bad)))).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn external_callback_finishes_the_sign_in_and_filters_gate_claims() {
+        let c = core_at(&fake_gate_external("redirect").await);
+        // a real provider calls back on the fixed URL with only code + state: the control plane resolves the
+        // session and returns the captured authorize params, which the core re-validates before minting the code.
+        let (st, h, _) = send(&c, ext_get("/authorize/external/callback?code=code-1&state=st-ok")).await;
+        assert_eq!(st, StatusCode::FOUND);
+        let loc = h[header::LOCATION].to_str().unwrap().to_string();
+        assert!(loc.starts_with("http://localhost:4200/callback?code=") && loc.contains("state=st%20ate"), "{loc}");
+        // the minted code belongs to demo-alice with the filtered claims (iss/role from the gate never reach the token)
+        let code = loc.split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
+        let good = Request::builder().method("POST").uri("/token").header("content-type", "application/json")
+            .body(Body::from(format!("{{\"code\":\"{code}\",\"code_verifier\":\"{VER}\",\"redirect_uri\":\"{CB}\",\"client_id\":\"demo-web\"}}"))).unwrap();
+        let (st2, _, body2) = send(&c, good).await;
+        assert_eq!(st2, StatusCode::OK, "{body2}");
+        let idt = serde_json::from_str::<Value>(&body2).unwrap()["id_token"].as_str().unwrap().to_string();
+        let claims = iam_idp::verify(&idt, &c.idp.jwks(), "http://idp.test").unwrap();
+        assert_eq!(claims["sub"], "demo-alice"); assert_eq!(claims["amr"], json!(["pwd", "fed"]));
+        assert_eq!(claims["iss"], "http://idp.test"); assert!(claims.get("role").is_none());
+        // a resumed redirect_uri that is not a registered one is refused: 400 page, no Location
+        let (st4, h4, _) = send(&c, ext_get("/authorize/external/callback?code=code-evil&state=st-ok")).await;
+        assert_eq!(st4, StatusCode::BAD_REQUEST); assert!(h4.get(header::LOCATION).is_none());
+        // wrong state: denial page, no redirect, no code
+        let (st3, h3, b3) = send(&c, ext_get("/authorize/external/callback?code=code-1&state=st-bad")).await;
+        assert_eq!(st3, StatusCode::UNAUTHORIZED); assert!(h3.get(header::LOCATION).is_none() && b3.contains("External sign-in failed"));
+    }
+
+    #[tokio::test]
+    async fn simulated_provider_mode_renders_a_marked_demo_chooser() {
+        let c = core_at(&fake_gate_external("sim").await);
+        let (st, _, body) = send(&c, ext_get(&format!("/authorize/external?{}", ext_params("sess1")))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(body.contains("class=\"demo\"") && body.contains("SIMULATED") || body.contains("DEMO"), "{body}");
+        assert!(body.contains("Fakebook (simulated)") && body.contains("Ada Lovelace &lt;fictional&gt;") && body.contains("Grace Hopper"), "{body}");
+        // a broken identity entry (empty sub) is skipped; the chooser links are core callback links carrying the provider state as `pstate`
+        assert!(!body.contains("broken") && body.contains("/authorize/external/callback?") && body.contains("sim=sim-ada") && body.contains("pstate=st-ok"), "{body}");
+        // choosing a fictional identity completes the sign-in like a real callback
+        let (st2, h2, _) = send(&c, ext_get(&format!("/authorize/external/callback?{}&pstate=st-ok&sim=sim-ada", ext_params("sess1")))).await;
+        assert_eq!(st2, StatusCode::FOUND);
+        assert!(h2[header::LOCATION].to_str().unwrap().starts_with("http://localhost:4200/callback?code="));
     }
 
     #[tokio::test]
