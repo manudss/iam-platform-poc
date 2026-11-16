@@ -41,36 +41,59 @@ silently downgraded.
 ## Flow (subject first, then provider)
 
 The person enters their account name as today (the subject rules of the existing flow do not change). A social
-step renders a **link field** (new core field type `link`: an anchor button, no input). The link points at the
-plugin's start route, carrying the flow session id:
+step renders a **link field** (new core field type `link`: an anchor button, no input) that the CORE builds
+itself - the plugin only declares its intent, the core builds the href, so a plugin can never smuggle a
+javascript: or http: URL into the page:
 
 1. `auth.prepare` (pure handler) returns the link prompt; the flow session id travels in the payload.
-2. `GET /tenants/:t/plugins/<id>/start` (public route): mints `state` + `nonce` + PKCE verifier, stores them in
-   the session's pending-external slot via AuthnService, 302 to the provider authorize URL.
-3. Provider redirects to `GET /tenants/:t/plugins/<id>/callback`: state check, code exchange, token/userinfo
-   validation, then `AuthnService.completeExternal(session, instance, { sub, email? })`.
-4. The API resolves the linked directory account from the enrollment store, calls `auth.verify` over the bus
-   (audit/fault path preserved), advances the session and 302s the browser to the core sign-in page with
-   `session=<id>`.
-5. The core resumes the session (new GET support): next step's challenge, or the normal allow+claims.
+2. The link points at the CORE: `GET /authorize/external?tenant&instance&session`. The gate calls the plugin's
+   `auth.external.start` over the bus, validates the answer (`checkStart`: https-or-loopback endpoints only,
+   caps everywhere), mints `state` + `nonce` + PKCE verifier, stores them in the session's pending-external
+   slot, captures the authorize params as `resume`, and 302s to the provider authorize URL.
+3. The provider redirects to the FIXED callback `GET /authorize/external/callback` (env
+   `IAM_EXTERNAL_CALLBACK_URL`, registered once per provider). It carries ONLY `code` + the provider's own
+   `state` (internal links use `pstate` so a provider answer can never clobber the authorize `state`). The gate
+   resolves the sign-in session from the provider state alone, re-validates the captured `resume` params, runs
+   the exchange (below), resolves the linked account, calls `auth.external.verify` over the bus, and 302s the
+   browser back to the sign-in page with `session=<id>&resume` - the same URL shape as a first pass, so the
+   resume replay cannot smuggle new fields.
+4. The core resumes the session: next step's challenge, or the normal allow+claims. A provider denial
+   (`error=access_denied`) needs no params and just fails the step.
+
+All network code lives API-side in `authn/federation.ts` (plugins stay pure handlers: they return provider
+metadata as data and decide ok/deny from the resolved profile). OIDC exchanges go through openid-client
+(`idTokenExpected`, exact issuer/audience, expiry, nonce, and `enableNonRepudiationChecks` so the JWKS signature
+is ALWAYS verified - v6 only checks claims otherwise); OAuth2-only providers go code -> token -> userinfo with
+the plugin's profileMap, an optional e-mails read (GitHub) and an optional token-inspection read judged by the
+plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail closed on anything unexpected.
 
 A social-ONLY chain (no username) comes after this base works: the provider's `sub` resolves the subject through
 the link table. Never through e-mail matching (rule 1).
 
-## Pieces
+## Pieces (as built)
 
-- core (Rust): `link` field type in `input_html`; GET resume with a session id; tests in authz.rs.
-- flow.service: session id in the method payload; pending-external state; `completeExternal` + resume; the
-  finish path extracted from `check`.
+- core (Rust): `link` field type built by the core; `GET /authorize/external` (302, https-or-loopback provider
+  URL only); `GET /authorize/external/callback` (provider state under `pstate` on internal links); DEMO
+  simulated chooser page. Tests in authz.rs (53 core tests + bus e2e).
+- flow.service: `externalStart`/`completeExternal`/`externalSession`, pending-external sessions, captured
+  `resume` params re-validated on the way back; the finish path (`advance`) extracted from `check`; factor
+  `other` never counts toward `auth_mfa`.
 - enroll-store: external links per tenant/subject/instance (sub, email, linkedAt), same storage class as the
   other enrollment records (never Dolt).
-- plugins: the five above, pure handlers + httpRoutes (start/callback/link management), shared protocol helpers
-  copied per plugin (plugins own their dependencies).
-- console/profile: a "linked sign-in providers" component per plugin (link while signed in, unlink).
+- plugins: five provider plugins + their refusing bases (a disabled provider fails CLOSED on the slot), pure
+  handlers (metadata + decision only), each signed; secrets only as `secret` settings or env.
+- authn/federation.ts: `checkStart` (answer validation), `buildAuthorizeUrl`, `exchangeOidc`,
+  `exchangeUserinfo` - the only network code of the feature.
+- console/profile: a "linked sign-in providers" component per plugin (link while signed in, unlink) - NOT in
+  this branch yet.
 
 ## Tests (each commit with its tests)
 
-- authz.rs: link field rendering (escaping, https-only, length caps), resume GET.
-- flow: external completion advances, wrong/expired state refused, session expiry, subject binding.
-- plugin per provider: prepare renders the link; verify checks sub/claims; simulated mode honest.
-- bus-routing-coverage and SENSITIVE/grants updated for new hooks if any.
+- authz.rs: link field rendering (escaping, https-only, length caps), external start/callback routes, resume.
+- external.spec.ts (API, over the bus): catalogue (five types, factor `other`, no `federation` placeholder);
+  full SIMULATED chain round-trip (link step, DEMO identities, explicit link, resume); callback resolving the
+  session from the provider state alone; external start refused on a non-federation step.
+- federation.spec.ts (API, loopback fake providers): real OIDC exchange with a jose-signed id_token validated
+  through JWKS (wrong key / wrong nonce / wrong verifier / wrong state all refused, PKCE verified provider-side);
+  oauth2-userinfo flow with e-mails fallback and token inspection; malformed plugin answers refused.
+- bus-routing-coverage and SENSITIVE/grants updated for the two new sensitive hooks.
