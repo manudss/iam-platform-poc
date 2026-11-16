@@ -32,7 +32,7 @@ export default {
     if (!p.external?.sub) return { ok: false, reason: 'no-subject' };
     const hd = String(p.config?.hostedDomain ?? '').trim();
     if (hd && p.external.claims?.hd !== hd) return { ok: false, reason: 'hosted-domain', message: 'This Google account is not in the accepted domain.' };
-    if (!p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this Google sign-in.' };
+    if (p.intent !== 'link' && !p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this Google sign-in.' };
     return { ok: true };
   },
 };

@@ -40,6 +40,9 @@ pub enum Step {
     /// An external provider step in SIMULATED mode: the control plane describes the fictional identities and the
     /// core renders the DEMO chooser page. Never produced when a real client id is configured.
     ExternalSim(Value),
+    /// A self-service provider linking finished (member profile): redirect to the recorded return URL when one
+    /// was kept, else show a plain confirmation page.
+    ExternalLinked(Option<String>),
     Unavailable,
 }
 
@@ -68,6 +71,9 @@ fn parse_step(v: &Value) -> Step {
         Some("external-redirect") => match v["url"].as_str() { Some(u) if provider_url_ok(u) => Step::ExternalRedirect(u.to_string()), _ => Step::Unavailable },
         Some("external-sim") if v["identities"].is_array() && v["state"].is_string() => Step::ExternalSim(v.clone()),
         Some("external-sim") => Step::Unavailable,
+        // A self-service link round-trip finished: the return URL comes from the control plane's server-side
+        // record, and is still held to the same https-or-loopback rule before the browser is sent there.
+        Some("external-linked") => Step::ExternalLinked(v["returnTo"].as_str().filter(|u| provider_url_ok(u)).map(String::from)),
         _ => Step::Deny(v["message"].as_str().map(String::from)),
     }
 }

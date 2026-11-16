@@ -31,7 +31,7 @@ export default {
     if (!p.external?.sub) return { ok: false, reason: 'no-subject' };
     const t = String(p.config?.tenant ?? '').trim();
     if (GUID.test(t) && p.external.claims && p.external.claims.tid && p.external.claims.tid !== t) return { ok: false, reason: 'tenant' };
-    if (!p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this Microsoft sign-in.' };
+    if (p.intent !== 'link' && !p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this Microsoft sign-in.' };
     return { ok: true };
   },
 };

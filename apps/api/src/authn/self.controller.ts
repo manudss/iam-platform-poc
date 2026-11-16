@@ -126,6 +126,45 @@ export class AuthnSelfController {
     return { removed: true };
   }
 
+  /** Self-service provider linking, leg 1 (docs/sso-federation.md rule 2): the member starts a provider
+   * round-trip bound to their own account. Real provider: a redirect URL for the browser. Simulated: the
+   * fictional identities for an in-page chooser. returnTo (console page) is https or loopback only. */
+  @Post('me/external-links/:instance') async startExternalLink(@Param('tenant') t: string, @Param('instance') inst: string, @Body() b: { returnTo?: string }, @Req() req: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(req);
+    const { type } = await this.instance(t, inst);
+    if (type.factor !== 'other') throw new BadRequestException(`${inst} is not an external-provider method`);
+    await this.assertSurfaceAllows(t, type.id);
+    let returnTo: string | undefined;
+    if (typeof b?.returnTo === 'string' && b.returnTo) {
+      if (b.returnTo.length > 512 || !(b.returnTo.startsWith('https://') || /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])/.test(b.returnTo))) throw new BadRequestException('returnTo: an https (or local) URL of the console');
+      returnTo = b.returnTo;
+    }
+    try { return await this.authn.startExternalLink(t, req.user.sub, inst, returnTo); }
+    catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code === 'no-instance') throw new NotFoundException('unknown or disabled method instance');
+      if (code === 'throttled' || code === 'external-refused') throw new ForbiddenException((e as Error).message);
+      throw e;
+    }
+  }
+
+  /** Simulated link leg 2: the member picked one of the fictional identities in the chooser. */
+  @Post('me/external-links/:instance/complete') async completeExternalLink(@Param('tenant') t: string, @Param('instance') inst: string, @Body() b: { state?: string; sim?: string }, @Req() req: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(req);
+    const { type } = await this.instance(t, inst);
+    if (type.factor !== 'other') throw new BadRequestException(`${inst} is not an external-provider method`);
+    await this.assertSurfaceAllows(t, type.id);
+    if (typeof b?.state !== 'string' || !b.state || typeof b?.sim !== 'string' || !b.sim) throw new BadRequestException('state and sim: the pending link request and the chosen identity');
+    try {
+      const r = await this.authn.completeExternalLinkSimulated(t, req.user.sub, inst, b.state, b.sim);
+      if (r.outcome === 'external-linked') return { linked: true, simulated: true, note: 'SIMULATED provider: the link is real but the identity proof is fictional.' };
+      throw new ForbiddenException(r.outcome === 'deny' ? r.message : 'The link failed. Try again.');
+    } catch (e) {
+      if ((e as { code?: string }).code === 'no-link-request') throw new NotFoundException('unknown or expired link request: start again');
+      throw e;
+    }
+  }
+
   /** Removes one of the person's own enrollments (any method type). */
   @Delete('me/enrollments/:instance') async remove(@Param('tenant') t: string, @Param('instance') inst: string, @Req() req: { user: { sub: string; branch?: string } }) {
     assertNotBranchTest(req);

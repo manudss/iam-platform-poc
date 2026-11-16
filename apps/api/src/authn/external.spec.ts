@@ -29,7 +29,8 @@ describe('external provider sign-in (federation)', () => {
   const env = { a: process.env.IAM_API_ADMIN_TOKEN, g: process.env.IAM_AUTH_GATE_TOKEN, f: process.env.IAM_AUTHN_FILE };
   before(async () => {
     process.env.IAM_API_ADMIN_TOKEN = ADMIN; process.env.IAM_AUTH_GATE_TOKEN = GATE; process.env.IAM_AUTHN_FILE = join(mkdtempSync(join(tmpdir(), 'authn-ext-')), 'e.json');
-    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
+    const guard = { canActivate: (c: any) => { const r = c.switchToHttp().getRequest(); r.user = { sub: String(r.headers['x-test-sub'] ?? 'demo-alice') }; return true; } };
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue(guard).compile();
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService);
     const reg = app.get(PluginRegistry);
     for (const id of ['auth-sso-google', 'auth-sso-github']) { await reg.install(T, id, {}); await reg.enable(T, id, { hooks: ['auth.external.start', 'auth.external.verify'] }); }
@@ -120,6 +121,37 @@ describe('external provider sign-in (federation)', () => {
     // no session id: exactly what a real provider callback looks like on the fixed registered URL
     const done = (await gate({ tenant: T, externalCallback: { state: start.state, sim: 'sim-google-ada' } })).body;
     assert.equal(done.outcome, 'allow'); assert.equal(done.subject, 'demo-alice');
+  });
+
+  it('self-service linking: a signed-in member links a provider identity to their own account', async () => {
+    const as = (sub: string) => ({ 'x-test-sub': sub });
+    // leg 1: the member starts the round-trip; the simulated provider answers its fictional identities
+    const start = (await http().post(`/tenants/${T}/auth/me/external-links/goog`).set(as('demo-dave')).send({})).body;
+    assert.equal(start.mode, 'simulated');
+    assert.ok(start.identities.some((i: any) => i.sub === 'sim-google-grace') && typeof start.state === 'string');
+    // a bad returnTo is refused at validation; a loopback console URL is accepted
+    assert.equal((await http().post(`/tenants/${T}/auth/me/external-links/goog`).set(as('demo-dave')).send({ returnTo: 'http://evil.example/x' })).status, 400);
+    // leg 2: the fictional identity is recorded on the MEMBER's account (never by e-mail matching)
+    const done = (await http().post(`/tenants/${T}/auth/me/external-links/goog/complete`).set(as('demo-dave')).send({ state: start.state, sim: 'sim-google-grace' })).body;
+    assert.equal(done.linked, true); assert.equal(done.simulated, true);
+    const st = (await http().get(`/tenants/${T}/auth/me/enrollments`).set(as('demo-dave'))).body;
+    assert.equal(st.enrollments.goog.external.sub, 'sim-google-grace');
+    // the link now signs demo-dave in on the social-only chain (the two halves of the feature meet)
+    const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, chain: 'social-only' })).body;
+    const s2 = (await gate({ tenant: T, session: e.session, externalStart: true, authorize })).body;
+    const signed = (await gate({ tenant: T, externalCallback: { state: s2.state, sim: 'sim-google-grace' } })).body;
+    assert.equal(signed.outcome, 'allow'); assert.equal(signed.subject, 'demo-dave');
+    // one-use state, unknown state, wrong member, wrong instance: all refused
+    assert.equal((await http().post(`/tenants/${T}/auth/me/external-links/goog/complete`).set(as('demo-dave')).send({ state: start.state, sim: 'sim-google-grace' })).status, 404);
+    assert.equal((await http().post(`/tenants/${T}/auth/me/external-links/goog/complete`).set(as('demo-dave')).send({ state: 'forged', sim: 'sim-google-grace' })).status, 404);
+    // a provider identity already linked elsewhere cannot be taken over (409-shaped refusal)
+    const other = (await http().post(`/tenants/${T}/auth/me/external-links/goog`).set(as('demo-erin')).send({})).body;
+    const clash = await http().post(`/tenants/${T}/auth/me/external-links/goog/complete`).set(as('demo-erin')).send({ state: other.state, sim: 'sim-google-ada' });
+    assert.equal(clash.status, 403); assert.match(clash.body.message, /already linked/);
+    // a password instance is not a federation method
+    assert.equal((await http().post(`/tenants/${T}/auth/me/external-links/pw`).set(as('demo-dave')).send({})).status, 400);
+    assert.equal((await http().post(`/tenants/${T}/auth/me/external-links/nope`).set(as('demo-dave')).send({})).status, 404);
+    await http().delete(`/tenants/${T}/auth/enrollments/demo-dave/goog`).set(adm).expect(200);
   });
 
   it('an external start on a non-federation step is refused', async () => {

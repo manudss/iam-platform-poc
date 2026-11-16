@@ -27,7 +27,9 @@ export type GateResponse =
   /** Start the provider round-trip in the browser (the core 302s to the url). */
   | { outcome: 'external-redirect'; url: string }
   /** SIMULATED provider: the core renders the marked DEMO chooser from these fictional identities. */
-  | { outcome: 'external-sim'; title: string; identities: ExternalIdentity[]; state: string };
+  | { outcome: 'external-sim'; title: string; identities: ExternalIdentity[]; state: string }
+  /** Self-service linking finished: the provider identity is recorded on the member's account (the core 302s to returnTo). */
+  | { outcome: 'external-linked'; returnTo?: string };
 
 interface Session {
   id: string; tenant: string; subject: string; known: boolean; exp: number; index: number;
@@ -270,7 +272,7 @@ export class AuthnService implements OnApplicationBootstrap {
   /** At most 30 sign-in starts per account per 10 minutes: bounds e-mail code floods. */
   private tooManyStarts(key: string) { const t = (this.starts.get(key) ?? []).filter((x) => x > this.now() - THROTTLE_MS); t.push(this.now()); this.starts.set(key, t); return t.length > 30; }
   private fail(key: string) { (this.fails.get(key) ?? this.fails.set(key, []).get(key)!).push(this.now()); }
-  private sweep() { const n = this.now(); for (const [k, s] of this.sessions) if (s.exp < n) this.sessions.delete(k); while (this.sessions.size > 2000) this.sessions.delete(this.sessions.keys().next().value as string); }
+  private sweep() { const n = this.now(); for (const [k, s] of this.sessions) if (s.exp < n) this.sessions.delete(k); while (this.sessions.size > 2000) this.sessions.delete(this.sessions.keys().next().value as string); for (const [k, l] of this.pendingLinks) if (l.exp < n) this.pendingLinks.delete(k); while (this.pendingLinks.size > 1000) this.pendingLinks.delete(this.pendingLinks.keys().next().value as string); }
 
   /** Chains a person may pick at sign-in: enabled chains of the LIVE configuration whose methods are all enabled
    * AND served by an active plugin on the sign-in registry (review n:2 / acceptance 3: disabling a method's plugin
@@ -426,6 +428,8 @@ export class AuthnService implements OnApplicationBootstrap {
     const cb = b.externalCallback!;
     let s = b.session ? this.sessions.get(String(b.session)) : undefined;
     if (!s && typeof cb.state === 'string' && cb.state) s = [...this.sessions.values()].find((x) => x.pendingExternal?.state === cb.state);
+    // Not a sign-in session: the state may belong to a self-service LINK round-trip (member profile page).
+    if (!s && typeof cb.state === 'string' && cb.state) { const l = this.pendingLinks.get(cb.state); if (l && l.tenant === b.tenant) return this.completeExternalLink(l, cb); }
     if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired', message: 'Your sign-in session expired. Start again.' }; }
     const deny = (message: string): GateResponse => ({ outcome: 'deny', reason: 'external-failed', message });
     const p = s.pendingExternal;
@@ -447,7 +451,7 @@ export class AuthnService implements OnApplicationBootstrap {
     const link = s.subject ? await this.enroll.externalLink(s.tenant, s.subject, st.id) : undefined;
     const linked = await this.enroll.findExternalLink(s.tenant, st.id, profile.sub);
     const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(s.tenant, `auth.${st.type}`, 'auth.external.verify',
-      { ...await this.methodPayload(reg, s, st, s.prepared?.state ?? {}), external: profile, link: link ?? null, linkedSubject: linked?.user ?? null })).result;
+      { ...await this.methodPayload(reg, s, st, s.prepared?.state ?? {}), intent: 'signin', external: profile, link: link ?? null, linkedSubject: linked?.user ?? null })).result;
     const key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
     // The link is the ONLY way in (docs/sso-federation.md): no link for this provider subject, no sign-in,
     // whatever the plugin answered. A linked account that is not the session's account is refused too.
@@ -463,6 +467,80 @@ export class AuthnService implements OnApplicationBootstrap {
     const r = await this.advance(s);
     return { ...r, ...(s.authorize ? { resume: s.authorize } : {}) };
   }
+  // ---- self-service linking (docs/sso-federation.md rules 1-2: a link is created from the member's OWN session,
+  // through a provider round-trip with its own state/nonce/PKCE; the provider subject then identifies exactly one
+  // account). The pending records live server-side, one-use, 5 minutes, swept with the sign-in sessions.
+  private pendingLinks = new Map<string, { tenant: string; subject: string; instanceId: string; mode: 'oidc' | 'oauth2-userinfo' | 'simulated'; state: string; nonce: string; verifier?: string; start: ExternalStart; returnTo?: string; exp: number }>();
+
+  /** Link leg 1 (member authenticated on the console): validates the instance, asks the plugin for its provider
+   * metadata, and answers the provider URL (real) or the fictional identities (simulated). */
+  async startExternalLink(tenant: string, subject: string, inst: string, returnTo?: string): Promise<{ mode: 'simulated'; title: string; identities: ExternalIdentity[]; state: string } | { mode: 'redirect'; url: string }> {
+    this.sweep();
+    const key = `${tenant}//${subject}/link`;
+    if (this.tooManyStarts(key)) { this.audit({ tenant, subject, outcome: 'throttled' }); throw Object.assign(new Error('Too many attempts. Try again later.'), { code: 'throttled' }); }
+    const cfg = await this.signinConfig(tenant);
+    const m = cfg.methods.find((x) => x.id === inst && x.enabled);
+    const t = m && methodType(m.type);
+    if (!m || !t || t.factor !== 'other') throw Object.assign(new Error('unknown or disabled federation method instance'), { code: 'no-instance' });
+    const reg = await this.signinRegistry(undefined);
+    const payload = { tenant, subject, known: true, instanceId: m.id, config: m.config as Record<string, any>, state: {}, answers: undefined, now: this.now(), enrollment: {} };
+    const start = checkStart((await reg.callSlot<ExternalStart>(tenant, `auth.${m.type}`, 'auth.external.start', { ...payload, callbackUrl: externalCallbackUrl() })).result);
+    if (!start.ok) { this.audit({ tenant, subject, method: inst, outcome: 'external-link-refused', reason: start.reason }); throw Object.assign(new Error('This sign-in method is not available.'), { code: 'external-refused' }); }
+    const state = mint();
+    const rec = { tenant, subject, instanceId: inst, mode: start.mode!, state, nonce: '', start, ...(returnTo ? { returnTo } : {}), exp: this.now() + SESSION_MS };
+    if (start.mode === 'simulated') {
+      this.pendingLinks.set(state, rec);
+      this.audit({ tenant, subject, method: inst, outcome: 'external-link-start', mode: 'simulated' });
+      return { mode: 'simulated', title: start.title!, identities: start.identities!, state };
+    }
+    const cbUrl = externalCallbackUrl();
+    if (!cbUrl) throw new Error('IAM_EXTERNAL_CALLBACK_URL is not configured: a real external provider cannot be reached');   // misconfiguration: fail closed
+    const nonce = mint(), verifier = mint();
+    const url = buildAuthorizeUrl(start, cbUrl, { state, nonce, challenge: pkceChallenge(verifier) });
+    this.pendingLinks.set(state, { ...rec, nonce, verifier });
+    this.audit({ tenant, subject, method: inst, outcome: 'external-link-start', mode: start.mode });
+    return { mode: 'redirect', url };
+  }
+
+  /** Simulated link leg 2 from the console chooser (the provider round-trip of a DEMO provider happens in-page). */
+  async completeExternalLinkSimulated(tenant: string, subject: string, inst: string, state: string, sim: string): Promise<GateResponse> {
+    const rec = this.pendingLinks.get(state);
+    if (!rec || rec.tenant !== tenant || rec.subject !== subject || rec.instanceId !== inst || rec.mode !== 'simulated') throw Object.assign(new Error('unknown or expired link request'), { code: 'no-link-request' });
+    return this.completeExternalLink(rec, { state, sim });
+  }
+
+  /** Link leg 2: the exchange runs, the PLUGIN judges the profile (its own policy: hosted domain, app check...),
+   * then the link is recorded - one provider subject per account, a clash refuses and keeps the existing link. */
+  private async completeExternalLink(rec: { tenant: string; subject: string; instanceId: string; mode: 'oidc' | 'oauth2-userinfo' | 'simulated'; state: string; nonce: string; verifier?: string; start: ExternalStart; returnTo?: string; exp: number }, cb: Record<string, string>): Promise<GateResponse> {
+    const deny = (message: string): GateResponse => ({ outcome: 'deny', reason: 'external-link-failed', message });
+    if (rec.exp < this.now()) { this.pendingLinks.delete(rec.state); return deny('The link request expired. Start again.'); }
+    this.pendingLinks.delete(rec.state);   // one-use, whatever happens next
+    const auditBase = { tenant: rec.tenant, subject: rec.subject, method: rec.instanceId };
+    if (cb.error) { this.audit({ ...auditBase, outcome: 'external-link-denied-by-provider', error: cb.error.slice(0, 80) }); return deny('The provider refused the sign-in. Try again.'); }
+    const cfg = await this.signinConfig(rec.tenant);
+    const m = cfg.methods.find((x) => x.id === rec.instanceId);
+    if (!m) return deny('This sign-in method is not available.');
+    let profile: ExternalProfile;
+    if (rec.mode === 'simulated') {
+      const id = rec.start.identities!.find((x) => x.sub === cb.sim);
+      if (!id) return deny('The link failed. Try again.');
+      profile = { sub: id.sub, ...(id.email ? { email: id.email, emailVerified: true } : {}), name: id.label };
+    } else {
+      const cbUrl = externalCallbackUrl();
+      const secret = typeof m.config.clientSecret === 'string' ? m.config.clientSecret : '';
+      profile = rec.mode === 'oidc' ? await exchangeOidc(rec.start, secret, cbUrl, cb, rec) : await exchangeUserinfo(rec.start, secret, cbUrl, cb, rec);   // a throw is a technical failure: 503, fail closed
+    }
+    const reg = await this.signinRegistry(undefined);
+    const payload = { tenant: rec.tenant, subject: rec.subject, known: true, instanceId: m.id, config: m.config as Record<string, any>, state: {}, answers: undefined, now: this.now(), enrollment: {} };
+    const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(rec.tenant, `auth.${m.type}`, 'auth.external.verify',
+      { ...payload, intent: 'link', external: profile, link: null, linkedSubject: null })).result;
+    if (!verdict?.ok) { this.audit({ ...auditBase, outcome: 'external-link-refused', reason: verdict?.reason }); return deny(typeof verdict?.message === 'string' && verdict.message.length <= 160 ? verdict.message : 'The link failed. Try again.'); }
+    try { await this.enroll.setExternalLink(rec.tenant, rec.subject, rec.instanceId, { sub: profile.sub, ...(profile.email ? { email: profile.email } : {}) }); }
+    catch (e) { if ((e as { code?: string }).code === 'external-sub-taken') { this.audit({ ...auditBase, outcome: 'external-link-clash' }); return deny('This provider identity is already linked to another account.'); } throw e; }
+    this.audit({ ...auditBase, outcome: 'external-linked', mode: rec.mode });
+    return { outcome: 'external-linked', ...(rec.returnTo ? { returnTo: rec.returnTo } : {}) };
+  }
+
   private async prepare(s: Session) {
     const st = s.steps[s.index];
     const reg = await this.signinRegistry(s.branch);

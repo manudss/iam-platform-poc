@@ -29,7 +29,7 @@ export default {
   },
   'auth.external.verify': (p) => {
     if (!p.external?.sub) return { ok: false, reason: 'no-subject' };
-    if (!p.linkedSubject) return { ok: false, reason: 'not-linked', message: `No account is linked to this ${name(p.config)} sign-in.` };
+    if (p.intent !== 'link' && !p.linkedSubject) return { ok: false, reason: 'not-linked', message: `No account is linked to this ${name(p.config)} sign-in.` };
     return { ok: true };
   },
 };

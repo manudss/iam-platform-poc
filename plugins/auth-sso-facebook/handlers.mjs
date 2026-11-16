@@ -36,7 +36,7 @@ export default {
       const d = p.external.tokenInfo?.data;
       if (!d || d.is_valid !== true || String(d.app_id) !== String(p.config.clientId).trim()) return { ok: false, reason: 'token-not-ours' };
     }
-    if (!p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this Facebook sign-in.' };
+    if (p.intent !== 'link' && !p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this Facebook sign-in.' };
     return { ok: true };
   },
 };

@@ -517,6 +517,16 @@ pub async fn external_callback(State(c): State<Arc<Core>>, headers: HeaderMap, Q
             c.bus_emit("signin.refused", json!({"client_id": g("client_id")}), None);
             error_page(StatusCode::UNAUTHORIZED, m.as_deref().unwrap_or("Sign-in failed. Check your details and try again."), &theme)
         }
+        // A member linking a provider from their profile: back to the console, or a bare confirmation page.
+        crate::gate::Step::ExternalLinked(Some(url)) => {
+            let mut r = (StatusCode::FOUND, [(header::LOCATION, url)]).into_response();
+            r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            r
+        }
+        crate::gate::Step::ExternalLinked(None) => {
+            let card = "<h1 class=\"page-title\">Provider linked</h1><p class=\"lead\">The sign-in provider is now linked to your account. You can close this tab and go back to your profile.</p>";
+            page(StatusCode::OK, frame("Provider linked", card, &theme, "/authorize", false), None, false)
+        }
         _ => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
     }
 }
