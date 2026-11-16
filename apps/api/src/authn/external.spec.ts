@@ -39,7 +39,7 @@ describe('external provider sign-in (federation)', () => {
         { id: 'pw', type: 'password', name: 'Password', enabled: true, level: 3, config: {} },
         { id: 'goog', type: 'sso-google', name: 'Google', enabled: true, level: 6, config: {} },
       ],
-      chains: [{ id: 'social', name: 'Password then Google', steps: ['pw', 'goog'], level: 7 }],
+      chains: [{ id: 'social', name: 'Password then Google', steps: ['pw', 'goog'], level: 7 }, { id: 'social-only', name: 'Google only', steps: ['goog'], level: 6 }],
       defaultChain: 'social',
     });
   });
@@ -83,6 +83,35 @@ describe('external provider sign-in (federation)', () => {
     assert.deepEqual(done.claims.amr, ['pwd']);
     assert.equal(done.claims.auth_mfa, false);
     assert.deepEqual(done.claims.auth_simulated, ['goog']);
+  });
+
+  it('a social-only chain starts without a username and resolves the account at the callback', async () => {
+    // the classic "Sign in with Google" button: entry on a chain opening with a federation step creates a
+    // subject-less session and returns the link field for the first page (no username form ever renders)
+    const e = (await http().post('/internal/auth/entry').set('x-gate-token', GATE).send({ tenant: T, chain: 'social-only' })).body;
+    assert.equal(e.mode, 'chain');
+    assert.equal(e.noSubject, true);
+    assert.ok(typeof e.session === 'string' && e.session.length >= 20);
+    assert.equal(e.title, 'Sign in with Google');
+    assert.deepEqual(e.fields, [{ name: 'external', label: 'Continue with Google', type: 'link' }]);
+    // a subject-less authenticate POST stays refused (400 bad-request): the entry session is the only way in
+    const bare = await gate({ tenant: T, chain: 'social-only' });
+    assert.equal(bare.status, 400); assert.equal(bare.body.code, 'bad-request');
+    // the round-trip on that session: simulated provider, explicit link, subject resolved at the callback
+    const start = (await gate({ tenant: T, session: e.session, externalStart: true, authorize })).body;
+    assert.equal(start.outcome, 'external-sim');
+    // one provider subject = one account: sim-google-ada is already linked to demo-alice (test 2), refusing
+    // a second link keeps the reverse lookup unambiguous (409, no overwrite)
+    const clash = await http().post(`/tenants/${T}/auth/enrollments/demo-carol/goog`).set(adm).send({ externalSub: 'sim-google-ada' });
+    assert.equal(clash.status, 409);
+    await http().post(`/tenants/${T}/auth/enrollments/demo-carol/goog`).set(adm).send({ externalSub: 'sim-google-grace' }).expect(201);
+    const done = (await gate({ tenant: T, externalCallback: { state: start.state, sim: 'sim-google-grace' } })).body;
+    assert.equal(done.outcome, 'allow');
+    assert.equal(done.subject, 'demo-carol');   // nobody typed a username: the link resolved the account
+    await http().delete(`/tenants/${T}/auth/enrollments/demo-carol/goog`).set(adm).expect(200);   // leave the store clean for the confusion test
+    assert.equal(done.claims.auth_mfa, false);  // a federated step alone never counts as MFA
+    assert.deepEqual(done.claims.auth_simulated, ['goog']);
+    assert.deepEqual(done.resume, authorize);
   });
 
   it('the callback resolves the session from the provider state alone (fixed provider URL)', async () => {

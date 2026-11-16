@@ -74,7 +74,17 @@ export class EnrollmentStore {
 
   // External-provider links (federated sign-in). One link per user+instance; the reverse lookup answers "which
   // local user linked this provider subject on this instance" (POC: linear scan of the tenant's records).
-  async setExternalLink(tenant: string, user: string, inst: string, link: { sub: string; email?: string }) { await this.mutate((d) => { this.rec(d, tenant, user, inst).external = { sub: link.sub, ...(link.email ? { email: link.email } : {}), linkedAt: new Date().toISOString() }; }); }
+  async setExternalLink(tenant: string, user: string, inst: string, link: { sub: string; email?: string }) {
+    await this.mutate((d) => {
+      // A provider subject identifies ONE account on this instance: linking it to a second account would make the
+      // reverse lookup ambiguous (which account does the provider sign in?). Re-linking the same account refreshes.
+      for (const [k, insts] of Object.entries(d.users)) {
+        if (!k.startsWith(tenant + '/')) continue;
+        if (insts[inst]?.external?.sub === link.sub && k !== `${tenant}/${user}`) { const e = new Error('this provider identity is already linked to another account'); (e as Error & { code?: string }).code = 'external-sub-taken'; throw e; }
+      }
+      this.rec(d, tenant, user, inst).external = { sub: link.sub, ...(link.email ? { email: link.email } : {}), linkedAt: new Date().toISOString() };
+    });
+  }
   async externalLink(tenant: string, user: string, inst: string): Promise<ExternalLink | undefined> { return this.get(await this.load(), tenant, user, inst)?.external; }
   async findExternalLink(tenant: string, inst: string, sub: string): Promise<{ user: string; link: ExternalLink } | undefined> {
     const d = await this.load();

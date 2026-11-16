@@ -320,13 +320,26 @@ export class AuthnService implements OnApplicationBootstrap {
   }
 
   /** First page of the core's form. No chain is configured: classic form. Chains exist and none is picked: the list to choose from. A chain is picked: its first inputs. */
-  async entry(tenant: string, chainId?: string, branch?: string): Promise<{ mode: 'legacy' } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields'] }> {
+  async entry(tenant: string, chainId?: string, branch?: string): Promise<{ mode: 'legacy' } | { mode: 'error'; message: string } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields']; session?: string; noSubject?: boolean; title?: string; message?: string }> {
     const reg = await this.signinRegistry(branch);
     const cfg = await this.signinConfig(tenant, branch), list = await this.offered(cfg, reg, tenant);
     if (!list.length) return { mode: 'legacy' };
     const chain = typeof chainId === 'string' && chainId ? list.find((c) => c.id === chainId) : undefined;
     if (!chain) return { mode: 'choice', chains: (await this.options(tenant, branch)).chains };
     const m = cfg.methods.find((x) => x.id === chain.steps[0])!, t = methodType(m.type)!;
+    // A chain OPENING on a federation step starts without a username (the classic "Sign in with <provider>"
+    // button): the session is subject-less until the callback resolves the account through the explicit link
+    // (docs/sso-federation.md). The link step renders on the first page, its session created here.
+    if (t.factor === 'other') {
+      const key = `${tenant}/${branch ?? 'live'}//external-entry`;
+      if (this.tooManyStarts(key)) { this.audit({ tenant, outcome: 'throttled' }); return { mode: 'error', message: 'Too many attempts. Try again later.' }; }
+      const a = analyzeChain(cfg, chain);
+      const steps = await Promise.all(chain.steps.map(async (id) => { const sm = cfg.methods.find((x) => x.id === id)!; return { id: sm.id, type: sm.type, name: sm.name, level: sm.level, config: sm.config, real: (await this.verification(reg, tenant, sm)).real }; }));
+      const s: Session = { id: randomBytes(24).toString('base64url'), tenant, subject: '', branch, known: false, exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
+      this.sessions.set(s.id, s);
+      await this.prepare(s);
+      return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: s.prepared!.prompt.fields, session: s.id, noSubject: true, title: s.prepared!.prompt.title, ...(s.prepared!.prompt.message ? { message: s.prepared!.prompt.message } : {}) };
+    }
     if (!t.inlineWithUsername(m.config)) return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: [] };
     const s = { tenant, subject: '', known: false, branch } as Session;
     const st = { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: true };

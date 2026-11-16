@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Optional, Param, Put, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, ConflictException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Optional, Param, Put, Post, Req, UseGuards } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
@@ -68,7 +68,8 @@ export class AuthnAdminController {
       // Federated sign-in: EXPLICITLY link the provider subject to this account (docs/sso-federation.md). Never by e-mail match.
       if (typeof b?.externalSub !== 'string' || !b.externalSub || b.externalSub.length > 255) throw new BadRequestException('externalSub required: the provider subject to link to this account');
       const email = typeof b?.externalEmail === 'string' && /^[^\s@]{1,64}@[^\s@]{1,120}$/.test(b.externalEmail) ? b.externalEmail : undefined;
-      await this.authn.enroll.setExternalLink(t, u, inst, { sub: b.externalSub, ...(email ? { email } : {}) });
+      try { await this.authn.enroll.setExternalLink(t, u, inst, { sub: b.externalSub, ...(email ? { email } : {}) }); }
+      catch (e) { if ((e as { code?: string }).code === 'external-sub-taken') throw new ConflictException('this provider identity is already linked to another account'); throw e; }
       return { instance: inst, type: type.id, linked: { sub: b.externalSub } };
     }
     if (type.id === 'totp') {

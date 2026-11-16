@@ -309,6 +309,20 @@ fn choice_page(p: &HashMap<String, String>, chains: &[Value], theme: &str) -> Re
     page(StatusCode::OK, frame("Choose how to sign in", &card, theme, &authorize_back(p), false), Some(&origin_of(p)), false)
 }
 
+/// The first page of a chain that opens on an external provider (social sign-in): no username input - the
+/// provider identity resolves the account at the callback through the explicit link. The session was created by
+/// the control plane when it answered the entry; only its `link` fields render, as buttons the core builds.
+fn link_start_page(p: &HashMap<String, String>, v: &Value, theme: &str) -> Response {
+    let session = v["session"].as_str().unwrap_or("");
+    if !session_ok(session) { return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", theme); }
+    let title = v["title"].as_str().or_else(|| v["chain"]["name"].as_str()).unwrap_or("Sign in");
+    let msg = v["message"].as_str().map(|m| format!("<p{}>{}</p>", if m.starts_with("DEMO") { " class=\"demo\"" } else { "" }, esc(m))).unwrap_or_default();
+    let links = v["fields"].as_array().map(|fs| fs.iter().filter(|f| f["type"].as_str() == Some("link")).filter_map(|f| link_html(f, p, session)).collect::<String>()).unwrap_or_default();
+    if links.is_empty() { return error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", theme); }
+    let card = format!("<h1 class=\"page-title\">{}</h1>{msg}{links}{}", esc(title), back_link(p));
+    page(StatusCode::OK, frame(title, &card, theme, &authorize_back(p), false), Some(&origin_of(p)), false)
+}
+
 /// A later step of a chain: the opaque session id is the only link to the first page (the user name is not sent again).
 fn step_page(p: &HashMap<String, String>, v: &Value, error: Option<&str>, theme: &str) -> Response {
     let st = &v["step"];
@@ -357,6 +371,7 @@ pub async fn authorize_form(State(c): State<Arc<Core>>, headers: HeaderMap, Quer
         None => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
         Some(v) if v["mode"] == "error" => error_page(StatusCode::BAD_REQUEST, v["message"].as_str().unwrap_or("this sign-in link is not valid"), &theme),
         Some(v) if v["mode"] == "choice" => choice_page(&p, v["chains"].as_array().map(Vec::as_slice).unwrap_or(&[]), &theme),
+        Some(v) if v["mode"] == "chain" && v["noSubject"].as_bool() == Some(true) => link_start_page(&p, &v, &theme),
         Some(v) if v["mode"] == "chain" => form(&p, None, Some(v["fields"].as_array().map(Vec::as_slice).unwrap_or(&[])), &theme),
         Some(_) => form(&p, None, None, &theme),
     }
@@ -678,7 +693,11 @@ mod tests {
                 if let Some(h) = t.find("\r\n\r\n") { let cl = t[..h].lines().find_map(|l| l.to_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap())).unwrap_or(0); if buf.len() >= h + 4 + cl { break; } } if n == 0 { break; } }
             let t = String::from_utf8_lossy(&buf).to_string(); let path = t.split_whitespace().nth(1).unwrap().to_string();
             let body: Value = serde_json::from_str(t.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-            let out = if path.ends_with("/entry") { json!({"mode":"chain","fields":[{"name":"password","label":"Password","type":"password"}]}) }
+            let out = if path.ends_with("/entry") && body["chain"] == "social" { json!({"mode":"chain","chain":{"id":"social","name":"Google only"},"noSubject":true,"session":"sess-soc","title":"Sign in with <Google>","fields":[{"type":"link","label":"Continue with <Google>"}]}) }
+            else if path.ends_with("/entry") { json!({"mode":"chain","fields":[{"name":"password","label":"Password","type":"password"}]}) }
+            else if body["externalStart"] == true && body["session"] == "sess-soc" {
+                json!({"outcome":"external-redirect","url":"https://provider.example/auth?client_id=c1&state=st-ok"})
+            }
             else if body["externalStart"] == true && body["session"] == "sess1" {
                 match mode {
                     "redirect" => json!({"outcome":"external-redirect","url":"https://provider.example/auth?client_id=c1&state=st-ok"}),
@@ -720,6 +739,24 @@ mod tests {
         assert!(href.starts_with("/authorize/external?") && href.contains("session=sess1") && href.contains("client_id=demo-web") && !href.contains("provider.example"), "{href}");
         // label is escaped, and the form has no submit button next to a link step
         assert!(body.contains("&lt;Fakebook&gt;") && !body.contains("<Fakebook>") && !body.contains("<button type=\"submit\">Continue</button>"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn social_only_chain_first_page_is_a_link_button_without_a_username_form() {
+        let c = core_at(&fake_gate_external("redirect").await);
+        let uri = format!("/authorize?{}&chain=social", ext_params("").replace("&session=", ""));
+        let (st, _, body) = send(&c, ext_get(&uri)).await;
+        assert_eq!(st, StatusCode::OK);
+        // the link button points at the core's own external route with the control-plane session, title escaped
+        let href = body.split("class=\"linkbtn\" href=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+        assert!(href.starts_with("/authorize/external?") && href.contains("session=sess-soc") && href.contains("chain=social"), "{href}");
+        assert!(body.contains("Sign in with &lt;Google&gt;") && !body.contains("Sign in with <Google>"), "{body}");
+        // no username/password input and no POST form: the first step IS the provider round-trip
+        assert!(!body.contains("name=\"username\"") && !body.contains("type=\"password\"") && !body.contains("method=\"post\""), "{body}");
+        // the button round-trips: external start on that session redirects to the provider
+        let (st2, h2, _) = send(&c, ext_get(&format!("/authorize/external?{}&chain=social", ext_params("sess-soc")))).await;
+        assert_eq!(st2, StatusCode::FOUND);
+        assert_eq!(h2[header::LOCATION].to_str().unwrap(), "https://provider.example/auth?client_id=c1&state=st-ok");
     }
 
     #[tokio::test]
