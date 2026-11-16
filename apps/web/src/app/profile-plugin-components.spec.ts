@@ -1,4 +1,5 @@
 import 'poc-plugins/auth-totp/screens/profile.mjs';
+import 'poc-plugins/auth-sso-google/screens/profile.mjs';
 import 'poc-plugins/auth-digit-code/screens/profile.mjs';
 import 'poc-plugins/auth-password/screens/profile.mjs';
 import 'poc-plugins/profile-picture/screens/picture.mjs';
@@ -119,6 +120,82 @@ describe('packaged profile components (plugins/*/screens/*.mjs)', () => {
     expect(customElements.get('iam-password-profile')).toBeTruthy();
     expect(customElements.get('iam-profile-picture')).toBeTruthy();
   });
+
+  const GOOG = { id: 'goog', type: 'sso-google', name: 'Google' };
+
+  it('SSO: linked status, link start, simulated chooser and completion on the self surface', async () => {
+    const calls: { method: string; path: string }[] = [];
+    let linked: object = {};
+    const el = await mount('iam-sso-google-profile', ctx({}), (p) => {
+      const method = p.includes('external-links') ? 'POST' : 'GET';
+      calls.push({ method, path: p });
+      if (p.endsWith('/auth/me/enrollments')) return enrollments([GOOG], linked);
+      if (p.endsWith('/external-links/goog/complete')) { linked = { goog: { external: { sub: 'sim-google-ada', email: 'ada@example.invalid', linkedAt: '2026-11-16T00:00:00Z' } } }; return { status: 200, data: { linked: true, simulated: true } }; }
+      if (p.endsWith('/external-links/goog')) return { status: 200, data: { mode: 'simulated', title: 'Google (simulated)', state: 'st-1', identities: [{ sub: 'sim-google-ada', label: 'Ada Lovelace (fiction)' }] } };
+      return enrollments([]);
+    });
+    expect(el.shadowRoot!.textContent).toContain('Not linked');
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.link')!.click();
+    await new Promise(r => setTimeout(r, 20));
+    // the DEMO chooser renders in-page, clearly marked; the server was asked with the console return URL
+    expect(el.shadowRoot!.textContent).toContain('DEMO: simulated provider');
+    expect(el.shadowRoot!.textContent).toContain('Ada Lovelace (fiction)');
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.chooser .idbtn')!.click();
+    await new Promise(r => setTimeout(r, 20));
+    expect(calls.some((c) => c.path.endsWith('/external-links/goog/complete'))).toBe(true);
+    expect(el.shadowRoot!.textContent).toContain('Linked (SIMULATED provider');
+    expect(el.shadowRoot!.textContent).toContain('Linked');
+    expect(el.shadowRoot!.textContent).toContain('ada@example.invalid');
+  });
+
+  it('SSO: a real provider answer navigates the browser, never renders a chooser', async () => {
+    const assigned: string[] = [];
+    const el = await mount('iam-sso-google-profile', ctx({}), (p) => {
+      if (p.endsWith('/auth/me/enrollments')) return enrollments([GOOG], {});
+      if (p.endsWith('/external-links/goog')) return { status: 200, data: { mode: 'redirect', url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x' } };
+      return enrollments([]);
+    });
+    // stub location.assign (jsdom does not navigate)
+    const orig = Object.getOwnPropertyDescriptor(window, 'location');
+    const fakeLoc = { ...window.location, assign: (u: string) => assigned.push(u), origin: window.location.origin, pathname: window.location.pathname };
+    Object.defineProperty(window, 'location', { value: fakeLoc, configurable: true });
+    try {
+      el.shadowRoot!.querySelector<HTMLButtonElement>('.link')!.click();
+      await new Promise(r => setTimeout(r, 20));
+      expect(assigned).toEqual(['https://accounts.google.com/o/oauth2/v2/auth?client_id=x']);
+      expect(el.shadowRoot!.querySelector('.chooser')).toBeNull();
+    } finally { if (orig) Object.defineProperty(window, 'location', orig); }
+  });
+
+  it('SSO: admin surface shows status and revoke, never a link control', async () => {
+    const el = await mount('iam-sso-google-profile', ctx({ surface: 'admin', subject: 'u1' }), (p) =>
+      p.includes('/auth/enrollments/u1') ? enrollments([GOOG], { goog: { external: { sub: 'sub-1', email: null, linkedAt: '2026-11-15T00:00:00Z' } } }) : enrollments([]));
+    expect(el.shadowRoot!.textContent).toContain('Linked');
+    expect(el.shadowRoot!.textContent).toContain('never create one');
+    expect(el.shadowRoot!.querySelector('.link')).toBeNull();
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.remove')!.click();
+    expect(el.shadowRoot!.textContent).toContain('Really revoke this link');
+  });
+
+  it('SSO: readonly mode shows the status but no mutating control', async () => {
+    const el = await mount('iam-sso-google-profile', ctx({ mode: 'readonly' }), () => enrollments([GOOG], { goog: { external: { sub: 'sub-1', email: null, linkedAt: '2026-11-15T00:00:00Z' } } }));
+    expect(el.shadowRoot!.textContent).toContain('Linked');
+    expect([...el.shadowRoot!.querySelectorAll('button')]).toEqual([]);
+  });
+
+  it('SSO: identity labels and server messages are escaped', async () => {
+    const el = await mount('iam-sso-google-profile', ctx({}), (p) => {
+      if (p.endsWith('/auth/me/enrollments')) return enrollments([GOOG], {});
+      if (p.endsWith('/external-links/goog')) return { status: 200, data: { mode: 'simulated', title: 'G <img src=x onerror=alert(1)>', state: 'st-1', identities: [{ sub: 's1', label: '<b>Evil</b>' }] } };
+      return enrollments([]);
+    });
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.link')!.click();
+    await new Promise(r => setTimeout(r, 20));
+    expect(el.shadowRoot!.querySelector('.chooser img')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.chooser .idbtn')!.innerHTML).not.toContain('<b>Evil</b>');
+    expect(el.shadowRoot!.textContent).toContain('<b>Evil</b>');
+  });
+
 });
 
 describe('PluginScreenLoader cache', () => {

@@ -59,5 +59,17 @@
   },
   "security": {
     "signed": true
-  }
+  },
+  "profileComponents": [
+    {
+      "id": "sso-github",
+      "title": "GitHub sign-in",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 30
+    }
+  ]
 }

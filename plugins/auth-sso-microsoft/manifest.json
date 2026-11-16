@@ -67,5 +67,17 @@
   },
   "security": {
     "signed": true
-  }
+  },
+  "profileComponents": [
+    {
+      "id": "sso-microsoft",
+      "title": "Microsoft sign-in",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 30
+    }
+  ]
 }

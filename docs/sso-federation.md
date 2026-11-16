@@ -38,12 +38,15 @@ silently downgraded.
    every page and claim says SIMULATED.
 7. The sign-in session rules stay: 5 minutes, throttling, generic refusals, fail closed on plugin fault.
 
-## Flow (subject first, then provider)
+## Flow (subject first, then provider - or provider only)
 
-The person enters their account name as today (the subject rules of the existing flow do not change). A social
-step renders a **link field** (new core field type `link`: an anchor button, no input) that the CORE builds
-itself - the plugin only declares its intent, the core builds the href, so a plugin can never smuggle a
-javascript: or http: URL into the page:
+Two shapes exist. **Subject first**: the person enters their account name as today (the subject rules of the
+existing flow do not change) and the social step is a later challenge. **Social-only**: a chain whose FIRST step
+is a federation step starts without a username - the classic "Sign in with <provider>" button; the entry creates
+a subject-less session and the provider identity resolves the account at the callback, through the explicit link
+and nothing else. In both shapes a social step renders a **link field** (new core field type `link`: an anchor
+button, no input) that the CORE builds itself - the plugin only declares its intent, the core builds the href, so
+a plugin can never smuggle a javascript: or http: URL into the page:
 
 1. `auth.prepare` (pure handler) returns the link prompt; the flow session id travels in the payload.
 2. The link points at the CORE: `GET /authorize/external?tenant&instance&session`. The gate calls the plugin's
@@ -67,9 +70,6 @@ is ALWAYS verified - v6 only checks claims otherwise); OAuth2-only providers go 
 the plugin's profileMap, an optional e-mails read (GitHub) and an optional token-inspection read judged by the
 plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail closed on anything unexpected.
 
-A social-ONLY chain (no username) comes after this base works: the provider's `sub` resolves the subject through
-the link table. Never through e-mail matching (rule 1).
-
 ## Pieces (as built)
 
 - core (Rust): `link` field type built by the core; `GET /authorize/external` (302, https-or-loopback provider
@@ -84,15 +84,23 @@ the link table. Never through e-mail matching (rule 1).
   handlers (metadata + decision only), each signed; secrets only as `secret` settings or env.
 - authn/federation.ts: `checkStart` (answer validation), `buildAuthorizeUrl`, `exchangeOidc`,
   `exchangeUserinfo` - the only network code of the feature.
-- console/profile: a "linked sign-in providers" component per plugin (link while signed in, unlink) - NOT in
-  this branch yet.
+- self-service linking: `POST /tenants/:t/auth/me/external-links/:instance` (+ `/complete` for a simulated
+  provider) starts a provider round-trip bound to the authenticated member (own one-use state, 5 minutes); the
+  fixed callback completes it and the core 302s to the recorded return URL (https-or-loopback, anything else
+  becomes a plain confirmation page - never an open redirect). The plugin judges with `intent: 'link'` (its own
+  policy applies; an existing link is not required to create one). Unlink is the enrollment DELETE.
+- console/profile: a "linked sign-in providers" component per plugin (`screens/profile.mjs`, self: link/unlink,
+  admin: status/revoke - an administrator never links for someone else).
 
 ## Tests (each commit with its tests)
 
 - authz.rs: link field rendering (escaping, https-only, length caps), external start/callback routes, resume.
 - external.spec.ts (API, over the bus): catalogue (five types, factor `other`, no `federation` placeholder);
   full SIMULATED chain round-trip (link step, DEMO identities, explicit link, resume); callback resolving the
-  session from the provider state alone; external start refused on a non-federation step.
+  session from the provider state alone; external start refused on a non-federation step; social-only chain
+  (subject-less entry, resolution at the callback, subject-less POST refused); self-service linking (simulated
+  round-trip, the link then signs the member in on the social-only chain, clash refused, one-use state);
+  one provider subject per account (409).
 - federation.spec.ts (API, loopback fake providers): real OIDC exchange with a jose-signed id_token validated
   through JWKS (wrong key / wrong nonce / wrong verifier / wrong state all refused, PKCE verified provider-side);
   oauth2-userinfo flow with e-mails fallback and token inspection; malformed plugin answers refused.

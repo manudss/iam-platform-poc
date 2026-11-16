@@ -720,6 +720,9 @@ mod tests {
                 if cb["state"] == "st-ok" && cb["sim"] == "sim-ada" && body["session"] == "sess1" { json!({"outcome":"allow","subject":"demo-alice","claims":{"amr":["pwd","fed"],"iss":"evil","role":"admin"}}) }
                 else if cb["state"] == "st-ok" && cb["code"] == "code-1" { json!({"outcome":"allow","subject":"demo-alice","claims":{"amr":["pwd","fed"],"iss":"evil","role":"admin"},"resume":{"client_id":"demo-web","redirect_uri":"http://localhost:4200/callback","state":"st ate","code_challenge":CH,"code_challenge_method":"S256"}}) }
                 else if cb["state"] == "st-ok" && cb["code"] == "code-evil" { json!({"outcome":"allow","subject":"demo-alice","claims":{},"resume":{"client_id":"demo-web","redirect_uri":"http://evil.example/cb","state":"st ate","code_challenge":CH,"code_challenge_method":"S256"}}) }
+                else if cb["state"] == "st-ok" && cb["code"] == "link-1" { json!({"outcome":"external-linked","returnTo":"http://localhost:4200/profile"}) }
+                else if cb["state"] == "st-ok" && cb["code"] == "link-nourl" { json!({"outcome":"external-linked"}) }
+                else if cb["state"] == "st-ok" && cb["code"] == "link-evil" { json!({"outcome":"external-linked","returnTo":"http://evil.example/x"}) }
                 else { json!({"outcome":"deny","message":"External sign-in failed. Try again."}) }
             }
             else if body["password"] == "pw" && body["subject"] == "demo-alice" {
@@ -785,6 +788,25 @@ mod tests {
         for bad in ["", "bad%20session!", &"x".repeat(65)] {
             assert_eq!(send(&c, ext_get(&format!("/authorize/external?{}", ext_params(bad)))).await.0, StatusCode::BAD_REQUEST, "{bad}");
         }
+    }
+
+    #[tokio::test]
+    async fn external_linked_redirects_to_the_recorded_return_url_or_confirms_in_page() {
+        let c = core_at(&fake_gate_external("redirect").await);
+        // a member linking a provider returns on the fixed callback URL with only code+state: 302 to the console
+        let (st, h, _) = send(&c, ext_get("/authorize/external/callback?code=link-1&state=st-ok")).await;
+        assert_eq!(st, StatusCode::FOUND);
+        assert_eq!(h[header::LOCATION].to_str().unwrap(), "http://localhost:4200/profile");
+        // no return URL recorded: a plain confirmation page, no redirect
+        let (st2, h2, b2) = send(&c, ext_get("/authorize/external/callback?code=link-nourl&state=st-ok")).await;
+        assert_eq!(st2, StatusCode::OK);
+        assert!(h2.get(header::LOCATION).is_none());
+        assert!(b2.contains("Provider linked"), "{b2}");
+        // a return URL that is not https-or-loopback is dropped: confirmation page, NEVER an open redirect
+        let (st3, h3, b3) = send(&c, ext_get("/authorize/external/callback?code=link-evil&state=st-ok")).await;
+        assert_eq!(st3, StatusCode::OK);
+        assert!(h3.get(header::LOCATION).is_none());
+        assert!(b3.contains("Provider linked"), "{b3}");
     }
 
     #[tokio::test]

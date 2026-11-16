@@ -33,7 +33,7 @@ describe('external provider sign-in (federation)', () => {
     const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue(guard).compile();
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService);
     const reg = app.get(PluginRegistry);
-    for (const id of ['auth-sso-google', 'auth-sso-github']) { await reg.install(T, id, {}); await reg.enable(T, id, { hooks: ['auth.external.start', 'auth.external.verify'] }); }
+    for (const id of ['auth-sso-google', 'auth-sso-github']) { await reg.install(T, id, {}); await reg.enable(T, id, { hooks: ['auth.external.start', 'auth.external.verify'], uiComponents: true }); }
     const put = (c: unknown) => request(app.getHttpServer()).put(`/tenants/${T}/auth`).set('x-api-admin-token', ADMIN).send({ config: c }).expect(200);
     await put({
       methods: [

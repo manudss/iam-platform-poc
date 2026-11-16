@@ -101,5 +101,17 @@
   },
   "security": {
     "signed": true
-  }
+  },
+  "profileComponents": [
+    {
+      "id": "sso-oidc",
+      "title": "External provider (OIDC) sign-in",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 30
+    }
+  ]
 }
