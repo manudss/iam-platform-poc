@@ -101,8 +101,14 @@ export class PluginsAdmin {
   }
   protected async open(p: PluginInfo, announce = true) {
     if (announce) this.opened.emit(p.id);
-    const same = this.selected()?.id === p.id; this.selected.set(p); if (!same) { this.tab.set('apercu'); this.note.set(''); } // re-opening the same plugin after an action keeps its tab and its result message
-    this.grantInstall = !!p.grants.install; this.grantComponents = !!p.grants.uiComponents; this.grantHooks = Object.fromEntries((p.grants.hooks ?? []).map(h => [h, true])); this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
+    // Re-opening the SAME plugin (post-action refresh, route echo) keeps the tab, the result message AND the grants
+    // the admin just ticked: resetting them here raced a slow re-open and sent enables with the grants unchecked.
+    // Opening a DIFFERENT plugin initializes the boxes from its stored grants, so a re-enable keeps what was granted.
+    const same = this.selected()?.id === p.id; this.selected.set(p);
+    if (!same) {
+      this.tab.set('apercu'); this.note.set('');
+      this.grantInstall = !!p.grants.install; this.grantComponents = !!p.grants.uiComponents; this.grantHooks = Object.fromEntries((p.grants.hooks ?? []).map(h => [h, true])); this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
+    }
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
       this.edited = Object.fromEntries(m.groups.flatMap((g) => g.fields).map((f) => [f.key, f.type === 'list' && Array.isArray(f.value) ? f.value.join(', ') : f.value]));
