@@ -20,4 +20,8 @@ cd "$OLDPWD"
 (cd core && cargo build -p iam-core --locked)
 (cd apps/api && npm ci && npm run build)
 (cd apps/web && npm ci)
+# Plugin dependencies live at the repository root, with host packages linked to the API copy.
+node scripts/plugin-deps.mjs
+npm ci
+node scripts/plugin-deps.mjs
 echo "demo-setup: done. Start everything with: bash scripts/demo-start.sh"
