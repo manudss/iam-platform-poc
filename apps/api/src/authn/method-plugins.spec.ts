@@ -167,4 +167,22 @@ describe('sign-in methods are registry plugins (step 2 acceptance)', () => {
     assert.equal(ok?.outcome, 'allow', 'the imported method signs in without any restart');
     assert.equal((ok as unknown as { claims: { auth_chain: string } }).claims.auth_chain, 'word');
   });
+
+  it('4. a replacement of the password method serves it transparently: chains stay offered, sign-in unchanged', async () => {
+    // The shipped lockout extends auth-password without declaring its own authMethod: enabling it must not
+    // retire the password method or its chains (regression: they all turned "plugin not active").
+    await putConfig([m('pw', 'password', 3)], [{ id: 'password-only', name: 'Password only', steps: ['pw'], level: 3 }], 'password-only').expect(200);
+    await reg.install(T, 'auth-password-lockout', { install: true });
+    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] });
+    const opts = await svc.options(T);
+    assert.deepEqual(opts.chains.map((c) => c.id), ['password-only'], 'the password chain stays offered with the replacement enabled');
+    const avail = await svc.availability(T, await svc.workingConfig(T));
+    assert.deepEqual(avail.methods.pw, { available: true, plugin: 'auth-password-lockout' }, 'the console sees the replacement serving the method');
+    const r = await svc.authenticate({ tenant: T, subject: 'demo-alice', chain: 'password-only' });
+    assert.equal(r?.outcome, 'challenge', 'the password prompt still opens, served by the replacement');
+    const ok = await svc.authenticate({ tenant: T, session: (r as { session: string }).session, answers: { password: PW } });
+    assert.equal(ok?.outcome, 'allow', 'the same password signs in through the replacement (its check delegates to the base)');
+    await reg.disable(T, 'auth-password-lockout');
+    assert.deepEqual((await svc.options(T)).chains.map((c) => c.id), ['password-only'], 'back to the base without any reconfiguration');
+  });
 });
