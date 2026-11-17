@@ -68,6 +68,7 @@ describe('signup page', () => {
     post.resolve(new Response(JSON.stringify({ message: 'Too many requests' }), { status: 429 }));
     await new Promise((r) => setTimeout(r, 5)); h.detectChanges();
     expect(el.querySelector('#su-error')?.textContent).toContain('Too many requests.');
+    expect(document.activeElement).toBe(el.querySelector('#su-error')); // focus moves to the banner on every refusal
   });
 
   it('locks the confirmation form while the code is being checked', async () => {

@@ -91,8 +91,8 @@ export class SignupPage {
   /** A refused request: a visible summary (focus moved to it), each problem anchored to its field, field-level errors inline. */
   private showError(status: number, d: unknown, test: boolean) {
     this.fieldErrs.set({});
-    if (status === 429) { this.errTitle.set('Too many requests.'); this.issues.set([{ text: 'Try again in a little while.' }]); return; }
-    if (status === 404) { this.errTitle.set('Sign-up is closed.'); this.issues.set([]); return; }
+    if (status === 429) { this.errTitle.set('Too many requests.'); this.issues.set([{ text: 'Try again in a little while.' }]); this.focusErr(); return; }
+    if (status === 404) { this.errTitle.set('Sign-up is closed.'); this.issues.set([]); this.focusErr(); return; }
     const raw = (d as { message?: unknown } | undefined)?.message;
     const msgs = (Array.isArray(raw) ? raw : [raw ?? (test ? 'The test account could not be created.' : 'The request could not be sent.')]).map(String);
     const fe: Record<string, string> = {};
@@ -107,8 +107,9 @@ export class SignupPage {
     this.errTitle.set(test ? 'The test account could not be created.' : 'Your request could not be sent.');
     this.issues.set(items);
     this.fieldErrs.set(fe);
-    if (typeof document !== 'undefined') setTimeout(() => document.getElementById('su-error')?.focus());
+    this.focusErr();
   }
+  private focusErr() { if (typeof document !== 'undefined') setTimeout(() => document.getElementById('su-error')?.focus()); }
   protected async send() {
     if (this.busy()) return;
     this.busy.set(true); this.errTitle.set(''); this.issues.set([]); this.fieldErrs.set({});
