@@ -11,9 +11,22 @@ export interface Chain { id: string; name: string; enabled: boolean; steps: stri
 export interface AuthnConfig { methods: MethodInstance[]; chains: Chain[]; defaultChain: string | null }
 export interface Analysis { id: string; declaredLevel: number; effectiveLevel: number; maxStepLevel: number; verifiedFactors: string[]; simulatedSteps: string[]; mfa: boolean; warnings: string[]; basis: string }
 export interface SettingField { key: string; type: string; label: string; help?: string; group?: string; default?: unknown; options?: { value: string; label: string }[]; min?: number; max?: number; visibleIf?: { key: string; equals: unknown } }
-export interface CatalogueEntry { id: string; name: string; description: string; factor: string; maturity: 'implemented' | 'catalogue'; suggestedLevel: number; provisioning: string; instances?: 'single' | 'multiple'; settings: SettingField[]; simulatedByDefault: boolean }
+export interface CatalogueEntry { id: string; name: string; description: string; factor: string; maturity: 'implemented' | 'catalogue'; suggestedLevel: number; provisioning: string; instances?: 'single' | 'multiple'; settings: SettingField[]; settingsScope?: 'instance' | 'plugin'; simulatedByDefault: boolean }
+/** The serving plugin's own form for a plugin-scoped method (password policy): schema + values of the plugin
+ * that serves the slot NOW (the enabled replacement when there is one), read from its settings store. */
+export interface ServingForm { plugin: string; settings: SettingField[]; values: Record<string, any> }
 
 /** Suggestion only: a chain cannot be weaker than its strongest step, so that is the starting value. The administrator sets the real level. */
+/** The drawer's effective value of a setting. A plugin-scoped method (serving form present) reads and writes the
+ * serving plugin's values - pending local edits first, then the stored values, then the field default; the instance
+ * config is never involved. An ordinary method reads its instance config. */
+export const drawerValue = (serving: ServingForm | undefined, edits: Record<string, any> | undefined, config: Record<string, any>, f: SettingField) => {
+  if (serving) return edits?.[f.key] ?? serving.values[f.key] ?? f.default;
+  return config[f.key] ?? f.default;
+};
+/** The values to write to the serving plugin: its stored values with the pending local edits applied. */
+export const mergedPluginValues = (form: ServingForm, edits: Record<string, any>) => ({ ...form.values, ...edits });
+
 export const suggestChainLevel = (cfg: AuthnConfig, steps: string[]) => Math.max(1, ...steps.map((s) => cfg.methods.find((m) => m.id === s)?.level ?? 1));
 export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 34) || 'item'; let id = b, i = 2; while (taken.includes(id)) id = `${b}-${i++}`; return id; };
 
@@ -31,6 +44,8 @@ export class AuthMethodsPage {
   protected catalogue = signal<CatalogueEntry[]>([]);
   protected analyses = signal<Analysis[]>([]);
   protected avail = signal<Availability | null>(null);
+  protected serving = signal<Record<string, ServingForm>>({});
+  private servingEdits: Record<string, Record<string, any>> = {};
   protected live = signal<{ config: AuthnConfig; signInMode: string } | null>(null);
   protected saved = '';
   protected note = signal(''); protected problem = signal(''); protected busy = signal(false); protected dirty = signal(false); protected loaded = signal(false); protected seeded = signal(false);
@@ -75,9 +90,10 @@ export class AuthMethodsPage {
   protected steps(e: Entry) { return e.stepIds.length; }
   protected groups(m: MethodInstance | undefined) {
     if (!m) return [] as { name: string; fields: SettingField[] }[];
+    const sv = this.serving()[m.id];
     const t = this.entryType(m.type); const out: { name: string; fields: SettingField[] }[] = [];
-    for (const f of t?.settings ?? []) {
-      if (f.visibleIf && (m.config[f.visibleIf.key] ?? t!.settings.find((x) => x.key === f.visibleIf!.key)?.default) !== f.visibleIf.equals) continue;
+    for (const f of sv?.settings ?? t?.settings ?? []) {
+      if (f.visibleIf && (this.val(m, f) ?? (sv?.settings ?? t!.settings).find((x) => x.key === f.visibleIf!.key)?.default) !== f.visibleIf.equals) continue;
       const g = f.group ?? 'Settings'; let b = out.find((x) => x.name === g); if (!b) out.push(b = { name: g, fields: [] }); b.fields.push(f);
     }
     return out;
@@ -93,6 +109,7 @@ export class AuthMethodsPage {
     try {
       const r = await this.s.api.raw<any>('GET', '/auth', undefined, this.h());
       this.catalogue.set(r.data.catalogue); this.cfg.set(r.data.working.config); this.analyses.set(r.data.working.analyses); this.avail.set(r.data.working.availability ?? null);
+      this.serving.set(r.data.working.serving ?? {}); this.servingEdits = {};
       this.live.set({ config: r.data.live.config, signInMode: r.data.live.signInMode });
       this.saved = r.data.working.seeded ? '' : JSON.stringify(r.data.working.config); this.seeded.set(!!r.data.working.seeded); this.dirty.set(!!r.data.working.seeded); this.problem.set('');
       // A plugin was disabled since the last save: its methods and chains leave the list now, with an explicit message.
@@ -109,6 +126,11 @@ export class AuthMethodsPage {
   protected async save() {
     this.busy.set(true); this.note.set('');
     try {
+      for (const [id, edits] of Object.entries(this.servingEdits)) {
+        if (!Object.keys(edits).length) continue;
+        const values = mergedPluginValues(this.serving()[id], edits);
+        await this.s.api.raw<any>('PUT', `/auth/instances/${id}/plugin-settings`, { values }, this.h());
+      }
       const r = await this.s.api.raw<any>('PUT', '/auth', { config: this.cfg() }, this.h());
       this.cfg.set(r.data.config); this.analyses.set(r.data.analyses); this.saved = JSON.stringify(r.data.config); this.dirty.set(false); this.problem.set('');
       this.note.set('Saved on the working branch. Sign-in does not change until Apply.'); await this.load();
@@ -147,7 +169,7 @@ export class AuthMethodsPage {
   protected pickType(t: CatalogueEntry) {
     if (t.maturity !== 'implemented' || this.locked(t)) return;
     this.newType.set(t.id); this.newName = ''; this.newLevel.set(t.suggestedLevel); this.newUse = true; this.newPos = this.used().length + 1;
-    this.newConfig = Object.fromEntries(t.settings.filter((f) => f.default !== undefined).map((f) => [f.key, f.default])); this.panel.set('new-form');
+    this.newConfig = t.settingsScope === 'plugin' ? {} : Object.fromEntries(t.settings.filter((f) => f.default !== undefined).map((f) => [f.key, f.default])); this.panel.set('new-form');
   }
   protected newEntry() { return this.entryType(this.newType()); }
   protected newGroups() {
@@ -178,6 +200,14 @@ export class AuthMethodsPage {
   protected rename(e: Entry, v: string) { const m = this.method(e.methodId), ch = this.chain(e); if (m) { m.name = v; syncSolo(this.cfg(), m.id); } else if (ch) ch.name = v; this.touch(); }
   protected setRecommended(e: Entry, on: boolean) { if (!e.chainId) return; this.cfg().defaultChain = on ? e.chainId : (this.cfg().defaultChain === e.chainId ? null : this.cfg().defaultChain); this.touch(); }
   protected setConfig(m: MethodInstance, key: string, v: unknown) { m.config[key] = v; this.touch(); }
+  /** The drawer value of a setting: the serving plugin's (edited) value for a plugin-scoped method, else the instance config. */
+  protected val(m: MethodInstance, f: SettingField) {
+    return drawerValue(this.serving()[m.id], this.servingEdits[m.id], m.config, f);
+  }
+  protected setVal(m: MethodInstance, key: string, v: unknown) {
+    if (this.serving()[m.id]) { (this.servingEdits[m.id] ??= {})[key] = v; this.dirty.set(true); return; }
+    this.setConfig(m, key, v);
+  }
   protected addStep(e: Entry) {
     const ch = this.chain(e); const id = this.stepPick || this.cfg().methods.find((m) => !ch?.steps.includes(m.id))?.id; if (!ch || !id || ch.steps.includes(id) || ch.steps.length >= 6) return;
     ch.steps.push(id); ch.level = Math.max(ch.level, minChainLevel(this.cfg(), ch.steps)); this.stepPick = ''; this.touch();

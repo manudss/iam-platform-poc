@@ -51,6 +51,10 @@ export interface AuthMethodType {
   provisioning: 'directory' | 'admin-demo' | 'none';
   /** `single`: one instance at most per configuration. `multiple` (default): several, each with its own settings. */
   instances: 'single' | 'multiple';
+  /** Where the method's settings live: the instance config (default) or the serving plugin's own settings store
+   * ('plugin', manifest `authMethod.settingsScope`). A plugin-scoped method's Authentication form is the serving
+   * plugin's form: its schema, values and save all go through that plugin. */
+  settingsScope?: 'instance' | 'plugin';
   inlineWithUsername(config: Record<string, any>): boolean;
   /** `real` = the check proves what the factor category says. A demo delivery channel proves nothing, so it is not real.
    * DESCRIPTIVE metadata for the catalogue and the chain analysis (config-only, never touches tenant state). Sign-in

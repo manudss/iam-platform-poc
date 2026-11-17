@@ -128,10 +128,10 @@
               @for (f of g.fields; track f.key) {
                 <label>{{ f.label }}
                   @switch (f.type) {
-                    @case ('select') { <select [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, $event)">@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
-                    @case ('number') { <input type="number" [attr.min]="f.min ?? null" [attr.max]="f.max ?? null" [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, +$event)" /> }
-                    @case ('boolean') { <input type="checkbox" [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, $event)" /> }
-                    @default { <input type="text" [name]="'cf'+f.key" [ngModel]="method(e.methodId)!.config[f.key] ?? f.default" (ngModelChange)="setConfig(method(e.methodId)!, f.key, $event)" /> }
+                    @case ('select') { <select [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, $event)">@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
+                    @case ('number') { <input type="number" [attr.min]="f.min ?? null" [attr.max]="f.max ?? null" [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, +$event)" /> }
+                    @case ('boolean') { <input type="checkbox" [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, $event)" /> }
+                    @default { <input type="text" [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, $event)" /> }
                   }@if (f.help) {<small>{{f.help}}</small>}</label>
               }
             } @empty { <p class="hint">This type has no settings.</p> }
