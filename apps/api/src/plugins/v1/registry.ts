@@ -135,7 +135,7 @@ export class PluginRegistry {
   impl(id: string): PluginImpl | undefined { return this.impls.get(id); }
   /** Tenants that have any plugin state: the bus host syncs registrations for each of them. */
   tenants(): string[] { return [...new Set([...this.state.keys()].map((k) => k.split('/')[0]))]; }
-  async settingsFor(tenant: string, id: string): Promise<Record<string, unknown> | undefined> { return this.mergedSettings(tenant, this.plugin(id)); }
+  async settingsFor(tenant: string, id: string): Promise<Record<string, unknown> | undefined> { const p = this.impls.get(id); return p ? this.mergedSettings(tenant, p) : undefined; }
 
   /** Reload durable state after a restart. Call once after registering the plugins. Replacements that were enabled take their slots again; faults stay faults. */
   async load() {

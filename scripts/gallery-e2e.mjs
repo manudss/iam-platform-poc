@@ -20,12 +20,14 @@ try {
   await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]'); await page.locator('nav a[data-nav="/my-applications"]').click(); await page.waitForSelector('.lp-card');
   // The first visible card is not the complete seeded gallery render. Wait for the same
   // minimum the assertion requires; do not inspect a transient first paint synchronously.
-  await page.waitForFunction(()=>document.querySelectorAll('.lp-card').length>=10);
-  assert.ok(await page.locator('.lp-card').count()>=10);
+  // The launchpad re-renders on background refresh (execution badges), so a count read right
+  // after a passing wait can land mid-repaint: poll the count itself instead of racing it.
+  const pollCount = async (sel, min) => { let n = 0; for (let i = 0; i < 40 && n < min; i++) { n = await page.locator(sel).count(); if (n < min) await page.waitForTimeout(150); } return n; };
+  assert.ok(await pollCount('.lp-card', 10) >= 10);
   assert.equal(await page.getByText('Open with SSO',{exact:false}).count(),0);
   // Launching opens a new tab, never replaces the launchpad, and stays keyboard reachable.
+  assert.ok(await pollCount('.lp-launch', 10) >= 10);
   const launch = await page.locator('.lp-launch').evaluateAll(xs=>xs.map(x=>({target:x.getAttribute('target'),rel:x.getAttribute('rel'),tabIndex:x.tabIndex})));
-  assert.ok(launch.length>=10);
   for (const l of launch) { assert.equal(l.target,'_blank'); assert.ok(l.rel.includes('noopener')); assert.ok(l.rel.includes('noreferrer')); assert.equal(l.tabIndex,0); }
   await assertGalleryLaunchPopup(page, page.locator('.lp-launch').first());
   await page.waitForSelector('.lp-card');
