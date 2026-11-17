@@ -143,6 +143,11 @@ export class PluginRegistry {
   tenants(): string[] { return [...new Set([...this.state.keys()].map((k) => k.split('/')[0]))]; }
   async settingsFor(tenant: string, id: string): Promise<Record<string, unknown> | undefined> { const p = this.impls.get(id); return p ? this.mergedSettings(tenant, p) : undefined; }
 
+  /** Instance-scoped secrets (the generic OIDC provider's per-instance client secret): stored under the plugin's
+   * own secret-store document, keyed `<instanceId>.<settingKey>`, so the versioned method config never holds them. */
+  async readSecret(tenant: string, pluginId: string, key: string): Promise<string | undefined> { return this.secrets.get(tenant, pluginId, key); }
+  async writeSecret(tenant: string, pluginId: string, key: string, value: string): Promise<void> { await this.secrets.put(tenant, pluginId, key, value); }
+
   /** Reload durable state after a restart. Call once after registering the plugins. Replacements that were enabled take their slots again; faults stay faults. */
   async load() {
     if (!this.states) return;

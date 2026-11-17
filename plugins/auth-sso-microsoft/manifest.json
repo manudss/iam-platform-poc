@@ -60,7 +60,8 @@
     "amr": "fed",
     "maturity": "implemented",
     "suggestedLevel": 6,
-    "provisioning": "admin-demo"
+    "provisioning": "admin-demo",
+    "settingsScope": "plugin"
   },
   "entrypoints": {
     "handlers": "handlers.mjs"

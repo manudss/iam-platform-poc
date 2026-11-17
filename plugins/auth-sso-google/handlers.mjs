@@ -10,27 +10,30 @@ const SIMULATED = [
 ];
 const configured = (c) => typeof c?.clientId === 'string' && c.clientId.trim().length > 0;
 
+/** Settings live ON THE PLUGIN (settingsScope 'plugin', docs/sso-federation.md rule 5): one provider project
+ * per environment, the client secret in the plugin secret store. The instance config is a legacy fallback only. */
+const conf = (p, c) => ({ ...(p?.config ?? {}), ...(c?.settings ?? {}) });
 export default {
-  'auth.verification': (p) => configured(p.config)
+  'auth.verification': (p, c) => configured(conf(p, c))
     ? { real: true, note: 'Sign-in is delegated to Google (OIDC: issuer, audience, signature, expiry and nonce are checked).' }
     : { real: false, note: 'SIMULATED: no Google client id configured. Demonstration only - proves nothing.' },
   'auth.prepare': () => ({ prompt: { title: 'Sign in with Google', fields: [{ name: 'external', label: 'Continue with Google', type: 'link' }] }, state: {} }),
-  'auth.external.start': (p) => {
-    if (!configured(p.config)) return { ok: true, mode: 'simulated', title: 'Google (simulated)', identities: SIMULATED };
-    const hd = String(p.config.hostedDomain ?? '').trim();
+  'auth.external.start': (p, c) => {
+    if (!configured(conf(p, c))) return { ok: true, mode: 'simulated', title: 'Google (simulated)', identities: SIMULATED };
+    const hd = String(conf(p, c).hostedDomain ?? '').trim();
     return {
       ok: true, mode: 'oidc',
       issuer: 'https://accounts.google.com',
       authorizeEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenEndpoint: 'https://oauth2.googleapis.com/token',
       jwksUri: 'https://www.googleapis.com/oauth2/v3/certs',
-      clientId: p.config.clientId.trim(), scopes: ['openid', 'email', 'profile'], pkce: true,
+      clientId: conf(p, c).clientId.trim(), scopes: ['openid', 'email', 'profile'], pkce: true,
       ...(hd && /^[a-z0-9.-]{1,100}$/i.test(hd) ? { extraAuthorizeParams: { hd } } : {}),
     };
   },
-  'auth.external.verify': (p) => {
+  'auth.external.verify': (p, c) => {
     if (!p.external?.sub) return { ok: false, reason: 'no-subject' };
-    const hd = String(p.config?.hostedDomain ?? '').trim();
+    const hd = String(conf(p, c)?.hostedDomain ?? '').trim();
     if (hd && p.external.claims?.hd !== hd) return { ok: false, reason: 'hosted-domain', message: 'This Google account is not in the accepted domain.' };
     if (p.intent !== 'link' && !p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this Google sign-in.' };
     return { ok: true };

@@ -103,9 +103,12 @@
                 @case ('select') { <select [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=$event">@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
                 @case ('number') { <input type="number" [attr.min]="f.min ?? null" [attr.max]="f.max ?? null" [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=+$event" /> }
                 @case ('boolean') { <input type="checkbox" [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=$event" /> }
+                @case ('secret') { <input type="password" autocomplete="off" [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=$event" /> }
                 @default { <input type="text" [name]="'nf'+f.key" [ngModel]="newConfig[f.key]" (ngModelChange)="newConfig[f.key]=$event" /> }
               }@if (f.help) {<small>{{f.help}}</small>}</label>
           }
+        } @empty {
+          @if (newEntry()?.settingsScope === 'plugin') { <p class="hint">One provider project per environment: the client id and secret are set once on the plugin, not per instance. Create the instance, then open its Edit drawer (or Plugins &gt; Settings) to enter them, and Apply to save.</p> }
         }
         <div class="row-btns foot"><button id="authn-create-instance" (click)="createInstance()">Create</button><button class="secondary" (click)="panel.set('new-type')">Back</button></div>
       </aside>
@@ -131,6 +134,7 @@
                     @case ('select') { <select [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, $event)">@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
                     @case ('number') { <input type="number" [attr.min]="f.min ?? null" [attr.max]="f.max ?? null" [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, +$event)" /> }
                     @case ('boolean') { <input type="checkbox" [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, $event)" /> }
+                    @case ('secret') { <input type="password" autocomplete="off" [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, $event)" /> }
                     @default { <input type="text" [name]="'cf'+f.key" [ngModel]="val(method(e.methodId)!, f)" (ngModelChange)="setVal(method(e.methodId)!, f.key, $event)" /> }
                   }@if (f.help) {<small>{{f.help}}</small>}</label>
               }

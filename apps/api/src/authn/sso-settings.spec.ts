@@ -37,8 +37,7 @@ async function loadReal(id: string): Promise<PluginImpl> {
 async function setup() {
   const secrets = new FilePluginSecrets(join(mkdtempSync(join(tmpdir(), 'sso-secrets-')), 's.json'));
   const reg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, new MemoryStateStore(), secrets);
-  reg.register(await loadReal('auth-sso-google'));
-  reg.register(await loadReal('auth-sso-oidc'));
+  for (const id of ['auth-sso-google-base', 'auth-sso-google', 'auth-sso-oidc-base', 'auth-sso-oidc']) reg.register(await loadReal(id));
   const svc = new AuthnService(reg);
   return { reg, svc, secrets };
 }
@@ -57,7 +56,7 @@ describe('social provider settings scope', () => {
   });
 
   it('openid-client is a runtime dependency (the demo image prunes devDependencies)', () => {
-    const pkg = JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8'));
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
     assert.ok(pkg.dependencies?.['openid-client'], 'federation.ts imports openid-client at the provider callback: it must survive npm prune --omit=dev');
   });
 
@@ -72,7 +71,7 @@ describe('social provider settings scope', () => {
   it('the console form of a plugin-scoped method masks the stored secret and the mask never overwrites it', async () => {
     const { reg, svc } = await setup();
     await reg.install(T, 'auth-sso-google', {});
-    await reg.enable(T, 'auth-sso-google', { hooks: ['auth.external.start', 'auth.external.verify'] });
+    await reg.enable(T, 'auth-sso-google', { hooks: ['auth.external.start', 'auth.external.verify'], uiComponents: true });
     await reg.configure(T, 'auth-sso-google', { clientId: 'fictional-client', clientSecret: 'fictional-secret' });
     await svc.saveConfig(T, { methods: [{ id: 'goog', type: 'sso-google', name: 'Google', enabled: true, level: 6, config: {} }], chains: [], defaultChain: null });
 

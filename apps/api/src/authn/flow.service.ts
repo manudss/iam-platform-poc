@@ -11,6 +11,10 @@ import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
 import { ExternalIdentity, ExternalProfile, ExternalStart, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, mint, pkceChallenge } from './federation.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
+
+/** The console-facing mask for a stored secret; the same sentinel the plugin settings form uses (settings.ts). */
+const SECRET_MASK = '********';
+const methodPluginId = (type: string) => methodType(type)?.pluginId;
 import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
 export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string>; origin?: string;
@@ -120,10 +124,79 @@ export class AuthnService implements OnApplicationBootstrap {
   async workingConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('work')).coreSettings(tenant, CORE_SETTINGS_ID)); }
   async saveConfig(tenant: string, input: unknown): Promise<AuthnConfig> {
     const cfg = validateConfig(input);
-    await (await this.registry('work', true)).putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+    const reg = await this.registry('work', true);
+    // An INSTANCE-scoped secret setting (the generic OIDC provider's clientSecret) never lands in the versioned
+    // config: it goes to the plugin secret store under `<instanceId>.<key>`. The intent is read from the RAW input
+    // (validateSettings rewrites an empty string to the default): a re-sent mask or an absent key keeps the
+    // stored value, an empty string clears it. validateConfig already stripped plugin-scoped settings.
+    const rawMethods = (input && typeof input === 'object' && Array.isArray((input as { methods?: unknown }).methods) ? (input as { methods: Record<string, any>[] }).methods : []);
+    for (const m of cfg.methods) {
+      const t = methodType(m.type), pluginId = methodPluginId(m.type);
+      if (!t || !pluginId) continue;
+      const raw = rawMethods.find((x) => x && x.id === m.id && x.config && typeof x.config === 'object')?.config as Record<string, unknown> | undefined;
+      for (const f of t.settings.filter((x) => x.type === 'secret')) {
+        delete m.config[f.key];
+        const v = raw?.[f.key];
+        if (v === undefined || v === SECRET_MASK) continue; // untouched: keep the stored secret
+        await reg.writeSecret(tenant, pluginId, `${m.id}.${f.key}`, typeof v === 'string' ? v : '');
+      }
+    }
+    await reg.putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
     return cfg;
   }
+
+  /** The config as the console may read it: instance-scoped secrets masked (the real values never leave the
+   * secret store). The console re-sends the mask unchanged; saveConfig keeps the stored secret for it. */
+  async consoleConfig(tenant: string): Promise<AuthnConfig> {
+    const cfg = await this.workingConfig(tenant);
+    const reg = await this.registry('work');
+    for (const m of cfg.methods) {
+      const t = methodType(m.type), pluginId = methodPluginId(m.type);
+      if (!t || !pluginId) continue;
+      for (const f of t.settings.filter((x) => x.type === 'secret')) {
+        if (m.config[f.key] !== undefined) continue;
+        if (await reg.readSecret(tenant, pluginId, `${m.id}.${f.key}`)) m.config[f.key] = SECRET_MASK;
+      }
+    }
+    return cfg;
+  }
+
+  /** The runtime config of a method instance: the versioned values plus its instance-scoped secrets from the
+   * secret store. Plugin-scoped settings are NOT here - the serving plugin's own store holds them (c.settings). */
+  private async instanceConfig(reg: PluginRegistry, tenant: string, m: { id: string; type: string; config: Record<string, any> }): Promise<Record<string, any>> {
+    const t = methodType(m.type), pluginId = methodPluginId(m.type);
+    const out = { ...m.config };
+    if (!t || !pluginId) return out;
+    for (const f of t.settings.filter((x) => x.type === 'secret')) {
+      if (out[f.key] !== undefined) continue;
+      const v = await reg.readSecret(tenant, pluginId, `${m.id}.${f.key}`);
+      if (v) out[f.key] = v;
+    }
+    return out;
+  }
+
+  /** The client secret of a federated method for the provider exchange: the serving plugin's settings for a
+   * plugin-scoped method (the named providers), the instance's secret store entry otherwise (generic OIDC). */
+  private async externalSecret(reg: PluginRegistry, tenant: string, m: { id: string; type: string; config: Record<string, any> }): Promise<string> {
+    const serving = this.provider(reg, tenant, m.type);
+    if (serving && this.methodDeclaration(reg, serving)?.manifest.authMethod?.settingsScope === 'plugin') {
+      const v = (await reg.settingsFor(tenant, serving.manifest.id))?.clientSecret;
+      return typeof v === 'string' ? v : '';
+    }
+    const v = (await this.instanceConfig(reg, tenant, m)).clientSecret;
+    return typeof v === 'string' ? v : '';
+  }
+
   analyses(cfg: AuthnConfig): ChainAnalysis[] { return cfg.chains.map((c) => analyzeChain(cfg, c)); }
+
+  /** Registry-aware analyses: the real/simulated verdict of each method through the registry (serving plugin's
+   * settings included), so a plugin-scoped method is not misread as simulated from its empty instance config. */
+  async analysesReg(tenant: string, cfg: AuthnConfig, ref: 'live' | 'work' = 'work'): Promise<ChainAnalysis[]> {
+    const reg = await this.registry(ref);
+    const verdicts = new Map<string, { real: boolean; note: string }>();
+    for (const m of cfg.methods) verdicts.set(m.id, await this.verification(reg, tenant, m));
+    return cfg.chains.map((c) => analyzeChain(cfg, c, (m) => verdicts.get(m.id)));
+  }
 
   /** Passkey self-enrollment, step 1: the creation options of the auth.enroll hook of the method plugin on the
    * slot (the plugin owns the attestation logic; this service only orchestrates). The pending challenge is stored
@@ -151,7 +224,7 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!(await this.enroll.addWebAuthnCredential(tenant, subject, inst, cred))) return { ok: false as const, reason: 'this credential id is already enrolled with a different key' };
     return { ok: true as const, enrolled: { id: cred.id, name: cred.name ?? null } };
   }
-  catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, instances: t.instances, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
+  catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, instances: t.instances, settings: t.settings, ...(t.settingsScope ? { settingsScope: t.settingsScope } : {}), simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
 
   /** Which instances and chains of a configuration are served right now by an ACTIVE plugin of the given registry (working branch or live).
    * A method is unavailable when the plugin serving its type is disabled or absent; a chain is unavailable when any of its steps is. Drives the "no longer active" state of the console. */
@@ -212,7 +285,11 @@ export class AuthnService implements OnApplicationBootstrap {
       if (!serving) continue;
       const decl = this.methodDeclaration(reg, serving);
       if (decl?.manifest.authMethod?.settingsScope !== 'plugin') continue;
-      out[m.id] = { plugin: serving.manifest.id, settings: serving.manifest.settings ?? [], values: (await reg.settingsFor(tenant, serving.manifest.id)) ?? {} };
+      // Mask secret values: the drawer needs to know one is set, never the value itself. The mask is a
+      // sentinel saveServingSettings drops (see SECRET_MASK).
+      const values = { ...((await reg.settingsFor(tenant, serving.manifest.id)) ?? {}) };
+      for (const f of (serving.manifest.settings ?? []).filter((x) => x.type === 'secret')) if (values[f.key]) values[f.key] = SECRET_MASK;
+      out[m.id] = { plugin: serving.manifest.id, settings: serving.manifest.settings ?? [], values };
     }
     return out;
   }
@@ -226,7 +303,11 @@ export class AuthnService implements OnApplicationBootstrap {
     const reg = await this.registry('work', true);
     const serving = this.provider(reg, tenant, m.type);
     if (!serving || this.methodDeclaration(reg, serving)?.manifest.authMethod?.settingsScope !== 'plugin') throw new BadRequestException(`method ${methodId} has no plugin-scoped form`);
-    await reg.configure(tenant, serving.manifest.id, values);
+    // A secret field still holding the mask means "unchanged": drop it so configure keeps the stored value.
+    const schema = serving.manifest.settings ?? [];
+    const out: Record<string, unknown> = { ...values };
+    for (const f of schema.filter((x) => x.type === 'secret')) if (out[f.key] === SECRET_MASK) delete out[f.key];
+    await reg.configure(tenant, serving.manifest.id, out);
     return { configured: serving.manifest.id };
   }
   /** Descriptive verification note THROUGH THE REGISTRY (never in-process at sign-in, review n:2): a disabled or
@@ -258,7 +339,7 @@ export class AuthnService implements OnApplicationBootstrap {
   private async methodPayload(reg: PluginRegistry, s: Session, st: Session['steps'][number], state: Record<string, any>, answers?: Record<string, string>) {
     const passwordChangedAt = st.type === 'password' ? await this.passwordChangedAt(s.tenant, s.subject) : undefined;
     return {
-      tenant: s.tenant, subject: s.subject, known: s.known, instanceId: st.id, config: st.config as Record<string, any>,
+      tenant: s.tenant, subject: s.subject, known: s.known, instanceId: st.id, config: await this.instanceConfig(reg, s.tenant, st),
       state, answers, now: this.now(), ...(s.origin ? { origin: s.origin } : {}),
       enrollment: await this.enrollment(s.tenant, s.subject, st),
       ...(st.type === 'email-otp' ? { profileEmail: await this.profileEmail(s.subject, s.branch), notifyCapability: await this.notifyCapability(reg, s.tenant) } : {}),
@@ -438,16 +519,16 @@ export class AuthnService implements OnApplicationBootstrap {
     if (st.id !== p.instanceId) return deny('External sign-in failed. Try again.');
     if (cb.error) { this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-denied-by-provider', error: cb.error.slice(0, 80) }); return deny('The provider refused the sign-in. Try again.'); }
     let profile: ExternalProfile;
+    const reg = await this.signinRegistry(s.branch);
     if (p.mode === 'simulated') {
       const id = p.start.identities!.find((x) => x.sub === cb.sim);
       if (!id) return deny('External sign-in failed. Try again.');
       profile = { sub: id.sub, ...(id.email ? { email: id.email, emailVerified: true } : {}), name: id.label };
     } else {
       const cbUrl = externalCallbackUrl();
-      const secret = typeof st.config.clientSecret === 'string' ? st.config.clientSecret : '';
+      const secret = await this.externalSecret(reg, s.tenant, st);
       profile = p.mode === 'oidc' ? await exchangeOidc(p.start, secret, cbUrl, cb, p) : await exchangeUserinfo(p.start, secret, cbUrl, cb, p);   // a throw is a technical failure: 503, fail closed
     }
-    const reg = await this.signinRegistry(s.branch);
     const link = s.subject ? await this.enroll.externalLink(s.tenant, s.subject, st.id) : undefined;
     const linked = await this.enroll.findExternalLink(s.tenant, st.id, profile.sub);
     const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(s.tenant, `auth.${st.type}`, 'auth.external.verify',
@@ -520,6 +601,7 @@ export class AuthnService implements OnApplicationBootstrap {
     const cfg = await this.signinConfig(rec.tenant);
     const m = cfg.methods.find((x) => x.id === rec.instanceId);
     if (!m) return deny('This sign-in method is not available.');
+    const reg = await this.signinRegistry(undefined);
     let profile: ExternalProfile;
     if (rec.mode === 'simulated') {
       const id = rec.start.identities!.find((x) => x.sub === cb.sim);
@@ -527,11 +609,10 @@ export class AuthnService implements OnApplicationBootstrap {
       profile = { sub: id.sub, ...(id.email ? { email: id.email, emailVerified: true } : {}), name: id.label };
     } else {
       const cbUrl = externalCallbackUrl();
-      const secret = typeof m.config.clientSecret === 'string' ? m.config.clientSecret : '';
+      const secret = await this.externalSecret(reg, rec.tenant, m);
       profile = rec.mode === 'oidc' ? await exchangeOidc(rec.start, secret, cbUrl, cb, rec) : await exchangeUserinfo(rec.start, secret, cbUrl, cb, rec);   // a throw is a technical failure: 503, fail closed
     }
-    const reg = await this.signinRegistry(undefined);
-    const payload = { tenant: rec.tenant, subject: rec.subject, known: true, instanceId: m.id, config: m.config as Record<string, any>, state: {}, answers: undefined, now: this.now(), enrollment: {} };
+    const payload = { tenant: rec.tenant, subject: rec.subject, known: true, instanceId: m.id, config: await this.instanceConfig(reg, rec.tenant, m), state: {}, answers: undefined, now: this.now(), enrollment: {} };
     const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(rec.tenant, `auth.${m.type}`, 'auth.external.verify',
       { ...payload, intent: 'link', external: profile, link: null, linkedSubject: null })).result;
     if (!verdict?.ok) { this.audit({ ...auditBase, outcome: 'external-link-refused', reason: verdict?.reason }); return deny(typeof verdict?.message === 'string' && verdict.message.length <= 160 ? verdict.message : 'The link failed. Try again.'); }

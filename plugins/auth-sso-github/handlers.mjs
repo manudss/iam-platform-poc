@@ -10,13 +10,16 @@ const SIMULATED = [
 ];
 const configured = (c) => typeof c?.clientId === 'string' && c.clientId.trim().length > 0;
 
+/** Settings live ON THE PLUGIN (settingsScope 'plugin', docs/sso-federation.md rule 5): one provider project
+ * per environment, the client secret in the plugin secret store. The instance config is a legacy fallback only. */
+const conf = (p, c) => ({ ...(p?.config ?? {}), ...(c?.settings ?? {}) });
 export default {
-  'auth.verification': (p) => configured(p.config)
+  'auth.verification': (p, c) => configured(conf(p, c))
     ? { real: true, note: 'Sign-in is delegated to GitHub (OAuth2 with PKCE S256 + state; no OIDC id_token exists).' }
     : { real: false, note: 'SIMULATED: no GitHub client id configured. Demonstration only - proves nothing.' },
   'auth.prepare': () => ({ prompt: { title: 'Sign in with GitHub', fields: [{ name: 'external', label: 'Continue with GitHub', type: 'link' }] }, state: {} }),
-  'auth.external.start': (p) => {
-    if (!configured(p.config)) return { ok: true, mode: 'simulated', title: 'GitHub (simulated)', identities: SIMULATED };
+  'auth.external.start': (p, c) => {
+    if (!configured(conf(p, c))) return { ok: true, mode: 'simulated', title: 'GitHub (simulated)', identities: SIMULATED };
     return {
       ok: true, mode: 'oauth2-userinfo', pkce: true,
       authorizeEndpoint: 'https://github.com/login/oauth/authorize',
@@ -25,10 +28,10 @@ export default {
       userinfoHeaders: { accept: 'application/vnd.github+json' },
       emailsEndpoint: 'https://api.github.com/user/emails',
       profileMap: { sub: 'id', email: 'email', name: 'name' },
-      clientId: p.config.clientId.trim(), scopes: ['read:user', 'user:email'],
+      clientId: conf(p, c).clientId.trim(), scopes: ['read:user', 'user:email'],
     };
   },
-  'auth.external.verify': (p) => {
+  'auth.external.verify': (p, c) => {
     if (!p.external?.sub) return { ok: false, reason: 'no-subject' };
     if (p.intent !== 'link' && !p.linkedSubject) return { ok: false, reason: 'not-linked', message: 'No account is linked to this GitHub sign-in.' };
     return { ok: true };

@@ -58,6 +58,8 @@ export interface AuthMethodType {
    * ('plugin', manifest `authMethod.settingsScope`). A plugin-scoped method's Authentication form is the serving
    * plugin's form: its schema, values and save all go through that plugin. */
   settingsScope?: 'instance' | 'plugin';
+  /** The declaring plugin's id (undefined for the planned catalogue entries): where instance-scoped secrets are stored. */
+  pluginId?: string;
   inlineWithUsername(config: Record<string, any>): boolean;
   /** `real` = the check proves what the factor category says. A demo delivery channel proves nothing, so it is not real.
    * DESCRIPTIVE metadata for the catalogue and the chain analysis (config-only, never touches tenant state). Sign-in
@@ -85,7 +87,9 @@ function fromPlugin(impl: { manifest: import('../plugins/v1/manifest.js').Plugin
   const id = (impl.manifest.provides ?? []).find((s) => s.startsWith('auth.'))!.slice('auth.'.length);
   return {
     id, name: a.name, description: a.description, factor: a.factor as Factor, amr: a.amr, maturity: a.maturity,
+    pluginId: impl.manifest.id,
     suggestedLevel: a.suggestedLevel, settings: impl.manifest.settings, provisioning: a.provisioning, instances: a.instances ?? 'multiple',
+    settingsScope: a.settingsScope,
     inlineWithUsername: () => !!a.inlineWithUsername,
     verification: (config) => (impl.handlers['auth.verification']?.({ config }, { tenant: '', settings: {} }) ?? { real: false, note: 'no verification handler' }) as { real: boolean; note: string },
   };
