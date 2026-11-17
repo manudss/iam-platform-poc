@@ -18,6 +18,7 @@ The page `Authentication methods` shows **one list**, not one block per concept.
 - A method used alone is stored as a chain with one step. The stored configuration keeps its shape; only the page changed. A chain is a method too, and the page does not separate them.
 - There is **no "disabled" state on a method**. A method is *in use* or *not in use*. To switch a method off for good, disable its plugin on the Plugins page.
 - **Plugin disabled**: methods of that plugin, and the chains that need them, leave the list and move to *Not in use*, marked **unavailable**, and a red banner says the method is no longer active. Enable the plugin again, then press **Use**. Nothing comes back by itself.
+- **Plugin replaced, not disabled**: enabling the replacement of a *working* method (the password lockout, the advanced password policy) changes nothing on this page - the same methods and chains stay in place, simply served by the replacement from then on (the edit panel shows its plugin id). No reconfiguration is needed, and disabling the replacement hands the method back to the base just as silently.
 - **Edit** opens a side panel. The form appears only to add or change something. Common fields (name, level, recommended) come first, then the **settings declared by the plugin** (grouped as the plugin says), the demo enrollment for types that need it, and for a chain its steps with the analysis (multi-factor or not, effective level).
 - **Level** is a select: each option shows the number (1 to 10) and the gauge. Keyboard: arrows, Home, End, Enter, Escape.
 - **+ New instance** opens a chooser with the installed types. A type declares `authMethod.instances` in its manifest: `multiple` (default, several instances with different settings) or `single` (for example the password). The chooser disables a single type that already has its instance, and the API refuses a second one. **+ New chain** asks for a name, then you add steps (any existing method, in use or not).
@@ -55,6 +56,12 @@ The demo edge refuses framing everywhere (`X-Frame-Options: DENY`, `frame-ancest
 | PIN on a shuffled keypad | knowledge | real verification of a whole PIN (scrypt hash) |
 | Passkey (WebAuthn / FIDO2) | possession | real, standards-based ceremonies through SimpleWebAuthn (challenge one-use and time-limited, signature and anti-clone counter checked server-side); self-enrollment from the person's own session |
 | Recovery codes, external IdP | | catalogue entries only, cannot be created |
+
+### Method settings: instance-scoped vs plugin-scoped
+
+Most methods keep their settings on the instance: each configured instance of the method carries its own `config`, and the Authentication page drawer edits it. A method can instead declare `authMethod.settingsScope: "plugin"` in its manifest: its settings then belong to the plugin that SERVES the slot, in that plugin's own settings store (the same store the Settings page writes through `registry.configure`). The base password method works this way because its handlers read the plugin settings, not the instance config.
+
+For a plugin-scoped method the Authentication page drawer IS the serving plugin's form: it shows the serving plugin's settings schema and its stored values - with an enabled replacement such as `auth-password-policy`, that is the advanced policy (character classes, forbidden words, reuse, maximum age...), not the base schema. Saving writes the values to the serving plugin through `PUT /auth/instances/:id/plugin-settings`; the instance config carries none of these keys, so a replacement and the base plugin each keep their own values. `GET /auth` exposes this under `working.serving` (per method instance: serving plugin id, settings schema, values). The catalogue entry carries `settingsScope` so the new-instance form does not propose per-instance defaults for a plugin-scoped type.
 
 ### Advanced password policy (`auth-password-policy`)
 

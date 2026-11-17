@@ -151,17 +151,26 @@ export class BusHost {
   /** Every loaded registry (main + branches) re-pushes on enable/disable: a plugin enabled on a working branch
    * must not wait for the 60 s timer to get its bus registration (decision 7: the branch test sign-in is live). */
   private attachActivity() {
-    this.allRegistries().then((regs) => {
-      for (const [branch, r] of regs) {
-        if (this.listeningOn.has(r)) continue;
-        this.listeningOn.add(r);
-        r.onActivityChange(() => this.sync());
-        r.onAudit((e) => {
-          this.post('/v1/bus/emit', { source: 'api', kind: AUDIT_EVENT_KIND, tenant: e.tenant, branch: branch === 'main' ? undefined : branch, effect_key: `audit-event:${randomUUID()}`, payload: { action: e.action, plugin: e.plugin, detail: e.detail } })
-            .catch((err) => this.log({ warn: 'audit event not emitted', action: e.action, plugin: e.plugin, error: String(err) }));
-        });
-      }
-    }).catch(() => {});
+    this.allRegistries().then((regs) => { for (const [branch, r] of regs) this.watch(branch, r); }).catch(() => {});
+  }
+
+  private watch(branch: string, r: PluginRegistry) {
+    if (this.listeningOn.has(r)) return;
+    this.listeningOn.add(r);
+    r.onActivityChange(() => this.sync());
+    r.onAudit((e) => {
+      this.post('/v1/bus/emit', { source: 'api', kind: AUDIT_EVENT_KIND, tenant: e.tenant, branch: branch === 'main' ? undefined : branch, effect_key: `audit-event:${randomUUID()}`, payload: { action: e.action, plugin: e.plugin, detail: e.detail } })
+        .catch((err) => this.log({ warn: 'audit event not emitted', action: e.action, plugin: e.plugin, error: String(err) }));
+    });
+  }
+
+  /** A registry that came up AFTER the last sync (a new working branch, or main rebuilt by Apply): its activity
+   * listener only appears at the next sync, so an enable/disable before then never reached the bus - the plugin
+   * stayed unregistered and a slot call answered 'no responder' until the 60 s tick. Listen immediately and
+   * resync now: its already-enabled plugins join the routing table at once. */
+  watchRegistry(branch: string, r: PluginRegistry): void {
+    this.watch(branch, r);
+    void this.sync().catch(() => {});
   }
 
   /** Pushes the registrations of every active plugin and serves their deliveries. Idempotent; replaces the set.

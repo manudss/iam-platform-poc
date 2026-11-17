@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, OnApplicationBootstrap, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
-import { PluginRegistry } from '../plugins/v1/registry.js';
+import { PluginRegistry, PluginImpl } from '../plugins/v1/registry.js';
 import type { AuthenticateResult } from '../plugins/v1/hooks.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
@@ -158,10 +158,59 @@ export class AuthnService implements OnApplicationBootstrap {
     try { return ((await this.users.list(branch ?? 'main')).find((u) => u.id === subject && u.login_enabled && u.hasCredential) as { email?: string | null } | undefined)?.email || undefined; } catch { return undefined; }
   }
   /** The plugin SERVING a method type right now on this registry: the provider chosen for the auth.<type> slot
-   * (the working base, or the enabled replacement) - and only when it really is a method (the refusing base of a
-   * slot without an enabled method is NOT one). A disabled or removed method simply has no provider. */
+   * (the working base, or the enabled replacement) - and only when it really is a method. The replacement of a
+   * WORKING method (password lockout, advanced password policy) declares no `authMethod` of its own: it IS the
+   * same method as its base, so the base's declaration is enough and enabling it must be transparent - no
+   * method retired, no chain dropped, no reconfiguration. The REFUSING base of a slot without an enabled
+   * method (auth-totp-base and friends) declares none and extends nothing: NOT a provider. */
   private provider(reg: PluginRegistry, tenant: string, type: string) {
-    try { const p = reg.resolve(tenant, `auth.${type}`); return p.manifest.authMethod && reg.isActive(tenant, p.manifest.id) ? p : undefined; } catch { return undefined; }
+    try {
+      const p = reg.resolve(tenant, `auth.${type}`);
+      if (!reg.isActive(tenant, p.manifest.id)) return undefined;
+      if (p.manifest.authMethod) return p;
+      const base = p.manifest.extends ? reg.impl(p.manifest.extends) : undefined;
+      return base?.manifest.authMethod ? p : undefined;
+    } catch { return undefined; }
+  }
+
+  /** The plugin that DECLARES a served method (walks `extends` to the authMethod declaration): its
+   * `settingsScope` tells whether the Authentication drawer edits per-instance config (default, the TOTP
+   * pattern: handed to the hooks in the payload) or the serving plugin's own settings store (the password
+   * pattern: the slot-wide policy the hooks read as c.settings). */
+  private methodDeclaration(reg: PluginRegistry, serving: PluginImpl): PluginImpl | undefined {
+    let cur: PluginImpl | undefined = serving;
+    while (cur && !cur.manifest.authMethod && cur.manifest.extends) cur = reg.impl(cur.manifest.extends);
+    return cur?.manifest.authMethod ? cur : undefined;
+  }
+
+  /** The Authentication drawer's plugin-scoped forms: for each method instance served by a plugin whose method
+   * declaration says `settingsScope: 'plugin'`, the schema and current values of the SERVING plugin (the enabled
+   * replacement when there is one - its richer policy is what the administrator must see and edit), read from the
+   * same settings store the sign-in hooks consume. Instance-scoped methods are absent from this map. */
+  async servingSettings(tenant: string, cfg: AuthnConfig, ref: 'live' | 'work' = 'work') {
+    const reg = await this.registry(ref);
+    const out: Record<string, { plugin: string; settings: import('../plugins/v1/manifest.js').SettingField[]; values: Record<string, unknown> }> = {};
+    for (const m of cfg.methods) {
+      const serving = this.provider(reg, tenant, m.type);
+      if (!serving) continue;
+      const decl = this.methodDeclaration(reg, serving);
+      if (decl?.manifest.authMethod?.settingsScope !== 'plugin') continue;
+      out[m.id] = { plugin: serving.manifest.id, settings: serving.manifest.settings ?? [], values: (await reg.settingsFor(tenant, serving.manifest.id)) ?? {} };
+    }
+    return out;
+  }
+
+  /** Saving a plugin-scoped method form writes the SERVING plugin's settings store (audited, manifest-validated,
+   * secrets split out by configure): what sign-in applies immediately after Apply. Never the instance config. */
+  async saveServingSettings(tenant: string, methodId: string, values: Record<string, unknown>) {
+    const cfg = await this.workingConfig(tenant);
+    const m = cfg.methods.find((x) => x.id === methodId);
+    if (!m) throw new NotFoundException('unknown method instance');
+    const reg = await this.registry('work', true);
+    const serving = this.provider(reg, tenant, m.type);
+    if (!serving || this.methodDeclaration(reg, serving)?.manifest.authMethod?.settingsScope !== 'plugin') throw new BadRequestException(`method ${methodId} has no plugin-scoped form`);
+    await reg.configure(tenant, serving.manifest.id, values);
+    return { configured: serving.manifest.id };
   }
   /** Descriptive verification note THROUGH THE REGISTRY (never in-process at sign-in, review n:2): a disabled or
    * faulted plugin cannot answer, so the note degrades to 'unavailable' instead of lying. */

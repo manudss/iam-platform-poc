@@ -84,6 +84,7 @@ Rules checked when a replacement is registered (`PluginRegistry.register`):
 Behaviour:
 
 - Enabling a replacement makes it serve its slots **for that tenant**. The base plugin's stored settings and data are not modified.
+- When the base IS a sign-in method (it declares `authMethod`, like `auth-password`), the replacement declares none of its own: it serves the *same* method, so enabling it is transparent - method instances and chains keep working, no reconfiguration. (The other pattern, a refusing base like `auth-totp-base` with a separate method plugin, is untouched: there the method exists only while its plugin is enabled.)
 - Disabling it returns the slot to the base, with the base's own configuration. Nothing is dropped. Re-enabling later does not re-run migrations.
 - Base plugins cannot be disabled or uninstalled (`base-required`). To change behaviour you enable a replacement.
 - **Failure safety, and why it is not "fall back to the base".** The base is often *less* restrictive than a replacement (no lockout, no extra factor). So the registry never asks the base after a replacement refused, errored or timed out for a **sensitive hook** (`auth.*`, `risk.score`, `access.decide`):

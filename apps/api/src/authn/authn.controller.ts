@@ -27,7 +27,7 @@ export class AuthnAdminController {
 
   @Get() async get(@Param('tenant') t: string) {
     const stored = await this.authn.workingConfig(t), live = await this.authn.liveConfig(t), seeded = isEmptyConfig(stored), work = seeded ? validateConfig(SEED_CONFIG) : stored;
-    return { tenant: t, catalogue: this.authn.catalogue(), working: { config: work, seeded, analyses: this.authn.analyses(work), availability: await this.authn.availability(t, work, 'work') }, live: { config: live, analyses: this.authn.analyses(live), signInMode: live.chains.some((c) => c.enabled) ? 'chain' : 'base-password' } };
+    return { tenant: t, catalogue: this.authn.catalogue(), working: { config: work, seeded, analyses: this.authn.analyses(work), availability: await this.authn.availability(t, work, 'work'), serving: await this.authn.servingSettings(t, work, 'work') }, live: { config: live, analyses: this.authn.analyses(live), signInMode: live.chains.some((c) => c.enabled) ? 'chain' : 'base-password' } };
   }
   /** Validates and analyzes a DRAFT configuration without saving it, so the console can show levels, factors and warnings while editing. */
   @Post('analyze') analyze(@Body() b: { config?: unknown }) {
@@ -37,6 +37,11 @@ export class AuthnAdminController {
   @UseGuards(AdminGuard) @Put() async put(@Param('tenant') t: string, @Body() b: { config?: unknown }) {
     const cfg = await this.authn.saveConfig(t, b?.config);
     return { saved: true, config: cfg, analyses: this.authn.analyses(cfg) };
+  }
+  /** A plugin-scoped method form (password policy): saved on the SERVING plugin's settings store, never into the
+   * instance config - that store is what the sign-in hooks read, so the advanced policy actually applies. */
+  @UseGuards(AdminGuard) @Put('instances/:id/plugin-settings') async putPluginSettings(@Param('tenant') t: string, @Param('id') id: string, @Body() b: { values?: Record<string, unknown> }) {
+    return this.authn.saveServingSettings(t, id, b?.values ?? {});
   }
 
   private async instance(t: string, id: string) {

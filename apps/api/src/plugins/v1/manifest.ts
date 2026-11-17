@@ -124,7 +124,12 @@ export interface AuthMethodDecl {
   inlineWithUsername?: boolean;
   /** How many instances of this type an administrator may create: `single` (one only, e.g. the directory password) or `multiple` (default: several, each with its own settings). */
   instances?: 'single' | 'multiple';
-}
+  /** Where the Authentication drawer's settings live: `instance` (default - each instance carries its own config, handed to the
+   * hooks in the payload, the TOTP pattern) or `plugin` (one slot-wide set the serving plugin reads from its settings store -
+   * the password pattern; the drawer then edits the SERVING plugin's settings, so an enabled replacement's schema and values
+   * are what the administrator sees and what sign-in applies). */
+  settingsScope?: 'instance' | 'plugin';
+}  
 
 export interface PluginManifest {
   apiVersion: 'plugin/v1' | 'plugin/v3';
@@ -238,6 +243,7 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     if (!Number.isInteger(a.suggestedLevel) || a.suggestedLevel < 1 || a.suggestedLevel > 10) errs.push('authMethod.suggestedLevel must be a whole number from 1 to 10');
     if (!['directory', 'admin-demo', 'none'].includes(a.provisioning)) errs.push(`authMethod.provisioning: unknown value ${a.provisioning}`);
     if (a.instances !== undefined && !['single', 'multiple'].includes(a.instances)) errs.push('authMethod.instances must be single or multiple');
+    if (a.settingsScope !== undefined && !['instance', 'plugin'].includes(a.settingsScope)) errs.push('authMethod.settingsScope must be instance or plugin');
   }
   for (const f of m.settings ?? []) {
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(f.key ?? '')) errs.push(`setting key ${f.key} is invalid`);

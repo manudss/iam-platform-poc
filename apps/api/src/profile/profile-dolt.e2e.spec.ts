@@ -184,6 +184,32 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     } finally { await busRef.onModuleDestroy(); delete process.env.IAM_WORKSPACE_MODE; }
   });
 
+  it('bus sync: a replacement enabled on a registry created after the host started answers immediately, not at the 60 s tick', async () => {
+    // Regression: enable on a working branch fired no sync (the activity listener only appeared at the next
+    // 60 s resync), so after Apply the live sign-in answered 'no responder' for the slot until the timer ran.
+    const busRef = new BusHostRef();
+    process.env.IAM_WORKSPACE_MODE = '1';
+    try {
+      const v = new VersioningService(), users = new UsersService(v), br = new BranchRegistries(v, users, undefined, busRef);
+      await br.get('main'); // the bus host starts here
+      await v.lock(() => v.at('main', async (c) => { await c.query('call dolt_branch(?)', ['work-bus-sync']); }));
+      const work = await br.get('work-bus-sync'); // built AFTER the host started
+      await work.install(T, 'auth-password-lockout', { install: true });
+      await work.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] });
+      const r = await work.callSlot<{ prompt: { title: string } }>(T, 'auth.password', 'auth.prepare', { tenant: T });
+      assert.equal(r.servedBy, 'auth-password-lockout', 'the freshly enabled replacement is on the bus at once');
+      assert.equal(r.result?.prompt?.title, 'Password');
+      // The Apply loop end to end: merge the branch, rebuild main, and the live (main) slot call answers too.
+      const { applyContext } = await import('../workspace/context.js');
+      const m = await applyContext.run(true, () => v.mergeInto('work-bus-sync', 'main', 'apply work-bus-sync', 'demo-alice'));
+      assert.equal(m.mergeable, true, JSON.stringify(m));
+      br.drop('main');
+      const main = await br.get('main');
+      const live = await main.callSlot<{ prompt: { title: string } }>(T, 'auth.password', 'auth.prepare', { tenant: T });
+      assert.equal(live.servedBy, 'auth-password-lockout', 'after Apply the live registry is served by the replacement at once');
+    } finally { await busRef.onModuleDestroy(); delete process.env.IAM_WORKSPACE_MODE; }
+  });
+
   it('demo data seed: organizations and HR plugins enabled, people with profile values, sign-up open, idempotent', async () => {
     const busRef = new BusHostRef();
     const ST = 'seed-demo'; process.env.IAM_WORKSPACE_MODE = '1'; process.env.IAM_CREDENTIAL_FILE = join(dir, 'cred.json');
