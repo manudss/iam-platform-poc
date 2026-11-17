@@ -117,6 +117,23 @@ export async function exchangeOidc(s: ExternalStart, clientSecret: string, cbUrl
   return { sub: String(claims.sub), ...(email ? { email, emailVerified: claims.email_verified === true } : {}), ...(typeof claims.name === 'string' && claims.name.length <= 120 ? { name: claims.name } : {}), claims: claims as Record<string, unknown> };
 }
 
+/** The provider gave a DEFINITIVE refusal during the exchange (unknown client, rejected credentials, bad/expired
+ * code, refused userinfo read): retrying the same callback cannot succeed, and the cause is the provider's answer,
+ * not a transient fault. Carries only a safe category (which step) and an HTTP status - never the provider's
+ * payload, which can echo request data. A provider 5xx is NOT a refusal: it stays a generic technical failure. */
+export class ProviderRefusal extends Error {
+  constructor(readonly where: 'token' | 'userinfo', readonly status: number | 'error-payload', message: string) { super(message); }
+}
+
+/** A typed provider refusal maps to an actionable denial: the sign-in stays refused (fail closed), but the answer
+ * says where to look. It reveals nothing about any account - it fires before the account is even resolved, from
+ * the provider's answer alone - so it is safe at any chain position. Anything else stays a technical failure: the
+ * caller rethrows and the gate answers 503. */
+export function externalRefusalMessage(e: unknown): string | undefined {
+  if (!(e instanceof ProviderRefusal)) return undefined;
+  return 'The sign-in provider refused the exchange. Check the method settings (client ID, client secret, the app callback URL), then try again.';
+}
+
 /** OAuth2-only providers (GitHub, Facebook): code -> access token -> userinfo (+ optional e-mails and token inspection reads). */
 export async function exchangeUserinfo(s: ExternalStart, clientSecret: string, cbUrl: string, cb: Record<string, string>, pending: { state: string; verifier?: string }): Promise<ExternalProfile> {
   if (!strOk(cb.code, 2048)) throw new Error('oauth2: no code');
@@ -124,12 +141,19 @@ export async function exchangeUserinfo(s: ExternalStart, clientSecret: string, c
   if (clientSecret) form.set('client_secret', clientSecret);
   if (pending.verifier && s.pkce !== false) form.set('code_verifier', pending.verifier);
   const tokRes = await fetch(s.tokenEndpoint!, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: form.toString(), signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!tokRes.ok) throw new Error(`oauth2: token endpoint answered ${tokRes.status}`);
+  if (!tokRes.ok) {
+    if (tokRes.status < 500) throw new ProviderRefusal('token', tokRes.status, `oauth2: token endpoint answered ${tokRes.status}`);
+    throw new Error(`oauth2: token endpoint answered ${tokRes.status}`);
+  }
   const tok = await readJson(tokRes, 'oauth2 token');
   const access = tok.access_token;
-  if (typeof access !== 'string' || !access.length || access.length > 4096) throw new Error('oauth2: no access token');
+  // GitHub answers a refusal as 200 with an error payload: no access token means the provider said no.
+  if (typeof access !== 'string' || !access.length || access.length > 4096) throw new ProviderRefusal('token', 'error-payload', 'oauth2: no access token');
   const infoRes = await fetch(s.userinfoEndpoint!, { headers: { authorization: `Bearer ${access}`, accept: 'application/json', ...(s.userinfoHeaders ?? {}) }, signal: AbortSignal.timeout(TIMEOUT_MS) });
-  if (!infoRes.ok) throw new Error(`oauth2: userinfo answered ${infoRes.status}`);
+  if (!infoRes.ok) {
+    if (infoRes.status < 500) throw new ProviderRefusal('userinfo', infoRes.status, `oauth2: userinfo answered ${infoRes.status}`);
+    throw new Error(`oauth2: userinfo answered ${infoRes.status}`);
+  }
   const raw = await readJson(infoRes, 'oauth2 userinfo');
   const map = s.profileMap!;
   const sub = raw[map.sub];
