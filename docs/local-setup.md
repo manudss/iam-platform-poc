@@ -30,6 +30,13 @@ Node 22+ from your package manager / nvm, Docker Engine + compose plugin.
 `dolt`, `psql`, `nats-server`, `bao` and `temporal` binaries are NOT needed in this path (they run in containers). They are only
 needed for the test suites described in `docs/e2e.md`.
 
+One-time per clone, activate the repository git hooks (the pre-commit hook regenerates `docs/event-inventory.md` whenever a
+commit touches an event-circuit source, so the CI inventory guard is never stale):
+
+```powershell
+git config core.hooksPath .githooks    # same command in bash
+```
+
 ## 2. Configure
 
 ```powershell

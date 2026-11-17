@@ -1,0 +1,15 @@
+#!/bin/sh
+# Regenerate docs/event-inventory.md whenever a commit touches a scanned source tree, so the CI guard
+# (`node scripts/event-inventory.mjs --check`) never fails on a forgotten regeneration.
+# Activate once per clone: git config core.hooksPath .githooks
+changed=$(git diff --cached --name-only)
+case "$changed" in
+  *apps/api/src/*.ts*|*plugins/*.mjs*|*core/crates/*.rs*|*scripts/event-inventory.mjs*) ;;
+  *) exit 0 ;;
+esac
+node scripts/event-inventory.mjs >/dev/null || exit 1
+if ! git diff --quiet -- docs/event-inventory.md; then
+  git add docs/event-inventory.md
+  echo "event-inventory: docs/event-inventory.md regenerated and staged"
+fi
+exit 0

@@ -108,7 +108,8 @@ if (process.argv.includes('--check')) {
   try { committed = readFileSync(DOC, 'utf8'); } catch { /* missing */ }
   if (committed.trim() !== fresh.trim()) {
     console.error('event-inventory: docs/event-inventory.md is STALE (a circuit appeared, moved or disappeared).');
-    console.error('Run `node scripts/event-inventory.mjs` and commit the result.');
+    console.error('Run `node scripts/event-inventory.mjs` and commit the result. To regenerate it automatically on');
+    console.error('every commit, activate the repo hooks once per clone: `git config core.hooksPath .githooks`.');
     process.exit(1);
   }
   console.log('event-inventory: up to date');
