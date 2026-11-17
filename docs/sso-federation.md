@@ -95,6 +95,10 @@ plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail clos
   policy applies; an existing link is not required to create one). Unlink is the enrollment DELETE.
 - console/profile: a "linked sign-in providers" component per plugin (`screens/profile.mjs`, self: link/unlink,
   admin: status/revoke - an administrator never links for someone else).
+- in-console setup guide: each provider manifest declares a `setupGuide` (intro, ordered steps, provider
+  console + official doc links). The Plugins drawer shows it above the settings form with the exact callback
+  URL to register (`IAM_EXTERNAL_CALLBACK_URL` when set, else the console's own origin + the fixed callback
+  path), a copy button, a secret-handling warning, and a DEMO MODE chip while the client id is empty.
 
 ## Tests (each commit with its tests)
 
