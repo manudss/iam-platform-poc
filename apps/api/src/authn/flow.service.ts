@@ -15,6 +15,16 @@ import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 
 /** The console-facing mask for a stored secret; the same sentinel the plugin settings form uses (settings.ts). */
 const SECRET_MASK = '********';
+
+/** Per-method budget of the console's in-process verification call: generous for a config-pure handler (they
+ * are synchronous lookups), small enough that a stalled third-party handler cannot push the console GET past
+ * the edge proxy timeout (all methods race in parallel, so the worst added latency is one budget). */
+const VERDICT_BUDGET_MS = 1000;
+function verdictBounded<R>(p: Promise<R>): Promise<R> {
+  let timer: ReturnType<typeof setTimeout>;
+  const bounded = new Promise<R>((_, reject) => { timer = setTimeout(() => reject(new Error('verification timed out')), VERDICT_BUDGET_MS); });
+  return Promise.race([p.finally(() => clearTimeout(timer)), bounded]);
+}
 const methodPluginId = (type: string) => methodType(type)?.pluginId;
 import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
@@ -215,8 +225,13 @@ export class AuthnService implements OnApplicationBootstrap {
       if (!impl || !h) return [m.id, { real: false, note: 'Method unavailable (its plugin declares no verification).' }] as const;
       const decl = this.methodDeclaration(reg, serving);
       const config = decl?.manifest.authMethod?.settingsScope === 'plugin' ? m.config : await this.instanceConfig(reg, tenant, m);
-      try { return [m.id, h({ config: config as Record<string, unknown> }, { tenant, settings: settings.get(serving.manifest.id) ?? {} })] as const; }
-      catch { return [m.id, { real: false, note: 'Method unavailable (its plugin failed).' }] as const; }
+      try {
+        // Bounded even though the handlers are config-pure by contract: a third-party handler that answers late
+        // or never degrades to the same fail-closed verdict instead of stalling the console GET. (A handler that
+        // blocks the event loop synchronously stalls any request path, bus or not: no path protects against that.)
+        const v = await verdictBounded(Promise.resolve(h({ config: config as Record<string, unknown> }, { tenant, settings: settings.get(serving.manifest.id) ?? {} })));
+        return [m.id, { real: v?.real === true, note: typeof v?.note === 'string' ? v.note : 'Method unavailable (its plugin failed).' }] as const;
+      } catch { return [m.id, { real: false, note: 'Method unavailable (its plugin failed).' }] as const; }
     })));
     return cfg.chains.map((c) => analyzeChain(cfg, c, (m) => verdicts.get(m.id)));
   }

@@ -128,4 +128,26 @@ describe('social provider settings scope', () => {
     [a] = await svc.analysesReg(T, cfg);
     assert.deepEqual(a.simulatedSteps, ['goog'], 'a faulted replacement fails closed, exactly like the bus refusal');
   });
+
+  it('a verification handler that never settles degrades fail-closed within the console budget', async () => {
+    const { reg, svc } = await setup();
+    const hanging: PluginImpl = {
+      manifest: { apiVersion: 'plugin/v3', id: 'auth-sso-google-hanging', version: '0.0.0', name: 'Hanging Google (spec)', publisher: 'spec', kinds: ['auth-method'], extends: 'auth-sso-google-base', provides: ['auth.sso-google'], hooks: [{ name: 'auth.prepare', mode: 'blocking' }, { name: 'auth.external.start', mode: 'blocking' }, { name: 'auth.external.verify', mode: 'blocking' }, { name: 'auth.verification', mode: 'blocking' }],
+        settings: [{ key: 'clientId', type: 'string', label: 'Client id', default: '' }, { key: 'clientSecret', type: 'secret', label: 'Client secret' }, { key: 'hostedDomain', type: 'string', label: 'Hosted domain', default: '' }], entrypoints: { handlers: 'handlers.mjs' } } as PluginImpl['manifest'],
+      handlers: {
+        'auth.verification': () => new Promise(() => { /* never settles */ }),
+        'auth.prepare': () => ({ prompt: { title: 'x', fields: [] }, state: {} }),
+        'auth.external.start': () => ({ ok: true, mode: 'simulated', title: 'x', identities: [] }),
+        'auth.external.verify': () => ({ ok: false }),
+      },
+    };
+    reg.register(hanging);
+    await reg.install(T, 'auth-sso-google-hanging', {});
+    await reg.enable(T, 'auth-sso-google-hanging', { hooks: ['auth.prepare', 'auth.external.start', 'auth.external.verify', 'auth.verification'] });
+    const cfg = validateConfig({ methods: [{ id: 'goog', type: 'sso-google', name: 'Google', enabled: true, level: 6, config: {} }], chains: [{ id: 'c', name: 'C', enabled: true, steps: ['goog'], level: 6 }], defaultChain: null });
+    const t0 = Date.now();
+    const [a] = await svc.analysesReg(T, cfg);
+    assert.ok(Date.now() - t0 < 5000, 'the console verdict is bounded even when a handler never answers');
+    assert.deepEqual(a.simulatedSteps, ['goog'], 'a stalled handler degrades to the fail-closed verdict');
+  });
 });
