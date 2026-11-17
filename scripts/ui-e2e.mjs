@@ -68,6 +68,17 @@ try {
     new MutationObserver(rec).observe(document, { subtree: true, childList: true, characterData: true });
   });
   page.on('dialog', (d) => d.accept());
+  // Lifecycle diagnostics: log the exact grants payload and answer of every plugin enable/disable call, so a
+  // grant refusal in CI shows what the console actually sent instead of only the server note.
+  page.on('response', (r) => {
+    if (!/\/plugins\/[^/]+\/(enable|disable)(\?|$)/.test(r.url())) return;
+    void (async () => {
+      let req = '';
+      try { req = JSON.stringify(r.request().postDataJSON()); } catch { req = String(r.request().postData() ?? ''); }
+      const body = await r.text().catch(() => '');
+      console.log('DIAG-LIFECYCLE', r.url(), '->', r.status(), 'req=', req.slice(0, 300), 'res=', body.slice(0, 300));
+    })();
+  });
   const BASE = 'http://localhost:4200';
   const shot = (n) => page.screenshot({ path: join(out, `${n}.png`), fullPage: true });
   const path = () => new URL(page.url()).pathname;

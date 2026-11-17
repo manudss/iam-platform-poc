@@ -8,6 +8,14 @@ import { validateManifest } from './manifest.js';
 import { HOOKS } from './hooks.js';
 import { toFormModel } from './settings.js';
 import { fakeBusBridge } from '../../testing/fake-bus.js';
+import { FilePluginSecrets } from './secret-store.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Isolated per-registry secret store: the default file path is process-global, so sharing it across spec
+// files and runs would leak a configured secret into another test's 'required secret missing' check.
+const testSecrets = () => new FilePluginSecrets(join(mkdtempSync(join(tmpdir(), 'iam-pv1-secrets-')), 'secrets.json'));
 
 const T = 't1';
 const good = { subject: 'demo-user-1', credential: { password: 'demo-pass-1' } };
@@ -17,7 +25,7 @@ describe('plugin registry v1', () => {
   let reg: PluginRegistry; let mig: MemoryMigrationStore; let audit: string[];
   beforeEach(() => {
     mig = new MemoryMigrationStore(); audit = [];
-    reg = new PluginRegistry(mig, new MemorySettingsStore(), (e) => audit.push(`${e.action}:${e.plugin}`));
+    reg = new PluginRegistry(mig, new MemorySettingsStore(), (e) => audit.push(`${e.action}:${e.plugin}`), undefined, testSecrets());
     reg.register(authPassword); reg.register(notifyLog);
     reg.setBus(fakeBusBridge(reg)); // registry is bus-only (step 3 cleanup): unit specs attach the in-process fake
   });
@@ -42,7 +50,7 @@ describe('plugin registry v1', () => {
   it('a replacement delegates to the base REGISTERED in this registry, not the one the loader saw (directory-auth override)', async () => {
     // The directory-backed base (workspace mode) replaces only auth.authenticate; the lockout must call THAT one.
     const directoryAuth = { ...authPassword, handlers: { ...authPassword.handlers, 'auth.authenticate': async (p: any) => p.credential.password === 'directory-pass' ? { outcome: 'allow', subject: p.subject, methods: ['pwd'] } : { outcome: 'deny', reason: 'bad-credentials' } } };
-    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {});
+    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, undefined, testSecrets());
     reg2.register(directoryAuth); reg2.register(authPasswordLockout());
     reg2.setBus(fakeBusBridge(reg2));
     await reg2.install(T, 'auth-password-lockout', { install: true });
@@ -321,7 +329,7 @@ describe('manifest v2: subscribes and emits (step 2)', () => {
     assert.ok(validateManifest(m, HOOKS).some((e) => e.includes('mandatory')));
     m.subscribes = [{ name: 'plg.notify-log.check', mode: 'blocking', group: 'g' }];
     assert.ok(validateManifest(m, HOOKS).some((e) => e.includes('group')));
-    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, undefined, testSecrets());
     m.subscribes = [{ name: 'plg.notify-log.check', mode: 'blocking', mandatory: true }];
     assert.throws(() => reg2.register({ manifest: m, handlers: notifyLog.handlers }), /check declared but no handler/);
   });
@@ -330,7 +338,7 @@ describe('manifest v2: subscribes and emits (step 2)', () => {
 describe('bus facade (step 2)', () => {
   let reg: PluginRegistry;
   beforeEach(() => {
-    reg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    reg = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, undefined, testSecrets());
     reg.register(authPassword); reg.register(notifyLog);
   });
   const stub = (impl: Partial<import('./registry.js').BusBridge>) => impl as import('./registry.js').BusBridge;
@@ -348,7 +356,7 @@ describe('bus facade (step 2)', () => {
   it('a bus failure raises without any in-process fallback (no double effects, D16)', async () => {
     let ranInProcess = false;
     const spy = { manifest: { ...notifyLog.manifest, hooks: notifyLog.manifest.hooks.filter((h) => h.name === 'notify.send') }, handlers: { 'notify.send': () => { ranInProcess = true; return {}; } } };
-    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    const reg2 = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, undefined, testSecrets());
     reg2.register(spy);
     reg2.setBus(stub({ routed: () => true, emit: async () => { throw new Error('core unreachable'); } }));
     await assert.rejects(reg2.emit(T, 'notify.send', { effectKey: 'k2', to: 'x', template: 'y', tenant: T, data: {} } as any), /bus|core unreachable/);
@@ -359,7 +367,7 @@ describe('bus facade (step 2)', () => {
     reg.setBus(stub({ routed: () => false }));
     await assert.rejects(reg.emit(T, 'notify.send', { effectKey: 'k3', to: 'a@b.c', template: 't', tenant: T, data: {} } as any), (e: PluginError) => e.code === 'bus-unavailable');
     await assert.rejects(reg.callSlot(T, 'auth.password', 'auth.authenticate', good), (e: PluginError) => e.code === 'bus-unavailable');
-    const bare = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore());
+    const bare = new PluginRegistry(new MemoryMigrationStore(), new MemorySettingsStore(), () => {}, undefined, testSecrets());
     bare.register(notifyLog);
     await assert.rejects(bare.emit(T, 'notify.send', { effectKey: 'k4', to: 'a@b.c', template: 't', tenant: T, data: {} } as any), (e: PluginError) => e.code === 'bus-unavailable');
   });

@@ -2,9 +2,12 @@ import type { SettingField } from '../plugins/v1/manifest.js';
 import { pluginCatalogue } from '../plugins/v1/loader.js';
 import type { HookHandler } from '../plugins/v1/hooks.js';
 
-export type Factor = 'knowledge' | 'possession' | 'inherence';
+export type Factor = 'knowledge' | 'possession' | 'inherence' | 'other';   // 'other': federation (a federated step never counts toward MFA by itself)
 export interface KeypadKey { id: string; digit: string; letters: string }
-export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits' | 'keypad' | 'webauthn'; maxLength?: number; hint?: string;
+export interface PromptField { name: string; label: string; type: 'password' | 'text' | 'digits' | 'keypad' | 'webauthn' | 'link'; maxLength?: number; hint?: string;
+  /** link only: an external-provider step. The core builds the href itself (its own /authorize/external route);
+   * the plugin supplies ONLY the label. No URL ever travels in the field. */
+  external?: boolean;
   /** keypad only: buttons in display order (opaque ids, valid for this page only), digits entered so far, digits needed. */
   keys?: KeypadKey[]; entered?: number; length?: number;
   /** webauthn only: the PublicKeyCredentialRequestOptionsJSON the core-rendered ceremony feeds to the browser. */
@@ -55,6 +58,8 @@ export interface AuthMethodType {
    * ('plugin', manifest `authMethod.settingsScope`). A plugin-scoped method's Authentication form is the serving
    * plugin's form: its schema, values and save all go through that plugin. */
   settingsScope?: 'instance' | 'plugin';
+  /** The declaring plugin's id (undefined for the planned catalogue entries): where instance-scoped secrets are stored. */
+  pluginId?: string;
   inlineWithUsername(config: Record<string, any>): boolean;
   /** `real` = the check proves what the factor category says. A demo delivery channel proves nothing, so it is not real.
    * DESCRIPTIVE metadata for the catalogue and the chain analysis (config-only, never touches tenant state). Sign-in
@@ -70,7 +75,6 @@ const planned = (id: string, name: string, description: string, factor: Factor, 
 });
 const PLANNED: AuthMethodType[] = [
   planned('recovery-code', 'Recovery codes', 'One-time printed codes for account recovery. Not built.', 'knowledge', 5, 'otp'),
-  planned('federation', 'External identity provider (OIDC/SAML)', 'Delegate sign-in to another IdP and map its claims. Not built.', 'other' as Factor, 6, 'fed'),
 ];
 
 /**
@@ -83,7 +87,9 @@ function fromPlugin(impl: { manifest: import('../plugins/v1/manifest.js').Plugin
   const id = (impl.manifest.provides ?? []).find((s) => s.startsWith('auth.'))!.slice('auth.'.length);
   return {
     id, name: a.name, description: a.description, factor: a.factor as Factor, amr: a.amr, maturity: a.maturity,
+    pluginId: impl.manifest.id,
     suggestedLevel: a.suggestedLevel, settings: impl.manifest.settings, provisioning: a.provisioning, instances: a.instances ?? 'multiple',
+    settingsScope: a.settingsScope,
     inlineWithUsername: () => !!a.inlineWithUsername,
     verification: (config) => (impl.handlers['auth.verification']?.({ config }, { tenant: '', settings: {} }) ?? { real: false, note: 'no verification handler' }) as { real: boolean; note: string },
   };

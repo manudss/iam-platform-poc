@@ -38,6 +38,9 @@ export IAM_IDP_EXTRA_REDIRECT_URIS="$(PUBLIC_ORIGIN="$PUBLIC_ORIGIN" node /app/d
 export IAM_ISSUER="${PUBLIC_ORIGIN}/core"
 # SSO (oidc-provider plugin): applications reach the API through the edge under /api
 export IAM_SSO_BASE_URL="${PUBLIC_ORIGIN}/api"
+# Social sign-in (PR #100): the fixed external-provider callback, reached through the edge at the root
+# (demo/server.mjs proxies /authorize/* to the core). Real provider modes fail closed without it.
+export IAM_EXTERNAL_CALLBACK_URL="${IAM_EXTERNAL_CALLBACK_URL:-${PUBLIC_ORIGIN}/authorize/external/callback}"
 GATE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export IAM_AUTH_GATE_TOKEN="$GATE_TOKEN" IAM_AUTH_GATE_ADDR=127.0.0.1:3000
 export IAM_WORKSPACE_MODE=1

@@ -14,6 +14,8 @@ export const HOOKS = new Map<string, HookMode[]>([
   ['auth.verification', ['blocking']], // what the method instance proves: { real, note }
   ['auth.enroll', ['blocking']], // self-service enrollment ceremony of a method (passkey creation options + attestation check), orchestrated by the self-service controller
   ['auth.password.validate', ['blocking']], // password policy of the auth.password slot: check a candidate at creation/change -> { ok, errors? }. Pure: the candidate, user info and salted hash history travel in the payload.
+  ['auth.external.start', ['blocking']], // federated sign-in: the provider metadata of a method instance (endpoints, mode), API executes the round-trip (docs/sso-federation.md)
+  ['auth.external.verify', ['blocking']], // federated sign-in: the plugin decides ok/deny from the resolved external profile and the explicit link
   ['profile.enrich', ['blocking', 'async']], // add attributes or claims; the blocking mode is a merged bus query (step 3)
   ['identity.changed', ['async']], // joiner / mover / leaver, role change
   ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM) - documented bus exception (decision 8)

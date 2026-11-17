@@ -48,6 +48,8 @@ export function validateSettings(fields: SettingField[], input: Record<string, u
 /** What the admin console receives: a form description plus current values, secrets masked. */
 export interface FormModel {
   groups: { name: string; fields: (SettingField & { value: unknown })[] }[];
+  /** The manifest's setup guide plus the callback URL computed for this environment (registry attaches it). */
+  guide?: import('./manifest.js').SetupGuide & { callbackUrl: string };
 }
 export function toFormModel(fields: SettingField[], current: Record<string, unknown>): FormModel {
   const groups = new Map<string, (SettingField & { value: unknown })[]>();

@@ -1,0 +1,98 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-sso-microsoft",
+  "version": "1.0.0",
+  "name": "Sign in with Microsoft",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "provides": [
+    "auth.sso-microsoft"
+  ],
+  "extends": "auth-sso-microsoft-base",
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.start",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.verify",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "clientId",
+      "type": "string",
+      "label": "Application (client) ID",
+      "help": "Of a Microsoft Entra app registration. Empty = SIMULATED demonstration mode.",
+      "default": "",
+      "group": "Microsoft Entra"
+    },
+    {
+      "key": "clientSecret",
+      "type": "secret",
+      "label": "Client secret",
+      "group": "Microsoft Entra"
+    },
+    {
+      "key": "tenant",
+      "type": "string",
+      "label": "Directory (tenant) ID",
+      "help": "The tenant GUID. Token issuers are tenant-specific: a specific GUID is required, 'common'/'organizations' cannot be validated.",
+      "default": "",
+      "group": "Microsoft Entra"
+    }
+  ],
+  "authMethod": {
+    "name": "Microsoft",
+    "description": "Federated sign-in with a Microsoft Entra account (OpenID Connect: issuer, audience, signature and nonce checks; the tenant GUID pins the issuer). The account must be explicitly linked to a local account.",
+    "factor": "other",
+    "amr": "fed",
+    "maturity": "implemented",
+    "suggestedLevel": 6,
+    "provisioning": "admin-demo",
+    "settingsScope": "plugin"
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  },
+  "profileComponents": [
+    {
+      "id": "sso-microsoft",
+      "title": "Microsoft sign-in",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 30
+    }
+  ],
+  "setupGuide": {
+    "intro": "Everything happens on this screen. Leave the Client ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Open the {console} > Identity > Applications > App registrations > New registration. See the {docs}.",
+      "Add a redirect URI of platform Web and paste exactly:",
+      "{callback}",
+      "Under Certificates & secrets, create a client secret. Copy the Application (client) ID and the secret VALUE into the fields below, then Save.",
+      "Set the Tenant field to match the registration: common (any account), organizations, consumers, or your directory tenant ID.",
+      "Each person then links their Microsoft account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade",
+    "consoleLabel": "Microsoft Entra admin center",
+    "docsUrl": "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app"
+  }
+}

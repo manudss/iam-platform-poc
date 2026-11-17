@@ -2,9 +2,12 @@ import { HOOKS, HookHandler, PluginContext } from './hooks.js';
 import { sanitizeSvg } from '../../branding/svg.js';
 import { PluginManifest, validateManifest } from './manifest.js';
 import { settingsExtend, toFormModel, validateSettings, FormModel } from './settings.js';
+import { defaultPluginSecrets, PluginSecretStore } from './secret-store.js';
 
 /** Hooks that sit on the sign-in or decision path. Declaring one is not enough: an admin must grant it. */
-export const SENSITIVE_HOOKS = new Set(['auth.authenticate', 'auth.challenge', 'auth.password.validate', 'access.decide', 'risk.score']);
+export const SENSITIVE_HOOKS = new Set(['auth.authenticate', 'auth.challenge', 'auth.password.validate', 'access.decide', 'risk.score',
+  // The federated sign-in hooks (docs/sso-federation.md): they sit on the sign-in path like auth.authenticate.
+  'auth.external.start', 'auth.external.verify']);
 
 export interface PluginImpl { manifest: PluginManifest; handlers: Record<string, HookHandler>; }
 
@@ -58,6 +61,12 @@ export function defaultHookTimeoutMs(): number {
   return Number.isFinite(v) && v >= 250 ? v : 2000;
 }
 
+/** The fixed external-provider callback URL for setup guides: the explicit env wins (the demo derives it from
+ * the public origin); otherwise it is computed from the origin the admin console was reached on. */
+export function callbackUrl(publicOrigin?: string): string {
+  return process.env.IAM_EXTERNAL_CALLBACK_URL ?? `${(publicOrigin ?? 'http://localhost:8080').replace(/\/$/, '')}/authorize/external/callback`;
+}
+
 /** Step 2: the bridge to the core's event bus, provided by the plugin host (bus-host.ts) when it is enabled.
  * Every routed call requires this bridge; absence refuses rather than executing locally. */
 export interface BusBridge {
@@ -96,7 +105,21 @@ export class PluginRegistry {
   /** Working branch this registry serves (decision 7): stamped on every envelope emitted through the bus. */
   private branchRef?: string;
   private activityListeners: (() => void | Promise<void>)[] = [];
-  constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}, private states?: StateStore) {}
+  constructor(private migrations: MigrationStore, private settings: SettingsStore, private audit: RegistryAudit = () => {}, private states?: StateStore, private secrets: PluginSecretStore = defaultPluginSecrets()) {}
+
+  private static secretKeys(p: PluginImpl): string[] { return p.manifest.settings.filter((f) => f.type === 'secret').map((f) => f.key); }
+
+  /** Settings as the runtime needs them: the versioned non-secret values plus the secrets, which live in the secret store
+   * (never in Dolt). A legacy row written before secrets were split out may still carry a plaintext secret; the secret
+   * store wins, and the next configure rewrites the row without it. */
+  private async mergedSettings(tenant: string, p: PluginImpl): Promise<Record<string, unknown>> {
+    const base = { ...((await this.settings.get(tenant, p.manifest.id)) ?? {}) };
+    for (const k of PluginRegistry.secretKeys(p)) {
+      const v = await this.secrets.get(tenant, p.manifest.id, k);
+      if (v !== undefined) base[k] = v;
+    }
+    return base;
+  }
 
   private readonly auditListeners: RegistryAudit[] = [];
   /** Step 3: extra audit sinks (the bus host turns them into audit.event). The constructor callback stays the primary sink. */
@@ -118,7 +141,12 @@ export class PluginRegistry {
   impl(id: string): PluginImpl | undefined { return this.impls.get(id); }
   /** Tenants that have any plugin state: the bus host syncs registrations for each of them. */
   tenants(): string[] { return [...new Set([...this.state.keys()].map((k) => k.split('/')[0]))]; }
-  async settingsFor(tenant: string, id: string): Promise<Record<string, unknown> | undefined> { return this.settings.get(tenant, id); }
+  async settingsFor(tenant: string, id: string): Promise<Record<string, unknown> | undefined> { const p = this.impls.get(id); return p ? this.mergedSettings(tenant, p) : undefined; }
+
+  /** Instance-scoped secrets (the generic OIDC provider's per-instance client secret): stored under the plugin's
+   * own secret-store document, keyed `<instanceId>.<settingKey>`, so the versioned method config never holds them. */
+  async readSecret(tenant: string, pluginId: string, key: string): Promise<string | undefined> { return this.secrets.get(tenant, pluginId, key); }
+  async writeSecret(tenant: string, pluginId: string, key: string, value: string): Promise<void> { await this.secrets.put(tenant, pluginId, key, value); }
 
   /** Reload durable state after a restart. Call once after registering the plugins. Replacements that were enabled take their slots again; faults stay faults. */
   async load() {
@@ -248,7 +276,10 @@ export class PluginRegistry {
     // A secret that is not re-sent keeps its stored value (the console never gets the secret back, only a mask).
     const stored = (await this.settings.get(tenant, id)) ?? {};
     const merged = { ...input };
-    for (const f of p.manifest.settings) if (f.type === 'secret' && merged[f.key] === undefined && stored[f.key] !== undefined) merged[f.key] = stored[f.key];
+    for (const f of p.manifest.settings) if (f.type === 'secret' && merged[f.key] === undefined) {
+      const kept = (await this.secrets.get(tenant, id, f.key)) ?? stored[f.key];
+      if (kept !== undefined) merged[f.key] = kept;
+    }
     const r = validateSettings(p.manifest.settings, merged);
     if (!r.ok) throw new PluginError('invalid-settings', r.errors.join('; '));
     if(p.manifest.provides?.includes('branding')) {
@@ -257,14 +288,20 @@ export class PluginRegistry {
         if(r.values['logoMode']==='custom'&&!r.values['logoSvg'])throw Error('Custom logo requires SVG artwork');
       } catch(e) {throw new PluginError('invalid-settings',(e as Error).message);}
     }
-    await this.settings.put(tenant, id, r.values);
+    // Non-secret settings stay in the versioned settings store; secret values go to the secret store and never touch Dolt.
+    // Rewriting the row without the secret keys also scrubs any legacy plaintext secret an older build stored there.
+    const secretKeys = new Set(PluginRegistry.secretKeys(p));
+    await this.settings.put(tenant, id, Object.fromEntries(Object.entries(r.values).filter(([k]) => !secretKeys.has(k))));
+    for (const k of secretKeys) if (typeof r.values[k] === 'string' && r.values[k]) await this.secrets.put(tenant, id, k, r.values[k] as string);
     this.invalidateInventories();
-    this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => p.manifest.settings.find((f) => f.key === k)?.type !== 'secret').join(',') });
+    this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => !secretKeys.has(k)).join(',') });
   }
 
-  async form(tenant: string, id: string): Promise<FormModel> {
+  async form(tenant: string, id: string, publicOrigin?: string): Promise<FormModel> {
     const p = this.plugin(id);
-    return toFormModel(p.manifest.settings, (await this.settings.get(tenant, id)) ?? {});
+    const model = toFormModel(p.manifest.settings, await this.mergedSettings(tenant, p));
+    if (p.manifest.setupGuide) model.guide = { ...p.manifest.setupGuide, callbackUrl: callbackUrl(publicOrigin) };
+    return model;
   }
 
   private checkGrants(p: PluginImpl, g: Grants) {
@@ -281,7 +318,7 @@ export class PluginRegistry {
     const g = { ...st.grants, ...grants };
     this.checkGrants(p, g);
     for (const r of p.manifest.requires ?? []) if (!this.isActive(tenant, r)) throw new PluginError('missing-dependency', `requires ${r}`);
-    const cur = (await this.settings.get(tenant, id)) ?? {};
+    const cur = await this.mergedSettings(tenant, p);
     const v = validateSettings(p.manifest.settings, cur);
     if (!v.ok) throw new PluginError('invalid-settings', `configure before enabling: ${v.errors.join('; ')}`);
     st.grants = g; st.enabled = true;

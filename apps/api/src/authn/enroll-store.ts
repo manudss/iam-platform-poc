@@ -12,7 +12,10 @@ import { dirname, join } from 'node:path';
  */
 /** One enrolled passkey (WebAuthn credential). The public key is not a secret; the private key never leaves the authenticator. */
 export interface WebAuthnCred { id: string; publicKey: string; counter: number; transports?: string[]; name?: string; aaguid?: string; deviceType?: string; backedUp?: boolean; createdAt: string }
-interface UserRec { totp?: { secret: string; lastStep: number; enrolledAt?: string; lastUsedAt?: string }; pin?: { length: number; salt: string; hash: string; enrolledAt?: string; lastUsedAt?: string }; email?: string; webauthn?: { credentials: WebAuthnCred[]; pending?: { challenge: string; origin: string; rpId: string; exp: number } } }
+/** An external-provider account explicitly linked to this user for one method instance (docs/sso-federation.md).
+ * Links are created only from an authenticated self-service session; sign-in NEVER links by e-mail match. */
+export interface ExternalLink { sub: string; email?: string; linkedAt: string }
+interface UserRec { totp?: { secret: string; lastStep: number; enrolledAt?: string; lastUsedAt?: string }; pin?: { length: number; salt: string; hash: string; enrolledAt?: string; lastUsedAt?: string }; email?: string; webauthn?: { credentials: WebAuthnCred[]; pending?: { challenge: string; origin: string; rpId: string; exp: number } }; external?: ExternalLink }
 interface FileShape { users: Record<string, Record<string, UserRec>> }
 
 export function defaultEnrollmentPath() {
@@ -52,20 +55,45 @@ export class EnrollmentStore {
       totpLastUsedAt: r.totp?.lastUsedAt ?? null,
       pin: r.pin ? { length: r.pin.length, enrolledAt: r.pin.enrolledAt ?? null, lastUsedAt: r.pin.lastUsedAt ?? null } : false,
       email: r.email ?? null,
+      external: r.external ? { sub: r.external.sub, email: r.external.email ?? null, linkedAt: r.external.linkedAt } : null,
       webauthn: r.webauthn?.credentials?.length ? r.webauthn.credentials.map((c) => ({ id: c.id, name: c.name ?? null, createdAt: c.createdAt, backedUp: !!c.backedUp, deviceType: c.deviceType ?? null })) : false }]))
   }
   /** Counts per method instance and kind (admin overview of who enrolled what; secrets never leave the store). */
   async stats(tenant: string) {
     const d = await this.load();
-    const out: Record<string, { totp: number; pin: number; email: number; webauthn: number }> = {};
+    const out: Record<string, { totp: number; pin: number; email: number; webauthn: number; external: number }> = {};
     for (const [k, insts] of Object.entries(d.users)) {
       if (!k.startsWith(tenant + '/')) continue;
       for (const [inst, r] of Object.entries(insts)) {
-        const s = (out[inst] ??= { totp: 0, pin: 0, email: 0, webauthn: 0 });
-        if (r.totp) s.totp++; if (r.pin) s.pin++; if (r.email) s.email++; if (r.webauthn?.credentials?.length) s.webauthn++;
+        const s = (out[inst] ??= { totp: 0, pin: 0, email: 0, webauthn: 0, external: 0 });
+        if (r.totp) s.totp++; if (r.pin) s.pin++; if (r.email) s.email++; if (r.webauthn?.credentials?.length) s.webauthn++; if (r.external) s.external++;
       }
     }
     return out;
+  }
+
+  // External-provider links (federated sign-in). One link per user+instance; the reverse lookup answers "which
+  // local user linked this provider subject on this instance" (POC: linear scan of the tenant's records).
+  async setExternalLink(tenant: string, user: string, inst: string, link: { sub: string; email?: string }) {
+    await this.mutate((d) => {
+      // A provider subject identifies ONE account on this instance: linking it to a second account would make the
+      // reverse lookup ambiguous (which account does the provider sign in?). Re-linking the same account refreshes.
+      for (const [k, insts] of Object.entries(d.users)) {
+        if (!k.startsWith(tenant + '/')) continue;
+        if (insts[inst]?.external?.sub === link.sub && k !== `${tenant}/${user}`) { const e = new Error('this provider identity is already linked to another account'); (e as Error & { code?: string }).code = 'external-sub-taken'; throw e; }
+      }
+      this.rec(d, tenant, user, inst).external = { sub: link.sub, ...(link.email ? { email: link.email } : {}), linkedAt: new Date().toISOString() };
+    });
+  }
+  async externalLink(tenant: string, user: string, inst: string): Promise<ExternalLink | undefined> { return this.get(await this.load(), tenant, user, inst)?.external; }
+  async findExternalLink(tenant: string, inst: string, sub: string): Promise<{ user: string; link: ExternalLink } | undefined> {
+    const d = await this.load();
+    for (const [k, insts] of Object.entries(d.users)) {
+      if (!k.startsWith(tenant + '/')) continue;
+      const link = insts[inst]?.external;
+      if (link?.sub === sub) return { user: k.slice(tenant.length + 1), link };
+    }
+    return undefined;
   }
   async remove(tenant: string, user: string, inst: string) { await this.mutate((d) => { const u = d.users[`${tenant}/${user}`]; if (u) delete u[inst]; }); }
 

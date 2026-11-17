@@ -101,8 +101,14 @@ export class PluginsAdmin {
   }
   protected async open(p: PluginInfo, announce = true) {
     if (announce) this.opened.emit(p.id);
-    const same = this.selected()?.id === p.id; this.selected.set(p); if (!same) { this.tab.set('apercu'); this.note.set(''); } // re-opening the same plugin after an action keeps its tab and its result message
-    this.grantInstall = !!p.grants.install; this.grantComponents = !!p.grants.uiComponents; this.grantHooks = Object.fromEntries((p.grants.hooks ?? []).map(h => [h, true])); this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
+    // Re-opening the SAME plugin (post-action refresh, route echo) keeps the tab, the result message AND the grants
+    // the admin just ticked: resetting them here raced a slow re-open and sent enables with the grants unchecked.
+    // Opening a DIFFERENT plugin initializes the boxes from its stored grants, so a re-enable keeps what was granted.
+    const same = this.selected()?.id === p.id; this.selected.set(p);
+    if (!same) {
+      this.tab.set('apercu'); this.note.set('');
+      this.grantInstall = !!p.grants.install; this.grantComponents = !!p.grants.uiComponents; this.grantHooks = Object.fromEntries((p.grants.hooks ?? []).map(h => [h, true])); this.confirmingUninstall.set(false); this.heldValues.set(null); this.wizardStep.set(0); this.confirmText = '';
+    }
     try {
       const m = await this.admin.form(p.id); this.model.set(m);
       this.edited = Object.fromEntries(m.groups.flatMap((g) => g.fields).map((f) => [f.key, f.type === 'list' && Array.isArray(f.value) ? f.value.join(', ') : f.value]));
@@ -131,6 +137,23 @@ export class PluginsAdmin {
   protected wizardGo(delta: 1 | -1) { this.wizardStep.update((s) => (s + delta) as 1 | 2 | 3); }
   /** The fault banner's entry point: open the drawer straight on the recovery tab. */
   protected treat(p: PluginInfo) { return this.open(p).then(() => this.tab.set('cycle')); }
+  /** Setup guide (manifest-declared): {console} and {docs} tokens in a step render as links. */
+  protected guideParts(step: string, g: { consoleUrl: string; consoleLabel: string; docsUrl?: string }): { text: string; href?: string }[] {
+    const parts: { text: string; href?: string }[] = [];
+    const re = /\{(console|docs)\}/g; let last = 0; let m: RegExpExecArray | null;
+    while ((m = re.exec(step))) {
+      if (m.index > last) parts.push({ text: step.slice(last, m.index) });
+      if (m[1] === 'console') parts.push({ text: g.consoleLabel, href: g.consoleUrl });
+      else if (g.docsUrl) parts.push({ text: 'official guide', href: g.docsUrl });
+      last = m.index + m[0].length;
+    }
+    if (last < step.length) parts.push({ text: step.slice(last) });
+    return parts;
+  }
+  protected hasSecretField(): boolean { return (this.model()?.groups ?? []).some((g) => g.fields.some((f) => f.type === 'secret')); }
+  /** Demo mode = the guide-bearing provider plugin has no client id configured yet. */
+  protected demoMode(): boolean { const m = this.model(); return !!m?.guide && !String(this.edited['clientId'] ?? '').trim(); }
+  protected copy(text: string) { void navigator.clipboard?.writeText(text).then(() => this.note.set('Callback URL copied.')); }
   protected save() { const p = this.selected()!; return this.act(() => this.admin.save(p.id, formValues(this.model()!, this.edited)), 'Settings saved.'); }
   protected enable() { const p = this.selected()!; return this.act(() => this.admin.enable(p.id, { uiComponents: this.grantComponents, hooks: Object.keys(this.grantHooks).filter(h => this.grantHooks[h]) }), `Enabled ${p.name}.`); }
   protected disable() { const p = this.selected()!; return this.act(() => this.admin.disable(p.id), `Disabled ${p.name}: its slots are served by the base plugin again.`); }

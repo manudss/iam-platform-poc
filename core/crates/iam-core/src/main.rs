@@ -138,6 +138,8 @@ pub fn app(engine: Arc<Core>) -> Router {
         .route("/jwks.json", get(|State(c): State<Arc<Core>>| async move { Json(c.idp.jwks()) }))
         .route("/authorize", post(authorize).get(authz::authorize_form))
         .route("/authorize/login", post(authz::login))
+        .route("/authorize/external", get(authz::external_start))
+        .route("/authorize/external/callback", get(authz::external_callback))
         .route("/authorize/theme", get(authz::set_theme))
         .route("/authorize/webauthn.js", get(authz::wa_js))
         .route("/token", post(token))

@@ -174,6 +174,7 @@ export class AuthMethodsPage {
   protected newEntry() { return this.entryType(this.newType()); }
   protected newGroups() {
     const t = this.newEntry(); const out: { name: string; fields: SettingField[] }[] = [];
+    if (t?.settingsScope === 'plugin') return out; // settings live on the serving plugin, never asked per instance
     for (const f of t?.settings ?? []) {
       if (f.visibleIf && (this.newConfig[f.visibleIf.key] ?? t!.settings.find((x) => x.key === f.visibleIf!.key)?.default) !== f.visibleIf.equals) continue;
       const g = f.group ?? 'Settings'; let b = out.find((x) => x.name === g); if (!b) out.push(b = { name: g, fields: [] }); b.fields.push(f);

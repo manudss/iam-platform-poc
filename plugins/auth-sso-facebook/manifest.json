@@ -1,0 +1,97 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-sso-facebook",
+  "version": "1.0.0",
+  "name": "Sign in with Facebook",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "provides": [
+    "auth.sso-facebook"
+  ],
+  "extends": "auth-sso-facebook-base",
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.start",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.verify",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "clientId",
+      "type": "string",
+      "label": "App ID",
+      "help": "Of a Meta app with Facebook Login. Empty = SIMULATED demonstration mode.",
+      "default": "",
+      "group": "Facebook"
+    },
+    {
+      "key": "clientSecret",
+      "type": "secret",
+      "label": "App secret",
+      "group": "Facebook"
+    },
+    {
+      "key": "apiVersion",
+      "type": "string",
+      "label": "Graph API version",
+      "default": "v19.0",
+      "pattern": "^v[0-9]+\\.[0-9]+$",
+      "group": "Facebook"
+    }
+  ],
+  "authMethod": {
+    "name": "Facebook",
+    "description": "Federated sign-in with a Facebook account (OAuth2 manual flow: state, token exchange and a debug_token check that the token belongs to this app - Facebook Login is not OIDC). The account must be explicitly linked to a local account.",
+    "factor": "other",
+    "amr": "fed",
+    "maturity": "implemented",
+    "suggestedLevel": 6,
+    "provisioning": "admin-demo",
+    "settingsScope": "plugin"
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  },
+  "profileComponents": [
+    {
+      "id": "sso-facebook",
+      "title": "Facebook sign-in",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 30
+    }
+  ],
+  "setupGuide": {
+    "intro": "Everything happens on this screen. Leave the App ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Open the {console} > My Apps > Create app, and add the Facebook Login product. See the {docs}.",
+      "Under Facebook Login > Settings > Valid OAuth Redirect URIs, paste exactly:",
+      "{callback}",
+      "Copy the App ID and App secret (Settings > Basic) into the fields below, then Save. Keep the app in Live mode for real sign-ins.",
+      "Each person then links their Facebook account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://developers.facebook.com/apps",
+    "consoleLabel": "Meta for Developers",
+    "docsUrl": "https://developers.facebook.com/docs/facebook-login"
+  }
+}

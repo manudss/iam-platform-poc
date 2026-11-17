@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Optional, Param, Put, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, ConflictException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Optional, Param, Put, Post, Req, UseGuards } from '@nestjs/common';
 import { randomInt } from 'node:crypto';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
@@ -26,8 +26,8 @@ export class AuthnAdminController {
   }
 
   @Get() async get(@Param('tenant') t: string) {
-    const stored = await this.authn.workingConfig(t), live = await this.authn.liveConfig(t), seeded = isEmptyConfig(stored), work = seeded ? validateConfig(SEED_CONFIG) : stored;
-    return { tenant: t, catalogue: this.authn.catalogue(), working: { config: work, seeded, analyses: this.authn.analyses(work), availability: await this.authn.availability(t, work, 'work'), serving: await this.authn.servingSettings(t, work, 'work') }, live: { config: live, analyses: this.authn.analyses(live), signInMode: live.chains.some((c) => c.enabled) ? 'chain' : 'base-password' } };
+    const stored = await this.authn.consoleConfig(t), live = await this.authn.liveConfig(t), seeded = isEmptyConfig(stored), work = seeded ? validateConfig(SEED_CONFIG) : stored;
+    return { tenant: t, catalogue: this.authn.catalogue(), working: { config: work, seeded, analyses: await this.authn.analysesReg(t, work, 'work'), availability: await this.authn.availability(t, work, 'work'), serving: await this.authn.servingSettings(t, work, 'work') }, live: { config: live, analyses: await this.authn.analysesReg(t, live, 'live'), signInMode: live.chains.some((c) => c.enabled) ? 'chain' : 'base-password' } };
   }
   /** Validates and analyzes a DRAFT configuration without saving it, so the console can show levels, factors and warnings while editing. */
   @Post('analyze') analyze(@Body() b: { config?: unknown }) {
@@ -36,7 +36,7 @@ export class AuthnAdminController {
   }
   @UseGuards(AdminGuard) @Put() async put(@Param('tenant') t: string, @Body() b: { config?: unknown }) {
     const cfg = await this.authn.saveConfig(t, b?.config);
-    return { saved: true, config: cfg, analyses: this.authn.analyses(cfg) };
+    return { saved: true, config: cfg, analyses: await this.authn.analysesReg(t, cfg) };
   }
   /** A plugin-scoped method form (password policy): saved on the SERVING plugin's settings store, never into the
    * instance config - that store is what the sign-in hooks read, so the advanced policy actually applies. */
@@ -60,10 +60,18 @@ export class AuthnAdminController {
    * DEMO provisioning by an administrator. The secret or PIN is returned once and never again. A real product enrolls from the user's own session.
    * Body: { email } for e-mail codes; { pin } or { length } for digit codes (a PIN typed here goes to the server over this request only).
    */
-  @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number }, @Req() req: { user?: { branch?: string } }) {
+  @UseGuards(AdminGuard) @Post('enrollments/:user/:instance') async provision(@Param('tenant') t: string, @Param('user') u: string, @Param('instance') inst: string, @Body() b: { email?: string; pin?: string; length?: number; externalSub?: string; externalEmail?: string }, @Req() req: { user?: { branch?: string } }) {
     assertNotBranchTest(req); // enrollments are shared, unversioned secrets: never written from a branch-test session
     this.user(u); const { m, type } = await this.instance(t, inst);
     await this.assertSurfaceAllows(t, type.id, 'admin');
+    if (type.factor === 'other') {
+      // Federated sign-in: EXPLICITLY link the provider subject to this account (docs/sso-federation.md). Never by e-mail match.
+      if (typeof b?.externalSub !== 'string' || !b.externalSub || b.externalSub.length > 255) throw new BadRequestException('externalSub required: the provider subject to link to this account');
+      const email = typeof b?.externalEmail === 'string' && /^[^\s@]{1,64}@[^\s@]{1,120}$/.test(b.externalEmail) ? b.externalEmail : undefined;
+      try { await this.authn.enroll.setExternalLink(t, u, inst, { sub: b.externalSub, ...(email ? { email } : {}) }); }
+      catch (e) { if ((e as { code?: string }).code === 'external-sub-taken') throw new ConflictException('this provider identity is already linked to another account'); throw e; }
+      return { instance: inst, type: type.id, linked: { sub: b.externalSub } };
+    }
     if (type.id === 'totp') {
       const secret = newTotpSecret(); await this.authn.enroll.setTotp(t, u, inst, secret);
       return { instance: inst, type: type.id, shownOnce: { secret, otpauthUri: otpauthUri(String(m.config.issuer ?? 'IAM POC'), u, secret, Number(m.config.periodSeconds ?? 30), Number(m.config.digits ?? 6)) }, note: 'Shown once. Demo provisioning only.' };

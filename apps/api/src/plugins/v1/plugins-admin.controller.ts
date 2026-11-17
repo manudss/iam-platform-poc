@@ -1,7 +1,7 @@
 import { Optional } from '@nestjs/common';
 import { BranchRegistries } from './branch-registries.js';
 import { currentBranch, workspaceMode } from '../../workspace/context.js';
-import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpException, NotFoundException, Param, Post, Put, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Headers, HttpException, NotFoundException, Param, Post, Put, Res, UseGuards } from '@nestjs/common';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { AuthGuard } from '../../auth/auth.guard.js';
@@ -60,7 +60,9 @@ export class PluginsAdminController {
     return { workspace: true, branch, pending: pluginChanges(workList, mainList, ws, ms) };
   }
 
-  @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string) { return wrap(async () => (await this.registry()).form(t, id)); }
+  @Get(':id/form') form(@Param('tenant') t: string, @Param('id') id: string, @Headers('x-forwarded-proto') proto?: string, @Headers('host') host?: string) {
+    return wrap(async () => (await this.registry()).form(t, id, host ? `${proto ?? 'https'}://${host}` : undefined));
+  }
   /** How much profile data a plugin holds for this tenant; the console shows it in the uninstall confirmation.
    * Lives here, not on ProfileController: the plugin HTTP catch-all (@All(':id/{*path}')) is registered before it. */
   @UseGuards(AdminGuard) @Get(':id/profile-values') async pluginValues(@Param('tenant') t: string, @Param('id') id: string) {

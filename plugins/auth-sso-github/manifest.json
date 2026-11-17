@@ -1,0 +1,89 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-sso-github",
+  "version": "1.0.0",
+  "name": "Sign in with GitHub",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "provides": [
+    "auth.sso-github"
+  ],
+  "extends": "auth-sso-github-base",
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.start",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.verify",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "clientId",
+      "type": "string",
+      "label": "Client ID",
+      "help": "Of a GitHub OAuth app. Empty = SIMULATED demonstration mode.",
+      "default": "",
+      "group": "GitHub"
+    },
+    {
+      "key": "clientSecret",
+      "type": "secret",
+      "label": "Client secret",
+      "group": "GitHub"
+    }
+  ],
+  "authMethod": {
+    "name": "GitHub",
+    "description": "Federated sign-in with a GitHub account (OAuth2 with PKCE + state; GitHub has no OIDC id_token). The account must be explicitly linked to a local account.",
+    "factor": "other",
+    "amr": "fed",
+    "maturity": "implemented",
+    "suggestedLevel": 6,
+    "provisioning": "admin-demo",
+    "settingsScope": "plugin"
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  },
+  "profileComponents": [
+    {
+      "id": "sso-github",
+      "title": "GitHub sign-in",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 30
+    }
+  ],
+  "setupGuide": {
+    "intro": "Everything happens on this screen. Leave the Client ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Open the {console} (Settings > Developer settings > OAuth Apps) > New OAuth App. See the {docs}.",
+      "As Authorization callback URL, paste exactly:",
+      "{callback}",
+      "Copy the generated Client ID, generate a client secret, paste both into the fields below, then Save.",
+      "Each person then links their GitHub account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://github.com/settings/developers",
+    "consoleLabel": "GitHub developer settings",
+    "docsUrl": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app"
+  }
+}

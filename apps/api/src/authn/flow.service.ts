@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { PluginRegistry, PluginImpl } from '../plugins/v1/registry.js';
+import { validateSettings } from '../plugins/v1/settings.js';
 import type { AuthenticateResult } from '../plugins/v1/hooks.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
@@ -9,14 +10,41 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
+import { ExternalIdentity, ExternalProfile, ExternalStart, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, mint, pkceChallenge } from './federation.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
+
+/** The console-facing mask for a stored secret; the same sentinel the plugin settings form uses (settings.ts). */
+const SECRET_MASK = '********';
+
+/** Per-method budget of the console's in-process verification call: generous for a config-pure handler (they
+ * are synchronous lookups), small enough that a stalled third-party handler cannot push the console GET past
+ * the edge proxy timeout (all methods race in parallel, so the worst added latency is one budget). */
+const VERDICT_BUDGET_MS = 1000;
+function verdictBounded<R>(p: Promise<R>): Promise<R> {
+  let timer: ReturnType<typeof setTimeout>;
+  const bounded = new Promise<R>((_, reject) => { timer = setTimeout(() => reject(new Error('verification timed out')), VERDICT_BUDGET_MS); });
+  return Promise.race([p.finally(() => clearTimeout(timer)), bounded]);
+}
+const methodPluginId = (type: string) => methodType(type)?.pluginId;
 import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
 
-export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string>; origin?: string }
+export interface GateRequest { tenant: string; subject?: string; session?: string; chain?: string; branch?: string; answers?: Record<string, string>; origin?: string;
+  /** Federated sign-in (docs/sso-federation.md): start the provider round-trip of the running session's current step. */
+  externalStart?: boolean;
+  /** The provider (or DEMO chooser) callback parameters. */
+  externalCallback?: Record<string, string>;
+  /** The authorize params the core captured (the fixed provider callback URL cannot carry them; re-validated by the core on resume). */
+  authorize?: Record<string, string> }
 export type GateResponse =
-  | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string }
+  | { outcome: 'allow'; subject: string; claims: Record<string, unknown>; chain: string; resume?: Record<string, string> }
   | { outcome: 'deny'; reason: string; message: string }
-  | { outcome: 'challenge'; session: string; step: { index: number; total: number; methodId: string; type: string } & Prompt; error?: string };
+  | { outcome: 'challenge'; session: string; step: { index: number; total: number; methodId: string; type: string } & Prompt; error?: string; resume?: Record<string, string> }
+  /** Start the provider round-trip in the browser (the core 302s to the url). */
+  | { outcome: 'external-redirect'; url: string }
+  /** SIMULATED provider: the core renders the marked DEMO chooser from these fictional identities. */
+  | { outcome: 'external-sim'; title: string; identities: ExternalIdentity[]; state: string }
+  /** Self-service linking finished: the provider identity is recorded on the member's account (the core 302s to returnTo). */
+  | { outcome: 'external-linked'; returnTo?: string };
 
 interface Session {
   id: string; tenant: string; subject: string; known: boolean; exp: number; index: number;
@@ -30,6 +58,10 @@ interface Session {
   done: { id: string; type: string; real: boolean }[];
   prepared?: { prompt: Prompt; state: Record<string, any> };
   tries: number;
+  /** The authorize params captured by the core at the external start (returned as `resume` after the callback). */
+  authorize?: Record<string, string>;
+  /** The running external round-trip: state/nonce/verifier live HERE, never in the browser beyond the state itself. */
+  pendingExternal?: { instanceId: string; mode: 'oidc' | 'oauth2-userinfo' | 'simulated'; state: string; nonce: string; verifier?: string; start: ExternalStart };
 }
 const SESSION_MS = 5 * 60_000, MAX_TRIES = 3, THROTTLE_N = 10, THROTTLE_MS = 10 * 60_000;
 
@@ -103,10 +135,106 @@ export class AuthnService implements OnApplicationBootstrap {
   async workingConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('work')).coreSettings(tenant, CORE_SETTINGS_ID)); }
   async saveConfig(tenant: string, input: unknown): Promise<AuthnConfig> {
     const cfg = validateConfig(input);
-    await (await this.registry('work', true)).putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+    const reg = await this.registry('work', true);
+    // An INSTANCE-scoped secret setting (the generic OIDC provider's clientSecret) never lands in the versioned
+    // config: it goes to the plugin secret store under `<instanceId>.<key>`. The intent is read from the RAW input
+    // (validateSettings rewrites an empty string to the default): a re-sent mask or an absent key keeps the
+    // stored value, an empty string clears it. validateConfig already stripped plugin-scoped settings.
+    const rawMethods = (input && typeof input === 'object' && Array.isArray((input as { methods?: unknown }).methods) ? (input as { methods: Record<string, any>[] }).methods : []);
+    for (const m of cfg.methods) {
+      const t = methodType(m.type), pluginId = methodPluginId(m.type);
+      if (!t || !pluginId || t.settingsScope === 'plugin') continue; // plugin-scoped: settings were stripped, never stored per instance
+      const raw = rawMethods.find((x) => x && x.id === m.id && x.config && typeof x.config === 'object')?.config as Record<string, unknown> | undefined;
+      for (const f of t.settings.filter((x) => x.type === 'secret')) {
+        delete m.config[f.key];
+        const v = raw?.[f.key];
+        if (v === undefined || v === SECRET_MASK) continue; // untouched: keep the stored secret
+        await reg.writeSecret(tenant, pluginId, `${m.id}.${f.key}`, typeof v === 'string' ? v : '');
+      }
+    }
+    await reg.putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
     return cfg;
   }
+
+  /** The config as the console may read it: instance-scoped secrets masked (the real values never leave the
+   * secret store). The console re-sends the mask unchanged; saveConfig keeps the stored secret for it. */
+  async consoleConfig(tenant: string): Promise<AuthnConfig> {
+    const cfg = await this.workingConfig(tenant);
+    const reg = await this.registry('work');
+    // Parallel: the console GET cannot afford a serial round-trip per instance (cold secret store + edge timeout).
+    await Promise.all(cfg.methods.map(async (m) => {
+      const t = methodType(m.type), pluginId = methodPluginId(m.type);
+      if (!t || !pluginId || t.settingsScope === 'plugin') return;
+      await Promise.all(t.settings.filter((x) => x.type === 'secret').map(async (f) => {
+        if (m.config[f.key] !== undefined) return;
+        if (await reg.readSecret(tenant, pluginId, `${m.id}.${f.key}`)) m.config[f.key] = SECRET_MASK;
+      }));
+    }));
+    return cfg;
+  }
+
+  /** The runtime config of a method instance: the versioned values plus its instance-scoped secrets from the
+   * secret store. Plugin-scoped settings are NOT here - the serving plugin's own store holds them (c.settings). */
+  private async instanceConfig(reg: PluginRegistry, tenant: string, m: { id: string; type: string; config: Record<string, any> }): Promise<Record<string, any>> {
+    const t = methodType(m.type), pluginId = methodPluginId(m.type);
+    const out = { ...m.config };
+    if (!t || !pluginId || t.settingsScope === 'plugin') return out; // plugin-scoped settings live in the serving plugin's store (c.settings)
+    for (const f of t.settings.filter((x) => x.type === 'secret')) {
+      if (out[f.key] !== undefined) continue;
+      const v = await reg.readSecret(tenant, pluginId, `${m.id}.${f.key}`);
+      if (v) out[f.key] = v;
+    }
+    return out;
+  }
+
+  /** The client secret of a federated method for the provider exchange: the serving plugin's settings for a
+   * plugin-scoped method (the named providers), the instance's secret store entry otherwise (generic OIDC). */
+  private async externalSecret(reg: PluginRegistry, tenant: string, m: { id: string; type: string; config: Record<string, any> }): Promise<string> {
+    const serving = this.provider(reg, tenant, m.type);
+    if (serving && this.methodDeclaration(reg, serving)?.manifest.authMethod?.settingsScope === 'plugin') {
+      const v = (await reg.settingsFor(tenant, serving.manifest.id))?.clientSecret;
+      return typeof v === 'string' ? v : '';
+    }
+    const v = (await this.instanceConfig(reg, tenant, m)).clientSecret;
+    return typeof v === 'string' ? v : '';
+  }
+
   analyses(cfg: AuthnConfig): ChainAnalysis[] { return cfg.chains.map((c) => analyzeChain(cfg, c)); }
+
+  /** Registry-aware analyses: the real/simulated verdict of each method with the serving plugin's settings (and
+   * the instance's secrets) merged in, so a plugin-scoped method is not misread as simulated from its empty
+   * instance config. The verification handlers are config-pure by contract (config + serving settings only, no
+   * I/O), so they answer IN-PROCESS with the same context the bus delivery would inject: no per-method bus
+   * round-trips - a fan-out of those overruns the edge proxy timeout on a throttled hosted deployment. */
+  async analysesReg(tenant: string, cfg: AuthnConfig, ref: 'live' | 'work' = 'work'): Promise<ChainAnalysis[]> {
+    const reg = await this.registry(ref);
+    const servings = new Map(cfg.methods.map((m) => [m.id, this.provider(reg, tenant, m.type)] as const));
+    const pluginIds = [...new Set([...servings.values()].filter((p): p is PluginImpl => !!p).map((p) => p.manifest.id))];
+    const settings = new Map(await Promise.all(pluginIds.map(async (id) => {
+      const impl = reg.impl(id);
+      return [id, impl ? validateSettings(impl.manifest.settings ?? [], (await reg.settingsFor(tenant, id)) ?? {}).values : {}] as const;
+    })));
+    const verdicts = new Map(await Promise.all(cfg.methods.map(async (m) => {
+      const serving = servings.get(m.id);
+      if (!serving) return [m.id, { real: false, note: 'Method unavailable (its plugin is disabled).' }] as const;
+      // Same fail-closed rule as the bus delivery: a faulted replacement refuses every call until an admin acts.
+      if (serving.manifest.extends && reg.isFaulted(tenant, serving.manifest.id)) return [m.id, { real: false, note: 'Method unavailable (its plugin failed).' }] as const;
+      let impl: PluginImpl | undefined = serving;
+      while (impl && !impl.handlers['auth.verification'] && impl.manifest.extends) impl = reg.impl(impl.manifest.extends);
+      const h = impl?.handlers['auth.verification'] as ((p: { config: Record<string, unknown> }, c: { tenant: string; settings: Record<string, unknown> }) => { real: boolean; note: string }) | undefined;
+      if (!impl || !h) return [m.id, { real: false, note: 'Method unavailable (its plugin declares no verification).' }] as const;
+      const decl = this.methodDeclaration(reg, serving);
+      const config = decl?.manifest.authMethod?.settingsScope === 'plugin' ? m.config : await this.instanceConfig(reg, tenant, m);
+      try {
+        // Bounded even though the handlers are config-pure by contract: a third-party handler that answers late
+        // or never degrades to the same fail-closed verdict instead of stalling the console GET. (A handler that
+        // blocks the event loop synchronously stalls any request path, bus or not: no path protects against that.)
+        const v = await verdictBounded(Promise.resolve(h({ config: config as Record<string, unknown> }, { tenant, settings: settings.get(serving.manifest.id) ?? {} })));
+        return [m.id, { real: v?.real === true, note: typeof v?.note === 'string' ? v.note : 'Method unavailable (its plugin failed).' }] as const;
+      } catch { return [m.id, { real: false, note: 'Method unavailable (its plugin failed).' }] as const; }
+    })));
+    return cfg.chains.map((c) => analyzeChain(cfg, c, (m) => verdicts.get(m.id)));
+  }
 
   /** Passkey self-enrollment, step 1: the creation options of the auth.enroll hook of the method plugin on the
    * slot (the plugin owns the attestation logic; this service only orchestrates). The pending challenge is stored
@@ -134,7 +262,7 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!(await this.enroll.addWebAuthnCredential(tenant, subject, inst, cred))) return { ok: false as const, reason: 'this credential id is already enrolled with a different key' };
     return { ok: true as const, enrolled: { id: cred.id, name: cred.name ?? null } };
   }
-  catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, instances: t.instances, settings: t.settings, simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
+  catalogue() { return methodTypes().map((t) => ({ id: t.id, name: t.name, description: t.description, factor: t.factor, maturity: t.maturity, suggestedLevel: t.suggestedLevel, provisioning: t.provisioning, instances: t.instances, settings: t.settings, ...(t.settingsScope ? { settingsScope: t.settingsScope } : {}), simulatedByDefault: !t.verification(Object.fromEntries(t.settings.map((s) => [s.key, s.default]))).real && t.maturity === 'implemented' })); }
 
   /** Which instances and chains of a configuration are served right now by an ACTIVE plugin of the given registry (working branch or live).
    * A method is unavailable when the plugin serving its type is disabled or absent; a chain is unavailable when any of its steps is. Drives the "no longer active" state of the console. */
@@ -195,7 +323,11 @@ export class AuthnService implements OnApplicationBootstrap {
       if (!serving) continue;
       const decl = this.methodDeclaration(reg, serving);
       if (decl?.manifest.authMethod?.settingsScope !== 'plugin') continue;
-      out[m.id] = { plugin: serving.manifest.id, settings: serving.manifest.settings ?? [], values: (await reg.settingsFor(tenant, serving.manifest.id)) ?? {} };
+      // Mask secret values: the drawer needs to know one is set, never the value itself. The mask is a
+      // sentinel saveServingSettings drops (see SECRET_MASK).
+      const values = { ...((await reg.settingsFor(tenant, serving.manifest.id)) ?? {}) };
+      for (const f of (serving.manifest.settings ?? []).filter((x) => x.type === 'secret')) if (values[f.key]) values[f.key] = SECRET_MASK;
+      out[m.id] = { plugin: serving.manifest.id, settings: serving.manifest.settings ?? [], values };
     }
     return out;
   }
@@ -209,7 +341,11 @@ export class AuthnService implements OnApplicationBootstrap {
     const reg = await this.registry('work', true);
     const serving = this.provider(reg, tenant, m.type);
     if (!serving || this.methodDeclaration(reg, serving)?.manifest.authMethod?.settingsScope !== 'plugin') throw new BadRequestException(`method ${methodId} has no plugin-scoped form`);
-    await reg.configure(tenant, serving.manifest.id, values);
+    // A secret field still holding the mask means "unchanged": drop it so configure keeps the stored value.
+    const schema = serving.manifest.settings ?? [];
+    const out: Record<string, unknown> = { ...values };
+    for (const f of schema.filter((x) => x.type === 'secret')) if (out[f.key] === SECRET_MASK) delete out[f.key];
+    await reg.configure(tenant, serving.manifest.id, out);
     return { configured: serving.manifest.id };
   }
   /** Descriptive verification note THROUGH THE REGISTRY (never in-process at sign-in, review n:2): a disabled or
@@ -241,7 +377,7 @@ export class AuthnService implements OnApplicationBootstrap {
   private async methodPayload(reg: PluginRegistry, s: Session, st: Session['steps'][number], state: Record<string, any>, answers?: Record<string, string>) {
     const passwordChangedAt = st.type === 'password' ? await this.passwordChangedAt(s.tenant, s.subject) : undefined;
     return {
-      tenant: s.tenant, subject: s.subject, known: s.known, instanceId: st.id, config: st.config as Record<string, any>,
+      tenant: s.tenant, subject: s.subject, known: s.known, instanceId: st.id, config: await this.instanceConfig(reg, s.tenant, st),
       state, answers, now: this.now(), ...(s.origin ? { origin: s.origin } : {}),
       enrollment: await this.enrollment(s.tenant, s.subject, st),
       ...(st.type === 'email-otp' ? { profileEmail: await this.profileEmail(s.subject, s.branch), notifyCapability: await this.notifyCapability(reg, s.tenant) } : {}),
@@ -255,7 +391,7 @@ export class AuthnService implements OnApplicationBootstrap {
   /** At most 30 sign-in starts per account per 10 minutes: bounds e-mail code floods. */
   private tooManyStarts(key: string) { const t = (this.starts.get(key) ?? []).filter((x) => x > this.now() - THROTTLE_MS); t.push(this.now()); this.starts.set(key, t); return t.length > 30; }
   private fail(key: string) { (this.fails.get(key) ?? this.fails.set(key, []).get(key)!).push(this.now()); }
-  private sweep() { const n = this.now(); for (const [k, s] of this.sessions) if (s.exp < n) this.sessions.delete(k); while (this.sessions.size > 2000) this.sessions.delete(this.sessions.keys().next().value as string); }
+  private sweep() { const n = this.now(); for (const [k, s] of this.sessions) if (s.exp < n) this.sessions.delete(k); while (this.sessions.size > 2000) this.sessions.delete(this.sessions.keys().next().value as string); for (const [k, l] of this.pendingLinks) if (l.exp < n) this.pendingLinks.delete(k); while (this.pendingLinks.size > 1000) this.pendingLinks.delete(this.pendingLinks.keys().next().value as string); }
 
   /** Chains a person may pick at sign-in: enabled chains of the LIVE configuration whose methods are all enabled
    * AND served by an active plugin on the sign-in registry (review n:2 / acceptance 3: disabling a method's plugin
@@ -305,13 +441,26 @@ export class AuthnService implements OnApplicationBootstrap {
   }
 
   /** First page of the core's form. No chain is configured: classic form. Chains exist and none is picked: the list to choose from. A chain is picked: its first inputs. */
-  async entry(tenant: string, chainId?: string, branch?: string): Promise<{ mode: 'legacy' } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields'] }> {
+  async entry(tenant: string, chainId?: string, branch?: string): Promise<{ mode: 'legacy' } | { mode: 'error'; message: string } | { mode: 'choice'; chains: Awaited<ReturnType<AuthnService['options']>>['chains'] } | { mode: 'chain'; chain: { id: string; name: string }; fields: Prompt['fields']; session?: string; noSubject?: boolean; title?: string; message?: string }> {
     const reg = await this.signinRegistry(branch);
     const cfg = await this.signinConfig(tenant, branch), list = await this.offered(cfg, reg, tenant);
     if (!list.length) return { mode: 'legacy' };
     const chain = typeof chainId === 'string' && chainId ? list.find((c) => c.id === chainId) : undefined;
     if (!chain) return { mode: 'choice', chains: (await this.options(tenant, branch)).chains };
     const m = cfg.methods.find((x) => x.id === chain.steps[0])!, t = methodType(m.type)!;
+    // A chain OPENING on a federation step starts without a username (the classic "Sign in with <provider>"
+    // button): the session is subject-less until the callback resolves the account through the explicit link
+    // (docs/sso-federation.md). The link step renders on the first page, its session created here.
+    if (t.factor === 'other') {
+      const key = `${tenant}/${branch ?? 'live'}//external-entry`;
+      if (this.tooManyStarts(key)) { this.audit({ tenant, outcome: 'throttled' }); return { mode: 'error', message: 'Too many attempts. Try again later.' }; }
+      const a = analyzeChain(cfg, chain);
+      const steps = await Promise.all(chain.steps.map(async (id) => { const sm = cfg.methods.find((x) => x.id === id)!; return { id: sm.id, type: sm.type, name: sm.name, level: sm.level, config: sm.config, real: (await this.verification(reg, tenant, sm)).real }; }));
+      const s: Session = { id: randomBytes(24).toString('base64url'), tenant, subject: '', branch, known: false, exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
+      this.sessions.set(s.id, s);
+      await this.prepare(s);
+      return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: s.prepared!.prompt.fields, session: s.id, noSubject: true, title: s.prepared!.prompt.title, ...(s.prepared!.prompt.message ? { message: s.prepared!.prompt.message } : {}) };
+    }
     if (!t.inlineWithUsername(m.config)) return { mode: 'chain', chain: { id: chain.id, name: chain.name }, fields: [] };
     const s = { tenant, subject: '', known: false, branch } as Session;
     const st = { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: true };
@@ -322,6 +471,8 @@ export class AuthnService implements OnApplicationBootstrap {
   /** Returns null when no chain is live: the caller then uses the single base-password path unchanged. */
   async authenticate(b: GateRequest): Promise<GateResponse | null> {
     this.sweep();
+    if (b.externalStart) return this.startExternal(b);
+    if (b.externalCallback) return this.completeExternal(b);
     if (b.session) return this.answer(b);
     const reg = await this.signinRegistry(b.branch);
     const cfg = await this.signinConfig(b.tenant, b.branch);
@@ -348,6 +499,167 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!b.answers || typeof b.answers !== 'object') return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     return this.check(s, b.answers);
   }
+
+  /** The session a start/callback leg belongs to, with the same expiry and tenant rules as a form answer. */
+  private externalSession(b: GateRequest): Session | GateResponse {
+    const s = b.session ? this.sessions.get(String(b.session)) : undefined;
+    if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired', message: 'Your sign-in session expired. Start again.' }; }
+    if (s.branch && typeof b.branch === 'string' && b.branch && b.branch !== s.branch) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
+    return s;
+  }
+
+  /** Federated sign-in, leg 1 (docs/sso-federation.md): the plugin on the slot returns its provider's metadata as
+   * DATA (auth.external.start); this service mints state/nonce/PKCE, keeps them server-side in the session, and
+   * answers with the provider URL (the core 302s) or the DEMO chooser data of a SIMULATED provider. */
+  private async startExternal(b: GateRequest): Promise<GateResponse> {
+    const found = this.externalSession(b);
+    if ('outcome' in found) return found;
+    const s = found;
+    const st = s.steps[s.index], t = methodType(st.type);
+    if (!t || t.factor !== 'other') return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };   // the current step is not a federation step
+    if (b.authorize && typeof b.authorize === 'object') {
+      const keys = ['response_type', 'client_id', 'redirect_uri', 'state', 'code_challenge', 'code_challenge_method', 'branch', 'ticket'];
+      s.authorize = Object.fromEntries(keys.map((k) => [k, b.authorize![k]]).filter(([, v]) => typeof v === 'string' && (v as string).length <= 512)) as Record<string, string>;
+    }
+    const reg = await this.signinRegistry(s.branch);
+    const payload = await this.methodPayload(reg, s, st, s.prepared?.state ?? {});
+    const start = checkStart((await reg.callSlot<ExternalStart>(s.tenant, `auth.${st.type}`, 'auth.external.start', { ...payload, callbackUrl: externalCallbackUrl() })).result);
+    if (!start.ok) { this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-refused', reason: start.reason }); return { outcome: 'deny', reason: 'external-unavailable', message: 'This sign-in method is not available. Try another one.' }; }
+    const state = mint();
+    if (start.mode === 'simulated') {
+      s.pendingExternal = { instanceId: st.id, mode: 'simulated', state, nonce: '', start };
+      this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-start', mode: 'simulated' });
+      return { outcome: 'external-sim', title: start.title!, identities: start.identities!, state };
+    }
+    const cbUrl = externalCallbackUrl();
+    if (!cbUrl) throw new Error('IAM_EXTERNAL_CALLBACK_URL is not configured: a real external provider cannot be reached');   // technical misconfiguration: fail closed (503)
+    const nonce = mint(), verifier = mint();
+    const url = buildAuthorizeUrl(start, cbUrl, { state, nonce, challenge: pkceChallenge(verifier) });
+    s.pendingExternal = { instanceId: st.id, mode: start.mode!, state, nonce, verifier, start };
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-start', mode: start.mode });
+    return { outcome: 'external-redirect', url };
+  }
+
+  /** Federated sign-in, leg 2: the provider state resolves the session when the fixed callback URL could not
+   * carry it; the token exchange runs HERE (openid-client for OIDC, a plain token+userinfo read for OAuth2-only
+   * providers); the plugin decides ok/deny from the resolved profile and the EXPLICIT link only. */
+  private async completeExternal(b: GateRequest): Promise<GateResponse> {
+    const cb = b.externalCallback!;
+    let s = b.session ? this.sessions.get(String(b.session)) : undefined;
+    if (!s && typeof cb.state === 'string' && cb.state) s = [...this.sessions.values()].find((x) => x.pendingExternal?.state === cb.state);
+    // Not a sign-in session: the state may belong to a self-service LINK round-trip (member profile page).
+    if (!s && typeof cb.state === 'string' && cb.state) { const l = this.pendingLinks.get(cb.state); if (l && l.tenant === b.tenant) return this.completeExternalLink(l, cb); }
+    if (!s || s.tenant !== b.tenant || s.exp < this.now()) { if (s) this.sessions.delete(s.id); return { outcome: 'deny', reason: 'session-expired', message: 'Your sign-in session expired. Start again.' }; }
+    const deny = (message: string): GateResponse => ({ outcome: 'deny', reason: 'external-failed', message });
+    const p = s.pendingExternal;
+    if (!p || typeof cb.state !== 'string' || cb.state !== p.state) return deny('External sign-in failed. Try again.');
+    const st = s.steps[s.index];
+    if (st.id !== p.instanceId) return deny('External sign-in failed. Try again.');
+    if (cb.error) { this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-denied-by-provider', error: cb.error.slice(0, 80) }); return deny('The provider refused the sign-in. Try again.'); }
+    let profile: ExternalProfile;
+    const reg = await this.signinRegistry(s.branch);
+    if (p.mode === 'simulated') {
+      const id = p.start.identities!.find((x) => x.sub === cb.sim);
+      if (!id) return deny('External sign-in failed. Try again.');
+      profile = { sub: id.sub, ...(id.email ? { email: id.email, emailVerified: true } : {}), name: id.label };
+    } else {
+      const cbUrl = externalCallbackUrl();
+      const secret = await this.externalSecret(reg, s.tenant, st);
+      profile = p.mode === 'oidc' ? await exchangeOidc(p.start, secret, cbUrl, cb, p) : await exchangeUserinfo(p.start, secret, cbUrl, cb, p);   // a throw is a technical failure: 503, fail closed
+    }
+    const link = s.subject ? await this.enroll.externalLink(s.tenant, s.subject, st.id) : undefined;
+    const linked = await this.enroll.findExternalLink(s.tenant, st.id, profile.sub);
+    const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(s.tenant, `auth.${st.type}`, 'auth.external.verify',
+      { ...await this.methodPayload(reg, s, st, s.prepared?.state ?? {}), intent: 'signin', external: profile, link: link ?? null, linkedSubject: linked?.user ?? null })).result;
+    const key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
+    // The link is the ONLY way in (docs/sso-federation.md): no link for this provider subject, no sign-in,
+    // whatever the plugin answered. A linked account that is not the session's account is refused too.
+    if (!verdict?.ok || !linked || (s.subject && linked.user !== s.subject)) {
+      this.fail(key); s.tries++;
+      this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'step-failed', via: 'external' });
+      const message = verdict?.ok ? 'No account is linked to this provider sign-in.' : (typeof verdict?.message === 'string' && verdict.message.length <= 160 ? verdict.message : 'External sign-in failed. Try again.');
+      if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return deny('Sign-in failed. Check your details and try again.'); }
+      return deny(message);
+    }
+    if (!s.subject) { s.subject = linked.user; s.known = await this.known(s.tenant, linked.user, s.branch); }
+    s.pendingExternal = undefined;
+    const r = await this.advance(s);
+    return { ...r, ...(s.authorize ? { resume: s.authorize } : {}) };
+  }
+  // ---- self-service linking (docs/sso-federation.md rules 1-2: a link is created from the member's OWN session,
+  // through a provider round-trip with its own state/nonce/PKCE; the provider subject then identifies exactly one
+  // account). The pending records live server-side, one-use, 5 minutes, swept with the sign-in sessions.
+  private pendingLinks = new Map<string, { tenant: string; subject: string; instanceId: string; mode: 'oidc' | 'oauth2-userinfo' | 'simulated'; state: string; nonce: string; verifier?: string; start: ExternalStart; returnTo?: string; exp: number }>();
+
+  /** Link leg 1 (member authenticated on the console): validates the instance, asks the plugin for its provider
+   * metadata, and answers the provider URL (real) or the fictional identities (simulated). */
+  async startExternalLink(tenant: string, subject: string, inst: string, returnTo?: string): Promise<{ mode: 'simulated'; title: string; identities: ExternalIdentity[]; state: string } | { mode: 'redirect'; url: string }> {
+    this.sweep();
+    const key = `${tenant}//${subject}/link`;
+    if (this.tooManyStarts(key)) { this.audit({ tenant, subject, outcome: 'throttled' }); throw Object.assign(new Error('Too many attempts. Try again later.'), { code: 'throttled' }); }
+    const cfg = await this.signinConfig(tenant);
+    const m = cfg.methods.find((x) => x.id === inst && x.enabled);
+    const t = m && methodType(m.type);
+    if (!m || !t || t.factor !== 'other') throw Object.assign(new Error('unknown or disabled federation method instance'), { code: 'no-instance' });
+    const reg = await this.signinRegistry(undefined);
+    const payload = { tenant, subject, known: true, instanceId: m.id, config: m.config as Record<string, any>, state: {}, answers: undefined, now: this.now(), enrollment: {} };
+    const start = checkStart((await reg.callSlot<ExternalStart>(tenant, `auth.${m.type}`, 'auth.external.start', { ...payload, callbackUrl: externalCallbackUrl() })).result);
+    if (!start.ok) { this.audit({ tenant, subject, method: inst, outcome: 'external-link-refused', reason: start.reason }); throw Object.assign(new Error('This sign-in method is not available.'), { code: 'external-refused' }); }
+    const state = mint();
+    const rec = { tenant, subject, instanceId: inst, mode: start.mode!, state, nonce: '', start, ...(returnTo ? { returnTo } : {}), exp: this.now() + SESSION_MS };
+    if (start.mode === 'simulated') {
+      this.pendingLinks.set(state, rec);
+      this.audit({ tenant, subject, method: inst, outcome: 'external-link-start', mode: 'simulated' });
+      return { mode: 'simulated', title: start.title!, identities: start.identities!, state };
+    }
+    const cbUrl = externalCallbackUrl();
+    if (!cbUrl) throw new Error('IAM_EXTERNAL_CALLBACK_URL is not configured: a real external provider cannot be reached');   // misconfiguration: fail closed
+    const nonce = mint(), verifier = mint();
+    const url = buildAuthorizeUrl(start, cbUrl, { state, nonce, challenge: pkceChallenge(verifier) });
+    this.pendingLinks.set(state, { ...rec, nonce, verifier });
+    this.audit({ tenant, subject, method: inst, outcome: 'external-link-start', mode: start.mode });
+    return { mode: 'redirect', url };
+  }
+
+  /** Simulated link leg 2 from the console chooser (the provider round-trip of a DEMO provider happens in-page). */
+  async completeExternalLinkSimulated(tenant: string, subject: string, inst: string, state: string, sim: string): Promise<GateResponse> {
+    const rec = this.pendingLinks.get(state);
+    if (!rec || rec.tenant !== tenant || rec.subject !== subject || rec.instanceId !== inst || rec.mode !== 'simulated') throw Object.assign(new Error('unknown or expired link request'), { code: 'no-link-request' });
+    return this.completeExternalLink(rec, { state, sim });
+  }
+
+  /** Link leg 2: the exchange runs, the PLUGIN judges the profile (its own policy: hosted domain, app check...),
+   * then the link is recorded - one provider subject per account, a clash refuses and keeps the existing link. */
+  private async completeExternalLink(rec: { tenant: string; subject: string; instanceId: string; mode: 'oidc' | 'oauth2-userinfo' | 'simulated'; state: string; nonce: string; verifier?: string; start: ExternalStart; returnTo?: string; exp: number }, cb: Record<string, string>): Promise<GateResponse> {
+    const deny = (message: string): GateResponse => ({ outcome: 'deny', reason: 'external-link-failed', message });
+    if (rec.exp < this.now()) { this.pendingLinks.delete(rec.state); return deny('The link request expired. Start again.'); }
+    this.pendingLinks.delete(rec.state);   // one-use, whatever happens next
+    const auditBase = { tenant: rec.tenant, subject: rec.subject, method: rec.instanceId };
+    if (cb.error) { this.audit({ ...auditBase, outcome: 'external-link-denied-by-provider', error: cb.error.slice(0, 80) }); return deny('The provider refused the sign-in. Try again.'); }
+    const cfg = await this.signinConfig(rec.tenant);
+    const m = cfg.methods.find((x) => x.id === rec.instanceId);
+    if (!m) return deny('This sign-in method is not available.');
+    const reg = await this.signinRegistry(undefined);
+    let profile: ExternalProfile;
+    if (rec.mode === 'simulated') {
+      const id = rec.start.identities!.find((x) => x.sub === cb.sim);
+      if (!id) return deny('The link failed. Try again.');
+      profile = { sub: id.sub, ...(id.email ? { email: id.email, emailVerified: true } : {}), name: id.label };
+    } else {
+      const cbUrl = externalCallbackUrl();
+      const secret = await this.externalSecret(reg, rec.tenant, m);
+      profile = rec.mode === 'oidc' ? await exchangeOidc(rec.start, secret, cbUrl, cb, rec) : await exchangeUserinfo(rec.start, secret, cbUrl, cb, rec);   // a throw is a technical failure: 503, fail closed
+    }
+    const payload = { tenant: rec.tenant, subject: rec.subject, known: true, instanceId: m.id, config: await this.instanceConfig(reg, rec.tenant, m), state: {}, answers: undefined, now: this.now(), enrollment: {} };
+    const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(rec.tenant, `auth.${m.type}`, 'auth.external.verify',
+      { ...payload, intent: 'link', external: profile, link: null, linkedSubject: null })).result;
+    if (!verdict?.ok) { this.audit({ ...auditBase, outcome: 'external-link-refused', reason: verdict?.reason }); return deny(typeof verdict?.message === 'string' && verdict.message.length <= 160 ? verdict.message : 'The link failed. Try again.'); }
+    try { await this.enroll.setExternalLink(rec.tenant, rec.subject, rec.instanceId, { sub: profile.sub, ...(profile.email ? { email: profile.email } : {}) }); }
+    catch (e) { if ((e as { code?: string }).code === 'external-sub-taken') { this.audit({ ...auditBase, outcome: 'external-link-clash' }); return deny('This provider identity is already linked to another account.'); } throw e; }
+    this.audit({ ...auditBase, outcome: 'external-linked', mode: rec.mode });
+    return { outcome: 'external-linked', ...(rec.returnTo ? { returnTo: rec.returnTo } : {}) };
+  }
+
   private async prepare(s: Session) {
     const st = s.steps[s.index];
     const reg = await this.signinRegistry(s.branch);
@@ -404,10 +716,17 @@ export class AuthnService implements OnApplicationBootstrap {
       if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
       return this.challenge(s, `Incorrect answer. ${MAX_TRIES - s.tries} attempt(s) left.`);
     }
+    return this.advance(s);
+  }
+  /** The accepted step is recorded and the chain moves on: next step's challenge, or the final allow with the claims. */
+  private async advance(s: Session): Promise<GateResponse> {
+    const st = s.steps[s.index];
     s.done.push({ id: st.id, type: st.type, real: st.real }); s.index++;
     if (s.index < s.steps.length) { await this.prepare(s); return this.challenge(s); }
-    this.sessions.delete(s.id); this.fails.delete(key);
-    const real = s.done.filter((d) => d.real), factors = new Set(real.map((d) => methodType(d.type)!.factor));
+    this.sessions.delete(s.id); this.fails.delete(`${s.tenant}/${s.branch ?? 'live'}/${s.subject}`);
+    // Factor 'other' (federation) never counts toward MFA by itself: a federated step asserts a sign-in happened
+    // at the provider, not an independent factor of THIS service (docs/sso-federation.md).
+    const real = s.done.filter((d) => d.real), factors = new Set(real.map((d) => methodType(d.type)!.factor).filter((f) => f !== 'other'));
     const claims = {
       amr: [...new Set(real.map((d) => methodType(d.type)!.amr))],
       auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',

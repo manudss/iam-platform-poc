@@ -39,7 +39,10 @@ export function validateConfig(input: unknown): AuthnConfig {
     const r = validateSettings(t!.settings, (raw.config && typeof raw.config === 'object' && !Array.isArray(raw.config) ? raw.config : {}) as Record<string, unknown>);
     if (!r.ok) bad(`method ${raw.id}: ${r.errors.join('; ')}`);
     if (t!.instances === 'single' && methods.some((x) => x.type === t!.id)) bad(`method ${raw.id}: type ${t!.id} allows a single instance and one already exists`);
-    methods.push({ id: raw.id, type: t!.id, name: raw.name.trim(), enabled: raw.enabled !== false, level: raw.level, config: r.values });
+    // A plugin-scoped method (manifest `settingsScope: 'plugin'`, the named social providers) keeps NO settings in
+    // the versioned instance config: they live in the serving plugin's settings store (secrets in the secret store).
+    // Stripping here also scrubs a legacy instance config written before the scope change.
+    methods.push({ id: raw.id, type: t!.id, name: raw.name.trim(), enabled: raw.enabled !== false, level: raw.level, config: t!.settingsScope === 'plugin' ? {} : r.values });
   }
   const byId = new Map(methods.map((m) => [m.id, m])), chains: Chain[] = [], cseen = new Set<string>();
   for (const raw of i.chains as Record<string, any>[]) {
@@ -81,9 +84,11 @@ export interface ChainAnalysis {
  * - `effectiveLevel` equals the declared level when every step is really verified. With a simulated step it is capped by the strongest really-verified step.
  * - The suggestion (highest step level) is only a starting point for the administrator.
  */
-export function analyzeChain(cfg: AuthnConfig, chain: Chain): ChainAnalysis {
+export function analyzeChain(cfg: AuthnConfig, chain: Chain, verdict?: (m: AuthnConfig['methods'][number]) => { real: boolean; note: string } | undefined): ChainAnalysis {
   const steps = chain.steps.map((s) => cfg.methods.find((m) => m.id === s)!);
-  const info = steps.map((m) => { const t = methodType(m.type)!; return { m, t, v: t.verification(m.config) }; });
+  // The in-process t.verification reads only the instance config: a PLUGIN-scoped method (empty instance config,
+  // settings in the serving plugin's store) would be misread as simulated. Callers with a registry pass `verdict`.
+  const info = steps.map((m) => { const t = methodType(m.type)!; return { m, t, v: verdict?.(m) ?? t.verification(m.config) }; });
   const real = info.filter((x) => x.v.real), sim = info.filter((x) => !x.v.real);
   const factors = [...new Set(real.map((x) => x.t.factor))];
   const maxStep = Math.max(...steps.map((m) => m.level)), maxReal = real.length ? Math.max(...real.map((x) => x.m.level)) : 1;

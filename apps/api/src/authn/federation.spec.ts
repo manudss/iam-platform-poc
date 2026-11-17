@@ -1,0 +1,191 @@
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { createServer, type Server } from 'node:http';
+import { generateKeyPair, exportJWK, SignJWT } from 'jose';
+import { createHash } from 'node:crypto';
+import {
+  checkStart, buildAuthorizeUrl, exchangeOidc, exchangeUserinfo, mint, pkceChallenge,
+  type ExternalStart,
+} from './federation.js';
+
+/**
+ * The REAL exchange paths of the federation client, against a loopback fake provider: a signed id_token validated
+ * through JWKS (OIDC mode) and a token + userinfo (+ e-mails, token-inspection) flow (oauth2-userinfo mode).
+ * No provider account, no network beyond 127.0.0.1 - the provider's wire behaviour is what is under test.
+ */
+
+async function listen(handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void): Promise<{ srv: Server; base: string }> {
+  const srv = createServer(handler);
+  await new Promise<void>((ok) => srv.listen(0, '127.0.0.1', ok));
+  const { port } = srv.address() as { port: number };
+  return { srv, base: `http://127.0.0.1:${port}` };
+}
+const readBody = (req: import('node:http').IncomingMessage) => new Promise<string>((ok) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => ok(b)); });
+const json = (res: import('node:http').ServerResponse, body: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+
+describe('federation client (real exchange paths)', () => {
+  it('checkStart refuses malformed answers and non-https endpoints (fail closed)', () => {
+    assert.throws(() => checkStart(null), /bad auth\.external\.start/);
+    assert.throws(() => checkStart({ ok: true, mode: 'simulated', identities: [] }), /simulated/);
+    assert.throws(() => checkStart({ ok: true, mode: 'oidc', authorizeEndpoint: 'http://evil.example.com/a', tokenEndpoint: 'https://p.example.com/t', jwksUri: 'https://p.example.com/j', issuer: 'https://p.example.com', clientId: 'x' }), /endpoints/);
+    const ok = checkStart({ ok: true, mode: 'oidc', authorizeEndpoint: 'https://p.example.com/a', tokenEndpoint: 'https://p.example.com/t', jwksUri: 'https://p.example.com/j', issuer: 'https://p.example.com', clientId: 'c', scopes: ['openid', 'x'.repeat(60), 'email'], extraAuthorizeParams: { 'bad key!': 'v', hd: 'example.com' } });
+    assert.equal(ok.ok, true);
+    assert.deepEqual(ok.scopes, ['openid', 'email']); // over-long entries dropped
+    assert.deepEqual(ok.extraAuthorizeParams, { hd: 'example.com' }); // illegal key dropped
+  });
+
+  it('buildAuthorizeUrl carries state, nonce, S256 challenge and extra params', () => {
+    const s = checkStart({ ok: true, mode: 'oidc', authorizeEndpoint: 'https://p.example.com/authorize', tokenEndpoint: 'https://p.example.com/token', jwksUri: 'https://p.example.com/jwks', issuer: 'https://p.example.com', clientId: 'client-1', scopes: ['openid', 'email'], extraAuthorizeParams: { hd: 'example.com' } });
+    const u = new URL(buildAuthorizeUrl(s, 'https://iam.example.com/authorize/external/callback', { state: 'st', nonce: 'no', challenge: 'ch' }));
+    assert.equal(u.searchParams.get('response_type'), 'code');
+    assert.equal(u.searchParams.get('client_id'), 'client-1');
+    assert.equal(u.searchParams.get('redirect_uri'), 'https://iam.example.com/authorize/external/callback');
+    assert.equal(u.searchParams.get('state'), 'st');
+    assert.equal(u.searchParams.get('nonce'), 'no');
+    assert.equal(u.searchParams.get('code_challenge'), 'ch');
+    assert.equal(u.searchParams.get('code_challenge_method'), 'S256');
+    assert.equal(u.searchParams.get('scope'), 'openid email');
+    assert.equal(u.searchParams.get('hd'), 'example.com');
+  });
+
+  describe('OIDC mode against a loopback fake provider', () => {
+    let srv: Server, base: string, start: ExternalStart, verifier: string, state: string, nonce: string;
+    let priv: Awaited<ReturnType<typeof generateKeyPair>>['privateKey'], pub: Awaited<ReturnType<typeof generateKeyPair>>['publicKey'], otherPriv: Awaited<ReturnType<typeof generateKeyPair>>['privateKey'], kid: string;
+    const seen: { codeVerifier?: string; clientSecret?: string; code?: string } = {};
+    before(async () => {
+      ({ privateKey: priv, publicKey: pub } = await generateKeyPair('RS256'));
+      ({ privateKey: otherPriv } = await generateKeyPair('RS256'));
+      kid = 'fake-key-1';
+      const jwk = await exportJWK(pub); jwk.kid = kid; jwk.alg = 'RS256'; jwk.use = 'sig';
+      verifier = mint(); state = mint(); nonce = mint();
+      const challenge = pkceChallenge(verifier);
+      const signIdToken = (key: typeof priv, claims: Record<string, unknown> = {}) => new SignJWT({ email: 'user@example.com', email_verified: true, name: 'Real User', ...claims })
+        .setProtectedHeader({ alg: 'RS256', kid }).setSubject('provider-sub-42').setIssuer(base).setAudience('client-1')
+        .setIssuedAt().setExpirationTime('10m').setJti(mint()).sign(key);
+      ({ srv, base } = await listen(async (req, res) => {
+        const u = new URL(req.url ?? '/', 'http://x');
+        if (u.pathname === '/jwks') return json(res, { keys: [jwk] });
+        if (u.pathname === '/token') {
+          const f = new URLSearchParams(await readBody(req));
+          seen.codeVerifier = f.get('code_verifier') ?? undefined; seen.clientSecret = f.get('client_secret') ?? undefined; seen.code = f.get('code') ?? undefined;
+          if (f.get('grant_type') !== 'authorization_code' || f.get('code') !== 'the-code' || f.get('redirect_uri') !== 'https://iam.example.com/cb' || f.get('client_id') !== 'client-1') return json(res, { error: 'invalid_grant' }, 400);
+          if (f.get('client_secret') !== 's3cret') return json(res, { error: 'invalid_client' }, 401);
+          if (createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url') !== challenge) return json(res, { error: 'invalid_grant', error_description: 'pkce' }, 400);
+          return json(res, { access_token: 'at-1', token_type: 'Bearer', expires_in: 3600, id_token: await signIdToken(priv, { nonce }) });
+        }
+        return json(res, { error: 'not-found' }, 404);
+      }));
+      start = checkStart({ ok: true, mode: 'oidc', authorizeEndpoint: `${base}/authorize`, tokenEndpoint: `${base}/token`, jwksUri: `${base}/jwks`, issuer: base, clientId: 'client-1', scopes: ['openid', 'email'] });
+    });
+    after(() => srv.close());
+
+    it('a well-formed code exchange returns the validated profile (PKCE + secret reach the provider)', async () => {
+      const p = await exchangeOidc(start, 's3cret', 'https://iam.example.com/cb', { code: 'the-code', state }, { state, nonce, verifier });
+      assert.equal(p.sub, 'provider-sub-42');
+      assert.equal(p.email, 'user@example.com');
+      assert.equal(p.emailVerified, true);
+      assert.equal(p.name, 'Real User');
+      assert.equal(p.claims?.iss, base);
+      assert.equal(seen.codeVerifier, verifier);
+      assert.equal(seen.clientSecret, 's3cret');
+    });
+
+    it('a wrong state is refused before any token call', async () => {
+      await assert.rejects(exchangeOidc(start, 's3cret', 'https://iam.example.com/cb', { code: 'the-code', state: 'forged' }, { state, nonce, verifier }));
+    });
+
+    it('a wrong nonce in the id_token is refused', async () => {
+      // Pending nonce differs from what the provider will sign: validation must fail.
+      await assert.rejects(exchangeOidc(start, 's3cret', 'https://iam.example.com/cb', { code: 'the-code', state }, { state, nonce: mint(), verifier }));
+    });
+
+    it('a wrong PKCE verifier is refused by the provider', async () => {
+      await assert.rejects(exchangeOidc(start, 's3cret', 'https://iam.example.com/cb', { code: 'the-code', state }, { state, nonce, verifier: mint() }));
+    });
+
+    it('an id_token signed by a key absent from the JWKS is refused', async () => {
+      // The fake provider signs with a DIFFERENT key than the one its JWKS publishes: signature validation must fail.
+      const bad = await new SignJWT({ nonce }).setProtectedHeader({ alg: 'RS256', kid }).setSubject('x')
+        .setIssuer(base).setAudience('client-1').setIssuedAt().setExpirationTime('10m').sign(otherPriv);
+      const { srv: srv2, base: base2 } = await listen(async (req, res) => {
+        const u = new URL(req.url ?? '/', 'http://x');
+        if (u.pathname === '/jwks') { const j = await exportJWK(pub); j.kid = kid; j.alg = 'RS256'; return json(res, { keys: [j] }); }
+        if (u.pathname === '/token') return json(res, { access_token: 'a', token_type: 'Bearer', id_token: bad });
+        return json(res, {}, 404);
+      });
+      try {
+        const s2 = checkStart({ ok: true, mode: 'oidc', authorizeEndpoint: `${base2}/authorize`, tokenEndpoint: `${base2}/token`, jwksUri: `${base2}/jwks`, issuer: base, clientId: 'client-1' });
+        await assert.rejects(exchangeOidc(s2, '', 'https://iam.example.com/cb', { code: 'c', state }, { state, nonce }));
+      } finally { srv2.close(); }
+    });
+  });
+
+  describe('oauth2-userinfo mode against a loopback fake provider', () => {
+    let srv: Server, base: string, start: ExternalStart;
+    const seen: { authHeader?: string; emailsCalled: boolean; tokenInfoCalled: boolean; verifier?: string } = { emailsCalled: false, tokenInfoCalled: false };
+    before(async () => {
+      const verifierExpected = pkceChallenge('the-verifier');
+      ({ srv, base } = await listen(async (req, res) => {
+        const u = new URL(req.url ?? '/', 'http://x');
+        if (u.pathname === '/token') {
+          const f = new URLSearchParams(await readBody(req));
+          seen.verifier = f.get('code_verifier') ?? undefined;
+          if (f.get('code') !== 'gh-code' || f.get('client_id') !== 'gh-client' || f.get('client_secret') !== 'gh-secret') return json(res, { error: 'bad_verification_code' }, 400);
+          if (createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url') !== verifierExpected) return json(res, { error: 'bad_verification_code' }, 400);
+          return json(res, { access_token: 'gh-token', token_type: 'bearer', scope: 'read:user user:email' });
+        }
+        if (u.pathname === '/user') {
+          seen.authHeader = String(req.headers.authorization ?? '');
+          if (req.headers.authorization !== 'Bearer gh-token') return json(res, { message: 'bad credentials' }, 401);
+          return json(res, { id: 12345, login: 'octocat', name: 'The Octocat', email: null });
+        }
+        if (u.pathname === '/user/emails') {
+          seen.emailsCalled = true;
+          return json(res, [{ email: 'secondary@example.com', primary: false, verified: true }, { email: 'octocat@example.com', primary: true, verified: true }]);
+        }
+        if (u.pathname === '/debug_token') {
+          seen.tokenInfoCalled = true;
+          if (u.searchParams.get('access_token') !== 'gh-client|gh-secret') return json(res, { error: { message: 'bad app token' } }, 400);
+          return json(res, { data: { app_id: 'gh-client', is_valid: true } });
+        }
+        return json(res, {}, 404);
+      }));
+      start = checkStart({
+        ok: true, mode: 'oauth2-userinfo', authorizeEndpoint: `${base}/authorize`, tokenEndpoint: `${base}/token`, userinfoEndpoint: `${base}/user`,
+        clientId: 'gh-client', scopes: ['read:user', 'user:email'], pkce: true,
+        profileMap: { sub: 'id', email: 'email', name: 'name' }, emailsEndpoint: `${base}/user/emails`,
+        tokenInfoEndpoint: `${base}/debug_token?input_token={token}&access_token={appToken}`,
+      });
+    });
+    after(() => srv.close());
+
+    it('code -> token -> userinfo with e-mail fallback and token inspection', async () => {
+      const p = await exchangeUserinfo(start, 'gh-secret', 'https://iam.example.com/cb', { code: 'gh-code', state: 'st' }, { state: 'st', verifier: 'the-verifier' });
+      assert.equal(p.sub, '12345'); // numeric provider id stringified
+      assert.equal(p.email, 'octocat@example.com'); // primary verified picked from the e-mails list
+      assert.equal(p.emailVerified, true);
+      assert.equal(p.name, 'The Octocat');
+      assert.deepEqual(p.tokenInfo, { data: { app_id: 'gh-client', is_valid: true } });
+      assert.equal(seen.emailsCalled, true);
+      assert.equal(seen.tokenInfoCalled, true);
+      assert.equal(seen.verifier, 'the-verifier');
+    });
+
+    it('refuses when the token endpoint rejects the code', async () => {
+      await assert.rejects(exchangeUserinfo(start, 'gh-secret', 'https://iam.example.com/cb', { code: 'wrong', state: 'st' }, { state: 'st', verifier: 'the-verifier' }), /token endpoint answered 400/);
+    });
+
+    it('refuses a profile without a subject', async () => {
+      const { srv: s2, base: b2 } = await listen(async (req, res) => {
+        const u = new URL(req.url ?? '/', 'http://x');
+        if (u.pathname === '/token') return json(res, { access_token: 't', token_type: 'bearer' });
+        if (u.pathname === '/user') return json(res, { login: 'nosub' });
+        return json(res, {}, 404);
+      });
+      try {
+        const bad = checkStart({ ok: true, mode: 'oauth2-userinfo', authorizeEndpoint: `${b2}/a`, tokenEndpoint: `${b2}/token`, userinfoEndpoint: `${b2}/user`, clientId: 'c', profileMap: { sub: 'id' } });
+        await assert.rejects(exchangeUserinfo(bad, '', 'https://iam.example.com/cb', { code: 'c', state: 'st' }, { state: 'st' }), /no subject/);
+      } finally { s2.close(); }
+    });
+  });
+});

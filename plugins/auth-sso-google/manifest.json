@@ -1,0 +1,97 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-sso-google",
+  "version": "1.0.0",
+  "name": "Sign in with Google",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "provides": [
+    "auth.sso-google"
+  ],
+  "extends": "auth-sso-google-base",
+  "hooks": [
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.start",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.external.verify",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "clientId",
+      "type": "string",
+      "label": "Client ID",
+      "help": "OAuth 2.0 client id of a Google Cloud project (Web application). Empty = SIMULATED demonstration mode.",
+      "default": "",
+      "group": "Google"
+    },
+    {
+      "key": "clientSecret",
+      "type": "secret",
+      "label": "Client secret",
+      "group": "Google"
+    },
+    {
+      "key": "hostedDomain",
+      "type": "string",
+      "label": "Hosted domain (optional)",
+      "help": "Restrict to one Google Workspace domain (the token's hd claim must match).",
+      "default": "",
+      "group": "Policy"
+    }
+  ],
+  "authMethod": {
+    "name": "Google",
+    "description": "Federated sign-in with a Google account (OpenID Connect: issuer, audience, signature and nonce checks). The account must be explicitly linked to a local account; nothing is linked by e-mail match.",
+    "factor": "other",
+    "amr": "fed",
+    "maturity": "implemented",
+    "suggestedLevel": 6,
+    "provisioning": "admin-demo",
+    "settingsScope": "plugin"
+  },
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  },
+  "profileComponents": [
+    {
+      "id": "sso-google",
+      "title": "Google sign-in",
+      "component": "screens/profile.mjs",
+      "surfaces": {
+        "self": "manage",
+        "admin": "manage"
+      },
+      "order": 30
+    }
+  ],
+  "setupGuide": {
+    "intro": "Everything happens on this screen. Leave the Client ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Open the {console} > APIs & services > Credentials > Create credentials > OAuth client ID (application type: Web application). See the {docs}.",
+      "Under Authorized redirect URIs, paste exactly:",
+      "{callback}",
+      "Copy the generated Client ID and Client secret into the fields below, then Save.",
+      "Each person then links their Google account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://console.cloud.google.com/apis/credentials",
+    "consoleLabel": "Google Cloud console",
+    "docsUrl": "https://developers.google.com/workspace/guides/create-credentials"
+  }
+}

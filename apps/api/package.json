@@ -25,6 +25,7 @@
     "mysql2": "^3.24.6",
     "nats": "^2.29.3",
     "oidc-provider": "9.13.3",
+    "openid-client": "6.8.9",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.37.0",
@@ -39,7 +40,6 @@
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "nock": "^14.0.17",
-    "openid-client": "6.8.9",
     "supertest": "^7.3.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
