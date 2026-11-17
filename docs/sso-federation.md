@@ -33,7 +33,11 @@ silently downgraded.
    against the ID token; issuer, audience (exact client id), expiry and JWKS signature checked on every ID token;
    `redirect_uri` exact match, https outside localhost; codes exchanged server-side only.
 5. **Secrets**: client secrets are `secret` settings or env refs, never in Dolt/exports/logs; the bus maskers
-   cover the callback payload (`code`, tokens) by the existing DENY rules.
+   cover the callback payload (`code`, tokens) by the existing DENY rules. At rest a `secret` setting lives in
+   the plugin secret store (apps/api/src/plugins/v1/secret-store.ts): OpenBao (KV v2, same service as the app
+   connectors) when IAM_BAO_ADDR + IAM_BAO_TOKEN are set, otherwise a 0600 file next to the credential file
+   (IAM_PLUGIN_SECRETS_FILE to override) - the same storage class as the TOTP/PIN enrollment records, never the
+   versioned settings table. A row written before this split keeps working and is scrubbed by the next configure.
 6. **No exploitable demo in real mode**: the simulated screen only exists when no client id is configured, and
    every page and claim says SIMULATED.
 7. The sign-in session rules stay: 5 minutes, throttling, generic refusals, fail closed on plugin fault.
