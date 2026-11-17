@@ -119,3 +119,49 @@ describe('PluginsAdmin component', () => {
     expect(comp.grants().hooks).toEqual([]);
   });
 });
+
+  it('setup guide panel renders in the Settings tab: steps, links, callback URL, secret warning, demo chip', async () => {
+    const plugin = { id: 'auth-sso-google', name: 'Google sign-in', version: '1.0.0', kinds: ['auth-method'], base: false, provides: [], enabled: false, installed: true, grants: {}, requests: {} };
+    const gmodel = {
+      groups: [{ name: 'Provider', fields: [
+        { key: 'clientId', label: 'Client ID', type: 'string', required: false },
+        { key: 'clientSecret', label: 'Client secret', type: 'secret', required: false },
+      ] }],
+      guide: {
+        intro: 'Leave the Client ID empty for demo mode.',
+        steps: ['Open the {console}, then follow the {docs} to create an OAuth client.', '{callback}', 'Paste the two values below and save.'],
+        consoleUrl: 'https://console.cloud.google.com', consoleLabel: 'Google Cloud Console',
+        docsUrl: 'https://developers.google.com/identity/protocols/oauth2',
+        callbackUrl: 'https://iam-pr100.onrender.com/authorize/external/callback',
+      },
+    };
+    const f = (async (url: string) => ({ ok: true, status: 200, json: async () => (url.endsWith('/form') ? gmodel : { plugins: [plugin] }) }) as Response) as unknown as typeof fetch;
+    await TestBed.configureTestingModule({ imports: [PluginsAdmin] }).compileComponents();
+    const fx = TestBed.createComponent(PluginsAdmin);
+    fx.componentRef.setInput('api', new ApiClient('acme-demo', f));
+    fx.detectChanges(); await settle(fx);
+    const el = fx.nativeElement as HTMLElement;
+    (el.querySelector('[data-plugin=auth-sso-google] button') as HTMLButtonElement).click();
+    await settle(fx);
+    const tabs = el.querySelectorAll('.drawer .dtabs button');
+    (tabs[1] as HTMLButtonElement).click(); // Settings
+    await settle(fx);
+    const guide = el.querySelector('[data-guide]');
+    expect(guide).toBeTruthy();
+    const text = guide!.textContent!;
+    expect(text).toContain('Leave the Client ID empty for demo mode.');
+    expect(text).toContain('https://iam-pr100.onrender.com/authorize/external/callback');
+    expect(text).toContain('dedicated secret store');
+    const links = Array.from(guide!.querySelectorAll('a')).map((a) => a.getAttribute('href'));
+    expect(links).toContain('https://console.cloud.google.com');
+    expect(links).toContain('https://developers.google.com/identity/protocols/oauth2');
+    expect(guide!.querySelector('.sg-copy')).toBeTruthy();
+    // no client id configured -> DEMO MODE chip in the drawer header
+    expect(el.querySelector('.chip.demo-mode')?.textContent).toContain('DEMO MODE (simulated)');
+    const input = el.querySelector('[data-field=clientId] input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    input.value = 'real-client-id';
+    input.dispatchEvent(new Event('input'));
+    await settle(fx);
+    expect(el.querySelector('.chip.demo-mode')).toBeNull(); // typed a real client id -> real mode
+  });
