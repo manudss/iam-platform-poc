@@ -40,6 +40,15 @@ silently downgraded.
    versioned settings table. A row written before this split keeps working and is scrubbed by the next configure.
    The demo's ephemeral OpenBao token is scoped to the paths it needs (workflow-connections, iam/plugins, a
    read on iam/pg) - scripts/demo-secret-store.test.mjs proves each scope and each refusal.
+   Scope: the four NAMED providers (Google, Microsoft, Facebook, GitHub) declare `settingsScope: "plugin"` -
+   one provider project per environment, so the client id and secret are set ONCE on the plugin (Plugins >
+   Settings or the instance's Edit drawer) and the instance config carries nothing (the New-instance form does
+   not re-ask them). The GENERIC OIDC provider stays instance-scoped (several providers, one instance each):
+   its `clientSecret` is split out of the versioned config into the plugin secret store under
+   `<instanceId>.clientSecret` on save, masked as `********` in every console read (a re-sent mask keeps the
+   stored value, an empty string clears it) and merged back only in the server-side runtime paths.
+   `openid-client` is a runtime dependency of the API: the demo image prunes devDependencies, and the OIDC
+   exchange at the provider callback imports it.
 6. **No exploitable demo in real mode**: the simulated screen only exists when no client id is configured, and
    every page and claim says SIMULATED.
 7. The sign-in session rules stay: 5 minutes, throttling, generic refusals, fail closed on plugin fault.
@@ -83,7 +92,11 @@ plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail clos
   simulated chooser page. Tests in authz.rs (53 core tests + bus e2e).
 - flow.service: `externalStart`/`completeExternal`/`externalSession`, pending-external sessions, captured
   `resume` params re-validated on the way back; the finish path (`advance`) extracted from `check`; factor
-  `other` never counts toward `auth_mfa`.
+  `other` never counts toward `auth_mfa`. `consoleConfig` masks the instance-scoped secrets for the console,
+  `saveConfig` splits them into the secret store, `instanceConfig` merges them back for the runtime payloads
+  and the exchange secret comes from the serving plugin's settings (plugin-scoped) or the instance's secret
+  store entry (generic OIDC). Chain analyses read each method's verification THROUGH the registry so a
+  plugin-scoped configured provider is not misread as simulated from its empty instance config.
 - enroll-store: external links per tenant/subject/instance (sub, email, linkedAt), same storage class as the
   other enrollment records (never Dolt).
 - plugins: five provider plugins + their refusing bases (a disabled provider fails CLOSED on the slot), pure
@@ -96,7 +109,9 @@ plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail clos
   becomes a plain confirmation page - never an open redirect). The plugin judges with `intent: 'link'` (its own
   policy applies; an existing link is not required to create one). Unlink is the enrollment DELETE.
 - console/profile: a "linked sign-in providers" component per plugin (`screens/profile.mjs`, self: link/unlink,
-  admin: status/revoke - an administrator never links for someone else).
+  admin: status/revoke - an administrator never links for someone else). The New-instance form of a
+  plugin-scoped provider asks only the core fields (name, level) and says where the provider project is set;
+  every `secret` setting renders as a password input in the console forms.
 - in-console setup guide: each provider manifest declares a `setupGuide` (intro, ordered steps, provider
   console + official doc links). The Plugins drawer shows it above the settings form with the exact callback
   URL to register (`IAM_EXTERNAL_CALLBACK_URL` when set, else the console's own origin + the fixed callback
