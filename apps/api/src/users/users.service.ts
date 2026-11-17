@@ -1,4 +1,4 @@
-import { currentBranch, workspaceMode } from '../workspace/context.js';
+import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import type { PasswordValidatePayload, PasswordValidateResult } from '../plugins/v1/hooks.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -20,6 +20,14 @@ export class UsersService {
     if (!this.modules) throw new Error('directory.default slot requires the plugin registry (UsersService was built without ModuleRef)');
     if (!workspaceMode()) return this.modules.get(PluginRegistry, { strict: false });
     return this.modules.get(BranchRegistries, { strict: false }).get(currentBranch(write));
+  }
+  /** Registry owning the sign-in policy for a policy CHECK: the caller's working branch when an administrator
+   * edits on one, main on context-free live paths (public sign-up, live self-service change). A read never
+   * demands a working branch. */
+  private async slotRegistry(): Promise<PluginRegistry> {
+    if (!this.modules) throw new Error('directory.default slot requires the plugin registry (UsersService was built without ModuleRef)');
+    if (!workspaceMode()) return this.modules.get(PluginRegistry, { strict: false });
+    return this.modules.get(BranchRegistries, { strict: false }).get(branchContext.getStore()?.branch ?? 'main');
   }
   private ready?: Promise<void>;
   async onModuleInit() { if (workspaceMode()) await this.init(); }
@@ -54,7 +62,7 @@ export class UsersService {
    * plugin fails closed (the error propagates and the change is refused). */
   async checkPasswordPolicy(tenant: string, id: string, candidate: string, user?: { display_name?: unknown; email?: unknown }): Promise<{ ok: boolean; errors: string[] }> {
     if (typeof candidate !== 'string' || candidate.length > 128) return { ok: false, errors: ['password: at most 128 characters'] };
-    const reg = await this.registry(true);
+    const reg = await this.slotRegistry();
     let declares = false;
     try { const p = reg.resolve(tenant, 'auth.password'); declares = !!p.manifest.hooks?.some((h) => h.name === 'auth.password.validate') && reg.isActive(tenant, p.manifest.id); } catch { declares = false; }
     if (!declares) return candidate.length >= 12 ? { ok: true, errors: [] } : { ok: false, errors: ['password: 12 to 128 characters'] };
