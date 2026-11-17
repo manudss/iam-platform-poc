@@ -51,9 +51,11 @@ export class BranchRegistries {
       // Decision 6: the bus is MANDATORY - no host, no registry (specs use testing/test-bus.ts).
       if(!host)throw new Error('event bus required (step 3, decision 6): set IAM_BUS_NATS_URL, IAM_BUS_NATS_PASSWORD and IAM_CORE_ADMIN_TOKEN, with a reachable nats-server and core');
       for(const [b,reg]of this.resolved)reg.setBus(host.bridge(),b);if(this.events)host.attachEvents(this.events);if(this.busRef)this.busRef.host=host;
+      // A rebuilt main (Apply, publication) carries its enabled plugins onto the bus NOW, not at the next 60 s tick.
+      host.watchRegistry(ref,r);
     } else {
       const host=await this.host;
-      if(host)r.setBus(host.bridge(),ref);
+      if(host){r.setBus(host.bridge(),ref);host.watchRegistry(ref,r);} // same immediacy for a branch built after the host started
     }
     return r;
   }
