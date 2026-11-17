@@ -53,7 +53,7 @@ const CORE: Record<string, [string, string]> = { id: ['User ID', 'su-id'], displ
         @if (fieldErrs()['password']) { <span class="field-err" id="su-pw-err">{{fieldErrs()['password']}}</span> }</label>
       @if (!test()) { @for (sec of sections(); track sec.name) {
         @if (sec.name) { <h3 class="profile-section">{{sec.name}}</h3> }
-        @for (f of sec.fields; track f.key) { <label><span>{{f.label}}@if (f.required) { <b class="req" title="required">*</b> } @else { <span class="opt">(optional)</span> }</span>
+        @for (f of sec.fields; track f.key) { <label><span>{{f.label}}@if (f.required) { <b class="req" title="required">*</b> } @else { <span class="opt">&nbsp;(optional)</span> }</span>
           @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
           @else { <input [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event" /> }</label> }
       } }
