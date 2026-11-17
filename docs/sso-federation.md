@@ -84,6 +84,12 @@ metadata as data and decide ok/deny from the resolved profile). OIDC exchanges g
 is ALWAYS verified - v6 only checks claims otherwise); OAuth2-only providers go code -> token -> userinfo with
 the plugin's profileMap, an optional e-mails read (GitHub) and an optional token-inspection read judged by the
 plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail closed on anything unexpected.
+A DEFINITIVE provider refusal (4xx at the token or userinfo read, or GitHub's 200-with-error-payload shape: unknown
+client, rejected credentials, bad/expired code) is not a technical failure: the callback denies with an actionable
+message (check the client ID, client secret and callback URL) and the audit trail records only the step and the HTTP
+status - never the provider's payload. It fires before any account is resolved, so it reveals nothing about
+accounts and stays safe at any chain position. A provider 5xx, a timeout or a malformed answer stays a technical
+failure: 503, fail closed.
 
 ## Pieces (as built)
 
