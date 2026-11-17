@@ -17,6 +17,12 @@ it('demo OpenBao: immutable scoped credentials, no admin/outside access, no root
     // Activation probes optional PostgreSQL credentials on bootstrap. The demo
     // has none: scoped read must return absent, not 403 that aborts startup.
     assert.equal((await call('secret/data/iam/pg')).status, 404);
+    // Plugin settings secrets (social sign-in client secrets) live under iam/plugins: the scoped token must
+    // read and write them (a 403 here broke the Plugins > Settings form of every provider with a 500).
+    const ppath = 'secret/data/iam/plugins/acme-demo/auth-sso-google';
+    assert.equal((await call(ppath, 'POST', { data: { clientSecret: 'FICTIONAL-TEST-ONLY' } })).status, 200);
+    assert.equal((await (await call(ppath)).json()).data.data.clientSecret, 'FICTIONAL-TEST-ONLY');
+    assert.equal((await call('secret/data/iam/plugins/acme-demo/auth-sso-google/extra', 'DELETE')).status, 403);
     assert.equal((await call('secret/data/iam/pg', 'POST', value)).status, 403);
     assert.equal((await call('sys/mounts')).status, 403);
     assert.equal((await call('auth/token/create', 'POST', { policies: ['root'] })).status, 403);
