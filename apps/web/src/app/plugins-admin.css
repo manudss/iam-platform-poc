@@ -116,7 +116,7 @@ button.ghost:hover:not(:disabled) { background: var(--accent-soft); border-color
 .confirm-label { display: block; }
 
 /* Provider setup guide (manifest setupGuide), above the settings form */
-.setup-guide{border:1px solid var(--ok-line,#9ac491);background:var(--panel);border-radius:10px;padding:12px 14px;margin-bottom:16px}
+.setup-guide{border:1px solid var(--ok-line);background:var(--panel);border-radius:10px;padding:12px 14px;margin-bottom:16px}
 .setup-guide .sg-intro{margin:0 0 8px;font-size:12px;color:var(--muted)}
 .setup-guide ol{margin:0 0 4px 18px;padding:0;font-size:13px;line-height:1.55}
 .setup-guide a{color:var(--link)}
