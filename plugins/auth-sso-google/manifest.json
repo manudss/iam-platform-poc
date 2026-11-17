@@ -79,5 +79,18 @@
       },
       "order": 30
     }
-  ]
+  ],
+  "setupGuide": {
+    "intro": "Everything happens on this screen. Leave the Client ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Open the {console} > APIs & services > Credentials > Create credentials > OAuth client ID (application type: Web application). See the {docs}.",
+      "Under Authorized redirect URIs, paste exactly:",
+      "{callback}",
+      "Copy the generated Client ID and Client secret into the fields below, then Save.",
+      "Each person then links their Google account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://console.cloud.google.com/apis/credentials",
+    "consoleLabel": "Google Cloud console",
+    "docsUrl": "https://developers.google.com/workspace/guides/create-credentials"
+  }
 }

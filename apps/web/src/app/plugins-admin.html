@@ -73,7 +73,7 @@
     <div class="drawer" role="dialog" aria-modal="true" [attr.aria-label]="p.name">
     <div class="dhead">
       <span class="mono">{{ p.name.charAt(0) }}</span>
-      <div class="dhead-t"><b>{{ p.name }}</b>
+      <div class="dhead-t"><b>{{ p.name }}</b>@if (demoMode()) { <span class="chip demo-mode">DEMO MODE (simulated)</span> }
         <div class="meta hint">v{{ p.version }} · {{ p.publisher || '—' }}@if (p.signed) { · signed ✓ }@if (p.extends) { · extends {{ p.extends }} }</div>
       </div>
       <button type="button" class="ghost" id="plugin-close" aria-label="Close" (click)="close()">✕</button>
@@ -125,6 +125,21 @@
       <button type="button" [disabled]="session.branch()==='main'" id="plugin-install-open" (click)="wizardStep.set(1)">Install…</button>
     }
     @if (tab()==='reglages' && model(); as m) {
+      @if (m.guide; as g) {
+        <div class="setup-guide" data-guide>
+          <p class="sg-intro">{{ g.intro }}</p>
+          <ol>
+            @for (step of g.steps; track step) {
+              @if (step === '{callback}') {
+                <li class="sg-callback"><code>{{ g.callbackUrl }}</code><button type="button" class="sg-copy" (click)="copy(g.callbackUrl)">Copy</button></li>
+              } @else {
+                <li>@for (part of guideParts(step, g); track $index) {@if (part.href) { <a [href]="part.href" target="_blank" rel="noopener noreferrer">{{ part.text }}</a> } @else {{{ part.text }} } }</li>
+              }
+            }
+          </ol>
+          @if (hasSecretField()) { <div class="sg-warn">Never paste the secret into a chat or a ticket. It is stored in a dedicated secret store, outside the versioned configuration, and is only ever shown masked.</div> }
+        </div>
+      }
       <form (ngSubmit)="save()" id="plugin-form">
         @for (g of m.groups; track g.name) {
           <fieldset>

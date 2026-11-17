@@ -61,6 +61,12 @@ export function defaultHookTimeoutMs(): number {
   return Number.isFinite(v) && v >= 250 ? v : 2000;
 }
 
+/** The fixed external-provider callback URL for setup guides: the explicit env wins (the demo derives it from
+ * the public origin); otherwise it is computed from the origin the admin console was reached on. */
+export function callbackUrl(publicOrigin?: string): string {
+  return process.env.IAM_EXTERNAL_CALLBACK_URL ?? `${(publicOrigin ?? 'http://localhost:8080').replace(/\/$/, '')}/authorize/external/callback`;
+}
+
 /** Step 2: the bridge to the core's event bus, provided by the plugin host (bus-host.ts) when it is enabled.
  * Every routed call requires this bridge; absence refuses rather than executing locally. */
 export interface BusBridge {
@@ -286,9 +292,11 @@ export class PluginRegistry {
     this.emitAudit({ tenant, action: 'plugin.configure', plugin: id, detail: Object.keys(r.values).filter((k) => !secretKeys.has(k)).join(',') });
   }
 
-  async form(tenant: string, id: string): Promise<FormModel> {
+  async form(tenant: string, id: string, publicOrigin?: string): Promise<FormModel> {
     const p = this.plugin(id);
-    return toFormModel(p.manifest.settings, await this.mergedSettings(tenant, p));
+    const model = toFormModel(p.manifest.settings, await this.mergedSettings(tenant, p));
+    if (p.manifest.setupGuide) model.guide = { ...p.manifest.setupGuide, callbackUrl: callbackUrl(publicOrigin) };
+    return model;
   }
 
   private checkGrants(p: PluginImpl, g: Grants) {

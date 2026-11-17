@@ -253,7 +253,8 @@ export interface PluginInfo {
   profileFields?: string[];
 }
 export interface FormField { key: string; type: string; label: string; help?: string; required?: boolean; options?: { value: string; label: string }[]; value: unknown; group?: string; visibleIf?: { key: string; equals: unknown }; min?: number; max?: number }
-export interface FormModel { groups: { name: string; fields: FormField[] }[] }
+export interface SetupGuide { intro: string; steps: string[]; consoleUrl: string; consoleLabel: string; docsUrl?: string; callbackUrl: string }
+export interface FormModel { groups: { name: string; fields: FormField[] }[]; guide?: SetupGuide }
 export interface GrantsInput { install?: boolean; hooks?: string[]; uiComponents?: boolean }
 
 /** Admin calls carry the admin capability token typed by the operator. It is kept in memory only, like the user token. */

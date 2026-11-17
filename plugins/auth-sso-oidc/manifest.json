@@ -113,5 +113,17 @@
       },
       "order": 30
     }
-  ]
+  ],
+  "setupGuide": {
+    "intro": "Sign in with any OpenID Connect provider. Leave the Client ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Register a web application / client at your provider's console ({console}).",
+      "Configure the allowed redirect / callback URL as exactly:",
+      "{callback}",
+      "Fill the fields below: issuer (or the authorize/token/JWKS endpoints when the provider has no discovery document), the client ID and secret, then Save.",
+      "Each person then links their account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://openid.net/developers/certified-openid-connect-implementations/",
+    "consoleLabel": "your provider's developer console"
+  }
 }

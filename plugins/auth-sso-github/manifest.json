@@ -71,5 +71,18 @@
       },
       "order": 30
     }
-  ]
+  ],
+  "setupGuide": {
+    "intro": "Everything happens on this screen. Leave the Client ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Open the {console} (Settings > Developer settings > OAuth Apps) > New OAuth App. See the {docs}.",
+      "As Authorization callback URL, paste exactly:",
+      "{callback}",
+      "Copy the generated Client ID, generate a client secret, paste both into the fields below, then Save.",
+      "Each person then links their GitHub account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://github.com/settings/developers",
+    "consoleLabel": "GitHub developer settings",
+    "docsUrl": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app"
+  }
 }

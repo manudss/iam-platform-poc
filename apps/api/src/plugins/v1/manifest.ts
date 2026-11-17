@@ -131,6 +131,20 @@ export interface AuthMethodDecl {
   settingsScope?: 'instance' | 'plugin';
 }  
 
+/** In-console setup guide a plugin declares (docs/sso-federation.md): provider-specific steps, console and
+ * documentation links. The server adds the computed callback URL; the console renders the panel above the
+ * settings fields so an admin never has to leave the drawer to configure the plugin. */
+export interface SetupGuide {
+  /** One-line context, e.g. what leaving the client id empty means (demo mode). */
+  intro: string;
+  /** Ordered steps. {console} renders as a link to consoleUrl; {callback} renders as a copy row with the
+   *  environment's computed callback URL; {docs} renders as a link to docsUrl. */
+  steps: string[];
+  consoleUrl: string;
+  consoleLabel: string;
+  docsUrl?: string;
+}
+
 export interface PluginManifest {
   apiVersion: 'plugin/v1' | 'plugin/v3';
   id: string; // lowercase-kebab
@@ -151,6 +165,8 @@ export interface PluginManifest {
   base?: boolean;
   install?: InstallSpec;
   settings: SettingField[];
+  /** Optional in-console setup guide, rendered above the settings form. */
+  setupGuide?: SetupGuide;
   screens?: UiScreen[];
   /** Profile fields this plugin adds (kind `profile`). Values live in a table the plugin owns (`storage` in the
    * declaration, created by its install migrations and dropped by their inverse on uninstall); a declaration
@@ -231,6 +247,14 @@ export function validateManifest(m: PluginManifest, knownHooks: ReadonlyMap<stri
     else if (!modes.includes(h.mode)) errs.push(`hook ${h.name} does not allow mode ${h.mode}`);
     if (seenHooks.has(h.name)) errs.push(`hook ${h.name} declared twice`);
     seenHooks.add(h.name);
+  }
+  if (m.setupGuide) {
+    const g = m.setupGuide;
+    if (!g.intro) errs.push('setupGuide.intro is required');
+    if (!Array.isArray(g.steps) || g.steps.length === 0 || g.steps.some((s) => typeof s !== 'string' || !s)) errs.push('setupGuide.steps must be a non-empty string list');
+    if (!g.consoleUrl || !g.consoleUrl.startsWith('https://')) errs.push('setupGuide.consoleUrl must be an https URL');
+    if (!g.consoleLabel) errs.push('setupGuide.consoleLabel is required');
+    if (g.docsUrl !== undefined && !g.docsUrl.startsWith('https://')) errs.push('setupGuide.docsUrl must be an https URL');
   }
   const seen = new Set<string>();
   if (m.authMethod) {

@@ -79,5 +79,18 @@
       },
       "order": 30
     }
-  ]
+  ],
+  "setupGuide": {
+    "intro": "Everything happens on this screen. Leave the App ID empty to try the simulated demo mode (screen marked DEMO, fictional accounts).",
+    "steps": [
+      "Open the {console} > My Apps > Create app, and add the Facebook Login product. See the {docs}.",
+      "Under Facebook Login > Settings > Valid OAuth Redirect URIs, paste exactly:",
+      "{callback}",
+      "Copy the App ID and App secret (Settings > Basic) into the fields below, then Save. Keep the app in Live mode for real sign-ins.",
+      "Each person then links their Facebook account from their Profile page (Linked sign-in providers). No automatic linking by e-mail."
+    ],
+    "consoleUrl": "https://developers.facebook.com/apps",
+    "consoleLabel": "Meta for Developers",
+    "docsUrl": "https://developers.facebook.com/docs/facebook-login"
+  }
 }
