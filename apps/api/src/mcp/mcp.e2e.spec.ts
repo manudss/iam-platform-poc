@@ -347,7 +347,13 @@ describe('MCP server (real Dolt + real core): branch-confined, human-gated AI ac
     assert.notEqual(r.result?.isError, true, textOf(r));
     const b = JSON.parse(textOf(r)) as { records: unknown[]; enabled: boolean };
     assert.ok(Array.isArray(b.records));
-    assert.ok(!JSON.stringify(b.records).match(/password|secret/i));
+    // The precise scrub contract: every payload KEY that names a credential is masked. Protocol vocabulary in
+    // metadata values (hook names like auth.password.validate, plugin ids like auth-password) is not a secret.
+    for (const x of b.records as { payload?: Record<string, string> }[]) {
+      for (const [k, v] of Object.entries(x.payload ?? {})) {
+        if (/(token|password|passwd|secret|credential|candidate|code|pin|authorization|cookie|key|hash|salt|otp|signature)/i.test(k) && k !== 'effectKey') assert.equal(v, '[masked]', `payload key ${k} must be masked`);
+      }
+    }
   });
 
   it('submit_pull_request opens a human-reviewed PR; the session then refuses more writes', async () => {

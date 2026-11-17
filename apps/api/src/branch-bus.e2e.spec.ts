@@ -43,7 +43,7 @@ describe('working branches on the same bus (decision 7)', () => {
     branch.setBus(bus.host.bridge(), BRANCH);
     // The lockout replacement is enabled on the branch only.
     await branch.install(T, 'auth-password-lockout', { install: true });
-    await branch.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] });
+    await branch.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] });
     // The spy sink is enabled on the branch only.
     await branch.install(T, 'spy-sink', { install: true });
     await branch.enable(T, 'spy-sink', {});

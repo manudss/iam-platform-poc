@@ -120,12 +120,13 @@ Not covered: signature check of third-party plugin packages for async plugins (W
 
 ## 9. Demo versus catalogue
 
-Covered by running code and tests in this POC: `auth-method` (base password + lockout replacement), `notifier` (log base; a replacement is tested with a failing example), `profile` + `workflow` + `ui` (org-manager, mixed kinds, schema screens only), `risk-signal` (risk-geo, used to demonstrate grants only). Everything else in section 2 (connectors, audit sinks, policy plugins beyond the v0 WASM hook, TOTP, passkeys, federation, ...) is a **catalogue of possibilities**, not implemented here.
+Covered by running code and tests in this POC: `auth-method` (base password + lockout and advanced-policy replacements), `notifier` (log base; a replacement is tested with a failing example), `profile` + `workflow` + `ui` (org-manager, mixed kinds, schema screens only), `risk-signal` (risk-geo, used to demonstrate grants only). Everything else in section 2 (connectors, audit sinks, policy plugins beyond the v0 WASM hook, TOTP, passkeys, federation, ...) is a **catalogue of possibilities**, not implemented here.
 
 ## 9b. Worked examples (in the code)
 
 - `auth-password` (base, slot `auth.password`) and `notify-log` (base, slot `notify.default`).
 - `auth-password-lockout`: replacement. Same settings plus `maxFailures`, one table, locks after N failures. Tests: replace, lock, explicit disable, base answers again, no `drop`, re-install does not rerun the migration; failure of the replacement is refused, never retried on the base.
+- `auth-password-policy`: replacement. Adds a configurable creation policy (character classes, forbidden words and user information, common-password blocklist), reuse prevention over the last N passwords (hashes in the server-side credential file only, compared with scrypt + constant-time equality) and a maximum password age. Declares the new sensitive blocking hook `auth.password.validate`; the base and every other `auth.password` replacement declare it too, and enabling needs the matching grant. Tests: `apps/api/src/plugins/v1/auth-password-policy.spec.ts`.
 - `org-manager`: multi-kind (`profile`, `workflow`, `ui`), two tables, seed row, two schema screens, a claim name setting with a regex.
 - `risk-geo`: asks for a sensitive hook and a component screen. Test: enabling is refused until both are granted.
 
@@ -189,7 +190,7 @@ New v3 manifest fields:
 
 **Generators.** `scripts/plugin-create.mjs <id>` scaffolds a new folder plugin, `scripts/plugin-extend.mjs <base-id> <new-id>` scaffolds a replacement (superset of the base, handlers delegating to `ctx.base`), `scripts/plugin-validate.mjs [dir ...]` checks manifests, signatures and extension compatibility (run `npm run build` in `apps/api` first).
 
-**Shipped plugins** (all folder plugins): `auth-password` (base), `auth-password-lockout`, `auth-email-otp`, `auth-digit-code`, `auth-totp`, `notify-log` (base), `notify-resend`, `org-manager`, `organizations`, `hr-attributes`, `risk-geo`, `directory`, `csv-connector`, `scim-connector`, `mcp-gateway`, `workflows-iga`, `app-connector`, `policy-studio`, `oidc-provider`, `saml-idp`.
+**Shipped plugins** (all folder plugins): `auth-password` (base), `auth-password-lockout`, `auth-password-policy`, `auth-email-otp`, `auth-digit-code`, `auth-totp`, `notify-log` (base), `notify-resend`, `org-manager`, `organizations`, `hr-attributes`, `risk-geo`, `directory`, `csv-connector`, `scim-connector`, `mcp-gateway`, `workflows-iga`, `app-connector`, `policy-studio`, `oidc-provider`, `saml-idp`.
 
 **Directory plugins (step 7).** Decision 2: identity storage stays core (Dolt tables, credential file); the management rules live in replaceable plugins. `directory` (kind `directory`, the base plugin) owns the profile-field catalogue and value rules (`fields.mjs`), the activation-effects engine (`effects.mjs` + `loopback.mjs`), role and separation-of-duties management (`roles.mjs`), public sign-up (`signup.mjs`) and identity validation (`users.mjs`). `organizations` owns organization management (CRUD, parent-cycle guard, administrator assignments, profile section). The core keeps the stores and wires the engines through `createX(deps)` factories; controllers and routes are unchanged.
 

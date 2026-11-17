@@ -3,7 +3,7 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-const DENY: &[&str] = &["token", "password", "passwd", "secret", "credential", "code", "pin", "authorization", "cookie", "key", "hash", "salt", "otp", "signature"];
+const DENY: &[&str] = &["token", "password", "passwd", "secret", "credential", "candidate", "code", "pin", "authorization", "cookie", "key", "hash", "salt", "otp", "signature"];
 /// Keys shown as they are: identifiers and counters, never credentials (checked before DENY: `effectKey` contains "key").
 const KEEP: &[&str] = &["subject", "effectKey", "actor", "from", "to", "organization", "decision", "field", "keys", "role", "department", "plugin", "hook", "type", "tenant", "seq", "commit", "outcome"];
 

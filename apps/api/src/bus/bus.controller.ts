@@ -3,7 +3,7 @@ import { AuthGuard } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 
 const EMAIL = /([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9])[A-Za-z0-9.-]*(\.[A-Za-z]{2,})/g;
-const DENY = /(token|password|secret|credential|authorization|cookie|api.?key|hash|salt|otp|signature)/i;
+const DENY = /(token|password|secret|credential|candidate|authorization|cookie|api.?key|hash|salt|otp|signature)/i;
 /** Second line of defence: the core already masks, the API scrubs again and forwards only the known fields. */
 export function scrub(r: any) {
   const payload: Record<string, string> = {};

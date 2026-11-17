@@ -12,4 +12,11 @@ export default {
     DEMO_USERS[p.subject] !== undefined && DEMO_USERS[p.subject] === p.credential.password
       ? { outcome: 'allow', subject: p.subject, methods: ['pwd'] }
       : { outcome: 'deny', reason: 'bad-credentials' },
+  // Password policy of the base method: the historical rule - the minLength setting (default 12) and the hard
+  // 128-character cap the core stores enforce. A replacement (auth-password-policy) takes over with richer rules.
+  'auth.password.validate': (p, c) => {
+    const pwd = typeof p.candidate === 'string' ? p.candidate : '';
+    const min = Number(c.settings.minLength ?? 12);
+    return pwd.length >= min && pwd.length <= 128 ? { ok: true } : { ok: false, errors: [`password: ${min} to 128 characters`] };
+  },
 };

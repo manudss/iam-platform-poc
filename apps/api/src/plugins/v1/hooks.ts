@@ -13,6 +13,7 @@ export const HOOKS = new Map<string, HookMode[]>([
   ['auth.interact', ['blocking']], // interactive step (keypad): one call per button press
   ['auth.verification', ['blocking']], // what the method instance proves: { real, note }
   ['auth.enroll', ['blocking']], // self-service enrollment ceremony of a method (passkey creation options + attestation check), orchestrated by the self-service controller
+  ['auth.password.validate', ['blocking']], // password policy of the auth.password slot: check a candidate at creation/change -> { ok, errors? }. Pure: the candidate, user info and salted hash history travel in the payload.
   ['profile.enrich', ['blocking', 'async']], // add attributes or claims; the blocking mode is a merged bus query (step 3)
   ['identity.changed', ['async']], // joiner / mover / leaver, role change
   ['access.decide', ['blocking']], // extra policy input, runs in the core (WASM) - documented bus exception (decision 8)
@@ -44,6 +45,11 @@ export type AuthenticateResult =
   | { outcome: 'deny'; reason: string }
   | { outcome: 'challenge'; challenge: string };
 
+/** auth.password.validate payload: a password candidate checked against the slot's policy before it is stored.
+ * `history` = salted scrypt hashes of previous passwords (newest first, entry 0 = current), assembled core-side
+ * from the credential store (hashes never enter Dolt/SQL); `userInfo` feeds the no-login/name/e-mail rule. */
+export interface PasswordValidatePayload { tenant: string; subject: string; candidate: string; userInfo?: { login?: string; displayName?: string; email?: string }; history?: { salt: string; hash: string; at: number }[]; now?: number }
+export interface PasswordValidateResult { ok: boolean; errors?: string[] }
 export interface EnrichPayload { tenant: string; subject: string; profile: Record<string, unknown>; }
 export interface NotifyPayload { tenant: string; to: string; template: string; data: Record<string, unknown>; effectKey: string;
   /** Rendered content, attached by the core after a notify.render call on the notify.templates slot (mail-templates).

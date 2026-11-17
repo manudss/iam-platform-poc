@@ -52,7 +52,7 @@ describe('plugin registry on real PostgreSQL', { skip: !have && 'PG_BIN not set 
     let r = await make();
     await r.install('t1', 'auth-password-lockout', { install: true });
     await r.configure('t1', 'auth-password-lockout', { maxFailures: 2 });
-    await r.enable('t1', 'auth-password-lockout', { hooks: ['auth.authenticate'] });
+    await r.enable('t1', 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] });
     assert.equal((await pool.query("select to_regclass('plg_auth_password_lockout_attempts') t")).rows[0].t, 'plg_auth_password_lockout_attempts');
     r = await make(); // restart
     assert.equal((await r.callSlot<any>('t1', 'auth.password', 'auth.authenticate', good)).servedBy, 'auth-password-lockout');

@@ -1,0 +1,151 @@
+{
+  "apiVersion": "plugin/v3",
+  "id": "auth-password-policy",
+  "version": "1.0.0",
+  "name": "Password sign-in with advanced policy",
+  "description": "Replacement of the base password method with a configurable password policy: length and character classes, denied content (login, name, e-mail, forbidden and common words), reuse history and expiry. Verified at creation and change by the core; hashes and history never leave the core credential store.",
+  "publisher": "iam-platform",
+  "kinds": [
+    "auth-method"
+  ],
+  "extends": "auth-password",
+  "provides": [
+    "auth.password"
+  ],
+  "hooks": [
+    {
+      "name": "auth.authenticate",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.prepare",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verify",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.verification",
+      "mode": "blocking"
+    },
+    {
+      "name": "auth.password.validate",
+      "mode": "blocking"
+    }
+  ],
+  "settings": [
+    {
+      "key": "minLength",
+      "type": "number",
+      "label": "Minimum password length",
+      "default": 12,
+      "min": 8,
+      "max": 128,
+      "group": "Policy"
+    },
+    {
+      "key": "allowedDomains",
+      "type": "list",
+      "label": "Allowed e-mail domains (empty = all)",
+      "default": [],
+      "group": "Policy"
+    },
+    {
+      "key": "maxLength",
+      "type": "number",
+      "label": "Maximum password length",
+      "help": "The core credential store caps passwords at 128 characters.",
+      "default": 128,
+      "min": 12,
+      "max": 128,
+      "group": "Policy"
+    },
+    {
+      "key": "minClasses",
+      "type": "number",
+      "label": "Character classes required (0 = off)",
+      "help": "How many of the four classes (uppercase, lowercase, digit, symbol) a password must use. Length usually matters more than complexity; leave at 0 to not require classes.",
+      "default": 0,
+      "min": 0,
+      "max": 4,
+      "group": "Policy"
+    },
+    {
+      "key": "requireUpper",
+      "type": "boolean",
+      "label": "Require an uppercase letter",
+      "default": false,
+      "group": "Policy"
+    },
+    {
+      "key": "requireLower",
+      "type": "boolean",
+      "label": "Require a lowercase letter",
+      "default": false,
+      "group": "Policy"
+    },
+    {
+      "key": "requireDigit",
+      "type": "boolean",
+      "label": "Require a digit",
+      "default": false,
+      "group": "Policy"
+    },
+    {
+      "key": "requireSymbol",
+      "type": "boolean",
+      "label": "Require a symbol",
+      "default": false,
+      "group": "Policy"
+    },
+    {
+      "key": "forbidUserInfo",
+      "type": "boolean",
+      "label": "Forbid the login, name or e-mail in the password",
+      "default": true,
+      "group": "Denied content"
+    },
+    {
+      "key": "forbiddenWords",
+      "type": "list",
+      "label": "Forbidden words (a password containing one is refused)",
+      "default": [],
+      "group": "Denied content"
+    },
+    {
+      "key": "blockCommon",
+      "type": "boolean",
+      "label": "Refuse the most common passwords (small built-in list)",
+      "help": "A short built-in list of very common passwords, not a breach corpus. For a real product, plug a breached-password corpus here.",
+      "default": false,
+      "group": "Denied content"
+    },
+    {
+      "key": "historyCount",
+      "type": "number",
+      "label": "Previous passwords that cannot be reused (0 = only the current one)",
+      "help": "The core keeps the salted hashes of previous passwords outside the database and hands them to this check. 24 stored at most.",
+      "default": 0,
+      "min": 0,
+      "max": 24,
+      "group": "History and age"
+    },
+    {
+      "key": "maxAgeDays",
+      "type": "number",
+      "label": "Password expiry in days (0 = never)",
+      "help": "Applies from the next password change (the core knows the change date only for passwords set while history is active). An expired password is refused at sign-in: the person asks an administrator for a reset.",
+      "default": 0,
+      "min": 0,
+      "max": 3650,
+      "group": "History and age"
+    }
+  ],
+  "entrypoints": {
+    "handlers": "handlers.mjs"
+  },
+  "security": {
+    "signed": true
+  }
+}

@@ -49,12 +49,25 @@ The demo edge refuses framing everywhere (`X-Frame-Options: DENY`, `frame-ancest
 
 | Type | Factor | State |
 | --- | --- | --- |
-| Password | knowledge | real, through the base password slot (lockout still applies) |
+| Password | knowledge | real, through the base password slot (lockout and the advanced policy replacement still apply) |
 | Authenticator app (TOTP, RFC 6238) | possession | real verification (tested on RFC vectors, a used time step is refused again); self-enrollment from the person's profile shows the secret once, as a QR code drawn in the browser and as a text key |
 | One-time code by e-mail | possession | **simulated** (demo outbox) by default. **Real** only when the method's delivery is `SMTP` and the notifier chosen on the `notify.default` slot really delivers (the shipped `notify-resend` needs `RESEND_API_KEY` on the server); then it counts as a verified possession factor |
 | PIN on a shuffled keypad | knowledge | real verification of a whole PIN (scrypt hash) |
 | Passkey (WebAuthn / FIDO2) | possession | real, standards-based ceremonies through SimpleWebAuthn (challenge one-use and time-limited, signature and anti-clone counter checked server-side); self-enrollment from the person's own session |
 | Recovery codes, external IdP | | catalogue entries only, cannot be created |
+
+### Advanced password policy (`auth-password-policy`)
+
+An optional replacement for the base password method. It keeps the base settings (length bounds, allowed domains) and adds a configurable policy checked on every password creation or change: character classes (minimum number of required classes, or per-class switches for upper/lower/digit/symbol), forbidden words, forbidden user information in the password (id, e-mail parts, display name), a blocklist of the most common passwords, reuse prevention (the last N passwords, 0 to 24, are refused; hashes live only in the server-side credential file, never in Dolt) and a maximum password age (an expired password is refused at sign-in with the reason `password-expired` - there is no self-service recovery in this POC, an administrator resets it).
+
+The reuse history and its limits, honestly:
+
+- The check re-hashes the candidate with every stored salt (scrypt + constant-time compare). The cap of 24 previous passwords keeps that bounded (25 scrypt computations per check, tens of milliseconds each) and the file small; the range 0-24 is the manifest's configuration surface, chosen as a sane ceiling, not a standard.
+- The history is a local JSON file (mode 0600, atomic tmp+rename), keyed by `tenant:id`, sitting by default next to the credential file: it inherits exactly the credential store's guarantees - it survives restarts, and it survives redeploys only where the credential directory is persistent (the default `/tmp` location is ephemeral; pin `IAM_CREDENTIAL_FILE` or `IAM_PASSWORD_HISTORY_FILE`). It never enters Dolt, SQL, exports or logs. One API process writes it; there is no cross-process lock, same as the credential store.
+- History is written before the credential: a change that cannot be tracked is refused (fail closed); a crash between the two writes can only make the reuse rule stricter, never weaker.
+- Passwords set before the history existed have no recorded change date: a maximum-age rule never locks them out - it applies from their next change. Enabling `maxAgeDays` on an existing directory is therefore a soft migration: everyone keeps signing in, and the rule starts biting as passwords are changed or reset. Every rule is a setting with a documented default; nothing is hardcoded. The policy answers the blocking hook `auth.password.validate` on the `auth.password` slot, so any plugin that replaces the base password method must declare it (the shipped lockout does); the hook is sensitive and needs an explicit grant at enable time. When no policy plugin is installed, the historical length rule (12 to 128 characters) applies.
+
+Where the policy is read from: an administrator editing on a working branch checks the policy **of that branch**; a context-free live path (public account request, live self-service password change) reads the **live** policy on `main`, the same configuration sign-in enforces - a policy check never demands a working branch.
 
 ### PIN on a shuffled keypad
 

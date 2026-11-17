@@ -18,6 +18,9 @@ export const BUS_CONTROL_KINDS = new Set(['auth.authenticate', 'auth.challenge',
   // The self-service enrollment ceremony of a method (passkey options + attestation check): same slot-targeted
   // blocking call, orchestrated by the self-service controller.
   'auth.enroll',
+  // The password-creation policy check (auth.password.validate): slot-targeted blocking call on the
+  // auth.password slot, invoked by the users service before hashing a new/changed password.
+  'auth.password.validate',
 
   'directory.user.validate', 'directory.fields.validateDecls', 'directory.fields.catalogue', 'directory.fields.parseConfig',
   'directory.fields.validateConfig', 'directory.fields.effectiveSchema', 'directory.fields.checkValue', 'directory.effects.compute']);

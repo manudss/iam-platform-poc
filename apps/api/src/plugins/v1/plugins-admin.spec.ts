@@ -120,7 +120,7 @@ describe('plugin admin API', () => {
     await s().post('/tenants/t4/plugins/auth-password-lockout/install').set(adm).send({ grants: { install: true } }).expect(201);
     await s().put('/tenants/t4/plugins/auth-password-lockout/settings').set(adm).send({ values: {} }).expect(200);
     await s().post('/tenants/t4/plugins/auth-password-lockout/enable').set(adm).send({}).expect(403);
-    await s().post('/tenants/t4/plugins/auth-password-lockout/enable').set(adm).send({ grants: { hooks: ['auth.authenticate'] } }).expect(201);
+    await s().post('/tenants/t4/plugins/auth-password-lockout/enable').set(adm).send({ grants: { hooks: ['auth.authenticate', 'auth.password.validate'] } }).expect(201);
     await s().post('/tenants/t4/plugins/auth-password-lockout/disable').set(adm).expect(201);
     await s().post('/tenants/t4/plugins/auth-password/disable').set(adm).expect(409);
     await s().get('/tenants/t4/plugins/nope/form').expect(404);

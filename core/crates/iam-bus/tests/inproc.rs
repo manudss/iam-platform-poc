@@ -110,8 +110,8 @@ async fn observer_sees_every_exchange_without_payload_and_changes_nothing() {
 fn masking_rules() {
     use iam_bus::mask::*;
     assert_eq!(mask_email("alice@example.com"), "a***@e***.com");
-    let m = mask_payload(&json!({"password": "p", "authToken": "t", "effectKey": "e-1", "subject": "bob", "mail": "bob@corp.io", "o": {"x": 1}, "n": 5, "list": ["a@b.fr", "c"], "gone": null}));
-    assert_eq!(m["password"], "[masked]"); assert_eq!(m["authToken"], "[masked]");
+    let m = mask_payload(&json!({"password": "p", "candidate": "p", "authToken": "t", "effectKey": "e-1", "subject": "bob", "mail": "bob@corp.io", "o": {"x": 1}, "n": 5, "list": ["a@b.fr", "c"], "gone": null}));
+    assert_eq!(m["password"], "[masked]"); assert_eq!(m["candidate"], "[masked]"); assert_eq!(m["authToken"], "[masked]");
     assert_eq!(m["effectKey"], "e-1"); assert_eq!(m["subject"], "bob");
     assert_eq!(m["mail"], "b***@c***.io"); assert_eq!(m["o"], "[object]"); assert_eq!(m["n"], "5");
     assert_eq!(m["list"], "a***@b***.fr,c"); assert!(!m.contains_key("gone"));

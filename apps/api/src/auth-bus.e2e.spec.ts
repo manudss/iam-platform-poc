@@ -50,7 +50,7 @@ describe('authentication over the bus (mandatory controls)', () => {
   it('the enabled replacement answers, the base says not-concerned (single responder)', async (t) => {
     if (!bus) return t.skip('no nats-server or core binary');
     await reg.install(T, 'auth-password-lockout', { install: true });
-    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate'] }); // sensitive hook: explicit grant
+    await reg.enable(T, 'auth-password-lockout', { hooks: ['auth.authenticate', 'auth.password.validate'] }); // sensitive hook: explicit grant
     await reg.configure(T, 'auth-password-lockout', { maxFailures: 2 });
     await bus.host.sync();
     const r = await reg.callSlot<any>(T, 'auth.password', 'auth.authenticate', good);
