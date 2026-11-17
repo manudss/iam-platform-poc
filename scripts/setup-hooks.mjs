@@ -14,7 +14,11 @@ try {
   try {
     current = execFileSync('git', ['config', '--get', 'core.hooksPath'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch { /* unset: git config --get exits 1 */ }
-  if (current !== '.githooks') {
+  if (current === '.githooks') {
+    // Already active: nothing to do.
+  } else if (current) {
+    console.log(`setup-hooks: existing core.hooksPath '${current}' left untouched; to use the repository hooks, point it at .githooks or merge them into your own hook.`);
+  } else {
     execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: root, stdio: 'ignore' });
     console.log('setup-hooks: git hooks activated (core.hooksPath = .githooks)');
   }
