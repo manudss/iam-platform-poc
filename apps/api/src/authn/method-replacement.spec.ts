@@ -8,7 +8,7 @@ import { AuthnService } from './flow.service.js';
 import { PluginRegistry, PluginImpl } from '../plugins/v1/registry.js';
 import { MemoryMigrationStore, MemorySettingsStore, MemoryStateStore } from '../plugins/v1/memory-stores.js';
 import { defaultPluginsDir } from '../plugins/v1/loader.js';
-import { CORE_SETTINGS_ID } from './config.js';
+import { CORE_SETTINGS_ID, parseStored } from './config.js';
 
 /**
  * A replacement of a WORKING sign-in method serves it transparently (tout-plugin decision: the base is the
@@ -91,5 +91,46 @@ describe('a replacement of a working sign-in method serves it transparently', ()
     await reg.markFaulted(T, 'auth-password-lockout', 'test fault');
     const avail = await svc.availability(T, cfg());
     assert.deepEqual(avail.methods.pw, { available: true, plugin: 'auth-password-lockout' }, 'still the chosen provider: sign-in fails closed instead of degrading to the laxer base');
+  });
+});
+
+describe('the Authentication form of a plugin-scoped method follows the SERVING plugin', () => {
+  it('schema and values come from the serving plugin, save writes its store, and disabling falls back to the base', async () => {
+    const { reg, svc } = await setup();
+    reg.register(await loadReal('auth-password-policy'));
+
+    // Baseline: the base serves - its own schema (minLength, allowedDomains), no policy keys, TOTP stays instance-scoped.
+    let serving = await svc.servingSettings(T, cfg());
+    assert.equal(serving.pw.plugin, 'auth-password');
+    assert.ok(serving.pw.settings.some((f) => f.key === 'minLength'));
+    assert.ok(!serving.pw.settings.some((f) => f.key === 'minClasses'), 'no advanced policy keys while the base serves');
+    assert.equal(serving.tp, undefined, 'an instance-scoped method keeps its per-instance form');
+
+    // Enable the advanced policy: the same method instance now shows the replacement's full schema.
+    await reg.install(T, 'auth-password-policy', { install: true });
+    await reg.enable(T, 'auth-password-policy', { hooks: ['auth.authenticate', 'auth.password.validate'] });
+    serving = await svc.servingSettings(T, cfg());
+    assert.equal(serving.pw.plugin, 'auth-password-policy', 'the form follows the serving plugin');
+    for (const k of ['minLength', 'allowedDomains', 'minClasses', 'maxLength']) assert.ok(serving.pw.settings.some((f) => f.key === k), `schema carries ${k}`);
+
+    // Saving writes the SERVING plugin's settings store - the store the sign-in actually reads (c.settings).
+    await svc.saveServingSettings(T, 'pw', { minLength: 20, minClasses: 2 });
+    const stored = await reg.settingsFor(T, 'auth-password-policy');
+    assert.equal(stored?.minLength, 20);
+    assert.equal(stored?.minClasses, 2);
+    serving = await svc.servingSettings(T, cfg());
+    assert.equal(serving.pw.values.minLength, 20, 'the drawer re-reads what was saved');
+    assert.deepEqual(parseStored(await reg.coreSettings(T, CORE_SETTINGS_ID))!.methods.find((m) => m.id === 'pw')!.config, {}, 'the instance config is not polluted with plugin-scoped keys');
+
+    // An unknown key is refused by the manifest validation, not silently stored.
+    await assert.rejects(() => svc.saveServingSettings(T, 'pw', { notARealKey: 1 }));
+
+    // Disabling the replacement: the form falls back to the base schema/values, chains untouched.
+    await reg.disable(T, 'auth-password-policy');
+    serving = await svc.servingSettings(T, cfg());
+    assert.equal(serving.pw.plugin, 'auth-password');
+    assert.ok(!serving.pw.settings.some((f) => f.key === 'minClasses'));
+    const avail = await svc.availability(T, cfg());
+    assert.equal(avail.chains['password-only'].available, true, 'no chain lost in the fallback');
   });
 });
