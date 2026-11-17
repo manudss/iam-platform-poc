@@ -23,7 +23,7 @@ export const routes: Routes = [
   { path: 'callback', component: CallbackPage },
   { path: 'sso-interaction/:uid', component: SsoInteractionPage, canActivate: [authGuard], title: 'Sign in to an application' },
   { path: 'sso-saml/:rid', component: SsoSamlPage, canActivate: [authGuard], title: 'Sign in to an application' },
-  { path: 'signup', component: SignupPage, title: 'Request an account' },
+  { path: 'signup', component: SignupPage, title: 'Create an account' },
   { path: 'privacy', component: PrivacyPage, title: 'Politique de confidentialité' },
   { path: 'about', component: AboutPage, title: 'About this demo' },
   { path: 'login', component: LoginPage, title: 'Sign in' },
