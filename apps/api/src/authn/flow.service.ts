@@ -132,7 +132,7 @@ export class AuthnService implements OnApplicationBootstrap {
     const rawMethods = (input && typeof input === 'object' && Array.isArray((input as { methods?: unknown }).methods) ? (input as { methods: Record<string, any>[] }).methods : []);
     for (const m of cfg.methods) {
       const t = methodType(m.type), pluginId = methodPluginId(m.type);
-      if (!t || !pluginId) continue;
+      if (!t || !pluginId || t.settingsScope === 'plugin') continue; // plugin-scoped: settings were stripped, never stored per instance
       const raw = rawMethods.find((x) => x && x.id === m.id && x.config && typeof x.config === 'object')?.config as Record<string, unknown> | undefined;
       for (const f of t.settings.filter((x) => x.type === 'secret')) {
         delete m.config[f.key];
@@ -150,14 +150,15 @@ export class AuthnService implements OnApplicationBootstrap {
   async consoleConfig(tenant: string): Promise<AuthnConfig> {
     const cfg = await this.workingConfig(tenant);
     const reg = await this.registry('work');
-    for (const m of cfg.methods) {
+    // Parallel: the console GET cannot afford a serial round-trip per instance (cold secret store + edge timeout).
+    await Promise.all(cfg.methods.map(async (m) => {
       const t = methodType(m.type), pluginId = methodPluginId(m.type);
-      if (!t || !pluginId) continue;
-      for (const f of t.settings.filter((x) => x.type === 'secret')) {
-        if (m.config[f.key] !== undefined) continue;
+      if (!t || !pluginId || t.settingsScope === 'plugin') return;
+      await Promise.all(t.settings.filter((x) => x.type === 'secret').map(async (f) => {
+        if (m.config[f.key] !== undefined) return;
         if (await reg.readSecret(tenant, pluginId, `${m.id}.${f.key}`)) m.config[f.key] = SECRET_MASK;
-      }
-    }
+      }));
+    }));
     return cfg;
   }
 
@@ -166,7 +167,7 @@ export class AuthnService implements OnApplicationBootstrap {
   private async instanceConfig(reg: PluginRegistry, tenant: string, m: { id: string; type: string; config: Record<string, any> }): Promise<Record<string, any>> {
     const t = methodType(m.type), pluginId = methodPluginId(m.type);
     const out = { ...m.config };
-    if (!t || !pluginId) return out;
+    if (!t || !pluginId || t.settingsScope === 'plugin') return out; // plugin-scoped settings live in the serving plugin's store (c.settings)
     for (const f of t.settings.filter((x) => x.type === 'secret')) {
       if (out[f.key] !== undefined) continue;
       const v = await reg.readSecret(tenant, pluginId, `${m.id}.${f.key}`);
@@ -193,8 +194,8 @@ export class AuthnService implements OnApplicationBootstrap {
    * settings included), so a plugin-scoped method is not misread as simulated from its empty instance config. */
   async analysesReg(tenant: string, cfg: AuthnConfig, ref: 'live' | 'work' = 'work'): Promise<ChainAnalysis[]> {
     const reg = await this.registry(ref);
-    const verdicts = new Map<string, { real: boolean; note: string }>();
-    for (const m of cfg.methods) verdicts.set(m.id, await this.verification(reg, tenant, m));
+    // Parallel: a serial bus round-trip per method instance times the console GET out on a cold deployment.
+    const verdicts = new Map(await Promise.all(cfg.methods.map(async (m) => [m.id, await this.verification(reg, tenant, m)] as const)));
     return cfg.chains.map((c) => analyzeChain(cfg, c, (m) => verdicts.get(m.id)));
   }
 
