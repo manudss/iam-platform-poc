@@ -123,5 +123,9 @@ describe('social provider settings scope', () => {
     await svc.saveConfig(T, { methods: [oidcInstance('fictional-oidc-secret')], chains: [], defaultChain: null });
     [a] = await svc.analysesReg(T, cfg);
     assert.deepEqual(a.simulatedSteps, [], 'the serving plugin settings count: no configured step misread as simulated');
+
+    await reg.markFaulted(T, 'auth-sso-google', 'fictional runtime fault');
+    [a] = await svc.analysesReg(T, cfg);
+    assert.deepEqual(a.simulatedSteps, ['goog'], 'a faulted replacement fails closed, exactly like the bus refusal');
   });
 });

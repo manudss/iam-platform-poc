@@ -207,6 +207,8 @@ export class AuthnService implements OnApplicationBootstrap {
     const verdicts = new Map(await Promise.all(cfg.methods.map(async (m) => {
       const serving = servings.get(m.id);
       if (!serving) return [m.id, { real: false, note: 'Method unavailable (its plugin is disabled).' }] as const;
+      // Same fail-closed rule as the bus delivery: a faulted replacement refuses every call until an admin acts.
+      if (serving.manifest.extends && reg.isFaulted(tenant, serving.manifest.id)) return [m.id, { real: false, note: 'Method unavailable (its plugin failed).' }] as const;
       let impl: PluginImpl | undefined = serving;
       while (impl && !impl.handlers['auth.verification'] && impl.manifest.extends) impl = reg.impl(impl.manifest.extends);
       const h = impl?.handlers['auth.verification'] as ((p: { config: Record<string, unknown> }, c: { tenant: string; settings: Record<string, unknown> }) => { real: boolean; note: string }) | undefined;
