@@ -67,6 +67,8 @@ The reuse history and its limits, honestly:
 - History is written before the credential: a change that cannot be tracked is refused (fail closed); a crash between the two writes can only make the reuse rule stricter, never weaker.
 - Passwords set before the history existed have no recorded change date: a maximum-age rule never locks them out - it applies from their next change. Enabling `maxAgeDays` on an existing directory is therefore a soft migration: everyone keeps signing in, and the rule starts biting as passwords are changed or reset. Every rule is a setting with a documented default; nothing is hardcoded. The policy answers the blocking hook `auth.password.validate` on the `auth.password` slot, so any plugin that replaces the base password method must declare it (the shipped lockout does); the hook is sensitive and needs an explicit grant at enable time. When no policy plugin is installed, the historical length rule (12 to 128 characters) applies.
 
+Where the policy is read from: an administrator editing on a working branch checks the policy **of that branch**; a context-free live path (public account request, live self-service password change) reads the **live** policy on `main`, the same configuration sign-in enforces - a policy check never demands a working branch.
+
 ### PIN on a shuffled keypad
 
 Requirement from the product owner: a numeric PIN typed with on-screen buttons shown in a different order each time, with the small letters of a phone keypad, where each button carries a code the backend decodes, so the PIN digits are not sent in clear.
