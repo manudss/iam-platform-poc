@@ -158,10 +158,19 @@ export class AuthnService implements OnApplicationBootstrap {
     try { return ((await this.users.list(branch ?? 'main')).find((u) => u.id === subject && u.login_enabled && u.hasCredential) as { email?: string | null } | undefined)?.email || undefined; } catch { return undefined; }
   }
   /** The plugin SERVING a method type right now on this registry: the provider chosen for the auth.<type> slot
-   * (the working base, or the enabled replacement) - and only when it really is a method (the refusing base of a
-   * slot without an enabled method is NOT one). A disabled or removed method simply has no provider. */
+   * (the working base, or the enabled replacement) - and only when it really is a method. The replacement of a
+   * WORKING method (password lockout, advanced password policy) declares no `authMethod` of its own: it IS the
+   * same method as its base, so the base's declaration is enough and enabling it must be transparent - no
+   * method retired, no chain dropped, no reconfiguration. The REFUSING base of a slot without an enabled
+   * method (auth-totp-base and friends) declares none and extends nothing: NOT a provider. */
   private provider(reg: PluginRegistry, tenant: string, type: string) {
-    try { const p = reg.resolve(tenant, `auth.${type}`); return p.manifest.authMethod && reg.isActive(tenant, p.manifest.id) ? p : undefined; } catch { return undefined; }
+    try {
+      const p = reg.resolve(tenant, `auth.${type}`);
+      if (!reg.isActive(tenant, p.manifest.id)) return undefined;
+      if (p.manifest.authMethod) return p;
+      const base = p.manifest.extends ? reg.impl(p.manifest.extends) : undefined;
+      return base?.manifest.authMethod ? p : undefined;
+    } catch { return undefined; }
   }
   /** Descriptive verification note THROUGH THE REGISTRY (never in-process at sign-in, review n:2): a disabled or
    * faulted plugin cannot answer, so the note degrades to 'unavailable' instead of lying. */
