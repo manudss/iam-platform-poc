@@ -103,4 +103,25 @@ describe('social provider settings scope', () => {
     await svc.saveConfig(T, { methods: [oidcInstance('')], chains: [], defaultChain: null });
     assert.equal((await svc.consoleConfig(T)).methods[0].config.clientSecret, undefined, 'an empty value clears the secret');
   });
+
+  it('console analyses read the serving plugin settings and the stored instance secret, in-process (no bus fan-out)', async () => {
+    const { reg, svc } = await setup();
+    await reg.install(T, 'auth-sso-google', {});
+    await reg.enable(T, 'auth-sso-google', { hooks: ['auth.external.start', 'auth.external.verify'], uiComponents: true });
+    await reg.install(T, 'auth-sso-oidc', {});
+    await reg.configure(T, 'auth-sso-oidc', { issuer: 'https://idp.example.test', authorizeEndpoint: 'https://idp.example.test/auth', tokenEndpoint: 'https://idp.example.test/token', jwksUri: 'https://idp.example.test/jwks' });
+    await reg.enable(T, 'auth-sso-oidc', { hooks: ['auth.external.start', 'auth.external.verify'], uiComponents: true });
+    const cfg = validateConfig({ methods: [
+      { id: 'goog', type: 'sso-google', name: 'Google', enabled: true, level: 6, config: {} },
+      oidcInstance(undefined),
+    ], chains: [{ id: 'c', name: 'C', enabled: true, steps: ['goog', 'oidc1'], level: 6 }], defaultChain: null });
+
+    let [a] = await svc.analysesReg(T, cfg);
+    assert.deepEqual(a.simulatedSteps, ['goog'], 'only the plugin-scoped method is simulated: its settings are not set; the OIDC instance config (public client, no secret required) is complete');
+
+    await reg.configure(T, 'auth-sso-google', { clientId: 'fictional-client', clientSecret: 'fictional-secret' });
+    await svc.saveConfig(T, { methods: [oidcInstance('fictional-oidc-secret')], chains: [], defaultChain: null });
+    [a] = await svc.analysesReg(T, cfg);
+    assert.deepEqual(a.simulatedSteps, [], 'the serving plugin settings count: no configured step misread as simulated');
+  });
 });
