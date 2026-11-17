@@ -38,6 +38,8 @@ silently downgraded.
    connectors) when IAM_BAO_ADDR + IAM_BAO_TOKEN are set, otherwise a 0600 file next to the credential file
    (IAM_PLUGIN_SECRETS_FILE to override) - the same storage class as the TOTP/PIN enrollment records, never the
    versioned settings table. A row written before this split keeps working and is scrubbed by the next configure.
+   The demo's ephemeral OpenBao token is scoped to the paths it needs (workflow-connections, iam/plugins, a
+   read on iam/pg) - scripts/demo-secret-store.test.mjs proves each scope and each refusal.
 6. **No exploitable demo in real mode**: the simulated screen only exists when no client id is configured, and
    every page and claim says SIMULATED.
 7. The sign-in session rules stay: 5 minutes, throttling, generic refusals, fail closed on plugin fault.
