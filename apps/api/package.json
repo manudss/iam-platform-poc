@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
+    "prepare": "node ../../scripts/setup-hooks.mjs",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "test": "tsc -p tsconfig.json && node --test \"dist/**/*.spec.js\"",

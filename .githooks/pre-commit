@@ -1,0 +1,23 @@
+#!/bin/sh
+# Regenerate docs/event-inventory.md whenever a commit touches a scanned source tree, so the CI guard
+# (`node scripts/event-inventory.mjs --check`) never fails on a forgotten regeneration.
+# Activated automatically by apps/api's prepare script (scripts/setup-hooks.mjs); manual fallback:
+# git config core.hooksPath .githooks
+changed=$(git diff --cached --name-only)
+case "$changed" in
+  *apps/api/src/*.ts*|*plugins/*.mjs*|*core/crates/*.rs*|*scripts/event-inventory.mjs*) ;;
+  *) exit 0 ;;
+esac
+# Generate from the INDEX, not the working tree: a partially staged source file must not bake its
+# unstaged circuits into the committed inventory (the committed doc has to match the committed tree,
+# which is what CI scans).
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+git checkout-index -a --prefix="$tmp/" || exit 1
+node "$tmp/scripts/event-inventory.mjs" >/dev/null || exit 1
+if ! cmp -s "$tmp/docs/event-inventory.md" docs/event-inventory.md 2>/dev/null; then
+  cp "$tmp/docs/event-inventory.md" docs/event-inventory.md
+  git add docs/event-inventory.md
+  echo "event-inventory: docs/event-inventory.md regenerated from the staged changes and staged"
+fi
+exit 0
