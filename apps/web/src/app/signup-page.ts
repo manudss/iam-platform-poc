@@ -28,7 +28,7 @@ const CORE: Record<string, [string, string]> = { id: ['User ID', 'su-id'], displ
   @else if (state()==='closed') { <p id="su-closed" role="status">Sign-up is closed.</p> }
   @else if (state()==='sent' && test()) { <p id="su-test-done" role="status">{{msg()}}</p><p><a class="create" id="su-test-signin" [href]="loginUrl()">Sign in with this test account</a></p> }
   @else if (state()==='sent') { <p id="su-sent" role="status">{{msg()}}</p>
-    <form (ngSubmit)="confirm()"><fieldset class="su-fields" [disabled]="busyConfirm()"><label>Confirmation code<input name="code" [(ngModel)]="code" autocomplete="off" /></label></fieldset>
+    <form (ngSubmit)="confirm()"><fieldset class="su-fields" [disabled]="busyConfirm()"><label><span>Confirmation code</span><input name="code" [(ngModel)]="code" autocomplete="off" /></label></fieldset>
       <button id="su-confirm" [disabled]="busyConfirm()" [attr.aria-busy]="busyConfirm() || null">@if (busyConfirm()) {<span class="spin" aria-hidden="true"></span>Confirming…} @else {Confirm}</button></form>
     @if (confirmed()) { <p role="status">{{confirmed()}}</p> } }
   @else { @if (test(); as t) { <p class="hint" id="su-test-note">Test account on the branch <b>{{t.branch}}</b> only: no e-mail confirmation, no approval, no role, never on main. Its id starts with <code>test-</code>. Fictional data only.</p> }
@@ -43,17 +43,17 @@ const CORE: Record<string, [string, string]> = { id: ['User ID', 'su-id'], displ
     }
     <form id="su-form" (ngSubmit)="send()">
       <fieldset class="su-fields" [disabled]="busy()">
-      <label>User ID <b class="req" title="required">*</b><input id="su-id" name="id" [(ngModel)]="id" required [pattern]="test() ? 'test-[a-z0-9][a-z0-9-]{1,38}' : '[a-z0-9-]{1,32}'" [placeholder]="test() ? 'test-yourname' : ''" [attr.aria-invalid]="fieldErrs()['id'] ? true : null" [attr.aria-describedby]="fieldErrs()['id'] ? 'su-id-err' : null" />
+      <label><span>User ID <b class="req" title="required">*</b></span><input id="su-id" name="id" [(ngModel)]="id" required [pattern]="test() ? 'test-[a-z0-9][a-z0-9-]{1,38}' : '[a-z0-9-]{1,32}'" [placeholder]="test() ? 'test-yourname' : ''" [attr.aria-invalid]="fieldErrs()['id'] ? true : null" [attr.aria-describedby]="fieldErrs()['id'] ? 'su-id-err' : null" />
         @if (fieldErrs()['id']) { <span class="field-err" id="su-id-err">{{fieldErrs()['id']}}</span> }</label>
-      <label>Display name <b class="req" title="required">*</b><input id="su-dn" name="dn" [(ngModel)]="dn" required maxlength="80" [attr.aria-invalid]="fieldErrs()['display_name'] ? true : null" [attr.aria-describedby]="fieldErrs()['display_name'] ? 'su-dn-err' : null" />
+      <label><span>Display name <b class="req" title="required">*</b></span><input id="su-dn" name="dn" [(ngModel)]="dn" required maxlength="80" [attr.aria-invalid]="fieldErrs()['display_name'] ? true : null" [attr.aria-describedby]="fieldErrs()['display_name'] ? 'su-dn-err' : null" />
         @if (fieldErrs()['display_name']) { <span class="field-err" id="su-dn-err">{{fieldErrs()['display_name']}}</span> }</label>
-      @if (!test()) { <label>E-mail <b class="req" title="required">*</b><input id="su-em" name="em" [(ngModel)]="em" required maxlength="254" autocomplete="off" [attr.aria-invalid]="fieldErrs()['email'] ? true : null" [attr.aria-describedby]="fieldErrs()['email'] ? 'su-em-err' : null" />
+      @if (!test()) { <label><span>E-mail <b class="req" title="required">*</b></span><input id="su-em" name="em" [(ngModel)]="em" required maxlength="254" autocomplete="off" [attr.aria-invalid]="fieldErrs()['email'] ? true : null" [attr.aria-describedby]="fieldErrs()['email'] ? 'su-em-err' : null" />
         @if (fieldErrs()['email']) { <span class="field-err" id="su-em-err">{{fieldErrs()['email']}}</span> }</label> }
-      <label>Password (12 to 128 characters) <b class="req" title="required">*</b><input id="su-pw" type="password" name="pw" [(ngModel)]="pw" required minlength="12" maxlength="128" autocomplete="new-password" [attr.aria-invalid]="fieldErrs()['password'] ? true : null" [attr.aria-describedby]="fieldErrs()['password'] ? 'su-pw-err' : null" />
+      <label><span>Password (12 to 128 characters) <b class="req" title="required">*</b></span><input id="su-pw" type="password" name="pw" [(ngModel)]="pw" required minlength="12" maxlength="128" autocomplete="new-password" [attr.aria-invalid]="fieldErrs()['password'] ? true : null" [attr.aria-describedby]="fieldErrs()['password'] ? 'su-pw-err' : null" />
         @if (fieldErrs()['password']) { <span class="field-err" id="su-pw-err">{{fieldErrs()['password']}}</span> }</label>
       @if (!test()) { @for (sec of sections(); track sec.name) {
         @if (sec.name) { <h3 class="profile-section">{{sec.name}}</h3> }
-        @for (f of sec.fields; track f.key) { <label>{{f.label}}@if (f.required) { <b class="req" title="required">*</b> } @else { <span class="opt">(optional)</span> }
+        @for (f of sec.fields; track f.key) { <label><span>{{f.label}}@if (f.required) { <b class="req" title="required">*</b> } @else { <span class="opt">(optional)</span> }</span>
           @if (f.type==='select') { <select [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event"><option value="">-</option>@for (o of f.options; track o.value) {<option [value]="o.value">{{o.label}}</option>}</select> }
           @else { <input [name]="f.key" [ngModel]="vals[f.key] ?? ''" (ngModelChange)="vals[f.key]=$event" /> }</label> }
       } }
