@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { PluginRegistry, PluginImpl } from '../plugins/v1/registry.js';
+import { validateSettings } from '../plugins/v1/settings.js';
 import type { AuthenticateResult } from '../plugins/v1/hooks.js';
 import { UsersService } from '../users/users.service.js';
 import { currentBranch, workspaceMode } from '../workspace/context.js';
@@ -190,12 +191,31 @@ export class AuthnService implements OnApplicationBootstrap {
 
   analyses(cfg: AuthnConfig): ChainAnalysis[] { return cfg.chains.map((c) => analyzeChain(cfg, c)); }
 
-  /** Registry-aware analyses: the real/simulated verdict of each method through the registry (serving plugin's
-   * settings included), so a plugin-scoped method is not misread as simulated from its empty instance config. */
+  /** Registry-aware analyses: the real/simulated verdict of each method with the serving plugin's settings (and
+   * the instance's secrets) merged in, so a plugin-scoped method is not misread as simulated from its empty
+   * instance config. The verification handlers are config-pure by contract (config + serving settings only, no
+   * I/O), so they answer IN-PROCESS with the same context the bus delivery would inject: no per-method bus
+   * round-trips - a fan-out of those overruns the edge proxy timeout on a throttled hosted deployment. */
   async analysesReg(tenant: string, cfg: AuthnConfig, ref: 'live' | 'work' = 'work'): Promise<ChainAnalysis[]> {
     const reg = await this.registry(ref);
-    // Parallel: a serial bus round-trip per method instance times the console GET out on a cold deployment.
-    const verdicts = new Map(await Promise.all(cfg.methods.map(async (m) => [m.id, await this.verification(reg, tenant, m)] as const)));
+    const servings = new Map(cfg.methods.map((m) => [m.id, this.provider(reg, tenant, m.type)] as const));
+    const pluginIds = [...new Set([...servings.values()].filter((p): p is PluginImpl => !!p).map((p) => p.manifest.id))];
+    const settings = new Map(await Promise.all(pluginIds.map(async (id) => {
+      const impl = reg.impl(id);
+      return [id, impl ? validateSettings(impl.manifest.settings ?? [], (await reg.settingsFor(tenant, id)) ?? {}).values : {}] as const;
+    })));
+    const verdicts = new Map(await Promise.all(cfg.methods.map(async (m) => {
+      const serving = servings.get(m.id);
+      if (!serving) return [m.id, { real: false, note: 'Method unavailable (its plugin is disabled).' }] as const;
+      let impl: PluginImpl | undefined = serving;
+      while (impl && !impl.handlers['auth.verification'] && impl.manifest.extends) impl = reg.impl(impl.manifest.extends);
+      const h = impl?.handlers['auth.verification'] as ((p: { config: Record<string, unknown> }, c: { tenant: string; settings: Record<string, unknown> }) => { real: boolean; note: string }) | undefined;
+      if (!impl || !h) return [m.id, { real: false, note: 'Method unavailable (its plugin declares no verification).' }] as const;
+      const decl = this.methodDeclaration(reg, serving);
+      const config = decl?.manifest.authMethod?.settingsScope === 'plugin' ? m.config : await this.instanceConfig(reg, tenant, m);
+      try { return [m.id, h({ config: config as Record<string, unknown> }, { tenant, settings: settings.get(serving.manifest.id) ?? {} })] as const; }
+      catch { return [m.id, { real: false, note: 'Method unavailable (its plugin failed).' }] as const; }
+    })));
     return cfg.chains.map((c) => analyzeChain(cfg, c, (m) => verdicts.get(m.id)));
   }
 

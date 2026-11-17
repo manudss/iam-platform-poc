@@ -95,8 +95,11 @@ plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail clos
   `other` never counts toward `auth_mfa`. `consoleConfig` masks the instance-scoped secrets for the console,
   `saveConfig` splits them into the secret store, `instanceConfig` merges them back for the runtime payloads
   and the exchange secret comes from the serving plugin's settings (plugin-scoped) or the instance's secret
-  store entry (generic OIDC). Chain analyses read each method's verification THROUGH the registry so a
-  plugin-scoped configured provider is not misread as simulated from its empty instance config.
+  store entry (generic OIDC). Chain analyses run each method's verification IN-PROCESS, with the serving
+  plugin's settings (and the instance's stored secret) merged in: the verification handlers are config-pure by
+  contract, so the console GET fans no per-method bus calls out (a hosted container cannot afford them inside
+  the edge proxy timeout) and a plugin-scoped configured provider is not misread as simulated from its empty
+  instance config.
 - enroll-store: external links per tenant/subject/instance (sub, email, linkedAt), same storage class as the
   other enrollment records (never Dolt).
 - plugins: five provider plugins + their refusing bases (a disabled provider fails CLOSED on the slot), pure
