@@ -10,7 +10,7 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
-import { ExternalIdentity, ExternalProfile, ExternalStart, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, mint, pkceChallenge } from './federation.js';
+import { ExternalIdentity, ExternalProfile, ExternalStart, ProviderRefusal, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, externalRefusalMessage, mint, pkceChallenge } from './federation.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 
 /** The console-facing mask for a stored secret; the same sentinel the plugin settings form uses (settings.ts). */
@@ -565,7 +565,15 @@ export class AuthnService implements OnApplicationBootstrap {
     } else {
       const cbUrl = externalCallbackUrl();
       const secret = await this.externalSecret(reg, s.tenant, st);
-      profile = p.mode === 'oidc' ? await exchangeOidc(p.start, secret, cbUrl, cb, p) : await exchangeUserinfo(p.start, secret, cbUrl, cb, p);   // a throw is a technical failure: 503, fail closed
+      try {
+        profile = p.mode === 'oidc' ? await exchangeOidc(p.start, secret, cbUrl, cb, p) : await exchangeUserinfo(p.start, secret, cbUrl, cb, p);
+      } catch (e) {
+        // A definitive provider refusal is an actionable denial, not a technical failure; anything else stays 503 (fail closed).
+        const refusal = externalRefusalMessage(e);
+        if (!refusal) throw e;
+        this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-exchange-refused', where: (e as ProviderRefusal).where, status: String((e as ProviderRefusal).status) });
+        return deny(refusal);
+      }
     }
     const link = s.subject ? await this.enroll.externalLink(s.tenant, s.subject, st.id) : undefined;
     const linked = await this.enroll.findExternalLink(s.tenant, st.id, profile.sub);
@@ -648,7 +656,15 @@ export class AuthnService implements OnApplicationBootstrap {
     } else {
       const cbUrl = externalCallbackUrl();
       const secret = await this.externalSecret(reg, rec.tenant, m);
-      profile = rec.mode === 'oidc' ? await exchangeOidc(rec.start, secret, cbUrl, cb, rec) : await exchangeUserinfo(rec.start, secret, cbUrl, cb, rec);   // a throw is a technical failure: 503, fail closed
+      try {
+        profile = rec.mode === 'oidc' ? await exchangeOidc(rec.start, secret, cbUrl, cb, rec) : await exchangeUserinfo(rec.start, secret, cbUrl, cb, rec);
+      } catch (e) {
+        // Same rule as the sign-in leg: a definitive provider refusal is an actionable denial; anything else stays 503.
+        const refusal = externalRefusalMessage(e);
+        if (!refusal) throw e;
+        this.audit({ ...auditBase, outcome: 'external-exchange-refused', where: (e as ProviderRefusal).where, status: String((e as ProviderRefusal).status) });
+        return deny(refusal);
+      }
     }
     const payload = { tenant: rec.tenant, subject: rec.subject, known: true, instanceId: m.id, config: await this.instanceConfig(reg, rec.tenant, m), state: {}, answers: undefined, now: this.now(), enrollment: {} };
     const verdict = (await reg.callSlot<{ ok: boolean; reason?: string; message?: string }>(rec.tenant, `auth.${m.type}`, 'auth.external.verify',

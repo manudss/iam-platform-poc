@@ -5,6 +5,7 @@ import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { createHash } from 'node:crypto';
 import {
   checkStart, buildAuthorizeUrl, exchangeOidc, exchangeUserinfo, mint, pkceChallenge,
+  ProviderRefusal, externalRefusalMessage,
   type ExternalStart,
 } from './federation.js';
 
@@ -188,4 +189,50 @@ describe('federation client (real exchange paths)', () => {
       } finally { s2.close(); }
     });
   });
+
+  describe('provider refusals: a definitive NO from the provider is typed, never a generic fault', () => {
+    const cbUrl = 'https://iam.example.com/cb';
+    const startAt = (base: string) => checkStart({ ok: true, mode: 'oauth2-userinfo', authorizeEndpoint: `${base}/a`, tokenEndpoint: `${base}/token`, userinfoEndpoint: `${base}/user`, clientId: 'c', profileMap: { sub: 'id' } });
+    const run = (s: ExternalStart) => exchangeUserinfo(s, 'a-secret', cbUrl, { code: 'c', state: 'st' }, { state: 'st' });
+
+    it('a token-endpoint 4xx (rejected client credentials, bad code) is a typed refusal', async () => {
+      const { srv, base } = await listen((_req, res) => json(res, { error: 'incorrect_client_credentials' }, 404));
+      try {
+        await assert.rejects(run(startAt(base)), (e: unknown) => e instanceof ProviderRefusal && e.where === 'token' && e.status === 404 && /token endpoint answered 404/.test((e as Error).message));
+      } finally { srv.close(); }
+    });
+
+    it("a 200 error payload (GitHub's refusal shape) is a typed refusal, not a crash", async () => {
+      const { srv, base } = await listen((_req, res) => json(res, { error: 'bad_verification_code', error_description: 'The code passed is incorrect or expired.' }));
+      try {
+        await assert.rejects(run(startAt(base)), (e: unknown) => e instanceof ProviderRefusal && e.where === 'token' && e.status === 'error-payload' && /no access token/.test((e as Error).message));
+      } finally { srv.close(); }
+    });
+
+    it('a userinfo rejection is a typed refusal at the userinfo step', async () => {
+      const { srv, base } = await listen((req, res) => {
+        const u = new URL(req.url ?? '/', 'http://x');
+        if (u.pathname === '/token') return json(res, { access_token: 't', token_type: 'bearer' });
+        return json(res, { message: 'bad credentials' }, 401);
+      });
+      try {
+        await assert.rejects(run(startAt(base)), (e: unknown) => e instanceof ProviderRefusal && e.where === 'userinfo' && e.status === 401);
+      } finally { srv.close(); }
+    });
+
+    it('a provider 5xx stays a generic technical failure (the gate keeps answering 503)', async () => {
+      const { srv, base } = await listen((_req, res) => json(res, { error: 'boom' }, 503));
+      try {
+        await assert.rejects(run(startAt(base)), (e: unknown) => !(e instanceof ProviderRefusal) && /token endpoint answered 503/.test((e as Error).message));
+      } finally { srv.close(); }
+    });
+
+    it('externalRefusalMessage maps only a typed refusal to an actionable denial', () => {
+      const m = externalRefusalMessage(new ProviderRefusal('token', 404, 'oauth2: token endpoint answered 404'));
+      assert.ok(m && /client secret/.test(m) && /callback URL/.test(m) && m.length <= 200);
+      assert.equal(externalRefusalMessage(new Error('oauth2: token endpoint answered 503')), undefined);
+      assert.equal(externalRefusalMessage('nope'), undefined);
+    });
+  });
 });
+
