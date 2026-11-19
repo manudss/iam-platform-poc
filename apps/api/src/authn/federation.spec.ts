@@ -5,7 +5,7 @@ import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { createHash } from 'node:crypto';
 import {
   checkStart, buildAuthorizeUrl, exchangeOidc, exchangeUserinfo, mint, pkceChallenge,
-  ProviderRefusal, externalRefusalMessage,
+  ProviderRefusal, externalRefusalMessage, githubTokenReason,
   type ExternalStart,
 } from './federation.js';
 
@@ -236,3 +236,42 @@ describe('federation client (real exchange paths)', () => {
   });
 });
 
+
+
+describe('safe GitHub token diagnostics', () => {
+  const endpoint = 'https://github.com/login/oauth/access_token';
+  for (const code of ['incorrect_client_credentials', 'redirect_uri_mismatch', 'bad_verification_code'] as const) {
+    it(`keeps only the allowlisted ${code} from a 400`, async () => {
+      const original = globalThis.fetch;
+      globalThis.fetch = async () => new Response(JSON.stringify({ error: code, error_description: 'PRIVATE_SENTINEL', access_token: 'PRIVATE_SENTINEL', error_uri: 'https://secret.invalid' }), { status: 400, headers: { 'content-type': 'application/json' } });
+      try {
+        const s = checkStart({ ok: true, mode: 'oauth2-userinfo', authorizeEndpoint: 'https://github.com/login/oauth/authorize', tokenEndpoint: endpoint, userinfoEndpoint: 'https://api.github.com/user', clientId: 'fictional', profileMap: { sub: 'id' } });
+        await assert.rejects(exchangeUserinfo(s, 'PRIVATE_SENTINEL', 'https://iam.example/cb', { code: 'PRIVATE_SENTINEL' }, { state: 'st' }), (e: unknown) => {
+          assert.ok(e instanceof ProviderRefusal); assert.equal(e.providerReason, code); assert.equal(e.status, 400);
+          assert.ok(!JSON.stringify(e).includes('PRIVATE_SENTINEL')); assert.ok(!e.message.includes('PRIVATE_SENTINEL'));
+          assert.ok(!externalRefusalMessage(e)?.includes(code)); return true;
+        });
+      } finally { globalThis.fetch = original; }
+    });
+  }
+  it('unknown or malicious error text never escapes', () => {
+    for (const payload of [null, {}, { error: 'PRIVATE_SENTINEL' }, { error: { secret: 'PRIVATE_SENTINEL' } }, { error: 'bad_verification_code\nPRIVATE_SENTINEL' }]) assert.equal(githubTokenReason(endpoint, payload), 'other');
+  });
+  it('does not attribute another provider or look-alike endpoint to GitHub', () => {
+    for (const url of ['https://github.com.evil.invalid/login/oauth/access_token', endpoint + '?secret=x', 'http://github.com/login/oauth/access_token', 'https://other.invalid/token']) assert.equal(githubTokenReason(url, { error: 'bad_verification_code' }), undefined);
+  });
+  for (const variant of ['form', 'malformed', 'oversized', 'server-error', 'success-error']) it(`handles ${variant} without a payload leak or auth change`, async () => {
+    const original = globalThis.fetch;
+    const body = variant === 'form' ? 'error=redirect_uri_mismatch&error_description=PRIVATE_SENTINEL' : variant === 'malformed' ? '{PRIVATE_SENTINEL' : variant === 'oversized' ? 'PRIVATE_SENTINEL'.repeat(1000) : JSON.stringify({ error: 'bad_verification_code', error_description: 'PRIVATE_SENTINEL' });
+    globalThis.fetch = async () => new Response(body, { status: variant === 'server-error' ? 503 : variant === 'success-error' ? 200 : 400, headers: { 'content-type': variant === 'form' ? 'application/x-www-form-urlencoded' : 'application/json' } });
+    try {
+      const s = checkStart({ ok: true, mode: 'oauth2-userinfo', authorizeEndpoint: 'https://github.com/login/oauth/authorize', tokenEndpoint: endpoint, userinfoEndpoint: 'https://api.github.com/user', clientId: 'fictional', profileMap: { sub: 'id' } });
+      await assert.rejects(exchangeUserinfo(s, 'secret', 'https://iam.example/cb', { code: 'code' }, { state: 'st' }), (e: unknown) => {
+        assert.ok(e instanceof Error); assert.ok(!e.message.includes('PRIVATE_SENTINEL')); assert.ok(!JSON.stringify(e).includes('PRIVATE_SENTINEL'));
+        if (variant === 'server-error') { assert.ok(!(e instanceof ProviderRefusal)); assert.equal(externalRefusalMessage(e), undefined); }
+        else { assert.ok(e instanceof ProviderRefusal); assert.equal(e.providerReason, variant === 'form' ? 'redirect_uri_mismatch' : variant === 'success-error' ? 'bad_verification_code' : 'other'); }
+        return true;
+      });
+    } finally { globalThis.fetch = original; }
+  });
+});
