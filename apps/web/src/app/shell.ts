@@ -52,10 +52,29 @@ export class Shell {
   protected async pickerCreate(){if(!this.newBranch)return;await this.create();this.picker.set(false);this.pickerNew.set(false);}
   /** The same button opens and closes the review panel (a toggle), which floats above the page. */
   protected toggleReview(){if(this.review()){this.review.set(null);return;}void this.prepareApply();}
-  /** An accepted write on the working branch: refresh the counter, then flash the pending-merge hint and fly a dot to the chip.
-   * Branch bookkeeping (/workspace/...) never flashes, and a failed write never reaches this point (the API hook fires on success only). */
-  private onBranchWrite(){void this.loadChanges();const b=this.s.branch();const p=this.s.lastWritePath();
-    if(!b||b==='main'||p.startsWith('/workspace'))return;
+  /** Writes that can leave rows pending on the working branch. Checked against the API: users, roles, profile fields, staged
+   *  assignments, plugin enable/disable/settings/install, application connectors, workflows and explorer SQL all write through the
+   *  branch registries. Simulations, probes, sessions, tokens, enrollments, profile reviews, activations and branch bookkeeping
+   *  (apply, personal branch, test links, branches/pulls/tags) never flash. */
+  private isBranchDataWrite(p:string){
+    if(/^\/workspace\/(un)?assignments?$/.test(p))return true; // staged assignments live on the branch
+    if(/^\/plugins\/[^/]+\/(enable|disable|settings|install)$/.test(p))return true;
+    const base=p.split('/')[1]??'';
+    if(['users','roles','profile-fields','workflow-templates','sql'].includes(base))return true;
+    if(base==='app-connectors'&&!p.startsWith('/app-connectors/parse-sp-metadata'))return true;
+    if(base==='workflows'&&!p.startsWith('/workflows/test-run'))return true;
+    if(base==='workflow-connections'&&!p.startsWith('/workflow-connections/probe'))return true;
+    return false;
+  }
+  /** An accepted write on the working branch: refresh the counter (the REAL branch diff, not a write count: an edit that cancels
+   *  another brings it back to 0), then flash the pending-merge hint and fly a dot to the chip — only while the diff truly has
+   *  something pending. A failed write never reaches this point (the API hook fires on success only). */
+  private async onBranchWrite(){const b=this.s.branch();
+    if(!b||b==='main')return;
+    if(!this.isBranchDataWrite(this.s.lastWritePath())){void this.loadChanges();return;} // bookkeeping and other writes still refresh the counter
+    await this.loadChanges();
+    if(b!==this.s.branch())return; // the branch changed while the diff was re-read: nothing to announce here
+    if(!(this.changes()??0))return; // nothing truly pending (e.g. an edit undone): no false "merge me" claim
     this.flash.set(`Added to ${b} - it is available once the branch is merged into main.`);this.flashHiding.set(false);
     clearTimeout(this.flashTimer);this.flashTimer=setTimeout(()=>{this.flashHiding.set(true);this.flashTimer=setTimeout(()=>{this.flash.set(null);this.flashHiding.set(false);},450);},4600);
     const chip=typeof document==='undefined'?null:document.getElementById('review-apply');const r=chip?.getBoundingClientRect();
@@ -184,7 +203,7 @@ export class Shell {
     // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
     effect(() => { this.s.pluginsVersion(); this.s.branch(); this.s.branchEpoch(); void this.loadPluginMenu(); });
     effect(()=>{this.s.branch();this.s.branchEpoch();this.s.adminToken();void this.loadBranding();});
-    effect(()=>{const n=this.s.branchWrites();const fresh=n>this.seenWrites;this.seenWrites=n;if(fresh)this.onBranchWrite();});
+    effect(()=>{const n=this.s.branchWrites();const fresh=n>this.seenWrites;this.seenWrites=n;if(fresh)void this.onBranchWrite();});
     this.title.set(this.leafTitle());
   }
   private leafTitle(): string {

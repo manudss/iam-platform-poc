@@ -24,16 +24,17 @@ describe('branch bar: changes chip, branch picker and pending-merge flash', () =
   const access = { subject: 'demo-alice', admin: true, restricted: true, plugins: {} };
   const branchList = { default: 'main', branches: [{ name: 'main', commit: 'm1' }, { name: 'personal/demo-alice', commit: 'p1' }, { name: 'work-alpha', commit: 'w1' }] };
   let workspaceCalls = 0;
+  const diff = { total: 3 };
   const boot = async () => {
     await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents();
-    workspaceCalls = 0;
+    workspaceCalls = 0; diff.total = 3;
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
     s.api.raw = (async (_m: string, path: string) => {
       if (path === '/me/access') return { status: 200, data: access };
       if (path === '/workspace/personal') return { status: 200, data: { branch: 'personal/demo-alice', status: 'reused' } };
       if (path === '/versioning/branches') return { status: 200, data: branchList };
-      if (path === '/workspace') { workspaceCalls++; return { status: 200, data: { branch: s.branch(), diff: { rows: { total: 3, added: 2, modified: 1, removed: 0 }, tables: [] } } }; }
+      if (path === '/workspace') { workspaceCalls++; return { status: 200, data: { branch: s.branch(), diff: { rows: { total: diff.total, added: diff.total, modified: 0, removed: 0 }, tables: [] } } }; }
       return { status: 200, data: [] };
     }) as never;
     const h = await RouterTestingHarness.create();
@@ -89,14 +90,22 @@ describe('branch bar: changes chip, branch picker and pending-merge flash', () =
     expect(chip.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('an accepted data write flashes the pending-merge banner and flies the dot; bookkeeping and failures do not', async () => {
+  it('only a real pending branch change flashes the banner: simulations, bookkeeping and net-zero edits never do', async () => {
     const { s, el, h } = await boot();
-    const before = workspaceCalls;
-    s.api.onDataMutation?.({ method: 'POST', path: '/workspace/apply', status: 200 });
+    s.api.onDataMutation?.({ method: 'POST', path: '/policies/simulate', status: 200 }); // a simulation stores nothing
     await settle(h);
-    expect(workspaceCalls).toBeGreaterThan(before); // the counter still refreshes
+    expect(el.querySelector('#branch-flash')).toBeNull();
+    const before = workspaceCalls;
+    s.api.onDataMutation?.({ method: 'POST', path: '/workspace/apply', status: 200 }); // bookkeeping refreshes the counter only
+    await settle(h);
+    expect(workspaceCalls).toBeGreaterThan(before);
+    expect(el.querySelector('#branch-flash')).toBeNull();
+    diff.total = 0; // an edit that cancels another: the diff is empty again, there is nothing to merge
+    s.api.onDataMutation?.({ method: 'PUT', path: '/users/u1', status: 200 });
+    await settle(h);
     expect(el.querySelector('#branch-flash')).toBeNull();
     expect(el.querySelector('.fly-dot')).toBeNull();
+    diff.total = 4;
     s.api.onDataMutation?.({ method: 'POST', path: '/users', status: 200 });
     await settle(h);
     const flash = el.querySelector('#branch-flash');
@@ -104,5 +113,6 @@ describe('branch bar: changes chip, branch picker and pending-merge flash', () =
     expect(flash?.textContent).toContain('merged into main');
     expect(el.querySelector('.fly-dot')).not.toBeNull();
     expect((el.querySelector('#review-apply') as HTMLElement).classList.contains('pulse')).toBe(true);
+    expect(el.querySelector('#review-apply')?.textContent).toContain('4 changes pending');
   });
 });
