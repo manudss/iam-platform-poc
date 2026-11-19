@@ -69,12 +69,12 @@ export interface WfNodeData { name: string; category: StepCategory; icon?: strin
     :host { display: block; position: relative; }
     .wf-node {
       box-sizing: border-box; width: 190px; min-height: 64px; padding: 10px 12px;
-      background: var(--card); border: 1.5px solid var(--field-line); border-left: 5px solid var(--accent); border-radius: 10px;
+      background: var(--card); border: 1.5px solid var(--field-line); border-left: 5px solid var(--acc2); border-radius: 10px;
       box-shadow: 0 1px 3px var(--shadow-color); cursor: pointer;
       display: flex; flex-direction: column; gap: 6px;
     }
-    .wf-node.logic.computed,.wf-node.logic.real,.wf-node.logic { width:250px;background:var(--accent-soft);border-color:var(--accent);border-left-color:var(--accent); }
-    .wf-logic-label{font-size:11px;font-weight:700;color:var(--accent);}
+    .wf-node.logic.computed,.wf-node.logic.real,.wf-node.logic { width:250px;background:var(--acc2-soft);border-color:var(--acc2);border-left-color:var(--acc2); }
+    .wf-logic-label{font-size:11px;font-weight:700;color:var(--acc2);}
     .wf-ports{display:flex;justify-content:space-between;gap:12px;margin:2px -12px -4px;}
     .wf-inputs,.wf-outputs{display:flex;flex-direction:column;min-width:0;max-width:50%;flex:1;}
     .wf-port{position:relative;min-height:36px;display:flex;align-items:center;font-size:11px;color:var(--muted);padding:0 12px;}
@@ -86,19 +86,19 @@ export interface WfNodeData { name: string; category: StepCategory; icon?: strin
     .wf-port[data-kind="error"]{color:var(--bad);}
     .wf-port[data-kind="true"]{color:var(--ok);}.wf-port[data-kind="true"] handle{border-color:var(--ok);}
     .wf-port[data-kind="each"]{color:var(--warn-ink);}.wf-port[data-kind="each"] handle{border-color:var(--warn-line);}
-    .wf-node.logic.selected{border-color:var(--accent);box-shadow:0 0 0 3px var(--shadow-color);}
+    .wf-node.logic.selected{border-color:var(--acc2);box-shadow:0 0 0 3px var(--shadow-color);}
     .wf-node.logic[data-run="done"]{border-color:var(--ok);}.wf-node.logic[data-run="failed"]{border-color:var(--bad-line);}.wf-node.logic[data-run="running"]{border-color:var(--accent);}
     @media(max-width:700px){.wf-port,.wf-port-label{min-height:52px;}}
     .wf-port handle{width:18px;height:18px;}
     .wf-node.real { border-left-color: var(--ok); }
     .wf-node.computed { border-left-color: var(--warn-line); }
-    .wf-node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--shadow-color); }
+    .wf-node.selected { border-color: var(--acc2); box-shadow: 0 0 0 3px var(--shadow-color); }
     .wf-node[data-run="done"] { border-color: var(--ok); }
     .wf-node[data-run="failed"] { border-color: var(--bad-line); }
     .wf-node[data-run="running"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
     .wf-node[data-run="skipped"] { opacity: .55; }
     .wf-node-title { display: flex; align-items: center; gap: 7px; }
-    .wf-node-icon { flex-shrink: 0; display: grid; place-items: center; width: 21px; height: 21px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; }
+    .wf-node-icon { flex-shrink: 0; display: grid; place-items: center; width: 21px; height: 21px; border-radius: 5px; background: var(--acc2-soft); color: var(--acc2); font-size: 11px; font-weight: 700; }
     .wf-run-dot { position: absolute; right: -7px; top: -7px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: var(--panel); color: var(--muted); font-size: 11px; }
     .wf-node[data-run="done"] .wf-run-dot { background: var(--ok); color: var(--card); }
     .wf-node[data-run="failed"] .wf-run-dot { background: var(--bad); color: var(--on-bad); }
@@ -109,12 +109,12 @@ export interface WfNodeData { name: string; category: StepCategory; icon?: strin
     }
     .wf-node-badge {
       align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .04em;
-      padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+      padding: 2px 7px; border-radius: 999px; background: var(--acc2-soft); color: var(--acc2);
     }
     .wf-node-badge.real { background: var(--ok-soft); color: var(--ok); }
     .wf-node-badge.computed { background: var(--warn-soft); color: var(--warn-ink); }
     handle { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
-      background: var(--card); border: 2px solid var(--accent); transform: translateY(-50%); }
+      background: var(--card); border: 2px solid var(--acc2); transform: translateY(-50%); }
     handle[position="left"] { left: -6px; }
     handle[position="right"] { right: -6px; }
   `],

@@ -4,11 +4,11 @@
 .brand { display: grid; gap: .15rem; justify-items: start; padding: .3rem .4rem 1rem; }
 .brand .side-logo { display: block; height: 2.1rem; width: auto; }
 .brand small { display: block; font-weight: 400; color: var(--sidebar-muted); font-size: .75rem; }
-.logo { display: grid; place-items: center; width: 2.3rem; height: 2.3rem; border-radius: .65rem; background: linear-gradient(135deg, var(--accent), var(--accent)); color: var(--accent-ink); font-size: .7rem; font-weight: 800; letter-spacing: .05em; }
+.logo { display: grid; place-items: center; width: 2.3rem; height: 2.3rem; border-radius: .65rem; background: linear-gradient(135deg, var(--gradient-from), var(--gradient-to)); color: var(--accent-ink); font-size: .7rem; font-weight: 800; letter-spacing: .05em; }
 .group { margin: 1.1rem .5rem .3rem; font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--sidebar-muted); }
 nav a { display: flex; align-items: center; gap: .65rem; padding: .5rem .65rem; border-radius: .5rem; color: var(--sidebar-ink); text-decoration: none; font-size: .92rem; }
 nav a:hover { background: var(--sidebar-hover); color: var(--sidebar-ink); }
-nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box-shadow: inset 3px 0 0 var(--accent); }
+nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box-shadow: inset 3px 0 0 var(--acc2); }
 .ico { width: 1.2rem; text-align: center; opacity: .85; }
 .token { margin-top: auto; padding-top: 1rem; font-size: .8rem; }
 .token summary { cursor: pointer; color: var(--sidebar-muted); }
@@ -18,7 +18,7 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .top { display: flex; align-items: center; gap: .8rem; padding: .8rem 1.5rem; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 .top h1 { font-size: 1.15rem; margin: 0; }
 .spacer { flex: 1; }
-.who { background: var(--accent-soft); color: var(--chip-ink); border-radius: 999px; padding: .2rem .7rem; font-size: .85rem; font-weight: 600; }
+.who { background: var(--acc2-soft); color: var(--acc2-dark); border-radius: 999px; padding: .2rem .7rem; font-size: .85rem; font-weight: 600; }
 .burger { display: none; }
 .bar { margin: 1rem 1.5rem 0; }
 .content { padding: 1.25rem 1.5rem 3rem; max-width: 80rem; width: 100%; box-sizing: border-box; }
@@ -53,7 +53,7 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .pill { border: 0; background: transparent; font-weight: 600; font-size: .85rem; padding: .3rem .2rem; max-width: 12rem; text-overflow: ellipsis; }
 .icon { position: relative; background: transparent; color: var(--th-ink); border: 1px solid transparent; padding: .25rem .55rem; font-size: 1rem; line-height: 1; }
 .icon:hover:not(:disabled) { background: var(--accent-soft); } .icon:disabled { opacity: .45; }
-.badge { position: absolute; top: -.35rem; right: -.35rem; min-width: 1.1rem; height: 1.1rem; padding: 0 .25rem; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: .68rem; font-weight: 700; display: grid; place-items: center; }
+.badge { position: absolute; top: -.35rem; right: -.35rem; min-width: 1.1rem; height: 1.1rem; padding: 0 .25rem; border-radius: 999px; background: var(--acc2); color: var(--acc2-ink); font-size: .68rem; font-weight: 700; display: grid; place-items: center; }
 .pop { position: absolute; right: 1rem; top: 3.4rem; z-index: 8; background: var(--card); border: 1px solid var(--line); border-radius: .6rem; box-shadow: 0 12px 30px var(--shadow-color); padding: .8rem; max-width: min(34rem, calc(100vw - 2rem)); max-height: 75vh; overflow: auto; }
 .pop.menu { display: flex; flex-direction: column; gap: .4rem; min-width: 14rem; }
 .pop .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: end; margin-bottom: .5rem; } .pop input { max-width: 12rem; }

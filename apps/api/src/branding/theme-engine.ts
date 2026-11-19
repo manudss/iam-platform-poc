@@ -24,6 +24,7 @@ export const THEME_VARIABLES = [
   '--ink', '--muted', '--label', '--brand-sub', '--th-ink',
   '--line', '--field-line', '--focus',
   '--accent', '--accent-ink', '--accent-dark', '--accent-soft', '--link',
+  '--acc2', '--acc2-ink', '--acc2-dark', '--acc2-soft',
   '--chip-bg', '--chip-ink',
   '--ok', '--ok-soft', '--ok-line', '--bad', '--bad-soft', '--bad-ink', '--bad-line',
   '--warn-soft', '--warn-line', '--warn-ink',
@@ -43,7 +44,7 @@ function hexa(p: TonalPalette, tone: number, alpha: number): string {
   return `${hex(p, tone)}${a}`;
 }
 
-export interface Palettes { primary: TonalPalette; secondary: TonalPalette; neutral: TonalPalette; neutralVariant: TonalPalette; neutralDark: TonalPalette; neutralVariantDark: TonalPalette; ok: TonalPalette; bad: TonalPalette; warn: TonalPalette }
+export interface Palettes { primary: TonalPalette; secondary: TonalPalette; tertiary: TonalPalette; neutral: TonalPalette; neutralVariant: TonalPalette; neutralDark: TonalPalette; neutralVariantDark: TonalPalette; ok: TonalPalette; bad: TonalPalette; warn: TonalPalette }
 
 /** The palettes of a theme: primary/accent from the source colors, neutrals from the primary hue, and the fixed
  * semantic hues (green / Material error red / amber). Light surfaces keep Material's low chromas; dark surfaces
@@ -54,6 +55,7 @@ export function palettesOf(colors: BrandingColors): Palettes {
   return {
     primary: palette(p.hue, Math.min(p.chroma, 48)),
     secondary: palette(a.hue, Math.min(a.chroma, 24)),
+    tertiary: palette(a.hue, Math.min(a.chroma, 48)),
     neutral: palette(p.hue, Math.min(p.chroma / 12, 8)),
     neutralVariant: palette(p.hue, Math.min(p.chroma / 8 + 4, 24)),
     neutralDark: palette(p.hue, Math.min(p.chroma / 6 + 6, 14)),
@@ -66,7 +68,7 @@ export function palettesOf(colors: BrandingColors): Palettes {
 
 /** One mode of the theme: the variable contract filled from the palettes. */
 function modeVars(pl: Palettes, dark: boolean): ThemeVars {
-  const { primary: P, secondary: S, ok: G, bad: E, warn: W } = pl;
+  const { primary: P, secondary: S, tertiary: T, ok: G, bad: E, warn: W } = pl;
   // Dark surfaces use the higher-chroma neutrals: the hue of the customisation colour stays visible on them.
   const N = dark ? pl.neutralDark : pl.neutral;
   const NV = dark ? pl.neutralVariantDark : pl.neutralVariant;
@@ -77,6 +79,7 @@ function modeVars(pl: Palettes, dark: boolean): ThemeVars {
     '--ink': hex(N, 90), '--muted': hex(NV, 80), '--label': hex(NV, 85), '--brand-sub': hex(NV, 80), '--th-ink': hex(NV, 80),
     '--line': hex(NV, 62), '--field-line': hex(NV, 63), '--focus': hex(P, 70),
     '--accent': hex(P, 80), '--accent-ink': hex(P, 20), '--accent-dark': hex(P, 70), '--accent-soft': hex(P, 25), '--link': hex(P, 80),
+    '--acc2': hex(T, 80), '--acc2-ink': hex(T, 20), '--acc2-dark': hex(T, 85), '--acc2-soft': hex(T, 30),
     '--chip-bg': hex(S, 30), '--chip-ink': hex(S, 90),
     '--ok': hex(G, 80), '--ok-soft': hex(G, 25), '--ok-line': hex(G, 40),
     '--bad': hex(E, 80), '--bad-soft': hex(E, 25), '--bad-ink': hex(E, 90), '--bad-line': hex(E, 40),
@@ -91,6 +94,7 @@ function modeVars(pl: Palettes, dark: boolean): ThemeVars {
     '--ink': hex(N, 10), '--muted': hex(NV, 45), '--label': hex(NV, 30), '--brand-sub': hex(NV, 45), '--th-ink': hex(NV, 40),
     '--line': hex(NV, 88), '--field-line': hex(NV, 55), '--focus': hex(P, 45),
     '--accent': hex(P, 40), '--accent-ink': hex(P, 100), '--accent-dark': hex(P, 30), '--accent-soft': hex(P, 92), '--link': hex(P, 40),
+    '--acc2': hex(T, 40), '--acc2-ink': hex(T, 100), '--acc2-dark': hex(T, 30), '--acc2-soft': hex(T, 92),
     '--chip-bg': hex(S, 90), '--chip-ink': hex(S, 30),
     '--ok': hex(G, 40), '--ok-soft': hex(G, 90), '--ok-line': hex(G, 75),
     '--bad': hex(E, 40), '--bad-soft': hex(E, 90), '--bad-ink': hex(E, 30), '--bad-line': hex(E, 75),

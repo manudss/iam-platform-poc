@@ -22,7 +22,7 @@
 .tree-list{list-style:none;margin:0;padding:0}
 .tree-item{display:flex;justify-content:space-between;gap:.5rem;width:100%;background:none;border:0;border-radius:.4rem;margin:0;padding:.3rem .5rem;text-align:left;font-size:.88rem;color:var(--ink)}
 .tree-item:hover{background:var(--row-hover)}
-.tree-item.on{background:var(--accent-soft);color:var(--accent-dark);font-weight:600}
+.tree-item.on{background:var(--acc2-soft);color:var(--acc2-dark);font-weight:600}
 .tree-item .cnt{color:var(--muted);font-size:.78rem}
 .wb-tabs{display:flex;gap:.3rem;align-items:center;border-bottom:1px solid var(--line);margin-bottom:.8rem;flex-wrap:wrap}
 .wb-tab{display:inline-flex;align-items:center;border:1px solid var(--line);border-bottom:0;border-radius:.5rem .5rem 0 0;background:var(--panel)}
@@ -30,7 +30,7 @@
 .wb-tab button{background:none;border:0;margin:0;padding:.35rem .3rem .35rem .7rem;font-size:.88rem;color:var(--ink)}
 .wb-tab.on button{font-weight:700}
 .wb-tab button:hover:not(:disabled),.tree-item:not(.on):hover:not(:disabled){background:var(--row-hover);color:var(--ink)}
-.tree-item.on:hover:not(:disabled){background:var(--accent-soft);color:var(--accent-dark)}
+.tree-item.on:hover:not(:disabled){background:var(--acc2-soft);color:var(--acc2-dark)}
 .wb-tab .x{padding:.35rem .6rem .35rem .2rem;color:var(--muted)}
 .wb-tab .ref{background:var(--chip-bg);color:var(--chip-ink);border-radius:.3rem;padding:0 .35rem;font-size:.7rem;font-weight:600;margin-left:.3rem}
 .wb-tabs select{width:auto;margin-left:auto;margin-bottom:.3rem}
@@ -43,7 +43,7 @@
 .col-chooser{position:relative}
 .col-chooser summary{list-style:none;cursor:pointer;border:1px solid var(--field-line);border-radius:.4rem;padding:.35rem .7rem;color:var(--label);background:var(--card)}
 .col-menu{position:absolute;z-index:5;background:var(--card);border:1px solid var(--line);border-radius:.5rem;box-shadow:var(--shadow);padding:.5rem .8rem;display:grid;gap:.2rem;min-width:160px}
-.chip.pk{background:var(--accent-soft);color:var(--accent-dark);font-size:.68rem;padding:0 .4rem;margin-left:.3rem}
+.chip.pk{background:var(--acc2-soft);color:var(--acc2-dark);font-size:.68rem;padding:0 .4rem;margin-left:.3rem}
 .wb-foot{margin:.5rem 0 0}
 .wb-empty{padding:2rem 0;text-align:center}
 .wb-status{display:flex;justify-content:space-between;gap:1rem;border-top:1px solid var(--line);margin-top:.8rem;padding:.4rem .2rem 0;font-size:.82rem;color:var(--muted)}
@@ -62,7 +62,7 @@
 .wb-rowedit{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:1rem;align-items:start}
 .rowedit-form h4{margin-top:0}
 .commit-box{background:var(--panel);border:1px solid var(--line);border-radius:.5rem;padding:.8rem 1rem;margin-top:1rem}
-.commit-title{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-dark);border-bottom:1px solid var(--line);padding-bottom:.4rem;margin-bottom:.6rem}
+.commit-title{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--acc2-dark);border-bottom:1px solid var(--line);padding-bottom:.4rem;margin-bottom:.6rem}
 .commit-msg{display:flex;flex-direction:column;gap:.3rem;font-weight:600;font-size:.85rem;color:var(--label)}
 .commit-acts{display:flex;gap:.6rem;align-items:center;margin-top:.7rem;flex-wrap:wrap}
 @media(max-width:900px){.wb-rowedit{grid-template-columns:1fr}}

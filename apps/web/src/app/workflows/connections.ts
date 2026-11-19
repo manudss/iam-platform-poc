@@ -15,7 +15,7 @@ export function probeFor(c: WorkflowConnection, probes: Record<string, Connectio
 @Component({selector: 'app-workflow-connections', imports: [FormsModule, RouterLink], styleUrl: '../pages.css', styles: [`
 .wfc-tabs { display:flex; gap:1.5rem; border-bottom:1px solid var(--line); padding:.7rem 0; margin-bottom:1.4rem; }
 .wfc-tabs a { color:var(--muted); text-decoration:none; padding:.3rem 0; }
-.wfc-tabs a.current { color:var(--accent); border-bottom:2px solid var(--accent); font-weight:600; }
+.wfc-tabs a.current { color:var(--acc2); border-bottom:2px solid var(--acc2); font-weight:600; }
 .wfc-head { display:flex; align-items:center; gap:1rem; justify-content:space-between; flex-wrap:wrap; }
 .wfc-head h2 { margin:0 0 .3rem; }
 .wfc-search { width:min(100%,560px); margin:1.4rem 0 .2rem; }

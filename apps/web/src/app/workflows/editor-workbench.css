@@ -166,8 +166,8 @@
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--acc2-soft);
+  color: var(--acc2);
   border-radius: 5px;
   font-size: 12px;
 }
@@ -206,7 +206,7 @@
   font-size: 8px !important;
   font-weight: 700;
   flex-shrink: 0;
-  color: var(--accent) !important;
+  color: var(--acc2) !important;
 }
 .wb-pal-category[data-category="real"] {
   color: var(--ok) !important;
@@ -293,9 +293,9 @@
 }
 .wb-tab.on {
   border: 0;
-  border-bottom: 2px solid var(--accent);
+  border-bottom: 2px solid var(--acc2);
   background: none;
-  color: var(--accent);
+  color: var(--acc2);
 }
 .wb-drawer label {
   font-size: 11px;
@@ -341,7 +341,7 @@
   overflow: auto;
   padding: 12px 15px;
   background: var(--card);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--acc2);
   border-radius: 10px;
   box-shadow: 0 8px 24px var(--shadow-color);
 }
@@ -363,7 +363,7 @@
 }
 .wb-test-head progress {
   width: 70px;
-  accent-color: var(--accent);
+  accent-color: var(--acc2);
 }
 .wb-payload {
   min-width: 0;
@@ -635,16 +635,16 @@
 /* Pair both colors: the global primary-button hover otherwise hides placeholder text. */
 .wb-drawer .ph-chip:hover,
 .wb-drawer .ph-chip:focus-visible {
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-color: var(--accent);
+  background: var(--acc2);
+  color: var(--acc2-ink);
+  border-color: var(--acc2);
 }
 .wb-drawer .ph-chip { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 /* Links are quiet at rest; each remains reachable by keyboard and touch. */
 .wb-edge{position:relative;background:transparent;border:0;padding:0;}
 .wb-link-chip{min-width:28px;min-height:28px;padding:3px 8px;background:var(--card);border:1px solid var(--line);border-radius:8px;font-size:11px;white-space:nowrap;}
 .wb-link-chip.main{opacity:.18;}
-.wb-link-chip:hover,.wb-link-chip:focus-visible,.wb-edge.editing .wb-link-chip{opacity:1;background:var(--accent-soft);}
+.wb-link-chip:hover,.wb-link-chip:focus-visible,.wb-edge.editing .wb-link-chip{opacity:1;background:var(--acc2-soft);}
 .wb-link-actions{position:absolute;top:100%;left:0;z-index:20;width:180px;display:flex;flex-direction:column;gap:6px;padding:10px;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px var(--shadow-color);}
 .wb-link-actions select{width:100%;max-width:none;color:var(--ink);}
 @media(max-width:700px){.wb-link-chip{min-height:44px;min-width:44px;}.wb-link-actions button{min-height:44px;}}

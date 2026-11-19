@@ -19,7 +19,7 @@ export const initials = (name: string): string => {
   return ((p[0]?.[0] ?? '?') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase();
 };
 
-const PALETTE = ['var(--accent)', 'var(--link)', 'var(--ok)', 'var(--warn-ink)', 'var(--bad)', 'var(--accent)', 'var(--accent)', 'var(--ok)'];
+const PALETTE = ['var(--accent)', 'var(--link)', 'var(--ok)', 'var(--warn-ink)', 'var(--bad)', 'var(--acc2)', 'var(--acc2-dark)', 'var(--ok)'];
 export const deptColor = (dept: string): string => {
   let h = 0;
   for (const c of dept || '') h = (h * 31 + (c.codePointAt(0) ?? 0)) >>> 0;

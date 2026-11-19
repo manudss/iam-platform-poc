@@ -244,7 +244,7 @@ export class WorkflowExecutionsPage implements OnInit, OnDestroy {
     return (v.run.edges ?? []).map((e) => ({
       id: `${e.from}->${e.to}${e.label ? `#${e.label}` : ''}`, source: e.from, target: e.to,
       edgeLabels: signal(e.label ? { center: { type: 'default' as const, text: e.label } } : {}),
-      markers: signal({ end: { type: 'arrow-closed' as const, width: 16, height: 16, color: e.label === 'error' ? 'var(--warn-line)' : e.label ? 'var(--accent)' : 'var(--muted)' } }),
+      markers: signal({ end: { type: 'arrow-closed' as const, width: 16, height: 16, color: e.label === 'error' ? 'var(--warn-line)' : e.label ? 'var(--acc2)' : 'var(--muted)' } }),
     } as Edge));
   });
   private depths(v: RunView): Map<string, number> {

@@ -7,7 +7,7 @@
 .qviews,.dtabs {display:flex;gap:.4rem;flex-wrap:wrap;margin:.75rem 0;}
 .qviews button,.dtabs button {background:var(--card);color:var(--label);border:1px solid var(--field-line);margin:0;min-height:2.5rem;}
 .qviews button {border-radius:999px;font-size:.8rem;}
-.qviews button.on,.dtabs button.on {background:var(--chip-bg);color:var(--chip-ink);border-color:var(--accent);}
+.qviews button.on,.dtabs button.on {background:var(--chip-bg);color:var(--chip-ink);border-color:var(--acc2);}
 .dtabs {position:sticky;top:0;background:var(--card);padding:.5rem 0;z-index:1;border-bottom:1px solid var(--line);margin:0;}
 .dtabs button {flex:1;padding:.5rem .6rem;font-size:.82rem;white-space:nowrap;}
 .chips {display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;}
