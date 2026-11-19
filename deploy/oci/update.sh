@@ -348,10 +348,14 @@ tar -C "$(dirname "$DATA_DIR")" -czf "$DATA_BACKUP" "$(basename "$DATA_DIR")" \
 
 # Full application state capture. Content: for every user table, the row count AND an
 # order-independent content hash (same count never means same data - constant-cardinality
-# edits change the hash). Schema: a NORMALIZED export - columns with defaults and
-# nullability, constraints, indexes, views, functions and sequence definitions, one line per
-# object, ordered, hashed as a whole (an altered default, a dropped index, a changed view or
-# function all change it). Sequences: the FULL runtime state (last_value + is_called) of
+# edits change the hash). Schema: a NORMALIZED, SEMANTICALLY STABLE export - columns with
+# defaults and nullability, constraint DEFINITIONS (pg_get_constraintdef: the semantic
+# expression, never the catalog name - synthetic names embed internal identifiers that
+# change on drop+recreate of an identical schema, reproduced in the isolated failure test),
+# index definitions with the index NAME stripped (same reason), views, functions and
+# sequence definitions - one line per object, ordered, hashed as a whole. A genuinely
+# different constraint/index/column changes the definition and the hash; a mere synthetic
+# NAME change does not. Sequences: the FULL runtime state (last_value + is_called) of
 # every sequence. Every query runs with ON_ERROR_STOP: an enumeration or read failure aborts
 # the capture, it is never ignored (a failed capture aborts the update on the backup path and
 # keeps the service down on the restore path).
@@ -361,8 +365,8 @@ pg_state_capture() {
   _psql() { docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tA -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null; }
   _schema="$(_psql "SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) FROM (
       SELECT 'col '||table_schema||'.'||table_name||'.'||column_name||' '||udt_name||' '||is_nullable||' '||coalesce(column_default,'') AS line FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog','information_schema')
-      UNION ALL SELECT 'con '||constraint_schema||'.'||table_name||'.'||constraint_name||' '||constraint_type FROM information_schema.table_constraints WHERE constraint_schema NOT IN ('pg_catalog','information_schema')
-      UNION ALL SELECT 'idx '||schemaname||'.'||indexname||' '||indexdef FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'con '||n.nspname||'.'||coalesce(cl.relname,'')||' '||c.contype||' '||pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace LEFT JOIN pg_class cl ON cl.oid=c.conrelid WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'idx '||schemaname||'.'||tablename||' '||regexp_replace(indexdef, '^(CREATE (UNIQUE )?INDEX )\\S+', '\\1') FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog','information_schema')
       UNION ALL SELECT 'view '||table_schema||'.'||table_name||' '||coalesce(view_definition,'') FROM information_schema.views WHERE table_schema NOT IN ('pg_catalog','information_schema')
       UNION ALL SELECT 'fun '||routine_schema||'.'||routine_name||' '||routine_type||' '||coalesce(routine_definition,'') FROM information_schema.routines WHERE routine_schema NOT IN ('pg_catalog','information_schema')
       UNION ALL SELECT 'seqdef '||sequence_schema||'.'||sequence_name||' '||data_type||' '||start_value||' '||minimum_value||' '||maximum_value||' '||increment FROM information_schema.sequences WHERE sequence_schema NOT IN ('pg_catalog','information_schema')

@@ -20,8 +20,10 @@ real user data.
    files - even for a same-image redeploy), then: tar of the data directory, a per-database
    `pg_dump` of the PostgreSQL companion (a failed export aborts; no pipe can hide it) with a
    FULL application-state capture (per-table row count + an order-independent content
-   hash of every row; a normalized schema export - columns with defaults, constraints,
-   indexes, views, functions, sequence definitions - hashed as a whole; and every
+   hash of every row; a normalized, semantically stable schema export - columns with defaults,
+   constraint DEFINITIONS (never synthetic catalog names, which embed internal identifiers
+   that change on drop+recreate), name-stripped index definitions, views, functions,
+   sequence definitions - hashed as a whole; and every
    sequence's last_value + is_called, every query under ON_ERROR_STOP so an enumeration or
    read failure aborts the capture, never ignored), a tar of the OpenBao storage plus its
    unseal-key
