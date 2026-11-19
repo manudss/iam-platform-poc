@@ -294,8 +294,13 @@ setup by the repository administrator, once the update path has been validated o
 Backups land in `LYAM_BACKUP_DIR` (default `/opt/lyam/backups`), kept
 `LYAM_BACKUP_KEEP` generations per kind: `lyam-data-*.tar.gz`, `lyam-pg-*.sql.gz`,
 `lyam-bao-*.tar.gz` (storage + unseal keys) and the private `lyam-recovery-*.tar.gz`
-bundle (0600: env file, compose / bao config / policy, manifest with sha256 of every
-artifact and the captured table state). These LOCAL generations serve fast rollback on the
+bundle (0600: env file, compose / bao config / policy, the updater profile itself -
+scripts, boot unit and companions of the exact version that produced the archives, so a
+rebuild never depends on a script outside the backup - and a manifest with the sha256 of
+every artifact, the captured table state, and the mode/owner/secret flag of every bundled
+file). Non-secret files keep their source mode/owner inside the bundle so a restore leaves
+them readable by the container user; the env file and compose env are forced to root 0600
+whatever their source mode. These LOCAL generations serve fast rollback on the
 host. The durable
 layer is the platform volume snapshot (see guarantee 6): the first snapshot exists
 (2026-11-19, retention until 2026-12-16, verified to contain the cold application archive;
@@ -323,10 +328,14 @@ expectation for that backup before serving.
 Qualification path for a full rebuild on a NEW host from `lyam-recovery-<ts>.tar.gz` plus
 the data/pg/bao backups of the same generation:
 
-1. Untar the bundle at `/` (`tar -C / -xzf lyam-recovery-<ts>.tar.gz`): the tree is
-   preserved, so the env file, compose file, compose `.env` (PG password), bao config and
-   policy, systemd unit, boot scripts and front-gate Caddy config all land at their
-   original paths. Read `MANIFEST` for the image refs, backup names and their sha256.
+1. Untar the bundle at `/` as root (`tar -C / -xzf lyam-recovery-<ts>.tar.gz` - root
+   extraction preserves the recorded modes): the tree is preserved, so the env file,
+   compose file, compose `.env` (PG password), bao config and policy, systemd unit, boot
+   scripts and front-gate Caddy config all land at their original paths with the modes the
+   manifest records (secrets 0600 root, non-secret files readable by their container user -
+   verify against the manifest's `file mode=... owner=...` lines and re-apply any drift).
+   The updater of this exact generation is under `updater/` in the bundle. Read `MANIFEST`
+   for the image refs, backup names and their sha256.
 2. Verify each backup against the manifest sha256 BEFORE restoring anything.
 3. Install docker + the `bao` CLI (at `/usr/bin/bao`, not `/bin/bao`), create `lyam-net`,
    run the recovered `prepare-dirs.sh` (bind dirs owned by the image users), then bring the

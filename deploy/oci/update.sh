@@ -435,18 +435,38 @@ fi
 
 # Private recovery bundle: everything needed to rebuild the service from these backups -
 # env file (root 0600), compose / bao config (mandatory when the companions are configured),
-# extra recovery files, and a manifest of this generation. The tree is PRESERVED (cp
-# --parents), never flattened: two files with the same basename can never collide. The
+# extra recovery files, the updater itself (a fresh stack rebuilds from the bundle alone,
+# never from a script living outside the backup), and a manifest of this generation. The
+# tree is PRESERVED (cp -p --parents), never flattened: two files with the same basename
+# can never collide, and NON-secret files keep their source mode/owner so a restore leaves
+# them readable by the container user (a flat 0600-root copy made the bao config unreadable
+# inside the container on a fresh-stack rebuild). Secret files (the env file and the
+# compose env) are forced to root 0600 whatever their source mode. The manifest records
+# mode/owner/secret/sha256 for every file so the restore can verify and re-apply them. The
 # staging dir is 0700 and the archive 0600 from creation (umask 077 above).
 RECOVERY="$BACKUP_DIR/lyam-recovery-$TS.tar.gz"
 STAGE="$BACKUP_DIR/.recovery-$TS"
 mkdir -m 700 -p "$STAGE"
 rec_ok=1
-for f in "$ENV_FILE" ${COMPOSE_FILE:+"$COMPOSE_FILE"} ${COMPOSE_ENV_FILE:+"$COMPOSE_ENV_FILE"} \
-         ${BAO_CONFIG_FILE:+"$BAO_CONFIG_FILE"} ${BAO_POLICY_FILE:+"$BAO_POLICY_FILE"} \
-         $STACK_FILES $RECOVERY_FILES; do
+BUNDLE_FILES="$ENV_FILE ${COMPOSE_FILE:-} ${COMPOSE_ENV_FILE:-} ${BAO_CONFIG_FILE:-} ${BAO_POLICY_FILE:-} $STACK_FILES $RECOVERY_FILES"
+SECRET_FILES="$ENV_FILE ${COMPOSE_ENV_FILE:-}"
+for f in $BUNDLE_FILES; do
   [ -n "$f" ] || continue
-  cp --parents "$f" "$STAGE" 2>/dev/null || rec_ok=0
+  cp -p --parents "$f" "$STAGE" 2>/dev/null || rec_ok=0
+done
+# The updater profile is part of the backup: scripts, boot unit and companions of the
+# EXACT version that produced these archives, under updater/ in the bundle.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+mkdir -p "$STAGE/updater"
+for f in update.sh host-boot.sh prepare-dirs.sh front-barrier-check.sh lyam-boot.service lyam.env.example; do
+  [ -f "$SCRIPT_DIR/$f" ] && { cp -p "$SCRIPT_DIR/$f" "$STAGE/updater/" || rec_ok=0; }
+done
+[ -d "$SCRIPT_DIR/companions" ] && { cp -rp "$SCRIPT_DIR/companions" "$STAGE/updater/" || rec_ok=0; }
+# Secrets stay strictly private no matter how loose the host copy was.
+for f in $SECRET_FILES; do
+  [ -n "$f" ] && [ -f "$STAGE$f" ] || continue
+  chmod 600 "$STAGE$f" || rec_ok=0
+  [ "$(id -u)" = 0 ] && { chown 0:0 "$STAGE$f" || rec_ok=0; }
 done
 MANIFEST="$STAGE/MANIFEST"
 {
@@ -459,6 +479,16 @@ MANIFEST="$STAGE/MANIFEST"
   [ -n "${BAO_BACKUP:-}" ] && echo "bao_backup=$(basename "$BAO_BACKUP") sha256=$(sha256sum "$BAO_BACKUP" | cut -d' ' -f1)"
   [ -n "${BAO_KEYS_DIR:-}" ] && echo "bao_keys_included=yes"
   echo "front_barrier_file=$BARRIER_FILE"
+  for f in $BUNDLE_FILES; do
+    [ -n "$f" ] && [ -f "$STAGE$f" ] || continue
+    s=no
+    case " $SECRET_FILES " in *" $f "*) s=yes ;; esac
+    echo "file mode=$(stat -c '%a' "$STAGE$f") owner=$(stat -c '%u:%g' "$STAGE$f") secret=$s sha256=$(sha256sum "$STAGE$f" | cut -d' ' -f1) path=$f"
+  done
+  find "$STAGE/updater" -type f | while read -r u; do
+    rel=${u#"$STAGE/"}
+    echo "file mode=$(stat -c '%a' "$u") owner=$(stat -c '%u:%g' "$u") secret=no sha256=$(sha256sum "$u" | cut -d' ' -f1) path=$rel"
+  done
 } > "$MANIFEST"
 tar -C "$STAGE" -czf "$RECOVERY" . 2>/dev/null || rec_ok=0
 rm -rf "$STAGE"

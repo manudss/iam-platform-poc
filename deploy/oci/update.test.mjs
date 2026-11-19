@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -194,6 +194,35 @@ test('happy path: front gate proven FIRST, cold backup, gate lifted only when he
   for (const want of ['lyam.env', 'compose.yml', 'compose.env', 'lyam-boot.service', 'host-boot.sh', 'bao-bootstrap.sh', 'lyam-gate.caddy', 'MANIFEST']) {
     assert.ok(listing.includes(want), `recovery bundle carries ${want}`);
   }
+});
+
+test('recovery bundle: non-secret modes preserved, secrets forced 0600, updater inside, manifest records modes', () => {
+  // Isolated fresh-stack rebuild found the bao config landing as an unreadable root file:
+  // a restrictive umask flattened every copied mode. Non-secret files must keep their
+  // source mode/owner, secrets must be forced to 0600, and the bundle must carry the
+  // updater itself so a rebuild never depends on a script outside the backup.
+  const base = mkdtempSync(join(tmpdir(), 'lyam-fixture-'));
+  const { env, dir } = setup({ pg: true, extraEnv: [`LYAM_RECOVERY_FILES=${join(base, 'bao-extra.conf')}`] });
+  writeFileSync(join(base, 'bao-extra.conf'), '# test policy');
+  chmodSync(join(dir, 'compose.env'), 0o644);   // a secret left loose on the host
+  chmodSync(join(base, 'bao-extra.conf'), 0o640); // a non-secret file with a specific mode
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 0, r.stderr);
+  const bundle = readdirSync(join(dir, 'backups')).find((f) => f.startsWith('lyam-recovery-'));
+  const out = mkdtempSync(join(tmpdir(), 'lyam-recovery-'));
+  const x = spawnSync('tar', ['-xzf', join(dir, 'backups', bundle), '-C', out], { encoding: 'utf8' });
+  assert.equal(x.status, 0, x.stderr);
+  const mode = (p) => (statSync(p).mode & 0o777).toString(8);
+  const found = (name) => spawnSync('find', [out, '-name', name, '-type', 'f'], { encoding: 'utf8' }).stdout.trim().split('\n')[0];
+  assert.equal(mode(found('bao-extra.conf')), '640', 'non-secret file keeps its source mode');
+  assert.equal(mode(found('compose.env')), '600', 'secret compose env forced private');
+  assert.equal(mode(found('lyam.env')), '600', 'secret env file forced private');
+  assert.ok(existsSync(join(out, 'updater', 'update.sh')), 'the updater travels inside the bundle');
+  assert.ok(existsSync(join(out, 'updater', 'host-boot.sh')), 'the boot script travels inside the bundle');
+  const manifest = readFileSync(join(out, 'MANIFEST'), 'utf8');
+  assert.match(manifest, /file mode=640 owner=\d+:\d+ secret=no sha256=[0-9a-f]{64} path=.*bao-extra\.conf/, 'manifest records the preserved non-secret mode');
+  assert.match(manifest, /file mode=600 owner=\d+:\d+ secret=yes sha256=[0-9a-f]{64} path=.*lyam\.env/, 'manifest records the enforced secret mode');
+  assert.match(manifest, /path=updater\/update\.sh/, 'manifest lists the bundled updater');
 });
 
 test('a foreign maintenance gate refuses the update and is never removed', () => {
