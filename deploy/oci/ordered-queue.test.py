@@ -18,9 +18,9 @@ class Queue(unittest.TestCase):
   q.deploy(self.path,plan(1,2,3),'update',self.runok);q.deploy(self.path,plan(1,2),'update',self.runok);self.assertEqual(len(self.calls),2)
  def test_overlap_older_then_newer(self):
   q.deploy(self.path,plan(1,2),'update',self.runok);q.deploy(self.path,plan(1,2,3),'update',self.runok);self.assertEqual(len(self.calls),2)
- def test_digest_drift(self):
+ def test_rebuilt_overlap_never_replaces_deployed_digest(self):
   q.deploy(self.path,plan(1,2),'update',self.runok);bad=plan(1,2,3);bad['entries'][0]['digest']=D(999)
-  with self.assertRaises(ValueError):q.deploy(self.path,bad,'update',self.runok)
+  q.deploy(self.path,bad,'update',self.runok);self.assertEqual(q.load(self.path)['history'][1]['digest'],D(2));self.assertEqual(len(self.calls),2)
  def test_fail_blocks_followers_and_retry(self):
   with self.assertRaises(RuntimeError):q.deploy(self.path,plan(1,2,3),'update',lambda *a,**k:SimpleNamespace(returncode=3))
   self.assertEqual(len(q.load(self.path)['history']),1)

@@ -25,10 +25,12 @@ Independent main CI still runs. Image concurrency is now per-run/SHA instead of 
 an earlier main build. PR checks may still cancel superseded PR versions.
 
 The host validates contiguous parent links, full SHA/digests and known baseline. It skips
-only the identical already-confirmed prefix (same SHA AND digest). A later workflow arriving
+only the identical already-confirmed prefix (same confirmed source SHA, preserving its original deployed digest). A later workflow arriving
 first still contains all earlier missing commits and deploys them first. An older workflow
-arriving later is an already-confirmed no-op, not a rewind. An altered digest for a confirmed
-SHA is refused and requires investigation.
+arriving later is an already-confirmed no-op, not a rewind. An overlapping workflow may build the same source SHA with a different digest because
+image signing keys are generated at build time. That already-deployed prefix is skipped
+by confirmed source SHA; the original historical deployed digest is NEVER overwritten,
+substituted or redeployed. Only still-missing SHAs use their same-run qualified digest.
 
 ## Failures and interruption
 
@@ -99,7 +101,7 @@ not overwritten from an unqualified default-branch checkout by every workflow.
    the workflow's green status. Emmanuel keeps PR merge control.
 
 Local tests cover multi-commit planning, out-of-order overlapping runs, duplicate prevention,
-digest drift, gaps/divergence, apply failure and crash-pending refusal, plus mandatory hook
+rebuilt-overlap digest preservation, gaps/divergence, apply failure and crash-pending refusal, plus mandatory hook
 failure before stop and gate-held success/failure. Full isolated host qualification and real
 workflow_call validation remain activation requirements, not claims made by unit tests.
 

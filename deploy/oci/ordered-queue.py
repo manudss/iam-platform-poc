@@ -47,8 +47,11 @@ def deploy(path, plan, updater, runner=subprocess.run):
     overlap=min(len(entries),len(confirmed)-offset)
     for i in range(overlap):
         old=state['history'][offset+i]
-        if old['sha']!=entries[i]['sha'] or old.get('digest')!=entries[i]['digest']:
+        if old['sha']!=entries[i]['sha']:
             raise ValueError('deployment history divergence')
+        # An overlapping qualified workflow may rebuild the same source SHA with
+        # different generated build-time signing keys. Its digest is NOT deployed,
+        # substituted, or written over the already-confirmed historical digest.
     if offset+overlap<len(confirmed):
         if overlap==len(entries): return state  # older runner completed after a newer runner
         raise ValueError('noncontiguous plan')
