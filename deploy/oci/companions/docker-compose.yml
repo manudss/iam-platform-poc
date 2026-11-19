@@ -1,5 +1,5 @@
 # Persistent companions for the Lyam demo host (docs/oci-deploy.md): PostgreSQL (durable
-# activation journal + decision audit) and OpenBao file backend (durable plugin/workflow
+# activation journal + decision audit) and OpenBao (embedded PebbleDB backend; durable plugin/workflow
 # secrets). Both join the lyam-net network that the lyam container also uses.
 #
 # Bring them up ONCE, before the first lyam boot that references them:

@@ -17,17 +17,23 @@ real user data.
    empty database (`demo/dolt-state.mjs`): any doubt stops the boot instead of seeding over
    existing data.
 2. **Backup before every update.** The container is ALWAYS stopped first (cold, consistent
-   files - even for a same-image redeploy), then: tar of the data directory, `pg_dumpall` of
-   the PostgreSQL companion (a failed export aborts; no pipe can hide it) and a tar of the
-   OpenBao storage taken while the Bao container is stopped. A host lock
-   (`LYAM_LOCK_FILE`) refuses concurrent runs.
-3. **Health gate + compensation.** The new container must be creatable AND answer `/healthz`
-   within `LYAM_HEALTH_TIMEOUT` seconds. Any failure rolls back image AND data together: the
-   pre-update backup is restored first (the failed version may have migrated the Dolt schema
-   or plugin state at boot, so an old image on a newer data state is not a safe rollback),
-   the PostgreSQL dump is replayed and the OpenBao storage restored when configured, then
-   the previous image starts. Restoring costs nothing: the container was stopped during the
-   backup, so no user write can be lost.
+   files - even for a same-image redeploy), then: tar of the data directory, a per-database
+   `pg_dump` of the PostgreSQL companion (a failed export aborts; no pipe can hide it; the
+   journal row count is captured for post-restore verification) and a tar of the OpenBao
+   storage plus its unseal-key directory taken while the Bao container is stopped. A host
+   lock (`LYAM_LOCK_FILE`) refuses concurrent runs.
+3. **Health gate + compensation.** The new container starts on a CANARY loopback port
+   (`LYAM_CANARY_PORT`, default 18080) and must answer `/healthz` within
+   `LYAM_HEALTH_TIMEOUT` seconds before being published on the public port. Visitors never
+   reach an unvalidated version (the public port serves nothing during the window), so no
+   write can land on a version a rollback would then discard. Any failure rolls back image
+   AND data together: the pre-update backup is restored first (the failed version may have
+   migrated the Dolt schema or plugin state at boot, so an old image on a newer data state
+   is not a safe rollback). The PostgreSQL restore is drop + recreate + verified replay
+   (`ON_ERROR_STOP=1`, journal row count compared against the pre-update capture; a
+   postmortem dump of the failed state is kept first), and the OpenBao storage is restored
+   and unsealed before the previous image starts. If ANY verification fails, the service
+   stays DOWN (exit 4) rather than exposing an unverified state.
 4. **Immutable versions only.** The updater accepts a full commit-SHA tag or a
    `@sha256:` digest - never a moving tag like `latest`.
 5. **Deliberate freeze.** Creating the pause file (default `/opt/lyam/UPDATE_PAUSED`)
@@ -50,7 +56,8 @@ One docker network (`lyam-net`) with:
   (`127.0.0.1:8080`), HTTPS terminated by Caddy on the host.
 - `pg` (optional) - PostgreSQL with its own volume: durable activation journal and
   decision audit via `IAM_PG_URL`.
-- `bao` (optional) - OpenBao with file storage: durable plugin and workflow-connection
+- `bao` (optional) - OpenBao with embedded PebbleDB storage (the legacy `file` backend was
+  removed in OpenBao 2.7): durable plugin and workflow-connection
   secrets via `IAM_BAO_ADDR` + `IAM_BAO_TOKEN`.
 
 Without `pg`/`bao` the demo still keeps its Dolt data and credentials across restarts,
@@ -87,8 +94,9 @@ first use; point `IAM_PG_URL=postgres://<user>:<password>@pg:5432/<db>` in `lyam
 storage on the host path `/opt/lyam/bao-storage`, loopback-only publication). Then
 `deploy/oci/companions/bao-bootstrap.sh` initializes the backend ONCE (it refuses to
 re-initialize), unseals it (safe to re-run after every bao restart - hook it into the host
-boot), writes `deploy/oci/companions/bao-policy.hcl` and mints a periodic (30-day) scoped
-token into a root-owned 0600 file. It never prints a secret. Constraints:
+boot; `--unseal-only` skips every init step), writes `deploy/oci/companions/bao-policy.hcl`,
+enables the KV-v2 engine if needed, and mints a scoped token with an explicit 960 h (40-day)
+TTL into a root-owned 0600 file. It never prints a secret. Constraints:
 
 - Bao seals on every restart: keep the unseal key(s) and root token in a mode-0600 file
   on the host (that is what `bao-bootstrap.sh` produces) and unseal at boot (demo-grade;
@@ -109,8 +117,12 @@ token into a root-owned 0600 file. It never prints a secret. Constraints:
   path "secret/data/iam/pg" { capabilities = ["read"] }
   ```
 
-  Prefer a renewable/periodic token: a short-lived non-renewable token silently cuts the
-  API off its secrets when it expires.
+  The API does NOT renew Bao leases (POC scope, `apps/api/src/integrations/secrets.service.ts`),
+  so the minted token carries an explicit 960 h TTL sized to the demo window. Re-issue before
+  expiry: re-run `bao-bootstrap.sh` (it mints a new token only when the current one is invalid
+  and announces loudly that the app env must be updated), put the new token into `lyam.env`
+  and restart the `lyam` container. Re-running the script after a bao restart unseals without
+  re-minting, so processes holding the current token are never cut off.
 
 ## Migrating the state of a running RAM-mode instance (first switch)
 
@@ -151,8 +163,7 @@ sudo sh update.sh --image ghcr.io/manudss/iam-platform-poc:<full-commit-sha>
 
 Automatic (`.github/workflows/oci-deploy.yml`): after each successful main image build,
 the workflow carries `update.sh` over SSH and runs it with the new SHA (via sudo). One-time
-setup, performed by the assistant through the GitHub UI once the update path has been
-validated on the host (the owner is only involved if a 2FA prompt needs him):
+setup by the repository administrator, once the update path has been validated on the host:
 
 1. On the host: `ssh-keygen -t ed25519 -f ~/.ssh/lyam-deploy` (no passphrase), append
    `lyam-deploy.pub` to `~/.ssh/authorized_keys`.
@@ -176,17 +187,20 @@ layer is the platform volume snapshot (see guarantee 6): the first snapshot exis
 restoring the volume itself has not been drilled yet and it does not capture Bao RAM state).
 Keep the two layers distinct in any recovery plan.
 
-Restore (service stopped):
+Restore (service stopped, consistent replay into a clean database):
 
 ```sh
 rm -rf /opt/lyam/data && mkdir /opt/lyam/data
 tar -C /opt/lyam -xzf /opt/lyam/backups/lyam-data-<ts>.tar.gz   # restores data/
-zcat /opt/lyam/backups/lyam-pg-<ts>.sql.gz | docker exec -i pg psql -U postgres   # when pg is used
-tar -C / -xzf /opt/lyam/backups/lyam-bao-<ts>.tar.gz            # path from LYAM_BACKUP_BAO_DIR
+docker exec pg psql -U lyam -d postgres -v ON_ERROR_STOP=1 -c 'DROP DATABASE IF EXISTS "lyam"'
+docker exec pg psql -U lyam -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE "lyam"'
+zcat /opt/lyam/backups/lyam-pg-<ts>.sql.gz | docker exec -i pg psql -U lyam -d lyam -v ON_ERROR_STOP=1 -q
+tar -C / -xzf /opt/lyam/backups/lyam-bao-<ts>.tar.gz            # paths from LYAM_BACKUP_BAO_DIR/KEYS_DIR
 ```
 
 Then boot with `IAM_DEMO_SEED_MODE=never`: with a dataset present the guard passes and
-nothing is seeded.
+nothing is seeded. After the pg replay, compare the journal row count
+(`SELECT count(*) FROM activations`) with the expectation for that backup before serving.
 
 ## Failure modes
 
@@ -199,10 +213,11 @@ nothing is seeded.
 | Another update running | Refused (host lock) |
 | Pre-update hook (volume snapshot) fails | Aborted, previous container restarted |
 | Backup fails (data tar, pg export, bao archive) | Update aborts, previous container restarted |
-| New container cannot be created | Compensation: data/pg/bao restored, previous image started |
-| New image never healthy | Same compensation (image + data restored together) |
+| New container cannot be created | Compensation: data/pg/bao restored and verified, previous image started |
+| New image never healthy on the canary port | Same compensation (image + data restored together; the failed version was never published) |
+| PostgreSQL restore or journal verification fails in rollback | Service stays DOWN, postmortem dump kept, manual verification requested (exit 4) |
+| Bao unseal/wait-ready fails in rollback | Service stays DOWN, manual unseal requested (exit 4) |
 | Rollback never healthy | Backup restored, manual verification requested |
-| PostgreSQL restore | Overlay replay of the dump: objects CREATED by the failed version are not dropped - drop/recreate the database manually from the dump in that case |
 | Bao sealed/unreachable at boot | API fails closed on secret reads; no data is deleted |
 
 ## Validation status

@@ -1,8 +1,10 @@
-# OpenBao demo companion: file storage on a host-backed path, no TLS (loopback / docker network
-# only - Caddy terminates the public TLS in front of the app, Bao is never public). Demo-grade:
-# mlock disabled, unseal key material lives in root-owned 0600 files on the same host. A real
-# deployment would use TLS, mlock and an external auto-unseal - out of demo scope.
-storage "file" {
+# OpenBao demo companion: embedded PebbleDB storage on a host-backed path, no TLS (loopback / docker
+# network only - Caddy terminates the public TLS in front of the app, Bao is never public).
+# Demo-grade: mlock disabled, unseal key material lives in root-owned 0600 files on the same
+# host. A real deployment would use TLS, mlock and an external auto-unseal - out of demo scope.
+# NOTE: the legacy `file` backend was removed in OpenBao 2.7.0 ("unknown storage type file");
+# pebbledb is its direct single-directory replacement in 2.7.x.
+storage "pebbledb" {
   path = "/bao/file"
 }
 
