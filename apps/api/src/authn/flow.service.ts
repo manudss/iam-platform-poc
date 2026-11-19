@@ -1,3 +1,4 @@
+import { seedAuthnV1 } from '../migrations/v0001/authn-seed.js';
 import { randomBytes } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -72,7 +73,7 @@ const SESSION_MS = 5 * 60_000, MAX_TRIES = 3, THROTTLE_N = 10, THROTTLE_MS = 10 
  * a technical failure of a method throws (the gate answers 503 and the core refuses the sign-in: fail closed).
  */
 /** Published FICTIONAL demo credentials for demo-alice (opt-in demo seed only). */
-export const DEMO_TOTP_SECRET = 'JBSWY3DPEHPK3PXP', DEMO_PIN = '246810', DEMO_PIN8 = '24681024';
+export { DEMO_TOTP_SECRET, DEMO_PIN, DEMO_PIN8 } from '../migrations/v0001/authn-seed.js';
 
 @Injectable()
 export class AuthnService implements OnApplicationBootstrap {
@@ -103,24 +104,13 @@ export class AuthnService implements OnApplicationBootstrap {
    * configuration or enrollment. No real secret is created.
    */
   async onApplicationBootstrap() {
+    if (process.env.IAM_DATA_MIGRATIONS === '1') return;
     if (process.env.IAM_AUTHN_DEMO_SEED !== '1') return;
     const tenant = process.env.IAM_AUTHN_DEMO_SEED_TENANT || 'acme-demo';
     try { await this.seedDemo(tenant); } catch (e) { console.warn('authn demo seed skipped:', (e as Error).message); }
   }
   async seedDemo(tenant: string): Promise<boolean> {
-    const main = await (workspaceMode() ? this.branches!.get('main') : this.reg);
-    if (!isEmptyConfig(parseStored(await main.coreSettings(tenant, CORE_SETTINGS_ID)))) return false;
-    const cfg = validateConfig(SEED_CONFIG);
-    await main.putCoreSettings(tenant, CORE_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
-    // The seeded chains use TOTP, e-mail code, PIN and passkey: their method plugins must serve the slots (step 2).
-    // The profile components they ship (passkey management, authenticator setup) run plugin JS in the console: the uiComponents grant.
-    for (const id of ['auth-totp', 'auth-email-otp', 'auth-digit-code', 'auth-webauthn']) { try { await main.install(tenant, id, {}); } catch { /* already installed */ } try { await main.enable(tenant, id, { uiComponents: true }); } catch (e) { console.warn('authn demo seed: cannot enable', id, (e as Error).message); } }
-    const have = await this.enroll.status(tenant, 'demo-alice');
-    if (!have['authenticator-app']) await this.enroll.setTotp(tenant, 'demo-alice', 'authenticator-app', DEMO_TOTP_SECRET);
-    if (!have['pin-keypad']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad', DEMO_PIN);
-    if (!have['pin-keypad-8']) await this.enroll.setPin(tenant, 'demo-alice', 'pin-keypad-8', DEMO_PIN8);
-    if (!have['e-mail-code']) await this.enroll.setEmail(tenant, 'demo-alice', 'e-mail-code', 'alice@example.invalid');
-    return true;
+    return seedAuthnV1(tenant, this.reg, this.enroll, this.branches);
   }
   /** Session length settings (docs/session.md): sign-in reads them on Dolt main, or on the tested branch; the console edits them on the working branch. */
   async signinSession(tenant: string, branch?: string): Promise<SessionConfig> { return parseSession(await (await this.signinRegistry(branch)).coreSettings(tenant, SESSION_SETTINGS_ID)); }

@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "versions": [
+    {
+      "id": "0001",
+      "name": "Complete initial demo baseline",
+      "files": {
+        "apps/api/src/migrations/v0001/app-connectors.ts": "0b432012102b31bc40f00142bbae3741b83411cc93f494c114543b9420d7c651",
+        "apps/api/src/migrations/v0001/authn-config.ts": "8cd09e153ec3e1ed3f2745d6482f3ef23501016016ccea16c1a3828d4c1fb1b6",
+        "apps/api/src/migrations/v0001/authn-seed.ts": "9f93d39f6f49fd856ca6ed9f37881da295166e01a2c5de4e0f3be7eb6269dd22",
+        "apps/api/src/migrations/v0001/demo-data.service.ts": "25ff20a56b7695caf9027612372000fd681911844a73c2018a9dfcb15ab1626c",
+        "apps/api/src/migrations/v0001/directory.ts": "0e8c2250d94738f33d200d2e1055fac10afc00537805dcc3647cf41caaa7e4a3",
+        "apps/api/src/migrations/v0001/run.ts": "7f2a4ed4f0882995b72c35e9e261b3261649fb1f93118e04b76a2b62f1ad1351",
+        "apps/api/src/migrations/v0001/workflow-seed.ts": "253a4dbba58bffe638c1060ce28af85a9b8a822be2c5b6a2f6cee58af0f3805f",
+        "data/migrations/0001-initial.sql": "1a6f86951f5931aaee1c0a10e50f05bf600d424fcb95bf68703f558d36a543b0"
+      },
+      "checksum": "047a391cbfbc41131dddc96bc432a85277c77d84a96676ee32c233594a41fe86"
+    }
+  ]
+}
