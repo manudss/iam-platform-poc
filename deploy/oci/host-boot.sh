@@ -54,16 +54,30 @@ if [ -n "$BAO_CONTAINER" ]; then
 fi
 
 log "starting $CONTAINER (seed mode: never)"
+# The front must be UP before anything it gates: the coordinated recreation proves its gate
+# through the origin, and a boot that races Caddy would fail randomly. Bounded wait - any
+# HTTP code counts; 000 means the front itself is not answering yet.
+ORIGIN="$(getconf IAM_PUBLIC_ORIGIN)"; ORIGIN="${ORIGIN%/}"
+if [ -n "$ORIGIN" ] && command -v curl >/dev/null 2>&1; then
+  n=0
+  while [ "$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "$ORIGIN/healthz" 2>/dev/null || echo 000)" = "000" ]; do
+    n=$((n + 1)); [ "$n" -lt "$BOOT_TRIES" ] || fail "the front at $ORIGIN never came up; not starting the app (its gate could not be proven)"
+    sleep 5
+  done
+  log "front answering at $ORIGIN"
+fi
 # docker start does NOT reload the env - not even on a stopped container. When the env file
 # drifted from the container's recorded env (a bao-bootstrap re-mint syncs IAM_BAO_TOKEN into
 # the file; the container still holds the previous value), a plain start would RESUME WITH A
-# DIVERGENT ENVIRONMENT. Never serve that: recreate from the env file through the updater's
+# DIVERGENT ENVIRONMENT. Comparison scope: EVERY IAM_* application parameter sourced from
+# the env file (the seed mode is forced by the run flag and the image config is immutable,
+# so they cannot drift). Never serve that: recreate from the env file through the updater's
 # own coordinated same-image redeploy (cold backup, front gate, health gate), and fail the
 # boot if that recreation fails.
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
   CONT_ENV="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" 2>/dev/null || true)"
   DIVERGED=""
-  for key in IAM_BAO_TOKEN IAM_PG_URL; do
+  for key in $(sed -n 's/^\(IAM_[A-Za-z0-9_]*\)=.*/\1/p' "$ENV_FILE" 2>/dev/null); do
     fv="$(getconf "$key")"
     cv="$(printf '%s\n' "$CONT_ENV" | sed -n "s/^$key=//p" | head -n 1)"
     [ "$fv" = "$cv" ] || DIVERGED="$DIVERGED $key"

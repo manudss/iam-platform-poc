@@ -96,7 +96,7 @@ gate_up
 check "GET /healthz gated" 503 "$ORIGIN/healthz"
 check "POST /healthz gated" 503 "$ORIGIN/healthz" POST
 
-note "== 4. SYNCHRONIZED concurrent transition =="
+note "== 4. SYNCHRONIZED concurrent transition + distinct post-lift wave =="
 RES="$WORK/results"; : > "$RES"; GO="$WORK/go"
 for i in $(seq 1 12); do
   ( while [ ! -f "$GO" ]; do sleep 0.01; done
@@ -111,10 +111,20 @@ if grep -qEv '^(200|503)$' "$RES"; then
   fail "a request during the transition got an unexpected code: $(sort -u "$RES" | tr '\n' ' ')"
 elif [ "$EARLY" != "503" ]; then
   fail "the first 6 synchronized results were not all 503 (gate was up): $(echo "$EARLY" | tr '\n' ' ')"
-elif ! tail -n 6 "$RES" | grep -q 200; then
-  fail "no request observed the re-opened front (200) after the synchronized lift"
 else
-  note "PASS 12 synchronized requests across the transition: 503 while gated, 200 after, no half-gated state"
+  note "PASS 12 synchronized requests across the transition: 503 while gated, only 200/503, no half-gated state"
+fi
+# Distinct wave AFTER the lift: proves the 200 (the transition wave may legitimately have
+# finished entirely under the gate).
+RES2="$WORK/results2"; : > "$RES2"
+for i in $(seq 1 6); do
+  curl -sk -o /dev/null -w '%{http_code}\n' "$ORIGIN/healthz" >> "$RES2" &
+done
+wait
+if [ "$(sort -u "$RES2")" = "200" ]; then
+  note "PASS post-lift wave: 6/6 requests 200 after the gate came down"
+else
+  fail "post-lift wave: wanted all 200, got $(sort -u "$RES2" | tr '\n' ' ')"
 fi
 
 note "== 5. gate DOWN =="

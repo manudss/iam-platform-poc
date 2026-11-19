@@ -128,7 +128,10 @@ proven 200 through the origin once the healthy version serves. Semantics that ma
   the gate up - fail closed;
 - coverage limits: a request already routed when the gate appears completes (the container
   stop drains in-flight work before any data changes); WebSocket/upgraded connections and
-  HTTP/2 stream reuse rely on Caddy's per-request routing plus the container stop.
+  HTTP/2 stream reuse rely on Caddy's per-request routing plus the container stop;
+- the concurrent check proves the transition with a synchronized burst (503 while gated,
+  only 200/503 across it) and then a DISTINCT post-lift wave that must be all 200 - the
+  transition wave alone may legitimately finish entirely under the gate.
 
 Prove the gate end-to-end on a THROWAWAY Caddy (never the main one) before trusting the
 first update. The check is EXPLICITLY SYNCHRONIZED (no sleep-based racing): a single
@@ -143,9 +146,13 @@ sudo IAM_PUBLIC_ORIGIN=https://<test-front> deploy/oci/front-barrier-check.sh
 ### Host boot ordering and reboot drill
 
 `deploy/oci/host-boot.sh` (driven by `lyam-boot.service`) owns the start order after a host
-reboot: `pg` up, `bao` up AND unsealed, then `lyam`. Before any `docker start` of the app it
-compares the env file against the container's recorded env (`docker start` never reloads
-env): a divergence - e.g. a re-minted Bao token synced into the file - triggers a
+reboot: the FRONT first (the unit orders after `caddy.service` and the script waits, bounded,
+for any HTTP answer from the origin - a boot that races Caddy would fail the gate proof
+randomly), then `pg` up, `bao` up AND unsealed, then `lyam`. Before any `docker start` of the
+app it compares every `IAM_*` application parameter sourced from the env file against the
+container's recorded env (`docker start` never reloads env; the seed mode is forced by the
+run flag and the image config is immutable, so they cannot drift - that is the comparison
+scope): a divergence - e.g. a re-minted Bao token synced into the file - triggers a
 coordinated same-image recreation through the updater instead of a plain start, and a
 failed recreation fails the boot rather than serving a divergent environment. The `lyam`
 container itself runs with
