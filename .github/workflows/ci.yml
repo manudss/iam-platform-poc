@@ -144,7 +144,15 @@ jobs:
         run: node --test demo/frame-policy.test.mjs demo/warm-signin.test.mjs
       - name: Demo edge routing (the whole /authorize surface, incl. the passkey script, reaches the core)
         run: node --test demo/server.test.mjs
+      # These are controller tests, not tests belonging to an older application SHA.
+      # Pin their tree to the called workflow revision. Never silently skip a missing test.
+      - name: Check out the pinned workflow controller test tree separately
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-automation
       - name: Durable ordered deployment queue
+        working-directory: .ci-automation
         run: |
           python3 deploy/oci/ordered-queue.test.py
           python3 deploy/oci/qualification.test.py
