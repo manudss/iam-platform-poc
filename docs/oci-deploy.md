@@ -167,9 +167,15 @@ survived) is part of qualifying a new host.
 ## Persistent companions
 
 **PostgreSQL.** Versioned and executable: `deploy/oci/companions/docker-compose.yml` brings
-up `pg` and `bao` on `lyam-net` (`PG_PASSWORD=<choice> docker compose -f docker-compose.yml up -d`,
+up `pg` and `bao` on `lyam-net`. Prepare the bind-mounted host directories FIRST:
+`sh deploy/oci/companions/prepare-dirs.sh` creates them owned by the image default user
+(queried from the image itself, never hardcoded) - Docker auto-creates an absent bind
+source as root:root and the unprivileged openbao container then cannot write it. Only then
+(`PG_PASSWORD=<choice> docker compose -f docker-compose.yml up -d`,
 password never committed). The API creates its `activations`/`decision_audit` tables itself at
 first use; point `IAM_PG_URL=postgres://<user>:<password>@pg:5432/<db>` in `lyam.env` at it.
+The host `bao` CLI (used by bao-bootstrap.sh and the unseal hook) belongs at
+`/usr/bin/bao` on the VM, not `/bin/bao`.
 
 **OpenBao.** Same compose file runs `bao server` with `deploy/oci/companions/bao.hcl` (file
 storage on the host path `/opt/lyam/bao-storage`, loopback-only publication). Then
@@ -318,7 +324,9 @@ the data/pg/bao backups of the same generation:
    policy, systemd unit, boot scripts and front-gate Caddy config all land at their
    original paths. Read `MANIFEST` for the image refs, backup names and their sha256.
 2. Verify each backup against the manifest sha256 BEFORE restoring anything.
-3. Install docker + the `bao` CLI, create `lyam-net`, then bring the companions up with
+3. Install docker + the `bao` CLI (at `/usr/bin/bao`, not `/bin/bao`), create `lyam-net`,
+   run the recovered `prepare-dirs.sh` (bind dirs owned by the image users), then bring the
+   companions up with
    the recovered compose file and compose env (`docker compose --env-file <compose.env>
    -f <compose.yml> up -d`).
 4. Initialize/unseal Bao with the recovered `bao-bootstrap.sh` and the recovered keys dir

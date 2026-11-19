@@ -145,10 +145,18 @@ case "$TTL_GRANTED" in ''|*[!0-9]*) echo "the granted TTL could not be measured"
   || { echo "granted TTL ${TTL_GRANTED}s does not cover the ${REQUIRED_TTL}s left until $DEMO_UNTIL - adjust the mint parameters" >&2; exit 1; }
 
 # Synchronize the new token into the app env file ATOMICALLY (pure-shell rewrite: the token
-# never transits through a process argument list). A RUNNING container still holds the
-# previous token in its process env - env edits never reach it - so it must be RECREATED
-# from the env file (docker restart does NOT reload env); update.sh does that on its next run.
+# never transits through a process argument list). The TARGET stack is made explicit and
+# VERIFIED: the container name comes from LYAM_CONTAINER (process env, then the env file),
+# never silently assumed - a message naming the wrong stack is a mis-targeting risk. A
+# RUNNING container still holds the previous token in its process env - env edits never reach
+# it - so it must be RECREATED from the env file (docker restart/start do NOT reload env);
+# update.sh does that on its next run and host-boot.sh enforces it at boot.
 NEW_TOKEN="$(cat "$TOKEN_FILE")"
+TARGET_CONTAINER="${LYAM_CONTAINER:-}"
+if [ -z "$TARGET_CONTAINER" ] && [ -f "$ENV_FILE" ]; then
+  TARGET_CONTAINER="$(sed -n 's/^LYAM_CONTAINER=//p' "$ENV_FILE" 2>/dev/null | tail -n 1)"
+fi
+[ -n "$TARGET_CONTAINER" ] || TARGET_CONTAINER="lyam"
 if [ -f "$ENV_FILE" ] && grep -q '^IAM_BAO_TOKEN=' "$ENV_FILE"; then
   TMP_ENV="$ENV_FILE.tmp.$$"
   while IFS= read -r _line; do
@@ -158,11 +166,11 @@ if [ -f "$ENV_FILE" ] && grep -q '^IAM_BAO_TOKEN=' "$ENV_FILE"; then
     esac
   done < "$ENV_FILE" > "$TMP_ENV"
   chmod 600 "$TMP_ENV" && mv "$TMP_ENV" "$ENV_FILE"
-  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${LYAM_CONTAINER:-lyam}"; then
-    echo "NEW scoped API token (granted TTL ${TTL_GRANTED}s measured): $ENV_FILE updated; the RUNNING ${LYAM_CONTAINER:-lyam} container still holds the previous token - recreate it from the env file (docker restart does NOT reload env)"
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$TARGET_CONTAINER"; then
+    echo "NEW scoped API token (granted TTL ${TTL_GRANTED}s measured): $ENV_FILE updated; the RUNNING container named '$TARGET_CONTAINER' (verified via docker ps) still holds the previous token - recreate THAT container from $ENV_FILE (docker restart/start do NOT reload env)"
   else
-    echo "NEW scoped API token (granted TTL ${TTL_GRANTED}s measured): $ENV_FILE updated; the next container start picks it up"
+    echo "NEW scoped API token (granted TTL ${TTL_GRANTED}s measured): $ENV_FILE updated; no RUNNING container named '$TARGET_CONTAINER' found - the next start of THAT stack picks it up (host-boot.sh enforces the env/container match)"
   fi
 else
-  echo "NEW scoped API token in $TOKEN_FILE (granted TTL ${TTL_GRANTED}s measured) - set IAM_BAO_TOKEN from it in the app env file and (re)create the app container"
+  echo "NEW scoped API token in $TOKEN_FILE (granted TTL ${TTL_GRANTED}s measured) - no IAM_BAO_TOKEN line in $ENV_FILE: set it from this file for the stack you intend, and (re)create that stack's app container"
 fi

@@ -4,6 +4,7 @@
 #
 # Bring them up ONCE, before the first lyam boot that references them:
 #   docker network create lyam-net   # if it does not exist yet
+#   sh prepare-dirs.sh               # host bind dirs owned by the image users (root:root would break bao)
 #   PG_PASSWORD=<choose-one> docker compose -f docker-compose.yml up -d
 #   sh bao-bootstrap.sh http://127.0.0.1:8200 /opt/lyam/bao-keys
 # Then set IAM_PG_URL / IAM_BAO_ADDR / IAM_BAO_TOKEN in /opt/lyam/lyam.env (token from
