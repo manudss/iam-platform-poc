@@ -143,6 +143,6 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 @media (prefers-reduced-motion: reduce) { .branch-flash { animation: none; } }
 
 /* On each accepted change a dot flies to the Review & Apply chip, which pulses. */
-.fly-dot { position: fixed; left: 50vw; top: 64px; width: .8rem; height: .8rem; border-radius: 50%; background: var(--warn-ink); z-index: 60; pointer-events: none; animation: fly-to-chip .9s cubic-bezier(.5, 0, .3, 1) forwards; }
+.fly-dot { /* --tx/--ty default to the dot's own position; shell.ts sets the real chip coordinates inline. */ --tx: 50vw; --ty: 64px; position: fixed; left: 50vw; top: 64px; width: .8rem; height: .8rem; border-radius: 50%; background: var(--warn-ink); z-index: 60; pointer-events: none; animation: fly-to-chip .9s cubic-bezier(.5, 0, .3, 1) forwards; }
 @keyframes fly-to-chip { to { transform: translate(calc(var(--tx) - 50vw), calc(var(--ty) - 64px)) scale(.4); opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .fly-dot { animation: none; opacity: 0; } }
