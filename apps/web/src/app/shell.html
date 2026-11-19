@@ -25,7 +25,23 @@
       <!-- Session timer: self-contained, keep it in the top bar wherever the bar is rearranged. -->
       <app-session-timer />
       <app-theme-switch class="top-theme" />
-      <span class="who" title="Signed-in identity">{{ s.user() || 'signed in' }}</span>
+      <span class="userwrap">
+        <button type="button" class="userbtn" id="user-menu-button" (click)="toggleUserMenu()" [attr.aria-expanded]="userMenu()" aria-haspopup="menu" aria-controls="user-menu" title="Your account: profile, sign out and the deployed version">
+          @if (mePhoto()) {<img class="av" [src]="mePhoto()" alt="Profile picture" />}@else {<span class="av" aria-hidden="true">{{ meInitials() }}</span>}<span class="nm">{{ meName() || s.user() || 'signed in' }}</span><span class="chev" aria-hidden="true">▾</span>
+        </button>
+        @if (userMenu()) {<span class="umscrim" id="user-menu-scrim" (click)="closeUserMenu()"></span>
+        <div class="usermenu" id="user-menu" role="menu" aria-label="User menu">
+          <div class="um-head">
+            @if (mePhoto()) {<img class="av" [src]="mePhoto()" alt="Profile picture" />}@else {<span class="av" aria-hidden="true">{{ meInitials() }}</span>}
+            <span class="um-id"><b>{{ meName() || s.user() || 'signed in' }}</b><small>{{ s.user() }}</small></span>
+          </div>
+          <hr />
+          <a class="um-item" role="menuitem" id="user-menu-profile" routerLink="/my-profile" (click)="closeUserMenu()"><span class="ico" aria-hidden="true">☺</span>My profile</a>
+          <button type="button" class="um-item" role="menuitem" id="user-menu-signout" (click)="signOut()"><span class="ico" aria-hidden="true">⏻</span>Sign out</button>
+          <hr />
+          <div class="um-foot"><span>Version {{ appVersion() || 'dev' }}</span>@if (appCommit()) {<code id="user-menu-commit" title="Deployed commit">{{ appCommit().slice(0, 7) }}</code>}</div>
+        </div>}
+      </span>
       @if (isAdmin() && !s.testBranch()) {
       @if (canBranches()) {<span class="pillwrap" [class.busy]="branchState()==='creating'" [class.failed]="branchState()==='error'" id="branch-pill" tabindex="-1"><span class="dot" [class]="dot()"></span>
         <!-- The native select stays in the DOM (visually hidden) as the machine-readable state: automated scripts read and set it. -->
@@ -52,7 +68,6 @@
         aria-label="Review and apply changes" title="Review &amp; Apply: see what you changed on this branch, compared with main, then publish it to main. Disabled on main, which is read only.">⇄&nbsp;@if(changes()!==null){<span class="chiptext" id="changes-badge" [attr.aria-label]="changes()+' changed rows'"><span class="n">{{changes()}}</span><span class="w1"> {{changes()===1?'change':'changes'}}</span><span class="w2"> pending</span></span>}@else{<span class="chiptext">Review &amp; Apply</span>}</button>
       @if (canBranches()) {<button type="button" class="icon" id="more-menu" (click)="more.set(!more())" [attr.aria-expanded]="more()" aria-label="More branch actions" title="Test sign-in, stable test link, manage branches">⋯</button>}
       }
-      <button type="button" class="secondary" (click)="signOut()">Sign out</button>
     </header>
     @if (isAdmin() && !s.testBranch()) {
     @if (more() && canBranches()) {<div class="pop menu" id="more-panel" role="menu" aria-label="More branch actions">

@@ -18,7 +18,26 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .top { display: flex; align-items: center; gap: .8rem; padding: .8rem 1.5rem; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 .top h1 { font-size: 1.15rem; margin: 0; }
 .spacer { flex: 1; }
-.who { background: var(--acc2-soft); color: var(--acc2-dark); border-radius: 999px; padding: .2rem .7rem; font-size: .85rem; font-weight: 600; }
+/* User menu: avatar button top right; the menu groups the profile, sign-out and the deployed version. */
+.userwrap { position: relative; display: inline-flex; }
+.userbtn { display: inline-flex; align-items: center; gap: .55rem; border: 1px solid transparent; background: transparent; border-radius: 999px; padding: .2rem .65rem .2rem .25rem; margin: 0; color: var(--ink); cursor: pointer; font-weight: 600; }
+.userbtn:hover { background: var(--row-hover); border-color: var(--line); }
+.userbtn .nm { font-size: .9rem; max-width: 11rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.userbtn .chev { color: var(--muted); font-size: .75rem; }
+.userbtn .av, .usermenu .av { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; display: inline-grid; place-items: center; font-size: .8rem; font-weight: 700; background: var(--acc2-soft); color: var(--acc2-dark); border: 1px solid var(--acc2); box-sizing: border-box; overflow: hidden; flex: none; }
+.usermenu .um-head .av { width: 2.5rem; height: 2.5rem; font-size: .95rem; }
+.umscrim { position: fixed; inset: 0; z-index: 24; cursor: default; }
+.usermenu { position: absolute; top: calc(100% + .45rem); right: 0; z-index: 25; width: min(16.5rem, calc(100vw - 1rem)); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.usermenu .um-head { display: flex; gap: .7rem; align-items: center; padding: .8rem .95rem .7rem; }
+.usermenu .um-id { min-width: 0; }
+.usermenu .um-id b { display: block; font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usermenu .um-id small { color: var(--muted); font-size: .8rem; display: block; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usermenu hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
+.usermenu .um-item { display: flex; align-items: center; gap: .65rem; width: 100%; box-sizing: border-box; border: 0; background: transparent; font: inherit; font-size: .92rem; font-weight: 500; color: var(--ink); padding: .6rem .95rem; min-height: 44px; margin: 0; cursor: pointer; text-align: left; text-decoration: none; border-radius: 0; }
+.usermenu .um-item:hover { background: var(--row-hover); }
+.usermenu .um-item .ico { width: 1.2rem; text-align: center; color: var(--label); }
+.usermenu .um-foot { display: flex; justify-content: space-between; align-items: center; padding: .5rem .95rem .6rem; font-size: .76rem; color: var(--muted); }
+.usermenu .um-foot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; background: var(--code-bg); border-radius: 5px; padding: 1px 6px; color: var(--label); }
 .burger { display: none; }
 .bar { margin: 1rem 1.5rem 0; }
 .content { padding: 1.25rem 1.5rem 3rem; max-width: 80rem; width: 100%; box-sizing: border-box; }
@@ -30,7 +49,9 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
   .open .scrim { display: block; position: fixed; inset: 0; background: var(--scrim); z-index: 10; }
   .burger { display: inline-block; margin: 0; padding: .35rem .7rem; }
   .top { padding: .7rem 1rem; } .content { padding: 1rem; } .bar { margin: .8rem 1rem 0; }
-  .who { flex: 0 0 auto; max-width: 5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .userbtn .nm { display: none; }
+  /* The bar wraps on small screens and the button can sit at the left: pin the open menu to the viewport instead of the button. */
+  .usermenu { position: fixed; top: auto; right: .5rem; margin-top: .45rem; }
   .top { gap: .5rem; } .top h1 { font-size: 1rem; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 .top button { white-space: nowrap; }
@@ -65,7 +86,7 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .pop.inline { position: static; max-width: none; box-shadow: none; border-radius: 0; border-width: 0 0 1px; margin: 0; padding: .7rem 1.5rem; }
 @media (max-width: 900px) { .pop.inline { padding: .7rem 1rem; } }
 /* DOM order keeps the identity first (scripts and screen readers find it first); flex order puts it after the branch controls. */
-.who { order: 1; } .top > .secondary:last-child { order: 2; } .top > .pillwrap, .top > .icon { order: 0; }
+.userwrap { order: 1; } .top > .pillwrap, .top > .icon { order: 0; }
 
 /* Direction C: editor owns its workspace; other pages keep the normal document layout. */
 .workflow-workbench{height:100dvh;min-height:0;overflow:hidden;grid-template-columns:170px minmax(0,1fr)}

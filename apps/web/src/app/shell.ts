@@ -118,6 +118,7 @@ export class Shell {
   protected async refresh(){if(!this.personal())await this.ensurePersonal();await this.loadBranches();}
   protected async rename(){try{const r=await this.s.api.raw<{branch:string}>('POST','/workspace/personal/rename',{name:this.renameTo},this.headers());this.personal.set(r.data.branch);this.working=r.data.branch;this.renameTo=r.data.branch;this.s.selectBranch(r.data.branch);await this.loadBranches();this.manage.set(false);this.s.say('Personal branch renamed to '+r.data.branch+'.');}catch(e){this.s.say((e as Error).message,'error');}}
   async ngOnInit(){
+    void this.loadMe(); void this.loadVersion();
     await this.s.loadAccess();
     // Branch test: no personal branch, no workspace bar, no admin init; the app simply runs on the tested branch.
     if(this.s.testBranch()){if(!this.router.url.startsWith('/my-profile')&&!this.router.url.startsWith('/overview'))void this.router.navigateByUrl('/my-profile');return;}
@@ -142,12 +143,43 @@ export class Shell {
    * Bind the action to the reviewed branch/head; the server still checks permission, conflicts and SoD. */
   protected async apply(){const review=this.review();if(this.workingBusy()||!review||review.branch!==this.s.branch()||review.branch==='main'||!review.expectedHead)return;this.workingBusy.set(true);try{if(!await this.applyDialog.confirm(review.branch)||this.s.branch()!==review.branch)return;const head=review.expectedHead;const r=await this.s.api.raw<any>('POST','/workspace/apply',{confirm:true,expectedHead:head},this.headers());if(r.status>=400 || !r.data.applied)throw new Error(r.data.message??'Apply refused');this.review.set(null);this.s.branchEpoch.update(x=>x+1);this.s.say('Applied '+this.s.branch()+' into main: '+r.data.commit);await this.loadBranches();void this.loadChanges();void this.loadPluginMenu();}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
   protected readonly menu = signal(false);
+
+  /** User menu (top right): the person's photo when the profile-picture plugin is enabled and a picture exists, initials otherwise. */
+  protected readonly userMenu = signal(false);
+  protected readonly mePhoto = signal('');
+  protected readonly meName = signal('');
+  private meDirty = false;
+  protected toggleUserMenu() { this.userMenu.update((x) => !x); }
+  protected closeUserMenu() { this.userMenu.set(false); }
+  @HostListener('document:keydown.escape') protected onUserMenuEsc() { this.closeUserMenu(); }
+  protected meInitials() { const p = (this.meName() || this.s.user() || '?').trim().split(/\s+/); return ((p[0]?.[0] ?? '?') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase(); }
+  /** The signed-in person's own profile, for the avatar: picture (data URL) and display name. Best effort: the identity's initials remain. */
+  protected async loadMe() {
+    try {
+      const r = await this.s.api.raw<any>('GET', '/me/profile', undefined, this.headers());
+      if (r.status >= 400) return;
+      const v = r.data?.values ?? {};
+      const pic = v['profile-picture.picture'];
+      this.mePhoto.set(typeof pic === 'string' && pic.startsWith('data:image/') ? pic : '');
+      const name = v['base.display_name'];
+      this.meName.set(typeof name === 'string' && name ? name : '');
+    } catch { /* initials of the identity remain */ }
+  }
+  /** Deployed build shown in the user menu: baked into the image at build time (demo/Dockerfile), served by GET /health. */
+  protected readonly appVersion = signal('');
+  protected readonly appCommit = signal('');
+  protected async loadVersion() {
+    try {
+      const r = await this.s.api.raw<{ version?: string; commit?: string }>('GET', '@/health', undefined, this.headers());
+      if (r.status < 400) { this.appVersion.set(r.data?.version ?? ''); this.appCommit.set(r.data?.commit ?? ''); }
+    } catch { /* the version line is informational */ }
+  }
   /** Ordinary accounts see only their own space. Administration items need the administrator, plugin items need the plugin live. */
   protected visibleNav(): NavGroup[] {
     // Branch test shows the ordinary experience only: administration stays in the normal console.
-    if (this.s.testBranch()) return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/overview' || i.path === '/my-profile') })).filter((g: NavGroup) => g.items.length);
+    if (this.s.testBranch()) return this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/overview') })).filter((g: NavGroup) => g.items.length);
     const a = this.s.access(); const adminOk = !a || a.admin || !a.restricted;
-    const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-applications' || i.path === '/my-profile' || canOpen(a, screenOf(i.path))).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
+    const groups = this.nav().map((g: NavGroup) => ({ title: g.title, items: g.items.filter((i: NavItem) => i.path === '/my-applications' || canOpen(a, screenOf(i.path))).map((i: NavItem, n: number) => ({ ...i, order: i.order ?? (n + 1) * 10 })) }));
     // Plugin menu entries (step 2): declared in the plugin's manifest, present only while the plugin is active.
     const pluginEntries = this.pluginMenu?.(); // test harnesses can render before the field settles: no entries = static console
     if (Array.isArray(pluginEntries)) for (const m of pluginEntries) {
@@ -180,7 +212,6 @@ export class Shell {
       { path: '/profile-fields', label: 'Profile fields', icon: '☰' },
       { path: '/roles', label: 'Roles', icon: '⚖' },
       { path: '/profile-reviews', label: 'Profile reviews', icon: '✓' },
-      { path: '/my-profile', label: 'My profile', icon: '☺' },
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
@@ -199,7 +230,8 @@ export class Shell {
 
 
   constructor() {
-    this.router.events.pipe(filter((e) => e instanceof NavigationEnd),takeUntilDestroyed()).subscribe(() => { this.menu.set(false); this.title.set(this.leafTitle()); void this.loadChanges(); void this.loadBranding(); });
+    this.router.events.pipe(filter((e) => e instanceof NavigationEnd),takeUntilDestroyed()).subscribe(() => { this.menu.set(false); this.closeUserMenu(); this.title.set(this.leafTitle()); void this.loadChanges(); void this.loadBranding();
+      if (this.router.url.startsWith('/my-profile')) this.meDirty = true; else if (this.meDirty) { this.meDirty = false; void this.loadMe(); } });
     // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
     effect(() => { this.s.pluginsVersion(); this.s.branch(); this.s.branchEpoch(); void this.loadPluginMenu(); });
     effect(()=>{this.s.branch();this.s.branchEpoch();this.s.adminToken();void this.loadBranding();});

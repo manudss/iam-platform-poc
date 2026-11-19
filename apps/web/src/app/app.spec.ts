@@ -96,7 +96,7 @@ describe('personal space and plugin visibility', () => {
     await h.navigateByUrl('/roles'); await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
     expect(TestBed.inject(Router).url).toBe('/my-applications');
     const el = h.routeNativeElement as HTMLElement;
-    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'))).toEqual(['/my-applications', '/my-profile']);
+    expect([...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'))).toEqual(['/my-applications']); // My profile lives in the user menu, not in the administration navigation
     expect(el.textContent).not.toContain('Working data branch'); expect(el.textContent).not.toContain('Admin capability');
   });
   it('a plugin that is not enabled has no menu entry and no page', async () => {
@@ -197,8 +197,8 @@ describe('routing and sign-in guard', () => {
     await new Promise((r) => setTimeout(r, 0)); h.detectChanges(); // the plugin menu loads asynchronously (GET /plugins/menu)
     const el = h.routeNativeElement as HTMLElement;
     const nav = [...el.querySelectorAll('nav a')].map((a) => a.getAttribute('data-nav'));
-    expect(nav).toEqual(['/my-applications', '/overview', '/users', '/profile-fields', '/screens/organizations/orgs', '/roles', '/profile-reviews', '/my-profile', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/home', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
-    expect(el.querySelector('.who')?.textContent).toContain('demo-alice');
+    expect(nav).toEqual(['/my-applications', '/overview', '/users', '/profile-fields', '/screens/organizations/orgs', '/roles', '/profile-reviews', '/auth-methods', '/assignments', '/activation', '/workflows', '/plugins', '/event-bus', '/mcp', '/database/home', '/database/branches', '/database/history', '/database/compare', '/database/data', '/database/sql', '/database/pulls']);    expect(el.querySelector('nav a.active')?.getAttribute('data-nav')).toBe('/activation');
+    expect(el.querySelector('#user-menu-button')?.textContent).toContain('demo-alice');
     expect(el.textContent).toContain('Choose your working branch');
   });
 
