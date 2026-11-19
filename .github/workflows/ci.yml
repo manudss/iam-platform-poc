@@ -67,7 +67,13 @@ jobs:
           echo "NATS_SERVER_BIN=$(find /tmp/svc/nats -name nats-server -type f | head -1)" >> $GITHUB_ENV
           echo "BAO_BIN=$(find /tmp/svc/bao -name bao -type f | head -1)" >> $GITHUB_ENV
           echo "TEMPORAL_BIN=$(find /tmp/svc/temporal -name temporal -type f | head -1)" >> $GITHUB_ENV
-          mkdir /tmp/pgtry && cd /tmp/pgtry && npm init -y >/dev/null && npm i embedded-postgres >/dev/null
+          # Pin server/client version and require the native package directly: an optional
+          # native dependency can otherwise be skipped while npm still exits successfully.
+          mkdir /tmp/pgtry && cd /tmp/pgtry
+          npm init -y
+          npm i --save-exact embedded-postgres@17.12.0-beta.19 @embedded-postgres/linux-x64@17.12.0-beta.19
+          test -x /tmp/pgtry/node_modules/@embedded-postgres/linux-x64/native/bin/postgres
+          /tmp/pgtry/node_modules/@embedded-postgres/linux-x64/native/bin/postgres --version
           echo "PG_BIN=/tmp/pgtry/node_modules/@embedded-postgres/linux-x64/native/bin" >> $GITHUB_ENV
       - name: Demo secret store security (real OpenBao, no Google account)
         run: node --test scripts/demo-secret-store.test.mjs
@@ -121,6 +127,8 @@ jobs:
         run: node --test demo/frame-policy.test.mjs demo/warm-signin.test.mjs
       - name: Demo edge routing (the whole /authorize surface, incl. the passkey script, reaches the core)
         run: node --test demo/server.test.mjs
+      - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
+        run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 25

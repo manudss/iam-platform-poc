@@ -7,5 +7,6 @@ echo "== API unit tests"; (cd apps/api && npx tsc -p tsconfig.json && npm test)
 echo "== SSO session integration"; node --test scripts/sso-session.test.mjs scripts/saml-signatures.test.mjs
 echo "== Web unit tests"; (cd apps/web && npm test -- --watch=false)
 echo "== Demo edge tests"; node --test demo/*.test.mjs
+echo "== Deploy updater tests"; node --test deploy/oci/*.test.mjs
 if [ "${E2E:-}" = "1" ]; then echo "== Authentication methods e2e"; node scripts/auth-methods-e2e.mjs; fi
 echo "ALL TESTS PASSED"

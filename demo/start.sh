@@ -1,18 +1,38 @@
 #!/bin/sh
-# Hosted-demo start: one container, fictional data only. Re-seeds from scratch whenever the data
-# directory is empty (free hosts wipe the filesystem on restart/spin-down: a fresh demo each time).
+# Hosted-demo start: one container, fictional data only.
+#
+# Seed policy (IAM_DEMO_SEED_MODE):
+#   auto  (default, free hosts with an ephemeral filesystem): import the schema + fictional seed
+#         when, and only when, Dolt positively reports the dataset absent.
+#   never (persistent deployments, e.g. a VM with a durable /data volume): never import the schema,
+#         never run the demo data seeds. An empty dataset is a hard boot failure, not a seed trigger.
+# In BOTH modes a Dolt READ ERROR is never treated as an empty database: demo/dolt-state.mjs
+# distinguishes "not found" from real errors, and any doubt stops the boot (fail closed) instead of
+# re-seeding over existing data.
 set -e
+SEED_MODE="${IAM_DEMO_SEED_MODE:-auto}"
+case "$SEED_MODE" in
+  auto|never) ;;
+  *) echo "[demo] FATAL: IAM_DEMO_SEED_MODE must be auto or never (got '$SEED_MODE')" >&2; exit 1 ;;
+esac
 HOME_DIR="${IAM_DEMO_HOME:-/data}"
 PUBLIC_ORIGIN="${IAM_PUBLIC_ORIGIN:-http://localhost:${PORT:-8080}}"
 mkdir -p "$HOME_DIR/dolt" "$HOME_DIR/core-state"
 
-echo '[demo] dolt init + seed (fictional data)'
 cd "$HOME_DIR/dolt"
 dolt config --global --add user.name poc 2>/dev/null || true
 dolt config --global --add user.email poc@example.invalid 2>/dev/null || true
 [ -d .dolt ] || dolt init --fun >/dev/null
-if ! dolt sql -q "select count(*) from iam.assignments" >/dev/null 2>&1; then
+DB_STATE="$(node /app/demo/dolt-state.mjs)" || { echo '[demo] FATAL: cannot decide whether the Dolt data is empty; refusing to boot rather than risking a re-seed over existing data' >&2; exit 1; }
+if [ "$DB_STATE" = empty ]; then
+  if [ "$SEED_MODE" = never ]; then
+    echo '[demo] FATAL: no iam dataset in the data directory and IAM_DEMO_SEED_MODE=never forbids seeding. Restore a backup into the volume, or bootstrap once with IAM_DEMO_SEED_MODE=auto.' >&2
+    exit 1
+  fi
+  echo '[demo] empty data directory: importing schema + fictional seed'
   dolt sql < /app/data/demo/01-schema.sql
+else
+  echo '[demo] existing iam dataset found: no schema import, no re-seed'
 fi
 echo '[demo] starting dolt sql-server on 127.0.0.1:3307'
 GOMEMLIMIT="${DOLT_GOMEMLIMIT:-250MiB}" dolt sql-server -H 127.0.0.1 -P 3307 -l info >"$HOME_DIR/dolt.log" 2>&1 &
@@ -44,7 +64,13 @@ export IAM_EXTERNAL_CALLBACK_URL="${IAM_EXTERNAL_CALLBACK_URL:-${PUBLIC_ORIGIN}/
 GATE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 export IAM_AUTH_GATE_TOKEN="$GATE_TOKEN" IAM_AUTH_GATE_ADDR=127.0.0.1:3000
 export IAM_WORKSPACE_MODE=1
-export IAM_AUTHN_DEMO_SEED=1 IAM_DEMO_DATA_SEED=1
+# Demo data seeds are opt-in per boot: only auto mode exports them, so a persistent deployment
+# (IAM_DEMO_SEED_MODE=never) never re-seeds what an administrator already configured.
+if [ "$SEED_MODE" != never ]; then
+  export IAM_AUTHN_DEMO_SEED=1 IAM_DEMO_DATA_SEED=1
+else
+  unset IAM_AUTHN_DEMO_SEED IAM_DEMO_DATA_SEED
+fi
 export IAM_DIRECTORY_AUTH=1 IAM_PLUGIN_STORE=dolt IAM_CREDENTIAL_FILE="$HOME_DIR/core-state/credentials.json"
 # Required event bus: loopback only, random per-boot passwords, supervised restart.
 command -v nats-server >/dev/null 2>&1 || { echo '[demo] nats-server is required' >&2; exit 1; }

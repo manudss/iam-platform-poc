@@ -3,8 +3,9 @@
 Everything on this page uses free services only and fictional demo data. Nothing
 here publishes production configuration: the demo users and their shared
 password are fictional, signing keys and admin tokens are regenerated at every
-boot, and the data set is re-seeded from `data/demo/01-schema.sql` on every
-restart.
+boot. On free hosts (ephemeral filesystem) the data set starts empty on every
+restart and is seeded from `data/demo/01-schema.sql`; on a persistent volume
+the same image keeps its data and never re-seeds (see "Seed policy" below).
 
 ## Live demo
 
@@ -95,9 +96,28 @@ and completes a real fictional-account login after readiness passes.
   waits for a cold start (Render states 50 seconds or more).
 - Free web services include 750 instance-hours per month per workspace; one
   always-on service fits (744 h/month).
-- The filesystem is ephemeral: on every restart or wake, Dolt is re-seeded
-  from `data/demo/01-schema.sql` and all demo state (change branches,
-  activations, tokens) resets. This is a demo property, not a bug.
+- The filesystem is ephemeral: on every restart or wake the data directory
+  starts empty, Dolt is seeded from `data/demo/01-schema.sql` and all demo
+  state (change branches, activations, tokens) resets. This is a demo
+  property of the free tier, not a bug; for durable hosting see
+  `docs/oci-deploy.md`.
+
+### Seed policy (`IAM_DEMO_SEED_MODE`)
+
+The image supports two seed modes, selected with `IAM_DEMO_SEED_MODE`:
+
+- `auto` (default): import the schema + fictional seed only when Dolt
+  positively reports the dataset absent (free hosts with an ephemeral
+  filesystem).
+- `never`: never import the schema, never run the demo data seeds. Booting
+  with an empty dataset is a hard failure (restore a backup, or bootstrap
+  once with `auto`). This is the mode persistent deployments must use.
+
+In both modes a Dolt READ ERROR (corruption, lock, missing binary) is never
+treated as an empty database: `demo/dolt-state.mjs` classifies the state and
+any doubt stops the boot instead of re-seeding over existing data. The image
+exposes the supported modes in the `io.lyam.seed-modes` OCI label, which
+`deploy/oci/update.sh` checks before rolling an update onto a data volume.
 - Cost: $0. Verified on the billing page: plan Hobby, no card on file, so an
   overage suspends the service and can never bill.
 

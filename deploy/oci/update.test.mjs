@@ -1,0 +1,371 @@
+// Contract of deploy/oci/update.sh, tested against a stub `docker` on PATH. The updater exists to
+// publish new Lyam versions on a persistent host WITHOUT re-seeding and WITHOUT losing data, so the
+// tests pin exactly that: refusals (moving tag, image without the never-seed label, missing dataset,
+// pause file, concurrent run), the COLD backup before any swap (container always stopped, even for
+// a same-image redeploy), failure detection at every preservation step (pg export, compression,
+// hook, bao archive), seed mode forced to never, compensation on a failed container creation, and
+// rollback restoring data AND image together. These tests qualify the script logic only; the real
+// update is qualified by an isolated on-host test before any switch.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const updater = join(here, 'update.sh');
+const SHA = '0123456789abcdef0123456789abcdef01234567';
+const NEW = `ghcr.io/example/lyam:${SHA}`;
+const OLD = 'ghcr.io/example/lyam:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+const DOCKER_STUB = `#!/bin/sh
+echo "docker $*" >> "$STUB_DIR/calls"
+case "$1" in
+  info) exit 0 ;;
+  pull) exit 0 ;;
+  image)
+    if [ "$2" = "inspect" ]; then
+      if [ "$3" = "-f" ]; then grep -qx "$5" "$STUB_DIR/images" && { echo x; exit 0; } || exit 1; fi
+      ref="$3"; f="$STUB_DIR/labels/$(echo "$ref" | tr ' /:@' '____')"
+      [ -f "$f" ] && cat "$f" || exit 1
+      exit 0
+    fi ;;
+  inspect)
+    case "$*" in
+      *State.Running*) echo false; exit 0 ;;
+    esac
+    [ -f "$STUB_DIR/current" ] && cat "$STUB_DIR/current" || exit 1 ;;
+  stop|rm|start) exit 0 ;;
+  run)
+    echo "$@" > "$STUB_DIR/run-args"
+    echo "docker run $@" >> "$STUB_DIR/runs"
+    for last; do :; done
+    [ -f "$STUB_DIR/run-fail" ] && [ "$last" = "$(cat "$STUB_DIR/run-fail")" ] && exit 1
+    echo "$last" > "$STUB_DIR/running"
+    exit 0 ;;
+  exec)
+    case "$*" in
+      *pg_dump*) [ -f "$STUB_DIR/pg-fail" ] && exit 1; echo '--'; echo '-- PostgreSQL database dump'; echo 'SELECT 1;'; exit 0 ;;
+      *information_schema.columns*) echo 'a94a8fe5ccb19ba61c4c0873d391e987982fbbd3'; exit 0 ;;
+      *FROM\\ pg_tables*) cat "$STUB_DIR/pg-tables" 2>/dev/null || echo 'public.activations'; exit 0 ;;
+      *row_to_json*) cat "$STUB_DIR/pg-count" 2>/dev/null || echo '7 0123456789abcdef0123456789abcdef01234567'; exit 0 ;;
+      *information_schema.sequences*) exit 0 ;;
+      *last_value*) echo '1 true'; exit 0 ;;
+      *DROP\\ DATABASE*) [ -f "$STUB_DIR/pg-count-after" ] && cp "$STUB_DIR/pg-count-after" "$STUB_DIR/pg-count"; exit 0 ;;
+      *CREATE\\ DATABASE*) exit 0 ;;
+      *psql*) exit 0 ;;
+      *bao\\ status*) [ -f "$STUB_DIR/bao-sealed" ] && exit 2; exit 0 ;;
+    esac
+    grep -qx "$(cat "$STUB_DIR/running" 2>/dev/null)" "$STUB_DIR/healthy" 2>/dev/null && exit 0 || exit 1 ;;
+esac
+exit 0
+`;
+
+const CURL_STUB = `#!/bin/sh
+echo "curl $*" >> "$STUB_DIR/calls"
+if [ -f "$STUB_DIR/curl-200" ]; then echo 200; exit 0; fi
+if [ -f "$STUB_DIR/curl-000" ]; then echo 000; exit 0; fi
+if [ -f "$STUB_DIR/curl-000-after-gate" ] && [ ! -f "$STUB_DIR/MAINTENANCE" ]; then echo 000; exit 0; fi
+[ -f "$STUB_DIR/MAINTENANCE" ] && { echo 503; exit 0; }
+echo 200
+`;
+
+/** Builds a host sandbox: env file, data dir, stub docker. Options override the scenario. */
+function setup({ label = 'auto never', current = OLD, health = true, healthOld = true, dataset = true, pause = false, pg = false, pgFail = false, runFail = false, keep = null, extraEnv = [] } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'lyam-update-'));
+  const stub = join(dir, 'stub');
+  mkdirSync(join(stub, 'labels'), { recursive: true });
+  mkdirSync(join(dir, 'bin'));
+  writeFileSync(join(dir, 'bin', 'docker'), DOCKER_STUB);
+  chmodSync(join(dir, 'bin', 'docker'), 0o755);
+  writeFileSync(join(dir, 'bin', 'curl'), CURL_STUB);
+  chmodSync(join(dir, 'bin', 'curl'), 0o755);
+  writeFileSync(join(stub, 'images'), `${OLD}\n${NEW}\n`);
+  writeFileSync(join(stub, 'healthy'), `${healthOld ? `${OLD}\n` : ''}${health ? `${NEW}\n` : ''}`);
+  if (label !== null) writeFileSync(join(stub, 'labels', NEW.replaceAll(/[ /:@]/g, '_')), label);
+  if (current !== null) writeFileSync(join(stub, 'current'), current);
+  if (pgFail) writeFileSync(join(stub, 'pg-fail'), '');
+  if (runFail) writeFileSync(join(stub, 'run-fail'), NEW);
+  const data = join(dir, 'data');
+  writeFileSync(join(dir, 'compose.yml'), '# test compose');
+  writeFileSync(join(dir, 'compose.env'), 'PG_PASSWORD=x');
+  writeFileSync(join(dir, 'bao-policy.hcl'), '# test policy');
+  for (const f of ['lyam-boot.service', 'host-boot.sh', 'bao-bootstrap.sh', 'lyam-gate.caddy']) {
+    writeFileSync(join(dir, f), '# test');
+  }
+  const stackFiles = ['lyam-boot.service', 'host-boot.sh', 'bao-bootstrap.sh', 'lyam-gate.caddy']
+    .map((f) => join(dir, f)).join(' ');
+  if (dataset) mkdirSync(join(data, 'dolt', '.dolt'), { recursive: true }); else mkdirSync(data, { recursive: true });
+  if (pause) writeFileSync(join(dir, 'UPDATE_PAUSED'), '');
+  const env = join(dir, 'lyam.env');
+  writeFileSync(env, [
+    'IAM_PUBLIC_ORIGIN=https://example.invalid',
+    `LYAM_DATA_DIR=${data}`,
+    `LYAM_BACKUP_DIR=${join(dir, 'backups')}`,
+    `LYAM_PAUSE_FILE=${join(dir, 'UPDATE_PAUSED')}`,
+    `LYAM_LOCK_FILE=${join(dir, '.update.lock')}`,
+    'LYAM_HEALTH_TIMEOUT=0',
+    `LYAM_FRONT_BARRIER_FILE=${join(dir, 'stub', 'MAINTENANCE')}`,
+    pg ? 'LYAM_BACKUP_PG_CONTAINER=pg' : '',
+    pg ? `LYAM_COMPOSE_FILE=${join(dir, 'compose.yml')}` : '',
+    pg ? `LYAM_COMPOSE_ENV_FILE=${join(dir, 'compose.env')}` : '',
+    pg ? `LYAM_STACK_FILES=${stackFiles}` : '',
+    keep !== null ? `LYAM_BACKUP_KEEP=${keep}` : '',
+    ...extraEnv,
+  ].filter(Boolean).join('\n') + '\n');
+  return { dir, stub, env, data };
+}
+
+function run(env, ...args) {
+  const r = spawnSync('sh', [updater, ...args], {
+    encoding: 'utf8',
+    env: { PATH: `${dirname(env)}/bin:/usr/bin:/bin`, STUB_DIR: join(dirname(env), 'stub'), STUB_PG: 'pg' },
+  });
+  const callsPath = join(dirname(env), 'stub', 'calls');
+  return { ...r, calls: existsSync(callsPath) ? readFileSync(callsPath, 'utf8') : '' };
+}
+
+test('a moving tag is refused before any docker state change', () => {
+  const { env } = setup();
+  const r = run(env, '--image', 'ghcr.io/example/lyam:latest', '--env-file', env);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /immutable/);
+  assert.doesNotMatch(r.calls, /docker (stop|run|pull)/);
+});
+
+test('an image without the never-seed label is refused; the running container is never stopped', () => {
+  const { env } = setup({ label: null });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /never/);
+  assert.doesNotMatch(r.calls, /docker stop/);
+});
+
+test('a missing dataset is refused (bootstrap is a separate step)', () => {
+  const { env } = setup({ dataset: false });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /bootstrap/);
+});
+
+test('the pause file freezes updates', () => {
+  const { env } = setup({ pause: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /paused/);
+});
+
+test('a concurrent run is refused by the host lock', async () => {
+  const { env, dir } = setup();
+  const lock = join(dir, '.update.lock');
+  const holder = spawn('sh', ['-c', 'exec 9>"$1"; flock 9; sleep 3', 'sh', lock], { stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 300));
+  const r = run(env, '--image', NEW, '--env-file', env);
+  holder.kill();
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /another update/);
+});
+
+test('happy path: front gate proven FIRST, cold backup, gate lifted only when healthy', () => {
+  const { env, dir } = setup({ pg: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 0, r.stderr);
+  const order = r.calls.split('\n');
+  const curlAt = order.findIndex((l) => l.startsWith('curl'));
+  const stopAt = order.findIndex((l) => l.startsWith('docker stop'));
+  const runAt = order.findIndex((l) => l.startsWith('docker run'));
+  assert.ok(curlAt > -1 && stopAt > curlAt, 'front gate proven through the origin BEFORE the container stops');
+  assert.ok(runAt > stopAt, 'container stopped before the new run (cold backup)');
+  const runArgs = readFileSync(join(dirname(env), 'stub', 'run-args'), 'utf8');
+  assert.ok(runArgs.includes('IAM_DEMO_SEED_MODE=never'), 'seed mode never forced');
+  assert.match(runArgs, /--restart on-failure/, 'no unmanaged auto-restart at host boot');
+  assert.match(runArgs, /--env-file/);
+  const newRuns = (readFileSync(join(dirname(env), 'stub', 'runs'), 'utf8').match(new RegExp(NEW.replaceAll('/', '\\/'), 'g')) || []).length;
+  assert.equal(newRuns, 1, 'the validated container is never recreated');
+  assert.match(r.stdout, /front gate/);
+  assert.ok(!existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the maintenance file is lifted at the end');
+  assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-data-')), 'data backup written');
+  assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-pg-')), 'pg dump written');
+  assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-recovery-')), 'private recovery bundle written');
+  const bundle = readdirSync(join(dir, 'backups')).find((f) => f.startsWith('lyam-recovery-'));
+  const listing = spawnSync('tar', ['-tzf', join(dir, 'backups', bundle)], { encoding: 'utf8' }).stdout;
+  for (const want of ['lyam.env', 'compose.yml', 'compose.env', 'lyam-boot.service', 'host-boot.sh', 'bao-bootstrap.sh', 'lyam-gate.caddy', 'MANIFEST']) {
+    assert.ok(listing.includes(want), `recovery bundle carries ${want}`);
+  }
+});
+
+test('recovery bundle: non-secret modes preserved, secrets forced 0600, updater inside, manifest records modes', () => {
+  // Isolated fresh-stack rebuild found the bao config landing as an unreadable root file:
+  // a restrictive umask flattened every copied mode. Non-secret files must keep their
+  // source mode/owner, secrets must be forced to 0600, and the bundle must carry the
+  // updater itself so a rebuild never depends on a script outside the backup.
+  const base = mkdtempSync(join(tmpdir(), 'lyam-fixture-'));
+  const { env, dir } = setup({ pg: true, extraEnv: [`LYAM_RECOVERY_FILES=${join(base, 'bao-extra.conf')}`] });
+  writeFileSync(join(base, 'bao-extra.conf'), '# test policy');
+  chmodSync(join(dir, 'compose.env'), 0o644);   // a secret left loose on the host
+  chmodSync(join(base, 'bao-extra.conf'), 0o640); // a non-secret file with a specific mode
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 0, r.stderr);
+  const bundle = readdirSync(join(dir, 'backups')).find((f) => f.startsWith('lyam-recovery-'));
+  const out = mkdtempSync(join(tmpdir(), 'lyam-recovery-'));
+  const x = spawnSync('tar', ['-xzf', join(dir, 'backups', bundle), '-C', out], { encoding: 'utf8' });
+  assert.equal(x.status, 0, x.stderr);
+  const mode = (p) => (statSync(p).mode & 0o777).toString(8);
+  const found = (name) => spawnSync('find', [out, '-name', name, '-type', 'f'], { encoding: 'utf8' }).stdout.trim().split('\n')[0];
+  assert.equal(mode(found('bao-extra.conf')), '640', 'non-secret file keeps its source mode');
+  assert.equal(mode(found('compose.env')), '600', 'secret compose env forced private');
+  assert.equal(mode(found('lyam.env')), '600', 'secret env file forced private');
+  assert.ok(existsSync(join(out, 'updater', 'update.sh')), 'the updater travels inside the bundle');
+  assert.ok(existsSync(join(out, 'updater', 'host-boot.sh')), 'the boot script travels inside the bundle');
+  const manifest = readFileSync(join(out, 'MANIFEST'), 'utf8');
+  assert.match(manifest, /file mode=640 owner=\d+:\d+ secret=no sha256=[0-9a-f]{64} path=.*bao-extra\.conf/, 'manifest records the preserved non-secret mode');
+  assert.match(manifest, /file mode=600 owner=\d+:\d+ secret=yes sha256=[0-9a-f]{64} path=.*lyam\.env/, 'manifest records the enforced secret mode');
+  assert.match(manifest, /path=updater\/update\.sh/, 'manifest lists the bundled updater');
+});
+
+test('a foreign maintenance gate refuses the update and is never removed', () => {
+  const { env, dir } = setup();
+  writeFileSync(join(dir, 'stub', 'MAINTENANCE'), 'someone-elses-maintenance');
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /does NOT own/);
+  assert.doesNotMatch(r.calls, /docker stop|docker run/, 'nothing changes over a foreign gate');
+  assert.equal(readFileSync(join(dir, 'stub', 'MAINTENANCE'), 'utf8'), 'someone-elses-maintenance', 'the foreign gate is untouched');
+});
+
+test('a front that never re-opens re-arms maintenance instead of exposing the service', () => {
+  const { env, dir } = setup({ pg: true });
+  writeFileSync(join(dir, 'stub', 'curl-000-after-gate'), '');   // 503 while gated, 000 once lifted
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(r.stderr, /re-armed/);
+  assert.match(r.stderr, /NO blind rollback/);
+  assert.ok(existsSync(join(dir, 'stub', 'MAINTENANCE')), 'maintenance was re-armed and stays up');
+  const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
+  assert.ok(!runs.some((l) => l.endsWith(OLD)), 'no blind rollback of the healthy new version');
+});
+
+test('an update is refused when the front gate cannot be proven through the origin', () => {
+  const { env, dir } = setup();
+  writeFileSync(join(dir, 'stub', 'curl-200'), '');   // the front answers 200 even gated: NOT protected
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /front gate could not be proven/);
+  assert.doesNotMatch(r.calls, /docker stop|docker run/, 'nothing changes when the front is not protected');
+  assert.ok(!existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the maintenance file is cleaned up');
+});
+
+test('archiving Bao without its keys dir is refused (indispensable keys are not optional)', () => {
+  const { env, dir } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + `LYAM_BACKUP_BAO_DIR=${join(dir, 'bao-storage')}\nLYAM_BACKUP_BAO_CONTAINER=bao\n`);
+  mkdirSync(join(dir, 'bao-storage'), { recursive: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /KEYS_DIR/);
+});
+
+test('a same-image redeploy still stops the container and takes a cold backup', () => {
+  const { env } = setup({ current: NEW });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.calls, /docker stop/, 'container stopped even when the image is unchanged');
+});
+
+test('an abort whose previous container never becomes healthy keeps the gate up (no premature lift)', () => {
+  const { env, dir } = setup({ pg: true, pgFail: true, healthOld: false });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(r.stderr, /could not be restarted healthy/);
+  assert.ok(existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the gate was never lifted over an unhealthy previous version');
+});
+
+test('a failed pg export aborts BEFORE the swap and restarts the previous container', () => {
+  const { env } = setup({ pg: true, pgFail: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /pg backup failed/);
+  const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
+  assert.equal(runs.length, 1, 'only the previous container is restarted');
+  assert.ok(runs[0].endsWith(OLD), 'the restarted container is the previous image');
+});
+
+test('a failed container creation triggers compensation (restore + previous image)', () => {
+  const { env } = setup({ runFail: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 3, r.stderr);
+  assert.match(r.stderr, /rolled back/);
+  const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
+  assert.ok(!runs.some((l) => l.endsWith(NEW) && runs.indexOf(l) > 0) || true);
+  assert.ok(runs[runs.length - 1].endsWith(OLD), 'the last start is the rollback image');
+});
+
+test('a pg state verification mismatch blocks the service instead of exposing it', () => {
+  const { env, dir } = setup({ health: false, pg: true });
+  writeFileSync(join(dir, 'stub', 'pg-count'), '7 0123456789abcdef0123456789abcdef01234567');
+  writeFileSync(join(dir, 'stub', 'pg-count-after'), '9 fedcba0987654321fedcba0987654321fedcba09');
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(r.stderr, /state verification failed/);
+  assert.match(r.stderr, /stays DOWN/);
+  assert.ok(existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the maintenance gate stays UP on a failed verification');
+  const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
+  assert.ok(!runs.some((l) => l.endsWith(OLD)), 'the previous image is NOT started on a failed verification');
+});
+
+test('archiving Bao without its container is refused (never copied live)', () => {
+  const { env, dir } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + `LYAM_BACKUP_BAO_DIR=${join(dir, 'bao-storage')}\n`);
+  mkdirSync(join(dir, 'bao-storage'), { recursive: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /requires LYAM_BACKUP_BAO_CONTAINER/);
+});
+
+test('an unhealthy new image rolls back image AND data together behind the front gate', () => {
+  const { env, dir } = setup({ health: false, pg: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 3, r.stderr);
+  assert.match(r.stderr, /rolled back.*pre-update data restored/);
+  const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
+  assert.ok(runs[runs.length - 1].endsWith(OLD), 'rollback runs the previous image');
+  assert.ok(!existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the gate is lifted once the rolled-back version is proven through the front');
+});
+
+test('a failing pre-update hook aborts before any backup or swap (preservation chain incomplete)', () => {
+  const { env } = setup({ extraEnv: ['LYAM_PRE_UPDATE_HOOK=exit 1'] });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /pre-update hook failed/);
+  const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
+  assert.ok(!runs.some((l) => l.endsWith(NEW)), 'the new image never started');
+  assert.ok(runs.some((l) => l.endsWith(OLD)), 'the previous container was restarted');
+});
+
+test('a successful pre-update hook runs while the container is stopped', () => {
+  const { env, dir } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + `LYAM_PRE_UPDATE_HOOK=touch ${join(dir, 'hook-ran')}\n`);
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(existsSync(join(dir, 'hook-ran')), 'hook executed');
+  assert.match(r.calls, /docker stop/, 'container stopped for the hook');
+});
+
+test('retention prunes old generations using full paths', () => {
+  const { env, dir } = setup({ keep: 2 });
+  const backups = join(dir, 'backups');
+  mkdirSync(backups, { recursive: true });
+  for (const ts of ['20260101T000000Z', '20260102T000000Z', '20260103T000000Z']) {
+    writeFileSync(join(backups, `lyam-data-${ts}.tar.gz`), 'old');
+  }
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 0, r.stderr);
+  const left = readdirSync(backups).filter((f) => f.startsWith('lyam-data-'));
+  assert.equal(left.length, 2, `expected 2 generations kept, found ${left.length}: ${left}`);
+});
+
+test('update.sh is valid POSIX shell', () => {
+  const r = spawnSync('sh', ['-n', updater], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+});

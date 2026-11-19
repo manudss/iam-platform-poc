@@ -1,0 +1,20 @@
+# Boots the persistent Lyam demo in the right order at host boot: PostgreSQL ready, then
+# OpenBao unsealed, then the app (deploy/oci/host-boot.sh, docs/oci-deploy.md).
+# Install: cp lyam-boot.service /etc/systemd/system/ && systemctl enable --now lyam-boot
+[Unit]
+Description=Lyam persistent demo (ordered boot: front up, pg, bao unsealed, app)
+After=docker.service caddy.service
+Requires=docker.service
+# The front gate and every coordinated recreation are proven THROUGH Caddy: booting without
+# the front would fail randomly. Wants (not Requires) so a differently-named front unit still
+# lets the bounded front-wait in host-boot.sh decide.
+Wants=caddy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /opt/lyam/bin/host-boot.sh /opt/lyam/lyam.env
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
