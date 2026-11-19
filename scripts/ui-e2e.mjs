@@ -331,7 +331,7 @@ try {
   await page.waitForSelector('text=Able to merge');
   assert.equal(await btn('Approve').isDisabled(), false); // author approval allowed by default
   await btn('Approve').click(); await page.waitForSelector('text=approved');
-  assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
+  assert.equal(await page.locator('.msg.error').count(), 0); await page.click('#user-menu-button'); await page.waitForSelector('#user-menu:has-text("demo-alice")'); await page.keyboard.press('Escape'); // identity moved into the user menu
   await shot('8-explorer-5-pull-request');
   // Human Merge now uses the same checked publication path as Review & Apply.
   await btn('Merge pull request').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
