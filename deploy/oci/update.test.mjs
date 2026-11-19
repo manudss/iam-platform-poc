@@ -52,7 +52,7 @@ case "$1" in
       *FROM\\ pg_tables*) cat "$STUB_DIR/pg-tables" 2>/dev/null || echo 'public.activations'; exit 0 ;;
       *row_to_json*) cat "$STUB_DIR/pg-count" 2>/dev/null || echo '7 0123456789abcdef0123456789abcdef01234567'; exit 0 ;;
       *information_schema.sequences*) exit 0 ;;
-      *last_value*) echo 1; exit 0 ;;
+      *last_value*) echo '1 true'; exit 0 ;;
       *DROP\\ DATABASE*) [ -f "$STUB_DIR/pg-count-after" ] && cp "$STUB_DIR/pg-count-after" "$STUB_DIR/pg-count"; exit 0 ;;
       *CREATE\\ DATABASE*) exit 0 ;;
       *psql*) exit 0 ;;
@@ -67,6 +67,7 @@ const CURL_STUB = `#!/bin/sh
 echo "curl $*" >> "$STUB_DIR/calls"
 if [ -f "$STUB_DIR/curl-200" ]; then echo 200; exit 0; fi
 if [ -f "$STUB_DIR/curl-000" ]; then echo 000; exit 0; fi
+if [ -f "$STUB_DIR/curl-000-after-gate" ] && [ ! -f "$STUB_DIR/MAINTENANCE" ]; then echo 000; exit 0; fi
 [ -f "$STUB_DIR/MAINTENANCE" ] && { echo 503; exit 0; }
 echo 200
 `;
@@ -89,6 +90,13 @@ function setup({ label = 'auto never', current = OLD, health = true, dataset = t
   if (runFail) writeFileSync(join(stub, 'run-fail'), NEW);
   const data = join(dir, 'data');
   writeFileSync(join(dir, 'compose.yml'), '# test compose');
+  writeFileSync(join(dir, 'compose.env'), 'PG_PASSWORD=x');
+  writeFileSync(join(dir, 'bao-policy.hcl'), '# test policy');
+  for (const f of ['lyam-boot.service', 'host-boot.sh', 'bao-bootstrap.sh', 'lyam-gate.caddy']) {
+    writeFileSync(join(dir, f), '# test');
+  }
+  const stackFiles = ['lyam-boot.service', 'host-boot.sh', 'bao-bootstrap.sh', 'lyam-gate.caddy']
+    .map((f) => join(dir, f)).join(' ');
   if (dataset) mkdirSync(join(data, 'dolt', '.dolt'), { recursive: true }); else mkdirSync(data, { recursive: true });
   if (pause) writeFileSync(join(dir, 'UPDATE_PAUSED'), '');
   const env = join(dir, 'lyam.env');
@@ -102,6 +110,8 @@ function setup({ label = 'auto never', current = OLD, health = true, dataset = t
     `LYAM_FRONT_BARRIER_FILE=${join(dir, 'stub', 'MAINTENANCE')}`,
     pg ? 'LYAM_BACKUP_PG_CONTAINER=pg' : '',
     pg ? `LYAM_COMPOSE_FILE=${join(dir, 'compose.yml')}` : '',
+    pg ? `LYAM_COMPOSE_ENV_FILE=${join(dir, 'compose.env')}` : '',
+    pg ? `LYAM_STACK_FILES=${stackFiles}` : '',
     keep !== null ? `LYAM_BACKUP_KEEP=${keep}` : '',
     ...extraEnv,
   ].filter(Boolean).join('\n') + '\n');
@@ -179,6 +189,33 @@ test('happy path: front gate proven FIRST, cold backup, gate lifted only when he
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-data-')), 'data backup written');
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-pg-')), 'pg dump written');
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-recovery-')), 'private recovery bundle written');
+  const bundle = readdirSync(join(dir, 'backups')).find((f) => f.startsWith('lyam-recovery-'));
+  const listing = spawnSync('tar', ['-tzf', join(dir, 'backups', bundle)], { encoding: 'utf8' }).stdout;
+  for (const want of ['lyam.env', 'compose.yml', 'compose.env', 'lyam-boot.service', 'host-boot.sh', 'bao-bootstrap.sh', 'lyam-gate.caddy', 'MANIFEST']) {
+    assert.ok(listing.includes(want), `recovery bundle carries ${want}`);
+  }
+});
+
+test('a foreign maintenance gate refuses the update and is never removed', () => {
+  const { env, dir } = setup();
+  writeFileSync(join(dir, 'stub', 'MAINTENANCE'), 'someone-elses-maintenance');
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /does NOT own/);
+  assert.doesNotMatch(r.calls, /docker stop|docker run/, 'nothing changes over a foreign gate');
+  assert.equal(readFileSync(join(dir, 'stub', 'MAINTENANCE'), 'utf8'), 'someone-elses-maintenance', 'the foreign gate is untouched');
+});
+
+test('a front that never re-opens re-arms maintenance instead of exposing the service', () => {
+  const { env, dir } = setup({ pg: true });
+  writeFileSync(join(dir, 'stub', 'curl-000-after-gate'), '');   // 503 while gated, 000 once lifted
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(r.stderr, /re-armed/);
+  assert.match(r.stderr, /NO blind rollback/);
+  assert.ok(existsSync(join(dir, 'stub', 'MAINTENANCE')), 'maintenance was re-armed and stays up');
+  const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
+  assert.ok(!runs.some((l) => l.endsWith(OLD)), 'no blind rollback of the healthy new version');
 });
 
 test('an update is refused when the front gate cannot be proven through the origin', () => {
@@ -229,12 +266,13 @@ test('a failed container creation triggers compensation (restore + previous imag
 
 test('a pg state verification mismatch blocks the service instead of exposing it', () => {
   const { env, dir } = setup({ health: false, pg: true });
-  writeFileSync(join(dir, 'stub', 'pg-count'), '7');
+  writeFileSync(join(dir, 'stub', 'pg-count'), '7 0123456789abcdef0123456789abcdef01234567');
   writeFileSync(join(dir, 'stub', 'pg-count-after'), '9 fedcba0987654321fedcba0987654321fedcba09');
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 4, r.stderr);
   assert.match(r.stderr, /state verification failed/);
   assert.match(r.stderr, /stays DOWN/);
+  assert.ok(existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the maintenance gate stays UP on a failed verification');
   const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
   assert.ok(!runs.some((l) => l.endsWith(OLD)), 'the previous image is NOT started on a failed verification');
 });
@@ -249,12 +287,13 @@ test('archiving Bao without its container is refused (never copied live)', () =>
 });
 
 test('an unhealthy new image rolls back image AND data together behind the front gate', () => {
-  const { env } = setup({ health: false, pg: true });
+  const { env, dir } = setup({ health: false, pg: true });
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 3, r.stderr);
   assert.match(r.stderr, /rolled back.*pre-update data restored/);
   const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
   assert.ok(runs[runs.length - 1].endsWith(OLD), 'rollback runs the previous image');
+  assert.ok(!existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the gate is lifted once the rolled-back version is proven through the front');
 });
 
 test('a failing pre-update hook aborts before any backup or swap (preservation chain incomplete)', () => {

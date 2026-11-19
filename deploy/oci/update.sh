@@ -19,14 +19,16 @@
 #     optional OpenBao storage + keys tar taken while the Bao container is stopped, and a
 #     private recovery bundle (env file, compose, bao config/policy, manifest);
 #   - BEFORE the container stops, a FRONT GATE is proven through the public origin: a
-#     maintenance file the Caddy front watches is dropped, and the update only proceeds once
-#     $IAM_PUBLIC_ORIGIN answers 503. Host netfilter rules do NOT work here: Docker publishes
-#     loopback ports through userland docker-proxy, so iptables never sees front traffic -
-#     the gate lives at the real front and curl through the origin is the only proof. It is
-#     held until the new
-#     version - or the rolled-back previous one - is healthy and answers 200 through the origin.
-#     Health is probed INSIDE the
-#     container, so no visitor write can ever reach a version the rollback would discard.
+#     maintenance marker this run OWNS (unique token inside) is dropped in a dedicated
+#     front-readable directory, and the update only proceeds once $IAM_PUBLIC_ORIGIN answers
+#     503. Host netfilter rules do NOT work here: Docker publishes loopback ports through
+#     userland docker-proxy, so iptables never sees front traffic - the gate lives at the
+#     real front and curl through the origin is the only proof. A gate this run did NOT
+#     create is never removed (a pre-existing foreign gate refuses the update). The gate is
+#     held until the new version - or the rolled-back previous one - is healthy, and it is
+#     lifted only as remove + proven 200 through the origin; a failed lift RE-ARMS
+#     maintenance (no blind rollback of possible new writes, no exposed unverified service).
+#     Every other failure path KEEPS the gate up (fail closed).
 #     Any failure rolls back image AND data together (the failed version may have migrated
 #     the data, so an old image on a newer data state is not a safe rollback), including a
 #     consistent PostgreSQL restore (integrity-checked dump, drop + recreate + replay
@@ -45,11 +47,14 @@
 #   LYAM_BACKUP_DIR          backup destination (default /opt/lyam/backups)
 #   LYAM_PORT                host loopback port published to the container's 8080 (default 8080)
 #   The updater proves a FRONT GATE through the public origin BEFORE anything changes: it
-#   drops the maintenance file LYAM_FRONT_BARRIER_FILE (watched by the Caddy front) and
-#   refuses to proceed until $IAM_PUBLIC_ORIGIN/healthz answers 503; the gate is lifted only
-#   when the new version - or the rolled-back previous one - answers 200 through the origin.
-#   Host iptables rules are useless for this (userland docker-proxy serves loopback-published
-#   ports): curl through the origin is the only proof. curl and IAM_PUBLIC_ORIGIN are required.
+#   drops its owned maintenance marker LYAM_FRONT_BARRIER_FILE (default
+#   /var/lib/lyam-front-gate/MAINTENANCE - a dedicated 0755 directory the Caddy identity can
+#   traverse; /opt/lyam is root-0700 and cannot host it) and refuses to proceed until
+#   $IAM_PUBLIC_ORIGIN/healthz answers 503; the gate is lifted only when the new version - or
+#   the rolled-back previous one - answers 200 through the origin, and a failed lift re-arms
+#   it. Host iptables rules are useless for this (userland docker-proxy serves
+#   loopback-published ports): curl through the origin is the only proof. curl and
+#   IAM_PUBLIC_ORIGIN are required.
 #   LYAM_DOCKER_NETWORK      optional docker network (e.g. lyam-net with pg/bao companions)
 #   LYAM_HEALTH_TIMEOUT      seconds to wait for /healthz (default 420)
 #   LYAM_BACKUP_KEEP         backup generations kept per kind (default 5)
@@ -62,10 +67,16 @@
 #   LYAM_BACKUP_BAO_CONTAINER OpenBao container: stopped during the archive, started + unsealed after
 #   LYAM_BACKUP_BAO_KEYS_DIR REQUIRED with BAO_DIR: unseal key / root token / api token dir,
 #                            archived with the storage (indispensable keys are not optional)
-#   LYAM_FRONT_BARRIER_FILE maintenance file watched by the Caddy front (default
-#                            /opt/lyam/MAINTENANCE)
+#   LYAM_FRONT_BARRIER_FILE maintenance marker watched by the Caddy front (default
+#                            /var/lib/lyam-front-gate/MAINTENANCE; its directory must be
+#                            traversable by the Caddy identity and hold ONLY this marker)
 #   LYAM_COMPOSE_FILE        REQUIRED with the pg backup: companion compose file (recovery input)
+#   LYAM_COMPOSE_ENV_FILE    REQUIRED with the pg backup: the compose .env holding PG_PASSWORD
 #   LYAM_BAO_CONFIG_FILE     REQUIRED with BAO_DIR: bao server config (recovery input)
+#   LYAM_BAO_POLICY_FILE     REQUIRED with BAO_DIR: the scoped API policy (recovery input)
+#   LYAM_STACK_FILES         REQUIRED with companions: boot-time operational files (systemd
+#                            unit, host-boot.sh, bao-bootstrap.sh, front-gate Caddy config) -
+#                            all copied into the recovery bundle for a fresh-stack rebuild
 #   LYAM_RECOVERY_FILES      optional space-separated extra files (compose file, bao.hcl,
 #                            policy file) copied into the private recovery bundle; a configured
 #                            but unreadable entry aborts the update
@@ -119,7 +130,10 @@ BAO_KEYS_DIR="$(getconf LYAM_BACKUP_BAO_KEYS_DIR)"
 BAO_UNSEAL_CMD="$(getconf LYAM_BAO_UNSEAL_CMD)"
 ORIGIN="$(getconf IAM_PUBLIC_ORIGIN)"; ORIGIN="${ORIGIN%/}"
 COMPOSE_FILE="$(getconf LYAM_COMPOSE_FILE)"
+COMPOSE_ENV_FILE="$(getconf LYAM_COMPOSE_ENV_FILE)"
 BAO_CONFIG_FILE="$(getconf LYAM_BAO_CONFIG_FILE)"
+BAO_POLICY_FILE="$(getconf LYAM_BAO_POLICY_FILE)"
+STACK_FILES="$(getconf LYAM_STACK_FILES)"
 RECOVERY_FILES="$(getconf LYAM_RECOVERY_FILES)"
 HOOK="$(getconf LYAM_PRE_UPDATE_HOOK)"
 PAUSE_FILE="$(getconf LYAM_PAUSE_FILE)"; PAUSE_FILE="${PAUSE_FILE:-/opt/lyam/UPDATE_PAUSED}"
@@ -144,10 +158,21 @@ if [ -n "$BAO_DIR" ]; then
     || fail 1 "LYAM_BACKUP_BAO_DIR requires LYAM_BACKUP_BAO_KEYS_DIR pointing at the unseal-key/token dir - the recovery chain is incomplete without it"
   [ -n "$BAO_CONFIG_FILE" ] && [ -r "$BAO_CONFIG_FILE" ] \
     || fail 1 "LYAM_BACKUP_BAO_DIR requires LYAM_BAO_CONFIG_FILE (bao.hcl) readable - the bao service cannot be rebuilt without it"
+  [ -n "$BAO_POLICY_FILE" ] && [ -r "$BAO_POLICY_FILE" ] \
+    || fail 1 "LYAM_BACKUP_BAO_DIR requires LYAM_BAO_POLICY_FILE (bao-policy.hcl) readable - the scoped access cannot be rebuilt without it"
 fi
 if [ -n "$PG_CONTAINER" ]; then
   [ -n "$COMPOSE_FILE" ] && [ -r "$COMPOSE_FILE" ] \
     || fail 1 "LYAM_BACKUP_PG_CONTAINER requires LYAM_COMPOSE_FILE readable - the pg companion cannot be rebuilt without it"
+  [ -n "$COMPOSE_ENV_FILE" ] && [ -r "$COMPOSE_ENV_FILE" ] \
+    || fail 1 "LYAM_BACKUP_PG_CONTAINER requires LYAM_COMPOSE_ENV_FILE readable (the compose .env holding PG_PASSWORD) - the pg companion cannot be rebuilt without its password"
+fi
+if [ -n "$PG_CONTAINER" ] || [ -n "$BAO_DIR" ]; then
+  [ -n "$STACK_FILES" ] \
+    || fail 1 "LYAM_STACK_FILES must list the boot-time operational files (systemd unit, host-boot.sh, bao-bootstrap.sh, front-gate Caddy config) - a fresh stack cannot be rebuilt without them"
+  for f in $STACK_FILES; do
+    [ -r "$f" ] || fail 1 "LYAM_STACK_FILES entry $f is missing or unreadable"
+  done
 fi
 command -v curl >/dev/null 2>&1 \
   || fail 1 "curl not found on this host: the front barrier must be proven through the public origin"
@@ -167,27 +192,49 @@ done
 # the gate at runtime through the public origin: the probe must return 503 while the gate is
 # up (anything else = the front is not actually gated = refuse/fail closed) and 200 once it
 # is lifted.
-BARRIER_FILE="$(getconf LYAM_FRONT_BARRIER_FILE)"; BARRIER_FILE="${BARRIER_FILE:-/opt/lyam/MAINTENANCE}"
+# The marker lives in a DEDICATED directory the front can traverse: /opt/lyam is root-0700
+# (private data), and Caddy cannot stat a marker inside it. $BARRIER_DIR is 0755 root:root and
+# holds ONLY the marker - no private file ever belongs there. The marker carries this run's
+# ownership TOKEN: a gate this run did not create is never removed, and a pre-existing foreign
+# gate refuses the update (someone else's maintenance is not ours to lift). The marker file
+# itself is 0644 (its content is a non-secret token) so any front identity can stat/read it.
+BARRIER_FILE="$(getconf LYAM_FRONT_BARRIER_FILE)"; BARRIER_FILE="${BARRIER_FILE:-/var/lib/lyam-front-gate/MAINTENANCE}"
+GATE_TOKEN="lyam-update:$$:$(date -u +%Y%m%dT%H%M%SZ)"
 BARRIER_ACTIVE=0
 front_probe() { curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "$ORIGIN/healthz" 2>/dev/null || true; }
 barrier_verify() { [ "$(front_probe)" = 503 ]; }
 front_verify() { [ "$(front_probe)" = 200 ]; }
 barrier_add() {
-  touch "$BARRIER_FILE" || return 1
+  [ ! -e "$BARRIER_FILE" ] || return 2   # a gate this run does NOT own is already in place
+  mkdir -p "$(dirname "$BARRIER_FILE")" || return 1
+  chmod 755 "$(dirname "$BARRIER_FILE")" || return 1
+  echo "$GATE_TOKEN" > "$BARRIER_FILE" || return 1
+  chmod 644 "$BARRIER_FILE" || return 1
   BARRIER_ACTIVE=1
   barrier_verify
 }
 barrier_remove() {
   [ "$BARRIER_ACTIVE" = 1 ] || return 0
+  [ "$(cat "$BARRIER_FILE" 2>/dev/null)" = "$GATE_TOKEN" ] || return 1   # not ours: never delete
   rm -f "$BARRIER_FILE" || return 1
   BARRIER_ACTIVE=0
 }
-barrier_cleanup() {
-  if [ "$BARRIER_ACTIVE" = 1 ]; then
-    rm -f "$BARRIER_FILE" 2>/dev/null || log "WARNING: the maintenance file $BARRIER_FILE could not be removed - remove it manually to resume the front"
-  fi
+barrier_rearm() {
+  echo "$GATE_TOKEN" > "$BARRIER_FILE" 2>/dev/null || return 1
+  chmod 644 "$BARRIER_FILE" 2>/dev/null || true
+  BARRIER_ACTIVE=1
+  barrier_verify
 }
-trap barrier_cleanup EXIT
+# The ONLY way out of a gated window: remove OUR marker, then prove the front answers 200
+# again. If either step fails the gate is RE-ARMED - the service stays behind maintenance
+# rather than exposed in an unverified state.
+gate_lift() {
+  if barrier_remove && front_verify; then return 0; fi
+  barrier_rearm || log "WARNING: maintenance could not be re-armed at $BARRIER_FILE"
+  return 1
+}
+# An interruption mid-update leaves the state unknown: keep the gate UP (fail closed).
+trap 'log "interrupted: the maintenance gate stays UP at $BARRIER_FILE - verify the service state manually"; exit 4' INT TERM
 
 # One run at a time: the pipeline and a manual run must never interleave stops/backups/swaps.
 mkdir -p "$(dirname "$LOCK_FILE")"
@@ -261,7 +308,11 @@ restart_previous() {
 # whole window (including on reused connections), the gate is proven through the public origin,
 # and an unprovable gate refuses the update before any state change.
 log "front gate: enabling maintenance at the real front ($ORIGIN answers 503 until the end)"
-barrier_add || { barrier_cleanup; fail 1 "the front gate could not be proven through $ORIGIN (expected 503 while gated) - refusing to update: the front is NOT protected"; }
+barrier_rc=0; barrier_add || barrier_rc=$?
+[ "$barrier_rc" -ne 2 ] \
+  || fail 1 "a maintenance gate this run does NOT own is already in place at $BARRIER_FILE - refusing to update over someone else's maintenance"
+[ "$barrier_rc" -eq 0 ] \
+  || { barrier_remove; fail 1 "the front gate could not be proven through $ORIGIN (expected 503 while gated) - refusing to update: the front is NOT protected"; }
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$BACKUP_DIR"
 if [ -n "$PREVIOUS" ]; then
@@ -274,14 +325,16 @@ fi
 if [ -n "$HOOK" ]; then
   log "running pre-update hook"
   if ! sh -c "$HOOK"; then
-    restart_previous || fail 4 "pre-update hook failed AND the previous container could not be restarted - manual intervention"
-    fail 2 "pre-update hook failed; update aborted, previous container restarted"
+    restart_previous || fail 4 "pre-update hook failed AND the previous container could not be restarted - the maintenance gate stays UP - manual intervention"
+    gate_lift || fail 4 "pre-update hook failed; the previous container was restarted BUT the front could not be proven open - maintenance re-armed at $BARRIER_FILE, diagnose the front manually"
+    fail 2 "pre-update hook failed; update aborted, previous container restarted, front re-opened"
   fi
 fi
 
 abort_preservation() {
-  restart_previous || fail 4 "$1 AND the previous container could not be restarted - manual intervention"
-  fail 2 "$1; update aborted, previous container restarted"
+  restart_previous || fail 4 "$1 AND the previous container could not be restarted - the maintenance gate stays UP - manual intervention"
+  gate_lift || fail 4 "$1; the previous container was restarted BUT the front could not be proven open - maintenance re-armed at $BARRIER_FILE, diagnose the front manually"
+  fail 2 "$1; update aborted, previous container restarted, front re-opened"
 }
 
 DATA_BACKUP="$BACKUP_DIR/lyam-data-$TS.tar.gz"
@@ -290,16 +343,27 @@ tar -C "$(dirname "$DATA_DIR")" -czf "$DATA_BACKUP" "$(basename "$DATA_DIR")" \
   || abort_preservation "data backup failed"
 [ -s "$DATA_BACKUP" ] || abort_preservation "data backup is empty"
 
-# Full application state capture: for every user table, the row count AND an order-independent
-# content hash (same count never means same data - constant-cardinality edits change the hash),
-# every sequence's last_value, and a hash of the schema objects themselves (tables, columns,
-# types - an altered object changes it). A capture failure is never ignored: it aborts the
-# update (backup path) or keeps the service down (restore path).
+# Full application state capture. Content: for every user table, the row count AND an
+# order-independent content hash (same count never means same data - constant-cardinality
+# edits change the hash). Schema: a NORMALIZED export - columns with defaults and
+# nullability, constraints, indexes, views, functions and sequence definitions, one line per
+# object, ordered, hashed as a whole (an altered default, a dropped index, a changed view or
+# function all change it). Sequences: the FULL runtime state (last_value + is_called) of
+# every sequence. Every query runs with ON_ERROR_STOP: an enumeration or read failure aborts
+# the capture, it is never ignored (a failed capture aborts the update on the backup path and
+# keeps the service down on the restore path).
 pg_state_capture() {
   _out="$1"
   : > "$_out"
-  _psql() { docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tA -c "$1" 2>/dev/null; }
-  _schema="$(_psql "SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) FROM (SELECT table_name||' '||column_name||' '||data_type||' '||coalesce(character_maximum_length::text,'') AS line FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog','information_schema')) s")" || return 1
+  _psql() { docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tA -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null; }
+  _schema="$(_psql "SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) FROM (
+      SELECT 'col '||table_schema||'.'||table_name||'.'||column_name||' '||udt_name||' '||is_nullable||' '||coalesce(column_default,'') AS line FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'con '||constraint_schema||'.'||table_name||'.'||constraint_name||' '||constraint_type FROM information_schema.table_constraints WHERE constraint_schema NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'idx '||schemaname||'.'||indexname||' '||indexdef FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'view '||table_schema||'.'||table_name||' '||coalesce(view_definition,'') FROM information_schema.views WHERE table_schema NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'fun '||routine_schema||'.'||routine_name||' '||routine_type||' '||coalesce(routine_definition,'') FROM information_schema.routines WHERE routine_schema NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'seqdef '||sequence_schema||'.'||sequence_name||' '||data_type||' '||start_value||' '||minimum_value||' '||maximum_value||' '||increment FROM information_schema.sequences WHERE sequence_schema NOT IN ('pg_catalog','information_schema')
+    ) s")" || return 1
   case "$_schema" in ''|*' '*) return 1 ;; esac
   echo "schema $_schema" >> "$_out"
   _tables="$(_psql "SELECT format('%I.%I', schemaname, tablename) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') ORDER BY 1")" || return 1
@@ -312,12 +376,15 @@ pg_state_capture() {
     [ "$_ok" = 1 ] || break
     echo "table $_t $_row" >> "$_out"
   done
-  for _s in $(_psql "SELECT format('%I.%I', sequence_schema, sequence_name) FROM information_schema.sequences WHERE sequence_schema NOT IN ('pg_catalog','information_schema') ORDER BY 1"); do
-    _lv="$(_psql "SELECT last_value FROM $_s")" || _ok=0
-    case "$_lv" in ''|*[!0-9]*) _ok=0 ;; esac
-    [ "$_ok" = 1 ] || break
-    echo "sequence $_s $_lv" >> "$_out"
-  done
+  _seqs="$(_psql "SELECT format('%I.%I', sequence_schema, sequence_name) FROM information_schema.sequences WHERE sequence_schema NOT IN ('pg_catalog','information_schema') ORDER BY 1")" || _ok=0
+  if [ "$_ok" = 1 ]; then
+    for _s in $_seqs; do
+      _lv="$(_psql "SELECT last_value||' '||is_called FROM $_s")" || _ok=0
+      case "$_lv" in *[0-9]' true'|*[0-9]' false') ;; *) _ok=0 ;; esac
+      [ "$_ok" = 1 ] || break
+      echo "sequence $_s $_lv" >> "$_out"
+    done
+  fi
   IFS="$OLDIFS"
   [ "$_ok" = 1 ]
 }
@@ -368,7 +435,9 @@ RECOVERY="$BACKUP_DIR/lyam-recovery-$TS.tar.gz"
 STAGE="$BACKUP_DIR/.recovery-$TS"
 mkdir -m 700 -p "$STAGE"
 rec_ok=1
-for f in "$ENV_FILE" ${COMPOSE_FILE:+"$COMPOSE_FILE"} ${BAO_CONFIG_FILE:+"$BAO_CONFIG_FILE"} $RECOVERY_FILES; do
+for f in "$ENV_FILE" ${COMPOSE_FILE:+"$COMPOSE_FILE"} ${COMPOSE_ENV_FILE:+"$COMPOSE_ENV_FILE"} \
+         ${BAO_CONFIG_FILE:+"$BAO_CONFIG_FILE"} ${BAO_POLICY_FILE:+"$BAO_POLICY_FILE"} \
+         $STACK_FILES $RECOVERY_FILES; do
   [ -n "$f" ] || continue
   cp --parents "$f" "$STAGE" 2>/dev/null || rec_ok=0
 done
@@ -382,6 +451,7 @@ MANIFEST="$STAGE/MANIFEST"
   [ -n "${PG_STATE_FILE:-}" ] && { echo "pg_state:"; sed 's/^/  /' "$PG_STATE_FILE"; }
   [ -n "${BAO_BACKUP:-}" ] && echo "bao_backup=$(basename "$BAO_BACKUP") sha256=$(sha256sum "$BAO_BACKUP" | cut -d' ' -f1)"
   [ -n "${BAO_KEYS_DIR:-}" ] && echo "bao_keys_included=yes"
+  echo "front_barrier_file=$BARRIER_FILE"
 } > "$MANIFEST"
 tar -C "$STAGE" -czf "$RECOVERY" . 2>/dev/null || rec_ok=0
 rm -rf "$STAGE"
@@ -398,8 +468,9 @@ docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 CREATE_OK=1
 run_container "$IMAGE" "$PORT" || CREATE_OK=0
 if [ "$CREATE_OK" = 1 ] && bao_ready && health; then
-  barrier_remove || fail 4 "the new version is healthy BUT the maintenance file $BARRIER_FILE could not be removed - remove it manually to resume the front"
-  front_verify || fail 4 "the front gate lifted but $ORIGIN does not answer 200 - the front path is broken, verify manually"
+  # The gate lifts ONLY here, and a failed lift RE-ARMS it: no blind rollback of this
+  # version's possible writes, no exposed-but-unverified service either.
+  gate_lift || fail 4 "the new version is healthy BUT the front could not be proven open (gate removal or 200-probe failed) - maintenance re-armed at $BARRIER_FILE, the service stays behind it; NO blind rollback (visitor writes may already exist on this version): diagnose the front path manually"
   log "healthy: $CONTAINER now runs $IMAGE; the front serves it (proven through $ORIGIN); data preserved (backup $DATA_BACKUP)"
   exit 0
 fi
@@ -410,7 +481,9 @@ fi
 # The failed version may have migrated the Dolt schema or plugin state at boot: an old image
 # reading a newer data state is NOT a safe rollback, so the pre-update backup is restored first.
 # No visitor write can be lost: the front gate has answered 503 to every request since before
-# the swap began and stays up until the rolled-back previous version is healthy.
+# the swap began and stays up until the rolled-back previous version is healthy. Every fail-4
+# path below KEEPS the maintenance gate UP: the service is down or unverified, and a gate this
+# run owns is only ever lifted by gate_lift (remove + proven 200, re-armed otherwise).
 log "rolling back: restoring the pre-update data and starting the previous image"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
@@ -452,7 +525,7 @@ if [ -n "$PG_CONTAINER" ] && [ -f "${PG_BACKUP:-}" ]; then
     fail 4 "update failed AND the post-restore state could not be captured (unknown counts are never ignored); the service stays DOWN - verify $PG_BACKUP manually"
   fi
   if ! cmp -s "${PG_STATE_FILE:-/dev/null}" "$PG_STATE_POST"; then
-    log "state mismatch (table count, pre -> post):"
+    log "state mismatch (pre -> post):"
     diff "${PG_STATE_FILE:-/dev/null}" "$PG_STATE_POST" | grep -E '^[<>]' | sed 's/^/    /' >&2 || true
     rm -f "$PG_STATE_POST"
     fail 4 "update failed AND the PostgreSQL state verification failed; the service stays DOWN - verify $PG_BACKUP manually"
@@ -478,9 +551,8 @@ fi
 if [ -n "$PREVIOUS" ]; then
   run_container "$PREVIOUS" "$PORT" || fail 4 "update failed AND the rollback container could not start; the pre-update backup was restored into $DATA_DIR - verify manually"
   if health; then
-    barrier_remove || fail 4 "rolled back and healthy BUT the maintenance file $BARRIER_FILE could not be removed - remove it manually to resume the front"
-    front_verify || fail 4 "rolled back and healthy BUT $ORIGIN does not answer 200 after the gate lifted - the front path is broken, verify manually"
-    fail 3 "update failed; rolled back to $PREVIOUS with the pre-update data restored (backup $DATA_BACKUP)"
+    gate_lift || fail 4 "rolled back and healthy BUT the front could not be proven open - maintenance re-armed at $BARRIER_FILE, diagnose the front manually"
+    fail 3 "update failed; rolled back to $PREVIOUS with the pre-update data restored (backup $DATA_BACKUP); the front is open again"
   fi
   fail 4 "update failed AND the rollback to $PREVIOUS never became healthy; the pre-update backup was restored into $DATA_DIR - verify manually"
 fi

@@ -6,10 +6,12 @@
 #   - unseals it when sealed (safe to re-run after every bao container restart);
 #   - enables the KV-v2 engine at secret/ when missing;
 #   - writes the scoped API policy;
-#   - mints the scoped API token ONCE (reused while still valid; a new one is only minted
-#     when the stored one no longer works, and the script then says loudly that the app
-#     environment must be updated - the token inside a running container's env cannot be
-#     synchronized automatically).
+#   - mints the scoped API token ONCE. A stored token is only reused while its REMAINING
+#     lifetime covers the time left until the planned demo end (LYAM_DEMO_UNTIL, default
+#     2026-12-16); otherwise a new one is minted and synchronized ATOMICALLY into the app
+#     env file (LYAM_ENV_FILE, default /opt/lyam/lyam.env) - the token inside a RUNNING
+#     container's env cannot be hot-swapped, so a running app must then be recreated from
+#     the env file (update.sh does that on its next run; the script says so loudly).
 # --unseal-only mode (host boot, updater compensation paths): unseal + wait-ready ONLY;
 #   never touches policy or tokens.
 #
@@ -36,6 +38,16 @@ mkdir -p "$KEYS_DIR"
 chmod 700 "$KEYS_DIR"
 KEYS="$KEYS_DIR/keys.json"
 TOKEN_FILE="$KEYS_DIR/api-token"
+ENV_FILE="${LYAM_ENV_FILE:-/opt/lyam/lyam.env}"
+DEMO_UNTIL="${LYAM_DEMO_UNTIL:-2026-12-16}"
+# Coverage required from any token, minted or reused: the real time left until the planned
+# demo end, never an arbitrary floor (the API never renews tokens - a token that dies before
+# the teardown silently cuts it off its secrets). Floor of one day once the date has passed.
+NOW_S="$(date +%s)"
+UNTIL_S="$(date -d "$DEMO_UNTIL 23:59:59" +%s 2>/dev/null || echo 0)"
+case "$UNTIL_S" in ''|*[!0-9]*) UNTIL_S=0 ;; esac
+REQUIRED_TTL=$(( UNTIL_S - NOW_S ))
+[ "$REQUIRED_TTL" -ge 86400 ] || REQUIRED_TTL=86400
 
 # bao status exits 0 (unsealed), 1 (error/unreachable) or 2 (sealed) and still prints JSON in
 # every reachable case - capture output and code separately, never mask one with the other.
@@ -104,32 +116,53 @@ if [ -s "$TOKEN_FILE" ]; then
   LOOKUP="$(BAO_TOKEN="$(cat "$TOKEN_FILE")" bao token lookup -format=json 2>/dev/null || true)"
   TTL_LEFT="$(echo "$LOOKUP" | sed -n 's/.*"ttl" *: *\([0-9]*\).*/\1/p' | head -n 1)"
   case "$TTL_LEFT" in ''|*[!0-9]*) TTL_LEFT=0 ;; esac
-  # Reuse only while the REMAINING lifetime covers the real period ahead (14-day floor):
-  # a token that dies mid-demo silently cuts the API off its secrets (no renewal, POC scope).
-  if [ "$TTL_LEFT" -ge 1209600 ]; then
-    echo "scoped API token in $TOKEN_FILE is still valid for ${TTL_LEFT}s; unchanged"
+  # Reuse only while the REMAINING lifetime covers the whole period until the demo end.
+  if [ "$TTL_LEFT" -ge "$REQUIRED_TTL" ]; then
+    echo "scoped API token in $TOKEN_FILE is still valid for ${TTL_LEFT}s (covers the ${REQUIRED_TTL}s left until $DEMO_UNTIL); unchanged"
     exit 0
   fi
-  [ "$TTL_LEFT" -gt 0 ] && echo "stored token only has ${TTL_LEFT}s left (< 14 days): re-minting" >&2
+  [ "$TTL_LEFT" -gt 0 ] && echo "stored token only has ${TTL_LEFT}s left; ${REQUIRED_TTL}s are needed to cover the demo until $DEMO_UNTIL: re-minting" >&2
 fi
 
-# Scoped token with an explicit 40-day TTL: it outlives the planned demo window (teardown
-# mid-December) with margin, and is destroyed with the VM. There is NO automatic renewal -
-# the API does not renew leases (documented POC scope) and a periodic token without a
-# renewer would still expire. If the demo outlives the token: re-run this script and restart
-# the lyam container with the fresh IAM_BAO_TOKEN (docs/oci-deploy.md).
-bao token create -orphan -policy=lyam-demo-connections -ttl=960h -explicit-max-ttl=960h -display-name=lyam-api -format=json \
+# Scoped token with an explicit 40-day TTL: it outlives the planned demo window with margin
+# and is destroyed with the VM. There is NO automatic renewal - the API does not renew leases
+# (documented POC scope) and a periodic token without a renewer would still expire.
+MINT_TTL_S=3456000
+[ "$MINT_TTL_S" -ge "$REQUIRED_TTL" ] || { echo "the mint TTL ${MINT_TTL_S}s no longer covers the ${REQUIRED_TTL}s left until $DEMO_UNTIL - shorten the demo or raise the mint TTL" >&2; exit 1; }
+MINT_TTL_H=$(( (MINT_TTL_S + 3599) / 3600 ))
+bao token create -orphan -policy=lyam-demo-connections -ttl=${MINT_TTL_H}h -explicit-max-ttl=${MINT_TTL_H}h -display-name=lyam-api -format=json \
   | sed -n 's/.*"client_token" *: *"\([^"]*\)".*/\1/p' | head -n 1 > "$TOKEN_FILE"
 chmod 600 "$TOKEN_FILE"
 [ -s "$TOKEN_FILE" ] || { echo "no scoped token was issued" >&2; exit 1; }
 
 # The granted TTL is MEASURED, not assumed from the request: a silently shorter token would
-# cut the API off its secrets mid-demo. Require at least 28 days.
+# cut the API off its secrets before the demo end.
 LOOKUP="$(BAO_TOKEN="$(cat "$TOKEN_FILE")" bao token lookup -format=json 2>/dev/null)" \
   || { echo "the new token could not be verified" >&2; exit 1; }
 TTL_GRANTED="$(echo "$LOOKUP" | sed -n 's/.*"ttl" *: *\([0-9]*\).*/\1/p' | head -n 1)"
 case "$TTL_GRANTED" in ''|*[!0-9]*) echo "the granted TTL could not be measured" >&2; exit 1 ;; esac
-[ "$TTL_GRANTED" -ge 2419200 ] \
-  || { echo "granted TTL ${TTL_GRANTED}s is shorter than 28 days - adjust the mint parameters" >&2; exit 1; }
+[ "$TTL_GRANTED" -ge "$REQUIRED_TTL" ] \
+  || { echo "granted TTL ${TTL_GRANTED}s does not cover the ${REQUIRED_TTL}s left until $DEMO_UNTIL - adjust the mint parameters" >&2; exit 1; }
 
-echo "NEW scoped API token in $TOKEN_FILE (granted TTL ${TTL_GRANTED}s measured) - set IAM_BAO_TOKEN from it in the app env file and (re)start the app container"
+# Synchronize the new token into the app env file ATOMICALLY (pure-shell rewrite: the token
+# never transits through a process argument list). A RUNNING container still holds the
+# previous token in its process env - env edits never reach it - so it must be RECREATED
+# from the env file (docker restart does NOT reload env); update.sh does that on its next run.
+NEW_TOKEN="$(cat "$TOKEN_FILE")"
+if [ -f "$ENV_FILE" ] && grep -q '^IAM_BAO_TOKEN=' "$ENV_FILE"; then
+  TMP_ENV="$ENV_FILE.tmp.$$"
+  while IFS= read -r _line; do
+    case "$_line" in
+      IAM_BAO_TOKEN=*) printf 'IAM_BAO_TOKEN=%s\n' "$NEW_TOKEN" ;;
+      *) printf '%s\n' "$_line" ;;
+    esac
+  done < "$ENV_FILE" > "$TMP_ENV"
+  chmod 600 "$TMP_ENV" && mv "$TMP_ENV" "$ENV_FILE"
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${LYAM_CONTAINER:-lyam}"; then
+    echo "NEW scoped API token (granted TTL ${TTL_GRANTED}s measured): $ENV_FILE updated; the RUNNING ${LYAM_CONTAINER:-lyam} container still holds the previous token - recreate it from the env file (docker restart does NOT reload env)"
+  else
+    echo "NEW scoped API token (granted TTL ${TTL_GRANTED}s measured): $ENV_FILE updated; the next container start picks it up"
+  fi
+else
+  echo "NEW scoped API token in $TOKEN_FILE (granted TTL ${TTL_GRANTED}s measured) - set IAM_BAO_TOKEN from it in the app env file and (re)create the app container"
+fi
