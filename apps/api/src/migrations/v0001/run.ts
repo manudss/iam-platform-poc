@@ -15,6 +15,7 @@ export function initialMigration(app: INestApplication, journal: MigrationJourna
       journal.phase(bootId, 'initial-demo-data');
       if (!await app.get(DemoDataService, { strict: false }).seed(tenant)) throw new Error('unexpected existing demo data during fresh baseline');
       journal.phase(bootId, 'initial-workflows');
+      await app.get(WorkflowStore, { strict: false }).prepareMigrationStorage();
       await app.get(WorkflowDemoSeed, { strict: false }).seed(tenant);
     },
     verify: async () => {
