@@ -53,7 +53,11 @@ main commits from the host cursor. Do not interpret a green image build as a dep
 Automatic queue calls update.sh with `--require-qualification`. It refuses **before any stop**
 if LYAM_POST_UPDATE_CHECK is absent or not executable. Every gate lift, including rollback
 or a preserved-old-image restart, invokes this checker while the marker is still armed.
-A nonzero/unknown result leaves the marker armed. No lift/check/reactive-rearm window exists.
+A nonzero/unknown result leaves the marker armed. An after-check failure does NOT
+trigger automatic compensation: the candidate stays behind maintenance for explicit review.
+Only a create/health failure enters automatic image+data+PG+Bao compensation. Its restored
+previous image must pass the checker too before any gate lift. A failed compensation checker
+keeps503 even when that image is healthy. No lift/check/reactive-rearm window exists.
 
 The root-owned checker is a separate, site-specific qualification component. It must be
 implemented and proved on a complete isolated copy before activation. The queue integration

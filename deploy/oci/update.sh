@@ -29,11 +29,13 @@
 #     lifted only as remove + proven 200 through the origin; a failed lift RE-ARMS
 #     maintenance (no blind rollback of possible new writes, no exposed unverified service).
 #     Every other failure path KEEPS the gate up (fail closed).
-#     Any failure rolls back image AND data together (the failed version may have migrated
+#     A create/health failure rolls back image AND data together (the failed version may have migrated
 #     the data, so an old image on a newer data state is not a safe rollback), including a
 #     consistent PostgreSQL restore (integrity-checked dump, drop + recreate + replay
 #     verified against the full pre-update state, with a postmortem dump kept) and the
-#     OpenBao storage (stopped, restored, unsealed and waited-ready before the app starts);
+#     OpenBao storage (stopped, restored, unsealed and waited-ready before the app starts).
+#     A qualification/after-check or front-lift failure instead keeps maintenance armed
+#     for explicit review: it does NOT trigger a blind automatic rollback;
 #   - a pause file (default /opt/lyam/UPDATE_PAUSED) freezes updates deliberately (demo freeze).
 #
 # Run it as root (sudo) or as a user in the docker group: it reads the root-owned env file and
