@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,11 +27,19 @@ test('an unknown IAM_DEMO_SEED_MODE is refused before touching data', () => {
   assert.match(r.stderr, /IAM_DEMO_SEED_MODE must be auto or never/);
 });
 
-test('the seeded path is only reachable through dolt-state.mjs (error != empty)', () => {
-  const r = spawnSync('grep', ['-c', 'dolt-state.mjs', start], { encoding: 'utf8' });
-  assert.ok(Number(r.stdout.trim()) >= 1, 'start.sh must consult dolt-state.mjs before seeding');
-  const direct = spawnSync('grep', ['-n', 'dolt sql < /app/data/demo', start], { encoding: 'utf8' });
-  const guard = spawnSync('grep', ['-n', 'SEED_MODE" = never', start], { encoding: 'utf8' });
-  assert.ok(direct.stdout.trim(), 'schema import present');
-  assert.ok(guard.stdout.trim(), 'never-mode guard present');
+test('startup enters versioned prepare after probe, under a lifetime lock, never legacy seed hooks', () => {
+  const source = readFileSync(start, 'utf8');
+  assert.ok(source.indexOf('flock -n 9') < source.indexOf('dolt init'));
+  assert.ok(source.indexOf('dolt-state.mjs') < source.indexOf('cli.js prepare'));
+  assert.match(source, /cli\.js prepare "\$DB_STATE" \|\| exit 1/);
+  assert.doesNotMatch(source, /dolt sql < \/app\/data\/demo/);
+  assert.doesNotMatch(source, /export IAM_AUTHN_DEMO_SEED=1|export IAM_DEMO_DATA_SEED=1/);
+  assert.match(source, /unset IAM_AUTHN_DEMO_SEED IAM_DEMO_DATA_SEED/);
+});
+
+test('the operator wrapper takes the SAME lock and forbids startup/seed commands', () => {
+  const source = readFileSync(join(here, '../deploy/oci/data-migrations.sh'), 'utf8');
+  assert.match(source, /exec flock --nonblock "\$HOME_DIR\/\.boot\.lock"/);
+  const r = spawnSync('sh', [join(here, '../deploy/oci/data-migrations.sh'), 'prepare', 'empty'], {encoding:'utf8'});
+  assert.notEqual(r.status, 0);
 });
