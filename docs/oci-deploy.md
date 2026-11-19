@@ -233,10 +233,15 @@ Before moving a live instance from the RAM fallbacks to the persistent companion
 **inventory first**; preserve whatever the inventory finds, and block the switch if
 something recoverable cannot be migrated:
 
-- Journal: read it from the running API (`GET /tenants/<tenant>/activations`, admin
-  capability - the demo edge attaches it server-side). When empty, nothing to migrate.
-  Otherwise insert the rows into the new PostgreSQL `activations` table (same tenant,
-  seq, commit, state `recorded`) before the first `lyam` boot with `IAM_PG_URL`.
+- Journal: read the normal edge endpoint `GET /api/tenants/<tenant>/activations` with a
+  legitimate signed-in session JWT. The edge's static admin capability is NOT a bearer
+  session and is insufficient. Use the strict inventory helper below for every tenant in
+  the established inventory. A 401/403, other non-200, redirect, timeout, non-array JSON or
+  invalid row means **UNKNOWN: block the switch**, never an empty journal. Only a verified
+  HTTP 200 with an exact empty JSON array proves zero rows for that tenant at that moment.
+  Preserve all returned fields and states before migration; do not rewrite applied/failed
+  history as recorded. Do not stop the RAM instance until the export and target replay
+  have both been verified. This helper exports; it does not import or authorize a stop.
 - Bao secrets: while the old container still runs, read them with the token the API itself
   uses. That token lives in the environment of the NestJS API process - the start script
   creates it AFTER its own launch and passes it to the API child, so PID 1 is NOT the right
@@ -245,7 +250,9 @@ something recoverable cannot be migrated:
   (e.g. `/proc/<pid>/environ`) for the Bao address and token, use them directly in the
   export requests, and never print or persist those values outside root-only files outside
   the repository. The scoped token cannot LIST keys: enumerate the known paths from the
-  API/database side, and treat "no read error" as absence. Content the token cannot reach is
+  API/database side. A Bao 403 is an access failure, never proof of absence. Only the
+  backend's documented not-found response can indicate a missing path; other errors block
+  preservation. Content the token cannot reach is
   unrecoverable by design - stop and report rather than dropping it silently. Report export
   results as status codes and path counts only, never secret values or error bodies that
   could carry them.
@@ -438,3 +445,43 @@ sh deploy/oci/companions/bao-bootstrap.real-test.sh
 It covers fresh initialization, restart/unseal, token reuse, divergent-env repair without
 minting, dead-token replacement, unreachable listeners and refusal to reinitialize lost
 storage with existing keys. These tests supplement, not replace, isolated VM qualification.
+
+### Strict authenticated activation inventory
+
+The false-zero incident came from a temporary operator probe that parsed an HTTP 401
+error object using an empty-array fallback. It was not an updater or API auth-guard bug.
+Do not reuse that probe or trust its earlier zero counts as evidence of an empty journal.
+No new route or security bypass is introduced here.
+
+Run with Node 22 from a trusted operator environment. Authenticate through the normal
+edge as an account authorized for the tenant. Supply **either** a current session JWT
+under the JSON key `id_token` **or** the account's `username` and `password` keys on stdin.
+In the latter mode the helper uses the existing `/core/authorize` and `/core/token`
+authorization-code flow with a fresh PKCE challenge. Sign-in refusal, MFA/interactive
+requirements or a missing registered callback block the helper; use a legitimate browser
+session instead, never disable a guard or invent a token.
+
+```sh
+node deploy/oci/activation-inventory.mjs https://your-origin.example tenant-id /private/new-inventory-dir < /private/auth-input.json
+```
+
+Obtain authentication input only through approved local secret/session handling. Never
+paste it in chat, argv, shell history or repository files. If a temporary auth input file
+is necessary, keep it outside the repository with mode 0600, do not log it, and remove it
+when finished. A browser session token can be obtained through the existing same-origin
+`/session/bootstrap` request with its required `X-Requested-With: XMLHttpRequest` header
+in the legitimately signed-in context. Do not copy browser profiles or cookies to this
+repository. The helper never prints or archives credentials, codes or tokens.
+
+Success exits 0 and writes `activations.json` into a new 0700 directory (file 0600), with
+origin, tenant, capture time, verified flag, count and complete rows. Failure exits nonzero
+and creates no inventory directory. An existing output directory is never overwritten.
+The helper refuses redirects, remote plain HTTP and unexpected response forms; a local
+loopback HTTP origin is allowed for isolated tests. Output is scoped to one tenant and
+one observation time, not all tenants or a frozen snapshot. Keep writes gated during
+migration and re-inventory if the state changes. No VM deployment or restart is performed.
+
+Regression suite: `node --test deploy/oci/activation-inventory.test.mjs`. These fixture
+checks cover HTTP/error/schema and credential-handling contracts, not a real production
+sign-in. The receiving operator must verify a legitimate live session and the resulting
+inventory before relying on it for a preservation decision.
