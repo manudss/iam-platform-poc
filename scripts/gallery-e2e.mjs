@@ -97,7 +97,7 @@ try {
   const after=await page.locator('[data-app=peoplehub] img').getAttribute('src'); assert.notEqual(after,before);
   await page.waitForFunction(()=>document.querySelector('[data-app=peoplehub] img')?.naturalWidth>0);
   // A second authenticated user must not inherit Alice's favourites.
-  await page.getByRole('button',{name:'Sign out',exact:true}).click();
+  await page.click('#user-menu-button');await page.locator('#user-menu-signout').click();
   await page.locator('#signin-browser, [data-chain=password-only]').first().click();
   await page.fill('[name=username]','demo-bob'); await page.fill('[name=password]','demo-only-not-a-secret'); await page.click('button[type=submit]');
   await page.waitForSelector('.lp-card'); assert.equal(await page.locator('[aria-label=Favourites] .lp-card').count(),0);
