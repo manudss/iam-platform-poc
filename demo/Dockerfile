@@ -80,6 +80,11 @@ COPY demo/server.mjs demo/start.sh demo/dolt-state.mjs demo/public-redirect-uris
 # not list "never", so an image that would force a re-seed can never be rolled onto a persistent volume.
 COPY deploy/oci/data-migrations.sh /app/demo/data-migrations.sh
 LABEL io.lyam.seed-modes="auto never"
+# Deployed build identity, baked at image build (demo-image.yml): the incremental build number counts the
+# commits reachable from the built commit, so a redeploy or rollback shows the build that actually runs.
+ARG LYAM_BUILD_VERSION=dev
+ARG LYAM_BUILD_SHA=
+ENV IAM_APP_VERSION=$LYAM_BUILD_VERSION IAM_APP_COMMIT=$LYAM_BUILD_SHA
 ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json
 # Free-tier hosts (shared CPU) make every bus delivery slow (activity checks read Dolt on each one): give the
 # plugin hook calls and the core's gate client much larger budgets than the local defaults. Fail-closed
