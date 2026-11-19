@@ -338,17 +338,54 @@ the data/pg/bao backups of the same generation:
    The updater of this exact generation is under `updater/` in the bundle. Read `MANIFEST`
    for the image refs, backup names and their sha256.
 2. Verify each backup against the manifest sha256 BEFORE restoring anything.
-3. Install docker + the `bao` CLI (at `/usr/bin/bao`, not `/bin/bao`), create `lyam-net`,
-   run the recovered `prepare-dirs.sh` (bind dirs owned by the image users), then bring the
-   companions up with
-   the recovered compose file and compose env (`docker compose --env-file <compose.env>
-   -f <compose.yml> up -d`).
-4. Initialize/unseal Bao with the recovered `bao-bootstrap.sh` and the recovered keys dir
-   (the unseal keys are inside the bao backup's keys directory: restore it first).
-5. Restore pg (drop/recreate/replay as above), restore the data tar, install the recovered
-   systemd unit + `host-boot.sh`, put the front-gate Caddy snippet in place.
-6. Boot with `IAM_DEMO_SEED_MODE=never` and verify the restored pg content against the
-   manifest's `pg_state` (counts + content hashes + schema hash + sequence values).
+3. Install Docker and the `bao` CLI (at `/usr/bin/bao`, not `/bin/bao`). Run the
+   recovered `prepare-dirs.sh` so the bind directories belong to the container users.
+   Restore the Bao storage and keys from this generation before starting the backend;
+   verify their recovered modes and owners against the archive.
+   For this fresh-stack recovery, let Compose create its managed network and volumes:
+   **do not pre-create `lyam-net`**. Start companions using the recovered compose file
+   and compose env (`docker compose --env-file <compose.env> -f <compose.yml> up -d`).
+   If a network with that name already exists, inspect its ownership and users first.
+   Do not delete a network used by another stack. In the isolated drill, a newly created,
+   unused network was removed before Compose created its own managed network. This was
+   an operator preparation step, not a script change or an automatic recovery action.
+4. Use the recovered `bao-bootstrap.sh --unseal-only` with the recovered keys to unseal
+   the restored backend. Never initialize an empty backend in place of the recovered storage.
+5. Compose having started PostgreSQL does not mean it is ready. Wait with a bounded
+   readiness loop before any DROP/CREATE/replay, using the recovered target's container,
+   role and database names (the default example below uses `pg` and `lyam`):
+
+   ```sh
+   n=0
+   until docker exec pg pg_isready -U lyam -d postgres; do
+     n=$((n + 1))
+     [ "$n" -lt 60 ] || { echo 'PostgreSQL readiness timed out' >&2; exit 1; }
+     sleep 1
+   done
+   ```
+
+   Replay into a fresh database with `psql -v ON_ERROR_STOP=1` as above. Any decompression,
+   SQL or comparison error stops recovery with the application still down. When piping
+   the dump, use Bash `set -o pipefail` to detect decompression errors too, or decompress
+   successfully to a private file before invoking psql. Restore the application data tar.
+6. Compare the complete PostgreSQL state against the manifest's `pg_state` **before
+   starting the application or generating verification traffic**: schema hash, every
+   table's row count and content hash, and every sequence's last_value/is_called. A row
+   count alone is insufficient. Audit rows can grow once connections and checks begin;
+   comparing after that traffic does not test the restored baseline. Keep the front gated.
+7. Only after that comparison passes, create the application with
+   `IAM_DEMO_SEED_MODE=never`, the recovered env and immutable image. Install the recovered
+   systemd unit, `host-boot.sh` and front-gate configuration, then use the boot script for
+   the ordered service resumption and health checks. A failed check keeps maintenance on.
+
+The isolated recovery of candidate `44cca98` passed without chmod repairs or script
+patches. Only isolation-specific names, ports and paths were adapted. The tested operator
+sequence was manifest/mode/owner checks, directory preparation, Compose creation,
+recovered-key unseal, bounded PG readiness, clean replay, exact PG comparison before app
+traffic, and seed-never app creation with ordered boot-script resumption. The network and
+PG-readiness preparation above are manual runbook steps, not behavior implemented by the
+qualified updater. An actual OS reboot has **not** been tested. No merge or automatic
+activation follows from this drill.
 
 ## Failure modes
 
