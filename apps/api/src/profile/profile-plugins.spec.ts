@@ -268,6 +268,16 @@ describe('profile plugins API: components, grants and the uninstall contract', (
     const after = await api().get(`/tenants/${T}/plugins/profile-picture/profile-values`).set(adm);
     assert.equal(after.body.values, 1);
   });
+  it('a disabled picture plugin hides the picture from the profile but keeps the stored value', async () => {
+    const me = { 'x-test-sub': 'demo-bob' };
+    assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/disable`).set(adm)).status, 201);
+    const off = await api().get(`/tenants/${T}/me/profile`).set(me);
+    assert.equal(off.status, 200, JSON.stringify(off.body));
+    assert.ok(!('profile-picture.picture' in off.body.values), 'a disabled plugin no longer exposes its field');
+    assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/enable`).set(adm).send({ grants: { uiComponents: true } })).status, 201);
+    const on = await api().get(`/tenants/${T}/me/profile`).set(me);
+    assert.ok(String(on.body.values['profile-picture.picture'] ?? '').startsWith('data:image/'), 'the stored picture survived the disable and returns on re-enable');
+  });
   it('the picture is the person\'s: an administrator sees it but cannot change it (adminEdit false by default)', async () => {
     const r = await api().patch(`/tenants/${T}/users/demo-bob/profile`).set(adm).send({ values: { 'profile-picture.picture': pngDataUrl(16) } });
     assert.equal(r.status, 403, JSON.stringify(r.body));
