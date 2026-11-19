@@ -140,3 +140,15 @@ The controller is still subject to real isolated-stack qualification. In particu
 read-only offline Dolt inventory in the helper image, real PG17 SQL, metadata-only Bao
 permissions/coverage, the actual hosted form fields, and TLS front checks. Missing inputs
 or implementation failures leave maintenance armed and are blockers, never success claims.
+
+### Existing HTTP-loopback copies
+
+For existing isolated copies whose preserved issuer/redirect origins are HTTP loopback,
+`--isolated-loopback-test` plus policy `isolatedLoopbackTest:true` permits HTTP **only** on
+127.0.0.1, localhost or ::1. Both are required. It still requires503 at the dedicated copy
+front and all data/auth checks. The normal updater never supplies this flag. Public HTTP
+hosts remain refused even in test mode. Evidence and the result explicitly say
+ISOLATED_LOOPBACK_NO_PUBLIC_TLS_PROOF. This tests preservation/auth on the copy, **not** TLS
+or the three production hostnames. Do not change preserved copy origins just to make a test
+pass, and do not arm the production front. A separate real-TLS disposable-front test and
+coordinated final production-origin checks remain required before production activation.

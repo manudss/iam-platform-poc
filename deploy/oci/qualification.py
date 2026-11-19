@@ -3,6 +3,7 @@
 Requires a reviewed independent policy and a candidate-specific transform verifier for
 any intended business/schema change. No successful default for unknown state.
 """
+import urllib.parse
 import argparse,collections,hashlib,json,os,re,ssl,subprocess,sys,time,urllib.request,urllib.error
 from pathlib import Path
 
@@ -59,11 +60,17 @@ def compare(before,after,p):
         if not current or current['last_value']<seq['last_value'] or seq['is_called'] and not current['is_called']:changes.append('postgres-sequence-rewind:'+name)
     return changes
 
-def policy_load(path):
+def policy_load(path, isolated_loopback=False):
     p=json.loads(Path(path).read_text())
     required=['origins','issuer','tenant','pgContainer','pgUser','pgDatabase','network','authFile','baoMetadataRoots','baoAddress','baoTokenFile','credentialFiles','appendOnlyTables']
     if p.get('format')!=1 or any(k not in p for k in required):raise ValueError('incomplete independent qualification policy')
-    if not p['origins'] or any(not re.fullmatch(r'https://[a-zA-Z0-9.-]+(?::[0-9]+)?',x) for x in p['origins']):raise ValueError('invalid expected origin policy')
+    if not p['origins']:raise ValueError('empty origins')
+    for origin in p['origins']:
+        parsed=urllib.parse.urlsplit(origin)
+        if parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:raise ValueError('invalid expected origin')
+        if parsed.scheme=='https' and re.fullmatch(r'https://[a-zA-Z0-9.-]+(?::[0-9]+)?',origin):continue
+        if isolated_loopback and p.get('isolatedLoopbackTest') is True and parsed.scheme=='http' and parsed.hostname in ['127.0.0.1','localhost','::1']:continue
+        raise ValueError('TLS required outside explicit isolated loopback test')
     if len(p['origins'])!=len(set(p['origins'])):raise ValueError('duplicate origins')
     if not all(isinstance(p[k],list) for k in ['baoMetadataRoots','credentialFiles','appendOnlyTables']):raise ValueError('policy coverage invalid')
     return p
@@ -71,7 +78,8 @@ def policy_load(path):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after'],required=True)
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
-    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy)
+    parser.add_argument('--isolated-loopback-test',action='store_true')
+    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
     if not Path(a.barrier_file).is_file():raise ValueError('maintenance barrier absent')
     for origin in p['origins']:
         try: response=urllib.request.urlopen(origin+'/healthz',timeout=15);status=response.status
@@ -97,9 +105,10 @@ def main():
         smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth})))
     state=json.loads(cmd(node,json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})))
     state['credentials']=credential_hashes(Path(a.data_dir),p);state['postgres']=postgres(p)
-    state['image']=a.image;state['policyHash']=digest(Path(a.policy).read_bytes())
+    state['transportCoverage']='ISOLATED_LOOPBACK_NO_PUBLIC_TLS_PROOF' if a.isolated_loopback_test else 'TLS_EXPECTED_ORIGINS';state['image']=a.image;state['policyHash']=digest(Path(a.policy).read_bytes())
     if a.phase=='before':private_json(evidence/'before.json',state);print('Preservation snapshot captured privately; maintenance remains armed');return
     before=json.loads((evidence/'before.json').read_text())
+    if before['transportCoverage']!=state['transportCoverage']:raise ValueError('qualification coverage changed mid-update')
     if before['policyHash']!=state['policyHash']:raise ValueError('qualification policy changed mid-update')
     after_file=evidence/('after-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
     private_json(after_file,state)
@@ -111,7 +120,7 @@ def main():
         verifier=p.get('transformationVerifiers',{}).get(a.image)
         if not verifier or not Path(verifier).is_file() or not os.access(verifier,os.X_OK):raise ValueError('unexpected preservation changes; no digest-specific reviewed verifier')
         cmd([verifier,str(evidence/'before.json'),str(after_file)])
-    print('Pre-opening preservation, migration, OIDC, journal and TLS checks passed; caller still owns barrier')
+    print('ISOLATED LOOPBACK ONLY: preservation/OIDC/journal checks passed, NO public TLS qualification, keep production paused' if a.isolated_loopback_test else 'Pre-opening preservation, migration, OIDC, journal and TLS checks passed; caller still owns barrier')
 if __name__=='__main__':
     try:main()
     except Exception:print('Qualification failed or UNKNOWN. Keep maintenance armed and inspect private evidence.',file=sys.stderr);sys.exit(1)

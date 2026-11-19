@@ -30,6 +30,16 @@ class Preserve(unittest.TestCase):
    file=Path(d)/'policy.json';file.write_text('{}')
    with self.assertRaises(ValueError):q.policy_load(file)
    example=Path(__file__).with_name('qualification.policy.example.json');self.assertEqual(q.policy_load(example)['format'],1)
+ def test_http_only_explicit_isolated_loopback_never_production(self):
+  p=json.loads(Path(__file__).with_name('qualification.policy.example.json').read_text());p['origins']=['http://127.0.0.1:19087'];p['isolatedLoopbackTest']=True
+  with tempfile.TemporaryDirectory() as d:
+   file=Path(d)/'p.json';file.write_text(json.dumps(p))
+   with self.assertRaises(ValueError):q.policy_load(file)
+   self.assertEqual(q.policy_load(file,True)['origins'],p['origins'])
+   p['origins']=['http://example.invalid'];file.write_text(json.dumps(p))
+   with self.assertRaises(ValueError):q.policy_load(file,True)
+   p['origins']=['http://127.0.0.1.evil.invalid'];file.write_text(json.dumps(p))
+   with self.assertRaises(ValueError):q.policy_load(file,True)
  def test_private_evidence_never_overwritten(self):
   with tempfile.TemporaryDirectory() as d:
    file=Path(d)/'private.json';q.private_json(file,{'ok':True});self.assertEqual(file.stat().st_mode&0o777,0o600)
