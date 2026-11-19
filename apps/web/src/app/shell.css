@@ -167,3 +167,12 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .fly-dot { /* --tx/--ty default to the dot's own position; shell.ts sets the real chip coordinates inline. */ --tx: 50vw; --ty: 64px; position: fixed; left: 50vw; top: 64px; width: .8rem; height: .8rem; border-radius: 50%; background: var(--warn-ink); z-index: 60; pointer-events: none; animation: fly-to-chip .9s cubic-bezier(.5, 0, .3, 1) forwards; }
 @keyframes fly-to-chip { to { transform: translate(calc(var(--tx) - 50vw), calc(var(--ty) - 64px)) scale(.4); opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .fly-dot { animation: none; opacity: 0; } }
+/* Small screens (validated mobile layout): two grid rows. Row 1: burger, title, session timer, avatar pinned to
+   the right. Row 2: branch pill, Review & Apply and the "..." menu. Grid rows force the break that flex order
+   cannot; minmax(0, 1fr) lets the title shrink with its ellipsis. */
+@media (max-width: 600px) {
+  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .top > * { grid-row: 1; }
+  .top > .pillwrap, .top > .icon { grid-row: 2; }
+  .top .userwrap { order: 0; justify-self: end; }
+}

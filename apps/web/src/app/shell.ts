@@ -153,7 +153,9 @@ export class Shell {
   protected closeUserMenu() { this.userMenu.set(false); }
   @HostListener('document:keydown.escape') protected onUserMenuEsc() { this.closeUserMenu(); }
   protected meInitials() { const p = (this.meName() || this.s.user() || '?').trim().split(/\s+/); return ((p[0]?.[0] ?? '?') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase(); }
-  /** The signed-in person's own profile, for the avatar: picture (data URL) and display name. Best effort: the identity's initials remain. */
+  /** The signed-in person's own profile, for the avatar: picture (data URL) and display name. Best effort: the identity's
+   *  initials remain. A DISABLED profile-picture plugin needs no check here: its field leaves the profile schema, so
+   *  GET /me/profile simply omits profile-picture.picture while the stored value survives a re-enable. */
   protected async loadMe() {
     try {
       const r = await this.s.api.raw<any>('GET', '/me/profile', undefined, this.headers());
