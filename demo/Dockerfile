@@ -25,11 +25,12 @@ FROM node:22-bookworm-slim AS apibuild
 WORKDIR /src
 COPY apps/api/ apps/api/
 COPY scripts/ scripts/
+COPY data/migrations/ data/migrations/
 COPY plugins/ plugins/
 # The plugins' controlled shared install (step 4): the root package.json is generated from their declarations.
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    cd apps/api && npm ci && npm run build && npm prune --omit=dev
+    node scripts/data-migrations.mjs && cd apps/api && npm ci && npm run build && npm prune --omit=dev
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev && node scripts/plugin-deps.mjs && node scripts/plugin-deps.mjs --check
 # Demo signing keys are generated AT BUILD (never committed): the plugins are signed here and only the PUBLIC
@@ -50,7 +51,7 @@ FROM nats:2.15.2-alpine AS natsbin
 FROM openbao/openbao:2.7.2 AS baobin
 
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates util-linux && rm -rf /var/lib/apt/lists/*
 COPY --from=doltbin /usr/local/bin/dolt /usr/local/bin/dolt
 COPY --from=natsbin /usr/local/bin/nats-server /usr/local/bin/nats-server
 COPY --from=baobin /usr/bin/bao /usr/local/bin/bao
@@ -59,6 +60,9 @@ COPY --from=corebuild /iam-core-bin /app/iam-core
 COPY policies/ /app/policies/
 COPY conf/nats-local.conf /app/conf/nats-local.conf
 COPY data/demo/ /app/data/demo/
+# Frozen migration sources are checksummed at runtime and in CI, independent of transpilation.
+COPY data/migrations/ /app/migration-source/data/migrations/
+COPY apps/api/src/migrations/v0001/ /app/migration-source/apps/api/src/migrations/v0001/
 COPY --from=apibuild /src/apps/api/dist /app/api/dist
 COPY --from=apibuild /src/apps/api/node_modules /app/api/node_modules
 COPY --from=apibuild /src/apps/api/package.json /app/api/package.json
@@ -74,6 +78,7 @@ COPY --from=webbuild /src/apps/web/dist /app/web/dist
 COPY demo/server.mjs demo/start.sh demo/dolt-state.mjs demo/public-redirect-uris.mjs demo/frame-policy.mjs demo/secret-store.mjs demo/warm-signin.mjs /app/demo/
 # Update-safety contract: deploy/oci/update.sh refuses any image whose io.lyam.seed-modes label does
 # not list "never", so an image that would force a re-seed can never be rolled onto a persistent volume.
+COPY deploy/oci/data-migrations.sh /app/demo/data-migrations.sh
 LABEL io.lyam.seed-modes="auto never"
 ENV IAM_DEMO_HOME=/data PORT=8080 IAM_PLUGINS_DIR=/app/plugins IAM_PLUGIN_TRUST=/app/conf/plugin-trust.json
 # Free-tier hosts (shared CPU) make every bus delivery slow (activity checks read Dolt on each one): give the

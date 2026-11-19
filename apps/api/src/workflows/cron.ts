@@ -1,3 +1,4 @@
+import { dataReady } from '../migrations/readiness.js';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { nextCronFire } from './model.js';
@@ -32,6 +33,7 @@ export class WorkflowCronService implements OnModuleInit, OnModuleDestroy {
   }
 
   async tick(): Promise<void> {
+    if (!dataReady()) return;
     if (this.ticking) return; // a slow tick (cold Dolt) never overlaps the next one
     this.ticking = true;
     try {

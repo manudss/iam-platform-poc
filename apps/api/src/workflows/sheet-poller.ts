@@ -1,3 +1,4 @@
+import { dataReady } from '../migrations/readiness.js';
 import { WorkflowConnections } from './connections.js';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
@@ -35,6 +36,7 @@ export class WorkflowSheetPollerService implements OnModuleInit, OnModuleDestroy
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); if (this.first) clearTimeout(this.first); }
 
   async tick() {
+    if (!dataReady()) return;
     if (this.busy) return;
     this.busy = true;
     try { await branchContext.run({ branch: this.store.liveRef }, () => this.scan()); }

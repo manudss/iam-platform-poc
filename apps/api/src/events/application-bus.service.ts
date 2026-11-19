@@ -1,3 +1,4 @@
+import { awaitDataReady } from '../migrations/readiness.js';
 import { Injectable, Logger } from '@nestjs/common';
 
 /** Bus-only facade for application events. Writes emit after commit; each service consumes a durable address.
@@ -68,7 +69,7 @@ export class ApplicationBus {
   get routedToBus() { return !!this.sink; }
 
   private serveConsumer(c: { address: string; kinds: string[]; handler: Listener }) {
-    this.registrations.push(Promise.resolve(this.busServe!(c.address, c.kinds, async (env) => { await c.handler(envelopeToAppEvent(env)); })));
+    this.registrations.push(Promise.resolve(this.busServe!(c.address, c.kinds, async (env) => { await awaitDataReady(); await c.handler(envelopeToAppEvent(env)); })));
   }
 
   /** Fire-and-forget by design: the caller's action is already committed; listener and bus errors are only logged. */

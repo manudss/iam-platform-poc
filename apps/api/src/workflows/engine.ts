@@ -1,3 +1,4 @@
+import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
@@ -84,6 +85,7 @@ export class WorkflowEngine implements OnModuleInit {
 
   /** Resumes interrupted runs: grouped by the registry that must resolve the provider, kicked individually. */
   async onModuleInit() {
+    if (!dataReady()) { void awaitDataReady().then(() => this.onModuleInit()).catch(() => this.log.error('resume refused after data migrations')); return; }
     let runs: RunRow[] = [];
     try { runs = await this.store.runningRuns(); } catch (e) { this.log.warn(`resume scan failed: ${(e as Error).message}`); return; }
     for (const r of runs) {

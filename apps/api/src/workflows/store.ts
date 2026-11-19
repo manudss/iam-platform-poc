@@ -88,6 +88,9 @@ export class WorkflowStore {
     return this.open();
   }
 
+  /** Initial migration prepares storage before any workflow runner is allowed to start. */
+  async prepareMigrationStorage() { const c = await this.meta(); await c.end(); }
+
   private static ts(v: unknown): string { return v instanceof Date ? v.toISOString().slice(0, 23).replace('T', ' ') : String(v); }
   private static def(r: Record<string, unknown>): DefinitionRow {
     const trig = typeof r.trigger_json === 'string' ? JSON.parse(r.trigger_json) : r.trigger_json;

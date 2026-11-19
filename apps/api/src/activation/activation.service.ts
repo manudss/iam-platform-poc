@@ -1,3 +1,4 @@
+import { dataReady } from '../migrations/readiness.js';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import pg from 'pg';
 import { DoltService } from '../dolt/dolt.service.js';
@@ -179,6 +180,7 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
 
   /** One pass: reconcile each tenant that has activations (PostgreSQL journal only). Never overlaps itself. */
   async tick(): Promise<{ reconciled: string[] }> {
+    if (!dataReady()) return { reconciled: [] };
     if (this.ticking || !(await this.resolveUrl())) return { reconciled: [] };
     this.ticking = true;
     try {

@@ -14,11 +14,11 @@ Production code: 42 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:92 |
 | ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:117 |
 | ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:125 |
-| ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:149 |
-| ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:151 |
-| ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:152 |
-| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:258 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:369 |
+| ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:139 |
+| ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:141 |
+| ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:142 |
+| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:248 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:359 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:185 |
 | callSlot (blocking hook) | caller | notify.templates | apps/api/src/plugins/v1/mail-catalogue.ts:33 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:40 |
@@ -27,8 +27,8 @@ Production code: 42 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:146 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:211 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/profile/signup.service.ts:82 |
-| callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:69 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:115 |
+| callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:71 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:105 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:375 |
@@ -50,8 +50,8 @@ Production code: 42 points. Test code: 92 points.
 | plugin deps.emit (durable app event) | emitter | sso.assertion.issued | plugins/saml-idp/handlers.mjs:266 |
 | plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/saml-idp/handlers.mjs:267 |
 | plugin oidc/saml provider event hook | listener | - | plugins/oidc-provider/handlers.mjs:143 |
-| plugins.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
-| registry.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:34 |
+| plugins.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:36 |
+| registry.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:36 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/mail/mail-templates.ts:186 |
 
 ## Tests

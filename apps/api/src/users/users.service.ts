@@ -1,3 +1,5 @@
+import { initializeDirectoryV1 } from '../migrations/v0001/directory.js';
+import { migrationPaths } from '../migrations/cli.js';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import type { PasswordValidatePayload, PasswordValidateResult } from '../plugins/v1/hooks.js';
@@ -84,26 +86,14 @@ export class UsersService {
     return revision;
   }
   init() { return this.ready ??= this.v.lock(async () => {
-    await this.v.at('main', async (c) => {
-      const [cols] = await c.query('show columns from identities');
-      if (!(cols as { Field: string }[]).some(x => x.Field === 'login_enabled')) {
-        await c.query('alter table identities add column login_enabled boolean not null default true');
-        await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m','users: login eligibility')");
-      }
-      if (!(cols as { Field: string }[]).some(x => x.Field === 'email')) {
-        await c.query('alter table identities add column email varchar(254) null');
-        await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m','users: e-mail address on the profile')");
-      }
-      if (!(cols as { Field: string }[]).some(x => x.Field === 'credential_revision')) {
-        await c.query('alter table identities add column credential_revision varchar(40)');
-        const all = await this.credentials();
-        for (const id of ['demo-alice','demo-bob']) {
-          const revision = all[id] ? id : await this.password('acme-demo', id, 'demo-only-not-a-secret');
-          await c.query('update identities set credential_revision=? where id=?',[revision,id]);
-        }
-        await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m','users: credential revision references (no secrets)')");
-      }
-    });
+    if (process.env.IAM_DATA_MIGRATIONS === '1' && migrationPaths().journal.assertBoot(process.env.IAM_MIGRATION_BOOT_ID ?? '').pending?.id !== '0001') {
+      await this.v.at('main', async c => {
+        const [cols] = await c.query('show columns from identities');
+        for (const key of ['login_enabled', 'email', 'credential_revision']) if (!(cols as { Field: string }[]).some(x => x.Field === key)) throw new Error('directory schema is missing a versioned migration');
+      });
+      return;
+    }
+    await initializeDirectoryV1(this.v, () => this.credentials(), (tenant, id, password) => this.password(tenant, id, password));
   }); }
   async list(ref = currentBranch()) { await this.init(); return this.v.at(ref, async c => {
     const [r] = await c.query('select id, display_name, manager_id, department, email, login_enabled, credential_revision from identities order by id');
