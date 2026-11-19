@@ -20,6 +20,13 @@ case "$1" in
       *bao\\ status*) [ -f "$STUB_DIR/bao-sealed" ] && exit 2; exit 0 ;;
     esac
     [ -f "$STUB_DIR/app-sick" ] && exit 1; exit 0 ;;
+  inspect)
+    [ -f "$STUB_DIR/no-container" ] && exit 1
+    case "$*" in
+      *Config.Image*) cat "$STUB_DIR/image" 2>/dev/null || echo ghcr.io/example/lyam:current; exit 0 ;;
+      *Config.Env*) cat "$STUB_DIR/container-env" 2>/dev/null; exit 0 ;;
+    esac
+    exit 0 ;;
 esac
 exit 0
 `;
@@ -34,6 +41,8 @@ function setup({ pg = true, bao = true, unseal = true, pgDown = false, appSick =
   if (pgDown) writeFileSync(join(stub, 'pg-down'), '');
   if (appSick) writeFileSync(join(stub, 'app-sick'), '');
   if (unseal) writeFileSync(join(dir, 'unseal.sh'), '#!/bin/sh\necho "unseal-only ran" >> "$STUB_DIR/calls"\nexit 0\n');
+  writeFileSync(join(dir, 'update-stub.sh'), '#!/bin/sh\necho "update.sh $*" >> "$STUB_DIR/calls"\n[ -f "$STUB_DIR/update-fail" ] && exit 3\nexit 0\n');
+  chmodSync(join(dir, 'update-stub.sh'), 0o755);
   const env = join(dir, 'lyam.env');
   writeFileSync(env, [
     'IAM_PUBLIC_ORIGIN=https://example.invalid',
@@ -42,6 +51,7 @@ function setup({ pg = true, bao = true, unseal = true, pgDown = false, appSick =
     pg ? 'LYAM_BACKUP_PG_CONTAINER=pg' : '',
     bao ? 'LYAM_BACKUP_BAO_CONTAINER=bao' : '',
     unseal ? `LYAM_BAO_UNSEAL_CMD=STUB_DIR=${stub} sh ${join(dir, 'unseal.sh')}` : '',
+    `LYAM_UPDATE_SCRIPT=${join(dir, 'update-stub.sh')}`,
   ].filter(Boolean).join('\n') + '\n');
   return { dir, stub, env };
 }
@@ -93,4 +103,40 @@ test('without companions only the app starts', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.doesNotMatch(r.calls, /pg_isready|unseal-only/);
   assert.match(r.calls, /docker start lyam/);
+});
+
+test('env divergence (token re-minted into the file) forces a coordinated recreation, never a plain start', () => {
+  const { env, dir, stub } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + 'IAM_BAO_TOKEN=new-file-token\n');
+  writeFileSync(join(stub, 'container-env'), 'IAM_BAO_TOKEN=old-container-token\nPATH=/usr/bin\n');
+  writeFileSync(join(stub, 'image'), 'ghcr.io/example/lyam:0123456789abcdef0123456789abcdef01234567');
+  const r = run(env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.calls, /update\.sh --image ghcr\.io\/example\/lyam:0123456789abcdef0123456789abcdef01234567 --env-file/, 'coordinated same-image recreation through the updater');
+  assert.doesNotMatch(r.calls, /docker start lyam/, 'docker start is never used with a divergent env');
+  const lines = r.calls.split('\n');
+  const unseal = lines.findIndex((l) => /unseal-only ran/.test(l));
+  const update = lines.findIndex((l) => l.startsWith('update.sh'));
+  assert.ok(update > unseal, 'the recreation happens after the companions are ready');
+});
+
+test('a failed coordinated recreation fails the boot; the divergent app never starts', () => {
+  const { env, stub } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + 'IAM_BAO_TOKEN=new-file-token\n');
+  writeFileSync(join(stub, 'container-env'), 'IAM_BAO_TOKEN=old-container-token\n');
+  writeFileSync(join(stub, 'update-fail'), '');
+  const r = run(env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /NOT started with a divergent env/);
+  assert.doesNotMatch(r.calls, /docker start lyam/);
+});
+
+test('a matching file/container env keeps the plain start', () => {
+  const { env, stub } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + 'IAM_BAO_TOKEN=same-token\n');
+  writeFileSync(join(stub, 'container-env'), 'IAM_BAO_TOKEN=same-token\n');
+  const r = run(env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.calls, /docker start lyam/);
+  assert.doesNotMatch(r.calls, /update\.sh/);
 });

@@ -54,6 +54,31 @@ if [ -n "$BAO_CONTAINER" ]; then
 fi
 
 log "starting $CONTAINER (seed mode: never)"
+# docker start does NOT reload the env - not even on a stopped container. When the env file
+# drifted from the container's recorded env (a bao-bootstrap re-mint syncs IAM_BAO_TOKEN into
+# the file; the container still holds the previous value), a plain start would RESUME WITH A
+# DIVERGENT ENVIRONMENT. Never serve that: recreate from the env file through the updater's
+# own coordinated same-image redeploy (cold backup, front gate, health gate), and fail the
+# boot if that recreation fails.
+if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+  CONT_ENV="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" 2>/dev/null || true)"
+  DIVERGED=""
+  for key in IAM_BAO_TOKEN IAM_PG_URL; do
+    fv="$(getconf "$key")"
+    cv="$(printf '%s\n' "$CONT_ENV" | sed -n "s/^$key=//p" | head -n 1)"
+    [ "$fv" = "$cv" ] || DIVERGED="$DIVERGED $key"
+  done
+  if [ -n "$DIVERGED" ]; then
+    UPDATE_SCRIPT="$(getconf LYAM_UPDATE_SCRIPT)"; UPDATE_SCRIPT="${UPDATE_SCRIPT:-/opt/lyam/bin/update.sh}"
+    IMG="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null || true)"
+    log "env divergence detected ($DIVERGED): docker start would resume with stale env - coordinated same-image recreation through $UPDATE_SCRIPT"
+    [ -n "$IMG" ] || fail "env divergence ($DIVERGED) but the container image is unknown; the app is NOT started with a divergent env"
+    sh "$UPDATE_SCRIPT" --image "$IMG" --env-file "$ENV_FILE" \
+      || fail "the coordinated recreation failed (the updater keeps the front gate up); the app is NOT started with a divergent env"
+    log "recreated from the env file, healthy; boot ordering complete"
+    exit 0
+  fi
+fi
 docker start "$CONTAINER" >/dev/null
 waited=0
 while :; do

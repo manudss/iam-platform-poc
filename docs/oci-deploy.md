@@ -131,8 +131,10 @@ proven 200 through the origin once the healthy version serves. Semantics that ma
   HTTP/2 stream reuse rely on Caddy's per-request routing plus the container stop.
 
 Prove the gate end-to-end on a THROWAWAY Caddy (never the main one) before trusting the
-first update - new GET/POST, pre-existing reused keep-alive connections and a concurrent
-transition:
+first update. The check is EXPLICITLY SYNCHRONIZED (no sleep-based racing): a single
+connection is driven 200 -> gate up -> 503 -> gate down -> 200 with each response fully
+read before the next step, and the concurrent burst starts only after the gate is confirmed
+up and lifts only after 6 results are recorded:
 
 ```sh
 sudo IAM_PUBLIC_ORIGIN=https://<test-front> deploy/oci/front-barrier-check.sh
@@ -141,7 +143,12 @@ sudo IAM_PUBLIC_ORIGIN=https://<test-front> deploy/oci/front-barrier-check.sh
 ### Host boot ordering and reboot drill
 
 `deploy/oci/host-boot.sh` (driven by `lyam-boot.service`) owns the start order after a host
-reboot: `pg` up, `bao` up AND unsealed, then `lyam`. The `lyam` container itself runs with
+reboot: `pg` up, `bao` up AND unsealed, then `lyam`. Before any `docker start` of the app it
+compares the env file against the container's recorded env (`docker start` never reloads
+env): a divergence - e.g. a re-minted Bao token synced into the file - triggers a
+coordinated same-image recreation through the updater instead of a plain start, and a
+failed recreation fails the boot rather than serving a divergent environment. The `lyam`
+container itself runs with
 `--restart on-failure` so Docker's boot-time auto-restart cannot race the companions. The
 reboot drill (`sudo reboot`, then verify pg/bao-unsealed/lyam came up in order and the data
 survived) is part of qualifying a new host.
@@ -164,7 +171,11 @@ reuses the stored token while its REMAINING lifetime covers the time left until 
 demo end - `LYAM_DEMO_UNTIL`, default 2026-12-16 - never an arbitrary floor; the API never
 renews tokens). When it re-mints, the new token is synchronized ATOMICALLY into the app env
 file (`LYAM_ENV_FILE`) and the script says loudly whether the running container must be
-recreated (env edits never reach a running process; `docker restart` does not reload env).
+recreated (env edits never reach a running process; `docker restart` AND `docker start` do
+not reload env - not even on a stopped container). The boot path enforces this: host-boot.sh
+compares the env file against the container's recorded env before any `docker start`, and on
+divergence it recreates the app through the updater's coordinated same-image redeploy (cold
+backup, front gate, health gate) - the app never resumes with a divergent environment.
 It never prints a secret. Constraints:
 
 - Bao seals on every restart: keep the unseal key(s) and root token in a mode-0600 file
