@@ -13,6 +13,10 @@ Goal (validated mockup): one thin bar with the title, the session timer, the bra
 - No UI library. The session timer `<app-session-timer />` (PR session timeout) goes next to the user in this header: when both PRs are merged, add that one line to `shell.html` if the merge does not.
 - Browser scripts use `scripts/branch-ui.mjs` (`openManage`, `openMenu`) to reach the panels.
 
+## User menu
+
+"My profile" is not an administration item: it lives in the user menu at the right end of the bar (avatar button). The avatar shows the profile picture when the profile-picture plugin is active and a picture exists (a data image URL only), else the initials of the display name, else of the identity. The menu opens with My profile, Sign out, and the deployed build in the footer: an incremental build number (commits reachable from the built ref, baked into the image by demo-image.yml as IAM_APP_VERSION, with the short commit next to it as IAM_APP_COMMIT, both served by GET /health). It closes on Escape, on the scrim and on any navigation; coming back from /my-profile refreshes the avatar.
+
 ## Limits
 - The "Manage branches" panel still opens inline below the bar (the picker, the menu and the review panel float).
 - Not run locally: the browser e2e scripts need Dolt, so they run in CI.
