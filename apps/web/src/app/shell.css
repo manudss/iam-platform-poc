@@ -106,7 +106,10 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .prow input { max-width: 10rem; }
 .pmeta { display: flex; justify-content: space-between; align-items: center; font-size: .72rem; color: var(--muted); padding: .35rem .2rem 0; }
 .plink { border: 0; background: none; color: var(--link); cursor: pointer; font: inherit; font-size: .72rem; font-weight: 600; padding: .1rem .2rem; }
-@media (max-width: 900px) { .picker { position: absolute; top: 3.2rem; left: .5rem; right: .5rem; width: auto; } }
+/* On mobile the bar wraps, so the picker becomes a bottom sheet instead of overlapping the bar. */
+@media (max-width: 900px) { .picker { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; max-width: none; border-radius: .9rem .9rem 0 0; max-height: 72vh; display: flex; flex-direction: column; } .picker .blist { flex: 1; } }
+/* While the picker is open the pill tooltip would overlap it: keep it hidden. */
+.pillwrap:has(> .picker):hover .tip, .pillwrap:has(> .picker):focus-within .tip { opacity: 0; visibility: hidden; }
 
 /* Review & Apply as a chip: quiet when nothing waits, highlighted (warn tokens) as soon as changes are pending. */
 .chipbtn { display: inline-flex; align-items: center; gap: .3rem; font: inherit; font-size: .85rem; font-weight: 700; border-radius: 999px; padding: .3rem .8rem; border: 1px solid var(--field-line); background: var(--code-bg); color: var(--muted); white-space: nowrap; cursor: pointer; }
@@ -114,7 +117,9 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .chipbtn:disabled { opacity: .45; cursor: default; }
 @keyframes chip-pulse { 0% { transform: scale(1); } 40% { transform: scale(1.12); } 100% { transform: scale(1); } }
 .chipbtn.pulse { animation: chip-pulse .5s ease; }
-@media (max-width: 600px) { .chipbtn .wide { display: none; } }
+/* The chip text shrinks before the bar overflows: full "3 changes pending", then "3 pending", then "3". */
+@media (max-width: 1350px) { .chipbtn .w1 { display: none; } }
+@media (max-width: 1100px) { .chipbtn .w2 { display: none; } }
 @media (prefers-reduced-motion: reduce) { .chipbtn.pulse { animation: none; } }
 
 /* The review panel floats above the page instead of pushing the content down; same button re-closes it. */

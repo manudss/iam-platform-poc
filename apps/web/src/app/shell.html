@@ -49,7 +49,7 @@
       </span>
       <span class="sr-only" role="status">{{branchTip()}}</span>}
       <button type="button" class="chipbtn" id="review-apply" [class.pending]="(changes() ?? 0)>0" [class.pulse]="pulse()" (click)="toggleReview()" [disabled]="workingBusy()||!s.branch()||s.branch()==='main'" [attr.aria-expanded]="review()!==null" aria-controls="review-panel"
-        aria-label="Review and apply changes" title="Review &amp; Apply: see what you changed on this branch, compared with main, then publish it to main. Disabled on main, which is read only.">⇄&nbsp;@if(changes()!==null){@if(changes()===0){<span class="chiptext">No pending changes</span>}@else{<span class="chiptext" id="changes-badge" [attr.aria-label]="changes()+' changed rows'"><span class="n">{{changes()}}</span><span class="wide"> {{changes()===1?'change':'changes'}} pending</span></span>}}@else{<span class="chiptext">Review &amp; Apply</span>}</button>
+        aria-label="Review and apply changes" title="Review &amp; Apply: see what you changed on this branch, compared with main, then publish it to main. Disabled on main, which is read only.">⇄&nbsp;@if(changes()!==null){<span class="chiptext" id="changes-badge" [attr.aria-label]="changes()+' changed rows'"><span class="n">{{changes()}}</span><span class="w1"> {{changes()===1?'change':'changes'}}</span><span class="w2"> pending</span></span>}@else{<span class="chiptext">Review &amp; Apply</span>}</button>
       @if (canBranches()) {<button type="button" class="icon" id="more-menu" (click)="more.set(!more())" [attr.aria-expanded]="more()" aria-label="More branch actions" title="Test sign-in, stable test link, manage branches">⋯</button>}
       }
       <button type="button" class="secondary" (click)="signOut()">Sign out</button>
