@@ -57,7 +57,7 @@ th { background: var(--th-bg); color: var(--th-ink); font-size: .75rem; text-tra
    whatever their component classes (sibling vertical margins collapse, so this never doubles the per-block
    margin-bottom above). Horizontal stacks (stat grids, .row) manage their own gap and keep theirs at 0. */
 :is(.card, .panel, .zone, .scroll:has(> table)) + :is(.card, .panel, .zone, .scroll:has(> table)) { margin-top: var(--panel-gap); }
-:is(.kpis, .stats, .row) > :is(.card, .panel, .zone) { margin-top: 0; }
+:is(.kpis, .stats, .row, .scroll:has(> table)) > :is(.card, .panel, .zone, .scroll:has(> table)) { margin-top: 0; } /* mirrors the :has() arm so this ties the sibling rule's specificity and wins by order: stacks keep their own gap */
 tbody tr:nth-child(even) td { background: var(--panel); }
 tbody tr:hover td { background: var(--row-hover); }
 table.grid th, table.grid td { border: 0; border-bottom: 1px solid var(--line); }
