@@ -132,7 +132,7 @@ try {
   const ap = await call('POST', '/workspace/apply', { confirm: true }, 'authn-work'); const apj = await ap.json(); assert.equal(apj.applied, true, JSON.stringify(apj));
 
   // ---- 4. sign out, sign in through the chain password -> authenticator
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.click('header #user-menu-button'); await page.click('#user-menu-signout');
   await signInFirstStep('demo-alice', 'wrong'); await submit();
   assert.match(await page.textContent('body'), /Sign-in failed|Wrong|incorrect/i); await shot('4a-first-step-denied-mobile-desktop');
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await submit();
@@ -154,7 +154,7 @@ try {
   await page.click('#authn-save'); await page.waitForSelector('#authn-note');
   await shot('5-chain2-selected-desktop');
   const ap2 = await (await call('POST', '/workspace/apply', { confirm: true }, 'authn-work2')).json(); assert.equal(ap2.applied, true, JSON.stringify(ap2));
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.click('header #user-menu-button'); await page.click('#user-menu-signout');
   await signInFirstStep('demo-alice'); await shot('5b-chain2-first-step');
   await submit();
   await page.waitForSelector('input[name=a_code]'); assert.match(await page.textContent('body'), /Step 1 of 2/);

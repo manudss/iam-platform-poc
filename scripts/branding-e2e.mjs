@@ -78,7 +78,7 @@ try {
   await page.locator('#signin-browser, button[data-chain]').first().click();
   await page.fill('input[name=username]', 'demo-alice');await page.fill('input[name=password]', 'demo-only-not-a-secret');
   await page.click('button[type=submit]');
-  await page.waitForSelector('header .who');
+  await page.waitForSelector('header #user-menu-button');
   await status('personal branch');
   await page.waitForSelector('nav a[data-nav="/screens/branding-base/customisation"]');
   await nav('/screens/branding-base/customisation');

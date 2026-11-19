@@ -135,7 +135,9 @@ try {
   assert.equal(path(), '/database/pulls'); assert.equal(new URL(page.url()).search, ''); // back on the page that was asked for, no code or state left
   // The console later replaces this message (e.g. when it opens the personal branch), so the sign-in message is read from every status text seen by this document, not only the current one.
   assert.ok((await page.evaluate(() => window.__statuses)).some((t) => t.includes('browser flow')), 'the browser-flow sign-in message was shown');
-  assert.match(await page.locator('header .who').innerText(), /demo-alice/);
+  await page.click('header #user-menu-button');
+  assert.match(await page.locator('#user-menu .um-id small').innerText(), /demo-alice/);
+  await page.keyboard.press('Escape');
   await shot('2-signed-in-deep-link');
 
   // Workspace administration is fail-closed: without the admin capability token the console asks for it and opens no data branch.
@@ -224,9 +226,11 @@ try {
   await noBanner('disabled'); await shot('7-plugin-disabled-back-to-base');
 
   // A valid saved user session survives reload. The separate admin capability stays memory-only.
-  await page.reload(); await page.waitForSelector('header .who');
+  await page.reload(); await page.waitForSelector('header #user-menu-button');
   assert.equal(path(), '/plugins/auth-password-lockout');
-  assert.match(await page.locator('header .who').innerText(), /demo-alice/);
+  await page.click('header #user-menu-button');
+  assert.match(await page.locator('#user-menu .um-id small').innerText(), /demo-alice/);
+  await page.keyboard.press('Escape');
   assert.equal(await page.locator('#signin-browser').count(), 0, 'reload must not ask for credentials');
   await page.waitForFunction(() => document.body.innerText.includes('admin capability')); // the automatic open is refused first (no token in memory after a reload)
   await setToken();
@@ -271,7 +275,7 @@ try {
   await drawerTab('Lifecycle');
   await page.click('#plugin-disable'); await page.waitForSelector('#plugin-enable');
   await page.goto(`${BASE}/screens/organizations/orgs`); // the user session survives the full reload
-  await page.waitForSelector('header .who');
+  await page.waitForSelector('header #user-menu-button');
   await page.waitForFunction(() => location.pathname === '/screens/organizations/orgs');
   await setToken(); // the screens inventory is an admin read: the capability token is memory-only, re-enter it after the reload
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click(); // ensurePersonal raced the token entry at sign-in: reopen the personal branch now that the token is back
@@ -427,7 +431,7 @@ try {
   assert.equal(sectionSave[0].status(), 200, await sectionSave[0].text());
   assert.ok((await sectionSave[0].json()).config.sections.includes('Urgence'), 'server persisted empty section');
   await page.waitForFunction(() => !document.querySelector('#pf-save')?.disabled && !document.body.innerText.includes('Unsaved edits'));
-  await page.reload(); await page.waitForSelector('header .who');
+  await page.reload(); await page.waitForSelector('header #user-menu-button');
   await page.waitForSelector('details.token', { state: 'attached' });
   await setToken();
   await openManage(page); await page.getByRole('button', { name: 'Refresh branches' }).click();

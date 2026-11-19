@@ -88,7 +88,7 @@ try {
   const ap = await (await call('POST', '/workspace/apply', { confirm: true }, 'authn-pk')).json(); assert.equal(ap.applied, true, JSON.stringify(ap));
 
   // ---- 2. enroll a passkey from the person's own profile (browser ceremony on her session)
-  await page.locator('nav a[data-nav="/my-profile"]').click();
+  await page.click('header #user-menu-button'); await page.click('#user-menu-profile');
   const comp = page.locator('iam-passkeys-profile');
   await comp.waitFor();
   await comp.getByRole('button', { name: 'Add a passkey' }).waitFor();
@@ -100,7 +100,7 @@ try {
   await shot('2b-passkey-enrolled');
 
   // ---- 3. sign out, sign in through the passkey-only chain (core ceremony page + script)
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.click('header #user-menu-button'); await page.click('#user-menu-signout');
   await page.waitForSelector('[data-chain="passkey-only"]');
   await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.locator('[data-chain="passkey-only"]').first().click()]);
   await page.waitForSelector('input[name=username]');
@@ -118,7 +118,7 @@ try {
 
   // ---- 4. a cancelled ceremony stays on the step with an explanation (remove the authenticator, try again)
   await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.click('header #user-menu-button'); await page.click('#user-menu-signout');
   await page.waitForSelector('[data-chain="passkey-only"]');
   await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.locator('[data-chain="passkey-only"]').first().click()]);
   await page.fill('input[name=username]', 'demo-alice'); await page.click('button[type=submit]');
