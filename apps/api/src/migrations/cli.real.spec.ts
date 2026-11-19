@@ -9,6 +9,18 @@ import { MigrationJournal, readManifest } from './journal.js';
 const root = resolve('../..'), bin = process.env.DOLT_BIN;
 const cli = resolve('dist/migrations/cli.js');
 describe('migration CLI on real Dolt, including every dirty branch', { skip: !bin && 'DOLT_BIN required' }, () => {
+ it('refuses a partial dataset with a missing sentinel table instead of seeding it',()=>{
+  const home=mkdtempSync(join(tmpdir(),'migration-partial-'));mkdirSync(join(home,'dolt'));
+  const env={...process.env,HOME:home,DOLT_BIN:bin,IAM_DEMO_HOME:home,IAM_MIGRATION_SOURCE_ROOT:root,IAM_MIGRATION_BOOT_ID:'partial'};
+  try {
+   for(const [key,value] of [['user.name','test'],['user.email','test@example.invalid']]) assert.equal(spawnSync(bin!,['config','--global','--add',key,value],{env}).status,0);
+   const data=spawnSync(bin!,['sql','-q','CREATE DATABASE iam; USE iam; CREATE TABLE custom_work (id int); INSERT INTO custom_work VALUES (42)'],{cwd:join(home,'dolt'),env});assert.equal(data.status,0);
+   const result=spawnSync(process.execPath,[cli,'prepare','empty'],{env});assert.notEqual(result.status,0);
+   assert.equal(new MigrationJournal(home,readManifest(root).versions).read(),undefined);
+   const kept=spawnSync(bin!,['sql','-q','SELECT id FROM iam.custom_work'],{cwd:join(home,'dolt'),env,encoding:'utf8'});assert.equal(kept.status,0);assert.match(kept.stdout,/42/);
+  }finally{rmSync(home,{recursive:true,force:true});}
+ });
+
  it('initializes fresh preview once, refuses interrupted retry and never reseeds populated data; adoption is read-only',()=>{
   const home=mkdtempSync(join(tmpdir(),'migration-dolt-'));mkdirSync(join(home,'dolt'));
   const old=process.env.DOLT_BIN;process.env.DOLT_BIN=bin;

@@ -15,6 +15,23 @@ function dolt(home: string, args: string[], input?: string) {
   if (r.error || r.status !== 0) throw new Error('Dolt migration read/write failed; no success recorded. Preserve data and inspect private logs.');
   return r.stdout;
 }
+/** A missing sentinel table is NOT proof of an empty volume. Refuse partial/foreign data. */
+export function assertPristine(home: string) {
+  const query = (db: string, sql: string) => {
+    const value = JSON.parse(dolt(home, [...(db ? [`--use-db=${db}`] : []), 'sql', '-r', 'json', '-q', sql]));
+    if (!Array.isArray(value.rows)) throw new Error('empty-state inventory unknown');
+    return value.rows as Record<string, unknown>[];
+  };
+  const databases = query('', 'SHOW DATABASES').map(r => Object.values(r)[0]).filter(n => !['information_schema', 'mysql', 'dolt_cluster'].includes(String(n)));
+  for (const database of databases) {
+    if (database !== 'dolt') throw new Error('partial or existing user database is not an empty preview');
+    const tables = query('dolt', "SELECT count(*) AS n FROM information_schema.tables WHERE table_schema='dolt'");
+    const branches = query('dolt', 'SELECT count(*) AS n FROM dolt_branches');
+    const commits = query('dolt', 'SELECT count(*) AS n FROM dolt_log');
+    if (Number(tables[0]?.n) !== 0 || Number(branches[0]?.n) !== 1 || Number(commits[0]?.n) !== 1) throw new Error('bootstrap repository is not pristine');
+  }
+}
+
 /** Read-only full branch working-root fingerprints, including meta. Never check out or reset a branch. */
 export function adoptionSnapshot(home: string) {
   const query = (db: string, sql: string) => {
@@ -47,6 +64,7 @@ async function cli() {
     const state = journal.read();
     if (state) { if (arg === 'empty') throw new Error('journal exists but dataset missing'); journal.assertBoot(bootId); return; }
     if (arg !== 'empty' || process.env.IAM_DEMO_SEED_MODE === 'never') throw new Error('existing data requires explicit baseline adoption; seed never is preserved');
+    assertPristine(home);
     journal.initialize(); journal.begin('0001', bootId, 'initial-schema');
     dolt(home, ['sql'], readFileSync(join(root, 'data/migrations/0001-initial.sql'), 'utf8'));
     journal.phase(bootId, 'initial-api');
