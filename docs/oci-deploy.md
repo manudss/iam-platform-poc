@@ -218,13 +218,14 @@ It never prints a secret. Constraints:
   path "secret/data/iam/pg" { capabilities = ["read"] }
   ```
 
-  The API does NOT renew Bao leases (POC scope, `apps/api/src/integrations/secrets.service.ts`),
-  so the minted token carries an explicit 960 h TTL sized to the demo window - and the GRANTED
-  TTL is measured at mint time (`bao token lookup`), refusing anything under 28 days. Re-issue
-  before expiry: re-run `bao-bootstrap.sh` (it mints a new token only when the current one is
-  invalid and announces loudly that the app env must be updated), put the new token into
-  `lyam.env` and restart the `lyam` container. Re-running the script after a bao restart
-  unseals without re-minting, so processes holding the current token are never cut off.
+  The API does NOT renew Bao leases (POC scope, `apps/api/src/integrations/secrets.service.ts`).
+  The bootstrap requests 960 h and measures the granted TTL. Both new and reused tokens
+  must cover the remaining time until `LYAM_DEMO_UNTIL` (default 2026-12-16). A valid
+  stored token is reused, but a diverged `IAM_BAO_TOKEN` line in `LYAM_ENV_FILE` is repaired
+  atomically, just as after a mint. The env file stays 0600; token values are never printed.
+  A running app must be recreated from that file: Docker restart/start does not reload env.
+  `host-boot.sh` detects this divergence and routes recreation through the guarded updater.
+  `--unseal-only` never changes policy or tokens.
 
 ## Migrating the state of a running RAM-mode instance (first switch)
 
@@ -377,3 +378,26 @@ the data/pg/bao backups of the same generation:
 The updater's tests run against a stubbed docker and qualify the SCRIPT LOGIC only. A real
 update (actual image pull, boot, health, rollback) is qualified by an isolated on-host test
 against a copy of the data before any switch of the live service.
+
+### Repeatable real-service regressions
+
+`deploy/oci/update.real-pg.mjs` exercises real PostgreSQL **17.12** (the version used in
+this validation), including drop/recreate/replay, generated constraint/index names,
+sequence restoration, and a refused DROP that must leave the app down. Supply a disposable
+local server binary directory and matching 17.12 client binaries on PATH:
+
+```sh
+PG_BIN=/path/to/postgres-17.12/bin node deploy/oci/update.real-pg.mjs
+```
+
+The Docker/front commands are stubs in that harness; it does not qualify a full VM update.
+`deploy/oci/companions/bao-bootstrap.real-test.sh` uses a real local OpenBao 2.7.2 on
+port 18200, its own temporary storage, and no production credentials. Put `bao` on PATH:
+
+```sh
+sh deploy/oci/companions/bao-bootstrap.real-test.sh
+```
+
+It covers fresh initialization, restart/unseal, token reuse, divergent-env repair without
+minting, dead-token replacement, unreachable listeners and refusal to reinitialize lost
+storage with existing keys. These tests supplement, not replace, isolated VM qualification.

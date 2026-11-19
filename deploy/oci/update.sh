@@ -351,7 +351,8 @@ tar -C "$(dirname "$DATA_DIR")" -czf "$DATA_BACKUP" "$(basename "$DATA_DIR")" \
 # edits change the hash). Schema: a NORMALIZED, SEMANTICALLY STABLE export - columns with
 # defaults and nullability, constraint DEFINITIONS (pg_get_constraintdef: the semantic
 # expression, never the catalog name - synthetic names embed internal identifiers that
-# change on drop+recreate of an identical schema, reproduced in the isolated failure test),
+# change on drop+recreate of an identical schema, reproduced in the isolated failure test);
+# c.contype is CAST to text explicitly: PG17 rejects the implicit "char"||text concatenation),
 # index definitions with the index NAME stripped (same reason), views, functions and
 # sequence definitions - one line per object, ordered, hashed as a whole. A genuinely
 # different constraint/index/column changes the definition and the hash; a mere synthetic
@@ -365,7 +366,7 @@ pg_state_capture() {
   _psql() { docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tA -v ON_ERROR_STOP=1 -c "$1" 2>/dev/null; }
   _schema="$(_psql "SELECT md5(coalesce(string_agg(line, E'\\n' ORDER BY line), '')) FROM (
       SELECT 'col '||table_schema||'.'||table_name||'.'||column_name||' '||udt_name||' '||is_nullable||' '||coalesce(column_default,'') AS line FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog','information_schema')
-      UNION ALL SELECT 'con '||n.nspname||'.'||coalesce(cl.relname,'')||' '||c.contype||' '||pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace LEFT JOIN pg_class cl ON cl.oid=c.conrelid WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+      UNION ALL SELECT 'con '||n.nspname||'.'||coalesce(cl.relname,'')||' '||c.contype::text||' '||pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace LEFT JOIN pg_class cl ON cl.oid=c.conrelid WHERE n.nspname NOT IN ('pg_catalog','information_schema')
       UNION ALL SELECT 'idx '||schemaname||'.'||tablename||' '||regexp_replace(indexdef, '^(CREATE (UNIQUE )?INDEX )\\S+', '\\1') FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog','information_schema')
       UNION ALL SELECT 'view '||table_schema||'.'||table_name||' '||coalesce(view_definition,'') FROM information_schema.views WHERE table_schema NOT IN ('pg_catalog','information_schema')
       UNION ALL SELECT 'fun '||routine_schema||'.'||routine_name||' '||routine_type||' '||coalesce(routine_definition,'') FROM information_schema.routines WHERE routine_schema NOT IN ('pg_catalog','information_schema')

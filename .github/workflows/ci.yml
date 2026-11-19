@@ -122,7 +122,7 @@ jobs:
       - name: Demo edge routing (the whole /authorize surface, incl. the passkey script, reaches the core)
         run: node --test demo/server.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
-        run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/update.test.mjs
+        run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 25
