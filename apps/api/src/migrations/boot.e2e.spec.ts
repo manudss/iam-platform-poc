@@ -47,6 +47,6 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    assert.equal(dolt(['--use-db=iam/personal/keep','sql','-r','json','-q',"SELECT DOLT_HASHOF_DB('WORKING') AS root"]),dirty);
    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT display_name FROM identities WHERE id='demo-alice'"]),/Customized Alice/);
    assert.equal(journal.read()?.entries.length,1);
-  }finally{await stop(api);await stop(server);await bus.close();rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
+  }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
  });
 });
