@@ -6,7 +6,7 @@
 .group { margin: 1.1rem .5rem .3rem; font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--sidebar-muted); }
 nav a { display: flex; align-items: center; gap: .65rem; padding: .5rem .65rem; border-radius: .5rem; color: var(--sidebar-ink); font-size: .92rem; }
 nav a:hover { background: var(--sidebar-hover); }
-nav a.active { background: var(--sidebar-active); box-shadow: inset 3px 0 0 var(--accent); }
+nav a.active { background: var(--sidebar-active); box-shadow: inset 3px 0 0 var(--acc2); }
 .ico { width: 1.2rem; text-align: center; opacity: .85; }
 .main { min-width: 0; }
 .top { display: flex; align-items: center; gap: .8rem; padding: .8rem 1.5rem; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; }

@@ -41,7 +41,7 @@ export function templateBadge(source: WfTemplate['source']): { text: string; sta
 .tpl { display: flex; gap: 1rem; align-items: flex-start; }
 .tpl-cats { flex: 0 0 200px; display: flex; flex-direction: column; gap: 2px; }
 .tpl-cats button { display: flex; justify-content: space-between; background: none; border: 0; border-radius: .4rem; padding: .4rem .6rem; min-height: 0; text-align: left; color: var(--muted); cursor: pointer; }
-.tpl-cats button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.tpl-cats button.on { background: var(--acc2-soft); color: var(--acc2); font-weight: 600; }
 .tpl-main { flex: 1; min-width: 0; }
 .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: .8rem; margin-top: .8rem; }
 .tpl-card { display: flex; flex-direction: column; gap: .35rem; padding: .8rem .9rem; height: 100%; }
@@ -77,7 +77,7 @@ export function templateBadge(source: WfTemplate['source']): { text: string; sta
           <p>{{t.description}}</p>
           <svg class="wlc-mini" [attr.viewBox]="mini(t).viewBox" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
             @for (e of mini(t).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
-            @for (n of mini(t).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
+            @for (n of mini(t).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--acc2-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--acc2)' : 'var(--warn-line)'" />}
           </svg>
           <div class="tpl-badges"><span class="chip" [attr.data-status]="badgeOf(t).status">{{badgeOf(t).text}}</span>@if (t.createdBy) {<span>by {{t.createdBy}} ·</span>}<span>{{t.nodes.length}} blocks</span>@if (t.trigger) {<span>· trigger {{triggerText(t)}}</span>} @else {<span>· manual</span>}</div>
           <div class="tpl-actions"><button class="secondary" (click)="open(t)">Preview</button><button (click)="open(t)">Use template</button>@if (t.source === 'user') {<button class="secondary" style="flex:0 0 auto" (click)="removeTpl(t)" [disabled]="busy()" title="Delete this template">🗑</button>}</div>
@@ -98,7 +98,7 @@ export function templateBadge(source: WfTemplate['source']): { text: string; sta
       <div class="tpl-blocks">@for (n of t.nodes; track n.id) {<span class="chip" [attr.data-status]="catOf(n.type)">{{n.name}}</span>}</div>
       <svg class="wlc-mini" [attr.viewBox]="mini(t).viewBox" preserveAspectRatio="xMidYMid meet" aria-hidden="true" style="margin-bottom:.6rem">
         @for (e of mini(t).edges; track $index) {<line [attr.x1]="e.x1" [attr.y1]="e.y1" [attr.x2]="e.x2" [attr.y2]="e.y2" stroke="var(--line)" stroke-width="1.5" />}
-        @for (n of mini(t).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--accent-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--accent)' : 'var(--warn-line)'" />}
+        @for (n of mini(t).nodes; track $index) {<rect [attr.x]="n.x - 13" [attr.y]="n.y - 8" width="26" height="16" rx="5" [attr.fill]="n.cat === 'real' ? 'var(--ok-soft)' : n.cat === 'computed' ? 'var(--acc2-soft)' : 'var(--warn-soft)'" [attr.stroke]="n.cat === 'real' ? 'var(--ok-line)' : n.cat === 'computed' ? 'var(--acc2)' : 'var(--warn-line)'" />}
       </svg>
       <div class="row"><span class="spacer"></span><button class="secondary" (click)="close()">Cancel</button><button (click)="create()" [disabled]="busy() || !newName.trim()">Create the workflow</button></div>
     </div>

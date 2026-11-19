@@ -47,7 +47,13 @@ const PAIRS: [keyof ThemeVars, keyof ThemeVars, number][] = [
   ['--bad', '--bad-soft', 4.5],
   ['--bad-ink', '--bad-soft', 4.5],
   ['--warn-ink', '--warn-soft', 4.5],
-  ['--accent', '--bg', 3], // interactive boundary (button edge, dots, keypad)
+  ['--acc2', '--bg', 4.5], // links
+ ['--acc2', '--card', 4.5],
+ ['--acc2', '--panel', 4.5],
+ ['--acc2-ink', '--acc2', 4.5], // badge, selected segment, profile initials
+ ['--acc2-dark', '--acc2-soft', 4.5], // identity pill, selected chips/tabs
+ ['--acc2', '--acc2-soft', 4.5], // small labels on accent-tinted chips
+ ['--accent', '--bg', 3], // interactive boundary (button edge, dots, keypad)
   // Chip borders are decorative boundaries on an already-contrasting chip (the ink pair above is the AA one);
   // kept visibly distinct, not held to the text threshold.
   ['--ok-line', '--ok-soft', 1.2],

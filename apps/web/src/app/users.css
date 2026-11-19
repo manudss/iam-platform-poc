@@ -69,7 +69,7 @@
 .drawer label.inline input[type=checkbox] { flex: none; width: 1.15rem; height: 1.15rem; }
 .chain { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; margin-top: .55rem; }
 .chain .node { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .6rem .2rem .25rem; font-size: .82rem; background: var(--panel); }
-.chain .node.me { border-color: var(--accent); }
+.chain .node.me { border-color: var(--acc2); }
 .chain .arr { color: var(--label); }
 .danger-zone { margin-top: 1.2rem; border: 1px solid var(--bad); border-radius: .6rem; padding: .7rem .9rem; }
 .danger-zone p { margin: 0 0 .5rem; font-size: .82rem; color: var(--label); }

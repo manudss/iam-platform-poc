@@ -64,7 +64,7 @@ export function filterWorkflows(defs: DefinitionSummary[], query: string, filter
 .wlc-card.paused { opacity: .72; }
 .wlc-title { display: flex; align-items: flex-start; gap: .5rem; }
 .wlc-title a { flex: 1; font-weight: 600; color: var(--ink); text-decoration: none; }
-.wlc-title a:hover { color: var(--accent); }
+.wlc-title a:hover { color: var(--acc2); }
 .wlc-switch { position: relative; width: 34px; height: 19px; flex: none; }
 .wlc-switch input { opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .wlc-switch i { position: absolute; inset: 0; border-radius: 1rem; background: var(--bar-off); pointer-events: none; transition: background .15s; }

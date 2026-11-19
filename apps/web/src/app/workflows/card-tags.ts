@@ -22,8 +22,8 @@ export function fittingTags(widths:number[], available:number, overflowWidth:(co
 :host{display:block;position:relative;min-width:0;width:100%;}
 .tag-row{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;height:28px;}
 .tag{display:inline-flex;align-items:center;flex:0 0 auto;width:auto;max-width:100%;min-height:24px;margin:0;padding:2px 9px;border:1px solid transparent;border-radius:999px;background:var(--chip-bg);color:var(--muted);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer;}
-.tag:hover,.tag:focus-visible{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);}
-.tag.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);}
+.tag:hover,.tag:focus-visible{background:var(--acc2);color:var(--acc2-ink);border-color:var(--acc2);}
+.tag.on{border-color:var(--acc2);color:var(--acc2);background:var(--acc2-soft);}
 .more{flex:0 0 auto;display:flex;align-items:center;height:100%;}
 .tip{position:absolute;top:100%;left:0;z-index:25;display:flex;flex-wrap:wrap;gap:6px;min-width:180px;width:max-content;max-width:min(280px,75vw);padding:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 6px 24px var(--shadow-color);max-height:240px;overflow-y:auto;}
 .tip .tag{white-space:normal;overflow-wrap:anywhere;}

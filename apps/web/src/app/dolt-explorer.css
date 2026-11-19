@@ -18,7 +18,7 @@
 @media(max-width:800px){.home-cols{grid-template-columns:1fr}}
 /* branches: one card per branch, ahead/behind gauge, actions on the right */
 .branch-card{display:flex;gap:.9rem;align-items:flex-start}
-.branch-card.mine{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.branch-card.mine{border-color:var(--acc2);box-shadow:0 0 0 1px var(--acc2)}
 .branch-ico{color:var(--muted);font-size:1.1rem;line-height:1.4}
 .branch-main{flex:1;min-width:0}
 .branch-name{font-size:1.05rem;display:flex;align-items:center;flex-wrap:wrap;gap:.1rem}
@@ -46,7 +46,7 @@ ol.log li{display:flex;gap:.7rem;align-items:flex-start;padding:.5rem .6rem;back
 ol.log li:first-child{border-radius:.5rem .5rem 0 0}
 ol.log li:last-child{border-bottom:1px solid var(--line);border-radius:0 0 .5rem .5rem}
 ol.log li .dot{width:.65rem;height:.65rem;border-radius:50%;border:2px solid var(--field-line);background:var(--card);margin-top:.3rem;flex:none}
-ol.log li.merge .dot{border-color:var(--accent)}
+ol.log li.merge .dot{border-color:var(--acc2)}
 ol.log li.sel{background:var(--panel)}
 .log-main{flex:1;min-width:0}
 .log-main .msg{font-weight:600;text-decoration:none;font-size:.95rem;text-align:left}
@@ -55,7 +55,7 @@ ol.log li.sel{background:var(--panel)}
 .avatar{display:inline-flex;align-items:center;justify-content:center;width:1.3rem;height:1.3rem;border-radius:50%;background:var(--accent-soft);color:var(--accent-dark);font-size:.62rem;font-weight:700}
 .log-act{display:flex;align-items:center;gap:.4rem;flex:none}
 .log-act button{margin:0}
-.commit-card{border-left:3px solid var(--accent)}
+.commit-card{border-left:3px solid var(--acc2)}
 .commit-head{margin:0 0 .5rem;overflow-wrap:anywhere}
 .hist-cols{display:grid;grid-template-columns:1fr;gap:1rem;align-items:start}
 .hist-cols.with-inspector{grid-template-columns:minmax(0,1fr) minmax(0,24rem)}

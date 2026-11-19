@@ -1,6 +1,7 @@
 /* Bulk assignment matrix: lazy route only, kept out of the shared assignments.css so the initial bundle stays lean. */
 .check-label {display:flex;flex-direction:row;align-items:center;gap:.6rem;margin:0;padding:.5rem .7rem;border:1px solid var(--line);border-radius:.6rem;background:var(--panel);cursor:pointer;font-weight:400;color:var(--ink);}
-.check-label:hover,.check-label:has(:checked) {border-color:var(--accent);}
+.check-label:has(:checked) {border-color:var(--acc2);}
+.check-label:hover {border-color:var(--accent);}
 .check-label:has(:checked) {background:var(--accent-soft);}
 .check-label input {flex:none;width:1.1rem;height:1.1rem;}
 .check-label .text-pair {min-width:0;}
@@ -10,7 +11,7 @@
 .matrix thead th {position:sticky;top:0;z-index:3;background:var(--th-bg);text-transform:none;letter-spacing:normal;}
 .matrix th:first-child {position:sticky;left:0;min-width:13rem;text-align:left;background:var(--card);z-index:2;}
 .matrix thead th:first-child {z-index:4;background:var(--th-bg);}
-.matrix td.changed {background:var(--chip-bg);box-shadow:inset 0 0 0 2px var(--accent);}
+.matrix td.changed {background:var(--chip-bg);box-shadow:inset 0 0 0 2px var(--acc2);}
 .matrix td.conflict {background:var(--bad-soft);}
 .matrix input {width:1.25rem;height:1.25rem;}
 .selection-layout {display:grid;grid-template-columns:minmax(0,2fr) minmax(13rem,1fr);gap:1rem;}
