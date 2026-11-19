@@ -39,7 +39,9 @@ fail() { echo "FAIL $1" >&2; FAILED=1; }
 
 check() { # description expected_code url [method]
   desc="$1"; want="$2"; url="$3"; method="${4:-GET}"
-  got="$(curl -sk -o /dev/null -w '%{http_code}' -X "$method" "$url" || echo 000)"
+  # curl already prints 000 via -w on a failed connection: status and code stay separate.
+  got="$(curl -sk -o /dev/null -w '%{http_code}' -X "$method" "$url" 2>/dev/null)" || true
+  [ -n "$got" ] || got=000
   if [ "$got" = "$want" ]; then note "PASS $desc ($method $want)"; else fail "$desc ($method wanted $want, got $got)"; fi
 }
 

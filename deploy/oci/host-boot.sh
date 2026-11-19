@@ -60,7 +60,12 @@ log "starting $CONTAINER (seed mode: never)"
 ORIGIN="$(getconf IAM_PUBLIC_ORIGIN)"; ORIGIN="${ORIGIN%/}"
 if [ -n "$ORIGIN" ] && command -v curl >/dev/null 2>&1; then
   n=0
-  while [ "$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "$ORIGIN/healthz" 2>/dev/null || echo 000)" = "000" ]; do
+  # curl ALREADY prints 000 (its -w format) on a refused/failed connection: the HTTP code and
+  # the command status are read separately, never concatenated (a doubled "000000" would look
+  # like a live front).
+  while :; do
+    FRONT_CODE="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "$ORIGIN/healthz" 2>/dev/null)" || true
+    [ "$FRONT_CODE" = "000" ] || break
     n=$((n + 1)); [ "$n" -lt "$BOOT_TRIES" ] || fail "the front at $ORIGIN never came up; not starting the app (its gate could not be proven)"
     sleep 5
   done
@@ -69,15 +74,19 @@ fi
 # docker start does NOT reload the env - not even on a stopped container. When the env file
 # drifted from the container's recorded env (a bao-bootstrap re-mint syncs IAM_BAO_TOKEN into
 # the file; the container still holds the previous value), a plain start would RESUME WITH A
-# DIVERGENT ENVIRONMENT. Comparison scope: EVERY IAM_* application parameter sourced from
-# the env file (the seed mode is forced by the run flag and the image config is immutable,
-# so they cannot drift). Never serve that: recreate from the env file through the updater's
+# DIVERGENT ENVIRONMENT. Comparison scope: the UNION of the IAM_* application parameters
+# sourced from the env file AND the explicit persistence keys below - a key REMOVED from the
+# file but still baked into the container is a divergence too (a stale secret would keep
+# serving). Image-baked non-IAM defaults (PATH and friends) are immutable and excluded by
+# design. Never serve that: recreate from the env file through the updater's
 # own coordinated same-image redeploy (cold backup, front gate, health gate), and fail the
 # boot if that recreation fails.
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
   CONT_ENV="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" 2>/dev/null || true)"
   DIVERGED=""
-  for key in $(sed -n 's/^\(IAM_[A-Za-z0-9_]*\)=.*/\1/p' "$ENV_FILE" 2>/dev/null); do
+  DIVERGE_KEYS="$( { sed -n 's/^\(IAM_[A-Za-z0-9_]*\)=.*/\1/p' "$ENV_FILE" 2>/dev/null
+                    printf '%s\n' IAM_BAO_TOKEN IAM_PG_URL IAM_BAO_ADDR IAM_PUBLIC_ORIGIN; } | sort -u )"
+  for key in $DIVERGE_KEYS; do
     fv="$(getconf "$key")"
     cv="$(printf '%s\n' "$CONT_ENV" | sed -n "s/^$key=//p" | head -n 1)"
     [ "$fv" = "$cv" ] || DIVERGED="$DIVERGED $key"

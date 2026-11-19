@@ -36,7 +36,7 @@ function setup({ pg = true, bao = true, unseal = true, pgDown = false, appSick =
   mkdirSync(join(dir, 'bin'));
   writeFileSync(join(dir, 'bin', 'docker'), DOCKER_STUB);
   chmodSync(join(dir, 'bin', 'docker'), 0o755);
-  writeFileSync(join(dir, 'bin', 'curl'), '#!/bin/sh\necho "curl $*" >> "$STUB_DIR/calls"\n[ -f "$STUB_DIR/front-down" ] && { echo 000; exit 0; }\necho 200\n');
+  writeFileSync(join(dir, 'bin', 'curl'), '#!/bin/sh\necho "curl $*" >> "$STUB_DIR/calls"\n[ -f "$STUB_DIR/front-down" ] && { echo 000; exit 7; }   # refused connection: curl prints 000 AND exits non-zero\necho 200\n');
   chmodSync(join(dir, 'bin', 'curl'), 0o755);
   const stub = join(dir, 'stub');
   mkdirSync(stub);
@@ -155,6 +155,16 @@ test('any IAM_* parameter drift is caught (scope: every env-file application par
   assert.match(r.stdout, /divergence detected \( IAM_PG_URL\)/);
   assert.match(r.calls, /update\.sh --image/);
   assert.doesNotMatch(r.calls, /docker start lyam/);
+});
+
+test('a key REMOVED from the file but still baked into the container is a divergence (stale secret)', () => {
+  const { env, stub } = setup();
+  writeFileSync(join(stub, 'container-env'), 'IAM_PUBLIC_ORIGIN=https://example.invalid\nIAM_BAO_TOKEN=retired-container-token\n');
+  const r = run(env);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /divergence detected \( IAM_BAO_TOKEN\)/);
+  assert.match(r.calls, /update\.sh --image/);
+  assert.doesNotMatch(r.calls, /docker start lyam/, 'no plain start with a stale secret in the container');
 });
 
 test('a front that never comes up stops the boot before the app', () => {

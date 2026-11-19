@@ -147,12 +147,16 @@ sudo IAM_PUBLIC_ORIGIN=https://<test-front> deploy/oci/front-barrier-check.sh
 
 `deploy/oci/host-boot.sh` (driven by `lyam-boot.service`) owns the start order after a host
 reboot: the FRONT first (the unit orders after `caddy.service` and the script waits, bounded,
-for any HTTP answer from the origin - a boot that races Caddy would fail the gate proof
-randomly), then `pg` up, `bao` up AND unsealed, then `lyam`. Before any `docker start` of the
-app it compares every `IAM_*` application parameter sourced from the env file against the
-container's recorded env (`docker start` never reloads env; the seed mode is forced by the
-run flag and the image config is immutable, so they cannot drift - that is the comparison
-scope): a divergence - e.g. a re-minted Bao token synced into the file - triggers a
+for any HTTP answer from the origin - curl's exit status and HTTP code are read separately,
+never concatenated: a doubled `000000` would masquerade as a live front), then `pg` up,
+`bao` up AND unsealed, then `lyam`. Before any `docker start` of the
+app it compares the UNION of the `IAM_*` application parameters sourced from the env file
+AND the explicit persistence keys (IAM_BAO_TOKEN, IAM_PG_URL, IAM_BAO_ADDR,
+IAM_PUBLIC_ORIGIN) against the container's recorded env (`docker start` never reloads env;
+the seed mode is forced by the run flag and image-baked defaults are immutable, so they
+cannot drift - that is the comparison scope): a key REMOVED from the file but still baked
+into the container is a divergence too (a stale secret would keep serving). A divergence
+triggers a
 coordinated same-image recreation through the updater instead of a plain start, and a
 failed recreation fails the boot rather than serving a divergent environment. The `lyam`
 container itself runs with
