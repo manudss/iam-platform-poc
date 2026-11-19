@@ -177,12 +177,12 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
   .top > * { grid-row: 1; }
   .top .burger { justify-self: start; }
   /* Row 2: the pill spans the burger and title columns (so it does not stretch the burger's), then the icons.
-     .chipbtn matches nothing here: it is the Review & Apply chip's class once PR #114 lands, listed so the merged
+     .chipbtn matches nothing here: it is the Review & Apply chip's class once the branch-UX PR lands, listed so the merged
      bar keeps it on the second row without another change. */
   .top > .pillwrap { grid-row: 2; grid-column: 1 / 3; justify-self: stretch; min-width: 0; max-width: 100%; overflow: hidden; }
   .top > .icon, .top > .chipbtn { grid-row: 2; justify-self: start; min-width: 0; }
   /* The pill stretches to exactly its grid tracks, so it can never grow over the chip: the bar's .5rem column
-     gap stays between them at any width. #114's .pillbtn allows 12rem, wider than those tracks at 320px; here it
+     gap stays between them at any width. That PR's .pillbtn allows 12rem, wider than those tracks at 320px; here it
      shrinks instead and its text ellipsizes (the full branch name stays reachable in the picker it opens).
      overflow:hidden is safe below 900px only: .pillwrap is static there, so the tooltip's containing block is
      higher and the picker is fixed-positioned; neither is clipped. */
