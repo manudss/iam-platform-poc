@@ -1,0 +1,84 @@
+name: OCI demo deploy
+
+# Publishes every new main image on the persistent OCI demo host, after the
+# "Demo image (GHCR)" workflow has built and pushed it. The host pulls the
+# immutable image itself (the GHCR package is public): this workflow only
+# carries deploy/oci/update.sh over SSH and runs it.
+#
+# The updater is fail-closed about data preservation (deploy/oci/update.sh):
+# immutable refs only, the image must support IAM_DEMO_SEED_MODE=never, cold
+# backup before the swap, health check, rollback. A pause file on the host
+# (default /opt/lyam/UPDATE_PAUSED) freezes deployments deliberately.
+#
+# Activation: three repository secrets (docs/oci-deploy.md), set by the repo
+# owner. Until they exist every run ends green with a "skipped" note, exactly
+# like demo-deploy.yml before the Render switch.
+on:
+  workflow_run:
+    workflows: ['Demo image (GHCR)']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Full commit SHA to deploy (default: the main head of the triggering run)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oci-demo-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Roll the fresh image onto the OCI demo host
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      OCI_SSH_HOST: ${{ secrets.OCI_DEPLOY_SSH_HOST }}
+      OCI_SSH_USER: ${{ secrets.OCI_DEPLOY_SSH_USER }}
+      OCI_SSH_KEY: ${{ secrets.OCI_DEPLOY_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Skip cleanly until the deploy secrets exist
+        id: gate
+        run: |
+          if [ -z "${OCI_SSH_HOST}" ] || [ -z "${OCI_SSH_USER}" ] || [ -z "${OCI_SSH_KEY}" ]; then
+            {
+              echo '### OCI deploy skipped'
+              echo 'Repository secrets OCI_DEPLOY_SSH_HOST / OCI_DEPLOY_SSH_USER / OCI_DEPLOY_SSH_KEY are not set yet (docs/oci-deploy.md). Nothing was deployed.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo 'configured=yes' >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the commit to deploy
+        if: steps.gate.outputs.configured == 'yes'
+        id: t
+        run: |
+          SHA="${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.event.workflow_run.head_sha }}"
+          test -n "$SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Deploying ghcr.io/${{ github.repository }}:$SHA"
+
+      - name: Carry update.sh over SSH and run it on the host
+        if: steps.gate.outputs.configured == 'yes'
+        run: |
+          set -eu
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$OCI_SSH_KEY" > ~/.ssh/oci_deploy
+          chmod 600 ~/.ssh/oci_deploy
+          ssh-keyscan -H "$OCI_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          SSH="ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes"
+          $SSH "$OCI_SSH_USER@$OCI_SSH_HOST" 'mkdir -p ~/lyam-deploy'
+          scp -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes deploy/oci/update.sh "$OCI_SSH_USER@$OCI_SSH_HOST:~/lyam-deploy/update.sh"
+          $SSH "$OCI_SSH_USER@$OCI_SSH_HOST" "sh ~/lyam-deploy/update.sh --image ghcr.io/${{ github.repository }}:${{ steps.t.outputs.sha }}"
+
+      - name: Health check from the outside (optional public origin)
+        if: steps.gate.outputs.configured == 'yes' && vars.OCI_DEPLOY_PUBLIC_ORIGIN != ''
+        run: curl -fsS --retry 12 --retry-delay 15 --retry-all-errors "${{ vars.OCI_DEPLOY_PUBLIC_ORIGIN }}/healthz"
