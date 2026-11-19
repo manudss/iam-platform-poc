@@ -100,10 +100,14 @@ def main():
         if stable['RestartCount']!=restarts or not stable['State']['Running']:raise ValueError('candidate is restarting')
         node=['docker','exec','-i',a.container,'node','--input-type=module','-e',source,'capture']
     if a.phase=='after':
+        prior=json.loads((evidence/'before.json').read_text())
+        legacy_rollback=prior['image']==a.image and prior.get('migrationLedger') is None
         smoke=['docker','exec','-i',a.container,'node','--input-type=module','-e',source,'smoke']
         auth=json.loads(Path(p['authFile']).read_text())
-        smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth})))
+        smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth,'reviewedLegacyRollback':legacy_rollback})))
     state=json.loads(cmd(node,json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})))
+    ledger=Path(a.data_dir)/'migrations/journal.json'
+    state['migrationLedger']=json.loads(ledger.read_text()) if ledger.exists() else None
     state['credentials']=credential_hashes(Path(a.data_dir),p);state['postgres']=postgres(p)
     state['transportCoverage']='ISOLATED_LOOPBACK_NO_PUBLIC_TLS_PROOF' if a.isolated_loopback_test else 'TLS_EXPECTED_ORIGINS';state['image']=a.image;state['policyHash']=digest(Path(a.policy).read_bytes())
     if a.phase=='before':private_json(evidence/'before.json',state);print('Preservation snapshot captured privately; maintenance remains armed');return

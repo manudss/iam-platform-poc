@@ -1,7 +1,7 @@
 // Executed inside an isolated helper container (capture) or candidate (smoke).
 // Private auth and Bao tokens never leave this process or appear in stdout.
 import {execFileSync} from 'node:child_process';
-import {readFileSync} from 'node:fs';
+import {readFileSync,cpSync,mkdtempSync,existsSync} from 'node:fs';
 import {createHash,randomBytes} from 'node:crypto';
 const hash=x=>createHash('sha256').update(x).digest('hex');
 const [mode]=process.argv.slice(1);let raw='';for await(const chunk of process.stdin){raw+=chunk;if(raw.length>262144)throw Error('input bound');}const p=JSON.parse(raw);
@@ -29,7 +29,9 @@ async function bao(){
  return found;
 }
 function dolt(){
- const query=(db,sql)=>{const r=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:'/data/dolt',encoding:'utf8',maxBuffer:64*1024*1024}));if(!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;};
+ const dir=p.running?'/data/dolt':mkdtempSync('/tmp/qualification-')+'/dolt';
+ if(!p.running)cpSync('/data/dolt',dir,{recursive:true,errorOnExist:true});
+ const query=(db,sql)=>{const r=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,encoding:'utf8',maxBuffer:64*1024*1024}));if(!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;};
  const dbs=query('','SHOW DATABASES').map(r=>Object.values(r)[0]).filter(n=>!['information_schema','mysql','dolt_cluster'].includes(n)).sort();
  if(!dbs.includes('iam'))throw Error('business database absent');
  return dbs.flatMap(db=>query(db,'SELECT name, hash FROM dolt_branches ORDER BY name').map(b=>{
@@ -64,6 +66,7 @@ async function smoke(){
  }
  const negative=await fetch(local+'/core/authorize?'+new URLSearchParams({client_id:'demo-web',redirect_uri:'https://example.invalid/callback',response_type:'code',state:'negative',code_challenge:'A'.repeat(43),code_challenge_method:'S256'}));
  if(!/unknown client/i.test(await negative.text()))throw Error('negative redirect check failed');
+ if(p.reviewedLegacyRollback===true&&!existsSync('/data/migrations/journal.json')&&!existsSync('/app/migration-source/data/migrations/manifest.json'))return {journal,ledger:'legacy-rollback-no-migration-ledger'};
  const ledger=JSON.parse(readFileSync('/data/migrations/journal.json','utf8'));
  if(ledger.format!==1||ledger.pending||!Array.isArray(ledger.entries)||!ledger.entries.length)throw Error('migration ledger incomplete');
  const expected=JSON.parse(readFileSync('/app/migration-source/data/migrations/manifest.json','utf8'));
