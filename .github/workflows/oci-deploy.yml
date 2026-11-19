@@ -1,84 +1,147 @@
 name: OCI demo deploy
-
-# Publishes every new main image on the persistent OCI demo host, after the
-# "Demo image (GHCR)" workflow has built and pushed it. The host pulls the
-# immutable image itself (the GHCR package is public): this workflow only
-# carries deploy/oci/update.sh over SSH and runs it.
-#
-# The updater is fail-closed about data preservation (deploy/oci/update.sh):
-# immutable refs only, the image must support IAM_DEMO_SEED_MODE=never, cold
-# backup before the swap, health check, rollback. A pause file on the host
-# (default /opt/lyam/UPDATE_PAUSED) freezes deployments deliberately.
-#
-# Activation: three repository secrets (docs/oci-deploy.md), set by the repo
-# owner. Until they exist every run ends green with a "skipped" note, exactly
-# like demo-deploy.yml before the Render switch.
+# A workflow is NOT a FIFO. Every run recovers all missing first-parent main commits
+# from the durable host cursor. Runs may overlap and arrive out of order: the host
+# serializes complete plans, checks overlap, records each result, and never skips a failure.
 on:
-  workflow_run:
-    workflows: ['Demo image (GHCR)']
-    types: [completed]
+  push:
     branches: [main]
   workflow_dispatch:
     inputs:
+      qualification_only:
+        description: 'Run exact-SHA reusable CI/image with NO host access or delivery'
+        type: boolean
+        default: true
       sha:
-        description: 'Full commit SHA to deploy (default: the main head of the triggering run)'
-        required: false
+        description: 'Full SHA for qualification-only mode (required in this mode)'
+        type: string
         default: ''
 
 permissions:
   contents: read
+  packages: write
+  actions: read
 
-concurrency:
-  group: oci-demo-deploy
-  cancel-in-progress: false
-
+# Intentionally NO concurrency group: GitHub replaces pending runs even with
+# cancel-in-progress:false. The host owns the persistent ordered queue and lock.
 jobs:
-  deploy:
-    name: Roll the fresh image onto the OCI demo host
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_work: ${{ steps.plan.outputs.has_work }}
     env:
       OCI_SSH_HOST: ${{ secrets.OCI_DEPLOY_SSH_HOST }}
       OCI_SSH_USER: ${{ secrets.OCI_DEPLOY_SSH_USER }}
       OCI_SSH_KEY: ${{ secrets.OCI_DEPLOY_SSH_KEY }}
+      OCI_KNOWN_HOSTS: ${{ secrets.OCI_DEPLOY_KNOWN_HOSTS }}
     steps:
       - uses: actions/checkout@v5
-
-      - name: Skip cleanly until the deploy secrets exist
-        id: gate
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with: {node-version: 22}
+      - name: Prepare verified SSH transport
+        if: inputs.qualification_only != true
         run: |
-          if [ -z "${OCI_SSH_HOST}" ] || [ -z "${OCI_SSH_USER}" ] || [ -z "${OCI_SSH_KEY}" ]; then
-            {
-              echo '### OCI deploy skipped'
-              echo 'Repository secrets OCI_DEPLOY_SSH_HOST / OCI_DEPLOY_SSH_USER / OCI_DEPLOY_SSH_KEY are not set yet (docs/oci-deploy.md). Nothing was deployed.'
-            } >> "$GITHUB_STEP_SUMMARY"
+          set -eu
+          test -n "$OCI_SSH_HOST" && test -n "$OCI_SSH_USER" && test -n "$OCI_SSH_KEY" && test -n "$OCI_KNOWN_HOSTS" || { echo 'OCI deployment is NOT configured, no deploy attempted'; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$OCI_SSH_KEY" > ~/.ssh/oci_deploy
+          chmod 600 ~/.ssh/oci_deploy
+          printf '%s\n' "$OCI_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Recover all missing main commits, not merely the latest push head
+        id: plan
+        env:
+          QUALIFICATION_ONLY: ${{ inputs.qualification_only }}
+          QUALIFICATION_SHA: ${{ inputs.sha }}
+        run: |
+          set -eu
+          if [ "$QUALIFICATION_ONLY" = true ]; then
+            node -e 'const s=process.env.QUALIFICATION_SHA;if(!/^[a-f0-9]{40}$/.test(s))throw Error("full SHA required");const p={format:1,qualificationOnly:true,entries:[{sha:s}]};require("fs").writeFileSync("oci-plan.json",JSON.stringify(p));require("fs").appendFileSync(process.env.GITHUB_OUTPUT,"has_work=true\nmatrix="+JSON.stringify({include:[{sha:s}]})+"\n")'
             exit 0
           fi
-          echo 'configured=yes' >> "$GITHUB_OUTPUT"
-
-      - name: Resolve the commit to deploy
-        if: steps.gate.outputs.configured == 'yes'
-        id: t
-        run: |
-          SHA="${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.event.workflow_run.head_sha }}"
-          test -n "$SHA"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Deploying ghcr.io/${{ github.repository }}:$SHA"
-
-      - name: Carry update.sh over SSH and run it on the host
-        if: steps.gate.outputs.configured == 'yes'
+          BASE=$(ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$OCI_SSH_USER@$OCI_SSH_HOST" 'sudo python3 /opt/lyam/bin/ordered-queue.py status')
+          git fetch origin main
+          HEAD=$(git rev-parse origin/main)
+          MATRIX=$(node scripts/oci-plan.mjs plan "$BASE" "$HEAD" oci-plan.json)
+          printf 'matrix=%s\n' "$MATRIX" >> "$GITHUB_OUTPUT"
+          node -e 'const p=require("./oci-plan.json");require("fs").appendFileSync(process.env.GITHUB_OUTPUT,"has_work="+(p.entries.length>0)+"\n")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oci-plan
+          path: oci-plan.json
+          retention-days: 7
+  qualify:
+    needs: plan
+    if: needs.plan.outputs.has_work == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      sha: ${{ matrix.sha }}
+    secrets: inherit
+  image:
+    needs: [plan, qualify]
+    if: needs.plan.outputs.has_work == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    uses: ./.github/workflows/demo-image.yml
+    with:
+      sha: ${{ matrix.sha }}
+    secrets: inherit
+  verify-receipts:
+    needs: [plan, qualify, image]
+    if: needs.plan.outputs.has_work == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: {node-version: 22}
+      - uses: actions/download-artifact@v4
+        with: {name: oci-plan, path: plan}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oci-image-*
+          path: receipts
+      - name: Verify every exact-SHA same-run digest receipt without host access
+        run: node scripts/oci-plan.mjs receipts plan/oci-plan.json receipts qualified-plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oci-qualified-plan
+          path: qualified-plan.json
+          retention-days: 7
+  deliver:
+    needs: [plan, qualify, image, verify-receipts]
+    if: needs.plan.outputs.has_work == 'true' && inputs.qualification_only != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      OCI_SSH_HOST: ${{ secrets.OCI_DEPLOY_SSH_HOST }}
+      OCI_SSH_USER: ${{ secrets.OCI_DEPLOY_SSH_USER }}
+      OCI_SSH_KEY: ${{ secrets.OCI_DEPLOY_SSH_KEY }}
+      OCI_KNOWN_HOSTS: ${{ secrets.OCI_DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: {node-version: 22}
+      - uses: actions/download-artifact@v4
+        with: {name: oci-plan, path: plan}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oci-image-*
+          path: receipts
+      - name: Assemble exact qualified SHA and digest plan
+        run: node scripts/oci-plan.mjs receipts plan/oci-plan.json receipts qualified-plan.json
+      - name: Drain durable host queue in order, never upload an updater from an unqualified default checkout
         run: |
           set -eu
           install -m 700 -d ~/.ssh
           printf '%s\n' "$OCI_SSH_KEY" > ~/.ssh/oci_deploy
           chmod 600 ~/.ssh/oci_deploy
-          ssh-keyscan -H "$OCI_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          SSH="ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes"
-          $SSH "$OCI_SSH_USER@$OCI_SSH_HOST" 'mkdir -p ~/lyam-deploy'
-          scp -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes deploy/oci/update.sh "$OCI_SSH_USER@$OCI_SSH_HOST:~/lyam-deploy/update.sh"
-          $SSH "$OCI_SSH_USER@$OCI_SSH_HOST" "sudo sh ~/lyam-deploy/update.sh --image ghcr.io/${{ github.repository }}:${{ steps.t.outputs.sha }}"
-
-      - name: Health check from the outside (optional public origin)
-        if: steps.gate.outputs.configured == 'yes' && vars.OCI_DEPLOY_PUBLIC_ORIGIN != ''
-        run: curl -fsS --retry 12 --retry-delay 15 --retry-all-errors "${{ vars.OCI_DEPLOY_PUBLIC_ORIGIN }}/healthz"
+          printf '%s\n' "$OCI_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$OCI_SSH_USER@$OCI_SSH_HOST" 'sudo python3 /opt/lyam/bin/ordered-queue.py drain' < qualified-plan.json
