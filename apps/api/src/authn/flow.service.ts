@@ -11,7 +11,7 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
-import { ExternalIdentity, ExternalProfile, ExternalStart, ProviderRefusal, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, externalRefusalMessage, mint, pkceChallenge } from './federation.js';
+import { ExternalIdentity, ExternalProfile, ExternalStart, ProviderRefusal, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, externalRefusalMessage, mint, mintPkceVerifier, pkceChallenge } from './federation.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 
 /** The console-facing mask for a stored secret; the same sentinel the plugin settings form uses (settings.ts). */
@@ -523,7 +523,7 @@ export class AuthnService implements OnApplicationBootstrap {
     }
     const cbUrl = externalCallbackUrl();
     if (!cbUrl) throw new Error('IAM_EXTERNAL_CALLBACK_URL is not configured: a real external provider cannot be reached');   // technical misconfiguration: fail closed (503)
-    const nonce = mint(), verifier = mint();
+    const nonce = mint(), verifier = mintPkceVerifier();
     const url = buildAuthorizeUrl(start, cbUrl, { state, nonce, challenge: pkceChallenge(verifier) });
     s.pendingExternal = { instanceId: st.id, mode: start.mode!, state, nonce, verifier, start };
     this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-start', mode: start.mode });
@@ -612,7 +612,7 @@ export class AuthnService implements OnApplicationBootstrap {
     }
     const cbUrl = externalCallbackUrl();
     if (!cbUrl) throw new Error('IAM_EXTERNAL_CALLBACK_URL is not configured: a real external provider cannot be reached');   // misconfiguration: fail closed
-    const nonce = mint(), verifier = mint();
+    const nonce = mint(), verifier = mintPkceVerifier();
     const url = buildAuthorizeUrl(start, cbUrl, { state, nonce, challenge: pkceChallenge(verifier) });
     this.pendingLinks.set(state, { ...rec, nonce, verifier });
     this.audit({ tenant, subject, method: inst, outcome: 'external-link-start', mode: start.mode });

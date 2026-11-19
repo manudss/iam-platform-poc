@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:http';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { createHash } from 'node:crypto';
 import {
-  checkStart, buildAuthorizeUrl, exchangeOidc, exchangeUserinfo, mint, pkceChallenge,
+  checkStart, buildAuthorizeUrl, exchangeOidc, exchangeUserinfo, mint, mintPkceVerifier, pkceChallenge,
   ProviderRefusal, externalRefusalMessage, githubTokenReason,
   type ExternalStart,
 } from './federation.js';
@@ -25,6 +25,20 @@ const readBody = (req: import('node:http').IncomingMessage) => new Promise<strin
 const json = (res: import('node:http').ServerResponse, body: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
 
 describe('federation client (real exchange paths)', () => {
+  it('mints RFC 7636 verifiers separately from state/nonce and matches the RFC S256 vector', () => {
+    const samples = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      const verifier = mintPkceVerifier();
+      assert.equal(verifier.length, 43);
+      assert.match(verifier, /^[A-Za-z0-9._~-]{43,128}$/);
+      assert.equal(pkceChallenge(verifier).length, 43);
+      samples.add(verifier);
+    }
+    assert.equal(samples.size, 100);
+    assert.equal(mint().length, 32, 'state and nonce format is unchanged');
+    assert.equal(pkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+  });
+
   it('checkStart refuses malformed answers and non-https endpoints (fail closed)', () => {
     assert.throws(() => checkStart(null), /bad auth\.external\.start/);
     assert.throws(() => checkStart({ ok: true, mode: 'simulated', identities: [] }), /simulated/);
@@ -58,7 +72,7 @@ describe('federation client (real exchange paths)', () => {
       ({ privateKey: otherPriv } = await generateKeyPair('RS256'));
       kid = 'fake-key-1';
       const jwk = await exportJWK(pub); jwk.kid = kid; jwk.alg = 'RS256'; jwk.use = 'sig';
-      verifier = mint(); state = mint(); nonce = mint();
+      verifier = mintPkceVerifier(); state = mint(); nonce = mint();
       const challenge = pkceChallenge(verifier);
       const signIdToken = (key: typeof priv, claims: Record<string, unknown> = {}) => new SignJWT({ email: 'user@example.com', email_verified: true, name: 'Real User', ...claims })
         .setProtectedHeader({ alg: 'RS256', kid }).setSubject('provider-sub-42').setIssuer(base).setAudience('client-1')
@@ -71,7 +85,7 @@ describe('federation client (real exchange paths)', () => {
           seen.codeVerifier = f.get('code_verifier') ?? undefined; seen.clientSecret = f.get('client_secret') ?? undefined; seen.code = f.get('code') ?? undefined;
           if (f.get('grant_type') !== 'authorization_code' || f.get('code') !== 'the-code' || f.get('redirect_uri') !== 'https://iam.example.com/cb' || f.get('client_id') !== 'client-1') return json(res, { error: 'invalid_grant' }, 400);
           if (f.get('client_secret') !== 's3cret') return json(res, { error: 'invalid_client' }, 401);
-          if (createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url') !== challenge) return json(res, { error: 'invalid_grant', error_description: 'pkce' }, 400);
+          if (!/^[A-Za-z0-9._~-]{43,128}$/.test(f.get('code_verifier') ?? '') || createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url') !== challenge) return json(res, { error: 'invalid_grant', error_description: 'pkce' }, 400);
           return json(res, { access_token: 'at-1', token_type: 'Bearer', expires_in: 3600, id_token: await signIdToken(priv, { nonce }) });
         }
         return json(res, { error: 'not-found' }, 404);
@@ -101,7 +115,7 @@ describe('federation client (real exchange paths)', () => {
     });
 
     it('a wrong PKCE verifier is refused by the provider', async () => {
-      await assert.rejects(exchangeOidc(start, 's3cret', 'https://iam.example.com/cb', { code: 'the-code', state }, { state, nonce, verifier: mint() }));
+      await assert.rejects(exchangeOidc(start, 's3cret', 'https://iam.example.com/cb', { code: 'the-code', state }, { state, nonce, verifier: mintPkceVerifier() }));
     });
 
     it('an id_token signed by a key absent from the JWKS is refused', async () => {
@@ -125,14 +139,14 @@ describe('federation client (real exchange paths)', () => {
     let srv: Server, base: string, start: ExternalStart;
     const seen: { authHeader?: string; emailsCalled: boolean; tokenInfoCalled: boolean; verifier?: string } = { emailsCalled: false, tokenInfoCalled: false };
     before(async () => {
-      const verifierExpected = pkceChallenge('the-verifier');
+      const verifierExpected = pkceChallenge('v'.repeat(43));
       ({ srv, base } = await listen(async (req, res) => {
         const u = new URL(req.url ?? '/', 'http://x');
         if (u.pathname === '/token') {
           const f = new URLSearchParams(await readBody(req));
           seen.verifier = f.get('code_verifier') ?? undefined;
           if (f.get('code') !== 'gh-code' || f.get('client_id') !== 'gh-client' || f.get('client_secret') !== 'gh-secret') return json(res, { error: 'bad_verification_code' }, 400);
-          if (createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url') !== verifierExpected) return json(res, { error: 'bad_verification_code' }, 400);
+          if (!/^[A-Za-z0-9._~-]{43,128}$/.test(f.get('code_verifier') ?? '') || createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url') !== verifierExpected) return json(res, { error: 'bad_verification_code' }, 400);
           return json(res, { access_token: 'gh-token', token_type: 'bearer', scope: 'read:user user:email' });
         }
         if (u.pathname === '/user') {
@@ -161,7 +175,7 @@ describe('federation client (real exchange paths)', () => {
     after(() => srv.close());
 
     it('code -> token -> userinfo with e-mail fallback and token inspection', async () => {
-      const p = await exchangeUserinfo(start, 'gh-secret', 'https://iam.example.com/cb', { code: 'gh-code', state: 'st' }, { state: 'st', verifier: 'the-verifier' });
+      const p = await exchangeUserinfo(start, 'gh-secret', 'https://iam.example.com/cb', { code: 'gh-code', state: 'st' }, { state: 'st', verifier: 'v'.repeat(43) });
       assert.equal(p.sub, '12345'); // numeric provider id stringified
       assert.equal(p.email, 'octocat@example.com'); // primary verified picked from the e-mails list
       assert.equal(p.emailVerified, true);
@@ -169,11 +183,26 @@ describe('federation client (real exchange paths)', () => {
       assert.deepEqual(p.tokenInfo, { data: { app_id: 'gh-client', is_valid: true } });
       assert.equal(seen.emailsCalled, true);
       assert.equal(seen.tokenInfoCalled, true);
-      assert.equal(seen.verifier, 'the-verifier');
+      assert.equal(seen.verifier, 'v'.repeat(43));
+    });
+
+    it('a strict provider rejects the old 32-character verifier even with its matching challenge', async () => {
+      const short = mint();
+      let lengthRejected = false;
+      const { srv: strict, base: strictBase } = await listen(async (req, res) => {
+        const form = new URLSearchParams(await readBody(req));
+        lengthRejected = !/^[A-Za-z0-9._~-]{43,128}$/.test(form.get('code_verifier') ?? '');
+        assert.equal(pkceChallenge(form.get('code_verifier')!), pkceChallenge(short));
+        return json(res, { error: 'invalid_request' }, lengthRejected ? 400 : 200);
+      });
+      try {
+        await assert.rejects(exchangeUserinfo({ ...start, tokenEndpoint: `${strictBase}/token` }, 'gh-secret', 'https://iam.example.com/cb', { code: 'gh-code' }, { state: 'st', verifier: short }), ProviderRefusal);
+        assert.equal(lengthRejected, true);
+      } finally { strict.close(); }
     });
 
     it('refuses when the token endpoint rejects the code', async () => {
-      await assert.rejects(exchangeUserinfo(start, 'gh-secret', 'https://iam.example.com/cb', { code: 'wrong', state: 'st' }, { state: 'st', verifier: 'the-verifier' }), /token endpoint answered 400/);
+      await assert.rejects(exchangeUserinfo(start, 'gh-secret', 'https://iam.example.com/cb', { code: 'wrong', state: 'st' }, { state: 'st', verifier: 'v'.repeat(43) }), /token endpoint answered 400/);
     });
 
     it('refuses a profile without a subject', async () => {
