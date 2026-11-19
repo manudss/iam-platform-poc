@@ -4,6 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -169,4 +170,65 @@ describe('external provider sign-in (federation)', () => {
     const confused = (await gate({ tenant: T, session: r.session, externalCallback: { state: start.state, sim: 'sim-google-grace' } })).body;
     assert.equal(confused.outcome, 'deny');   // sim-google-grace is linked to demo-bob, not demo-alice
   });
+  it('real-mode GitHub signin and explicit linking preserve a strict RFC 7636 verifier end to end', async () => {
+    const reg = app.get(PluginRegistry);
+    await reg.configure(T, 'auth-sso-github', { clientId: 'fictional-gh-client', clientSecret: 'fictional-gh-secret' });
+    await svc.saveConfig(T, {
+      methods: [{ id: 'gh', type: 'sso-github', name: 'GitHub', enabled: true, level: 6, config: {} }],
+      chains: [{ id: 'gh-only', name: 'GitHub only', steps: ['gh'], level: 6 }], defaultChain: 'gh-only',
+    });
+    const saved = process.env.IAM_EXTERNAL_CALLBACK_URL, originalFetch = globalThis.fetch;
+    process.env.IAM_EXTERNAL_CALLBACK_URL = 'https://iam.example.test/authorize/external/callback';
+    let expectedChallenge = '', tokenCalls = 0;
+    const observedVerifiers = new Set<string>();
+    globalThis.fetch = async (input, init) => {
+      if (String(input) === 'https://github.com/login/oauth/access_token') {
+        tokenCalls++;
+        const form = new URLSearchParams(String(init?.body));
+        const verifier = form.get('code_verifier') ?? '';
+        assert.match(verifier, /^[A-Za-z0-9._~-]{43,128}$/);
+        assert.equal(createHash('sha256').update(verifier).digest('base64url'), expectedChallenge);
+        assert.equal(form.get('redirect_uri'), process.env.IAM_EXTERNAL_CALLBACK_URL);
+        assert.equal(form.get('client_id'), 'fictional-gh-client');
+        assert.equal(form.get('client_secret'), 'fictional-gh-secret');
+        observedVerifiers.add(verifier);
+        return Response.json({ access_token: 'fictional-gh-token', token_type: 'bearer' });
+      }
+      if (String(input) === 'https://api.github.com/user') {
+        return Response.json({ id: 'fixture-gh-subject', email: 'fixture@example.test', name: 'Fixture' });
+      }
+      return originalFetch(input, init);
+    };
+    const challengeFrom = (url: string) => {
+      const u = new URL(url);
+      assert.equal(u.searchParams.get('code_challenge_method'), 'S256');
+      assert.equal(u.searchParams.get('redirect_uri'), process.env.IAM_EXTERNAL_CALLBACK_URL);
+      expectedChallenge = u.searchParams.get('code_challenge')!;
+      assert.match(expectedChallenge, /^[A-Za-z0-9_-]{43}$/);
+      return u.searchParams.get('state')!;
+    };
+    try {
+      const link = await svc.startExternalLink(T, 'demo-bob', 'gh');
+      assert.equal(link.mode, 'redirect');
+      assert.ok('url' in link);
+      const linkState = challengeFrom(link.url);
+      const linked = (await gate({ tenant: T, externalCallback: { state: linkState, code: 'fictional-link-code' } }).expect(200)).body;
+      assert.equal(linked.outcome, 'external-linked');
+      const entry = (await gate({ tenant: T, subject: 'demo-bob', chain: 'gh-only' }).expect(200)).body;
+      assert.equal(entry.outcome, 'challenge');
+      const start = (await gate({ tenant: T, session: entry.session, externalStart: true }).expect(200)).body;
+      assert.equal(start.outcome, 'external-redirect');
+      const signinState = challengeFrom(start.url);
+      const done = (await gate({ tenant: T, session: entry.session, externalCallback: { state: signinState, code: 'fictional-signin-code' } }).expect(200)).body;
+      assert.equal(done.outcome, 'allow');
+      assert.equal(done.subject, 'demo-bob');
+      assert.equal(tokenCalls, 2);
+      assert.equal(observedVerifiers.size, 2, 'one fresh verifier per flow');
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (saved === undefined) delete process.env.IAM_EXTERNAL_CALLBACK_URL;
+      else process.env.IAM_EXTERNAL_CALLBACK_URL = saved;
+    }
+  });
+
 });

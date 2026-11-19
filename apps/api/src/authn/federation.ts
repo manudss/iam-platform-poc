@@ -67,6 +67,9 @@ export function checkStart(r: unknown): ExternalStart {
 }
 
 export const mint = () => randomBytes(24).toString('base64url');
+/** RFC 7636 section 4.1: 32 random octets encode to a 43-character, 256-bit verifier.
+ * State/nonce minting is separate: its 24 octets produce only 32 characters, invalid for PKCE. */
+export const mintPkceVerifier = () => randomBytes(32).toString('base64url');
 export const pkceChallenge = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
 
 /** The provider authorize URL. state/nonce/challenge were minted by the flow and live server-side in the session. */
