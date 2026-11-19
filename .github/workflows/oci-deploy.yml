@@ -77,7 +77,7 @@ jobs:
           SSH="ssh -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes"
           $SSH "$OCI_SSH_USER@$OCI_SSH_HOST" 'mkdir -p ~/lyam-deploy'
           scp -i ~/.ssh/oci_deploy -o IdentitiesOnly=yes deploy/oci/update.sh "$OCI_SSH_USER@$OCI_SSH_HOST:~/lyam-deploy/update.sh"
-          $SSH "$OCI_SSH_USER@$OCI_SSH_HOST" "sh ~/lyam-deploy/update.sh --image ghcr.io/${{ github.repository }}:${{ steps.t.outputs.sha }}"
+          $SSH "$OCI_SSH_USER@$OCI_SSH_HOST" "sudo sh ~/lyam-deploy/update.sh --image ghcr.io/${{ github.repository }}:${{ steps.t.outputs.sha }}"
 
       - name: Health check from the outside (optional public origin)
         if: steps.gate.outputs.configured == 'yes' && vars.OCI_DEPLOY_PUBLIC_ORIGIN != ''

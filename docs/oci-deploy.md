@@ -16,16 +16,30 @@ real user data.
    the volume by mistake. In the image itself, a Dolt READ ERROR is never treated as an
    empty database (`demo/dolt-state.mjs`): any doubt stops the boot instead of seeding over
    existing data.
-2. **Backup before every update.** Cold backup (container stopped) of the data directory,
-   plus `pg_dumpall` of the PostgreSQL companion and a tar of the OpenBao storage when
-   configured. A failed backup aborts the update and restarts the previous container.
-3. **Health gate + rollback.** The new container must answer `/healthz` within
-   `LYAM_HEALTH_TIMEOUT` seconds. Otherwise the previous image is restarted; if even that
-   fails, the backup is restored into the data directory.
+2. **Backup before every update.** The container is ALWAYS stopped first (cold, consistent
+   files - even for a same-image redeploy), then: tar of the data directory, `pg_dumpall` of
+   the PostgreSQL companion (a failed export aborts; no pipe can hide it) and a tar of the
+   OpenBao storage taken while the Bao container is stopped. A host lock
+   (`LYAM_LOCK_FILE`) refuses concurrent runs.
+3. **Health gate + compensation.** The new container must be creatable AND answer `/healthz`
+   within `LYAM_HEALTH_TIMEOUT` seconds. Any failure rolls back image AND data together: the
+   pre-update backup is restored first (the failed version may have migrated the Dolt schema
+   or plugin state at boot, so an old image on a newer data state is not a safe rollback),
+   the PostgreSQL dump is replayed and the OpenBao storage restored when configured, then
+   the previous image starts. Restoring costs nothing: the container was stopped during the
+   backup, so no user write can be lost.
 4. **Immutable versions only.** The updater accepts a full commit-SHA tag or a
    `@sha256:` digest - never a moving tag like `latest`.
 5. **Deliberate freeze.** Creating the pause file (default `/opt/lyam/UPDATE_PAUSED`)
    blocks every update, manual or automatic, until it is removed.
+6. **Two backup layers, no confusion between them.** The updater's local backups
+   (`LYAM_BACKUP_DIR`) exist for fast rollback/restore on the host. The durable,
+   disaster-recovery layer is the platform volume SNAPSHOT, owned by the platform operator,
+   triggered through `LYAM_PRE_UPDATE_HOOK` while the container is stopped (a failing hook
+   aborts the update: the swap never happens with an incomplete preservation chain). A local
+   backup dir is NOT automatically a remote snapshot, and a volume snapshot does NOT capture
+   in-RAM state (the built-in RAM Bao is only covered after the switch to the persistent
+   Bao). A volume-restore drill of the snapshot layer remains a platform-side task.
 
 ## Topology
 
@@ -64,16 +78,25 @@ bootstrapped.
 
 ## Persistent companions
 
-**PostgreSQL.** Any small Postgres container on `lyam-net` with a named volume. The API
-creates its `activations`/`decision_audit` tables itself at first use; point
-`IAM_PG_URL=postgres://<user>:<password>@pg:5432/<db>` in `lyam.env` at it.
+**PostgreSQL.** Versioned and executable: `deploy/oci/companions/docker-compose.yml` brings
+up `pg` and `bao` on `lyam-net` (`PG_PASSWORD=<choice> docker compose -f docker-compose.yml up -d`,
+password never committed). The API creates its `activations`/`decision_audit` tables itself at
+first use; point `IAM_PG_URL=postgres://<user>:<password>@pg:5432/<db>` in `lyam.env` at it.
 
-**OpenBao.** Run `bao server` with a file storage backend (its data dir on a host volume)
-on `lyam-net`. Constraints:
+**OpenBao.** Same compose file runs `bao server` with `deploy/oci/companions/bao.hcl` (file
+storage on the host path `/opt/lyam/bao-storage`, loopback-only publication). Then
+`deploy/oci/companions/bao-bootstrap.sh` initializes the backend ONCE (it refuses to
+re-initialize), unseals it (safe to re-run after every bao restart - hook it into the host
+boot), writes `deploy/oci/companions/bao-policy.hcl` and mints a periodic (30-day) scoped
+token into a root-owned 0600 file. It never prints a secret. Constraints:
 
 - Bao seals on every restart: keep the unseal key(s) and root token in a mode-0600 file
-  on the host and unseal at boot (demo-grade; document where they live). An external
-  secret manager would be the production answer - out of demo scope.
+  on the host (that is what `bao-bootstrap.sh` produces) and unseal at boot (demo-grade;
+  document where they live). An external secret manager would be the production answer -
+  out of demo scope.
+- Bringing the companions up must NEVER restart the Bao the running demo currently uses nor
+  re-initialize anything: inventory and preservation come first (see the migration section),
+  the companion stack only ever creates NEW services.
 - Start order: `pg` up, `bao` up **and unsealed**, then `lyam`. The API reads
   `iam/pg` from Bao lazily and fails closed when Bao is unreachable; it never wipes
   anything on a Bao outage.
@@ -99,13 +122,18 @@ something recoverable cannot be migrated:
   capability - the demo edge attaches it server-side). When empty, nothing to migrate.
   Otherwise insert the rows into the new PostgreSQL `activations` table (same tenant,
   seq, commit, state `recorded`) before the first `lyam` boot with `IAM_PG_URL`.
-- Bao secrets: while the old container still runs, its scoped token (visible in
-  `/proc/1/environ` inside the container) can READ every
-  `secret/data/iam/workflow-connections/*` and `secret/data/iam/plugins/*` key it
-  created; copy each into the persistent Bao under the same paths. The scoped token
-  cannot LIST keys: enumerate the known paths from the API/database side, and treat "no
-  read error" as absence. Content the token cannot reach is unrecoverable by design -
-  stop and report rather than dropping it silently.
+- Bao secrets: while the old container still runs, read them with the token the API itself
+  uses. That token lives in the environment of the NestJS API process - the start script
+  creates it AFTER its own launch and passes it to the API child, so PID 1 is NOT the right
+  process. Identify the node process whose command runs `dist/main.js` (exactly one must
+  match; if none or several do, STOP rather than guess), read its in-memory environment
+  (e.g. `/proc/<pid>/environ`) for the Bao address and token, use them directly in the
+  export requests, and never print or persist those values outside root-only files outside
+  the repository. The scoped token cannot LIST keys: enumerate the known paths from the
+  API/database side, and treat "no read error" as absence. Content the token cannot reach is
+  unrecoverable by design - stop and report rather than dropping it silently. Report export
+  results as status codes and path counts only, never secret values or error bodies that
+  could carry them.
 - Dolt data and the credential file already live on the volume: nothing to do.
 
 An inventory on 2026-11-19 (before this pipeline existed) found an empty journal, no
@@ -115,15 +143,16 @@ dated result as a standing fact.
 
 ## Updates
 
-Manual, from the host:
+Manual, from the host (sudo: the updater reads the root-owned env file and the docker socket):
 
 ```sh
-sh update.sh --image ghcr.io/manudss/iam-platform-poc:<full-commit-sha>
+sudo sh update.sh --image ghcr.io/manudss/iam-platform-poc:<full-commit-sha>
 ```
 
 Automatic (`.github/workflows/oci-deploy.yml`): after each successful main image build,
-the workflow carries `update.sh` over SSH and runs it with the new SHA. One-time setup,
-by the repo owner:
+the workflow carries `update.sh` over SSH and runs it with the new SHA (via sudo). One-time
+setup, performed by the assistant through the GitHub UI once the update path has been
+validated on the host (the owner is only involved if a 2FA prompt needs him):
 
 1. On the host: `ssh-keygen -t ed25519 -f ~/.ssh/lyam-deploy` (no passphrase), append
    `lyam-deploy.pub` to `~/.ssh/authorized_keys`.
@@ -141,8 +170,11 @@ by the repo owner:
 
 Backups land in `LYAM_BACKUP_DIR` (default `/opt/lyam/backups`), kept
 `LYAM_BACKUP_KEEP` generations per kind: `lyam-data-*.tar.gz`, `lyam-pg-*.sql.gz`,
-`lyam-bao-*.tar.gz`. Point `LYAM_BACKUP_DIR` at a durable/off-host mount when one is
-available, or sync it after each run.
+`lyam-bao-*.tar.gz`. These LOCAL generations serve fast rollback on the host. The durable
+layer is the platform volume snapshot (see guarantee 6): the first snapshot exists
+(2026-11-19, retention until 2026-12-16, verified to contain the cold application archive;
+restoring the volume itself has not been drilled yet and it does not capture Bao RAM state).
+Keep the two layers distinct in any recovery plan.
 
 Restore (service stopped):
 
@@ -164,7 +196,17 @@ nothing is seeded.
 | Image without the `never` seed label | Refused before the old container stops |
 | Data directory empty/missing | Refused (bootstrap first) |
 | Pause file present | Refused until removed |
-| Backup fails | Update aborts, previous container restarted |
-| New image never healthy | Rollback to the previous image |
-| Rollback never healthy | Backup restored into the data dir, manual verification requested |
+| Another update running | Refused (host lock) |
+| Pre-update hook (volume snapshot) fails | Aborted, previous container restarted |
+| Backup fails (data tar, pg export, bao archive) | Update aborts, previous container restarted |
+| New container cannot be created | Compensation: data/pg/bao restored, previous image started |
+| New image never healthy | Same compensation (image + data restored together) |
+| Rollback never healthy | Backup restored, manual verification requested |
+| PostgreSQL restore | Overlay replay of the dump: objects CREATED by the failed version are not dropped - drop/recreate the database manually from the dump in that case |
 | Bao sealed/unreachable at boot | API fails closed on secret reads; no data is deleted |
+
+## Validation status
+
+The updater's tests run against a stubbed docker and qualify the SCRIPT LOGIC only. A real
+update (actual image pull, boot, health, rollback) is qualified by an isolated on-host test
+against a copy of the data before any switch of the live service.
