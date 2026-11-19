@@ -87,7 +87,15 @@ plugin (Facebook `debug_token`). Bodies capped at 64 KB, 5 s timeouts, fail clos
 A DEFINITIVE provider refusal (4xx at the token or userinfo read, or GitHub's 200-with-error-payload shape: unknown
 client, rejected credentials, bad/expired code) is not a technical failure: the callback denies with an actionable
 message (check the client ID, client secret and callback URL) and the audit trail records only the step and the HTTP
-status - never the provider's payload. It fires before any account is resolved, so it reveals nothing about
+status - never the provider's payload. For the exact GitHub token endpoint only, the audit also
+includes `providerReason` from a closed vocabulary: `incorrect_client_credentials`,
+`redirect_uri_mismatch`, `bad_verification_code`, or `other`. Refused bodies are read with a
+4 KiB cap solely to classify this field (JSON or form-encoded); descriptions, URLs and
+unknown text are discarded. The same rule applies to a successful HTTP response with an
+error payload. This is operator diagnostics, not a claim about a particular failed attempt.
+The user-facing message stays generic. Other providers and OIDC are unchanged.
+
+It fires before any account is resolved, so it reveals nothing about
 accounts and stays safe at any chain position. A provider 5xx, a timeout or a malformed answer stays a technical
 failure: 503, fail closed.
 

@@ -122,7 +122,37 @@ export async function exchangeOidc(s: ExternalStart, clientSecret: string, cbUrl
  * not a transient fault. Carries only a safe category (which step) and an HTTP status - never the provider's
  * payload, which can echo request data. A provider 5xx is NOT a refusal: it stays a generic technical failure. */
 export class ProviderRefusal extends Error {
-  constructor(readonly where: 'token' | 'userinfo', readonly status: number | 'error-payload', message: string) { super(message); }
+  constructor(readonly where: 'token' | 'userinfo', readonly status: number | 'error-payload', message: string, readonly providerReason?: GitHubTokenReason) { super(message); }
+}
+
+/** Closed diagnostic vocabulary. No provider text, descriptions, URLs or credential values escape. */
+export type GitHubTokenReason = 'incorrect_client_credentials' | 'redirect_uri_mismatch' | 'bad_verification_code' | 'other';
+export function githubTokenReason(endpoint: string, payload: unknown): GitHubTokenReason | undefined {
+  // Only the documented GitHub token endpoint. A look-alike host/path is not GitHub.
+  if (endpoint !== 'https://github.com/login/oauth/access_token') return undefined;
+  const error = payload && typeof payload === 'object' ? (payload as { error?: unknown }).error : undefined;
+  switch (error) {
+    case 'incorrect_client_credentials': case 'redirect_uri_mismatch': case 'bad_verification_code': return error;
+    default: return 'other';
+  }
+}
+
+async function refusedTokenReason(endpoint: string, response: Response): Promise<GitHubTokenReason | undefined> {
+  if (endpoint !== 'https://github.com/login/oauth/access_token') return undefined;
+  // A refused body may echo secrets. Read at most 4 KiB and return only a closed enum.
+  let text = '', size = 0;
+  try {
+    const decoder = new TextDecoder();
+    for await (const chunk of response.body!) {
+      size += chunk.byteLength;
+      if (size > 4096) return 'other';
+      text += decoder.decode(chunk, { stream: true });
+    }
+    text += decoder.decode();
+    if (/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) return githubTokenReason(endpoint, JSON.parse(text));
+    if (/^application\/x-www-form-urlencoded(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) return githubTokenReason(endpoint, { error: new URLSearchParams(text).get('error') });
+  } catch { /* Diagnostic parsing must never replace the original definitive refusal. */ }
+  return 'other';
 }
 
 /** A typed provider refusal maps to an actionable denial: the sign-in stays refused (fail closed), but the answer
@@ -142,13 +172,13 @@ export async function exchangeUserinfo(s: ExternalStart, clientSecret: string, c
   if (pending.verifier && s.pkce !== false) form.set('code_verifier', pending.verifier);
   const tokRes = await fetch(s.tokenEndpoint!, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: form.toString(), signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!tokRes.ok) {
-    if (tokRes.status < 500) throw new ProviderRefusal('token', tokRes.status, `oauth2: token endpoint answered ${tokRes.status}`);
+    if (tokRes.status < 500) throw new ProviderRefusal('token', tokRes.status, `oauth2: token endpoint answered ${tokRes.status}`, await refusedTokenReason(s.tokenEndpoint!, tokRes));
     throw new Error(`oauth2: token endpoint answered ${tokRes.status}`);
   }
   const tok = await readJson(tokRes, 'oauth2 token');
   const access = tok.access_token;
   // GitHub answers a refusal as 200 with an error payload: no access token means the provider said no.
-  if (typeof access !== 'string' || !access.length || access.length > 4096) throw new ProviderRefusal('token', 'error-payload', 'oauth2: no access token');
+  if (typeof access !== 'string' || !access.length || access.length > 4096) throw new ProviderRefusal('token', 'error-payload', 'oauth2: no access token', githubTokenReason(s.tokenEndpoint!, tok));
   const infoRes = await fetch(s.userinfoEndpoint!, { headers: { authorization: `Bearer ${access}`, accept: 'application/json', ...(s.userinfoHeaders ?? {}) }, signal: AbortSignal.timeout(TIMEOUT_MS) });
   if (!infoRes.ok) {
     if (infoRes.status < 500) throw new ProviderRefusal('userinfo', infoRes.status, `oauth2: userinfo answered ${infoRes.status}`);

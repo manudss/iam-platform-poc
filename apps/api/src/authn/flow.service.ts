@@ -571,7 +571,7 @@ export class AuthnService implements OnApplicationBootstrap {
         // A definitive provider refusal is an actionable denial, not a technical failure; anything else stays 503 (fail closed).
         const refusal = externalRefusalMessage(e);
         if (!refusal) throw e;
-        this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-exchange-refused', where: (e as ProviderRefusal).where, status: String((e as ProviderRefusal).status) });
+        this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'external-exchange-refused', where: (e as ProviderRefusal).where, status: String((e as ProviderRefusal).status), ...((e as ProviderRefusal).providerReason ? { providerReason: (e as ProviderRefusal).providerReason } : {}) });
         return deny(refusal);
       }
     }
@@ -662,7 +662,7 @@ export class AuthnService implements OnApplicationBootstrap {
         // Same rule as the sign-in leg: a definitive provider refusal is an actionable denial; anything else stays 503.
         const refusal = externalRefusalMessage(e);
         if (!refusal) throw e;
-        this.audit({ ...auditBase, outcome: 'external-exchange-refused', where: (e as ProviderRefusal).where, status: String((e as ProviderRefusal).status) });
+        this.audit({ ...auditBase, outcome: 'external-exchange-refused', where: (e as ProviderRefusal).where, status: String((e as ProviderRefusal).status), ...((e as ProviderRefusal).providerReason ? { providerReason: (e as ProviderRefusal).providerReason } : {}) });
         return deny(refusal);
       }
     }
