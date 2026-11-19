@@ -91,6 +91,11 @@ not overwritten from an unqualified default-branch checkout by every workflow.
    initialize exactly once with its verified commit SHA and actual image digest:
    `sudo python3 /opt/lyam/bin/ordered-queue.py initialize-reviewed --sha <full-sha> --digest sha256:<digest>`.
    Initialization never overwrites an existing journal. Do not guess a baseline from a tag.
+   This SHA MUST be on the actual current main first-parent chain. A historical candidate
+   image built from a PR-side commit is not a valid automation cursor, even if its image
+   digest is known. First coordinate deployment/adoption and qualification of an approved
+   actual-main image, then initialize that proven pair. Never invent a parent link or
+   relabel an off-main deployed candidate as a main commit to make the planner proceed.
 5. Configure OCI_DEPLOY_SSH_HOST, OCI_DEPLOY_SSH_USER, OCI_DEPLOY_SSH_KEY and NEW
    OCI_DEPLOY_KNOWN_HOSTS (a separately verified pinned host-key line). The workflow uses
    StrictHostKeyChecking=yes; ssh-keyscan alone is not authentication. No key values in chat.
@@ -154,3 +159,12 @@ ISOLATED_LOOPBACK_NO_PUBLIC_TLS_PROOF. This tests preservation/auth on the copy,
 or the three production hostnames. Do not change preserved copy origins just to make a test
 pass, and do not arm the production front. A separate real-TLS disposable-front test and
 coordinated final production-origin checks remain required before production activation.
+
+### Host-free workflow-call qualification
+
+Manual dispatch defaults to qualification_only=true and requires a full sha input. It
+runs the real reusable CI/image workflows and validates their same-run digest receipts.
+SSH preparation and delivery are skipped. This proves workflow composition, exact SHA
+and artifacts, not the main first-parent recovery or a deployment. A normal push is not
+qualification-only. An intentional manual production recovery must set qualification_only
+false explicitly, after the operational gates above are satisfied.

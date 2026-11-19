@@ -94,8 +94,29 @@ jobs:
     with:
       sha: ${{ matrix.sha }}
     secrets: inherit
-  deliver:
+  verify-receipts:
     needs: [plan, qualify, image]
+    if: needs.plan.outputs.has_work == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: {node-version: 22}
+      - uses: actions/download-artifact@v4
+        with: {name: oci-plan, path: plan}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oci-image-*
+          path: receipts
+      - name: Verify every exact-SHA same-run digest receipt without host access
+        run: node scripts/oci-plan.mjs receipts plan/oci-plan.json receipts qualified-plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oci-qualified-plan
+          path: qualified-plan.json
+          retention-days: 7
+  deliver:
+    needs: [plan, qualify, image, verify-receipts]
     if: needs.plan.outputs.has_work == 'true' && inputs.qualification_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 350
