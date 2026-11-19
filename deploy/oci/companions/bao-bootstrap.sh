@@ -115,4 +115,13 @@ bao token create -orphan -policy=lyam-demo-connections -ttl=960h -explicit-max-t
 chmod 600 "$TOKEN_FILE"
 [ -s "$TOKEN_FILE" ] || { echo "no scoped token was issued" >&2; exit 1; }
 
-echo "NEW scoped API token in $TOKEN_FILE - set IAM_BAO_TOKEN from it in the app env file and (re)start the app container"
+# The granted TTL is MEASURED, not assumed from the request: a silently shorter token would
+# cut the API off its secrets mid-demo. Require at least 28 days.
+LOOKUP="$(BAO_TOKEN="$(cat "$TOKEN_FILE")" bao token lookup -format=json 2>/dev/null)" \
+  || { echo "the new token could not be verified" >&2; exit 1; }
+TTL_GRANTED="$(echo "$LOOKUP" | sed -n 's/.*"ttl" *: *\([0-9]*\).*/\1/p' | head -n 1)"
+case "$TTL_GRANTED" in ''|*[!0-9]*) echo "the granted TTL could not be measured" >&2; exit 1 ;; esac
+[ "$TTL_GRANTED" -ge 2419200 ] \
+  || { echo "granted TTL ${TTL_GRANTED}s is shorter than 28 days - adjust the mint parameters" >&2; exit 1; }
+
+echo "NEW scoped API token in $TOKEN_FILE (granted TTL ${TTL_GRANTED}s measured) - set IAM_BAO_TOKEN from it in the app env file and (re)start the app container"

@@ -1,0 +1,16 @@
+# Boots the persistent Lyam demo in the right order at host boot: PostgreSQL ready, then
+# OpenBao unsealed, then the app (deploy/oci/host-boot.sh, docs/oci-deploy.md).
+# Install: cp lyam-boot.service /etc/systemd/system/ && systemctl enable --now lyam-boot
+[Unit]
+Description=Lyam persistent demo (ordered boot: pg, bao unsealed, app)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /opt/lyam/bin/host-boot.sh /opt/lyam/lyam.env
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

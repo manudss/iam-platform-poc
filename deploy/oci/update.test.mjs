@@ -44,8 +44,9 @@ case "$1" in
     exit 0 ;;
   exec)
     case "$*" in
-      *pg_dump*) [ -f "$STUB_DIR/pg-fail" ] && exit 1; echo 'SELECT 1;'; exit 0 ;;
-      *SELECT\\ count*) cat "$STUB_DIR/pg-count" 2>/dev/null || echo unknown; exit 0 ;;
+      *pg_dump*) [ -f "$STUB_DIR/pg-fail" ] && exit 1; echo '--'; echo '-- PostgreSQL database dump'; echo 'SELECT 1;'; exit 0 ;;
+      *FROM\\ pg_tables*) cat "$STUB_DIR/pg-tables" 2>/dev/null || echo 'public.activations'; exit 0 ;;
+      *count\\(\\*\\)*) cat "$STUB_DIR/pg-count" 2>/dev/null || echo 7; exit 0 ;;
       *DROP\\ DATABASE*) [ -f "$STUB_DIR/pg-count-after" ] && cp "$STUB_DIR/pg-count-after" "$STUB_DIR/pg-count"; exit 0 ;;
       *CREATE\\ DATABASE*) exit 0 ;;
       *psql*) exit 0 ;;
@@ -53,6 +54,15 @@ case "$1" in
     esac
     grep -qx "$(cat "$STUB_DIR/running" 2>/dev/null)" "$STUB_DIR/healthy" 2>/dev/null && exit 0 || exit 1 ;;
 esac
+exit 0
+`;
+
+const IPTABLES_STUB = `#!/bin/sh
+echo "iptables $*" >> "$STUB_DIR/calls"
+if [ "$1" = "-I" ] || [ "$1" = "-C" ]; then
+  [ -f "$STUB_DIR/iptables-fail" ] && exit 1
+fi
+[ "$1" = "-C" ] && exit 1   # never pre-existing
 exit 0
 `;
 
@@ -64,6 +74,8 @@ function setup({ label = 'auto never', current = OLD, health = true, dataset = t
   mkdirSync(join(dir, 'bin'));
   writeFileSync(join(dir, 'bin', 'docker'), DOCKER_STUB);
   chmodSync(join(dir, 'bin', 'docker'), 0o755);
+  writeFileSync(join(dir, 'bin', 'iptables'), IPTABLES_STUB);
+  chmodSync(join(dir, 'bin', 'iptables'), 0o755);
   writeFileSync(join(stub, 'images'), `${OLD}\n${NEW}\n`);
   writeFileSync(join(stub, 'healthy'), health ? `${OLD}\n${NEW}\n` : `${OLD}\n`);
   if (label !== null) writeFileSync(join(stub, 'labels', NEW.replaceAll(/[ /:@]/g, '_')), label);
@@ -138,22 +150,45 @@ test('a concurrent run is refused by the host lock', async () => {
   assert.match(r.stderr, /another update/);
 });
 
-test('happy path: cold backup BEFORE a canary swap, publish only when healthy, seed mode never', () => {
+test('happy path: cold backup, write barrier BEFORE the start, lifted only when healthy', () => {
   const { env, dir } = setup({ pg: true });
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 0, r.stderr);
-  const order = r.calls.split('\n').map((l) => l.replace(/^docker (\S+).*$/, '$1'));
-  const stopAt = order.indexOf('stop');
-  const runAt = order.indexOf('run');
+  const order = r.calls.split('\n');
+  const stopAt = order.findIndex((l) => l.startsWith('docker stop'));
+  const barrierAt = order.findIndex((l) => l.startsWith('iptables -I'));
+  const runAt = order.findIndex((l) => l.startsWith('docker run'));
+  const liftAt = order.findIndex((l) => l.startsWith('iptables -D'));
   assert.ok(stopAt > -1 && runAt > stopAt, 'container stopped before the new run (cold backup)');
+  assert.ok(barrierAt > stopAt && barrierAt < runAt, 'write barrier installed after the backup and BEFORE the new container starts');
+  assert.ok(liftAt > runAt, 'barrier lifted only after the healthy start');
   const runArgs = readFileSync(join(dirname(env), 'stub', 'run-args'), 'utf8');
   assert.ok(runArgs.includes('IAM_DEMO_SEED_MODE=never'), 'seed mode never forced');
   assert.match(runArgs, /--env-file/);
   const newRuns = (readFileSync(join(dirname(env), 'stub', 'runs'), 'utf8').match(new RegExp(NEW.replaceAll('/', '\\/'), 'g')) || []).length;
-  assert.equal(newRuns, 2, 'canary run, then the published run');
-  assert.match(r.stdout, /canary/);
+  assert.equal(newRuns, 1, 'the validated container is never recreated');
+  assert.match(r.stdout, /write barrier/);
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-data-')), 'data backup written');
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-pg-')), 'pg dump written');
+  assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-recovery-')), 'private recovery bundle written');
+});
+
+test('an update is refused when the write barrier cannot be installed', () => {
+  const { env, dir } = setup();
+  writeFileSync(join(dir, 'stub', 'iptables-fail'), '');
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /write barrier/);
+  assert.doesNotMatch(r.calls, /docker run/, 'nothing starts without the barrier');
+});
+
+test('archiving Bao without its keys dir is refused (indispensable keys are not optional)', () => {
+  const { env, dir } = setup();
+  writeFileSync(env, readFileSync(env, 'utf8') + `LYAM_BACKUP_BAO_DIR=${join(dir, 'bao-storage')}\nLYAM_BACKUP_BAO_CONTAINER=bao\n`);
+  mkdirSync(join(dir, 'bao-storage'), { recursive: true });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /KEYS_DIR/);
 });
 
 test('a same-image redeploy still stops the container and takes a cold backup', () => {
@@ -183,13 +218,13 @@ test('a failed container creation triggers compensation (restore + previous imag
   assert.ok(runs[runs.length - 1].endsWith(OLD), 'the last start is the rollback image');
 });
 
-test('a pg journal verification mismatch blocks the service instead of exposing it', () => {
+test('a pg state verification mismatch blocks the service instead of exposing it', () => {
   const { env, dir } = setup({ health: false, pg: true });
   writeFileSync(join(dir, 'stub', 'pg-count'), '7');
   writeFileSync(join(dir, 'stub', 'pg-count-after'), '9');
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 4, r.stderr);
-  assert.match(r.stderr, /journal verification failed/);
+  assert.match(r.stderr, /state verification failed/);
   assert.match(r.stderr, /stays DOWN/);
   const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
   assert.ok(!runs.some((l) => l.endsWith(OLD)), 'the previous image is NOT started on a failed verification');
@@ -204,15 +239,15 @@ test('archiving Bao without its container is refused (never copied live)', () =>
   assert.match(r.stderr, /requires LYAM_BACKUP_BAO_CONTAINER/);
 });
 
-test('an unhealthy new image rolls back image AND data together (canary never published)', () => {
+test('an unhealthy new image rolls back image AND data together behind the barrier', () => {
   const { env } = setup({ health: false, pg: true });
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 3, r.stderr);
   assert.match(r.stderr, /rolled back.*pre-update data restored/);
   const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
-  assert.ok(runs[0].includes('18080'), 'the new image only ever ran on the canary port');
-  assert.ok(!runs.some((l) => l.includes(`127.0.0.1:8080:8080`) && l.endsWith(NEW)), 'the failed image was never published');
   assert.ok(runs[runs.length - 1].endsWith(OLD), 'rollback runs the previous image');
+  const liftAt = r.calls.split('\n').findIndex((l) => l.startsWith('iptables -D'));
+  assert.ok(liftAt > -1, 'the barrier is lifted once the rolled-back version is healthy');
 });
 
 test('a failing pre-update hook aborts before any backup or swap (preservation chain incomplete)', () => {

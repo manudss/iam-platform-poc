@@ -13,16 +13,19 @@
 #   - an optional pre-update hook (e.g. an OCI volume snapshot) must succeed while the container
 #     is stopped; the swap never happens with an incomplete preservation chain;
 #   - the cold backup must succeed BEFORE the swap: data directory tar, optional pg_dump
-#     (its failure is detected, never hidden by the compression pipe) and optional OpenBao
-#     storage tar taken while the Bao container is stopped;
-#   - the new container must be creatable AND answer /healthz within the timeout; it starts on a
-#     CANARY loopback port first, so the public front (Caddy -> LYAM_PORT) serves NOTHING during
-#     the update window: no visitor write can happen and be silently lost by the rollback. Only a
-#     healthy canary is re-published on the real port. Any failure rolls back image AND data
-#     together (the failed version may have migrated the data, so an old image on a newer data
-#     state is not a safe rollback), including a consistent PostgreSQL restore (drop + recreate +
-#     verified replay, with a postmortem dump of the failed state kept) and the OpenBao storage
-#     (stopped, restored, unsealed and waited-ready before the app starts);
+#     (its failure is detected, never hidden by the compression pipe; the FULL application
+#     state - every user table's row count - is captured for post-restore verification),
+#     optional OpenBao storage + keys tar taken while the Bao container is stopped, and a
+#     private recovery bundle (env file, compose, bao config/policy, manifest);
+#   - before the new container starts, a host WRITE BARRIER (iptables OUTPUT reject of new
+#     connections from the host to the published port) is installed and held until the new
+#     version - or the rolled-back previous one - is healthy. Health is probed INSIDE the
+#     container, so no visitor write can ever reach a version the rollback would discard.
+#     Any failure rolls back image AND data together (the failed version may have migrated
+#     the data, so an old image on a newer data state is not a safe rollback), including a
+#     consistent PostgreSQL restore (integrity-checked dump, drop + recreate + replay
+#     verified against the full pre-update state, with a postmortem dump kept) and the
+#     OpenBao storage (stopped, restored, unsealed and waited-ready before the app starts);
 #   - a pause file (default /opt/lyam/UPDATE_PAUSED) freezes updates deliberately (demo freeze).
 #
 # Run it as root (sudo) or as a user in the docker group: it reads the root-owned env file and
@@ -35,18 +38,26 @@
 #   LYAM_DATA_DIR            host data dir mounted at /data (default /opt/lyam/data)
 #   LYAM_BACKUP_DIR          backup destination (default /opt/lyam/backups)
 #   LYAM_PORT                host loopback port published to the container's 8080 (default 8080)
-#   LYAM_CANARY_PORT         loopback port for the pre-publish health gate (default 18080)
+#   The updater installs a host WRITE BARRIER (an iptables OUTPUT rule rejecting new
+#   connections from the host, i.e. Caddy, to the published port) before starting the new
+#   container and keeps it until the new version - or the rolled-back previous one - is
+#   healthy. Health is probed INSIDE the container, so the barrier never hides a failure and
+#   no visitor write can reach a version the rollback would discard. iptables is required.
 #   LYAM_DOCKER_NETWORK      optional docker network (e.g. lyam-net with pg/bao companions)
 #   LYAM_HEALTH_TIMEOUT      seconds to wait for /healthz (default 420)
 #   LYAM_BACKUP_KEEP         backup generations kept per kind (default 5)
 #   LYAM_BACKUP_PG_CONTAINER optional PostgreSQL companion container to pg_dump before the swap
 #   LYAM_BACKUP_PG_USER      pg_dump/psql user (default lyam, matches deploy/oci/companions)
 #   LYAM_BACKUP_PG_DB        database name (default lyam)
-#   LYAM_BACKUP_BAO_DIR      optional host dir with the OpenBao file storage to archive;
-#                            requires LYAM_BACKUP_BAO_CONTAINER (never archived live)
+#   LYAM_BACKUP_BAO_DIR      optional host dir with the OpenBao storage to archive; requires
+#                            LYAM_BACKUP_BAO_CONTAINER (never archived live) AND
+#                            LYAM_BACKUP_BAO_KEYS_DIR (the recovery chain is incomplete without it)
 #   LYAM_BACKUP_BAO_CONTAINER OpenBao container: stopped during the archive, started + unsealed after
-#   LYAM_BACKUP_BAO_KEYS_DIR optional OpenBao keys dir (unseal key, root token, api token) archived
-#                            with the storage - the recovery chain is incomplete without it
+#   LYAM_BACKUP_BAO_KEYS_DIR REQUIRED with BAO_DIR: unseal key / root token / api token dir,
+#                            archived with the storage (indispensable keys are not optional)
+#   LYAM_RECOVERY_FILES      optional space-separated extra files (compose file, bao.hcl,
+#                            policy file) copied into the private recovery bundle; a configured
+#                            but unreadable entry aborts the update
 #   LYAM_BAO_UNSEAL_CMD      command that unseals and waits-ready the Bao companion (e.g.
 #                            'sh /opt/lyam/bin/bao-bootstrap.sh --unseal-only'); without it the
 #                            updater only waits for bao status and a sealed Bao blocks the swap
@@ -84,7 +95,6 @@ CONTAINER="$(getconf LYAM_CONTAINER)"; CONTAINER="${CONTAINER:-lyam}"
 DATA_DIR="$(getconf LYAM_DATA_DIR)"; DATA_DIR="${DATA_DIR:-/opt/lyam/data}"
 BACKUP_DIR="$(getconf LYAM_BACKUP_DIR)"; BACKUP_DIR="${BACKUP_DIR:-/opt/lyam/backups}"
 PORT="$(getconf LYAM_PORT)"; PORT="${PORT:-8080}"
-CANARY_PORT="$(getconf LYAM_CANARY_PORT)"; CANARY_PORT="${CANARY_PORT:-18080}"
 NETWORK="$(getconf LYAM_DOCKER_NETWORK)"
 HEALTH_TIMEOUT="$(getconf LYAM_HEALTH_TIMEOUT)"; HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-420}"
 KEEP="$(getconf LYAM_BACKUP_KEEP)"; KEEP="${KEEP:-5}"
@@ -95,6 +105,7 @@ BAO_DIR="$(getconf LYAM_BACKUP_BAO_DIR)"
 BAO_CONTAINER="$(getconf LYAM_BACKUP_BAO_CONTAINER)"
 BAO_KEYS_DIR="$(getconf LYAM_BACKUP_BAO_KEYS_DIR)"
 BAO_UNSEAL_CMD="$(getconf LYAM_BAO_UNSEAL_CMD)"
+RECOVERY_FILES="$(getconf LYAM_RECOVERY_FILES)"
 HOOK="$(getconf LYAM_PRE_UPDATE_HOOK)"
 PAUSE_FILE="$(getconf LYAM_PAUSE_FILE)"; PAUSE_FILE="${PAUSE_FILE:-/opt/lyam/UPDATE_PAUSED}"
 LOCK_FILE="$(getconf LYAM_LOCK_FILE)"; LOCK_FILE="${LOCK_FILE:-/opt/lyam/.update.lock}"
@@ -111,9 +122,41 @@ echo "$IMAGE" | grep -Eq ':[0-9a-f]{40}$|@sha256:[0-9a-f]{64}$' \
 
 echo "$PG_USER" | grep -Eq '^[A-Za-z0-9_]+$' && echo "$PG_DB" | grep -Eq '^[A-Za-z0-9_]+$' \
   || fail 1 "LYAM_BACKUP_PG_USER / LYAM_BACKUP_PG_DB must be plain identifiers"
-if [ -n "$BAO_DIR" ] && [ -z "$BAO_CONTAINER" ]; then
-  fail 1 "LYAM_BACKUP_BAO_DIR requires LYAM_BACKUP_BAO_CONTAINER (a live Bao is never archived)"
+if [ -n "$BAO_DIR" ]; then
+  [ -n "$BAO_CONTAINER" ] \
+    || fail 1 "LYAM_BACKUP_BAO_DIR requires LYAM_BACKUP_BAO_CONTAINER (a live Bao is never archived)"
+  [ -n "$BAO_KEYS_DIR" ] && [ -d "$BAO_KEYS_DIR" ] \
+    || fail 1 "LYAM_BACKUP_BAO_DIR requires LYAM_BACKUP_BAO_KEYS_DIR pointing at the unseal-key/token dir - the recovery chain is incomplete without it"
 fi
+command -v iptables >/dev/null 2>&1 \
+  || fail 1 "iptables not found on this host: the write barrier is mandatory (no unvalidated version may ever accept a write)"
+for f in $RECOVERY_FILES; do
+  [ -r "$f" ] || fail 1 "LYAM_RECOVERY_FILES entry $f is missing or unreadable"
+done
+
+# --- write barrier (iptables): no visitor write to an unvalidated version -------------------
+# Locally-originated traffic (Caddy -> 127.0.0.1:$PORT) is DNAT'd to the container; a filter
+# OUTPUT rule on the container subnet rejects it. REJECT (not DROP) so visitors get a fast
+# refusal instead of a timeout. The health probe runs inside the container and never crosses
+# this rule. The tagged rule is installed before the container starts (no race) and removed
+# exactly once, after whichever final container is healthy; the EXIT trap cleans it up on any
+# unexpected path so a failed update never silently blocks a manual recovery.
+BARRIER_ACTIVE=0
+barrier_add() {
+  iptables -C OUTPUT -p tcp --dport "$PORT" -d 172.16.0.0/12 -j REJECT --reject-with tcp-reset -m comment --comment lyam-update-barrier 2>/dev/null \
+    && { BARRIER_ACTIVE=1; return 0; }
+  iptables -I OUTPUT 1 -p tcp --dport "$PORT" -d 172.16.0.0/12 -j REJECT --reject-with tcp-reset -m comment --comment lyam-update-barrier \
+    && BARRIER_ACTIVE=1
+}
+barrier_remove() {
+  [ "$BARRIER_ACTIVE" = 1 ] || return 0
+  iptables -D OUTPUT -p tcp --dport "$PORT" -d 172.16.0.0/12 -j REJECT --reject-with tcp-reset -m comment --comment lyam-update-barrier \
+    && BARRIER_ACTIVE=0
+}
+barrier_cleanup() {
+  barrier_remove || log "WARNING: the write barrier could not be removed - remove it manually: iptables -D OUTPUT -p tcp --dport $PORT -d 172.16.0.0/12 -j REJECT --reject-with tcp-reset"
+}
+trap barrier_cleanup EXIT
 
 # One run at a time: the pipeline and a manual run must never interleave stops/backups/swaps.
 mkdir -p "$(dirname "$LOCK_FILE")"
@@ -209,20 +252,37 @@ tar -C "$(dirname "$DATA_DIR")" -czf "$DATA_BACKUP" "$(basename "$DATA_DIR")" \
   || abort_preservation "data backup failed"
 [ -s "$DATA_BACKUP" ] || abort_preservation "data backup is empty"
 
+# Full application state capture: every user table's row count, one 'table count' line per
+# table. Unknown counts are NEVER ignored: a capture failure aborts the update (backup path)
+# or keeps the service down (restore path).
+pg_state_capture() {
+  _out="$1"
+  : > "$_out"
+  _tables="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tAc "SELECT format('%I.%I', schemaname, tablename) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') ORDER BY 1" 2>/dev/null)" || return 1
+  _ok=1
+  OLDIFS="$IFS"; IFS='
+'
+  for _t in $_tables; do
+    _c="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tAc "SELECT count(*) FROM $_t" 2>/dev/null)" || _ok=0
+    case "$_c" in ''|*[!0-9]*) _ok=0 ;; esac
+    [ "$_ok" = 1 ] || break
+    echo "$_t $_c" >> "$_out"
+  done
+  IFS="$OLDIFS"
+  [ "$_ok" = 1 ]
+}
+
 if [ -n "$PG_CONTAINER" ]; then
   PG_BACKUP="$BACKUP_DIR/lyam-pg-$TS.sql.gz"
-  PG_COUNT_FILE="$BACKUP_DIR/.pg-count-$TS"
+  PG_STATE_FILE="$BACKUP_DIR/.pg-state-$TS"
   log "backup: pg_dump $PG_CONTAINER/$PG_DB -> $PG_BACKUP"
-  # Journal size before the swap, for the post-restore verification (best effort: unknown when
-  # the table does not exist yet).
-  PG_COUNT_PRE="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tAc 'SELECT count(*) FROM activations' 2>/dev/null || true)"
-  case "$PG_COUNT_PRE" in ''|*[!0-9]*) PG_COUNT_PRE=unknown ;; esac
-  echo "$PG_COUNT_PRE" > "$PG_COUNT_FILE"
+  pg_state_capture "$PG_STATE_FILE" \
+    || abort_preservation "pg state capture failed (unknown counts are never ignored)"
   # No pipe can hide a failed export here: the dump lands in a plain file first, its exit code
   # and size are checked, and only then is it compressed.
   if ! docker exec "$PG_CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" > "$BACKUP_DIR/.pg-$TS.sql" 2>/dev/null \
      || [ ! -s "$BACKUP_DIR/.pg-$TS.sql" ]; then
-    rm -f "$BACKUP_DIR/.pg-$TS.sql" "$PG_COUNT_FILE"
+    rm -f "$BACKUP_DIR/.pg-$TS.sql" "$PG_STATE_FILE"
     abort_preservation "pg backup failed (pg_dump did not produce a dump)"
   fi
   gzip -f "$BACKUP_DIR/.pg-$TS.sql" && mv "$BACKUP_DIR/.pg-$TS.sql.gz" "$PG_BACKUP" \
@@ -241,43 +301,64 @@ if [ -n "$BAO_DIR" ]; then
   tar -czf "$BAO_BACKUP" "$@" || bao_ok=0
   [ -s "$BAO_BACKUP" ] || bao_ok=0
   docker start "$BAO_CONTAINER" >/dev/null || true
-  bao_ready || { log "WARNING: OpenBao did not become ready/unsealed after the backup archive"; }
+  # A Bao that stays sealed/unready here is NOT a warning: the app cannot serve without its
+  # secrets, so the update aborts (and the previous container only restarts once Bao is ready).
+  bao_ready || abort_preservation "OpenBao did not become ready/unsealed after the backup archive"
   [ "$bao_ok" = 1 ] || abort_preservation "bao backup failed"
 fi
 
-prune() { ls -1t "$BACKUP_DIR"/$1 2>/dev/null | tail -n "+$((KEEP + 1))" | while read -r f; do rm -f "$f"; done; }
-prune 'lyam-data-*.tar.gz'; prune 'lyam-pg-*.sql.gz'; prune 'lyam-bao-*.tar.gz'
+# Private recovery bundle: everything needed to rebuild the service from these backups -
+# env file (root 0600), compose / bao config / policy files when configured, and a manifest
+# of this generation. 0600 like the env file it contains.
+RECOVERY="$BACKUP_DIR/lyam-recovery-$TS.tar.gz"
+MANIFEST="$BACKUP_DIR/.manifest-$TS"
+{
+  echo "timestamp=$TS"
+  echo "previous_image=${PREVIOUS:-none}"
+  echo "target_image=$IMAGE"
+  echo "data_backup=$(basename "$DATA_BACKUP") sha256=$(sha256sum "$DATA_BACKUP" | cut -d' ' -f1)"
+  [ -n "${PG_BACKUP:-}" ] && echo "pg_backup=$(basename "$PG_BACKUP") sha256=$(sha256sum "$PG_BACKUP" | cut -d' ' -f1)"
+  [ -n "${PG_STATE_FILE:-}" ] && { echo "pg_state:"; sed 's/^/  /' "$PG_STATE_FILE"; }
+  [ -n "${BAO_BACKUP:-}" ] && echo "bao_backup=$(basename "$BAO_BACKUP") sha256=$(sha256sum "$BAO_BACKUP" | cut -d' ' -f1)"
+  [ -n "${BAO_KEYS_DIR:-}" ] && echo "bao_keys_included=yes"
+  echo "env_file=$(basename "$ENV_FILE")"
+  for f in $RECOVERY_FILES; do echo "extra=$(basename "$f")"; done
+} > "$MANIFEST"
+chmod 600 "$MANIFEST"
+rec_ok=1
+set -- -C "$(dirname "$ENV_FILE")" "$(basename "$ENV_FILE")" -C "$BACKUP_DIR" "$(basename "$MANIFEST")"
+for f in $RECOVERY_FILES; do set -- "$@" -C "$(dirname "$f")" "$(basename "$f")"; done
+tar -czf "$RECOVERY" "$@" 2>/dev/null || rec_ok=0
+chmod 600 "$RECOVERY" 2>/dev/null || true
+[ "$rec_ok" = 1 ] && [ -s "$RECOVERY" ] || abort_preservation "recovery bundle failed"
+rm -f "$MANIFEST"
 
-# --- swap: canary first, publish only when healthy --------------------------------------------
-# The new version starts on the CANARY loopback port: the public front still points at LYAM_PORT,
-# where NOTHING listens during the window (the old container is stopped). Visitors get a clean
-# 502, and no write can reach a version the rollback would then silently discard.
-log "canary: starting $CONTAINER from $IMAGE on loopback :$CANARY_PORT (seed mode: never)"
+prune() { ls -1t "$BACKUP_DIR"/$1 2>/dev/null | tail -n "+$((KEEP + 1))" | while read -r f; do rm -f "$f"; done; }
+prune 'lyam-data-*.tar.gz'; prune 'lyam-pg-*.sql.gz'; prune 'lyam-bao-*.tar.gz'; prune 'lyam-recovery-*.tar.gz'
+
+# --- swap: behind the write barrier ----------------------------------------------------------
+# The barrier rejects host (Caddy) connections to the published port BEFORE the new container
+# starts; the health probe runs inside the container. The new version is never recreated: the
+# very container that is validated is the one that keeps serving once the barrier lifts.
+log "write barrier: host connections to :$PORT are rejected until the new version is healthy"
+barrier_add || fail 1 "could not install the write barrier (iptables) - refusing to update without it"
+log "starting $CONTAINER from $IMAGE (seed mode: never)"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 CREATE_OK=1
-run_container "$IMAGE" "$CANARY_PORT" || CREATE_OK=0
-CANARY_OK=0
+run_container "$IMAGE" "$PORT" || CREATE_OK=0
 if [ "$CREATE_OK" = 1 ] && bao_ready && health; then
-  CANARY_OK=1
-else
-  [ "$CREATE_OK" = 1 ] || log "the new container could not be created"
-  [ "$CREATE_OK" = 0 ] || log "the new image never became healthy within ${HEALTH_TIMEOUT}s"
+  barrier_remove || fail 4 "the new version is healthy BUT the write barrier could not be removed - remove the 'lyam-update-barrier' iptables rule manually"
+  log "healthy: $CONTAINER now runs $IMAGE on :$PORT behind a lifted barrier; data preserved (backup $DATA_BACKUP)"
+  exit 0
 fi
-
-if [ "$CANARY_OK" = 1 ]; then
-  log "canary healthy: publishing $IMAGE on :$PORT"
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-  if run_container "$IMAGE" "$PORT" && health; then
-    log "healthy: $CONTAINER now runs $IMAGE on :$PORT; data preserved (backup $DATA_BACKUP)"
-    exit 0
-  fi
-  log "the healthy canary failed once published on :$PORT"
-fi
+[ "$CREATE_OK" = 1 ] || log "the new container could not be created"
+[ "$CREATE_OK" = 0 ] || log "the new image never became healthy within ${HEALTH_TIMEOUT}s"
 
 # --- compensation: data AND image together -----------------------------------------------------
 # The failed version may have migrated the Dolt schema or plugin state at boot: an old image
 # reading a newer data state is NOT a safe rollback, so the pre-update backup is restored first.
-# No visitor write can be lost: nothing was published on the public port during the window.
+# No visitor write can be lost: the write barrier has rejected every host connection since the
+# swap began and stays up until the rolled-back previous version is healthy.
 log "rolling back: restoring the pre-update data and starting the previous image"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
@@ -300,20 +381,31 @@ if [ -n "$PG_CONTAINER" ] && [ -f "${PG_BACKUP:-}" ]; then
     rm -f "$BACKUP_DIR/.pg-postmortem-$TS.sql"
     log "WARNING: no postmortem dump of the failed PostgreSQL state"
   fi
-  PG_COUNT_PRE="$(cat "${PG_COUNT_FILE:-/dev/null}" 2>/dev/null || echo unknown)"
   psql_admin() { docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -v ON_ERROR_STOP=1 -c "$1" >/dev/null 2>&1; }
+  # Integrity and decompression are verified SEPARATELY, before anything destructive.
+  gzip -t "$PG_BACKUP" 2>/dev/null \
+    || fail 4 "update failed AND the pg dump is corrupt (gzip); the service stays DOWN - verify $PG_BACKUP manually"
+  zcat "$PG_BACKUP" 2>/dev/null | head -n 5 | grep -q 'PostgreSQL database dump' \
+    || fail 4 "update failed AND the pg dump header is missing; the service stays DOWN - verify $PG_BACKUP manually"
   psql_admin "DROP DATABASE IF EXISTS \"$PG_DB\"" \
     || fail 4 "update failed AND the pg drop failed; the service stays DOWN - restore $PG_BACKUP manually"
   psql_admin "CREATE DATABASE \"$PG_DB\"" \
     || fail 4 "update failed AND the pg recreate failed; the service stays DOWN - restore $PG_BACKUP manually"
   zcat "$PG_BACKUP" | docker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 \
     || fail 4 "update failed AND the pg replay failed; the service stays DOWN - restore $PG_BACKUP manually"
-  PG_COUNT_POST="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tAc 'SELECT count(*) FROM activations' 2>/dev/null || true)"
-  case "$PG_COUNT_POST" in ''|*[!0-9]*) PG_COUNT_POST=unknown ;; esac
-  if [ "$PG_COUNT_PRE" != unknown ] && [ "$PG_COUNT_POST" != "$PG_COUNT_PRE" ]; then
-    fail 4 "update failed AND the journal verification failed ($PG_COUNT_PRE -> $PG_COUNT_POST activations); the service stays DOWN - verify $PG_BACKUP manually"
+  # Full application state: every user table's count must match the pre-update capture exactly.
+  PG_STATE_POST="$BACKUP_DIR/.pg-state-post-$TS"
+  if ! pg_state_capture "$PG_STATE_POST"; then
+    rm -f "$PG_STATE_POST"
+    fail 4 "update failed AND the post-restore state could not be captured (unknown counts are never ignored); the service stays DOWN - verify $PG_BACKUP manually"
   fi
-  rm -f "${PG_COUNT_FILE:-/dev/null}"
+  if ! cmp -s "${PG_STATE_FILE:-/dev/null}" "$PG_STATE_POST"; then
+    log "state mismatch (table count, pre -> post):"
+    diff "${PG_STATE_FILE:-/dev/null}" "$PG_STATE_POST" | grep -E '^[<>]' | sed 's/^/    /' >&2 || true
+    rm -f "$PG_STATE_POST"
+    fail 4 "update failed AND the PostgreSQL state verification failed; the service stays DOWN - verify $PG_BACKUP manually"
+  fi
+  rm -f "$PG_STATE_POST" "${PG_STATE_FILE:-/dev/null}"
 fi
 
 if [ -n "$BAO_DIR" ] && [ -f "${BAO_BACKUP:-}" ]; then
@@ -328,7 +420,10 @@ fi
 
 if [ -n "$PREVIOUS" ]; then
   run_container "$PREVIOUS" "$PORT" || fail 4 "update failed AND the rollback container could not start; the pre-update backup was restored into $DATA_DIR - verify manually"
-  health && fail 3 "update failed; rolled back to $PREVIOUS with the pre-update data restored (backup $DATA_BACKUP)"
+  if health; then
+    barrier_remove || fail 4 "rolled back and healthy BUT the write barrier could not be removed - remove the 'lyam-update-barrier' iptables rule manually"
+    fail 3 "update failed; rolled back to $PREVIOUS with the pre-update data restored (backup $DATA_BACKUP)"
+  fi
   fail 4 "update failed AND the rollback to $PREVIOUS never became healthy; the pre-update backup was restored into $DATA_DIR - verify manually"
 fi
 fail 4 "update failed with no previous image to roll back to; the pre-update backup was restored into $DATA_DIR - verify the service manually"

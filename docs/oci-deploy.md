@@ -18,22 +18,27 @@ real user data.
    existing data.
 2. **Backup before every update.** The container is ALWAYS stopped first (cold, consistent
    files - even for a same-image redeploy), then: tar of the data directory, a per-database
-   `pg_dump` of the PostgreSQL companion (a failed export aborts; no pipe can hide it; the
-   journal row count is captured for post-restore verification) and a tar of the OpenBao
-   storage plus its unseal-key directory taken while the Bao container is stopped. A host
-   lock (`LYAM_LOCK_FILE`) refuses concurrent runs.
-3. **Health gate + compensation.** The new container starts on a CANARY loopback port
-   (`LYAM_CANARY_PORT`, default 18080) and must answer `/healthz` within
-   `LYAM_HEALTH_TIMEOUT` seconds before being published on the public port. Visitors never
-   reach an unvalidated version (the public port serves nothing during the window), so no
-   write can land on a version a rollback would then discard. Any failure rolls back image
-   AND data together: the pre-update backup is restored first (the failed version may have
-   migrated the Dolt schema or plugin state at boot, so an old image on a newer data state
-   is not a safe rollback). The PostgreSQL restore is drop + recreate + verified replay
-   (`ON_ERROR_STOP=1`, journal row count compared against the pre-update capture; a
-   postmortem dump of the failed state is kept first), and the OpenBao storage is restored
-   and unsealed before the previous image starts. If ANY verification fails, the service
-   stays DOWN (exit 4) rather than exposing an unverified state.
+   `pg_dump` of the PostgreSQL companion (a failed export aborts; no pipe can hide it) with a
+   FULL application-state capture (every user table's row count; unknown counts are never
+   ignored - a capture failure aborts), a tar of the OpenBao storage plus its unseal-key
+   directory taken while the Bao container is stopped (the keys are MANDATORY: the updater
+   refuses a Bao backup without them), and a private recovery bundle (0600) with the env file,
+   the compose / bao config / policy files and a manifest of the generation. A host lock
+   (`LYAM_LOCK_FILE`) refuses concurrent runs.
+3. **Write barrier + health gate + compensation.** Before the new container starts, the
+   updater installs a host WRITE BARRIER (an iptables OUTPUT rule rejecting host - i.e. Caddy -
+   connections to the published port) and holds it until the new version - or the rolled-back
+   previous one - is healthy. Health is probed INSIDE the container, so the barrier never
+   hides a failure and no visitor write can reach a version the rollback would discard; the
+   validated container is never recreated. Any failure rolls back image AND data together:
+   the pre-update backup is restored first (the failed version may have migrated the Dolt
+   schema or plugin state at boot, so an old image on a newer data state is not a safe
+   rollback). The PostgreSQL restore verifies the dump (gzip integrity + dump header) BEFORE
+   anything destructive, then drop + recreate + replay (`ON_ERROR_STOP=1`) and compares the
+   FULL post-restore state against the pre-update capture (a postmortem dump of the failed
+   state is kept first). The OpenBao storage is restored and unsealed before the previous
+   image starts. If ANY verification fails, the service stays DOWN (exit 4) rather than
+   exposing an unverified state.
 4. **Immutable versions only.** The updater accepts a full commit-SHA tag or a
    `@sha256:` digest - never a moving tag like `latest`.
 5. **Deliberate freeze.** Creating the pause file (default `/opt/lyam/UPDATE_PAUSED`)
@@ -118,11 +123,12 @@ TTL into a root-owned 0600 file. It never prints a secret. Constraints:
   ```
 
   The API does NOT renew Bao leases (POC scope, `apps/api/src/integrations/secrets.service.ts`),
-  so the minted token carries an explicit 960 h TTL sized to the demo window. Re-issue before
-  expiry: re-run `bao-bootstrap.sh` (it mints a new token only when the current one is invalid
-  and announces loudly that the app env must be updated), put the new token into `lyam.env`
-  and restart the `lyam` container. Re-running the script after a bao restart unseals without
-  re-minting, so processes holding the current token are never cut off.
+  so the minted token carries an explicit 960 h TTL sized to the demo window - and the GRANTED
+  TTL is measured at mint time (`bao token lookup`), refusing anything under 28 days. Re-issue
+  before expiry: re-run `bao-bootstrap.sh` (it mints a new token only when the current one is
+  invalid and announces loudly that the app env must be updated), put the new token into
+  `lyam.env` and restart the `lyam` container. Re-running the script after a bao restart
+  unseals without re-minting, so processes holding the current token are never cut off.
 
 ## Migrating the state of a running RAM-mode instance (first switch)
 
@@ -153,6 +159,16 @@ workflow connections and no stored Bao secrets, so the first switch had nothing 
 migrate. Re-run the inventory if the instance has been used since; do not treat that
 dated result as a standing fact.
 
+## Host boot ordering
+
+At every host boot the companions must be READY before the app starts:
+`deploy/oci/host-boot.sh` starts PostgreSQL and probes `pg_isready`, then starts OpenBao and
+unseals it (`LYAM_BAO_UNSEAL_CMD`, i.e. `bao-bootstrap.sh --unseal-only`), then starts the
+`lyam` container and health-checks it. A companion that never becomes ready stops the boot
+instead of letting the app start against absent persistence. Install the ordering with
+`deploy/oci/lyam-boot.service` (systemd oneshot, `After=docker.service`). An isolated reboot
+drill of the whole chain remains part of the on-host validation before any switch.
+
 ## Updates
 
 Manual, from the host (sudo: the updater reads the root-owned env file and the docker socket):
@@ -181,7 +197,10 @@ setup by the repository administrator, once the update path has been validated o
 
 Backups land in `LYAM_BACKUP_DIR` (default `/opt/lyam/backups`), kept
 `LYAM_BACKUP_KEEP` generations per kind: `lyam-data-*.tar.gz`, `lyam-pg-*.sql.gz`,
-`lyam-bao-*.tar.gz`. These LOCAL generations serve fast rollback on the host. The durable
+`lyam-bao-*.tar.gz` (storage + unseal keys) and the private `lyam-recovery-*.tar.gz`
+bundle (0600: env file, compose / bao config / policy, manifest with sha256 of every
+artifact and the captured table state). These LOCAL generations serve fast rollback on the
+host. The durable
 layer is the platform volume snapshot (see guarantee 6): the first snapshot exists
 (2026-11-19, retention until 2026-12-16, verified to contain the cold application archive;
 restoring the volume itself has not been drilled yet and it does not capture Bao RAM state).
@@ -213,9 +232,12 @@ nothing is seeded. After the pg replay, compare the journal row count
 | Another update running | Refused (host lock) |
 | Pre-update hook (volume snapshot) fails | Aborted, previous container restarted |
 | Backup fails (data tar, pg export, bao archive) | Update aborts, previous container restarted |
-| New container cannot be created | Compensation: data/pg/bao restored and verified, previous image started |
-| New image never healthy on the canary port | Same compensation (image + data restored together; the failed version was never published) |
-| PostgreSQL restore or journal verification fails in rollback | Service stays DOWN, postmortem dump kept, manual verification requested (exit 4) |
+| New container cannot be created | Compensation: data/pg/bao restored and verified, previous image started behind the barrier |
+| New image never healthy | Same compensation (the write barrier was never lifted for it) |
+| Write barrier cannot be installed | Update refused (exit 1), nothing starts |
+| Healthy version but barrier cannot be lifted | Exit 4 with the manual iptables removal command |
+| PostgreSQL restore or state verification fails in rollback | Service stays DOWN, postmortem dump kept, manual verification requested (exit 4) |
+| Bao sealed/unready after its backup archive | Update aborts (preservation chain incomplete), previous container restarted once Bao is ready |
 | Bao unseal/wait-ready fails in rollback | Service stays DOWN, manual unseal requested (exit 4) |
 | Rollback never healthy | Backup restored, manual verification requested |
 | Bao sealed/unreachable at boot | API fails closed on secret reads; no data is deleted |
