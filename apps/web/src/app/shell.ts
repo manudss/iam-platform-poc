@@ -1,7 +1,7 @@
 import { ApplyDialog } from './apply-dialog';
 import { Brand, Branding } from './branding';
 import { canOpen, screenOf } from './access';
-import { Component, computed, effect, inject, signal, ViewChild } from '@angular/core';
+import { Component, computed, effect, ElementRef, HostListener, inject, signal, ViewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
@@ -26,7 +26,7 @@ export class Shell {
       if(request===this.brandingRequest&&r.status<400)this.branding.applyBundle(r.data);
     }catch{/* keep last readable palette while a branch is loading */}
   }
-  ngOnDestroy(){++this.brandingRequest;this.branding.clearDraft();}
+  ngOnDestroy(){++this.brandingRequest;this.branding.clearDraft();clearTimeout(this.flashTimer);clearTimeout(this.flyTimer);}
 
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
@@ -34,6 +34,41 @@ export class Shell {
   protected branches=signal<BranchInfo[]>([]);protected newBranch='';protected working='';protected review=signal<any>(null);protected workingBusy=signal(false);
   /** Compact bar state: the ⋯ menu, the "Manage branches" panel, and the number of changed ROWS on the working branch (the badge). */
   protected readonly more=signal(false);protected readonly manage=signal(false);protected readonly changes=signal<number|null>(null);
+  /** Branch picker (the rich dropdown), the transient pending-merge flash and the fly-to-chip animation. */
+  protected readonly picker=signal(false);protected branchFilter='';protected readonly pickerNew=signal(false);
+  protected readonly branchesAt=signal<number|null>(null);
+  protected readonly flash=signal<string|null>(null);protected readonly flashHiding=signal(false);
+  protected readonly fly=signal<{x:number;y:number}|null>(null);protected readonly pulse=signal(false);
+  private seenWrites=0;private flashTimer?:ReturnType<typeof setTimeout>;private flyTimer?:ReturnType<typeof setTimeout>;
+  protected dotFor(name:string){return !name||name==='main'?'grey':name===this.personal()?'green':'orange';}
+  protected pickerBranches(){const q=this.branchFilter.trim().toLowerCase();const list=this.branches()??[];return q?list.filter((b)=>b.name.toLowerCase().includes(q)):list;}
+  protected pickerLabel(){return this.branchState()==='creating'?'Opening your branch…':this.branchState()==='error'?'Branch unavailable':this.s.branch()||'Choose a branch';}
+  /** Opening the picker always reloads the branch list: branches created elsewhere must be there without a detour. */
+  protected async togglePicker(){const open=!this.picker();this.picker.set(open);if(!open)return;this.pickerNew.set(false);this.branchFilter='';await this.loadBranches();this.branchesAt.set(Date.now());}
+  protected async refreshPicker(){await this.loadBranches();this.branchesAt.set(Date.now());}
+  protected branchesAgo(){const t=this.branchesAt();if(t===null)return 'never';const m=Math.floor((Date.now()-t)/60000);return m<1?'just now':m===1?'1 minute ago':`${m} minutes ago`;}
+  protected pickBranch(name:string){this.picker.set(false);if(name===this.working)return;this.working=name;void this.select();}
+  protected pickerManage(){this.picker.set(false);this.openManage();}
+  protected async pickerCreate(){if(!this.newBranch)return;await this.create();this.picker.set(false);this.pickerNew.set(false);}
+  /** The same button opens and closes the review panel (a toggle), which floats above the page. */
+  protected toggleReview(){if(this.review()){this.review.set(null);return;}void this.prepareApply();}
+  /** An accepted write on the working branch: refresh the counter, then flash the pending-merge hint and fly a dot to the chip.
+   * Branch bookkeeping (/workspace/...) never flashes, and a failed write never reaches this point (the API hook fires on success only). */
+  private onBranchWrite(){void this.loadChanges();const b=this.s.branch();const p=this.s.lastWritePath();
+    if(!b||b==='main'||p.startsWith('/workspace'))return;
+    this.flash.set(`Added to ${b} - it is available once the branch is merged into main.`);this.flashHiding.set(false);
+    clearTimeout(this.flashTimer);this.flashTimer=setTimeout(()=>{this.flashHiding.set(true);this.flashTimer=setTimeout(()=>{this.flash.set(null);this.flashHiding.set(false);},450);},4600);
+    const chip=typeof document==='undefined'?null:document.getElementById('review-apply');const r=chip?.getBoundingClientRect();
+    this.fly.set({x:r?r.left+r.width/2:(globalThis.innerWidth??800)-140,y:r?r.top+r.height/2:28});this.pulse.set(true);
+    clearTimeout(this.flyTimer);this.flyTimer=setTimeout(()=>{this.fly.set(null);this.pulse.set(false);},950);
+  }
+  @HostListener('document:keydown.escape') onEsc(){this.picker.set(false);this.more.set(false);if(this.review())this.review.set(null);}
+  @HostListener('document:click',['$event']) onDocClick(ev:MouseEvent){const t=ev.target as HTMLElement|null;
+    if(this.picker()&&!t?.closest('#branch-picker')&&!t?.closest('#branch-picker-button'))this.picker.set(false);
+    if(this.review()&&!t?.closest('#review-panel')&&!t?.closest('#review-apply'))this.review.set(null);
+  }
+  /** Coming back to the tab re-reads the counter: changes made in another tab or by someone else show up too. */
+  @HostListener('window:focus') onFocus(){void this.loadChanges();}
   protected dot(){if(this.branchState()==='error')return 'red';const b=this.s.branch();return !b||b==='main'?'grey':b===this.personal()?'green':'orange';}
   protected async loadChanges(){const b=this.s.branch();if(!b||b==='main'||!this.isAdmin()){this.changes.set(null);return;}try{const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());if(r.status<400)this.changes.set(r.data?.diff?.rows?.total??r.data?.diff?.tables?.length??0);}catch{/* the badge is a hint; Review & Apply still reads the diff itself */}}
   /** Menu entries declared by the tenant's active plugins (GET /plugins/menu): a screen joins the sidebar with its plugin and leaves with it. */
@@ -80,7 +115,7 @@ export class Shell {
   protected async testSignIn(){if(!this.working||this.working==='main')return;this.more.set(false);this.testing.set(true);try{const r=await this.s.api.raw<{ticket:string;branch:string}>('POST','/workspace/branch-test',{branch:this.working},this.headers());const u=`${location.origin}/login?branch=${encodeURIComponent(r.data.branch)}&ticket=${encodeURIComponent(r.data.ticket)}`;if(!globalThis.open(u,'_blank','noopener'))this.s.say('Allow pop-ups or open this test link: '+u,'error');else this.s.say('Sign-in test of '+r.data.branch+' opened in a new tab. It stays valid for a few minutes.');}catch(e){this.s.say((e as Error).message,'error');}finally{this.testing.set(false);}}
   protected exitTest(){this.s.signOut();void this.router.navigateByUrl('/login');}
   private headers():Record<string,string>{return this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{};}
-  protected async loadBranches(){void this.loadStableLinks();try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
+  protected async loadBranches(){void this.loadStableLinks();try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);this.branchesAt.set(Date.now());if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
   protected async select(){this.s.selectBranch(this.working);this.review.set(null);this.more.set(false);void this.loadChanges();this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
   protected async create(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();await v.createBranch(this.newBranch,'main');this.working=this.newBranch;this.newBranch='';await this.loadBranches();await this.select();this.manage.set(false);}catch(e){this.s.say((e as Error).message,'error');}}
   protected async prepareApply(){this.workingBusy.set(true);try{await this.loadBranches();const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());this.review.set({...r.data,expectedHead:this.branches().find(b=>b.name===r.data.branch)?.commit});}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
@@ -149,6 +184,7 @@ export class Shell {
     // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
     effect(() => { this.s.pluginsVersion(); this.s.branch(); this.s.branchEpoch(); void this.loadPluginMenu(); });
     effect(()=>{this.s.branch();this.s.branchEpoch();this.s.adminToken();void this.loadBranding();});
+    effect(()=>{const n=this.s.branchWrites();const fresh=n>this.seenWrites;this.seenWrites=n;if(fresh)this.onBranchWrite();});
     this.title.set(this.leafTitle());
   }
   private leafTitle(): string {

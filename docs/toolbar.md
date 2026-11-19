@@ -3,17 +3,18 @@
 Goal (validated mockup): one thin bar with the title, the session timer, the branch pill (colour dot: main grey read only, own branch green, others orange), a Review & Apply icon with a badge, a menu and the user. Branch creation only in "Manage branches". No UI library, plain HTML/CSS.
 
 ## What the bar does
-- Header: title, branch pill (colour dot: main grey read only, your own branch green, others orange), Review & Apply icon with a badge of changed ROWS, a "..." menu, the user. Tooltips explain each control. The pill is a native select (keyboard and e2e friendly); a search box is not done yet.
+- Header: title, branch pill (colour dot: main grey read only, your own branch green, others orange), a Review & Apply chip with the count of pending changes, a "..." menu, the user. Tooltips explain each control. The pill opens a branch picker (search, refresh on open, "New branch", "Manage branches"); the native select stays in the DOM, visually hidden and synchronized, so browser scripts keep reading and setting it.
 - "..." menu: Test sign-in, Stable test link, Manage branches.
-- "Manage branches" panel (only place to create or rename a branch): create from main, rename your personal branch, stable links with Revoke, help folded behind "?".
-- Review & Apply opens the modification list (rows per table) with a link to the full diff page `/review`.
+- "Manage branches" panel: create from main, rename your personal branch, stable links with Revoke, help folded behind "?". Also reachable from the branch picker.
+- Review & Apply: the same chip opens and closes the review panel, which floats above the page (close with the chip, its ✕, Escape or a click outside) and lists the modifications (rows per table) with a link to the full diff page `/review`. The chip is quiet when nothing waits and highlighted as soon as changes are pending.
+- Pending-merge hint: each accepted write on a branch refreshes the counter, briefly flashes a banner at the top of the page (never sticky, it fades out by itself) and flies a dot toward the chip, which pulses. A failed API call never triggers it, branch bookkeeping (apply, test links, the personal branch) does not flash, and reduced-motion settings disable the animation. The hook is `ApiClient.onDataMutation`; the session counts accepted writes in `branchWrites`.
 - API: `GET /versioning/diff` and `GET /workspace` carry ROW counts (`rows`, per table and total) from `dolt_diff_stat`.
 - `/review`: every change of the working branch against main, like a PR "Files changed" tab: per table, per row, before red, after green, changed cells underlined, schema changes.
 - No UI library. The session timer `<app-session-timer />` (PR session timeout) goes next to the user in this header: when both PRs are merged, add that one line to `shell.html` if the merge does not.
 - Browser scripts use `scripts/branch-ui.mjs` (`openManage`, `openMenu`) to reach the panels.
 
 ## Limits
-- Branch search in the pill is not done. Panels open below the bar, not as floating popovers (the menu floats).
+- The "Manage branches" panel still opens inline below the bar (the picker, the menu and the review panel float).
 - Not run locally: the browser e2e scripts need Dolt, so they run in CI.
 
 ## Personal branch state (branch pill)

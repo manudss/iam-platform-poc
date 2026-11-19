@@ -212,6 +212,9 @@ export class ApiClient {
     if (!r.ok) { const d = (await r.json().catch(() => ({}))) as { message?: string }; throw Object.assign(new Error(d.message ?? `HTTP ${r.status}`), { body: d, status: r.status }); }
     return r.text();
   }
+  /** Successful tenant-scoped data writes (a POST/PUT/PATCH/DELETE the API accepted). The shell bar uses it to refresh
+   *  the pending-changes counter and flash the pending-merge hint; failures (and 409 refusals) never reach it. */
+  onDataMutation?: (m: { method: string; path: string; status: number }) => void;
   private async call<T>(method: string, path: string, body?: object, extra: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
     const sentToken = this.token, sentEpoch = this.epoch, sentBranch=this.branch;
@@ -225,6 +228,7 @@ export class ApiClient {
     if (this.epoch !== sentEpoch) throw new Error('Session changed. Request result ignored; check the current state.');
     if (r.status === 401) { if (this.token === sentToken) throw this.unauthorized(); throw new Error('Your session was just renewed. Please try the action again.'); }
     if (!r.ok && r.status !== 409) throw Object.assign(new Error((data as { message?: string }).message ?? `HTTP ${r.status}`), { body: data, status: r.status });
+    if (method !== 'GET' && r.ok) this.onDataMutation?.({ method, path, status: r.status });
     return { status: r.status, data };
   }
 
