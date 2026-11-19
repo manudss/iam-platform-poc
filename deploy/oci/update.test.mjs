@@ -33,6 +33,9 @@ case "$1" in
       exit 0
     fi ;;
   inspect)
+    case "$*" in
+      *State.Running*) echo false; exit 0 ;;
+    esac
     [ -f "$STUB_DIR/current" ] && cat "$STUB_DIR/current" || exit 1 ;;
   stop|rm|start) exit 0 ;;
   run)
@@ -45,8 +48,11 @@ case "$1" in
   exec)
     case "$*" in
       *pg_dump*) [ -f "$STUB_DIR/pg-fail" ] && exit 1; echo '--'; echo '-- PostgreSQL database dump'; echo 'SELECT 1;'; exit 0 ;;
+      *information_schema.columns*) echo 'a94a8fe5ccb19ba61c4c0873d391e987982fbbd3'; exit 0 ;;
       *FROM\\ pg_tables*) cat "$STUB_DIR/pg-tables" 2>/dev/null || echo 'public.activations'; exit 0 ;;
-      *count\\(\\*\\)*) cat "$STUB_DIR/pg-count" 2>/dev/null || echo 7; exit 0 ;;
+      *row_to_json*) cat "$STUB_DIR/pg-count" 2>/dev/null || echo '7 0123456789abcdef0123456789abcdef01234567'; exit 0 ;;
+      *information_schema.sequences*) exit 0 ;;
+      *last_value*) echo 1; exit 0 ;;
       *DROP\\ DATABASE*) [ -f "$STUB_DIR/pg-count-after" ] && cp "$STUB_DIR/pg-count-after" "$STUB_DIR/pg-count"; exit 0 ;;
       *CREATE\\ DATABASE*) exit 0 ;;
       *psql*) exit 0 ;;
@@ -57,13 +63,12 @@ esac
 exit 0
 `;
 
-const IPTABLES_STUB = `#!/bin/sh
-echo "iptables $*" >> "$STUB_DIR/calls"
-if [ "$1" = "-I" ] || [ "$1" = "-C" ]; then
-  [ -f "$STUB_DIR/iptables-fail" ] && exit 1
-fi
-[ "$1" = "-C" ] && exit 1   # never pre-existing
-exit 0
+const CURL_STUB = `#!/bin/sh
+echo "curl $*" >> "$STUB_DIR/calls"
+if [ -f "$STUB_DIR/curl-200" ]; then echo 200; exit 0; fi
+if [ -f "$STUB_DIR/curl-000" ]; then echo 000; exit 0; fi
+[ -f "$STUB_DIR/MAINTENANCE" ] && { echo 503; exit 0; }
+echo 200
 `;
 
 /** Builds a host sandbox: env file, data dir, stub docker. Options override the scenario. */
@@ -74,8 +79,8 @@ function setup({ label = 'auto never', current = OLD, health = true, dataset = t
   mkdirSync(join(dir, 'bin'));
   writeFileSync(join(dir, 'bin', 'docker'), DOCKER_STUB);
   chmodSync(join(dir, 'bin', 'docker'), 0o755);
-  writeFileSync(join(dir, 'bin', 'iptables'), IPTABLES_STUB);
-  chmodSync(join(dir, 'bin', 'iptables'), 0o755);
+  writeFileSync(join(dir, 'bin', 'curl'), CURL_STUB);
+  chmodSync(join(dir, 'bin', 'curl'), 0o755);
   writeFileSync(join(stub, 'images'), `${OLD}\n${NEW}\n`);
   writeFileSync(join(stub, 'healthy'), health ? `${OLD}\n${NEW}\n` : `${OLD}\n`);
   if (label !== null) writeFileSync(join(stub, 'labels', NEW.replaceAll(/[ /:@]/g, '_')), label);
@@ -83,6 +88,7 @@ function setup({ label = 'auto never', current = OLD, health = true, dataset = t
   if (pgFail) writeFileSync(join(stub, 'pg-fail'), '');
   if (runFail) writeFileSync(join(stub, 'run-fail'), NEW);
   const data = join(dir, 'data');
+  writeFileSync(join(dir, 'compose.yml'), '# test compose');
   if (dataset) mkdirSync(join(data, 'dolt', '.dolt'), { recursive: true }); else mkdirSync(data, { recursive: true });
   if (pause) writeFileSync(join(dir, 'UPDATE_PAUSED'), '');
   const env = join(dir, 'lyam.env');
@@ -93,7 +99,9 @@ function setup({ label = 'auto never', current = OLD, health = true, dataset = t
     `LYAM_PAUSE_FILE=${join(dir, 'UPDATE_PAUSED')}`,
     `LYAM_LOCK_FILE=${join(dir, '.update.lock')}`,
     'LYAM_HEALTH_TIMEOUT=0',
+    `LYAM_FRONT_BARRIER_FILE=${join(dir, 'stub', 'MAINTENANCE')}`,
     pg ? 'LYAM_BACKUP_PG_CONTAINER=pg' : '',
+    pg ? `LYAM_COMPOSE_FILE=${join(dir, 'compose.yml')}` : '',
     keep !== null ? `LYAM_BACKUP_KEEP=${keep}` : '',
     ...extraEnv,
   ].filter(Boolean).join('\n') + '\n');
@@ -150,36 +158,37 @@ test('a concurrent run is refused by the host lock', async () => {
   assert.match(r.stderr, /another update/);
 });
 
-test('happy path: cold backup, write barrier BEFORE the start, lifted only when healthy', () => {
+test('happy path: front gate proven FIRST, cold backup, gate lifted only when healthy', () => {
   const { env, dir } = setup({ pg: true });
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 0, r.stderr);
   const order = r.calls.split('\n');
+  const curlAt = order.findIndex((l) => l.startsWith('curl'));
   const stopAt = order.findIndex((l) => l.startsWith('docker stop'));
-  const barrierAt = order.findIndex((l) => l.startsWith('iptables -I'));
   const runAt = order.findIndex((l) => l.startsWith('docker run'));
-  const liftAt = order.findIndex((l) => l.startsWith('iptables -D'));
-  assert.ok(stopAt > -1 && runAt > stopAt, 'container stopped before the new run (cold backup)');
-  assert.ok(barrierAt > stopAt && barrierAt < runAt, 'write barrier installed after the backup and BEFORE the new container starts');
-  assert.ok(liftAt > runAt, 'barrier lifted only after the healthy start');
+  assert.ok(curlAt > -1 && stopAt > curlAt, 'front gate proven through the origin BEFORE the container stops');
+  assert.ok(runAt > stopAt, 'container stopped before the new run (cold backup)');
   const runArgs = readFileSync(join(dirname(env), 'stub', 'run-args'), 'utf8');
   assert.ok(runArgs.includes('IAM_DEMO_SEED_MODE=never'), 'seed mode never forced');
+  assert.match(runArgs, /--restart on-failure/, 'no unmanaged auto-restart at host boot');
   assert.match(runArgs, /--env-file/);
   const newRuns = (readFileSync(join(dirname(env), 'stub', 'runs'), 'utf8').match(new RegExp(NEW.replaceAll('/', '\\/'), 'g')) || []).length;
   assert.equal(newRuns, 1, 'the validated container is never recreated');
-  assert.match(r.stdout, /write barrier/);
+  assert.match(r.stdout, /front gate/);
+  assert.ok(!existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the maintenance file is lifted at the end');
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-data-')), 'data backup written');
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-pg-')), 'pg dump written');
   assert.ok(readdirSync(join(dir, 'backups')).some((f) => f.startsWith('lyam-recovery-')), 'private recovery bundle written');
 });
 
-test('an update is refused when the write barrier cannot be installed', () => {
+test('an update is refused when the front gate cannot be proven through the origin', () => {
   const { env, dir } = setup();
-  writeFileSync(join(dir, 'stub', 'iptables-fail'), '');
+  writeFileSync(join(dir, 'stub', 'curl-200'), '');   // the front answers 200 even gated: NOT protected
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 1, r.stderr);
-  assert.match(r.stderr, /write barrier/);
-  assert.doesNotMatch(r.calls, /docker run/, 'nothing starts without the barrier');
+  assert.match(r.stderr, /front gate could not be proven/);
+  assert.doesNotMatch(r.calls, /docker stop|docker run/, 'nothing changes when the front is not protected');
+  assert.ok(!existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the maintenance file is cleaned up');
 });
 
 test('archiving Bao without its keys dir is refused (indispensable keys are not optional)', () => {
@@ -221,7 +230,7 @@ test('a failed container creation triggers compensation (restore + previous imag
 test('a pg state verification mismatch blocks the service instead of exposing it', () => {
   const { env, dir } = setup({ health: false, pg: true });
   writeFileSync(join(dir, 'stub', 'pg-count'), '7');
-  writeFileSync(join(dir, 'stub', 'pg-count-after'), '9');
+  writeFileSync(join(dir, 'stub', 'pg-count-after'), '9 fedcba0987654321fedcba0987654321fedcba09');
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 4, r.stderr);
   assert.match(r.stderr, /state verification failed/);
@@ -239,15 +248,13 @@ test('archiving Bao without its container is refused (never copied live)', () =>
   assert.match(r.stderr, /requires LYAM_BACKUP_BAO_CONTAINER/);
 });
 
-test('an unhealthy new image rolls back image AND data together behind the barrier', () => {
+test('an unhealthy new image rolls back image AND data together behind the front gate', () => {
   const { env } = setup({ health: false, pg: true });
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 3, r.stderr);
   assert.match(r.stderr, /rolled back.*pre-update data restored/);
   const runs = r.calls.split('\n').filter((l) => l.startsWith('docker run'));
   assert.ok(runs[runs.length - 1].endsWith(OLD), 'rollback runs the previous image');
-  const liftAt = r.calls.split('\n').findIndex((l) => l.startsWith('iptables -D'));
-  assert.ok(liftAt > -1, 'the barrier is lifted once the rolled-back version is healthy');
 });
 
 test('a failing pre-update hook aborts before any backup or swap (preservation chain incomplete)', () => {

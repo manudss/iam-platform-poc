@@ -19,16 +19,21 @@ real user data.
 2. **Backup before every update.** The container is ALWAYS stopped first (cold, consistent
    files - even for a same-image redeploy), then: tar of the data directory, a per-database
    `pg_dump` of the PostgreSQL companion (a failed export aborts; no pipe can hide it) with a
-   FULL application-state capture (every user table's row count; unknown counts are never
-   ignored - a capture failure aborts), a tar of the OpenBao storage plus its unseal-key
+   FULL application-state capture (per-table row count + an order-independent content
+   hash of every row, a hash of the schema objects and the sequence values; unknowns are
+   never ignored - a capture failure aborts), a tar of the OpenBao storage plus its unseal-key
    directory taken while the Bao container is stopped (the keys are MANDATORY: the updater
    refuses a Bao backup without them), and a private recovery bundle (0600) with the env file,
    the compose / bao config / policy files and a manifest of the generation. A host lock
    (`LYAM_LOCK_FILE`) refuses concurrent runs.
-3. **Write barrier + health gate + compensation.** Before the new container starts, the
-   updater installs a host WRITE BARRIER (an iptables OUTPUT rule rejecting host - i.e. Caddy -
-   connections to the published port) and holds it until the new version - or the rolled-back
-   previous one - is healthy. Health is probed INSIDE the container, so the barrier never
+3. **Front gate + health gate + compensation.** Before the container stops, the
+   updater proves a FRONT GATE through the public origin: it drops a maintenance file the
+   Caddy front watches and refuses to continue until the origin answers 503 (Docker's
+   loopback port publication is served by userland docker-proxy, so host netfilter rules
+   never see front traffic - the gate must live at the real front, and `curl` through the
+   origin is the only proof that counts). The gate is held for the whole update window and
+   lifted only when the new version - or the rolled-back previous one - answers 200 through
+   the origin. Health is probed INSIDE the container, so the gate never
    hides a failure and no visitor write can reach a version the rollback would discard; the
    validated container is never recreated. Any failure rolls back image AND data together:
    the pre-update backup is restored first (the failed version may have migrated the Dolt
@@ -77,7 +82,7 @@ sudo install -d -m 700 /opt/lyam/data /opt/lyam/backups
 cp deploy/oci/lyam.env.example /opt/lyam/lyam.env   # then edit; chmod 600
 docker network create lyam-net
 # First and only seeded boot (creates the dataset):
-docker run -d --name lyam --restart unless-stopped \
+docker run -d --name lyam --restart on-failure \
   -p 127.0.0.1:8080:8080 -v /opt/lyam/data:/data \
   --env-file /opt/lyam/lyam.env --network lyam-net \
   -e IAM_DEMO_SEED_MODE=auto \
@@ -87,6 +92,37 @@ docker run -d --name lyam --restart unless-stopped \
 After this first boot the dataset exists and every later start/update uses
 `IAM_DEMO_SEED_MODE=never`. The updater refuses to run against a host that was never
 bootstrapped.
+
+### Front gate (Caddy)
+
+The updater protects visitors from discarded writes with a maintenance file, not with
+netfilter: Docker publishes loopback ports through userland docker-proxy, so host iptables
+rules never see front traffic. The Caddy front must watch the gate file:
+
+```caddy
+# one-time, in the site block for the public origin
+@maintenance file /opt/lyam/MAINTENANCE
+respond @maintenance 503
+reverse_proxy 127.0.0.1:8080
+```
+
+The updater touches `LYAM_FRONT_BARRIER_FILE` (default `/opt/lyam/MAINTENANCE`), refuses to
+proceed until `curl $IAM_PUBLIC_ORIGIN/healthz` answers 503, and lifts the gate only after
+the healthy version answers 200 through the origin. Prove the gate end-to-end on the real
+front - including POSTs and reused keep-alive connections - before trusting the first
+update:
+
+```sh
+sudo IAM_PUBLIC_ORIGIN=https://<origin> deploy/oci/front-barrier-check.sh
+```
+
+### Host boot ordering and reboot drill
+
+`deploy/oci/host-boot.sh` (driven by `lyam-boot.service`) owns the start order after a host
+reboot: `pg` up, `bao` up AND unsealed, then `lyam`. The `lyam` container itself runs with
+`--restart on-failure` so Docker's boot-time auto-restart cannot race the companions. The
+reboot drill (`sudo reboot`, then verify pg/bao-unsealed/lyam came up in order and the data
+survived) is part of qualifying a new host.
 
 ## Persistent companions
 
@@ -101,7 +137,9 @@ storage on the host path `/opt/lyam/bao-storage`, loopback-only publication). Th
 re-initialize), unseals it (safe to re-run after every bao restart - hook it into the host
 boot; `--unseal-only` skips every init step), writes `deploy/oci/companions/bao-policy.hcl`,
 enables the KV-v2 engine if needed, and mints a scoped token with an explicit 960 h (40-day)
-TTL into a root-owned 0600 file. It never prints a secret. Constraints:
+TTL into a root-owned 0600 file (the granted TTL is measured at mint time, and a re-run only
+reuses the stored token while its REMAINING lifetime still covers the next 14 days -
+otherwise it mints a new one; the API never renews tokens). It never prints a secret. Constraints:
 
 - Bao seals on every restart: keep the unseal key(s) and root token in a mode-0600 file
   on the host (that is what `bao-bootstrap.sh` produces) and unseal at boot (demo-grade;
@@ -218,8 +256,9 @@ tar -C / -xzf /opt/lyam/backups/lyam-bao-<ts>.tar.gz            # paths from LYA
 ```
 
 Then boot with `IAM_DEMO_SEED_MODE=never`: with a dataset present the guard passes and
-nothing is seeded. After the pg replay, compare the journal row count
-(`SELECT count(*) FROM activations`) with the expectation for that backup before serving.
+nothing is seeded. After the pg replay, verify the restored content (per-table count and
+content hash, `SELECT count(*), md5(...) ... row_to_json(t) FROM activations`) against the
+expectation for that backup before serving.
 
 ## Failure modes
 
@@ -232,10 +271,10 @@ nothing is seeded. After the pg replay, compare the journal row count
 | Another update running | Refused (host lock) |
 | Pre-update hook (volume snapshot) fails | Aborted, previous container restarted |
 | Backup fails (data tar, pg export, bao archive) | Update aborts, previous container restarted |
-| New container cannot be created | Compensation: data/pg/bao restored and verified, previous image started behind the barrier |
-| New image never healthy | Same compensation (the write barrier was never lifted for it) |
-| Write barrier cannot be installed | Update refused (exit 1), nothing starts |
-| Healthy version but barrier cannot be lifted | Exit 4 with the manual iptables removal command |
+| New container cannot be created | Compensation: data/pg/bao restored and verified, previous image started behind the front gate |
+| New image never healthy | Same compensation (the front gate was never lifted for it) |
+| Front gate cannot be proven through the origin | Update refused (exit 1), nothing stops or starts |
+| Healthy version but the front still answers 503/000 | Exit 4 with the manual gate-lift command |
 | PostgreSQL restore or state verification fails in rollback | Service stays DOWN, postmortem dump kept, manual verification requested (exit 4) |
 | Bao sealed/unready after its backup archive | Update aborts (preservation chain incomplete), previous container restarted once Bao is ready |
 | Bao unseal/wait-ready fails in rollback | Service stays DOWN, manual unseal requested (exit 4) |

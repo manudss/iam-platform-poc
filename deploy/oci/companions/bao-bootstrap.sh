@@ -100,9 +100,17 @@ fi
 
 bao policy write lyam-demo-connections "$POLICY_FILE" >/dev/null
 
-if [ -s "$TOKEN_FILE" ] && BAO_TOKEN="$(cat "$TOKEN_FILE")" bao token lookup >/dev/null 2>&1; then
-  echo "scoped API token in $TOKEN_FILE is still valid; unchanged"
-  exit 0
+if [ -s "$TOKEN_FILE" ]; then
+  LOOKUP="$(BAO_TOKEN="$(cat "$TOKEN_FILE")" bao token lookup -format=json 2>/dev/null || true)"
+  TTL_LEFT="$(echo "$LOOKUP" | sed -n 's/.*"ttl" *: *\([0-9]*\).*/\1/p' | head -n 1)"
+  case "$TTL_LEFT" in ''|*[!0-9]*) TTL_LEFT=0 ;; esac
+  # Reuse only while the REMAINING lifetime covers the real period ahead (14-day floor):
+  # a token that dies mid-demo silently cuts the API off its secrets (no renewal, POC scope).
+  if [ "$TTL_LEFT" -ge 1209600 ]; then
+    echo "scoped API token in $TOKEN_FILE is still valid for ${TTL_LEFT}s; unchanged"
+    exit 0
+  fi
+  [ "$TTL_LEFT" -gt 0 ] && echo "stored token only has ${TTL_LEFT}s left (< 14 days): re-minting" >&2
 fi
 
 # Scoped token with an explicit 40-day TTL: it outlives the planned demo window (teardown
