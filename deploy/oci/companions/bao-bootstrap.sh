@@ -61,7 +61,16 @@ bao_status() {
 }
 field() { echo "$2" | sed -n "s/.*\"$1\" *: *\([a-z]*\).*/\1/p" | head -n 1; }
 
-STATUS="$(bao_status)" || { echo "bao unreachable at $ADDR" >&2; exit 1; }
+# Bounded wait for the LISTENER first: a just-(re)started bao takes a moment to bind, and an
+# "unreachable" verdict is only legitimate AFTER the budget expires - never on the first try
+# (reproduced: bootstrap querying right after `docker start bao` failed unreachable).
+n=0
+while :; do
+  STATUS="$(bao_status)" && break
+  n=$((n + 1))
+  [ "$n" -lt "${BAO_WAIT_TRIES:-30}" ] || { echo "bao unreachable at $ADDR after $n tries" >&2; exit 1; }
+  sleep 1
+done
 INITIALIZED="$(field initialized "$STATUS")"
 SEALED="$(field sealed "$STATUS")"
 case "$INITIALIZED" in true|false) ;; *) echo "could not parse bao status" >&2; exit 1 ;; esac

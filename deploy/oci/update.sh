@@ -300,7 +300,10 @@ restart_previous() {
   [ -n "$PREVIOUS" ] || return 0
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   bao_ready || return 1
-  run_container "$PREVIOUS" "$PORT"
+  run_container "$PREVIOUS" "$PORT" || return 1
+  # The gate must only lift over a HEALTHY previous version: lifting right after the run
+  # probes a still-booting app, fails the 200, re-arms and strands the update (reproduced).
+  health
 }
 
 # --- cold backup (front gated, container stopped: consistent files) ---------------------------
@@ -325,14 +328,14 @@ fi
 if [ -n "$HOOK" ]; then
   log "running pre-update hook"
   if ! sh -c "$HOOK"; then
-    restart_previous || fail 4 "pre-update hook failed AND the previous container could not be restarted - the maintenance gate stays UP - manual intervention"
+    restart_previous || fail 4 "pre-update hook failed AND the previous container could not be restarted healthy - the maintenance gate stays UP - manual intervention"
     gate_lift || fail 4 "pre-update hook failed; the previous container was restarted BUT the front could not be proven open - maintenance re-armed at $BARRIER_FILE, diagnose the front manually"
     fail 2 "pre-update hook failed; update aborted, previous container restarted, front re-opened"
   fi
 fi
 
 abort_preservation() {
-  restart_previous || fail 4 "$1 AND the previous container could not be restarted - the maintenance gate stays UP - manual intervention"
+  restart_previous || fail 4 "$1 AND the previous container could not be restarted healthy - the maintenance gate stays UP - manual intervention"
   gate_lift || fail 4 "$1; the previous container was restarted BUT the front could not be proven open - maintenance re-armed at $BARRIER_FILE, diagnose the front manually"
   fail 2 "$1; update aborted, previous container restarted, front re-opened"
 }

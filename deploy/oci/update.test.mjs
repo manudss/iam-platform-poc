@@ -73,7 +73,7 @@ echo 200
 `;
 
 /** Builds a host sandbox: env file, data dir, stub docker. Options override the scenario. */
-function setup({ label = 'auto never', current = OLD, health = true, dataset = true, pause = false, pg = false, pgFail = false, runFail = false, keep = null, extraEnv = [] } = {}) {
+function setup({ label = 'auto never', current = OLD, health = true, healthOld = true, dataset = true, pause = false, pg = false, pgFail = false, runFail = false, keep = null, extraEnv = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'lyam-update-'));
   const stub = join(dir, 'stub');
   mkdirSync(join(stub, 'labels'), { recursive: true });
@@ -83,7 +83,7 @@ function setup({ label = 'auto never', current = OLD, health = true, dataset = t
   writeFileSync(join(dir, 'bin', 'curl'), CURL_STUB);
   chmodSync(join(dir, 'bin', 'curl'), 0o755);
   writeFileSync(join(stub, 'images'), `${OLD}\n${NEW}\n`);
-  writeFileSync(join(stub, 'healthy'), health ? `${OLD}\n${NEW}\n` : `${OLD}\n`);
+  writeFileSync(join(stub, 'healthy'), `${healthOld ? `${OLD}\n` : ''}${health ? `${NEW}\n` : ''}`);
   if (label !== null) writeFileSync(join(stub, 'labels', NEW.replaceAll(/[ /:@]/g, '_')), label);
   if (current !== null) writeFileSync(join(stub, 'current'), current);
   if (pgFail) writeFileSync(join(stub, 'pg-fail'), '');
@@ -242,6 +242,14 @@ test('a same-image redeploy still stops the container and takes a cold backup', 
   const r = run(env, '--image', NEW, '--env-file', env);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.calls, /docker stop/, 'container stopped even when the image is unchanged');
+});
+
+test('an abort whose previous container never becomes healthy keeps the gate up (no premature lift)', () => {
+  const { env, dir } = setup({ pg: true, pgFail: true, healthOld: false });
+  const r = run(env, '--image', NEW, '--env-file', env);
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(r.stderr, /could not be restarted healthy/);
+  assert.ok(existsSync(join(dir, 'stub', 'MAINTENANCE')), 'the gate was never lifted over an unhealthy previous version');
 });
 
 test('a failed pg export aborts BEFORE the swap and restarts the previous container', () => {

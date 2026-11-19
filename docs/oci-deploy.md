@@ -186,7 +186,9 @@ enables the KV-v2 engine if needed, and mints a scoped token with an explicit 96
 TTL into a root-owned 0600 file (the granted TTL is measured at mint time, and a re-run only
 reuses the stored token while its REMAINING lifetime covers the time left until the planned
 demo end - `LYAM_DEMO_UNTIL`, default 2026-12-16 - never an arbitrary floor; the API never
-renews tokens). When it re-mints, the new token is synchronized ATOMICALLY into the app env
+renews tokens). A bounded listener wait (`BAO_WAIT_TRIES`, default 30 tries) absorbs a bao
+that is still binding after a (re)start: an "unreachable" verdict is only legitimate after
+the budget expires, never on the first probe. When it re-mints, the new token is synchronized ATOMICALLY into the app env
 file (`LYAM_ENV_FILE`) and the script says loudly whether the running container must be
 recreated (env edits never reach a running process; `docker restart` AND `docker start` do
 not reload env - not even on a stopped container). The boot path enforces this: host-boot.sh
@@ -346,7 +348,7 @@ the data/pg/bao backups of the same generation:
 | Pause file present | Refused until removed |
 | Another update running | Refused (host lock) |
 | Pre-update hook (volume snapshot) fails | Aborted, previous container restarted |
-| Backup fails (data tar, pg export, bao archive) | Update aborts, previous container restarted |
+| Backup fails (data tar, pg export, bao archive) | Update aborts, previous container restarted AND health-checked before the gate lifts (the gate never lifts over a booting app) |
 | New container cannot be created | Compensation: data/pg/bao restored and verified, previous image started behind the front gate |
 | New image never healthy | Same compensation (the front gate was never lifted for it) |
 | A maintenance gate this run does not own already exists | Update refused (exit 1), the foreign marker is never touched |
