@@ -6,11 +6,18 @@
 # runner (Docker is preinstalled there; images are pulled from public registries, no paid service) and runs apps/api/src/compose.e2e.spec.ts (container checks) and compose-app.e2e.spec.ts (application path: Dolt -> activation -> core over gRPC -> durable bus -> consumer on the containers).
 name: ci
 on:
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      sha:
+        required: true
+        type: string
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}-${{ inputs.sha || github.sha }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -20,6 +27,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - name: Install nats-server (core bus end-to-end tests run against a real server)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,6 +54,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - name: Data migration history guard
@@ -123,6 +134,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm ci && npm test -- --watch=false
@@ -131,6 +144,10 @@ jobs:
         run: node --test demo/frame-policy.test.mjs demo/warm-signin.test.mjs
       - name: Demo edge routing (the whole /authorize surface, incl. the passkey script, reaches the core)
         run: node --test demo/server.test.mjs
+      - name: Durable ordered deployment queue
+        run: |
+          python3 deploy/oci/ordered-queue.test.py
+          node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
         run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
   compose:
@@ -138,6 +155,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - name: Start the compose stack (local-only dev credentials from .env.example)
@@ -178,6 +197,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - name: Build the demo image (build context = repository root)
         run: docker build -f demo/Dockerfile -t iam-demo:ci .
       - name: Boot it and wait for the API health check

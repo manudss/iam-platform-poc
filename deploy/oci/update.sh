@@ -102,10 +102,12 @@ umask 077   # every artifact created below (backups, bundles, manifests) is priv
 log() { echo "[update $(date -u +%H:%M:%S)] $*"; }
 fail() { code="$1"; shift; log "FATAL: $*" >&2; exit "$code"; }
 
+REQUIRE_QUALIFICATION=0
 IMAGE=""
 ENV_FILE="/opt/lyam/lyam.env"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --require-qualification) REQUIRE_QUALIFICATION=1; shift ;;
     --image) IMAGE="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
     *) fail 1 "unknown argument: $1" ;;
@@ -137,7 +139,14 @@ STACK_FILES="$(getconf LYAM_STACK_FILES)"
 RECOVERY_FILES="$(getconf LYAM_RECOVERY_FILES)"
 HOOK="$(getconf LYAM_PRE_UPDATE_HOOK)"
 PAUSE_FILE="$(getconf LYAM_PAUSE_FILE)"; PAUSE_FILE="${PAUSE_FILE:-/opt/lyam/UPDATE_PAUSED}"
+POST_CHECK="$(getconf LYAM_POST_UPDATE_CHECK)"
 LOCK_FILE="$(getconf LYAM_LOCK_FILE)"; LOCK_FILE="${LOCK_FILE:-/opt/lyam/.update.lock}"
+
+# Automatic queue requires a qualified checker, before stopping anything.
+if [ "$REQUIRE_QUALIFICATION" = 1 ]; then
+  [ -n "$POST_CHECK" ] && [ -f "$POST_CHECK" ] && [ -x "$POST_CHECK" ] \
+    || fail 1 "automatic deploy requires a qualified executable LYAM_POST_UPDATE_CHECK"
+fi
 
 # --- preconditions (refuse, never improvise) -------------------------------------------------
 command -v docker >/dev/null 2>&1 || fail 1 "docker not found on this host"
@@ -229,6 +238,14 @@ barrier_rearm() {
 # again. If either step fails the gate is RE-ARMED - the service stays behind maintenance
 # rather than exposed in an unverified state.
 gate_lift() {
+  # ALL paths, rollback included, are checked while the front is STILL gated.
+  if [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; then
+    actual_image="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null)" || return 1
+    [ -n "$actual_image" ] || return 1
+    "$POST_CHECK" --container "$CONTAINER" --image "$actual_image" --env-file "$ENV_FILE" \
+      --data-dir "$DATA_DIR" --backup-dir "$BACKUP_DIR" --barrier-file "$BARRIER_FILE" \
+      --target-image "$IMAGE" || { log 'pre-opening qualification failed or UNKNOWN; gate remains armed'; return 1; }
+  fi
   if barrier_remove && front_verify; then return 0; fi
   barrier_rearm || log "WARNING: maintenance could not be re-armed at $BARRIER_FILE"
   return 1

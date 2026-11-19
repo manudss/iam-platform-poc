@@ -160,10 +160,12 @@ test('the pause file freezes updates', () => {
 test('a concurrent run is refused by the host lock', async () => {
   const { env, dir } = setup();
   const lock = join(dir, '.update.lock');
-  const holder = spawn('sh', ['-c', 'exec 9>"$1"; flock 9; sleep 3', 'sh', lock], { stdio: 'ignore' });
+  const holder = spawn('sh', ['-c', 'exec 9>"$1"; flock 9; sleep 3', 'sh', lock], { stdio: 'ignore', detached: true });
   await new Promise((r) => setTimeout(r, 300));
   const r = run(env, '--image', NEW, '--env-file', env);
-  holder.kill();
+  const ended = new Promise(r => holder.once('exit', r));
+  process.kill(-holder.pid, 'SIGKILL');
+  await ended;
   assert.equal(r.status, 1);
   assert.match(r.stderr, /another update/);
 });
@@ -368,4 +370,28 @@ test('retention prunes old generations using full paths', () => {
 test('update.sh is valid POSIX shell', () => {
   const r = spawnSync('sh', ['-n', updater], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
+});
+
+test('automatic queue refuses absent qualification BEFORE stopping or backing up', () => {
+  const { env } = setup();
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  assert.equal(r.status,1);assert.match(r.stderr,/qualified executable/);assert.doesNotMatch(r.calls,/docker (stop|run|pull)/);
+});
+
+test('mandatory post-check is inside gate before removal, failure keeps maintenance armed', () => {
+  const {env,dir,stub}=setup();
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] || exit 99\necho checked >> "$STUB_DIR/post-checked"\nexit 1\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  assert.equal(r.status,4);assert.ok(existsSync(join(stub,'MAINTENANCE')));assert.ok(existsSync(join(stub,'post-checked')));
+});
+
+test('mandatory post-check succeeds before marker removal and receives actual immutable image', () => {
+  const {env,dir,stub}=setup();
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] || exit 99\necho "$*" > "$STUB_DIR/post-args"\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  assert.equal(r.status,0,r.stderr);assert.ok(!existsSync(join(stub,'MAINTENANCE')));assert.match(readFileSync(join(stub,'post-args'),'utf8'),/--image ghcr/);
 });
