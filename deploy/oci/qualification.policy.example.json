@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "origins": ["https://your-verified-host.example.invalid"],
+  "issuer": "https://your-verified-host.example.invalid/core",
+  "tenant": "acme-demo",
+  "network": "REVIEWED_COPY_NETWORK",
+  "pgContainer": "REVIEWED_COPY_PG",
+  "pgUser": "lyam",
+  "pgDatabase": "lyam",
+  "baoAddress": "http://REVIEWED_COPY_BAO:8200",
+  "baoTokenFile": "/private/copy-only-metadata-token",
+  "baoMetadataRoots": ["secret/metadata/iam"],
+  "authFile": "/private/reviewed-smoke-auth.json",
+  "credentialFiles": ["core-state/credentials.json", "core-state/iam-poc-authn-enrollments.json", "core-state/iam-poc-password-history.json"],
+  "appendOnlyTables": ["public.activations", "public.decision_audit"],
+  "transformationVerifiers": {}
+}

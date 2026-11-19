@@ -102,3 +102,41 @@ Local tests cover multi-commit planning, out-of-order overlapping runs, duplicat
 digest drift, gaps/divergence, apply failure and crash-pending refusal, plus mandatory hook
 failure before stop and gate-held success/failure. Full isolated host qualification and real
 workflow_call validation remain activation requirements, not claims made by unit tests.
+
+## Versioned qualification controller
+
+`deploy/oci/qualification.py` with adjacent `qualification-container.mjs` implements the
+checker, not merely the hook protocol. Install both together. The updater calls `--phase
+before` after stopping the app and before backup, then `--phase after` while the gate remains
+armed. A private unique evidence directory retains hash-only pre/post snapshots and smoke
+results. The controller requires an independent root-owned policy at
+`/opt/lyam/qualification.json`; `qualification.policy.example.json` is a **template**, not
+an approved production policy. A wrapper may add `--policy <copy-policy>` during isolation tests.
+
+It checks TLS-valid 503 on every expected origin, actual immutable image and stable restart
+count for30s, complete migration ledger checksums, real OIDC/password login with PKCE/state
+and session verification for each expected redirect origin plus a negative redirect, and
+strict authenticated activation journal schema. It captures every Dolt database/branch HEAD
+and dirty working root, explicitly selected persistent credential files, PostgreSQL row-hash
+multiplicities/schema/index/constraint/view/function/sequence definitions and monotonic
+sequence state, plus complete recursive Bao KV-v2 metadata hashes under the policy roots.
+`secret/metadata/iam` covers both current and not-yet-existing plugin/workflow namespaces
+through their parent, including entries absent from the plugin registry. A denied LIST or
+unknown response blocks. The Bao app token is currently insufficient; the controller takes
+a separately approved metadata-only qualification token through a private local file.
+Copy-only permission must NOT be silently applied to production. No values are printed.
+
+PG rows are exact by default. Only independently reviewed append-only tables permit additions,
+and every old row including multiplicity must remain. The current known PG tables are
+public.activations and public.decision_audit; Dolt session/MCP tables are not PG tables.
+For any other drift, the controller refuses unless a root-owned **exact image-ref-specific**
+transformation verifier has been reviewed, tested and listed in the independent policy.
+Such a verifier receives the private hash-only before/after files and must prove the whole
+transformation including preservation outside it. There are no broad ignore-table settings.
+The smoke login runs before the final capture, so its permitted audit additions are included
+and credential/business changes cannot slip through by happening after comparison.
+
+The controller is still subject to real isolated-stack qualification. In particular, prove
+read-only offline Dolt inventory in the helper image, real PG17 SQL, metadata-only Bao
+permissions/coverage, the actual hosted form fields, and TLS front checks. Missing inputs
+or implementation failures leave maintenance armed and are blockers, never success claims.

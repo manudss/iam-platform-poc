@@ -381,7 +381,7 @@ test('automatic queue refuses absent qualification BEFORE stopping or backing up
 test('mandatory post-check is inside gate before removal, failure keeps maintenance armed', () => {
   const {env,dir,stub}=setup();
   const hook=join(dir,'post-check.sh');
-  writeFileSync(hook,`#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] || exit 99\necho checked >> "$STUB_DIR/post-checked"\nexit 1\n`);chmodSync(hook,0o755);
+  writeFileSync(hook,`#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] || exit 99\necho checked >> "$STUB_DIR/post-checked"\n[ "$2" = before ] && exit 0\nexit 1\n`);chmodSync(hook,0o755);
   writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
   const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
   assert.equal(r.status,4);assert.ok(existsSync(join(stub,'MAINTENANCE')));assert.ok(existsSync(join(stub,'post-checked')));

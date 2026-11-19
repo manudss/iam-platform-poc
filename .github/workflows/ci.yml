@@ -147,6 +147,8 @@ jobs:
       - name: Durable ordered deployment queue
         run: |
           python3 deploy/oci/ordered-queue.test.py
+          python3 deploy/oci/qualification.test.py
+          node --check deploy/oci/qualification-container.mjs
           node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
         run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs

@@ -242,9 +242,9 @@ gate_lift() {
   if [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; then
     actual_image="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null)" || return 1
     [ -n "$actual_image" ] || return 1
-    "$POST_CHECK" --container "$CONTAINER" --image "$actual_image" --env-file "$ENV_FILE" \
+    "$POST_CHECK" --phase after --container "$CONTAINER" --image "$QUALIFICATION_EXPECTED_IMAGE" --env-file "$ENV_FILE" \
       --data-dir "$DATA_DIR" --backup-dir "$BACKUP_DIR" --barrier-file "$BARRIER_FILE" \
-      --target-image "$IMAGE" || { log 'pre-opening qualification failed or UNKNOWN; gate remains armed'; return 1; }
+      --target-image "$IMAGE" --evidence-dir "$QUALIFICATION_EVIDENCE" || { log 'pre-opening qualification failed or UNKNOWN; gate remains armed'; return 1; }
   fi
   if barrier_remove && front_verify; then return 0; fi
   barrier_rearm || log "WARNING: maintenance could not be re-armed at $BARRIER_FILE"
@@ -273,6 +273,9 @@ PREVIOUS="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null || tr
 if [ -n "$PREVIOUS" ] && [ "$(docker image inspect -f x "$PREVIOUS" 2>/dev/null || true)" != x ]; then
   fail 1 "rollback image $PREVIOUS is not available locally; refusing to update without a rollback path"
 fi
+
+QUALIFICATION_EXPECTED_IMAGE="$PREVIOUS"
+QUALIFICATION_EVIDENCE=""
 
 run_container() {
   img="$1"; port="$2"
@@ -338,6 +341,16 @@ mkdir -p "$BACKUP_DIR"
 if [ -n "$PREVIOUS" ]; then
   log "stopping $CONTAINER (running $PREVIOUS)"
   docker stop "$CONTAINER" >/dev/null
+fi
+
+# Capture read-only preservation evidence while the application is PROVEN stopped.
+# The checker itself validates every TLS origin remains behind maintenance.
+if [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; then
+  QUALIFICATION_EVIDENCE="$BACKUP_DIR/qualification-$TS-$$"
+  "$POST_CHECK" --phase before --container "$CONTAINER" --image "$PREVIOUS" --env-file "$ENV_FILE" \
+    --data-dir "$DATA_DIR" --backup-dir "$BACKUP_DIR" --barrier-file "$BARRIER_FILE" \
+    --target-image "$IMAGE" --evidence-dir "$QUALIFICATION_EVIDENCE" \
+    || fail 4 "pre-update preservation capture failed or UNKNOWN; application stays stopped, maintenance stays armed"
 fi
 
 # Optional platform-side preservation (e.g. an OCI volume snapshot): runs while the container
@@ -518,6 +531,7 @@ prune 'lyam-data-*.tar.gz'; prune 'lyam-pg-*.sql.gz'; prune 'lyam-bao-*.tar.gz';
 # --- swap (front still gated: the probe runs inside the container) ----------------------------
 # The validated container is never recreated: the very container that passes the health gate
 # is the one that serves when the gate lifts.
+QUALIFICATION_EXPECTED_IMAGE="$IMAGE"
 log "starting $CONTAINER from $IMAGE (seed mode: never)"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 CREATE_OK=1
@@ -539,6 +553,7 @@ fi
 # the swap began and stays up until the rolled-back previous version is healthy. Every fail-4
 # path below KEEPS the maintenance gate UP: the service is down or unverified, and a gate this
 # run owns is only ever lifted by gate_lift (remove + proven 200, re-armed otherwise).
+QUALIFICATION_EXPECTED_IMAGE="$PREVIOUS"
 log "rolling back: restoring the pre-update data and starting the previous image"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
