@@ -36,6 +36,7 @@ button.link:hover:not(:disabled) { background: none; color: var(--acc2-dark); }
 
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.25rem; margin: 0 0 var(--panel-gap); }
 .card > h3 { border-left: 3px solid var(--acc2); padding-left: .55rem; }
+.stat { border-top: 3px solid var(--acc2); }
 .panel { border: 1px solid var(--line); border-radius: .6rem; padding: .7rem .9rem; margin: 0 0 var(--panel-gap); background: var(--panel); }
 .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; }
 .scroll { overflow-x: auto; }
