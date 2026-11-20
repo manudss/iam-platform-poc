@@ -157,6 +157,6 @@ try {
   assert.deepEqual(errors.filter((e) => !/step-up|403/.test(e)), []);
   console.log('PASS account blocks: card after first factor, self-block refused, unblock, automatic lock, chains, level 8, step-up-required, unreachable level refused, re-sign-in page');
 } catch (e) {
-  console.error('FAILED:', e.message); try { const pg = browser?.contexts()[0]?.pages()[0]; console.error('URL:', pg?.url()); console.error('BODY:', (await pg?.content())?.slice(0, 2500)); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
+  console.error('FAILED:', e.message); try { const pg = browser?.contexts()[0]?.pages()[0]; console.error('URL:', pg?.url()); console.error('TEXT:', (await pg?.innerText('body'))?.slice(0, 1200)); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
   process.exitCode = 1;
 } finally { await browser?.close(); await stopAll(); }
