@@ -136,6 +136,14 @@ jobs:
         if: ${{ !cancelled() }}   # still runs when an earlier step failed, so one failure never hides the other results (the job stays red)
         run: |
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/account-blocks-e2e.mjs /tmp/blocks-shots
+      - name: Account blocks screenshots (fictional data, no secrets)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: account-blocks-e2e-screenshots
+          path: /tmp/blocks-shots
+          retention-days: 7
+          if-no-files-found: ignore
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 15
