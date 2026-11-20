@@ -75,7 +75,7 @@ export async function startBusHarness(opts: { natsPort: number; corePort?: numbe
     async close() {
       await host.close();
       // Stop the child processes and WAIT for them before deleting their store: a server still writing its stream files made the removal fail (ENOTEMPTY) and wedged the run.
-      const gone = (c?: { exitCode: number | null; kill: (s?: NodeJS.Signals) => boolean; once: (e: 'exit', f: () => void) => unknown }) => c && c.exitCode === null ? new Promise<void>((ok) => { c.once('exit', () => ok()); c.kill('SIGKILL'); setTimeout(ok, 5000); }) : Promise.resolve();
+      const gone = (c?: { exitCode: number | null; kill: (s?: NodeJS.Signals) => boolean; once: (e: 'exit', f: () => void) => unknown }) => c && c.exitCode === null ? new Promise<void>((ok) => { c.once('exit', () => ok()); c.kill(); /* SIGTERM first: a graceful exit releases the core's state files, as before */ setTimeout(() => { if (c.exitCode === null) c.kill('SIGKILL'); }, 3000); setTimeout(ok, 6000); }) : Promise.resolve();
       await Promise.all([gone(harness.core as never), gone(nats as never)]);
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // harness.core: a spec may have respawned the core
       delete process.env.IAM_BUS_NATS_URL; delete process.env.IAM_BUS_NATS_USER; delete process.env.IAM_BUS_NATS_PASSWORD;
