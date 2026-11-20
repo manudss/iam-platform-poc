@@ -150,3 +150,45 @@ describe('users drawer partial save and safe retry', () => {
     await page.save(); expect(detailsCalls).toBe(3);
   });
 });
+
+describe('users page on main (read only) and pictures', () => {
+  const PIC = 'data:image/png;base64,AAAA';
+  const make = (branch: string, pictures: Record<string, string>) => {
+    const calls: string[] = [];
+    TestBed.configureTestingModule({ providers: [{ provide: Session, useValue: {
+      branch: signal(branch), adminToken: () => '', api: { saveUser: async () => { calls.push('save'); }, raw: async (m: string, path: string) => {
+        calls.push(m + ' ' + path);
+        if (path === '/users') return { status: 200, data: { users: USERS } };
+        if (path === '/users-pictures') return { status: 200, data: { pictures } };
+        return { status: 200, data: { fields: [], values: {} } };
+      } },
+    } }] });
+    return { page: TestBed.runInInjectionContext(() => new UsersPage()) as any, calls };
+  };
+  it('opens a user sheet on main in read-only mode and never saves', async () => {
+    const { page, calls } = make('main', {});
+    await page.load();
+    expect(page.readOnly()).toBe(true);
+    page.start(USERS[0]);
+    expect(page.editing()).toBe(true);
+    await page.save();
+    expect(calls.some((c) => c === 'save' || c.startsWith('PATCH'))).toBe(false);
+    page.ngOnDestroy();
+  });
+  it('shows the live picture in the list and in the sheet even when the branch copy has none', async () => {
+    const { page } = make('personal/demo-alice', { 'demo-alice': PIC });
+    await page.load(); await Promise.resolve();
+    expect(page.photos()['demo-alice']).toBe(PIC);
+    page.start(USERS[0]);
+    expect(page.photo()).toBe(PIC);
+    page.start(USERS[1]);
+    expect(page.photo()).toBe('');
+    page.ngOnDestroy();
+  });
+  it('a picture request failure keeps the initials', async () => {
+    const { page } = make('main', {});
+    page['s'].api.raw = async (_m: string, path: string) => { if (path === '/users') return { status: 200, data: { users: USERS } }; throw new Error('boom'); };
+    await page.load(); await Promise.resolve(); await Promise.resolve();
+    expect(page.photos()).toEqual({});
+  });
+});

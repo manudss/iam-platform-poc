@@ -64,6 +64,18 @@ describe('profile values in real Dolt', { skip: !have && 'dolt binary missing' }
     assert.equal('hr-attributes.phone' in (await store.get(T, 'demo-alice', 'live')), false);
   });
 
+  it('photo source (fictional data): a picture set live on main after the branch was cut is on main, absent from the older branch row, and a later branch edit does not touch main', async () => {
+    const v = new VersioningService(); const branch = 'work-photo'; const PIC = 'profile-picture.picture';
+    const store = new DoltProfileStore(v, () => branch);
+    await store.put(T, 'demo-dave', { 'hr-attributes.job_title': 'Analyst' }, 'live', 'demo-dave');
+    await v.lock(() => v.at('main', async (c) => { await c.query('call dolt_branch(?)', [branch]); }));
+    await store.put(T, 'demo-dave', { [PIC]: 'data:image/png;base64,AAAA' }, 'live', 'demo-dave'); // the person sets the photo on main after the cut
+    assert.equal((await store.get(T, 'demo-dave', 'live'))[PIC], 'data:image/png;base64,AAAA', 'main (read only view) has the photo');
+    assert.equal(PIC in (await store.get(T, 'demo-dave', 'work')), false, 'the older branch lacks it: this is why a branch-only read showed initials');
+    await store.put(T, 'demo-dave', { 'hr-attributes.phone': '+33 6 00 00 00 00' }, 'work', 'admin');
+    assert.equal(PIC in (await store.get(T, 'demo-dave', 'work')), false);
+    assert.equal('hr-attributes.phone' in (await store.get(T, 'demo-dave', 'live')), false, 'main untouched by the branch edit');
+  });
   it('review policy: a personal branch holds the proposal, main is untouched until accepted, a refusal deletes it, the branch is reused', async () => {
     const v = new VersioningService(); const store = new DoltProfileStore(v, () => 'main');
     const F = 'hr-attributes.job_title';

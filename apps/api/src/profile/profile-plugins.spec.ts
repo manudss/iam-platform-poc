@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
+import { ProfileService, PROFILE_STORE } from './profile.service.js';
+import type { ProfileValueStore } from './store.js';
 import { BASE_FIELDS, toCatalog, validateFieldDecls } from './fields.js';
 import { DoltProfileStore, FieldRoute } from './store.js';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -281,6 +283,33 @@ describe('profile plugins API: components, grants and the uninstall contract', (
   it('the picture is the person\'s: an administrator sees it but cannot change it (adminEdit false by default)', async () => {
     const r = await api().patch(`/tenants/${T}/users/demo-bob/profile`).set(adm).send({ values: { 'profile-picture.picture': pngDataUrl(16) } });
     assert.equal(r.status, 403, JSON.stringify(r.body));
+  });
+  it('photo endpoint: the admin sheet and the users-pictures list serve the live picture, administrators only, picture field only, nothing written', async () => {
+    // Old-branch situation, fictional person demo-bob: the working branch holds an older row WITHOUT the photo while main (live) has it.
+    const store = app.get<ProfileValueStore>(PROFILE_STORE); const LIVE = pngDataUrl(32); const PIC = 'profile-picture.picture';
+    await store.put(T, 'demo-bob', { 'hr-attributes.job_title': 'Cook', [PIC]: null }, 'work', 'admin'); // the in-memory store copies live into the work row: drop the photo from it
+    assert.equal(PIC in (await store.get(T, 'demo-bob', 'work')), false, 'precondition: the branch row has no photo');
+    assert.equal((await store.get(T, 'demo-bob', 'live'))[PIC], LIVE, 'precondition: main has the photo');
+    const prof = app.get(ProfileService); const realIds = prof.directoryIds.bind(prof); prof.directoryIds = async () => ['demo-bob']; // this module has no user directory: the list is the fixture person only
+    const before = await api().get(`/tenants/${T}/users-pictures`).set(adm);
+    assert.equal(before.body.pictures['demo-bob'], LIVE, 'the list shows demo-bob\'s photo from the live source');
+    const sheet0 = await api().get(`/tenants/${T}/users/demo-bob/profile`).set(adm);
+    assert.equal(sheet0.body.values[PIC], LIVE, 'the sheet shows the live photo although the branch row lacks it');
+    const sheet = await api().get(`/tenants/${T}/users/demo-bob/profile`).set(adm);
+    assert.equal(sheet.status, 200, JSON.stringify(sheet.body));
+    assert.ok(String(sheet.body.values['profile-picture.picture'] ?? '').startsWith('data:image/'), 'the admin sheet shows the person\'s live picture');
+    assert.equal((await api().get(`/tenants/${T}/users-pictures`)).status, 403, 'not for a plain signed-in person');
+    const list = await api().get(`/tenants/${T}/users-pictures`).set(adm);
+    assert.equal(list.status, 200, JSON.stringify(list.body));
+    assert.deepEqual(Object.keys(list.body), ['pictures'], 'nothing else is exposed');
+    for (const v of Object.values(list.body.pictures)) assert.ok(String(v).startsWith('data:image/'), 'only data images, never a URL or another field');
+    const edit = await api().patch(`/tenants/${T}/users/demo-bob/profile`).set(adm).send({ values: { 'profile-picture.picture': pngDataUrl(8) } });
+    assert.equal(edit.status, 403, 'the admin read path never turns into a write');
+    assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/disable`).set(adm)).status, 201);
+    const off = await api().get(`/tenants/${T}/users-pictures`).set(adm);
+    assert.deepEqual(off.body.pictures, {}, 'a disabled picture plugin shows no photo anywhere');
+    prof.directoryIds = realIds;
+    assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/enable`).set(adm).send({ grants: { uiComponents: true } })).status, 201);
   });
   it('uninstall takes the plugin\'s profile configuration with it and reports the purge', async () => {
     assert.equal((await api().post(`/tenants/${T}/plugins/hr-attributes/install`).set(adm).send({ grants: { install: true } })).status, 201);
