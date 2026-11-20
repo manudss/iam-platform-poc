@@ -44,6 +44,8 @@ run('npx', ['ng', 'serve', '--host', '127.0.0.1', '--port', '4200'], { cwd: join
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let browser;
+// A hung step must fail the run, never hold the job until its timeout.
+const watchdog = setTimeout(async () => { console.error('FAILED: watchdog, the end-to-end run took more than 8 minutes'); await stopAll(); process.exit(1); }, 8 * 60 * 1000);
 try {
   for (let i = 0; i < 160; i++) { try { if ((await fetch('http://127.0.0.1:4200/')).ok && (await fetch('http://127.0.0.1:4200/api/health')).ok) break; } catch {} await sleep(500); }
   browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1, MAP *picsum.photos ~NOTFOUND'] });
@@ -161,4 +163,4 @@ try {
 } catch (e) {
   console.error('FAILED:', e.message); try { const pg = browser?.contexts()[0]?.pages()[0]; console.error('URL:', pg?.url()); console.error('TEXT:', (await pg?.innerText('body'))?.slice(0, 1200)); } catch {} try { await browser?.contexts()[0]?.pages()[0]?.screenshot({ path: join(out, 'failure.png'), fullPage: true }); } catch {}
   process.exitCode = 1;
-} finally { await browser?.close(); await stopAll(); }
+} finally { clearTimeout(watchdog); await browser?.close(); await stopAll(); process.exit(process.exitCode ?? 0); }
