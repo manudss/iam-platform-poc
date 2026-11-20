@@ -462,6 +462,43 @@ export class VersioningService {
     }, false));
   }
 
+  /**
+   * Rebases a working branch on top of the default branch (CALL DOLT_REBASE): the branch's own commits are replayed on the latest main,
+   * so the branch gets what changed there while keeping its work. History of THIS branch is rewritten (new commit ids); main is never touched.
+   * Safe by construction: refused on main, on protected branches and with uncommitted changes; a stale expectedHead is refused; plugin runtime
+   * state is never replayed (same rule as a merge); a conflict aborts the rebase (Dolt restores the branch) and nothing changes.
+   * A branch with no commit of its own is simply moved forward (fast-forward); a branch already containing main is reported as up to date.
+   */
+  async rebaseOnDefault(branch: string, expectedHead?: string) {
+    const base = this.defaultBranch;
+    branchName(branch);
+    if (branch === base) throw new ForbiddenException(`${base} cannot be rebased: it is the branch the others are rebased on`);
+    if (this.isProtected(branch)) throw new ForbiddenException(`branch ${branch} is protected: it cannot be rebased`);
+    return this.lock(() => this.at(branch, async (c, r) => {
+      if (r.kind !== 'branch') throw new BadRequestException('only a branch can be rebased');
+      await this.cleanOrFail(c, branch);
+      const head = async () => String(((await c.query('select hashof(?) h', [branch]))[0] as { h: string }[])[0].h);
+      const count = async (range: string) => Number(((await c.query('select count(*) n from dolt_log(?)', [range]))[0] as { n: number }[])[0].n);
+      const before = await head();
+      if (expectedHead && expectedHead !== before) throw new ConflictException('Working branch changed. Review again before rebasing.');
+      const behind = await count(`${branch}..${base}`), ahead = await count(`${base}..${branch}`);
+      if (behind === 0) return { branch, base, rebased: false, upToDate: true, behind, ahead, before, commit: before };
+      const [rt] = await c.query('select * from dolt_diff_summary(?)', [`${base}...${branch}`]);
+      if ((rt as { from_table_name?: string; to_table_name?: string }[]).some((x) => [x.from_table_name, x.to_table_name].some((n) => n?.toLowerCase().startsWith('plugin_runtime_')))) throw new ForbiddenException('This branch changes plugin runtime state. Use Plugins, not a rebase, to change grants or enablement.');
+      try {
+        if (ahead === 0) await c.query('CALL DOLT_MERGE(?, ?)', ['--ff-only', base]);
+        else await c.query('CALL DOLT_REBASE(?)', [base]);
+      } catch (e) {
+        await this.discard(c);
+        const msg = String((e as { message?: string })?.message ?? e);
+        if (/conflict/i.test(msg)) throw new ConflictException({ message: `Rebase refused: the branch conflicts with main. Nothing was changed.`, reasons: [msg.split('\n')[0]] });
+        throw mapSqlError(e);
+      }
+      const after = await head();
+      return { branch, base, rebased: true, upToDate: false, behind, ahead, before, commit: after };
+    }));
+  }
+
   private async mergeChecks(c: Connection, source: string, keep: boolean, _message: string) {
     const [runtimeDiff] = await c.query('select * from dolt_diff_summary(?)', [`HEAD...${source}`]);
     if (!applyContext.getStore() && (runtimeDiff as {from_table_name:string;to_table_name:string}[]).some(x=>[x.from_table_name,x.to_table_name].some(n=>n?.toLowerCase().startsWith('plugin_runtime_')))) throw new ForbiddenException('Plugin runtime state differs. Use Plugins, not a database merge, to change grants or enablement.');

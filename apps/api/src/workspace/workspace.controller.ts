@@ -23,6 +23,14 @@ export class WorkspaceController {
  assertNotBranchTest(req);
  const run=this.chain.then(()=>this.applyOnce(b,req,tenant));this.chain=run.catch(()=>undefined);return run;
  }
+ /** Rebases the globally selected working branch on main (never main itself). Same single-writer chain as Apply; the branch's registry is rebuilt from its new content. */
+ @Post('rebase') rebase(@Body() b:{confirm?:boolean;expectedHead?:string},@Req()req:{user:{sub:string;branch?:string}}){
+  assertNotBranchTest(req);
+  const run=this.chain.then(async()=>{
+   const branch=currentBranch(true);if(!workspaceMode()||b?.confirm!==true)throw new BadRequestException('Explicit rebase confirmation required');
+   const r=await this.v.rebaseOnDefault(branch,b.expectedHead);this.registries.drop(branch);return r;
+  });this.chain=run.catch(()=>undefined);return run;
+ }
  /** Issues the short-lived ticket that opens a sign-in test of one data branch (docs/branch-test.md). Administrators only. */
  @Post('branch-test') createBranchTest(@Param('tenant')tenant:string,@Body()b:{branch?:string;stable?:boolean;label?:string},@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.create(req.user?.sub,String(b?.branch??''),{stable:b?.stable===true,label:typeof b?.label==='string'?b.label:''});}
  @Get('branch-test') listBranchTests(@Param('tenant')tenant:string,@Req()req:{user?:{branch?:string}}){assertNotBranchTest(req);void tenant;return this.branchTest.list();}
