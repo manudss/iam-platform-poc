@@ -48,7 +48,7 @@ export function clock(ms: number): string {
   styles: [`
     :host { display: inline-flex; align-items: center; }
     .sesswrap { position: relative; display: inline-flex; }
-    .sess { display: inline-flex; flex-direction: column; justify-content: center; gap: 4px; box-sizing: border-box; height: var(--ctl-h, 2.5rem); width: 7.5rem; margin: 0; padding: 0 .75rem; border: 1px solid transparent; border-radius: var(--ctl-r, 999px); background: transparent; font: inherit; font-size: .72rem; color: var(--th-ink); cursor: pointer; }
+    .sess { display: inline-flex; flex-direction: column; justify-content: center; gap: 4px; box-sizing: border-box; height: var(--ctl-h, 2.5rem); width: 7.5rem; margin: 0; padding: 0 .75rem; border: 1px solid transparent; border-radius: 999px; background: transparent; font: inherit; font-size: .72rem; color: var(--th-ink); cursor: pointer; }
     .sesswrap:hover .sess, .sesswrap.open .sess, .sess:focus-visible { border-color: var(--line); background: var(--row-hover); }
     .lbl { font-variant-numeric: tabular-nums; line-height: 1; text-align: left; }
     .track { display: block; height: 5px; border-radius: 3px; background: var(--bar-off); overflow: hidden; }
