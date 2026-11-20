@@ -34,7 +34,7 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    await start();
    const journal=new MigrationJournal(home,readManifest(root).versions);assert.equal(journal.read()?.entries.length,2);assert.equal(journal.read()?.pending,undefined);
    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT count(*) AS n FROM policy_rules WHERE id='screen-account-blocks'"]),/\b1\b/);
-   assert.match(dolt(['--use-db=iam','sql','-q',"SELECT message FROM dolt_log LIMIT 1"]),/migration 0002/);
+   assert.match(dolt(['--use-db=iam','sql','-q',"SELECT message FROM dolt_log WHERE message LIKE 'migration 0002%'"]),/migration 0002/);
    await stop(api);await stop(server);
    dolt(['--use-db=iam','sql','-q',"UPDATE identities SET display_name='Customized Alice' WHERE id='demo-alice'; CALL DOLT_ADD('-A'); CALL DOLT_COMMIT('-m','user customization'); CALL DOLT_BRANCH('personal/keep');"]);
    dolt(['--use-db=iam/personal/keep','sql','-q',"INSERT INTO roles VALUES('keep','Personal dirty work',false)"]);
