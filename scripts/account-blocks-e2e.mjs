@@ -123,7 +123,7 @@ try {
   const ap1 = await json(await api(T1, 'POST', '/workspace/apply', { confirm: true }, 'blocks-e2e-1')); assert.equal(ap1.applied, true, JSON.stringify(ap1));
 
   // ---- 5. sign in through password then authenticator: level 8
-  let opt = {}; for (let i = 0; i < 20; i++) { opt = await json(await fetch(BASE + '/api/tenants/acme-demo/auth/options')); if (opt.mode === 'choice') break; await sleep(1000); }
+  let opt = {}; for (let i = 0; i < 20; i++) { opt = await json(await fetch(BASE + '/api/tenants/acme-demo/signin/options')); if (opt.mode === 'choice') break; await sleep(1000); }
   assert.equal(opt.mode, 'choice', 'the applied chains are offered: ' + JSON.stringify(opt).slice(0, 600));
   await page.goto(`${BASE}/login`);
   await page.waitForSelector('#signin-browser, [data-chain="password-then-authenticator"]');
