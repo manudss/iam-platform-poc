@@ -30,3 +30,7 @@ Opening the personal branch never shows a banner or a "Choose your working branc
 - **Error** (or admin capability token missing): red pill "Branch unavailable" with **Retry**; the detail is in the tooltip, the message bar and the "Choose your working branch" card stay as the visible fallback.
 
 My applications needs no branch and renders without waiting for it.
+
+## Top bar sizes and the branch picker actions
+
+Every control in the bar (theme switch, branch picker, Review & Apply, session timer, user button) is 40px high (44px up to 900px wide), with the same radius and an 8px gap. The former "..." menu is gone: the branch picker now holds "This branch" (Rebase on main, Test sign-in, Stable test link) and "Branches" (New branch from main, Manage branches). Rebase on main replays the branch on the latest main (`POST /workspace/rebase`, never touches main, refuses conflicts and leaves the branch unchanged). The session timer is borderless at rest; hover or focus opens a panel with the tip, Extend session and Sign out.

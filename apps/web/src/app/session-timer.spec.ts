@@ -103,4 +103,19 @@ describe('Session timer state', () => {
     (el.querySelector('#session-extend') as HTMLButtonElement).click(); await f.whenStable(); f.detectChanges();
     expect(el.querySelector('#session-dialog')).toBeNull(); s.signOut();
   });
+  it('the timer panel carries the tip, Extend session and Sign out', async () => {
+    const s = await signedIn(claims(), () => reply(200, { id_token: jwt(claims({ exp: now() + 1200 })) }));
+    const f = TestBed.createComponent(SessionTimer); f.detectChanges(); const el: HTMLElement = f.nativeElement;
+    const panel = el.querySelector('#session-panel') as HTMLElement;
+    expect(panel.textContent).toContain('Time left before you are signed out');
+    const ext = el.querySelector('#session-extend-panel') as HTMLButtonElement; expect(ext.disabled).toBe(false);
+    ext.click(); await f.whenStable(); f.detectChanges();
+    expect((el.querySelector('#session-signout-panel') as HTMLButtonElement).textContent).toContain('Sign out'); s.signOut();
+  });
+  it('Extend session is disabled and explained when the maximum is reached', async () => {
+    const s = await signedIn(claims({ session_max: 600 }), () => reply(409));
+    const f = TestBed.createComponent(SessionTimer); f.detectChanges(); const el: HTMLElement = f.nativeElement;
+    expect((el.querySelector('#session-extend-panel') as HTMLButtonElement).disabled).toBe(true);
+    expect((el.querySelector('#session-panel') as HTMLElement).textContent).toContain('Extending is unavailable'); s.signOut();
+  });
 });
