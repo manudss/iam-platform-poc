@@ -5,6 +5,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { connect } from 'node:net';
 import { resolve } from 'node:path';
 import { CoreGrpc } from './access/core-grpc.js';
 
@@ -18,6 +19,8 @@ describe('gRPC decision (real core over tonic)', { skip: !existsSync(coreBin) &&
   before(async () => {
     core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18096', IAM_CORE_GRPC_ADDR: GRPC, IAM_ISSUER: HTTP, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
     for (let i = 0; i < 100; i++) { try { if ((await fetch(`${HTTP}/health`)).ok) break; } catch { await sleep(100); } }
+    // The gRPC listener can come up after the HTTP one: wait for its port too (a startup race, not a behaviour change).
+    for (let i = 0; i < 100; i++) { if (await new Promise<boolean>((ok) => { const c = connect(18097, '127.0.0.1'); c.once('connect', () => { c.destroy(); ok(true); }); c.once('error', () => ok(false)); })) break; await sleep(100); }
     g = new CoreGrpc(GRPC);
   });
   after(() => { g?.close(); core?.kill(); });
