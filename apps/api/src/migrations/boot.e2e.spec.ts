@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, openSync, closeSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, openSync, closeSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startTestBus, testBusBinsPresent } from '../testing/test-bus.js';
@@ -11,7 +11,7 @@ import { MigrationJournal, readManifest } from './journal.js';
 const root=resolve('../..'), bin=process.env.DOLT_BIN, port=13987, apiPort=13988;
 const sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBinsPresent)&&'real Dolt + core + NATS required'},()=>{
- it('completes every seed component once; preserves edits, credentials and personal branch on second boot', {timeout:360000}, async()=>{
+ it('completes every seed component once; preserves edits, credentials and personal branch on second boot', {timeout:600000}, async()=>{
   const home=mkdtempSync(join(tmpdir(),'migration-api-'));mkdirSync(join(home,'dolt'));mkdirSync(join(home,'core-state'));
   const bus=await startTestBus(import.meta.url);let server:ChildProcess|undefined,api:ChildProcess|undefined;
   const env={...process.env,HOME:home,IAM_DEMO_HOME:home,IAM_MIGRATION_SOURCE_ROOT:root,IAM_DATA_MIGRATIONS:'1',IAM_MIGRATION_BOOT_ID:'first',
@@ -77,6 +77,21 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    const prep6=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});assert.equal(prep6.status,0,prep6.stderr);
    await start();await stop(api);await stop(server);
    assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2);
+   // Crash after the journal started: every image refuses to start, and the cold backup taken before the update restores service. Isolated temp home, nothing live.
+   dolt(['--use-db=iam','sql','-q',"DELETE FROM policy_rules WHERE id='screen-account-blocks'; CALL DOLT_ADD('-A'); CALL DOLT_COMMIT('-m','pre-update state');"]);
+   rmSync(join(home,'migrations','journal.json'));new MigrationJournal(home,readManifest(root).versions).adopt('c'.repeat(64));
+   const cold=mkdtempSync(join(tmpdir(),'cold-backup-'));cpSync(join(home,'dolt'),join(cold,'dolt'),{recursive:true});cpSync(join(home,'migrations'),join(cold,'migrations'),{recursive:true});
+   new MigrationJournal(home,readManifest(root).versions).begin('0002','crashed-boot','apply');
+   env.IAM_MIGRATION_BOOT_ID='seventh';spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});
+   await assert.rejects(start());await stop(api);await stop(server);
+   assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.pending?.id,'0002','the marker is kept, never cleared automatically');
+   rmSync(join(home,'dolt'),{recursive:true});rmSync(join(home,'migrations'),{recursive:true});
+   cpSync(join(cold,'dolt'),join(home,'dolt'),{recursive:true});cpSync(join(cold,'migrations'),join(home,'migrations'),{recursive:true});
+   env.IAM_MIGRATION_BOOT_ID='eighth';
+   const prep8=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});assert.equal(prep8.status,0,prep8.stderr);
+   await start();await stop(api);await stop(server);
+   assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2,'restored backup boots and 0002 runs once');
+   rmSync(cold,{recursive:true,force:true});
   }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
  });
 });
