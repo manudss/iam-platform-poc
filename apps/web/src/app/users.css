@@ -103,3 +103,7 @@ button.danger:hover:not(:disabled) { background: var(--bad-soft); color: var(--b
 .pf-image { display: flex; align-items: center; gap: .6rem; margin: .3rem 0; }
 .pf-image .pf-label { font-size: .92rem; }
 .pf-image .pf-thumb { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid var(--field-line); }
+
+.av.list-photo { object-fit: cover; border: 1px solid var(--line); box-sizing: border-box; }
+.ro-set { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ro-set:disabled { opacity: 1; }

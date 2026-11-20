@@ -106,12 +106,12 @@ export function userStats(users: UserProfile[]): UserStats {
 </tr></thead>
 <tbody>
 @for (u of filtered(); track u.id) {<tr>
-  <td><span class="tuser"><span class="av" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)" [style.border]="'1px solid '+deptColor(u.department)">{{initials(u.display_name)}}</span><span class="tx"><b>{{u.display_name}}</b><small>{{u.id}}</small></span></span></td>
+  <td><span class="tuser">@if (photos()[u.id]) {<img class="av list-photo" [src]="photos()[u.id]" alt="" />} @else {<span class="av" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)" [style.border]="'1px solid '+deptColor(u.department)">{{initials(u.display_name)}}</span>}<span class="tx"><b>{{u.display_name}}</b><small>{{u.id}}</small></span></span></td>
   <td><span class="tag" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)">{{u.department || '—'}}</span></td>
   <td class="mail">{{u.email || '—'}}</td>
   <td class="mgr">{{managerName(u)}}</td>
   <td><span class="st" [class.ok]="userStatus(u)==='enabled'" [class.off]="userStatus(u)==='no-credential'" [class.bad]="userStatus(u)==='disabled'">{{statusLabel(userStatus(u))}}</span></td>
-  <td class="acts"><button class="secondary rowbtn" (click)="start(u)" [disabled]="s.branch()==='main'">Edit</button>
+  <td class="acts"><button class="secondary rowbtn" [attr.id]="'user-open-'+u.id" (click)="start(u)" [title]="readOnly() ? 'Main is read only: opens the user sheet without any way to change it' : 'Edit this user on the working branch'">{{readOnly() ? 'View' : 'Edit'}}</button>
     <span class="rowmenu"><button class="secondary rowbtn" (click)="toggleMenu(u.id, $event)" [attr.aria-expanded]="menuFor()===u.id" aria-label="More actions">⋯</button>
       @if (menuFor()===u.id) {<span class="pop" (click)="$event.stopPropagation()">
         <button (click)="quickToggle(u)" [disabled]="busy() || s.branch()==='main' || !u.hasCredential" [class.danger]="u.login_enabled" [title]="!u.hasCredential ? 'No credential yet: give one with Edit first' : ''">{{u.login_enabled ? 'Disable sign-in' : 'Enable sign-in'}}</button>
@@ -123,7 +123,7 @@ export function userStats(users: UserProfile[]): UserStats {
 <div class="tfoot"><span>{{filtered().length}} of {{people().length}} users · sorted by {{sortLabel()}}</span></div></div>
 
 @if (editing()) {<div class="scrim" (click)="cancel()"></div>
-<aside class="drawer" id="user-editor" role="dialog" [attr.aria-label]="key ? 'Edit '+key : 'Create user'">
+<aside class="drawer" id="user-editor" role="dialog" [attr.aria-label]="key ? (readOnly() ? 'View '+key : 'Edit '+key) : 'Create user'">
   <div class="dhead">
     @if (photo()) {<img class="av big" id="drawer-photo" [src]="photo()" [style.object-fit]="'cover'" alt="">}
     @else {<span class="av big" [style.background]="'color-mix(in srgb, '+deptColor(form.department || 'user')+' 13%, transparent)'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')">{{initials(form.display_name || form.id || '?')}}</span>}
@@ -134,7 +134,8 @@ export function userStats(users: UserProfile[]): UserStats {
     <button class="secondary x" type="button" (click)="cancel()" title="Close">✕</button>
   </div>
   @if (partialSave()) { <p role="alert" class="msg bad" id="user-partial-save">User details were saved to this branch, but the additional profile fields were not saved. Your field edits are kept below. Retry saves those fields without repeating unchanged user details. Nothing becomes live until Review &amp; Apply.</p> }
-  <form (ngSubmit)="save()">
+  @if (readOnly()) { <p class="msg" id="user-readonly-note" role="status">Viewing main (read only). Pick a working branch to change anything.</p> }
+  <form (ngSubmit)="save()"><fieldset class="ro-set" [disabled]="readOnly()">
   <h4>Identity</h4>
   <label>User ID<input name="uid" [(ngModel)]="form.id" [disabled]="!!key" required pattern="[a-z0-9-]{1,32}" />@if(!key){<small>Lowercase letters, digits and dashes; cannot change later.</small>}</label>
   <label>Display name<input name="displayName" [(ngModel)]="form.display_name" maxlength="80" /></label>
@@ -150,7 +151,7 @@ export function userStats(users: UserProfile[]): UserStats {
   </div>}}
   @if (key && pfields().length) { <h4>Profile fields</h4><p class="hint">Fields the administrator configuration lets an administrator edit. Saved on the working branch like the rest.</p>
   @for (f of pfields(); track f.key) {
-  @if (f.type==='image') { <div class="pf-image"><span class="pf-label">{{f.label}} <small>(read only) · plugin profile-picture</small></span>@if (pvals()[f.key]) {<img class="pf-thumb" [src]="pvals()[f.key]" alt="" />}@else {<span class="pf-thumb pf-nopic">No picture</span>}<small class="hint">Belongs to the person; administrators see it but cannot change it.</small></div> }
+  @if (f.type==='image') { <div class="pf-image"><span class="pf-label">{{f.label}} <small>(read only) · plugin profile-picture</small></span>@if (photo()) {<img class="pf-thumb" [src]="photo()" alt="" />}@else {<span class="pf-thumb pf-nopic">No picture</span>}<small class="hint">Belongs to the person; administrators see it but cannot change it.</small></div> }
   @else { <label>{{f.label}}@if(!f.editable){<small> (read only)</small>}
   @if (f.type==='select') {<select [name]="'pf'+f.key" [ngModel]="pvals()[f.key] ?? ''" (ngModelChange)="setP(f.key,$event)" [disabled]="!f.editable"><option value="">-</option>@for(o of f.options;track o.value){<option [value]="o.value">{{o.label}}</option>}</select>}
   @else if (f.type==='boolean') {<select [name]="'pf'+f.key" [ngModel]="boolStr(f.key)" (ngModelChange)="setP(f.key,$event===''?null:$event==='true')" [disabled]="!f.editable"><option value="">-</option><option value="true">Yes</option><option value="false">No</option></select>}
@@ -163,8 +164,9 @@ export function userStats(users: UserProfile[]): UserStats {
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
   <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>
   <p class="hint">12 to 128 characters. Sent only in the request body; never returned in the table, SQL, history or logs. Do not use a real password in this public demo.</p>
-  @if (key && form.login_enabled) {<div class="danger-zone"><p>Disabling sign-in applies on the working branch and takes effect only after Review &amp; Apply.</p><button type="button" class="danger" id="user-disable" (click)="disableAndSave()" [disabled]="busy()">Disable sign-in</button></div>}
-  <div class="foot"><button class="grow" id="user-save" [disabled]="busy()">Save user to branch</button><button type="button" class="secondary" (click)="cancel()">Cancel</button></div>
+  @if (key && form.login_enabled && !readOnly()) {<div class="danger-zone"><p>Disabling sign-in applies on the working branch and takes effect only after Review &amp; Apply.</p><button type="button" class="danger" id="user-disable" (click)="disableAndSave()" [disabled]="busy()">Disable sign-in</button></div>}
+  </fieldset>
+  <div class="foot">@if (!readOnly()) {<button class="grow" id="user-save" [disabled]="busy()">Save user to branch</button>}<button type="button" class="secondary" [class.grow]="readOnly()" (click)="cancel()">{{readOnly() ? 'Close' : 'Cancel'}}</button></div>
   </form>
 </aside>}
 ` })
@@ -173,7 +175,10 @@ export class UsersPage {
   protected users = signal<UserProfile[]>([]); protected note = signal(''); protected busy = signal(false); protected editing = signal(false);
   protected pfields = signal<any[]>([]); protected pvals = signal<Record<string, unknown>>({}); private pchanged: Record<string, unknown> = {};
   /** The picture plugin's value for the edited user, when the plugin is active (the avatar shows it, initials otherwise). */
-  protected photo() { const v = this.pvals()['profile-picture.picture']; return typeof v === 'string' && v.startsWith('data:image/') ? v : ''; }
+  protected photo() { const v = this.pvals()['profile-picture.picture'] ?? (this.key ? this.photos()[this.key] : undefined); return typeof v === 'string' && v.startsWith('data:image/') ? v : ''; }
+  /** Pictures of the people in the list (live values, only what the server lets this administrator see). */
+  protected photos = signal<Record<string, string>>({});
+  protected readOnly() { return this.s.branch() === 'main'; }
   private pvalsFor: string | null = null; private profileRequest = 0;
   protected search = signal(''); protected fdept = signal(''); protected fstatus = signal<'' | UserStatus>('');
   protected sortKey = signal<SortKey>('name'); protected sortDir = signal<1 | -1>(1);
@@ -206,7 +211,9 @@ export class UsersPage {
   protected toggleMenu(id: string, ev: Event) { ev.stopPropagation(); this.menuFor.update((m) => (m === id ? null : id)); }
   @HostListener('document:click') closeMenu() { this.menuFor.set(null); }
 
-  protected async load() { try { const r = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}); this.users.set(r.data.users); } catch (e) { this.note.set((e as Error).message); } }
+  protected async load() { try { const r = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}); this.users.set(r.data.users); void this.loadPhotos(); } catch (e) { this.note.set((e as Error).message); } }
+  /** Best effort: without the picture plugin, or without the right to see it, the list keeps the initials. */
+  private async loadPhotos() { try { const r = await this.s.api.raw<{ pictures?: Record<string, string> }>('GET', '/users-pictures', undefined, this.h()); this.photos.set(r.status < 400 && r.data?.pictures ? r.data.pictures : {}); } catch { this.photos.set({}); } }
   protected start(u?: UserProfile) { this.partialSave.set(false); this.savedDetails = ''; this.menuFor.set(null); this.key = u?.id ?? null; this.form = { id: u?.id ?? '', display_name: u?.display_name ?? '', email: u?.email ?? '', department: u?.department ?? '', manager_id: u?.manager_id ?? '', login_enabled: u?.login_enabled ?? true }; this.password = ''; this.editing.set(true); this.pfields.set([]); this.pvals.set({}); this.pchanged = {}; this.pvalsFor = u?.id ?? null; ++this.profileRequest; if (u) void this.loadP(u.id); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   private async loadP(id: string) { const request = this.profileRequest, branch = this.s.branch(); try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400 && this.editing() && this.pvalsFor === id && this.key === id && request === this.profileRequest && branch === this.s.branch()) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }
@@ -223,6 +230,7 @@ export class UsersPage {
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
   protected async save() {
+    if (this.readOnly()) return; // main is read only: the sheet opens for reading, the API refuses writes anyway
     this.busy.set(true);
     try {
       const b: Record<string, unknown> = { ...this.form }; if (this.password) b['password'] = this.password;

@@ -11,9 +11,9 @@ Production code: 42 points. Test code: 92 points.
 
 | Circuit | Role | Event / detail | Place |
 |---|---|---|---|
-| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:92 |
-| ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:117 |
-| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:125 |
+| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:93 |
+| ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:118 |
+| ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:145 |
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:139 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:141 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:142 |
@@ -21,11 +21,11 @@ Production code: 42 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:359 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:185 |
 | callSlot (blocking hook) | caller | notify.templates | apps/api/src/plugins/v1/mail-catalogue.ts:33 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:40 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:44 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:53 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:146 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:211 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:41 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:45 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:54 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:166 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:231 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/profile/signup.service.ts:82 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:71 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:105 |

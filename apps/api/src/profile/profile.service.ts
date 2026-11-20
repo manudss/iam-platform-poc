@@ -13,6 +13,7 @@ export const PROFILE_STORE = 'PROFILE_VALUE_STORE';
 export const SIGNUP_ALLOWED = 'SIGNUP_ALLOWED';
 export const defaultSignupAllowed = () => workspaceMode();
 const SUBJECT = /^[A-Za-z0-9._@-]{1,64}$/;
+const PICTURE_KEY = 'profile-picture.picture';
 
 @Injectable()
 export class ProfileService {
@@ -117,7 +118,26 @@ export class ProfileService {
     this.events?.emit({ type: 'profile.review-resolved', tenant, branch: base, at: new Date().toISOString(), payload: { subject, decision: accept ? 'accepted' : 'refused', actor } });
     return { resolved: accept ? 'accepted' : 'refused', subject };
   }
-  async admin(tenant: string, id: string) { await this.subject(tenant, id, 'work'); return this.visible(tenant, 'admin', 'work', { ...(await this.baseValues(id, 'work')), ...(await this.store.get(tenant, id, 'work')) } as Values); }
+  /** The person's own picture is owned by the person: they save it on main (immediate policy), so an administrator's working branch cut earlier does not have it.
+   *  Administrators see the LIVE picture, read only, and only while the field is part of the administrator schema (plugin active, field visible). */
+  private async livePicture(tenant: string, id: string): Promise<string | undefined> {
+    try { const v = (await this.store.get(tenant, id, 'live'))[PICTURE_KEY]; return typeof v === 'string' && v.startsWith('data:image/') ? v : undefined; } catch { return undefined; }
+  }
+  async admin(tenant: string, id: string) {
+    await this.subject(tenant, id, 'work');
+    const r = await this.visible(tenant, 'admin', 'work', { ...(await this.baseValues(id, 'work')), ...(await this.store.get(tenant, id, 'work')) } as Values);
+    if (r.fields.some((f) => f.key === PICTURE_KEY)) { const pic = await this.livePicture(tenant, id); if (pic) r.values[PICTURE_KEY] = pic; }
+    return r;
+  }
+  /** Ids of the people in the directory of the selected branch (the users list shows these). */
+  async directoryIds(): Promise<string[]> { if (!this.users) return []; try { return (await this.users.list()).map((u) => String(u.id)); } catch { return []; } }
+  /** Pictures for the users list: the same rule as the user sheet (live value, only when the field is in the administrator schema). The caller filters the ids by the read policy first. */
+  async pictures(tenant: string, ids: string[]): Promise<Record<string, string>> {
+    if (!(await this.schema(tenant, 'admin', 'work')).some((f) => f.key === PICTURE_KEY)) return {};
+    const out: Record<string, string> = {};
+    for (const id of ids.slice(0, 500)) { const pic = await this.livePicture(tenant, id); if (pic) out[id] = pic; }
+    return out;
+  }
   async patchAdmin(tenant: string, id: string, input: unknown, actor: string) {
     await this.subject(tenant, id, 'work');
     const changes = await this.check(tenant, 'work', 'admin', input);

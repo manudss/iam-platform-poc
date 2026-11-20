@@ -65,6 +65,8 @@ export class ProfileController {
     let admin = true; try { new AdminGuard().capability({ switchToHttp: () => ({ getRequest: () => req }) } as never); } catch { admin = false; }
     return { subject: req.user.sub, admin, restricted, plugins, screenAccess: false };
   }
+  /** Pictures for the users list: live values, only for the people the caller may read, only while the picture field is shown to administrators. */
+  @UseGuards(AdminGuard) @Get('users-pictures') async pictures(@Param('tenant') t: string, @Req() req: { user: { sub: string } }) { const ids = await filterPeople(t, req.user.sub, 'user:read', await this.p.directoryIds(), (x) => x); return { pictures: await this.p.pictures(t, ids) }; }
   @UseGuards(AdminGuard) @Get('users/:id/profile') async user(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }) { await assertPerson(t, req.user.sub, 'user:read', id); return { ...(await this.p.admin(t, id)), sections: await this.sections(t, id, 'work') }; }
   @UseGuards(AdminGuard) @Patch('users/:id/profile') async patchUser(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: unknown) { await assertPerson(t, req.user.sub, 'user:manage', id); return this.p.patchAdmin(t, id, b, req.user.sub); }
 }
