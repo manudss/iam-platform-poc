@@ -109,6 +109,7 @@ jobs:
       - name: SSO session integration (two applications and expiration)
         run: node --test scripts/sso-session.test.mjs
       - name: Browser UI end-to-end (headless Chrome, real Dolt + core + API + ng serve)
+        if: ${{ !cancelled() }}   # still runs when an earlier step failed, so one failure never hides the other results (the job stays red)
         env:
           NG_CLI_ANALYTICS: "false"
         run: |
@@ -132,6 +133,7 @@ jobs:
       - name: Browser sign-in flow end-to-end (headless Chrome, real core, local client on localhost:4200)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/authz-browser-e2e.mjs /tmp/authz-shots
       - name: Account blocks and sign-in levels end-to-end (headless Chrome, real core, fictional data)
+        if: ${{ !cancelled() }}   # still runs when an earlier step failed, so one failure never hides the other results (the job stays red)
         run: |
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/account-blocks-e2e.mjs /tmp/blocks-shots
   web:
