@@ -54,7 +54,7 @@ export function clock(ms: number): string {
     .track { display: block; height: 5px; border-radius: 3px; background: var(--bar-off); overflow: hidden; }
     .fill { display: block; height: 100%; background: var(--acc2); transition: width 1s linear; }
     .warn .fill { background: var(--warn-ink); } .warn { color: var(--warn-ink); font-weight: 600; }
-    .spanel { display: none; position: absolute; top: calc(100% + .45rem); right: 0; z-index: 30; width: min(18rem, calc(100vw - 1rem)); box-sizing: border-box; padding: .8rem .9rem; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: .6rem; box-shadow: 0 12px 30px var(--shadow-color); font-size: .82rem; }
+    .spanel { display: none; position: absolute; top: calc(100% + .45rem); left: 0; z-index: 30; width: min(18rem, calc(100vw - 1rem)); box-sizing: border-box; padding: .8rem .9rem; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: .6rem; box-shadow: 0 12px 30px var(--shadow-color); font-size: .82rem; }
     .spanel::before { content: ''; position: absolute; left: 0; right: 0; top: -.5rem; height: .5rem; }
     .sesswrap:hover .spanel, .sesswrap:focus-within .spanel, .sesswrap.open .spanel { display: block; }
     .spanel p { margin: 0 0 .6rem; } .spanel .smeta { color: var(--muted); }
@@ -64,7 +64,7 @@ export function clock(ms: number): string {
     .dlg h3 { margin: 0 0 .5rem; } .dlg p { margin: 0 0 .8rem; } .bad { color: var(--bad); }
     .act { display: flex; gap: .6rem; flex-wrap: wrap; }
     @media (max-width: 900px) { .sess { height: var(--ctl-h, 2.75rem); } }
-    @media (max-width: 600px) { .sess { width: 4.6rem; padding: 0 .5rem; } .lbl { font-size: .65rem; } .spanel { right: -3rem; } }
+    @media (max-width: 600px) { .sess { width: 4.6rem; padding: 0 .5rem; } .lbl { font-size: .65rem; } .spanel { left: auto; right: -2rem; } }
   `],
 })
 export class SessionTimer {
