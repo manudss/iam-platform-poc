@@ -117,6 +117,14 @@ try {
   const seed = (await import(join(root, 'apps/api/dist/authn/config.js'))).SEED_CONFIG;
   const mk = async (name) => { const r = await api(T1, 'POST', '/versioning/branches', { name, from: 'main' }); assert.equal(r.status < 300, true, 'branch ' + name + ': ' + r.status + ' ' + JSON.stringify(await json(r.clone()))); };
   await mk('blocks-e2e-1');
+  // The authenticator-app method is served by an add-on plugin: it is installed and enabled on the working branch like any other change, then Applied.
+  const plist = await json(await api(T1, 'GET', '/plugins', undefined, 'blocks-e2e-1'));
+  const authState = (plist.plugins ?? []).filter((x) => /^auth-/.test(x.id)).map((x) => `${x.id}:${x.enabled ? 'on' : x.installed ? 'installed' : 'off'}`).join(',');
+  console.log('auth plugins on the branch:', authState);
+  for (const step of ['install', 'enable']) {
+    const r = await api(T1, 'POST', `/plugins/auth-totp/${step}`, { grants: { install: true } }, 'blocks-e2e-1');
+    assert.equal(r.status < 300, true, `auth-totp ${step}: ${r.status} ${JSON.stringify(await json(r.clone())).slice(0, 400)} (state: ${authState})`);
+  }
   const putCfg = await api(T1, 'PUT', '/auth', { config: seed }, 'blocks-e2e-1'); assert.equal(putCfg.status < 300, true, 'chains saved: ' + putCfg.status + ' ' + JSON.stringify(await json(putCfg.clone())));
   const enr = await json(await api(T1, 'POST', '/auth/enrollments/demo-alice/authenticator-app', {}, 'blocks-e2e-1'));
   const secret = enr.shownOnce.secret; assert.match(secret, /^[A-Z2-7]{16,}$/);
