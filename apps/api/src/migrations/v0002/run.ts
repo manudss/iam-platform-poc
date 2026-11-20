@@ -23,6 +23,15 @@ export function planAccountBlocksRule(rows: { set_name: string; id: string; ceda
  */
 export function accountBlocksRuleMigration(app: INestApplication) { return {
   id: '0002',
+  /** Everything that can be refused is checked before the journal marks the migration as started, so a refusal leaves the data and the journal untouched. */
+  preflight: async () => {
+    const v = app.get(VersioningService, { strict: false });
+    await v.at('main', async (c) => {
+      const [dirty] = await c.query("select count(*) n from dolt_status where table_name='policy_rules'");
+      if (Number((dirty as { n: number }[])[0].n)) throw new Error('policy_rules has uncommitted changes on main; nothing was changed. Commit or discard them, then start again');
+      await c.query('select set_name, id, cedar from policy_rules limit 1');
+    });
+  },
   run: async () => {
     const v = app.get(VersioningService, { strict: false });
     await v.lock(() => v.at('main', async (c) => {

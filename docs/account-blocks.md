@@ -61,3 +61,14 @@ Order for an existing dataset: back up, adopt baseline 0001 (the existing proced
 ## Workflow blocks
 
 `lyam-block-account`, `lyam-unblock-account` (immediate, idempotent, the last administrator is protected, test runs only log) and `lyam-security-setting`.
+
+## If migration 0002 fails at boot
+
+What can be refused is checked before the journal marks 0002 as started (`preflight`): uncommitted changes in `policy_rules` on `main`, or an unreadable table. A refusal there changes nothing and leaves no pending marker, so the previous image can still be started; after the cause is removed the new image retries by itself. The boot test runs exactly this case on real Dolt.
+
+If a failure comes after the journal started (a write error, a crash), the journal keeps `pending` on purpose and every image, old or new, refuses to start. Recovery is the one already documented for the baseline: stop the app, restore the complete cold backup taken before the update, then start the image you want. A reviewed manual repair is possible (the change is one row in `policy_rules` and one Dolt commit named `migration 0002`), but the pending marker is never deleted by hand. Take the cold backup before deploying; it is the rollback.
+
+## What the rule protects, before and after Review & Apply
+
+- Before: the rule exists in Dolt `main` but not in the live permission engine. Only the `iam-admin` role opens the Account protection page and its API; managers do not, and no one is locked out of anything they had. Blocks, lockout and levels already work, because they check the screen right, not the pending rule.
+- After: managers and administrators holding the `account-blocks` screen right can block and unblock accounts and change the settings. Nobody can block themselves, and the last active administrator cannot be blocked. Without the rule, nothing that exists today is removed.

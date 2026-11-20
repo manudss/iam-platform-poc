@@ -21,9 +21,9 @@
       "name": "Account-blocks screen rule (default policy set, pending Review & Apply)",
       "files": {
         "apps/api/src/migrations/v0002/rule.ts": "ba39d65ba9be6292f8e61f110de670c76dffd00565eaa03143a08b4000382740",
-        "apps/api/src/migrations/v0002/run.ts": "44b9a430027391581dc4f90f013334409d5322da5378571aef69a7d8d85757a7"
+        "apps/api/src/migrations/v0002/run.ts": "8ce872c866d2b2b4a497c2961204e6b7a70b858a463214594e8bc727d369484d"
       },
-      "checksum": "35b559d46dbd3380ba8e04748ac66a8a89af6552060d9378507ac2a9cae8d908"
+      "checksum": "3fef799dcba07cf71f9cc53b4ba1199850d06cefae4720826b70733fd2256a4f"
     }
   ]
 }

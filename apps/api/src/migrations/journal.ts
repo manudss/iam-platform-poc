@@ -74,13 +74,14 @@ export class MigrationJournal {
 }
 
 /** Run in order, exactly once. Any uncertainty retains pending and blocks serving traffic. No automatic retry/reset. */
-export async function migrate(journal: MigrationJournal, bootId: string, actions: { id: string; run: () => Promise<void>; verify: () => Promise<void> }[]) {
+export async function migrate(journal: MigrationJournal, bootId: string, actions: { id: string; preflight?: () => Promise<void>; run: () => Promise<void>; verify: () => Promise<void> }[]) {
   let j = journal.assertBoot(bootId);
   if (j.pending && j.pending.id !== '0001') error('unexpected in-progress migration');
   for (let i = j.entries.length; i < journal.versions.length; i++) {
     const v = journal.versions[i], action = actions.find(a => a.id === v.id);
     if (!action) error(`missing implementation for ${v.id}`);
-    if (!j.pending) journal.begin(v.id, bootId, 'apply');
+    // A refusal here happens BEFORE the pending marker exists: the data is untouched and the previous image can start again.
+    if (!j.pending) { await action.preflight?.(); journal.begin(v.id, bootId, 'apply'); }
     await action.run();
     journal.phase(bootId, 'verify'); await action.verify(); journal.complete(bootId);
     j = journal.assertBoot(bootId);

@@ -64,6 +64,19 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    };
    assert.equal(await legacy(false),1,'a customised tenant without the rule receives it, nothing else changes');
    assert.equal(await legacy(true),0,'a tenant that wrote its own rule for the screen keeps its choice');
+   // Refusal before the journal starts: uncommitted policy edits on main stop 0002 with no pending marker, so the previous image could still start.
+   rmSync(join(home,'migrations','journal.json'));new MigrationJournal(home,readManifest(root).versions).adopt('b'.repeat(64));
+   dolt(['--use-db=iam','sql','-q',"DELETE FROM policy_rules WHERE id='tenant-own-blocks'; CALL DOLT_ADD('-A'); CALL DOLT_COMMIT('-m','remove test rule'); INSERT INTO policy_rules (set_name,id,cedar) VALUES ('default','uncommitted-edit','permit(principal, action, resource);');"]);
+   env.IAM_MIGRATION_BOOT_ID='fifth';
+   const prep5=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});assert.equal(prep5.status,0,prep5.stderr);
+   await assert.rejects(start());await stop(api);await stop(server);
+   const stuck=new MigrationJournal(home,readManifest(root).versions).read();assert.equal(stuck?.pending,undefined);assert.equal(stuck?.entries.length,1);
+   assert.match(dolt(['--use-db=iam','sql','-q',"SELECT id FROM policy_rules WHERE id='uncommitted-edit'"]),/uncommitted-edit/);
+   dolt(['--use-db=iam','sql','-q',"CALL DOLT_CHECKOUT('policy_rules')"]);
+   env.IAM_MIGRATION_BOOT_ID='sixth';
+   const prep6=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});assert.equal(prep6.status,0,prep6.stderr);
+   await start();await stop(api);await stop(server);
+   assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2);
   }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
  });
 });
