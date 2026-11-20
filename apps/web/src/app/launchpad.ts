@@ -51,9 +51,9 @@ const LAUNCHPAD_KEY = makeStateKey<{ user?: { name?: string }; apps?: LaunchpadA
             @if (a.logo && !failedImages().includes(a.id)) { <img class="lp-logo" [src]="a.logo" alt="" (error)="imageFailed(a.id)" /> }
             @else { <span class="lp-logo lp-initials" aria-hidden="true">{{initials(a.name)}}</span> }
             <h3>@for (part of nameParts(a.name); track $index; let last = $last) {{{part}}@if (!last) {<wbr>} }</h3>
-            @if (a.minLevel) { <span class="lp-level" [attr.data-level]="a.minLevel" title="This application asks for a stronger sign-in">Level {{a.minLevel}}</span> }
           </div>
           <p class="lp-desc">{{a.description}}</p>
+          @if (a.minLevel) { <span class="lp-level" [attr.data-level]="a.minLevel" title="This application asks for a stronger sign-in">Level {{a.minLevel}}</span> }
           @if (editing()) {
             <div class="lp-move">
               <button class="secondary lp-handle" [attr.aria-label]="'Drag to reorder ' + a.name" [disabled]="busy()" (pointerdown)="startDrag($event,a.id)" (pointermove)="dragMove($event)" (pointerup)="drop($event,section.apps)" (pointercancel)="stopDrag()" (keydown.escape)="stopDrag()">⠿</button>
