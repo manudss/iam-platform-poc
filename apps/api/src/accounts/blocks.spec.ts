@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { type Block, afterVerification, canSignIn, inForce, lift, lockoutAfter, lockoutVerdict, LOCKOUT_OFF, mayManage, shownBlock } from './blocks.js';
+import { type Block, afterVerification, canSignIn, inForce, lift, lockoutAfter, lockoutVerdict, LOCKOUT_OFF, LOCKOUT_DEFAULT, mayManage, shownBlock } from './blocks.js';
 
 const b = (o: Partial<Block> & { id: string; kind: Block['kind'] }): Block => ({ subject: 'u', message: 'm', origin: 'admin', setBy: 'a', setAt: 1, ...o });
 const now = 1_000;
@@ -43,7 +43,7 @@ describe('e-mail verification', () => {
 });
 
 describe('who may block or unblock', () => {
-  const admin = { subject: 'root', admin: true, reports: [] }, mgr = { subject: 'm', admin: false, reports: ['e'] };
+  const admin = { subject: 'root', mayManageBlocks: true }, mgr = { subject: 'm', mayManageBlocks: true }, plain = { subject: 'p', mayManageBlocks: false };
   const t = (subject: string, adm = false) => ({ subject, admin: adm });
   it('nobody blocks themselves', () => {
     assert.deepEqual(mayManage({ actor: admin, target: t('root', true), kind: 'suspended', action: 'block', activeAdmins: ['root', 'x'] }), { ok: false, reason: 'self' });
@@ -51,15 +51,12 @@ describe('who may block or unblock', () => {
   it('the last active admin cannot be blocked', () => {
     assert.deepEqual(mayManage({ actor: { ...admin, subject: 'other' }, target: t('root', true), kind: 'suspended', action: 'block', activeAdmins: ['root'] }), { ok: false, reason: 'last-admin' });
   });
-  it('an admin may unblock someone else', () => assert.equal(mayManage({ actor: admin, target: t('e'), kind: 'disabled', action: 'unblock', activeAdmins: ['root'] }).ok, true));
-  it('a manager suspends and unblocks their reports only', () => {
-    assert.equal(mayManage({ actor: mgr, target: t('e'), kind: 'suspended', action: 'block', activeAdmins: ['root'] }).ok, true);
-    assert.equal(mayManage({ actor: mgr, target: t('e'), kind: 'suspended', action: 'unblock', activeAdmins: ['root'] }).ok, true);
-    assert.deepEqual(mayManage({ actor: mgr, target: t('z'), kind: 'suspended', action: 'unblock', activeAdmins: ['root'] }), { ok: false, reason: 'not-allowed' });
-    assert.deepEqual(mayManage({ actor: mgr, target: t('root', true), kind: 'suspended', action: 'block', activeAdmins: ['root', 'y'] }), { ok: false, reason: 'manager-cannot-block-admin' });
+  it('whoever holds the right blocks and unblocks anyone else, of any kind', () => {
+    for (const actor of [admin, mgr]) for (const kind of ['suspended', 'disabled', 'locked'] as const) for (const action of ['block', 'unblock'] as const)
+      assert.equal(mayManage({ actor, target: t('e'), kind, action, activeAdmins: ['root', 'y'] }).ok, true);
   });
-  it('a manager cannot disable (kept for admins until the owner decides)', () => {
-    assert.deepEqual(mayManage({ actor: mgr, target: t('e'), kind: 'disabled', action: 'block', activeAdmins: ['root'] }), { ok: false, reason: 'kind-needs-admin' });
+  it('without the right nothing is allowed', () => {
+    assert.deepEqual(mayManage({ actor: plain, target: t('e'), kind: 'suspended', action: 'unblock', activeAdmins: ['root'] }), { ok: false, reason: 'not-allowed' });
   });
 });
 
@@ -71,7 +68,8 @@ describe('a change set cannot lock us out', () => {
 
 describe('automatic lock', () => {
   const on = { ...LOCKOUT_OFF, enabled: true, maxFailures: 3, windowMs: 1000, lockMs: 500 };
-  it('is off unless enabled', () => assert.equal(lockoutVerdict([1, 2, 3, 4, 5, 6], 10, LOCKOUT_OFF, 'u').lock, false));
+  it('starts on with 5 failures in 15 minutes, locked 15 minutes', () => { assert.equal(LOCKOUT_DEFAULT.enabled, true); assert.equal(lockoutVerdict([1, 2, 3, 4, 5], 6, LOCKOUT_DEFAULT, 'u').lock, true); assert.equal(LOCKOUT_DEFAULT.maxFailures, 5); });
+  it('is off when disabled', () => assert.equal(lockoutVerdict([1, 2, 3, 4, 5, 6], 10, LOCKOUT_OFF, 'u').lock, false));
   it('counts failures inside the window only', () => {
     assert.equal(lockoutVerdict([0, 1500, 1600], 1700, on, 'u').lock, false);
     assert.equal(lockoutVerdict([1500, 1600, 1650], 1700, on, 'u').lock, true);

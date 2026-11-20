@@ -48,29 +48,21 @@ export function afterVerification(blocks: readonly Block[], opts: { holdAfterVer
   return [...rest, { id: opts.id, subject: opts.subject, kind: 'pending_approval', message: opts.message, origin: 'automatic', setBy: 'system', setAt: opts.now, hold: true }];
 }
 
-export interface Actor { subject: string; admin: boolean; /** Subjects this actor manages, directly or not. */ reports: readonly string[] }
-export type Refusal = 'self' | 'not-allowed' | 'last-admin' | 'manager-cannot-block-admin' | 'kind-needs-admin';
+/** The dedicated right to manage blocks. It is a permission of its own, assigned to roles (admin and manager for now), not a rule hard-wired to a role. */
+export const MANAGE_BLOCKS_RIGHT = 'accounts.blocks.manage';
+export interface Actor { subject: string; /** Whether the actor holds MANAGE_BLOCKS_RIGHT through one of their roles. */ mayManageBlocks: boolean }
+export type Refusal = 'self' | 'not-allowed' | 'last-admin';
 export interface Target { subject: string; admin: boolean }
 
-/** Kinds a manager may set or lift. `disabled` and the automatic kinds stay with admins (to be confirmed by the owner). */
-const MANAGER_KINDS: readonly BlockKind[] = ['suspended'];
-
 /**
- * May `actor` block (`action: 'block'`) or lift (`'unblock'`) a block of `kind` on `target`?
- * Nobody blocks themselves. An admin may act on anyone else, except that the last active admin cannot be blocked.
- * A manager acts only on people who report to them, never on an admin. Unblocking someone else is never refused for a rule other than scope.
+ * Who may set or lift a block. Kept simple on purpose: whoever holds the right may block or unblock anyone else, whatever set the block.
+ * Two protections stay: nobody blocks themselves, and the last active administrator cannot be blocked.
  */
 export function mayManage(a: { actor: Actor; target: Target; kind: BlockKind; action: 'block' | 'unblock'; activeAdmins: readonly string[] }): { ok: true } | { ok: false; reason: Refusal } {
-  const { actor, target, kind, action, activeAdmins } = a;
+  const { actor, target, action, activeAdmins } = a;
   if (action === 'block' && actor.subject === target.subject) return { ok: false, reason: 'self' };
-  if (actor.admin) {
-    if (action === 'block' && target.admin && activeAdmins.length === 1 && activeAdmins[0] === target.subject) return { ok: false, reason: 'last-admin' };
-    return { ok: true };
-  }
-  if (target.admin) return { ok: false, reason: 'manager-cannot-block-admin' };
-  if (!actor.reports.includes(target.subject)) return { ok: false, reason: 'not-allowed' };
-  if (!MANAGER_KINDS.includes(kind) && kind !== 'pending_approval' && kind !== 'pending_verification' && kind !== 'locked') return { ok: false, reason: 'kind-needs-admin' };
-  if (action === 'block' && !MANAGER_KINDS.includes(kind)) return { ok: false, reason: 'kind-needs-admin' };
+  if (!actor.mayManageBlocks) return { ok: false, reason: 'not-allowed' };
+  if (action === 'block' && target.admin && activeAdmins.length === 1 && activeAdmins[0] === target.subject) return { ok: false, reason: 'last-admin' };
   return { ok: true };
 }
 
@@ -81,9 +73,9 @@ export function lockoutAfter(a: { applier: string; adminsBefore: readonly string
   return { ok: true };
 }
 
-/** Lockout settings: OFF unless the owner enables it. No default values are active. */
+/** Lockout settings. The owner chose the starting values (5 failures in 15 minutes, locked 15 minutes) and wants them on; every field stays configurable per tenant. */
 export interface LockoutSettings { enabled: boolean; maxFailures: number; windowMs: number; lockMs: number; hold: boolean; exempt: readonly string[] }
-export const LOCKOUT_OFF: LockoutSettings = { enabled: false, maxFailures: 5, windowMs: 15 * 60_000, lockMs: 15 * 60_000, hold: false, exempt: [] };
+export const LOCKOUT_DEFAULT: LockoutSettings = { enabled: true, maxFailures: 5, windowMs: 15 * 60_000, lockMs: 15 * 60_000, hold: false, exempt: [] };
 
 /** Failed attempts inside the window decide whether a lock block must be set now. Pure: the caller keeps the timestamps. */
 export function lockoutVerdict(failures: readonly number[], now: number, s: LockoutSettings, subject: string): { lock: boolean; recent: number } {
@@ -99,3 +91,5 @@ export const BLOCK_LABEL: Record<BlockKind, string> = {
 };
 export const blockReference = (b: Pick<Block, 'id'>) => `BLK-${b.id.replace(/[^A-Za-z0-9]/g, '').slice(-4).toUpperCase()}`;
 export function refusalMessage(b: Block): string { return `${BLOCK_LABEL[b.kind]}. ${b.message.trim()} Reference ${blockReference(b)}.`.replace(/\.\s*\./g, '.'); }
+
+export const LOCKOUT_OFF: LockoutSettings = { ...LOCKOUT_DEFAULT, enabled: false };

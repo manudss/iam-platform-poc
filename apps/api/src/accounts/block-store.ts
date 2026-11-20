@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { type Block, type LockoutSettings, LOCKOUT_OFF } from './blocks.js';
+import { type Block, type LockoutSettings, LOCKOUT_DEFAULT } from './blocks.js';
 
 /**
- * Account blocks and the automatic-lock settings. Runtime security state: never in Dolt (a failed sign-in must not make a versioned commit),
+ * Account blocks and the automatic-lock settings. Operational security state (an admin unlock or a verification must not be undone by an old branch or a rebase): not in Dolt (a failed sign-in must not make a versioned commit),
  * never returned with secrets. One file, written atomically, like the authentication enrolments. Nothing here is a default value that
  * is active: lockout stays OFF until an administrator enables it.
  */
@@ -52,7 +52,7 @@ export class BlockStore {
   /** Every account that carries at least one block (admin list). */
   async blocked(tenant: string): Promise<string[]> { return Object.keys((await this.load()).blocks).filter((k) => k.startsWith(`${tenant}/`)).map((k) => k.slice(tenant.length + 1)); }
 
-  async lockout(tenant: string): Promise<LockoutSettings> { return { ...LOCKOUT_OFF, ...((await this.load()).lockout[tenant] ?? {}) }; }
+  async lockout(tenant: string): Promise<LockoutSettings> { return { ...LOCKOUT_DEFAULT, ...((await this.load()).lockout[tenant] ?? {}) }; }
   async setLockout(tenant: string, s: LockoutSettings): Promise<void> { await this.mutate((d) => { d.lockout[tenant] = s; }); }
   async holdAfterVerification(tenant: string): Promise<boolean> { return (await this.load()).holdAfterVerification[tenant] === true; }
   async setHoldAfterVerification(tenant: string, v: boolean): Promise<void> { await this.mutate((d) => { d.holdAfterVerification[tenant] = v; }); }
