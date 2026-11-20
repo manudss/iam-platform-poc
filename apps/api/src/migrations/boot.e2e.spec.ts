@@ -92,6 +92,6 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    await start();await stop(api);await stop(server);
    assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2,'restored backup boots and 0002 runs once');
    rmSync(cold,{recursive:true,force:true});
-  }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
+  }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}spawnSync('pkill',['-f',home]);await sleep(500);rmSync(home,{recursive:true,force:true,maxRetries:20,retryDelay:300});}
  });
 });
