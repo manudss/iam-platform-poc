@@ -5,7 +5,8 @@ import { LOCKOUT_DEFAULT, type LockoutSettings } from './blocks.js';
  * Account security settings (versioned, per tenant, on the Dolt data branch like the session settings): what the owner CONFIGURES.
  * The state those settings act on (who is blocked, failed-attempt counters) is operational and lives in the block store, so an
  * old branch or a rebase can never undo an unblock, a verification or an automatic lock.
- * Starting values chosen by the owner: lockout after 5 failures in 15 minutes for 15 minutes, administration pages at level 5.
+ * Starting values chosen by the owner: lockout after 5 failures in 15 minutes for 15 minutes (on). The demo level for the administration pages is 5, but
+ * it is not on in the code: the level is raised through the settings by someone who holds it (see saveSecurity), so a deploy can never lock the administrators out.
  */
 export const SECURITY_SETTINGS_ID = 'core-security';
 export interface SecurityConfig {
@@ -17,7 +18,7 @@ export interface SecurityConfig {
   /** When true, a person whose e-mail was just verified stays blocked until someone approves them. */
   holdAfterVerification: boolean;
 }
-export const DEFAULT_SECURITY: SecurityConfig = { lockout: { ...LOCKOUT_DEFAULT }, adminMinLevel: 5, adminMaxAgeSeconds: 0, holdAfterVerification: false };
+export const DEFAULT_SECURITY: SecurityConfig = { lockout: { ...LOCKOUT_DEFAULT }, adminMinLevel: 0, adminMaxAgeSeconds: 0, holdAfterVerification: false };
 
 const bad = (m: string): never => { throw new BadRequestException(m); };
 const whole = (v: unknown, name: string, lo: number, hi: number) => {

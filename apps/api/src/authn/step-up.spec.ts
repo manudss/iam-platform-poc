@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { adminReachability, checkAssurance, eligibleChains, sameAccount, type ChainOption } from './step-up.js';
+import { adminReachability, chainOptions, methodEnrolled, checkAssurance, eligibleChains, sameAccount, type ChainOption } from './step-up.js';
 
 const c = (id: string, level: number, o: Partial<ChainOption> = {}): ChainOption => ({ id, name: id, enabled: true, effectiveLevel: level, simulated: false, enrolled: true, ...o });
 
@@ -33,5 +33,21 @@ describe('same account and admin reachability', () => {
   it('accepts when at least one administrator can, and lists who cannot', () => {
     const r = adminReachability({ root: [c('pk', 9)], ann: [c('pw', 3)] }, 8);
     assert.equal(r.ok, true); assert.deepEqual(r.reachable, ['root']); assert.deepEqual(r.unreachable, ['ann']);
+  });
+});
+
+describe('options for a re-sign-in', () => {
+  const cfg = { methods: [{ id: 'pw', type: 'password', enabled: true }, { id: 'tp', type: 'totp', enabled: true }, { id: 'pk', type: 'passkey', enabled: true }],
+    chains: [{ id: 'basic', name: 'Password', steps: ['pw'] }, { id: 'mfa', name: 'Password then authenticator', steps: ['pw', 'tp'] }, { id: 'key', name: 'Passkey', steps: ['pk'] }] };
+  const an = { basic: { effectiveLevel: 3, simulatedSteps: [] }, mfa: { effectiveLevel: 8, simulatedSteps: [] }, key: { effectiveLevel: 9, simulatedSteps: [] } };
+  it('offers only chains the person has set up, that reach the level, never a weaker one', () => {
+    const opts = chainOptions(cfg, an, { tp: { totp: true } });
+    assert.deepEqual(eligibleChains(opts, 8).map((c) => c.id), ['mfa']);
+    assert.deepEqual(eligibleChains(chainOptions(cfg, an, {}), 8), []);
+    assert.deepEqual(eligibleChains(opts, 3).map((c) => c.id), ['basic', 'mfa']);
+  });
+  it('an enrolment is required for authenticator, PIN, passkey and external providers', () => {
+    assert.equal(methodEnrolled('password', undefined), true); assert.equal(methodEnrolled('totp', undefined), false);
+    assert.equal(methodEnrolled('passkey', { webauthn: [{}] }), true); assert.equal(methodEnrolled('sso-google', { external: { sub: 'x' } }), true); assert.equal(methodEnrolled('unknown', {}), false);
   });
 });

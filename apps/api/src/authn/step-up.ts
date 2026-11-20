@@ -33,3 +33,23 @@ export function adminReachability(admins: Readonly<Record<string, readonly Chain
   for (const [sub, chains] of Object.entries(admins)) (eligibleChains(chains, minLevel).length ? reachable : unreachable).push(sub);
   return { ok: reachable.length > 0, reachable, unreachable };
 }
+
+/** What a person has set up, per method instance (the shape of EnrollmentStore.status). */
+export interface EnrollmentView { totp?: boolean; pin?: unknown; email?: string | null; external?: unknown; webauthn?: unknown }
+/** Whether this person can really complete one method. Password and e-mail code need nothing set up here; the others need their own enrolment. */
+export function methodEnrolled(type: string, rec: EnrollmentView | undefined): boolean {
+  if (type === 'password' || type === 'email') return true;
+  if (type === 'totp') return !!rec?.totp;
+  if (type === 'pin') return !!rec?.pin;
+  if (type === 'passkey' || type === 'webauthn') return !!rec?.webauthn;
+  if (type.startsWith('sso-')) return !!rec?.external;
+  return false;
+}
+/** The chains of a configuration as options for a re-sign-in: effective level, simulated, and whether this person can complete every step. */
+export function chainOptions(cfg: { methods: { id: string; type: string; enabled: boolean }[]; chains: { id: string; name: string; steps: string[] }[] }, analysis: Record<string, { effectiveLevel: number; simulatedSteps: string[] }>, status: Record<string, EnrollmentView>): ChainOption[] {
+  return cfg.chains.map((c) => {
+    const steps = c.steps.map((s) => cfg.methods.find((m) => m.id === s));
+    const a = analysis[c.id];
+    return { id: c.id, name: c.name, enabled: steps.every((m) => !!m?.enabled), effectiveLevel: a?.effectiveLevel ?? 0, simulated: (a?.simulatedSteps.length ?? 0) > 0, enrolled: steps.every((m) => !!m && methodEnrolled(m.type, status[m.id])) };
+  });
+}

@@ -11,6 +11,8 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
+import { AdminGuard } from '../auth/admin.guard.js';
+import { chainOptions, checkAssurance, eligibleChains, type ChainOption, type StepUpVerdict } from './step-up.js';
 import { SECURITY_SETTINGS_ID, SecurityConfig, parseSecurity, storedSecurity, validateSecurity } from '../accounts/security-config.js';
 import { BlockStore } from '../accounts/block-store.js';
 import { inForce, lockoutVerdict, refusalMessage, shownBlock } from '../accounts/blocks.js';
@@ -88,7 +90,9 @@ export class AuthnService implements OnApplicationBootstrap {
   private sessions = new Map<string, Session>();
   private fails = new Map<string, number[]>();
   now = () => Date.now();
-  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService) {}
+  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService) {
+    AdminGuard.assurance = (tenant, claims) => this.adminAssurance(tenant, claims);
+  }
 
   private async registry(ref: 'live' | 'work', write = false): Promise<PluginRegistry> {
     if (!workspaceMode()) return this.reg;
@@ -131,8 +135,31 @@ export class AuthnService implements OnApplicationBootstrap {
   async signinSecurity(tenant: string, branch?: string): Promise<SecurityConfig> { return parseSecurity(await (await this.signinRegistry(branch)).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
   async liveSecurity(tenant: string): Promise<SecurityConfig> { return parseSecurity(await (await this.registry('live')).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
   async workingSecurity(tenant: string): Promise<SecurityConfig> { return parseSecurity(await (await this.registry('work')).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
-  async saveSecurity(tenant: string, input: unknown): Promise<SecurityConfig> {
+  /** Chains the person can complete to reach `minLevel` (never a weaker one, never simulated, only what they have set up). */
+  async stepUpOptions(tenant: string, subject: string, minLevel: number): Promise<ChainOption[]> {
+    const cfg = await this.liveConfig(tenant);
+    const analysis = Object.fromEntries(cfg.chains.map((c) => { const a = analyzeChain(cfg, c); return [c.id, { effectiveLevel: a.effectiveLevel, simulatedSteps: a.simulatedSteps }]; }));
+    return eligibleChains(chainOptions(cfg, analysis, await this.enroll.status(tenant, subject) as never), minLevel);
+  }
+  /** The rule for administration pages: the level (and optional freshness) of the sign-in behind the session. Off at 0. */
+  async adminAssurance(tenant: string, claims: { auth_level?: unknown; auth_time?: unknown } | undefined): Promise<StepUpVerdict> {
+    const sec = await this.liveSecurity(tenant);
+    if (sec.adminMinLevel <= 0) return { ok: true };
+    const level = typeof claims?.auth_level === 'number' ? claims.auth_level : 0;
+    const authTime = typeof claims?.auth_time === 'number' ? claims.auth_time * 1000 : 0;
+    return checkAssurance({ level, authTime }, { minLevel: sec.adminMinLevel, ...(sec.adminMaxAgeSeconds ? { maxAgeMs: sec.adminMaxAgeSeconds * 1000 } : {}) }, this.now());
+  }
+  /**
+   * Saving security settings. Raising the administration level is refused when the person saving does not hold that level themselves right now,
+   * or when no enabled chain without a simulated step reaches it: the change can never be the one that locks the administrators out.
+   */
+  async saveSecurity(tenant: string, input: unknown, actor?: { sub: string; level: number }): Promise<SecurityConfig> {
     const cfg = validateSecurity(input);
+    const before = await this.workingSecurity(tenant);
+    if (cfg.adminMinLevel > before.adminMinLevel) {
+      if (!actor || actor.level < cfg.adminMinLevel) throw new BadRequestException({ code: 'would-lock-out-the-applier', message: `Level ${cfg.adminMinLevel} is above your current sign-in (${actor?.level ?? 0}). Sign in with a stronger method first, so this change cannot lock you out.` });
+      if (!(await this.stepUpOptions(tenant, actor.sub, cfg.adminMinLevel)).length) throw new BadRequestException({ code: 'no-chain-reaches-level', message: `No enabled sign-in chain without a simulated step reaches level ${cfg.adminMinLevel} for you.` });
+    }
     await (await this.registry('work', true)).putCoreSettings(tenant, SECURITY_SETTINGS_ID, storedSecurity(cfg));
     return cfg;
   }
@@ -776,7 +803,7 @@ export class AuthnService implements OnApplicationBootstrap {
     const real = s.done.filter((d) => d.real), factors = new Set(real.map((d) => methodType(d.type)!.factor).filter((f) => f !== 'other'));
     const claims = {
       amr: [...new Set(real.map((d) => methodType(d.type)!.amr))],
-      auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',
+      auth_time: Math.floor(this.now() / 1000), auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',
       auth_mfa: factors.size >= 2, auth_chain: s.chain.id, auth_methods: s.done.map((d) => d.id),
       auth_simulated: s.done.filter((d) => !d.real).map((d) => d.id),
       ...sessionClaims(await this.signinSession(s.tenant, s.branch)),

@@ -36,5 +36,5 @@ export class AccountBlocksController {
   }
   /** Lockout and administration-level settings, versioned (edited on a working branch, live after Apply). */
   @Get('security') async settings(@Param('tenant') t: string) { return { tenant: t, working: await this.authn.workingSecurity(t), live: await this.authn.liveSecurity(t), defaults: DEFAULT_SECURITY }; }
-  @Put('security') async put(@Param('tenant') t: string, @Body() b: { config?: unknown }) { return { saved: true, config: await this.authn.saveSecurity(t, b?.config) }; }
+  @Put('security') async put(@Param('tenant') t: string, @Body() b: { config?: unknown }, @Req() req: any) { assertNotBranchTest(req); return { saved: true, config: await this.authn.saveSecurity(t, b?.config, { sub: this.sub(req), level: Number(req.user?.auth_level ?? 0) }) }; }
 }

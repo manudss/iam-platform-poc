@@ -28,8 +28,21 @@ export class AdminGuard implements CanActivate {
     }
     return true;
   }
-  /** With IAM_SCREEN_ACCESS=1 the policy engine decides per screen (Cedar screen:open, roles of the active version); the hosted subject list no longer decides. */
+  /** Set by the authentication service: the rule that administration pages need a minimum sign-in level (off at level 0). */
+  static assurance?: (tenant: string, claims: Record<string, unknown> | undefined) => Promise<{ ok: true } | { ok: false; code: string; reason: string; requiredLevel: number; currentLevel: number }>;
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    await this.decide(ctx);
+    const req = ctx.switchToHttp().getRequest();
+    if (AdminGuard.assurance && req.user) {
+      const m = /\/tenants\/([^/]+)\//.exec(String(req.originalUrl ?? req.url ?? ''));
+      const v = await AdminGuard.assurance(decodeURIComponent(m?.[1] ?? process.env.IAM_TENANT ?? 'acme-demo'), req.user);
+      // 403 with a code the console reads to offer the re-sign-in; the policy decision above is unchanged.
+      if (!v.ok) throw new ForbiddenException({ code: v.code, reason: v.reason, requiredLevel: v.requiredLevel, currentLevel: v.currentLevel, message: 'A stronger sign-in is needed for the administration pages.' });
+    }
+    return true;
+  }
+  /** With IAM_SCREEN_ACCESS=1 the policy engine decides per screen (Cedar screen:open, roles of the active version); the hosted subject list no longer decides. */
+  private async decide(ctx: ExecutionContext): Promise<boolean> {
     if (!screenAccessOn()) return this.legacy(ctx, true);
     this.legacy(ctx, false); // the capability the edge attaches stays required
     const req = ctx.switchToHttp().getRequest();
