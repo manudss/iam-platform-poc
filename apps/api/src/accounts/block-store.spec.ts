@@ -28,12 +28,6 @@ describe('block store', () => {
     assert.deepEqual((await s.list('t', 'u')).map((x) => x.message), ['two']);
     assert.equal((await s.list('other', 'u')).length, 1);
   });
-  it('lockout starts on with the chosen values and approval hold is off until an administrator sets them', async () => {
-    const s = new BlockStore(await tmp());
-    assert.equal((await s.lockout('t')).enabled, true); assert.equal(await s.holdAfterVerification('t'), false);
-    await s.setLockout('t', { ...(await s.lockout('t')), enabled: true, maxFailures: 3 });
-    assert.equal((await s.lockout('t')).maxFailures, 3); assert.equal((await s.lockout('other')).maxFailures, 5);
-  });
   it('the refusal shows the type, the admin message and a reference', () => {
     const m = refusalMessage({ ...base, id: 'ab12cd34', subject: 'u' });
     assert.match(m, /^Account suspended\. Paused for review\. Reference BLK-CD34\.$/); assert.equal(blockReference({ id: 'ab12cd34' }), 'BLK-CD34');

@@ -11,6 +11,7 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
+import { SECURITY_SETTINGS_ID, SecurityConfig, parseSecurity, storedSecurity, validateSecurity } from '../accounts/security-config.js';
 import { BlockStore } from '../accounts/block-store.js';
 import { inForce, lockoutVerdict, refusalMessage, shownBlock } from '../accounts/blocks.js';
 import { ExternalIdentity, ExternalProfile, ExternalStart, ProviderRefusal, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, externalRefusalMessage, mint, mintPkceVerifier, pkceChallenge } from './federation.js';
@@ -124,6 +125,15 @@ export class AuthnService implements OnApplicationBootstrap {
   async saveSession(tenant: string, input: unknown): Promise<SessionConfig> {
     const cfg = validateSession(input);
     await (await this.registry('work', true)).putCoreSettings(tenant, SESSION_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+    return cfg;
+  }
+  /** Account security settings (lockout, administration level): versioned like the session settings. Sign-in reads them on main, or on the tested branch. */
+  async signinSecurity(tenant: string, branch?: string): Promise<SecurityConfig> { return parseSecurity(await (await this.signinRegistry(branch)).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
+  async liveSecurity(tenant: string): Promise<SecurityConfig> { return parseSecurity(await (await this.registry('live')).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
+  async workingSecurity(tenant: string): Promise<SecurityConfig> { return parseSecurity(await (await this.registry('work')).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
+  async saveSecurity(tenant: string, input: unknown): Promise<SecurityConfig> {
+    const cfg = validateSecurity(input);
+    await (await this.registry('work', true)).putCoreSettings(tenant, SECURITY_SETTINGS_ID, storedSecurity(cfg));
     return cfg;
   }
   async liveConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('live')).coreSettings(tenant, CORE_SETTINGS_ID)); }
@@ -706,7 +716,7 @@ export class AuthnService implements OnApplicationBootstrap {
   }
   /** A failed answer counts toward the automatic lock, only when an administrator turned it on. Unknown accounts are never given a block. */
   private async recordFailure(s: Session) {
-    const settings = await this.blocks.lockout(s.tenant);
+    const settings = (await this.signinSecurity(s.tenant, s.branch)).lockout;
     if (!settings.enabled || !s.known) return;
     const k = `${s.tenant}/${s.subject}`, now = this.now(), list = [...(this.lockFails.get(k) ?? []).filter((x) => now - x < settings.windowMs), now];
     this.lockFails.set(k, list);
