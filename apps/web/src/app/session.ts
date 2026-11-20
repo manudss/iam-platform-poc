@@ -56,7 +56,12 @@ export class Session implements OnDestroy {
     // The render then answers with the signed-in page directly instead of bouncing to sign-in.
     const req = inject(REQUEST, { optional: true });
     if (req) { const t = sessionCookieToken(req.headers.get('cookie') ?? ''); if (t && this.api.adoptServer(t)) this.signedIn(); }
+    // The shell bar listens to accepted data writes to refresh its pending-changes counter and flash the pending-merge hint.
+    this.api.onDataMutation = (m) => { this.lastWritePath.set(m.path); this.branchWrites.update((x) => x + 1); };
   }
+  /** Heartbeat of accepted data writes (never failures); `lastWritePath` distinguishes branch data from branch bookkeeping. */
+  readonly branchWrites = signal(0);
+  readonly lastWritePath = signal('');
   /**
    * Browser start (an app initializer, before the first navigation, so the route guards see the session):
    * the hosted edge re-reads the HttpOnly cookie; in local development (no edge) the localStorage copy serves.
@@ -75,7 +80,7 @@ export class Session implements OnDestroy {
   readonly testBranch = signal('');
   /** Enters the branch-test mode after a test sign-in: every API call carries the branch and the shell shows the test banner. */
   enterBranchTest(branch: string) { this.testBranch.set(branch); this.selectBranch(branch); }
-  selectBranch(branch:string){this.api.branch=branch;this.branch.set(branch);this.branchEpoch.update(x=>x+1);this.change.set(null);this.assignments.set([]);this.activations.set([]);}
+  selectBranch(branch:string){this.api.branch=branch;this.branch.set(branch);this.branchEpoch.update(x=>x+1);this.change.set(null);this.assignments.set([]);this.activations.set([]);this.branchWrites.set(0);this.lastWritePath.set('');}
 
   readonly message = signal('');
   readonly tone = signal<Tone>('info');

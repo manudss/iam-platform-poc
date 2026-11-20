@@ -90,3 +90,59 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .pillwrap:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (max-width: 900px) { .pillwrap { position: static; } .tip { left: .75rem; right: .75rem; top: calc(100% - .2rem); width: auto; max-width: none; } }
+
+/* Branch picker, changes chip, floating review panel, flash + fly animation. */
+.sr-select { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.pillbtn { border: 0; background: transparent; font: inherit; font-weight: 600; font-size: .85rem; padding: .3rem .3rem .3rem .2rem; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); cursor: pointer; display: inline-flex; align-items: center; gap: .25rem; }
+.pillbtn .chev { font-size: .7rem; color: var(--muted); }
+.picker { position: absolute; top: calc(100% + .5rem); left: 0; z-index: 30; width: 20rem; max-width: calc(100vw - 2rem); background: var(--card); border: 1px solid var(--line); border-radius: .6rem; box-shadow: 0 12px 30px var(--shadow-color); padding: .6rem; }
+.psearch { width: 100%; box-sizing: border-box; margin-bottom: .4rem; }
+.blist { max-height: 15rem; overflow: auto; display: flex; flex-direction: column; }
+.brow { display: flex; align-items: center; gap: .55rem; padding: .45rem .55rem; border: 0; background: transparent; border-radius: .45rem; font: inherit; font-size: .88rem; font-weight: 600; color: var(--ink); cursor: pointer; text-align: left; margin: 0; }
+.brow.cur { background: var(--accent-soft); }
+.brow small { font-weight: 400; color: var(--muted); } .brow .bname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phint { margin: .3rem .4rem; font-size: .8rem; color: var(--muted); }
+.prow { display: flex; flex-wrap: wrap; gap: .4rem; border-top: 1px solid var(--line); padding-top: .5rem; margin-top: .4rem; }
+.prow input { max-width: 10rem; }
+.pmeta { display: flex; justify-content: space-between; align-items: center; font-size: .72rem; color: var(--muted); padding: .35rem .2rem 0; }
+.plink { border: 0; background: none; color: var(--link); cursor: pointer; font: inherit; font-size: .72rem; font-weight: 600; padding: .1rem .2rem; }
+/* Mobile: the picker becomes a bottom sheet. */
+@media (max-width: 900px) { .picker { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; max-width: none; border-radius: .9rem .9rem 0 0; max-height: 72vh; display: flex; flex-direction: column; } .picker .blist { flex: 1; } }
+/* Hide the pill tooltip while the picker is open. */
+.pillwrap:has(> .picker):hover .tip, .pillwrap:has(> .picker):focus-within .tip { opacity: 0; visibility: hidden; }
+
+/* Review & Apply chip: quiet at rest, warn-highlighted when changes are pending. */
+.chipbtn { display: inline-flex; align-items: center; gap: .3rem; font: inherit; font-size: .85rem; font-weight: 700; border-radius: 999px; padding: .3rem .8rem; border: 1px solid var(--field-line); background: var(--code-bg); color: var(--muted); white-space: nowrap; cursor: pointer; }
+.chipbtn.pending { border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn-ink); }
+.chipbtn:disabled { opacity: .45; cursor: default; }
+@keyframes chip-pulse { 0% { transform: scale(1); } 40% { transform: scale(1.12); } 100% { transform: scale(1); } }
+.chipbtn.pulse { animation: chip-pulse .5s ease; }
+/* Chip text shrinks before overflow: '3 changes pending' > '3 pending' > '3'. */
+@media (max-width: 1350px) { .chipbtn .w1 { display: none; } }
+@media (max-width: 1100px) { .chipbtn .w2 { display: none; } }
+@media (prefers-reduced-motion: reduce) { .chipbtn.pulse { animation: none; } }
+
+/* Review panel floats above content instead of pushing it down. */
+.reviewfloat { position: fixed; top: 3.9rem; right: 1.5rem; z-index: 40; background: var(--card); border: 1px solid var(--line); border-radius: .6rem; box-shadow: 0 12px 30px var(--shadow-color); padding: 1rem 1.1rem; max-width: min(26rem, calc(100vw - 2rem)); max-height: 75vh; overflow: auto; margin: 0; }
+.rclose { float: right; border: 0; background: transparent; font: inherit; color: var(--muted); cursor: pointer; font-size: 1rem; padding: .1rem .3rem; margin: 0; }
+/* Global button:hover paints accent-dark; keep our hover text readable. */
+.pillbtn:hover:not(:disabled),.brow:hover:not(:disabled),.rclose:hover:not(:disabled){background:var(--row-hover);color:var(--ink)}
+.brow.cur:hover:not(:disabled){background:var(--accent-soft);color:var(--ink)}
+.plink:hover:not(:disabled){background:none;color:var(--accent-dark)}
+.chipbtn:hover:not(:disabled){background:var(--code-bg);border-color:var(--muted);color:var(--ink)}
+.chipbtn.pending:hover:not(:disabled){background:var(--warn-soft);border-color:var(--warn-ink);color:var(--warn-ink)}
+/* Below 1260px the full action row cannot fit next to the sidebar: wrap to two rows. */
+@media(max-width:1260px) and (min-width:901px){.top{flex-wrap:wrap;row-gap:.4rem}}
+@media (max-width: 600px) { .reviewfloat { right: .75rem; left: .75rem; max-width: none; } }
+
+/* Transient pending-merge banner at the top of the page (never sticky). */
+.branch-flash { margin: .7rem 1.5rem 0; padding: .55rem .9rem; border-radius: .5rem; background: var(--warn-soft); border: 1px solid var(--warn-line); color: var(--warn-ink); font-size: .85rem; font-weight: 600; animation: flash-in .25s ease; transition: opacity .4s; }
+.branch-flash.hiding { opacity: 0; }
+@keyframes flash-in { from { transform: translateY(-6px); opacity: 0; } }
+@media (max-width: 600px) { .branch-flash { margin: .6rem 1rem 0; } }
+@media (prefers-reduced-motion: reduce) { .branch-flash { animation: none; } }
+
+/* On each accepted change a dot flies to the Review & Apply chip, which pulses. */
+.fly-dot { /* --tx/--ty default to the dot's own position; shell.ts sets the real chip coordinates inline. */ --tx: 50vw; --ty: 64px; position: fixed; left: 50vw; top: 64px; width: .8rem; height: .8rem; border-radius: 50%; background: var(--warn-ink); z-index: 60; pointer-events: none; animation: fly-to-chip .9s cubic-bezier(.5, 0, .3, 1) forwards; }
+@keyframes fly-to-chip { to { transform: translate(calc(var(--tx) - 50vw), calc(var(--ty) - 64px)) scale(.4); opacity: .2; } }
+@media (prefers-reduced-motion: reduce) { .fly-dot { animation: none; opacity: 0; } }
