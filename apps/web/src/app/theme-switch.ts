@@ -21,8 +21,8 @@ interface Mode { id: ThemeMode; label: string }
     </span>
   `,
   styles: [`
-    .seg { display: inline-flex; gap: .25rem; padding: .28rem; border-radius: 999px; background: var(--card-auth, var(--card)); border: 1px solid var(--line); box-shadow: var(--shadow); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
-    button { display: inline-flex; align-items: center; gap: .35rem; margin: 0; padding: .32rem .7rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: .8rem; font-weight: 600; cursor: pointer; }
+    .seg { display: inline-flex; align-items: stretch; box-sizing: border-box; height: var(--ctl-h, 2.5rem); gap: .2rem; padding: .25rem; border-radius: 999px; background: var(--card-auth, var(--card)); border: 1px solid var(--line); box-shadow: var(--shadow); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+    button { display: inline-flex; align-items: center; gap: .35rem; margin: 0; padding: 0 .7rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: .8rem; font-weight: 600; cursor: pointer; }
     button:hover:not(.on) { color: var(--ink); background: transparent; }
     button.on { background: var(--acc2); color: var(--acc2-ink); }
     button.on:hover { background: var(--acc2); }

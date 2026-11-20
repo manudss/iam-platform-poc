@@ -33,7 +33,7 @@ export class Shell {
   protected workflowEditor() { return this.router.url.startsWith('/workflows/edit/'); }
   protected branches=signal<BranchInfo[]>([]);protected newBranch='';protected working='';protected review=signal<any>(null);protected workingBusy=signal(false);
   /** Compact bar state: the ⋯ menu, the "Manage branches" panel, and the number of changed ROWS on the working branch (the badge). */
-  protected readonly more=signal(false);protected readonly manage=signal(false);protected readonly changes=signal<number|null>(null);
+  protected readonly rebaseAsk=signal(false);protected readonly manage=signal(false);protected readonly changes=signal<number|null>(null);
   /** Branch picker (the rich dropdown), the transient pending-merge flash and the fly-to-chip animation. */
   protected readonly picker=signal(false);protected branchFilter='';protected readonly pickerNew=signal(false);
   protected readonly branchesAt=signal<number|null>(null);
@@ -44,10 +44,15 @@ export class Shell {
   protected pickerBranches(){const q=this.branchFilter.trim().toLowerCase();const list=this.branches()??[];return q?list.filter((b)=>b.name.toLowerCase().includes(q)):list;}
   protected pickerLabel(){return this.branchState()==='creating'?'Opening your branch…':this.branchState()==='error'?'Branch unavailable':this.s.branch()||'Choose a branch';}
   /** Opening the picker always reloads the branch list: branches created elsewhere must be there without a detour. */
-  protected async togglePicker(){const open=!this.picker();this.picker.set(open);if(!open)return;this.pickerNew.set(false);this.branchFilter='';await this.loadBranches();this.branchesAt.set(Date.now());}
+  protected async togglePicker(){const open=!this.picker();this.picker.set(open);this.rebaseAsk.set(false);if(!open)return;this.pickerNew.set(false);this.branchFilter='';await this.loadBranches();this.branchesAt.set(Date.now());}
   protected async refreshPicker(){await this.loadBranches();this.branchesAt.set(Date.now());}
   protected branchesAgo(){const t=this.branchesAt();if(t===null)return 'never';const m=Math.floor((Date.now()-t)/60000);return m<1?'just now':m===1?'1 minute ago':`${m} minutes ago`;}
   protected pickBranch(name:string){this.picker.set(false);if(name===this.working)return;this.working=name;void this.select();}
+  protected cur(){return this.branches().find((b)=>b.name===this.s.branch());}
+  protected canRebase(){const b=this.cur();return !!b&&!b.default&&!b.protected&&!this.workingBusy()&&b.behindDefault>0;}
+  protected rebaseTip(){const b=this.cur();return !b||b.default?'Main is read only: nothing to rebase.':b.behindDefault>0?`Replays ${b.aheadOfDefault} commit(s) of this branch on top of the latest main (${b.behindDefault} newer on main).`:'This branch already contains the latest main.';}
+  /** Real rebase of the picked branch on main (POST /workspace/rebase). The API refuses stale heads, uncommitted work and conflicts, and then changes nothing. */
+  protected async rebase(){const b=this.cur();if(!b||this.workingBusy())return;this.workingBusy.set(true);try{const r=await this.s.api.raw<any>('POST','/workspace/rebase',{confirm:true,expectedHead:b.commit},this.headers());if(r.status>=400)throw new Error(r.data?.message??'Rebase refused');this.rebaseAsk.set(false);this.picker.set(false);this.review.set(null);this.s.branchEpoch.update(x=>x+1);this.s.say(r.data?.rebased===false?'Already up to date with main.':'Rebased '+b.name+' on main.');await this.loadBranches();void this.loadChanges();void this.loadPluginMenu();}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
   protected pickerManage(){this.picker.set(false);this.openManage();}
   protected async pickerCreate(){if(!this.newBranch)return;await this.create();this.picker.set(false);this.pickerNew.set(false);}
   /** The same button opens and closes the review panel (a toggle), which floats above the page. */
@@ -81,7 +86,7 @@ export class Shell {
     this.fly.set({x:r?r.left+r.width/2:(globalThis.innerWidth??800)-140,y:r?r.top+r.height/2:28});this.pulse.set(true);
     clearTimeout(this.flyTimer);this.flyTimer=setTimeout(()=>{this.fly.set(null);this.pulse.set(false);},950);
   }
-  @HostListener('document:keydown.escape') onEsc(){this.picker.set(false);this.more.set(false);if(this.review())this.review.set(null);}
+  @HostListener('document:keydown.escape') onEsc(){this.picker.set(false);if(this.review())this.review.set(null);}
   @HostListener('document:click',['$event']) onDocClick(ev:MouseEvent){const t=ev.target as HTMLElement|null;
     if(this.picker()&&!t?.closest('#branch-picker')&&!t?.closest('#branch-picker-button'))this.picker.set(false);
     if(this.review()&&!t?.closest('#review-panel')&&!t?.closest('#review-apply'))this.review.set(null);
@@ -93,7 +98,7 @@ export class Shell {
   /** Menu entries declared by the tenant's active plugins (GET /plugins/menu): a screen joins the sidebar with its plugin and leaves with it. */
   protected readonly pluginMenu=signal<{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]>([]);
   protected async loadPluginMenu(){try{const r=await this.s.api.raw<{entries:{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]}>('GET','/plugins/menu',undefined,this.headers());if(r.status<400&&Array.isArray(r.data?.entries))this.pluginMenu.set(r.data.entries);}catch{/* the static console still works without it */}}
-  protected openManage(){this.more.set(false);this.manage.set(!this.manage());}
+  protected openManage(){this.manage.set(!this.manage());}
   protected personal=signal('');protected renameTo='';
   /** Opens (or reuses) the signed-in user's own working branch so the console is ready to use on arrival. */
   /** State of opening the personal branch, shown in the branch selector pill (never as a banner): idle, creating, ready, error. */
@@ -130,13 +135,13 @@ export class Shell {
   protected readonly stableUrl=signal('');protected readonly stableLinks=signal<{id:string;branch:string;label:string;createdBy:string;createdAt:string}[]>([]);
   protected branchLinks(){return this.stableLinks().filter((l)=>l.branch===this.working);}
   protected async loadStableLinks(){try{const r=await this.s.api.raw<{id:string;branch:string;label:string;createdBy:string;createdAt:string}[]>('GET','/workspace/branch-test',undefined,this.headers());if(r.status<400)this.stableLinks.set(Array.isArray(r.data)?r.data:[]);}catch{/* listed on demand only */}}
-  protected async stableLink(){if(!this.working||this.working==='main')return;this.more.set(false);this.manage.set(true);this.testing.set(true);try{const r=await this.s.api.raw<{ticket:string;branch:string;id:string}>('POST','/workspace/branch-test',{branch:this.working,stable:true,label:this.working},this.headers());if(r.status>=400)throw new Error((r.data as {message?:string})?.message??'Refused');this.stableUrl.set(`${location.origin}/login?branch=${encodeURIComponent(r.data.branch)}&ticket=${encodeURIComponent(r.data.ticket)}`);this.s.say('Stable test link created for '+r.data.branch+': it stays valid until revoked. Copy it from the field next to the button.');await this.loadStableLinks();}catch(e){this.s.say((e as Error).message,'error');}finally{this.testing.set(false);}}
+  protected async stableLink(){if(!this.working||this.working==='main')return;this.picker.set(false);this.manage.set(true);this.testing.set(true);try{const r=await this.s.api.raw<{ticket:string;branch:string;id:string}>('POST','/workspace/branch-test',{branch:this.working,stable:true,label:this.working},this.headers());if(r.status>=400)throw new Error((r.data as {message?:string})?.message??'Refused');this.stableUrl.set(`${location.origin}/login?branch=${encodeURIComponent(r.data.branch)}&ticket=${encodeURIComponent(r.data.ticket)}`);this.s.say('Stable test link created for '+r.data.branch+': it stays valid until revoked. Copy it from the field next to the button.');await this.loadStableLinks();}catch(e){this.s.say((e as Error).message,'error');}finally{this.testing.set(false);}}
   protected async revokeLink(id:string){try{const r=await this.s.api.raw<{revoked:boolean}>('DELETE','/workspace/branch-test/'+encodeURIComponent(id),undefined,this.headers());if(r.status>=400)throw new Error('Refused');this.stableLinks.update((xs)=>xs.filter((x)=>x.id!==id));this.s.say('Stable test link revoked.');}catch(e){this.s.say((e as Error).message,'error');}}
-  protected async testSignIn(){if(!this.working||this.working==='main')return;this.more.set(false);this.testing.set(true);try{const r=await this.s.api.raw<{ticket:string;branch:string}>('POST','/workspace/branch-test',{branch:this.working},this.headers());const u=`${location.origin}/login?branch=${encodeURIComponent(r.data.branch)}&ticket=${encodeURIComponent(r.data.ticket)}`;if(!globalThis.open(u,'_blank','noopener'))this.s.say('Allow pop-ups or open this test link: '+u,'error');else this.s.say('Sign-in test of '+r.data.branch+' opened in a new tab. It stays valid for a few minutes.');}catch(e){this.s.say((e as Error).message,'error');}finally{this.testing.set(false);}}
+  protected async testSignIn(){if(!this.working||this.working==='main')return;this.picker.set(false);this.testing.set(true);try{const r=await this.s.api.raw<{ticket:string;branch:string}>('POST','/workspace/branch-test',{branch:this.working},this.headers());const u=`${location.origin}/login?branch=${encodeURIComponent(r.data.branch)}&ticket=${encodeURIComponent(r.data.ticket)}`;if(!globalThis.open(u,'_blank','noopener'))this.s.say('Allow pop-ups or open this test link: '+u,'error');else this.s.say('Sign-in test of '+r.data.branch+' opened in a new tab. It stays valid for a few minutes.');}catch(e){this.s.say((e as Error).message,'error');}finally{this.testing.set(false);}}
   protected exitTest(){this.s.signOut();void this.router.navigateByUrl('/login');}
   private headers():Record<string,string>{return this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{};}
   protected async loadBranches(){void this.loadStableLinks();try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);this.branchesAt.set(Date.now());if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
-  protected async select(){this.s.selectBranch(this.working);this.review.set(null);this.more.set(false);void this.loadChanges();this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
+  protected async select(){this.s.selectBranch(this.working);this.review.set(null);void this.loadChanges();this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
   protected async create(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();await v.createBranch(this.newBranch,'main');this.working=this.newBranch;this.newBranch='';await this.loadBranches();await this.select();this.manage.set(false);}catch(e){this.s.say((e as Error).message,'error');}}
   protected async prepareApply(){this.workingBusy.set(true);try{await this.loadBranches();const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());this.review.set({...r.data,expectedHead:this.branches().find(b=>b.name===r.data.branch)?.commit});}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
   /** Confirm the reviewed change with an HTML dialog, without blocking browser clients.
