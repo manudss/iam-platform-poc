@@ -100,9 +100,11 @@ try {
 
   // ---- 3. automatic lock: 5 failures, then even the right password meets the card
   for (let i = 0; i < 5; i++) assert.equal((await directSignIn('demo-bob', 'wrong-' + i)).ok, false);
+  // While the lock is in force no password is evaluated (guessing stops), so the right password is refused with the generic text: the reason cannot be proved to anyone.
   await classicFirstStep('demo-bob', PW);
-  await page.waitForSelector('#blocked-card', { timeout: 15000 });
-  assert.match(await bodyText(), /locked/i); await shot('3-locked-card');
+  await page.waitForSelector('text=Sign-in failed', { timeout: 15000 });
+  assert.equal(await page.locator('#blocked-card').count(), 0, 'a locked account reveals nothing');
+  assert.equal((await directSignIn('demo-bob', PW)).ok, false, 'the right password is refused while locked'); await shot('3-locked-generic-refusal');
   const list2 = await json(await api(T1, 'GET', '/account-blocks'));
   const lock = list2.accounts.find((a) => a.subject === 'demo-bob').blocks[0];
   assert.equal(lock.origin, 'automatic');
