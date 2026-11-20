@@ -1,5 +1,6 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute } from '@angular/router';
 import { Session } from './session';
 
 export interface BlockRow { id: string; kind: string; message: string; origin: string; setBy: string; setAt: number; until?: number; hold?: boolean; reference: string }
@@ -95,7 +96,7 @@ export class AccountProtectionPage {
   protected subject = ''; protected kind = 'suspended'; protected message = ''; protected until = ''; protected hold = false;
   protected form: SecurityForm = { lockEnabled: true, maxFailures: 5, windowMinutes: 15, lockMinutes: 15, adminMinLevel: 0, adminMaxAgeMinutes: 0, holdAfterVerification: false, appLevels: [] };
   private keep = { exempt: [] as string[], hold: false };
-  constructor() { void this.load(); }
+  constructor() { this.subject = inject(ActivatedRoute).snapshot.queryParamMap.get('subject') ?? ''; void this.load(); }
   protected label(k: string) { return this.listing().labels[k] ?? k; }
   protected when(t: number) { return new Date(t).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }); }
   private async load() {

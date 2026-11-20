@@ -67,6 +67,11 @@ describe('users page helpers', () => {
 
 
 describe('users drawer profile request isolation', () => {
+  it('offers the account-protection page from the user record only to people who may open it', () => {
+    const mk = (screens: string[]) => { TestBed.resetTestingModule(); TestBed.configureTestingModule({ providers: [{ provide: Session, useValue: { branch: signal('work-a'), adminToken: () => '', access: () => ({ subject: 'm', admin: false, restricted: true, plugins: {}, screens, screenAccess: true }), api: { raw: async () => ({ status: 200, data: {} }) } } }] }); return TestBed.runInInjectionContext(() => new UsersPage()) as any; };
+    assert.equal(mk(['users', 'account-blocks']).canProtect(), true);
+    assert.equal(mk(['users']).canProtect(), false);
+  });
   it('clears prior values and ignores closed, superseded and different-branch responses', async () => {
     const pending: ((r: unknown) => void)[] = [];
     const branch = signal('work-a');

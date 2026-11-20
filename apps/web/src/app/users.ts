@@ -1,5 +1,7 @@
 import { Component, HostListener, inject, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
+import { canOpen } from './access';
 import { Session } from './session';
 import { UserProfile } from './api';
 import { RolesRights } from './roles-rights';
@@ -69,7 +71,7 @@ export function userStats(users: UserProfile[]): UserStats {
   };
 }
 
-@Component({ selector: 'app-users', imports: [FormsModule, RolesRights, UserPluginSections, UserAvatar], styleUrl: './users.css', template: `
+@Component({ selector: 'app-users', imports: [FormsModule, RouterLink, RolesRights, UserPluginSections, UserAvatar], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
 <p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
@@ -135,6 +137,7 @@ export function userStats(users: UserProfile[]): UserStats {
     <button class="secondary x" type="button" (click)="cancel()" title="Close">✕</button>
   </div>
   @if (partialSave()) { <p role="alert" class="msg bad" id="user-partial-save">User details were saved to this branch, but the additional profile fields were not saved. Your field edits are kept below. Retry saves those fields without repeating unchanged user details. Nothing becomes live until Review &amp; Apply.</p> }
+  @if (key && canProtect()) { <p class="hint" id="user-protection-link">Sign-in protection: <a [routerLink]="['/account-protection']" [queryParams]="{subject: key}">block or review this account</a></p> }
   @if (readOnly()) { <p class="msg" id="user-readonly-note" role="status">Viewing main (read only). Pick a working branch to change anything.</p> }
   <form (ngSubmit)="save()"><fieldset class="ro-set" [disabled]="readOnly()">
   <h4>Identity</h4>
@@ -197,6 +200,7 @@ export class UsersPage {
   /** Referenced managers (reference rows) feed the manager field and the chain, never the list. */
   protected people = computed(() => this.users().filter((u) => !(u as { reference?: boolean }).reference));
   /** Manager and department are authority fields: only the super admin changes them. */
+  protected canProtect() { return canOpen(this.s.access(), 'account-blocks'); }
   protected canEditAuthority() { const a = this.s.access(); return !a || !a.screenAccess || !a.screens || a.screens.includes('authority-edit'); }
   protected stats = computed(() => userStats(this.people()));
   protected departments = computed(() => [...new Set(this.people().map((u) => u.department).filter(Boolean))].sort());
