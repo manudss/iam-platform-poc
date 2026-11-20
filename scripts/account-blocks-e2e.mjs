@@ -121,8 +121,10 @@ try {
   const plist = await json(await api(T1, 'GET', '/plugins', undefined, 'blocks-e2e-1'));
   const authState = (plist.plugins ?? []).filter((x) => /^auth-/.test(x.id)).map((x) => `${x.id}:${x.enabled ? 'on' : x.installed ? 'installed' : 'off'}`).join(',');
   console.log('auth plugins on the branch:', authState);
+  const entry = (plist.plugins ?? []).find((x) => x.id === 'auth-totp');
+  const grantAll = { install: true, hooks: entry?.requests?.sensitiveHooks ?? [], uiComponents: !!entry?.requests?.uiComponents };
   const steps = [];
-  for (const step of ['install', 'enable']) { const r = await api(T1, 'POST', `/plugins/auth-totp/${step}`, { grants: { install: true } }, 'blocks-e2e-1'); steps.push(`${step}=${r.status}`); }
+  for (const step of ['install', 'enable']) { const r = await api(T1, 'POST', `/plugins/auth-totp/${step}`, { grants: grantAll }, 'blocks-e2e-1'); steps.push(`${step}=${r.status}${r.status >= 300 ? ' ' + JSON.stringify(await json(r.clone())).slice(0, 300) : ''}`); }
   const after = await json(await api(T1, 'GET', '/plugins', undefined, 'blocks-e2e-1'));
   assert.equal((after.plugins ?? []).find((x) => x.id === 'auth-totp')?.enabled, true, `auth-totp enabled on the branch (${steps.join(' ')}; before: ${authState})`);
   const putCfg = await api(T1, 'PUT', '/auth', { config: seed }, 'blocks-e2e-1'); assert.equal(putCfg.status < 300, true, 'chains saved: ' + putCfg.status + ' ' + JSON.stringify(await json(putCfg.clone())));
