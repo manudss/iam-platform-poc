@@ -4,6 +4,7 @@ import { Session } from './session';
 import { UserProfile } from './api';
 import { RolesRights } from './roles-rights';
 import { UserPluginSections } from './user-plugin-sections';
+import { UserAvatar, UserPictures } from './user-avatar';
 
 /* Pure helpers, exported for the unit tests (users.spec.ts). */
 
@@ -68,7 +69,7 @@ export function userStats(users: UserProfile[]): UserStats {
   };
 }
 
-@Component({ selector: 'app-users', imports: [FormsModule, RolesRights, UserPluginSections], styleUrl: './users.css', template: `
+@Component({ selector: 'app-users', imports: [FormsModule, RolesRights, UserPluginSections, UserAvatar], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
 <p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
@@ -106,7 +107,7 @@ export function userStats(users: UserProfile[]): UserStats {
 </tr></thead>
 <tbody>
 @for (u of filtered(); track u.id) {<tr>
-  <td><span class="tuser">@if (photos()[u.id]) {<img class="av list-photo" [src]="photos()[u.id]" alt="" />} @else {<span class="av" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)" [style.border]="'1px solid '+deptColor(u.department)">{{initials(u.display_name)}}</span>}<span class="tx"><b>{{u.display_name}}</b><small>{{u.id}}</small></span></span></td>
+  <td><span class="tuser"><app-avatar [userId]="u.id" [name]="u.display_name" [color]="deptColor(u.department)" /><span class="tx"><b>{{u.display_name}}</b><small>{{u.id}}</small></span></span></td>
   <td><span class="tag" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)">{{u.department || '—'}}</span></td>
   <td class="mail">{{u.email || '—'}}</td>
   <td class="mgr">{{managerName(u)}}</td>
@@ -177,7 +178,8 @@ export class UsersPage {
   /** The picture plugin's value for the edited user, when the plugin is active (the avatar shows it, initials otherwise). */
   protected photo() { const v = this.pvals()['profile-picture.picture'] ?? (this.key ? this.photos()[this.key] : undefined); return typeof v === 'string' && v.startsWith('data:image/') ? v : ''; }
   /** Pictures of the people in the list (live values, only what the server lets this administrator see). */
-  protected photos = signal<Record<string, string>>({});
+  private readonly pictures = inject(UserPictures);
+  protected photos = this.pictures.map;
   protected readOnly() { return this.s.branch() === 'main'; }
   private pvalsFor: string | null = null; private profileRequest = 0;
   protected search = signal(''); protected fdept = signal(''); protected fstatus = signal<'' | UserStatus>('');
@@ -212,8 +214,7 @@ export class UsersPage {
   @HostListener('document:click') closeMenu() { this.menuFor.set(null); }
 
   protected async load() { try { const r = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}); this.users.set(r.data.users); void this.loadPhotos(); } catch (e) { this.note.set((e as Error).message); } }
-  /** Best effort: without the picture plugin, or without the right to see it, the list keeps the initials. */
-  private async loadPhotos() { try { const r = await this.s.api.raw<{ pictures?: Record<string, string> }>('GET', '/users-pictures', undefined, this.h()); this.photos.set(r.status < 400 && r.data?.pictures ? r.data.pictures : {}); } catch { this.photos.set({}); } }
+  private async loadPhotos() { await this.pictures.ensure(true); }
   protected start(u?: UserProfile) { this.partialSave.set(false); this.savedDetails = ''; this.menuFor.set(null); this.key = u?.id ?? null; this.form = { id: u?.id ?? '', display_name: u?.display_name ?? '', email: u?.email ?? '', department: u?.department ?? '', manager_id: u?.manager_id ?? '', login_enabled: u?.login_enabled ?? true }; this.password = ''; this.editing.set(true); this.pfields.set([]); this.pvals.set({}); this.pchanged = {}; this.pvalsFor = u?.id ?? null; ++this.profileRequest; if (u) void this.loadP(u.id); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
   private async loadP(id: string) { const request = this.profileRequest, branch = this.s.branch(); try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400 && this.editing() && this.pvalsFor === id && this.key === id && request === this.profileRequest && branch === this.s.branch()) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }

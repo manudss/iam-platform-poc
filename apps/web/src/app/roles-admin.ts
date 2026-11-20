@@ -3,8 +3,9 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { AssignmentData, Role, SodRule, referencedActions } from './assignment-data';
 import { initials, deptColor } from './users';
+import { UserAvatar } from './user-avatar';
 
-@Component({selector:'app-roles-admin',imports:[FormsModule,RouterLink],styleUrls:['./users.css','./assignments.css'],template:`
+@Component({selector:'app-roles-admin',imports:[FormsModule,RouterLink,UserAvatar],styleUrls:['./users.css','./assignments.css'],template:`
 <div class="head"><div class="grow"><h2>Roles</h2><span class="cnt">A catalogue of access roles, members and policy references.</span></div><button id="role-create" (click)="create()" [disabled]="locked()">Create role</button><button class="secondary" (click)="d.load()" [disabled]="d.busy()">Refresh</button></div>
 <div class="stats"><div class="stat"><span class="n">{{d.roles().length}}</span><span class="l">Roles</span></div><div class="stat"><span class="n">{{sensitive()}}</span><span class="l">Sensitive roles</span></div><div class="stat"><span class="n">{{d.assignments().length}}</span><span class="l">Assignments</span></div><div class="stat"><span class="n">{{d.rules().length}}</span><span class="l">SoD rules</span></div></div>
 @if(d.error()){<p class="msg error" role="alert">{{d.error()}}</p>}
@@ -25,7 +26,7 @@ import { initials, deptColor } from './users';
  @if(d.note()){<p class="msg" role="status">{{d.note()}}</p>}
  @if(tab()==='members' && !isNew()){
   <h4>{{members().length}} members</h4><div class="catalog-filters"><input name="memberSearch" aria-label="Search role members" placeholder="Search members…" [ngModel]="memberSearch()" (ngModelChange)="memberSearch.set($event)" /><select aria-label="Member department" name="memberDept" [ngModel]="memberDept()" (ngModelChange)="memberDept.set($event)"><option value="">All departments</option>@for(x of departments();track x){<option [value]="x">{{x}}</option>}</select></div>
-  <div class="member-list">@for(u of filteredMembers();track u.id){<div class="mrow"><span class="av" [style.background]="'color-mix(in srgb, '+deptColor(u.department)+' 13%, transparent)'" [style.color]="deptColor(u.department)">{{initials(u.display_name)}}</span><span class="grow"><b>{{u.display_name}}</b><small>{{u.id}} · {{u.department || '-'}}</small></span><button class="secondary" [attr.aria-label]="'Remove member '+u.id" (click)="d.stage([{identity:u.id,role:key(),assigned:false}])" [disabled]="locked()">Remove</button></div>}@empty{<p class="empty">No members match.</p>}</div>
+  <div class="member-list">@for(u of filteredMembers();track u.id){<div class="mrow"><app-avatar [userId]="u.id" [name]="u.display_name" [color]="deptColor(u.department)" /><span class="grow"><b>{{u.display_name}}</b><small>{{u.id}} · {{u.department || '-'}}</small></span><button class="secondary" [attr.aria-label]="'Remove member '+u.id" (click)="d.stage([{identity:u.id,role:key(),assigned:false}])" [disabled]="locked()">Remove</button></div>}@empty{<p class="empty">No members match.</p>}</div>
   <h4>Add a member</h4><label>Find a person<input name="addMemberSearch" placeholder="Search by name, id or e-mail…" [ngModel]="addSearch()" (ngModelChange)="addSearch.set($event)" /></label><label>Person<select name="newMember" [(ngModel)]="newMember"><option value="">Choose a person…</option>@for(u of candidates();track u.id){<option [value]="u.id">{{u.display_name}} ({{u.id}})</option>}</select></label>
   @if(newMember && proposedConflict()){<p class="warning">This assignment creates a SoD conflict. You can stage it, but Apply will be refused until the conflict is removed.</p>}
   <button (click)="addMember()" [disabled]="locked() || !newMember">Stage member</button><p class="hint">For many people and roles, use the <a routerLink="/assignments/matrix">bulk matrix</a>.</p>
