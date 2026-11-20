@@ -287,7 +287,7 @@ describe('profile plugins API: components, grants and the uninstall contract', (
   it('photo endpoint: the admin sheet and the users-pictures list serve the live picture, administrators only, picture field only, nothing written', async () => {
     // Old-branch situation, fictional person demo-bob: the working branch holds an older row WITHOUT the photo while main (live) has it.
     const store = app.get<ProfileValueStore>(PROFILE_STORE); const LIVE = pngDataUrl(32); const PIC = 'profile-picture.picture';
-    await store.put(T, 'demo-bob', { 'hr-attributes.job_title': 'Cook' }, 'work', 'admin');
+    await store.put(T, 'demo-bob', { 'hr-attributes.job_title': 'Cook', [PIC]: null }, 'work', 'admin'); // the in-memory store copies live into the work row: drop the photo from it
     assert.equal(PIC in (await store.get(T, 'demo-bob', 'work')), false, 'precondition: the branch row has no photo');
     assert.equal((await store.get(T, 'demo-bob', 'live'))[PIC], LIVE, 'precondition: main has the photo');
     const listed = await app.get(ProfileService).directoryIds(); assert.ok(listed.includes('demo-bob'), 'demo-bob is in the directory: ' + listed.join(','));
