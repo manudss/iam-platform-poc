@@ -17,8 +17,10 @@ export interface SecurityConfig {
   adminMaxAgeSeconds: number;
   /** When true, a person whose e-mail was just verified stays blocked until someone approves them. */
   holdAfterVerification: boolean;
+  /** Minimum sign-in level per application (by application id). An application not listed has no level rule. Declared, never measured. */
+  appLevels: Record<string, { minLevel: number; maxAgeSeconds?: number }>;
 }
-export const DEFAULT_SECURITY: SecurityConfig = { lockout: { ...LOCKOUT_DEFAULT }, adminMinLevel: 0, adminMaxAgeSeconds: 0, holdAfterVerification: false };
+export const DEFAULT_SECURITY: SecurityConfig = { lockout: { ...LOCKOUT_DEFAULT }, adminMinLevel: 0, adminMaxAgeSeconds: 0, holdAfterVerification: false, appLevels: {} };
 
 const bad = (m: string): never => { throw new BadRequestException(m); };
 const whole = (v: unknown, name: string, lo: number, hi: number) => {
@@ -33,7 +35,14 @@ const only = (o: Record<string, unknown>, keys: string[], name: string) => { if 
 
 export function validateSecurity(input: unknown): SecurityConfig {
   const i = obj(input, 'security configuration');
-  only(i, ['lockout', 'adminMinLevel', 'adminMaxAgeSeconds', 'holdAfterVerification'], 'security configuration');
+  only(i, ['lockout', 'adminMinLevel', 'adminMaxAgeSeconds', 'holdAfterVerification', 'appLevels'], 'security configuration');
+  const al = i.appLevels === undefined ? {} : obj(i.appLevels, 'appLevels');
+  const appLevels: SecurityConfig['appLevels'] = {};
+  for (const [id, v] of Object.entries(al)) {
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) bad(`appLevels: bad application id ${id}`);
+    const o = obj(v, `appLevels.${id}`); only(o, ['minLevel', 'maxAgeSeconds'], `appLevels.${id}`);
+    appLevels[id] = { minLevel: whole(o.minLevel, `appLevels.${id}.minLevel`, 0, 10), ...(o.maxAgeSeconds ? { maxAgeSeconds: whole(o.maxAgeSeconds, `appLevels.${id}.maxAgeSeconds`, 1, 604_800) } : {}) };
+  }
   const l = i.lockout === undefined ? {} : obj(i.lockout, 'lockout');
   only(l, ['enabled', 'maxFailures', 'windowSeconds', 'lockSeconds', 'hold', 'exempt'], 'lockout');
   for (const k of ['enabled', 'hold']) if (l[k] !== undefined && typeof l[k] !== 'boolean') bad(`lockout.${k}: true or false`);
@@ -53,6 +62,7 @@ export function validateSecurity(input: unknown): SecurityConfig {
     adminMinLevel: whole(i.adminMinLevel ?? DEFAULT_SECURITY.adminMinLevel, 'adminMinLevel', 0, 10),
     adminMaxAgeSeconds: whole(i.adminMaxAgeSeconds ?? 0, 'adminMaxAgeSeconds', 0, 604_800),
     holdAfterVerification: (i.holdAfterVerification as boolean | undefined) ?? false,
+    appLevels,
   };
 }
 
@@ -65,5 +75,5 @@ export function parseSecurity(v: Record<string, unknown> | undefined): SecurityC
 /** The shape saved to the data branch (seconds, no internal milliseconds). */
 export function storedSecurity(c: SecurityConfig): Record<string, unknown> {
   return { lockout: { enabled: c.lockout.enabled, maxFailures: c.lockout.maxFailures, windowSeconds: c.lockout.windowMs / 1000, lockSeconds: c.lockout.lockMs / 1000, hold: c.lockout.hold, exempt: [...c.lockout.exempt] },
-    adminMinLevel: c.adminMinLevel, adminMaxAgeSeconds: c.adminMaxAgeSeconds, holdAfterVerification: c.holdAfterVerification };
+    adminMinLevel: c.adminMinLevel, adminMaxAgeSeconds: c.adminMaxAgeSeconds, holdAfterVerification: c.holdAfterVerification, appLevels: structuredClone(c.appLevels) };
 }

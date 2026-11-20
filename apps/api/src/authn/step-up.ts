@@ -53,3 +53,9 @@ export function chainOptions(cfg: { methods: { id: string; type: string; enabled
     return { id: c.id, name: c.name, enabled: steps.every((m) => !!m?.enabled), effectiveLevel: a?.effectiveLevel ?? 0, simulated: (a?.simulatedSteps.length ?? 0) > 0, enrolled: steps.every((m) => !!m && methodEnrolled(m.type, status[m.id])) };
   });
 }
+
+/** The level rule of one application, from the security settings. No entry or level 0: no rule. */
+export function appRequirement(appLevels: Readonly<Record<string, { minLevel: number; maxAgeSeconds?: number }>>, appId: string): Requirement | undefined {
+  const r = appLevels[appId];
+  return r && r.minLevel > 0 ? { minLevel: r.minLevel, ...(r.maxAgeSeconds ? { maxAgeMs: r.maxAgeSeconds * 1000 } : {}) } : undefined;
+}

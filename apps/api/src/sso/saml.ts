@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Inject, Injectable, Logger, OnModuleInit, Optional, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Inject, Injectable, Logger, OnModuleInit, Optional, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { AuthnService } from '../authn/flow.service.js';
 import { HttpAdapterHost } from '@nestjs/core';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { ProfileService } from '../profile/profile.service.js';
@@ -103,7 +104,16 @@ export class SamlIdpService implements OnModuleInit {
 @UseGuards(AuthGuard)
 @Controller('sso/:tenant/saml-interaction')
 export class SamlInteractionController {
-  constructor(private readonly s: SamlIdpService) {}
-  @Get(':rid') details(@Param('tenant') t: string, @Param('rid') rid: string, @Req() r: { user: { sub: string; branch?: string } }) { assertNotBranchTest(r); return this.s.details(t, rid, r.user.sub); }
-  @Post(':rid/complete') complete(@Param('tenant') t: string, @Param('rid') rid: string, @Body() b: { decision?: unknown }, @Req() r: { user: { sub: string; branch?: string } }) { assertNotBranchTest(r); return this.s.complete(t, rid, r.user.sub, b?.decision); }
+  constructor(private readonly s: SamlIdpService, private readonly authn: AuthnService) {}
+  @Get(':rid') async details(@Param('tenant') t: string, @Param('rid') rid: string, @Req() r: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(r);
+    const d: any = await this.s.details(t, rid, r.user.sub);
+    return { ...d, assurance: d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true } };
+  }
+  @Post(':rid/complete') async complete(@Param('tenant') t: string, @Param('rid') rid: string, @Body() b: { decision?: unknown }, @Req() r: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(r);
+    const d: any = await this.s.details(t, rid, r.user.sub);
+    const a = d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true as const };
+    if (!a.ok) throw new ForbiddenException({ ...a, message: 'This application needs a stronger sign-in.' });
+    return this.s.complete(t, rid, r.user.sub, b?.decision); }
 }

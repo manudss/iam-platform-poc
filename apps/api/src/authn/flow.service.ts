@@ -12,7 +12,7 @@ import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, valida
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
 import { AdminGuard } from '../auth/admin.guard.js';
-import { chainOptions, checkAssurance, eligibleChains, type ChainOption, type StepUpVerdict } from './step-up.js';
+import { appRequirement, chainOptions, checkAssurance, eligibleChains, type ChainOption, type StepUpVerdict } from './step-up.js';
 import { SECURITY_SETTINGS_ID, SecurityConfig, parseSecurity, storedSecurity, validateSecurity } from '../accounts/security-config.js';
 import { BlockStore } from '../accounts/block-store.js';
 import { inForce, lockoutVerdict, refusalMessage, shownBlock } from '../accounts/blocks.js';
@@ -148,6 +148,14 @@ export class AuthnService implements OnApplicationBootstrap {
     const level = typeof claims?.auth_level === 'number' ? claims.auth_level : 0;
     const authTime = typeof claims?.auth_time === 'number' ? claims.auth_time * 1000 : 0;
     return checkAssurance({ level, authTime }, { minLevel: sec.adminMinLevel, ...(sec.adminMaxAgeSeconds ? { maxAgeMs: sec.adminMaxAgeSeconds * 1000 } : {}) }, this.now());
+  }
+  /** The level rule of one application against this session. Applications without a rule always pass. The answer names the chains the person can use to step up. */
+  async appAssurance(tenant: string, appId: string, subject: string, claims: { auth_level?: unknown; auth_time?: unknown } | undefined): Promise<{ ok: true } | (Extract<StepUpVerdict, { ok: false }> & { app: string; chains: { id: string; name: string; level: number }[] })> {
+    const req = appRequirement((await this.liveSecurity(tenant)).appLevels, appId);
+    if (!req) return { ok: true };
+    const v = checkAssurance({ level: typeof claims?.auth_level === 'number' ? claims.auth_level : 0, authTime: typeof claims?.auth_time === 'number' ? claims.auth_time * 1000 : 0 }, req, this.now());
+    if (v.ok) return v;
+    return { ...v, app: appId, chains: (await this.stepUpOptions(tenant, subject, req.minLevel)).map((c) => ({ id: c.id, name: c.name, level: c.effectiveLevel })) };
   }
   /**
    * Saving security settings. Raising the administration level is refused when the person saving does not hold that level themselves right now,
