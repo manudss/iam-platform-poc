@@ -138,8 +138,9 @@ try {
   await page.goto(`${BASE}/login`);
   await page.waitForSelector('#signin-browser, [data-chain="password-then-authenticator"]');
   if (await page.locator('#signin-browser').count()) await Promise.all([page.waitForURL(/localhost:4200\/core\/authorize/), page.click('#signin-browser')]);
-  await page.waitForSelector('[data-chain="password-then-authenticator"]'); await shot('5-chain-choice');
-  await Promise.all([page.waitForLoadState('load'), page.locator('[data-chain="password-then-authenticator"]').first().click()]);
+  const chainLink = '[data-chain="password-then-authenticator"], a.chain[href*="chain=password-then-authenticator"]'; // the console list, or the core's own list
+  await page.waitForSelector(chainLink); await shot('5-chain-choice');
+  await Promise.all([page.waitForLoadState('load'), page.locator(chainLink).first().click()]);
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', PW);
   await Promise.all([page.waitForLoadState('load'), page.click('button[type=submit]')]);
   await page.waitForSelector('input[name=a_code]'); await shot('5-authenticator-step');
