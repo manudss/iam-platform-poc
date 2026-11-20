@@ -15,6 +15,15 @@
         "data/migrations/0001-initial.sql": "1a6f86951f5931aaee1c0a10e50f05bf600d424fcb95bf68703f558d36a543b0"
       },
       "checksum": "495a35735003a1a1d7dc01ec528732ba7ea8a70a280f5263387096e7324b866a"
+    },
+    {
+      "id": "0002",
+      "name": "Account-blocks screen rule (default policy set, pending Review & Apply)",
+      "files": {
+        "apps/api/src/migrations/v0002/rule.ts": "ba39d65ba9be6292f8e61f110de670c76dffd00565eaa03143a08b4000382740",
+        "apps/api/src/migrations/v0002/run.ts": "44b9a430027391581dc4f90f013334409d5322da5378571aef69a7d8d85757a7"
+      },
+      "checksum": "35b559d46dbd3380ba8e04748ac66a8a89af6552060d9378507ac2a9cae8d908"
     }
   ]
 }

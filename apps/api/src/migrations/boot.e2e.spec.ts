@@ -32,7 +32,9 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    dolt(['config','--global','--add','user.name','migration-test']);dolt(['config','--global','--add','user.email','migration@example.invalid']);
    const prepared=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','empty'],{env,encoding:'utf8'});assert.equal(prepared.status,0,prepared.stderr);
    await start();
-   const journal=new MigrationJournal(home,readManifest(root).versions);assert.equal(journal.read()?.entries.length,1);assert.equal(journal.read()?.pending,undefined);
+   const journal=new MigrationJournal(home,readManifest(root).versions);assert.equal(journal.read()?.entries.length,2);assert.equal(journal.read()?.pending,undefined);
+   assert.match(dolt(['--use-db=iam','sql','-q',"SELECT count(*) AS n FROM policy_rules WHERE id='screen-account-blocks'"]),/\b1\b/);
+   assert.match(dolt(['--use-db=iam','sql','-q',"SELECT message FROM dolt_log LIMIT 1"]),/migration 0002/);
    await stop(api);await stop(server);
    dolt(['--use-db=iam','sql','-q',"UPDATE identities SET display_name='Customized Alice' WHERE id='demo-alice'; CALL DOLT_ADD('-A'); CALL DOLT_COMMIT('-m','user customization'); CALL DOLT_BRANCH('personal/keep');"]);
    dolt(['--use-db=iam/personal/keep','sql','-q',"INSERT INTO roles VALUES('keep','Personal dirty work',false)"]);
@@ -46,7 +48,7 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    assert.equal(dolt(['--use-db=iam','sql','-r','json','-q',"SELECT name, hash FROM dolt_branches ORDER BY name"]),state);
    assert.equal(dolt(['--use-db=iam/personal/keep','sql','-r','json','-q',"SELECT DOLT_HASHOF_DB('WORKING') AS root"]),dirty);
    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT display_name FROM identities WHERE id='demo-alice'"]),/Customized Alice/);
-   assert.equal(journal.read()?.entries.length,1);
+   assert.equal(journal.read()?.entries.length,2);
   }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
  });
 });
