@@ -78,6 +78,16 @@ describe('authentication methods and chains', () => {
     });
   });
 
+  describe('demo finance application at level 8 needs no seed change', () => {
+    it('the shipped chains already reach 8: authenticator app and passkey chains only, never a weaker or simulated one', async () => {
+      const { AuthnService } = await import('./flow.service.js');
+      assert.equal(AuthnService.reachable(SEED_CONFIG, 8), true);
+      assert.equal(AuthnService.reachable(SEED_CONFIG, 10), false);
+      const reaching = SEED_CONFIG.chains.filter((c) => { const a = analyzeChain(SEED_CONFIG, c); return !a.simulatedSteps.length && a.effectiveLevel >= 8; }).map((c) => c.id).sort();
+      assert.ok(reaching.includes('password-then-authenticator') && !reaching.includes('password-only') && !reaching.includes('password-then-e-mail-code'), reaching.join(','));
+    });
+  });
+
   describe('honest analysis', () => {
     it('does not add levels and does not call password + PIN multi-factor', () => {
       const c = validateConfig(cfg([m('pw', 'password', 3), m('pin', 'digit-code', 3)], [{ id: 'c', name: 'c', steps: ['pw', 'pin'], level: 4 }]));

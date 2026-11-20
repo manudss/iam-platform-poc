@@ -72,3 +72,15 @@ If a failure comes after the journal started (a write error, a crash), the journ
 
 - Before: the rule exists in Dolt `main` but not in the live permission engine. Only the `iam-admin` role opens the Account protection page and its API; managers do not, and no one is locked out of anything they had. Blocks, lockout and levels already work, because they check the screen right, not the pending rule.
 - After: managers and administrators holding the `account-blocks` screen right can block and unblock accounts and change the settings. Nobody can block themselves, and the last active administrator cannot be blocked. Without the rule, nothing that exists today is removed.
+
+## Demo: the finance application at level 8
+
+No seed change and no secret in the repository. The shipped chains already contain `password-then-authenticator` (level 8) and the passkey chains (level 9); every other chain stays below 8 or has a simulated step. The demo goes like this:
+1. Before the demo, the demo account signs in and enrols an authenticator app from its profile (live, the secret never leaves the person's device).
+2. An administrator sets `appLevels.finance = 8` on a working branch (Account protection, Settings) and applies it. Apply refuses it if no chain could reach 8.
+3. Opening the finance tile (marked "Level 8" on the launchpad) from a level 5 session leads to the re-sign-in page, which offers only the chains that reach 8 and that this person has set up. After the authenticator step the person lands back in the application.
+`authn.spec.ts` pins the chain facts above, `step-up.spec.ts` the page behaviour, `app-assurance.spec.ts` the checks.
+
+## Blocked sign-in card
+
+The sign-in page of the core shows a refusal caused by a block as a card: the type as title, the administrator's message and the reference. The API builds the text as `<Type>. <message> Reference BLK-XXXX.`; the core recognises exactly that shape (a strict `BLK-` reference) and falls back to the plain error page for anything else. The shape is unit tested in `authz.rs`.
