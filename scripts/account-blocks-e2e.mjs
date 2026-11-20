@@ -152,12 +152,13 @@ try {
   // ---- 6. an unreachable level is refused when saved; a reachable one needs a level-8 session and is applied
   await mk('blocks-e2e-2');
   const sec = await json(await api(T2, 'GET', '/security', undefined, 'blocks-e2e-2'));
-  const tooHigh = await api(T2, 'PUT', '/security', { config: { ...sec.working, adminMinLevel: 10 } }, 'blocks-e2e-2');
+  const secInput = (w, level) => ({ lockout: { enabled: w.lockout.enabled, maxFailures: w.lockout.maxFailures, windowSeconds: w.lockout.windowMs / 1000, lockSeconds: w.lockout.lockMs / 1000, hold: w.lockout.hold, exempt: w.lockout.exempt }, adminMinLevel: level, adminMaxAgeSeconds: w.adminMaxAgeSeconds, holdAfterVerification: w.holdAfterVerification, appLevels: w.appLevels });
+  const tooHigh = await api(T2, 'PUT', '/security', { config: secInput(sec.working, 10) }, 'blocks-e2e-2');
   const thj = await json(tooHigh); assert.equal(tooHigh.status, 400, 'level 10 is refused: ' + tooHigh.status + ' ' + JSON.stringify(thj).slice(0, 300)); console.log('level 10 refusal:', thj.code ?? JSON.stringify(thj).slice(0, 200));
-  const weak = await api(T1, 'PUT', '/security', { config: { ...sec.working, adminMinLevel: 8 } }, 'blocks-e2e-2');
+  const weak = await api(T1, 'PUT', '/security', { config: secInput(sec.working, 8) }, 'blocks-e2e-2');
   { const wj = await json(weak.clone()); console.log('level 3 session raising to 8:', weak.status, wj.code ?? JSON.stringify(wj).slice(0, 200)); }
   assert.equal(weak.status, 400, 'a level-3 session cannot raise the level to 8: ' + weak.status);
-  const okSave = await api(T2, 'PUT', '/security', { config: { ...sec.working, adminMinLevel: 8 } }, 'blocks-e2e-2'); assert.equal(okSave.status < 300, true, 'saved at 8: ' + okSave.status + ' ' + JSON.stringify(await json(okSave.clone())).slice(0, 400) + ' payload ' + JSON.stringify({ ...sec.working, adminMinLevel: 8 }).slice(0, 300));
+  const okSave = await api(T2, 'PUT', '/security', { config: secInput(sec.working, 8) }, 'blocks-e2e-2'); assert.equal(okSave.status < 300, true, 'saved at 8: ' + okSave.status + ' ' + JSON.stringify(await json(okSave.clone())).slice(0, 400) + ' payload ' + JSON.stringify(secInput(sec.working, 8)).slice(0, 300));
   const ap2 = await json(await api(T2, 'POST', '/workspace/apply', { confirm: true }, 'blocks-e2e-2')); assert.equal(ap2.applied, true, JSON.stringify(ap2));
 
   // ---- 7. below the level the administration says step-up-required; the eligible chains are only those that reach 8
