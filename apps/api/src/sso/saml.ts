@@ -107,14 +107,16 @@ export class SamlInteractionController {
   constructor(private readonly s: SamlIdpService, private readonly authn: AuthnService) {}
   @Get(':rid') async details(@Param('tenant') t: string, @Param('rid') rid: string, @Req() r: { user: { sub: string; branch?: string } }) {
     assertNotBranchTest(r);
-    const d: any = await this.s.details(t, rid, r.user.sub);
+    // If the request cannot be read, the normal completion below answers with its own error, unchanged.
+    const d: any = await (this.s.details(t, rid, r.user.sub)).catch(() => undefined);
     const a = d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true as const };
     // Present only when a level rule applies and is not met: an application without a rule keeps the exact same answer.
     return a.ok ? d : { ...d, assurance: a };
   }
   @Post(':rid/complete') async complete(@Param('tenant') t: string, @Param('rid') rid: string, @Body() b: { decision?: unknown }, @Req() r: { user: { sub: string; branch?: string } }) {
     assertNotBranchTest(r);
-    const d: any = await this.s.details(t, rid, r.user.sub);
+    // If the request cannot be read, the normal completion below answers with its own error, unchanged.
+    const d: any = await (this.s.details(t, rid, r.user.sub)).catch(() => undefined);
     const a = d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true as const };
     if (!a.ok) throw new ForbiddenException({ ...a, message: 'This application needs a stronger sign-in.' });
     return this.s.complete(t, rid, r.user.sub, b?.decision); }
