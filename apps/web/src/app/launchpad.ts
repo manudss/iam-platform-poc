@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 import { consumeLaunchpadPrefetch } from './launchpad-preload';
 
-export interface LaunchpadApp { id: string; name: string; description: string; protocol: 'oidc' | 'saml'; url: string; logo?: string | null }
+export interface LaunchpadApp { id: string; name: string; description: string; protocol: 'oidc' | 'saml'; url: string; logo?: string | null; minLevel?: number }
 export interface LaunchpadPreferences { favourites: string[]; order: string[] }
 export function orderedApps(apps: LaunchpadApp[], order: string[]): LaunchpadApp[] {
   const rank = new Map(order.map((id, i) => [id, i]));
@@ -51,6 +51,7 @@ const LAUNCHPAD_KEY = makeStateKey<{ user?: { name?: string }; apps?: LaunchpadA
             @if (a.logo && !failedImages().includes(a.id)) { <img class="lp-logo" [src]="a.logo" alt="" (error)="imageFailed(a.id)" /> }
             @else { <span class="lp-logo lp-initials" aria-hidden="true">{{initials(a.name)}}</span> }
             <h3>@for (part of nameParts(a.name); track $index; let last = $last) {{{part}}@if (!last) {<wbr>} }</h3>
+            @if (a.minLevel) { <span class="lp-level" [attr.data-level]="a.minLevel" title="This application asks for a stronger sign-in">Level {{a.minLevel}}</span> }
           </div>
           <p class="lp-desc">{{a.description}}</p>
           @if (editing()) {

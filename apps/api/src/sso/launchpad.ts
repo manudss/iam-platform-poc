@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Param, Put, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Inject, NotFoundException, Optional, Param, Put, Req, Res, UseGuards } from '@nestjs/common';
+import { AuthnService } from '../authn/flow.service.js';
 import type { Response } from 'express';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
 import { PROFILE_STORE } from '../profile/profile.service.js';
@@ -24,6 +25,7 @@ export class LaunchpadController {
     private readonly profile: ProfileService,
     @Inject(PROFILE_STORE) private readonly preferences: ProfileValueStore,
     @Inject(SSO_DIRECTORY) private readonly dir: SsoDirectory,
+    @Optional() private readonly authn?: AuthnService,
   ) {}
 
   @Get() async list(@Param('tenant') t: string, @Req() r: { user: { sub: string; branch?: string }; headers: Record<string, unknown>; protocol?: string }, @Res() res: Response) {
@@ -47,6 +49,8 @@ export class LaunchpadController {
       this.apps.liveApps(t),
     ]);
     const base = baseUrl(r);
+    // An application with a minimum sign-in level shows it before the click. No rule: the entry is exactly what it was.
+    const levels = this.authn ? (await this.authn.liveSecurity(t)).appLevels : {};
     const apps = [];
     for (const a of live) {
       if (!mayOpen(a, u)) continue;
@@ -54,7 +58,7 @@ export class LaunchpadController {
         ? (samlOn ? `${base}/sso/${encodeURIComponent(t)}/saml/login?app=${encodeURIComponent(a.id)}` : null)
         : (oidcOn ? a.launch_url : null);
       if (!url) continue;
-      apps.push({ id: a.id, name: a.name, description: a.description, logo: logoUrl(base, t, a.logo), protocol: a.protocol, url });
+      apps.push({ id: a.id, name: a.name, description: a.description, logo: logoUrl(base, t, a.logo), protocol: a.protocol, url, ...(levels[a.id]?.minLevel > 0 ? { minLevel: levels[a.id].minLevel } : {}) });
     }
     const values = await this.preferences.get(t, r.user.sub, 'live');
     let saved: unknown; try { saved = JSON.parse(String(values['console.launchpad'] ?? '{}')); } catch { saved = {}; }
