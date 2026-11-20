@@ -78,7 +78,7 @@ export function fromForm(f: SecurityForm, keep: { exempt: string[]; hold: boolea
     <p class="hint" id="ap-live">Live now: lock {{liveText()}}. Changes go live with Review &amp; Apply.</p>
   </section>
 }`,
-  styles: ['.card{margin-bottom:1rem}label{display:grid;gap:.25rem;margin:.6rem 0}.check{display:flex;flex-direction:row;gap:.5rem;align-items:center}.row{display:flex;gap:.5rem;margin-top:.75rem}.mrow{display:flex;gap:.75rem;align-items:center;padding:.4rem 0}.grow{flex:1;display:grid}.pill{padding:.1rem .5rem;border-radius:1rem;background:var(--bad-soft);color:var(--bad-ink);font-size:.85rem}.dtabs{display:flex;gap:.5rem;margin:.5rem 0 1rem}.dtabs .on{font-weight:700}.blk{border-top:1px solid var(--border);padding:.5rem 0}'],
+  styles: ['.card{margin-bottom:1rem}label{display:grid;gap:.25rem;margin:.6rem 0}.check{display:flex;flex-direction:row;gap:.5rem;align-items:center}.row{display:flex;gap:.5rem;margin-top:.75rem}.mrow{display:flex;gap:.75rem;align-items:center;padding:.4rem 0}.grow{flex:1;display:grid}.pill{padding:.1rem .5rem;border-radius:1rem;background:var(--bad-soft);color:var(--bad-ink);font-size:.85rem}.dtabs{display:flex;gap:.5rem;margin:.5rem 0 1rem}.dtabs .on{font-weight:700}.blk{border-top:1px solid var(--line);padding:.5rem 0}'],
 })
 export class AccountProtectionPage {
   private readonly s = inject(Session);

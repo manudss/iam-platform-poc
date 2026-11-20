@@ -40,7 +40,7 @@ export function stepUpView(a: { kind: string; app: string; required: number; cur
       <button class="secondary" id="su-cancel" (click)="cancel()">Cancel and go back</button>
     }
   </main>`,
-  styles: ['.su{max-width:30rem;margin:10vh auto;padding:1.5rem;font:16px system-ui;color:var(--ink);display:grid;gap:.75rem}.logo{font-weight:700;font-size:1.4rem}.alert{display:grid;gap:.25rem;padding:.8rem 1rem;border-radius:.5rem;background:var(--bad-soft);color:var(--bad-ink)}.alert.info{background:var(--card);border:1px solid var(--border);color:var(--ink)}.opt{display:flex;justify-content:space-between;align-items:center;text-align:left}button{padding:.6rem 1.2rem}.bad{color:var(--bad-ink)}'],
+  styles: ['.su{max-width:30rem;margin:10vh auto;padding:1.5rem;font:16px system-ui;color:var(--ink);display:grid;gap:.75rem}.logo{font-weight:700;font-size:1.4rem}.alert{display:grid;gap:.25rem;padding:.8rem 1rem;border-radius:.5rem;background:var(--bad-soft);color:var(--bad-ink)}.alert.info{background:var(--card);border:1px solid var(--line);color:var(--ink)}.opt{display:flex;justify-content:space-between;align-items:center;text-align:left}button{padding:.6rem 1.2rem}.bad{color:var(--bad-ink)}'],
 })
 export class StepUpPage {
   private readonly s = inject(Session);
