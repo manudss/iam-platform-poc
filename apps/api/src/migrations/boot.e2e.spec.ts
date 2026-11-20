@@ -11,7 +11,7 @@ import { MigrationJournal, readManifest } from './journal.js';
 const root=resolve('../..'), bin=process.env.DOLT_BIN, port=13987, apiPort=13988;
 const sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBinsPresent)&&'real Dolt + core + NATS required'},()=>{
- it('completes every seed component once; preserves edits, credentials and personal branch on second boot', {timeout:180000}, async()=>{
+ it('completes every seed component once; preserves edits, credentials and personal branch on second boot', {timeout:360000}, async()=>{
   const home=mkdtempSync(join(tmpdir(),'migration-api-'));mkdirSync(join(home,'dolt'));mkdirSync(join(home,'core-state'));
   const bus=await startTestBus(import.meta.url);let server:ChildProcess|undefined,api:ChildProcess|undefined;
   const env={...process.env,HOME:home,IAM_DEMO_HOME:home,IAM_MIGRATION_SOURCE_ROOT:root,IAM_DATA_MIGRATIONS:'1',IAM_MIGRATION_BOOT_ID:'first',
@@ -49,6 +49,21 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    assert.equal(dolt(['--use-db=iam/personal/keep','sql','-r','json','-q',"SELECT DOLT_HASHOF_DB('WORKING') AS root"]),dirty);
    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT display_name FROM identities WHERE id='demo-alice'"]),/Customized Alice/);
    assert.equal(journal.read()?.entries.length,2);
+   // An existing tenant: baseline 0001 adopted (not seeded), a customised policy, no account-blocks rule yet. Boot adds the rule on main only.
+   const legacy=async(customScreenRule:boolean)=>{
+    dolt(['--use-db=iam','sql','-q',`DELETE FROM policy_rules WHERE id='screen-account-blocks'; UPDATE policy_rules SET cedar=CONCAT(cedar,'\n// tenant edit') WHERE set_name='default' AND id=(SELECT id FROM (SELECT id FROM policy_rules WHERE set_name='default' ORDER BY id LIMIT 1) x);`+(customScreenRule?`INSERT INTO policy_rules (set_name,id,cedar) VALUES ('default','tenant-own-blocks','permit(principal, action, resource == Screen::"account-blocks");');`:'')+` CALL DOLT_ADD('-A'); CALL DOLT_COMMIT('-m','tenant policy customisation');`]);
+    rmSync(join(home,'migrations','journal.json'));new MigrationJournal(home,readManifest(root).versions).adopt('a'.repeat(64));
+    const others=dolt(['--use-db=iam','sql','-r','json','-q',"SELECT id, cedar FROM policy_rules WHERE id<>'screen-account-blocks' ORDER BY id"]);
+    env.IAM_MIGRATION_BOOT_ID=customScreenRule?'fourth':'third';
+    const prep=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});assert.equal(prep.status,0,prep.stderr);
+    await start();await stop(api);await stop(server);
+    assert.equal(dolt(['--use-db=iam','sql','-r','json','-q',"SELECT id, cedar FROM policy_rules WHERE id<>'screen-account-blocks' ORDER BY id"]),others,'tenant policy rows are untouched');
+    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT cedar FROM policy_rules WHERE set_name='default' AND cedar LIKE '%tenant edit%'"]),/tenant edit/);
+    assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2);
+    return Number(JSON.parse(dolt(['--use-db=iam','sql','-r','json','-q',"SELECT count(*) AS n FROM policy_rules WHERE id='screen-account-blocks'"])).rows[0].n);
+   };
+   assert.equal(await legacy(false),1,'a customised tenant without the rule receives it, nothing else changes');
+   assert.equal(await legacy(true),0,'a tenant that wrote its own rule for the screen keeps its choice');
   }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100});}
  });
 });
