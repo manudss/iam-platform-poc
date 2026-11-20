@@ -137,7 +137,9 @@ export class SsoInteractionController {
     assertNotBranchTest(r);
     const d: any = await this.o.details(t, uid, r.user.sub, r);
     // The console reads this to ask for a stronger sign-in BEFORE showing the consent.
-    return { ...d, assurance: d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true } };
+    const a = d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true as const };
+    // Present only when a level rule applies and is not met: an application without a rule keeps the exact same answer.
+    return a.ok ? d : { ...d, assurance: a };
   }
   @Post(':uid/complete') async complete(@Param('tenant') t: string, @Param('uid') uid: string, @Body() b: { decision?: unknown }, @Req() r: { user: { sub: string; branch?: string } }) {
     assertNotBranchTest(r);
