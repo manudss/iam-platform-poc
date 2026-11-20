@@ -26,3 +26,14 @@ describe('application level rule', () => {
   it('a missing level counts as zero, never as enough', async () => assert.equal(((await svc().appAssurance('t', 'finance', 'a', {})) as any).currentLevel, 0));
   it('level 0 means no rule', () => assert.equal(appRequirement({ x: { minLevel: 0 } }, 'x'), undefined));
 });
+
+describe('administration level safety net', () => {
+  const adm = (reachable: boolean) => {
+    const s = new AuthnService({} as never); s.now = () => 10_000_000;
+    (s as any).liveSecurity = async () => ({ ...DEFAULT_SECURITY, adminMinLevel: 5 });
+    (s as any).levelReachable = async () => reachable;
+    return s;
+  };
+  it('a reachable level is enforced', async () => assert.equal((await adm(true).adminAssurance('t', { auth_level: 3 })).ok, false));
+  it('a level no chain can reach is not applied, so administrators are never locked out by it', async () => assert.deepEqual(await adm(false).adminAssurance('t', { auth_level: 3 }), { ok: true }));
+});

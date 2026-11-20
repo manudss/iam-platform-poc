@@ -147,7 +147,17 @@ export class AuthnService implements OnApplicationBootstrap {
     if (sec.adminMinLevel <= 0) return { ok: true };
     const level = typeof claims?.auth_level === 'number' ? claims.auth_level : 0;
     const authTime = typeof claims?.auth_time === 'number' ? claims.auth_time * 1000 : 0;
-    return checkAssurance({ level, authTime }, { minLevel: sec.adminMinLevel, ...(sec.adminMaxAgeSeconds ? { maxAgeMs: sec.adminMaxAgeSeconds * 1000 } : {}) }, this.now());
+    const v = checkAssurance({ level, authTime }, { minLevel: sec.adminMinLevel, ...(sec.adminMaxAgeSeconds ? { maxAgeMs: sec.adminMaxAgeSeconds * 1000 } : {}) }, this.now());
+    if (v.ok) return v;
+    // Safety net for a settings change that arrived without passing saveSecurity (a merged branch, a workflow): when no enabled chain without a
+    // simulated step reaches the level, nobody could ever satisfy it, so the rule is not applied and the administrators are not locked out.
+    if (!(await this.levelReachable(tenant, sec.adminMinLevel))) { console.warn(`[security] administration level ${sec.adminMinLevel} is not reachable by any sign-in chain; the rule is not applied`); return { ok: true }; }
+    return v;
+  }
+  /** Whether at least one enabled chain, without a simulated step, declares and proves this level (configuration only, not who is enrolled). */
+  async levelReachable(tenant: string, minLevel: number): Promise<boolean> {
+    const cfg = await this.liveConfig(tenant);
+    return cfg.chains.some((c) => { const a = analyzeChain(cfg, c); return c.steps.every((id) => cfg.methods.find((m) => m.id === id)?.enabled) && !a.simulatedSteps.length && a.effectiveLevel >= minLevel; });
   }
   /** The level rule of one application against this session. Applications without a rule always pass. The answer names the chains the person can use to step up. */
   async appAssurance(tenant: string, appId: string, subject: string, claims: { auth_level?: unknown; auth_time?: unknown } | undefined): Promise<{ ok: true } | (Extract<StepUpVerdict, { ok: false }> & { app: string; chains: { id: string; name: string; level: number }[] })> {
