@@ -77,3 +77,23 @@ export function storedSecurity(c: SecurityConfig): Record<string, unknown> {
   return { lockout: { enabled: c.lockout.enabled, maxFailures: c.lockout.maxFailures, windowSeconds: c.lockout.windowMs / 1000, lockSeconds: c.lockout.lockMs / 1000, hold: c.lockout.hold, exempt: [...c.lockout.exempt] },
     adminMinLevel: c.adminMinLevel, adminMaxAgeSeconds: c.adminMaxAgeSeconds, holdAfterVerification: c.holdAfterVerification, appLevels: structuredClone(c.appLevels) };
 }
+
+/** The settings a workflow block may change one at a time. The value is text from the workflow editor. */
+export const SECURITY_SETTING_KEYS = ['lockout.enabled', 'lockout.maxFailures', 'lockout.windowSeconds', 'lockout.lockSeconds', 'lockout.hold', 'adminMinLevel', 'adminMaxAgeSeconds', 'holdAfterVerification', 'appLevel.<application id>'] as const;
+export function patchSecurity(current: Record<string, unknown> | undefined, setting: string, raw: string): Record<string, unknown> {
+  const stored = storedSecurity(parseSecurity(current));
+  const text = String(raw).trim();
+  const asBool = () => { if (text !== 'true' && text !== 'false') bad(`${setting}: true or false`); return text === 'true'; };
+  const asInt = () => { if (!/^\d{1,9}$/.test(text)) bad(`${setting}: a whole number`); return Number(text); };
+  const lock = stored.lockout as Record<string, unknown>;
+  if (setting === 'lockout.enabled' || setting === 'lockout.hold') lock[setting.slice(8)] = asBool();
+  else if (['lockout.maxFailures', 'lockout.windowSeconds', 'lockout.lockSeconds'].includes(setting)) lock[setting.slice(8)] = asInt();
+  else if (setting === 'adminMinLevel' || setting === 'adminMaxAgeSeconds') stored[setting] = asInt();
+  else if (setting === 'holdAfterVerification') stored[setting] = asBool();
+  else if (setting.startsWith('appLevel.')) {
+    const id = setting.slice(9), level = asInt();
+    const levels = stored.appLevels as Record<string, { minLevel: number; maxAgeSeconds?: number }>;
+    if (level === 0) delete levels[id]; else levels[id] = { ...(levels[id] ?? {}), minLevel: level };
+  } else bad(`unknown setting ${setting}`);
+  return storedSecurity(validateSecurity(stored));
+}

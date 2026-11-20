@@ -30,6 +30,8 @@ export interface WfBlockField { key: string; label: string; type: 'string' | 'te
 export interface WfBlockCtx {
   tenant: string; config: Record<string, unknown>; settings: Record<string, unknown>; dryRun: boolean;
   log: (line: string) => void; outputs: Record<string, Record<string, unknown>>;
+  /** Test run: blocks with an immediate effect only log what they would do. */
+  test?: boolean; runId?: string; accounts?: import('./engine.js').AccountEffects;
   branchWrite: (fn: (db: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }) => Promise<void>, message?: string) => Promise<void>;
 }
 export interface WfBlock {

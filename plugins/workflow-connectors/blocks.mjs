@@ -442,7 +442,100 @@ const lyamCreateUser = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser];
+
+// ------------------------------------------------------------ lyam connector: account blocks and security settings ----
+const KINDS = ['suspended', 'disabled', 'locked', 'pending_approval'];
+const userId = (v, what) => { const x = str(v, what, 64); if (!/\{\{/.test(x) && !/^[a-z0-9][a-z0-9._@-]{0,63}$/.test(x)) bad(`${what}: not a valid user id`); return x; };
+
+const lyamBlockAccount = {
+  type: 'lyam-block-account',
+  family: 'lyam',
+  label: 'Block an account in lyam',
+  simulated: false,
+  category: 'real',
+  description: 'REAL and immediate: sets an account block (the person sees your message at sign-in). Not written on the run branch, a block is operational state. A test run only logs what it would do. A person is never blocked if they are the last active administrator. Blocking again an account already blocked with the same type changes nothing.',
+  fields: [
+    { key: 'subject', label: 'User id', type: 'string', required: true, help: 'placeholders allowed, e.g. {{event.subject}}' },
+    { key: 'kind', label: 'Block type', type: 'select', options: KINDS, default: 'suspended', required: true },
+    { key: 'message', label: 'Message shown at sign-in', type: 'text', required: true, help: 'up to 300 characters, shown after the first factor succeeds' },
+    { key: 'durationMinutes', label: 'Lift automatically after (minutes, optional)', type: 'number' },
+  ],
+  outputs: [{ key: 'subject', description: 'The blocked user id' }, { key: 'applied', description: 'true when a block was set, false when one of this type was already in force' }],
+  validate(cfg) {
+    const kind = str(cfg.kind, 'lyam-block-account.kind', 30);
+    if (!KINDS.includes(kind)) bad(`lyam-block-account.kind: one of ${KINDS.join(', ')}`);
+    const d = cfg.durationMinutes;
+    if (d !== undefined && d !== null && d !== '' && !(Number.isInteger(Number(d)) && Number(d) >= 1 && Number(d) <= 525600)) bad('lyam-block-account.durationMinutes: a whole number of minutes (1 to 525600)');
+    return { subject: userId(cfg.subject, 'lyam-block-account.subject'), kind, message: str(cfg.message, 'lyam-block-account.message', 300), ...(d ? { durationMinutes: Number(d) } : {}) };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would block "${c.subject}" (${c.kind}) - nothing applied`); return { subject: c.subject, applied: false }; }
+    if (!ctx.accounts) bad('lyam-block-account: account blocks are not available on this server');
+    const r = await ctx.accounts.block(ctx.tenant, { runId: ctx.runId, subject: c.subject, kind: c.kind, message: c.message, ...(c.durationMinutes ? { untilSeconds: c.durationMinutes * 60 } : {}) });
+    ctx.log(r.applied ? `account "${c.subject}" blocked (${c.kind})` : `account "${c.subject}" already has a ${c.kind} block in force: no change`);
+    return { subject: c.subject, applied: r.applied };
+  },
+};
+
+const lyamUnblockAccount = {
+  type: 'lyam-unblock-account',
+  family: 'lyam',
+  label: 'Lift the blocks of an account in lyam',
+  simulated: false,
+  category: 'real',
+  description: 'REAL and immediate: lifts the blocks of an account (all of them, or one type). A test run only logs what it would do.',
+  fields: [
+    { key: 'subject', label: 'User id', type: 'string', required: true, help: 'placeholders allowed' },
+    { key: 'kind', label: 'Only this type (optional)', type: 'select', options: ['', ...KINDS] },
+  ],
+  outputs: [{ key: 'subject', description: 'The user id' }, { key: 'lifted', description: 'How many blocks were lifted' }],
+  validate(cfg) {
+    const kind = str(cfg.kind, 'lyam-unblock-account.kind', 30, false);
+    if (kind && !KINDS.includes(kind)) bad(`lyam-unblock-account.kind: one of ${KINDS.join(', ')}`);
+    return { subject: userId(cfg.subject, 'lyam-unblock-account.subject'), ...(kind ? { kind } : {}) };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would lift the blocks of "${c.subject}"${c.kind ? ` (${c.kind})` : ''} - nothing applied`); return { subject: c.subject, lifted: 0 }; }
+    if (!ctx.accounts) bad('lyam-unblock-account: account blocks are not available on this server');
+    const r = await ctx.accounts.unblock(ctx.tenant, { runId: ctx.runId, subject: c.subject, ...(c.kind ? { kind: c.kind } : {}) });
+    ctx.log(`${r.lifted} block(s) lifted on "${c.subject}"`);
+    return { subject: c.subject, lifted: r.lifted };
+  },
+};
+
+const lyamSecuritySetting = {
+  type: 'lyam-security-setting',
+  family: 'lyam',
+  label: 'Change a security setting in lyam',
+  simulated: false,
+  category: 'real',
+  description: 'REAL data write on the run branch only: changes one account-security setting (lockout, administration level, application level, hold after verification). It goes live with the normal review and Apply. The value is checked like the settings screen checks it.',
+  fields: [
+    { key: 'setting', label: 'Setting', type: 'string', required: true, help: 'lockout.enabled, lockout.maxFailures, lockout.windowSeconds, lockout.lockSeconds, lockout.hold, adminMinLevel, adminMaxAgeSeconds, holdAfterVerification, or appLevel.<application id> (0 removes the rule)' },
+    { key: 'value', label: 'Value', type: 'string', required: true, help: 'a whole number or true / false' },
+  ],
+  outputs: [{ key: 'setting', description: 'The setting changed' }, { key: 'value', description: 'The value written' }],
+  validate(cfg) { return { setting: str(cfg.setting, 'lyam-security-setting.setting', 80), value: str(cfg.value, 'lyam-security-setting.value', 20) }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (!ctx.accounts) bad('lyam-security-setting: not available on this server');
+    await ctx.branchWrite(async (db) => {
+      const [t] = await db.query("select count(*) n from information_schema.tables where table_schema = database() and table_name = 'plugin_runtime_settings'");
+      if (!Number(t[0].n)) bad('lyam-security-setting: the settings storage does not exist on this branch');
+      const [rows] = await db.query("select settings from plugin_runtime_settings where tenant = ? and plugin = 'core-security'", [ctx.tenant]);
+      const raw = rows[0]?.settings;
+      const current = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const next = ctx.accounts.patchSecurity(current, c.setting, c.value);
+      await db.query("insert into plugin_runtime_settings (tenant, plugin, settings) values (?, 'core-security', ?) on duplicate key update settings = values(settings)", [ctx.tenant, JSON.stringify(next)]);
+      ctx.log(`${c.setting} = ${c.value} written on the run branch (live after review and Apply)`);
+    }, `workflow: security setting ${c.setting} (lyam connector)`);
+    return { setting: c.setting, value: c.value };
+  },
+};
+
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {
