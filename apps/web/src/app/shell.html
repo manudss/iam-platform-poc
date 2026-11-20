@@ -55,10 +55,18 @@
             @for(b of pickerBranches();track b.name){<button type="button" class="brow" role="option" [attr.aria-selected]="b.name===s.branch()" [class.cur]="b.name===s.branch()" (click)="pickBranch(b.name)"><span class="dot" [class]="dotFor(b.name)"></span><span class="bname">{{b.name}}</span>@if(b.name==='main'){<small>read only</small>}@if(b.name===personal()){<small>yours</small>}@if(b.name===s.branch()){<span class="bcheck" aria-hidden="true">✓</span>}</button>}
             @empty {<p class="phint">No branch matches the search.</p>}
           </div>
-          <div class="prow">
-            @if(pickerNew()){<input name="pickerNewBranch" [(ngModel)]="newBranch" placeholder="my-work" aria-label="New branch name" /><button type="button" (click)="pickerCreate()" [disabled]="!newBranch || workingBusy()">Create &amp; select</button>}
-            @else {<button type="button" class="secondary" id="picker-new" (click)="pickerNew.set(true)">＋ New branch from main…</button>}
-            <button type="button" class="secondary" id="picker-manage" (click)="pickerManage()">⚙ Manage branches…</button>
+          <div class="psec" role="group" aria-label="This branch">
+            <p class="ptitle">This branch</p>
+            @if(rebaseAsk()){<div class="rebase-ask" id="rebase-confirm" role="alertdialog" aria-label="Confirm rebase"><p>Replay the changes of <b>{{s.branch()}}</b> on top of the latest main. Nothing is published to main. If they conflict, nothing changes.</p><div class="act"><button type="button" id="rebase-go" (click)="rebase()" [disabled]="workingBusy()">Rebase now</button><button type="button" class="secondary" (click)="rebaseAsk.set(false)">Cancel</button></div></div>}
+            @else {<button type="button" class="prowbtn" id="rebase-main" (click)="rebaseAsk.set(true)" [disabled]="!canRebase()" [attr.title]="rebaseTip()"><span class="pi" aria-hidden="true">⤴</span>Rebase on main</button>}
+            <button type="button" class="prowbtn" id="test-signin" (click)="testSignIn()" [disabled]="!s.branch()||s.branch()==='main'||workingBusy()||testing()" title="Opens the whole app, login included, as it behaves on this branch, in a new tab. Valid 10 minutes. Main is never touched."><span class="pi" aria-hidden="true">↗</span>Test sign-in</button>
+            <button type="button" class="prowbtn" id="stable-link" (click)="stableLink()" [disabled]="!s.branch()||s.branch()==='main'||workingBusy()||testing()" title="A test link that does not expire until you revoke it. It never grants extra rights and never publishes to main."><span class="pi" aria-hidden="true">🔗</span>Stable test link</button>
+          </div>
+          <div class="psec" role="group" aria-label="Branches">
+            <p class="ptitle">Branches</p>
+            @if(pickerNew()){<div class="prow"><input name="pickerNewBranch" [(ngModel)]="newBranch" placeholder="my-work" aria-label="New branch name" /><button type="button" (click)="pickerCreate()" [disabled]="!newBranch || workingBusy()">Create &amp; select</button></div>}
+            @else {<button type="button" class="prowbtn" id="picker-new" (click)="pickerNew.set(true)"><span class="pi" aria-hidden="true">＋</span>New branch from main…</button>}
+            <button type="button" class="prowbtn" id="picker-manage" (click)="pickerManage()"><span class="pi" aria-hidden="true">⚙</span>Manage branches…</button>
           </div>
           <div class="pmeta"><span>Branch list refreshed {{branchesAgo()}}</span><button type="button" class="plink" id="picker-refresh" (click)="refreshPicker()">⟳ Refresh</button></div>
         </div>}
@@ -66,15 +74,9 @@
       <span class="sr-only" role="status">{{branchTip()}}</span>}
       <button type="button" class="chipbtn" id="review-apply" [class.pending]="(changes() ?? 0)>0" [class.pulse]="pulse()" (click)="toggleReview()" [disabled]="workingBusy()||!s.branch()||s.branch()==='main'" [attr.aria-expanded]="review()!==null" aria-controls="review-panel"
         aria-label="Review and apply changes" title="Review &amp; Apply: see what you changed on this branch, compared with main, then publish it to main. Disabled on main, which is read only.">⇄&nbsp;@if(changes()!==null){<span class="chiptext" id="changes-badge" [attr.aria-label]="changes()+' changed rows'"><span class="n">{{changes()}}</span><span class="w1"> {{changes()===1?'change':'changes'}}</span><span class="w2"> pending</span></span>}@else{<span class="chiptext">Review &amp; Apply</span>}</button>
-      @if (canBranches()) {<button type="button" class="icon" id="more-menu" (click)="more.set(!more())" [attr.aria-expanded]="more()" aria-label="More branch actions" title="Test sign-in, stable test link, manage branches">⋯</button>}
       }
     </header>
     @if (isAdmin() && !s.testBranch()) {
-    @if (more() && canBranches()) {<div class="pop menu" id="more-panel" role="menu" aria-label="More branch actions">
-      <button type="button" class="secondary" id="test-signin" role="menuitem" (click)="testSignIn()" [disabled]="!s.branch()||s.branch()==='main'||workingBusy()||testing()" title="Opens the whole app, login included, as it behaves on this branch, in a new tab. Valid 10 minutes. Main is never touched.">Test sign-in on this branch</button>
-      <button type="button" class="secondary" id="stable-link" role="menuitem" (click)="stableLink()" [disabled]="!s.branch()||s.branch()==='main'||workingBusy()||testing()" title="A test link that does not expire until you revoke it. It never grants extra rights and never publishes to main.">Stable test link</button>
-      <button type="button" class="secondary" id="manage-branches" role="menuitem" (click)="openManage()">Manage branches…</button>
-    </div>}
     @if (manage() && canBranches()) {<section class="pop inline manage" id="branch-panel" aria-label="Manage branches">
       <div class="row"><label>New branch from main<input name="workspaceNewBranch" [(ngModel)]="newBranch" placeholder="my-work" /></label><button (click)="create()" [disabled]="!newBranch || workingBusy()">Create &amp; select</button><button class="secondary" (click)="refresh()">Refresh branches</button></div>
       @if(personal()){<div class="row"><label>Your personal branch<input name="personalBranchName" [(ngModel)]="renameTo" /></label><button class="secondary" id="rename-personal" (click)="rename()" [disabled]="!renameTo || renameTo===personal() || workingBusy()">Rename</button></div>}
