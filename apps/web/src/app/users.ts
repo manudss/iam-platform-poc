@@ -73,7 +73,7 @@ export function userStats(users: UserProfile[]): UserStats {
 
 @Component({ selector: 'app-users', imports: [FormsModule, RouterLink, RolesRights, UserPluginSections, UserAvatar], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
-<p class="hint">Fictional demo only. On the free hosted demo, all data is lost when its disk is replaced. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
+<p class="hint">Fictional demo only: do not enter real personal data. The data is kept on the server's disk and is backed up before each update, but this is a demo and nothing here is guaranteed to be kept. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="head">
   <div class="grow"><h2>Users</h2><span class="cnt">{{stats().total}} users · {{stats().enabled}} can sign in · {{stats().depts}} departments</span></div>
