@@ -57,7 +57,7 @@ try {
   await page.evaluate(()=>{document.documentElement.dataset.theme='light';});
   await page.screenshot({path:out+'/mobile-light.png',fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-  await page.click('#lp-organise'); await page.waitForSelector('#lp-save'); await page.screenshot({path:out+'/mobile-edit.png',fullPage:true});
+  await page.waitForFunction(()=>document.querySelector('.pillbtn')?.textContent.includes('personal/')); await page.click('#lp-organise'); await page.waitForSelector('#lp-save'); await page.screenshot({path:out+'/mobile-edit.png',fullPage:true});
   assert.equal(await page.locator('.lp-move button').first().evaluate(x=>x.getBoundingClientRect().height>=44),true);
   const mobileOther=page.locator('[aria-label="Other applications"] .lp-card');
   const mobileIds=await mobileOther.evaluateAll(xs=>xs.map(x=>x.dataset.app));
