@@ -282,6 +282,22 @@ describe('profile plugins API: components, grants and the uninstall contract', (
     const r = await api().patch(`/tenants/${T}/users/demo-bob/profile`).set(adm).send({ values: { 'profile-picture.picture': pngDataUrl(16) } });
     assert.equal(r.status, 403, JSON.stringify(r.body));
   });
+  it('photo endpoint: the admin sheet and the users-pictures list serve the live picture, administrators only, picture field only, nothing written', async () => {
+    const sheet = await api().get(`/tenants/${T}/users/demo-bob/profile`).set(adm);
+    assert.equal(sheet.status, 200, JSON.stringify(sheet.body));
+    assert.ok(String(sheet.body.values['profile-picture.picture'] ?? '').startsWith('data:image/'), 'the admin sheet shows the person\'s live picture');
+    assert.equal((await api().get(`/tenants/${T}/users-pictures`)).status, 403, 'not for a plain signed-in person');
+    const list = await api().get(`/tenants/${T}/users-pictures`).set(adm);
+    assert.equal(list.status, 200, JSON.stringify(list.body));
+    assert.deepEqual(Object.keys(list.body), ['pictures'], 'nothing else is exposed');
+    for (const v of Object.values(list.body.pictures)) assert.ok(String(v).startsWith('data:image/'), 'only data images, never a URL or another field');
+    const edit = await api().patch(`/tenants/${T}/users/demo-bob/profile`).set(adm).send({ values: { 'profile-picture.picture': pngDataUrl(8) } });
+    assert.equal(edit.status, 403, 'the admin read path never turns into a write');
+    assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/disable`).set(adm)).status, 201);
+    const off = await api().get(`/tenants/${T}/users-pictures`).set(adm);
+    assert.deepEqual(off.body.pictures, {}, 'a disabled picture plugin shows no photo anywhere');
+    assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/enable`).set(adm).send({ grants: { uiComponents: true } })).status, 201);
+  });
   it('uninstall takes the plugin\'s profile configuration with it and reports the purge', async () => {
     assert.equal((await api().post(`/tenants/${T}/plugins/hr-attributes/install`).set(adm).send({ grants: { install: true } })).status, 201);
     assert.equal((await api().post(`/tenants/${T}/plugins/hr-attributes/enable`).set(adm).send({ grants: {} })).status, 201, 'no UI grant: hr-attributes ships no components');
