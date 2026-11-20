@@ -55,7 +55,7 @@ export class StepUpPage {
   protected view() { return stepUpView({ kind: this.q.get('kind') ?? 'app', app: (this.q.get('app') ?? '').slice(0, 60), required: this.required(), current: Math.max(0, Number(this.q.get('current')) || 0), chains: this.chains() }); }
   constructor() { void this.load(); }
   private async load() {
-    try { this.chains.set((await this.s.api.raw<{ chains: StepUpChain[] }>('GET', `/me/step-up?level=${this.required()}`)).data.chains ?? []); }
+    try { this.chains.set((await this.s.api.raw<{ chains: StepUpChain[] }>('GET', `/auth/me/step-up?level=${this.required()}`)).data.chains ?? []); }
     catch (e) { this.error.set((e as Error).message); }
     this.loading.set(false);
   }
