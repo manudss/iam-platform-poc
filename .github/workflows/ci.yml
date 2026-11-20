@@ -131,6 +131,9 @@ jobs:
         run: NODE_PATH=/tmp/pw/node_modules node scripts/workflow-logic-ports-e2e.cjs /tmp/workflow-logic-ports
       - name: Browser sign-in flow end-to-end (headless Chrome, real core, local client on localhost:4200)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/authz-browser-e2e.mjs /tmp/authz-shots
+      - name: Account blocks and sign-in levels end-to-end (headless Chrome, real core, fictional data)
+        run: |
+          CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/account-blocks-e2e.mjs /tmp/blocks-shots
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 15
