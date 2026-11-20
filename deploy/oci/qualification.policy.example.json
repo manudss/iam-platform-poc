@@ -11,7 +11,7 @@
   "baoTokenFile": "/private/copy-only-metadata-token",
   "baoMetadataRoots": ["secret/metadata/iam"],
   "authFile": "/private/reviewed-smoke-auth.json",
-  "credentialFiles": ["core-state/credentials.json", "core-state/iam-poc-authn-enrollments.json", "core-state/iam-poc-password-history.json"],
+  "credentialFiles": ["core-state/credentials.json", "core-state/iam-poc-authn-enrollments.json", "core-state/iam-poc-password-history.json", "core-state/iam-poc-account-blocks.json"],
   "appendOnlyTables": ["public.activations", "public.decision_audit"],
   "transformationVerifiers": {}
 }
