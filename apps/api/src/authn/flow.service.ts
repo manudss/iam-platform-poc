@@ -11,6 +11,8 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
+import { BlockStore } from '../accounts/block-store.js';
+import { inForce, lockoutVerdict, refusalMessage, shownBlock } from '../accounts/blocks.js';
 import { ExternalIdentity, ExternalProfile, ExternalStart, ProviderRefusal, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, externalRefusalMessage, mint, mintPkceVerifier, pkceChallenge } from './federation.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 
@@ -78,6 +80,9 @@ export { DEMO_TOTP_SECRET, DEMO_PIN, DEMO_PIN8 } from '../migrations/v0001/authn
 @Injectable()
 export class AuthnService implements OnApplicationBootstrap {
   readonly enroll = new EnrollmentStore();
+  /** Account blocks (suspended, disabled, locked, waiting for approval or verification): checked by the core of the chain, never by a plugin. */
+  readonly blocks = new BlockStore();
+  private lockFails = new Map<string, number[]>();
   readonly outbox = new DemoOutbox();
   private sessions = new Map<string, Session>();
   private fails = new Map<string, number[]>();
@@ -573,7 +578,7 @@ export class AuthnService implements OnApplicationBootstrap {
     // The link is the ONLY way in (docs/sso-federation.md): no link for this provider subject, no sign-in,
     // whatever the plugin answered. A linked account that is not the session's account is refused too.
     if (!verdict?.ok || !linked || (s.subject && linked.user !== s.subject)) {
-      this.fail(key); s.tries++;
+      this.fail(key); s.tries++; await this.recordFailure(s);
       this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'step-failed', via: 'external' });
       const message = verdict?.ok ? 'No account is linked to this provider sign-in.' : (typeof verdict?.message === 'string' && verdict.message.length <= 160 ? verdict.message : 'External sign-in failed. Try again.');
       if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return deny('Sign-in failed. Check your details and try again.'); }
@@ -691,8 +696,32 @@ export class AuthnService implements OnApplicationBootstrap {
     const st = s.steps[s.index];
     return { outcome: 'challenge', session: s.id, step: { index: s.index, total: s.steps.length, methodId: st.id, type: st.type, ...s.prepared!.prompt }, ...(error ? { error } : {}) };
   }
+  /** The refusal for an account that carries a block, or null. Called once a step is proven, so the reason is never shown to someone who has not proved it (anti-enumeration). */
+  private async blockGate(s: Session): Promise<GateResponse | null> {
+    if (!s.known) return null;
+    const shown = shownBlock(await this.blocks.list(s.tenant, s.subject), this.now());
+    if (!shown) return null;
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'blocked', kind: shown.kind, block: shown.id });
+    return { outcome: 'deny', reason: 'account-blocked', message: refusalMessage(shown) };
+  }
+  /** A failed answer counts toward the automatic lock, only when an administrator turned it on. Unknown accounts are never given a block. */
+  private async recordFailure(s: Session) {
+    const settings = await this.blocks.lockout(s.tenant);
+    if (!settings.enabled || !s.known) return;
+    const k = `${s.tenant}/${s.subject}`, now = this.now(), list = [...(this.lockFails.get(k) ?? []).filter((x) => now - x < settings.windowMs), now];
+    this.lockFails.set(k, list);
+    if (!lockoutVerdict(list, now, settings, s.subject).lock) return;
+    this.lockFails.delete(k);
+    await this.blocks.add(s.tenant, { subject: s.subject, kind: 'locked', message: 'Too many failed attempts. Try again later or ask an administrator.', origin: 'automatic', setBy: 'system', setAt: now, ...(settings.hold ? { hold: true } : { until: now + settings.lockMs }) });
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'locked' });
+  }
   private async check(s: Session, answers: Record<string, string>): Promise<GateResponse> {
     const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
+    // An account locked by too many failures does not evaluate any answer: guessing stops while the lock is in force.
+    if (s.known && inForce((await this.blocks.list(s.tenant, s.subject)).filter((b) => b.kind === 'locked'), this.now()).length) {
+      this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'refused-while-locked' });
+      return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
+    }
     const clean: Record<string, string> = {};
     // One answer value is at most 256 chars, except the passkey ceremony answer: a signed WebAuthn JSON of a few KB.
     for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= (k === 'webauthn' ? 16384 : 256) && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
@@ -728,6 +757,8 @@ export class AuthnService implements OnApplicationBootstrap {
   private async advance(s: Session): Promise<GateResponse> {
     const st = s.steps[s.index];
     s.done.push({ id: st.id, type: st.type, real: st.real }); s.index++;
+    const blocked = await this.blockGate(s);
+    if (blocked) { this.sessions.delete(s.id); return blocked; }
     if (s.index < s.steps.length) { await this.prepare(s); return this.challenge(s); }
     this.sessions.delete(s.id); this.fails.delete(`${s.tenant}/${s.branch ?? 'live'}/${s.subject}`);
     // Factor 'other' (federation) never counts toward MFA by itself: a federated step asserts a sign-in happened

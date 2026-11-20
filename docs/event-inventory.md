@@ -17,8 +17,8 @@ Production code: 42 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:139 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:141 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:142 |
-| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:248 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:359 |
+| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:253 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:364 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:185 |
 | callSlot (blocking hook) | caller | notify.templates | apps/api/src/plugins/v1/mail-catalogue.ts:33 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:41 |

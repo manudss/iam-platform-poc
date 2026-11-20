@@ -91,3 +91,11 @@ export function lockoutVerdict(failures: readonly number[], now: number, s: Lock
   if (!s.enabled || s.exempt.includes(subject)) return { lock: false, recent };
   return { lock: recent >= s.maxFailures, recent };
 }
+
+/** The sign-in refusal shown for a block: its type, the message set by whoever blocked, and a short reference for support. */
+export const BLOCK_LABEL: Record<BlockKind, string> = {
+  suspended: 'Account suspended', disabled: 'Account disabled', locked: 'Account locked after too many failed attempts',
+  pending_approval: 'Account waiting for approval', pending_verification: 'E-mail address not verified yet',
+};
+export const blockReference = (b: Pick<Block, 'id'>) => `BLK-${b.id.replace(/[^A-Za-z0-9]/g, '').slice(-4).toUpperCase()}`;
+export function refusalMessage(b: Block): string { return `${BLOCK_LABEL[b.kind]}. ${b.message.trim()} Reference ${blockReference(b)}.`.replace(/\.\s*\./g, '.'); }
