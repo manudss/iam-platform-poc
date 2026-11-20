@@ -425,6 +425,8 @@ pub async fn login(State(c): State<Arc<Core>>, headers: HeaderMap, Form(p): Form
             crate::gate::Step::Deny(m) => {
                 c.bus_emit("signin.refused", serde_json::json!({"subject": g("username"), "client_id": g("client_id")}), None);
                 let msg = m.unwrap_or_else(|| "Wrong user or password.".into());
+                // A block refusal (proved credentials, account blocked) is the card, not the sign-in form again.
+                if split_block_refusal(&msg).is_some() { return deny_page(StatusCode::UNAUTHORIZED, &msg, &theme); }
                 return match first_page().await { Some(f) => form(&p, Some(&msg), Some(&f), &theme), None => form(&p, Some(&msg), None, &theme) };
             }
             crate::gate::Step::Challenge(v) => return step_page(&p, &v, None, &theme),
