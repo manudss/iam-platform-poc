@@ -212,7 +212,7 @@ await shot(page, '3-auth-methods-after');
 // 4. Review & Apply so the live registry carries the replacement, then a real sign-in still works.
 const applyRes = await call('POST', '/workspace/apply', { confirm: true }, 'repl-e2e');
 assert.ok(applyRes.ok, 'apply: ' + applyRes.status + ' ' + (await applyRes.text()));
-await page.getByRole('button', { name: 'Sign out' }).click();
+await page.click('header #user-menu-button'); await page.click('#user-menu-signout');
 await page.goto(BASE + '/login');
 await page.locator('[data-chain="password-only"]').waitFor({ timeout: 15000 });
 await shot(page, '4-login-chains');

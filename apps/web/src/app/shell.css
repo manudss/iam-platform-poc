@@ -18,7 +18,26 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .top { display: flex; align-items: center; gap: .8rem; padding: .8rem 1.5rem; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 .top h1 { font-size: 1.15rem; margin: 0; }
 .spacer { flex: 1; }
-.who { background: var(--acc2-soft); color: var(--acc2-dark); border-radius: 999px; padding: .2rem .7rem; font-size: .85rem; font-weight: 600; }
+/* User menu: avatar button top right; the menu groups the profile, sign-out and the deployed version. */
+.userwrap { position: relative; display: inline-flex; }
+.userbtn { display: inline-flex; align-items: center; gap: .55rem; border: 1px solid transparent; background: transparent; border-radius: 999px; padding: .2rem .65rem .2rem .25rem; margin: 0; color: var(--ink); cursor: pointer; font-weight: 600; }
+.userbtn:hover { background: var(--row-hover); border-color: var(--line); }
+.userbtn .nm { font-size: .9rem; max-width: 11rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.userbtn .chev { color: var(--muted); font-size: .75rem; }
+.userbtn .av, .usermenu .av { width: 2rem; height: 2rem; border-radius: 50%; object-fit: cover; display: inline-grid; place-items: center; font-size: .8rem; font-weight: 700; background: var(--acc2-soft); color: var(--acc2-dark); border: 1px solid var(--acc2); box-sizing: border-box; overflow: hidden; flex: none; }
+.usermenu .um-head .av { width: 2.5rem; height: 2.5rem; font-size: .95rem; }
+.umscrim { position: fixed; inset: 0; z-index: 24; cursor: default; }
+.usermenu { position: absolute; top: calc(100% + .45rem); right: 0; z-index: 25; width: min(16.5rem, calc(100vw - 1rem)); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.usermenu .um-head { display: flex; gap: .7rem; align-items: center; padding: .8rem .95rem .7rem; }
+.usermenu .um-id { min-width: 0; }
+.usermenu .um-id b { display: block; font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usermenu .um-id small { color: var(--muted); font-size: .8rem; display: block; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usermenu hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
+.usermenu .um-item { display: flex; align-items: center; gap: .65rem; width: 100%; box-sizing: border-box; border: 0; background: transparent; font: inherit; font-size: .92rem; font-weight: 500; color: var(--ink); padding: .6rem .95rem; min-height: 44px; margin: 0; cursor: pointer; text-align: left; text-decoration: none; border-radius: 0; }
+.usermenu .um-item:hover { background: var(--row-hover); }
+.usermenu .um-item .ico { width: 1.2rem; text-align: center; color: var(--label); }
+.usermenu .um-foot { display: flex; justify-content: space-between; align-items: center; padding: .5rem .95rem .6rem; font-size: .76rem; color: var(--muted); }
+.usermenu .um-foot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; background: var(--code-bg); border-radius: 5px; padding: 1px 6px; color: var(--label); }
 .burger { display: none; }
 .bar { margin: 1rem 1.5rem 0; }
 .content { padding: 1.25rem 1.5rem 3rem; max-width: 80rem; width: 100%; box-sizing: border-box; }
@@ -30,7 +49,11 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
   .open .scrim { display: block; position: fixed; inset: 0; background: var(--scrim); z-index: 10; }
   .burger { display: inline-block; margin: 0; padding: .35rem .7rem; }
   .top { padding: .7rem 1rem; } .content { padding: 1rem; } .bar { margin: .8rem 1rem 0; }
-  .who { flex: 0 0 auto; max-width: 5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .userbtn .nm { display: none; }
+  /* The open menu anchors under the whole bar (the mockup opens it below the bar, never over it): the button
+     wrapper stops being the positioning context, .top (sticky, so positioned) takes over. */
+  .userwrap { position: static; }
+  .usermenu { position: absolute; top: 100%; right: .5rem; margin-top: .45rem; }
   .top { gap: .5rem; } .top h1 { font-size: 1rem; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 .top button { white-space: nowrap; }
@@ -65,7 +88,7 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .pop.inline { position: static; max-width: none; box-shadow: none; border-radius: 0; border-width: 0 0 1px; margin: 0; padding: .7rem 1.5rem; }
 @media (max-width: 900px) { .pop.inline { padding: .7rem 1rem; } }
 /* DOM order keeps the identity first (scripts and screen readers find it first); flex order puts it after the branch controls. */
-.who { order: 1; } .top > .secondary:last-child { order: 2; } .top > .pillwrap, .top > .icon { order: 0; }
+.userwrap { order: 1; } .top > .pillwrap, .top > .icon { order: 0; }
 
 /* Direction C: editor owns its workspace; other pages keep the normal document layout. */
 .workflow-workbench{height:100dvh;min-height:0;overflow:hidden;grid-template-columns:170px minmax(0,1fr)}
@@ -146,3 +169,28 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .fly-dot { /* --tx/--ty default to the dot's own position; shell.ts sets the real chip coordinates inline. */ --tx: 50vw; --ty: 64px; position: fixed; left: 50vw; top: 64px; width: .8rem; height: .8rem; border-radius: 50%; background: var(--warn-ink); z-index: 60; pointer-events: none; animation: fly-to-chip .9s cubic-bezier(.5, 0, .3, 1) forwards; }
 @keyframes fly-to-chip { to { transform: translate(calc(var(--tx) - 50vw), calc(var(--ty) - 64px)) scale(.4); opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .fly-dot { animation: none; opacity: 0; } }
+/* Small screens (validated mobile layout): two grid rows. Row 1: burger, title, session timer, avatar pinned to
+   the right. Row 2: branch pill, Review & Apply and the "..." menu. Grid rows force the break that flex order
+   cannot; minmax(0, 1fr) lets the title shrink with its ellipsis. */
+@media (max-width: 600px) {
+  .top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; }
+  .top > * { grid-row: 1; }
+  .top .burger { justify-self: start; }
+  /* Row 2: the pill spans the burger and title columns (so it does not stretch the burger's), then the icons.
+     .chipbtn matches nothing here: it is the Review & Apply chip's class once the branch-UX PR lands, listed so the merged
+     bar keeps it on the second row without another change. */
+  .top > .pillwrap { grid-row: 2; grid-column: 1 / 3; justify-self: stretch; min-width: 0; max-width: 100%; overflow: hidden; }
+  .top > .icon, .top > .chipbtn { grid-row: 2; justify-self: start; min-width: 0; }
+  /* The pill stretches to exactly its grid tracks, so it can never grow over the chip: the bar's .5rem column
+     gap stays between them at any width. That PR's .pillbtn allows 12rem, wider than those tracks at 320px; here it
+     shrinks instead and its text ellipsizes (the full branch name stays reachable in the picker it opens).
+     overflow:hidden is safe below 900px only: .pillwrap is static there, so the tooltip's containing block is
+     higher and the picker is fixed-positioned; neither is clipped. */
+  .top .pillbtn { min-width: 0; max-width: 100%; display: inline-block; }
+  .top .pillbtn .chev { display: none; }
+  .top .userwrap { justify-self: end; }
+}
+
+/* Long branch names wrap in the picker list instead of truncating: the pill above ellipsizes them, so the
+   picker is where the full name must stay readable. */
+.top .picker .brow .bname { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }

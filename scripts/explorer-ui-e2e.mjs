@@ -110,7 +110,7 @@ try {
   await page.waitForSelector('text=Can be merged');
   // the author (demo-alice) cannot approve through the UI
   assert.equal(await btn('Approve').isDisabled(), true); await page.waitForSelector('text=someone else has to approve');
-  assert.equal(await page.locator('.msg.error').count(), 0); await page.waitForSelector('text=demo-alice');
+  assert.equal(await page.locator('.msg.error').count(), 0); await page.click('#user-menu-button'); await page.waitForSelector('#user-menu:has-text("demo-alice")'); await page.keyboard.press('Escape'); // identity moved into the user menu
   await shot('5-pull-request');
   await btn('Merge').click(); await page.waitForSelector('.explorer .msg:has-text("Merged as")');
   // history on main shows the merge commit

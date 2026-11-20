@@ -28,6 +28,8 @@ describe('api', () => {
   it('health', async () => {
     const r = await request(app.getHttpServer()).get('/health').expect(200);
     assert.equal(r.body.status, 'ok');
+    assert.equal(r.body.version, 'dev'); // IAM_APP_VERSION unset outside the image build
+    assert.equal(r.body.commit, '');
   });
 
   it('reactivating an older commit is a new activation', async () => {

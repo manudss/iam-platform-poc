@@ -59,6 +59,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'workflow_dispatch' && inputs.ref != '' && inputs.ref || github.sha }}
+          fetch-depth: 0 # the build number counts the commits reachable from the built ref
 
       - name: Resolve the commit SHA and image tags
         id: t
@@ -75,6 +76,7 @@ jobs:
           fi
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "version=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
           echo "Building ${REPO}@${SHA} -> ${TAGS}"
 
       - uses: docker/setup-buildx-action@v3
@@ -94,6 +96,9 @@ jobs:
           file: demo/Dockerfile
           platforms: linux/amd64
           push: true
+          build-args: |
+            LYAM_BUILD_VERSION=${{ steps.t.outputs.version }}
+            LYAM_BUILD_SHA=${{ steps.t.outputs.sha }}
           labels: org.opencontainers.image.revision=${{ steps.t.outputs.sha }}
           tags: ${{ steps.t.outputs.tags }}
           cache-from: type=gha,scope=demo-image

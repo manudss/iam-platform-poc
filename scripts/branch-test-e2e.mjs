@@ -71,7 +71,7 @@ try {
   assert.equal(new URL(page.url()).searchParams.get('branch'), null, 'a normal sign-in carries no branch');
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
   await Promise.all([page.waitForURL(/localhost:4200(?!\/core)/), page.click('button[type=submit]')]);
-  await page.waitForSelector('header .who');
+  await page.waitForSelector('header #user-menu-button');
   await page.evaluate(() => { document.querySelector('details.token').open = true; });
   await page.fill('input[name=admintoken]', ADMIN_TOKEN);
   await openManage(page);

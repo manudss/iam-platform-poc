@@ -25,17 +25,21 @@ await run('login page lists methods (390px)', { width: 390, height: 844 }, async
 await run('password only signs in demo-alice', { width: 1280, height: 800 }, async (page) => {
   await pick(page, 'password-only'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
   await page.screenshot({ path: join(out, 'core-password-only.png') });
-  await Promise.all([page.waitForURL(/\/(overview|callback)/), page.click('button[type=submit]')]); await page.waitForSelector('main.content, .who', { timeout: 20000 }); await sleep(800);
-  assert.match(await page.innerText('.who'), /demo-alice`?/); await page.screenshot({ path: join(out, 'signed-in-password-only.png') });
+  await Promise.all([page.waitForURL(/\/(overview|callback)/), page.click('button[type=submit]')]); await page.waitForSelector('main.content, #user-menu-button', { timeout: 20000 }); await sleep(800);
+  await page.click('header #user-menu-button');
+  assert.match(await page.locator('#user-menu .um-id small').innerText(), /demo-alice/);
+  await page.keyboard.press('Escape'); await page.screenshot({ path: join(out, 'signed-in-password-only.png') });
 });
 await run('password then authenticator: right code signs in', { width: 1280, height: 800 }, async (page) => {
   await pick(page, 'password-then-authenticator'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret'); await page.click('button[type=submit]');
   await page.waitForSelector('input[name=a_code]'); await page.screenshot({ path: join(out, 'core-second-step.png') });
   await page.fill('input[name=a_code]', totp('JBSWY3DPEHPK3PXP')); await Promise.all([page.waitForURL(/\/(overview|callback)/, { timeout: 20000 }), page.click('button[type=submit]')]);
-  await page.waitForSelector('.who', { timeout: 20000 }); assert.match(await page.innerText('.who'), /demo-alice/);
+  await page.waitForSelector('#user-menu-button', { timeout: 20000 }); await page.click('header #user-menu-button');
+  assert.match(await page.locator('#user-menu .um-id small').innerText(), /demo-alice/);
+  await page.keyboard.press('Escape');
 });
 await run('wrong password on a chosen chain is refused with a generic message', { width: 1280, height: 800 }, async (page) => {
   await pick(page, 'password-only'); await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'wrong-password-123'); await page.click('button[type=submit]'); await sleep(2000);
-  await page.screenshot({ path: join(out, 'wrong-password.png') }); assert.ok(/\/authorize/.test(page.url())); assert.match(await page.innerText('body'), /Sign-in failed\. Check your details/); assert.equal(await page.locator('.who').count(), 0);
+  await page.screenshot({ path: join(out, 'wrong-password.png') }); assert.ok(/\/authorize/.test(page.url())); assert.match(await page.innerText('body'), /Sign-in failed\. Check your details/); assert.equal(await page.locator('#user-menu-button').count(), 0);
 });
 await browser.close(); console.log('ALL PASS');

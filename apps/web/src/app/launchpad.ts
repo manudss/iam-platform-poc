@@ -1,5 +1,5 @@
 import { isPlatformBrowser } from '@angular/common';
-import { Component, PLATFORM_ID, PendingTasks, TransferState, computed, effect, inject, makeStateKey, signal } from '@angular/core';
+import { Component, PLATFORM_ID, PendingTasks, TransferState, computed, effect, inject, makeStateKey, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 import { consumeLaunchpadPrefetch } from './launchpad-preload';
@@ -97,13 +97,23 @@ export class LaunchpadPage {
   protected nameParts(name: string) { return name.split(/(?<=[a-z])(?=[A-Z])/); }
   protected initials(name: string) { return name.split(/[\s:-]+/).filter(Boolean).slice(0,2).map(x => x[0]).join('').toUpperCase(); }
   protected imageFailed(id: string) { this.failedImages.update(xs => [...xs,id]); }
+  /** The branch the current view state belongs to; undefined until the first load runs. */
+  private loadedBranch: string | null | undefined;
   private async load() {
-    const epoch = ++this.loadEpoch; this.editing.set(false); this.beforeEdit = null; this.stopDrag();
+    const epoch = ++this.loadEpoch;
+    // Only a real switch between two branches discards an organisation in progress. The bootstrap's late
+    // personal-workspace selection (branch going from unset to set) must not cancel it, and a reload must
+    // never overwrite the working copy, which is the user's unsaved arrangement. Untracked: load() runs
+    // inside the branchEpoch effect, and reading these signals bare would subscribe the effect to them.
+    const br = untracked(() => this.s.branch()) || null;
+    if (this.loadedBranch && br !== this.loadedBranch) { this.editing.set(false); this.beforeEdit = null; this.stopDrag(); }
+    this.loadedBranch = br;
+    const keepWorkingCopy = untracked(() => this.editing());
     // Hydration: reuse what the server fetched to render this very page instead of refetching it.
     if (this.isBrowser && this.transfer.hasKey(LAUNCHPAD_KEY)) {
       const d = this.transfer.get(LAUNCHPAD_KEY, {});
       this.apps.set(Array.isArray(d.apps) ? d.apps : []);
-      this.preferences.set(d.preferences ?? { favourites: [], order: [] });
+      if (!keepWorkingCopy) this.preferences.set(d.preferences ?? { favourites: [], order: [] });
       this.problem.set(''); this.failedImages.set([]);
       this.transfer.remove(LAUNCHPAD_KEY);
       this.loaded.set(true);
@@ -119,7 +129,8 @@ export class LaunchpadPage {
       if (epoch !== this.loadEpoch) return;
       if (r.status >= 400) throw Error(r.data?.message || 'Could not load applications');
       this.apps.set(Array.isArray(r.data?.apps) ? r.data.apps : []);
-      this.preferences.set(r.data?.preferences ?? { favourites: [], order: [] }); this.problem.set(''); this.failedImages.set([]);
+      if (!keepWorkingCopy) this.preferences.set(r.data?.preferences ?? { favourites: [], order: [] });
+      this.problem.set(''); this.failedImages.set([]);
       if (!this.isBrowser) this.transfer.set(LAUNCHPAD_KEY, r.data ?? {});
     } catch (e) { if (epoch === this.loadEpoch) this.problem.set((e as Error).message); }
     finally { if (epoch === this.loadEpoch) this.loaded.set(true); }

@@ -44,8 +44,8 @@ try {
   await Promise.all([page.waitForURL(/\/core\/authorize/), page.click('[data-chain=password-only]')]);
   await page.fill('input[name=username]', 'demo-alice'); await page.fill('input[name=password]', 'demo-only-not-a-secret');
   await Promise.all([page.waitForURL(/\/(overview|callback)/), page.click('button[type=submit]')]);
-  await page.waitForSelector('.who', { timeout: 30000 });
-  await page.locator('nav a[data-nav="/my-profile"]').click();
+  await page.waitForSelector('#user-menu-button', { timeout: 30000 });
+  await page.click('header #user-menu-button'); await page.click('#user-menu-profile');
   const comp = page.locator('iam-passkeys-profile');
   await comp.waitFor();
   await comp.getByRole('button', { name: 'Add a passkey' }).waitFor();
@@ -56,7 +56,7 @@ try {
   console.log('PASS 2: passkey enrolled on the hosted preview');
 
   // ---- 3. sign out, sign in through the passkey-only chain
-  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.click('header #user-menu-button'); await page.click('#user-menu-signout');
   await page.waitForSelector('[data-chain="passkey-only"]');
   await Promise.all([page.waitForURL(/\/core\/authorize/), page.locator('[data-chain="passkey-only"]').first().click()]);
   await page.fill('input[name=username]', 'demo-alice');
@@ -70,8 +70,10 @@ try {
     console.log('ceremony poll', JSON.stringify(await page.evaluate(() => ({ url: location.pathname, status: document.querySelector('.wa-status')?.textContent ?? null, disabled: document.querySelector('.wa-btn')?.disabled ?? null, answer: document.querySelector('input[name=a_webauthn]')?.value?.length ?? null }))));
   }
   assert.ok(!page.url().includes('/authorize'), 'the passkey ceremony did not complete');
-  await page.waitForSelector('.who', { timeout: 30000 });
-  assert.match(await page.innerText('.who'), /demo-alice/);
+  await page.waitForSelector('#user-menu-button', { timeout: 30000 });
+  await page.click('header #user-menu-button');
+  assert.match(await page.locator('#user-menu .um-id small').innerText(), /demo-alice/);
+  await page.keyboard.press('Escape');
   const k = claims();
   assert.deepEqual(k.amr, ['hwk']); assert.equal(k.auth_level, 9); assert.equal(k.auth_mfa, false); assert.equal(k.auth_chain, 'passkey-only');
   await shot('signed-in-passkey');
