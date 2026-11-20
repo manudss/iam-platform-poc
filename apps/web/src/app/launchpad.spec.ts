@@ -44,6 +44,32 @@ describe('launchpad (the signed-in home)', () => {
     expect(el.querySelectorAll('.lp-launch').length).toBe(2);
   });
 
+  it('an organisation in progress survives the late personal-workspace selection (bootstrap)', async () => {
+    const s = as({ apps: APPS, preferences: { favourites: [], order: [] } });
+    const f = TestBed.createComponent(LaunchpadPage); f.detectChanges(); await f.whenStable(); f.detectChanges();
+    const el = f.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('#lp-organise')!.click(); f.detectChanges();
+    expect(el.querySelector('#lp-save')).not.toBeNull();
+    el.querySelector<HTMLButtonElement>('[data-app="peoplehub"] .lp-star')!.click(); f.detectChanges();
+    // The shell's ensurePersonal resolves after the first render and selects the branch: that reload must
+    // keep the edit mode and the working copy.
+    s.selectBranch('personal/demo-alice'); f.detectChanges(); await f.whenStable(); f.detectChanges();
+    expect(el.querySelector('#lp-save')).not.toBeNull();
+    expect(el.querySelector('[aria-label="Favourites"] [data-app="peoplehub"]')).not.toBeNull();
+  });
+
+  it('a real branch switch still cancels an organisation in progress', async () => {
+    const s = as({ apps: APPS, preferences: { favourites: [], order: [] } });
+    const f = TestBed.createComponent(LaunchpadPage); f.detectChanges(); await f.whenStable(); f.detectChanges();
+    const el = f.nativeElement as HTMLElement;
+    s.selectBranch('personal/demo-alice'); f.detectChanges(); await f.whenStable(); f.detectChanges();
+    el.querySelector<HTMLButtonElement>('#lp-organise')!.click(); f.detectChanges();
+    expect(el.querySelector('#lp-save')).not.toBeNull();
+    s.selectBranch('main'); f.detectChanges(); await f.whenStable(); f.detectChanges();
+    expect(el.querySelector('#lp-save')).toBeNull();
+    expect(el.querySelector('#lp-organise')).not.toBeNull();
+  });
+
   it('uses the response requested at sign-in instead of asking again, once', async () => {
     const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('demo-alice');
     let calls = 0;
