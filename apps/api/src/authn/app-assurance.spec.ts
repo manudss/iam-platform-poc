@@ -27,13 +27,33 @@ describe('application level rule', () => {
   it('level 0 means no rule', () => assert.equal(appRequirement({ x: { minLevel: 0 } }, 'x'), undefined));
 });
 
-describe('administration level safety net', () => {
-  const adm = (reachable: boolean) => {
+describe('a level nobody can reach is refused upstream, never ignored at sign-in', () => {
+  const cfg = (enabled: boolean) => ({ methods: [{ id: 'pw', enabled, level: 3 }], chains: [{ id: 'c', steps: ['pw'] }] }) as never;
+  it('the live rule stays enforced even when the level is unreachable', async () => {
     const s = new AuthnService({} as never); s.now = () => 10_000_000;
     (s as any).liveSecurity = async () => ({ ...DEFAULT_SECURITY, adminMinLevel: 5 });
-    (s as any).levelReachable = async () => reachable;
-    return s;
-  };
-  it('a reachable level is enforced', async () => assert.equal((await adm(true).adminAssurance('t', { auth_level: 3 })).ok, false));
-  it('a level no chain can reach is not applied, so administrators are never locked out by it', async () => assert.deepEqual(await adm(false).adminAssurance('t', { auth_level: 3 }), { ok: true }));
+    assert.equal((await s.adminAssurance('t', { auth_level: 3 })).ok, false);
+  });
+  it('Apply is refused for an unreachable administration level and names why', async () => {
+    const s = new AuthnService({} as never);
+    (s as any).signinSecurity = async () => ({ ...DEFAULT_SECURITY, adminMinLevel: 5 });
+    (s as any).signinConfig = async () => ({ methods: [], chains: [] });
+    assert.match((await s.applyBlocker('t', 'work')) ?? '', /Administration level 5/);
+  });
+  it('Apply is refused for an unreachable application level', async () => {
+    const s = new AuthnService({} as never);
+    (s as any).signinSecurity = async () => ({ ...DEFAULT_SECURITY, appLevels: { finance: { minLevel: 8 } } });
+    (s as any).signinConfig = async () => ({ methods: [], chains: [] });
+    assert.match((await s.applyBlocker('t', 'main')) ?? '', /finance/);
+  });
+  it('a reachable level or no rule passes', async () => {
+    const s = new AuthnService({} as never);
+    (s as any).signinSecurity = async () => ({ ...DEFAULT_SECURITY, adminMinLevel: 0 });
+    (s as any).signinConfig = async () => ({ methods: [], chains: [] });
+    assert.equal(await s.applyBlocker('t', 'work'), null);
+  });
+  it('a chain with a disabled method does not count, and no chain means unreachable', () => {
+    assert.equal(AuthnService.reachable(cfg(false), 1), false);
+    assert.equal(AuthnService.reachable({ methods: [], chains: [] } as never, 1), false);
+  });
 });
