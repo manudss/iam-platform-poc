@@ -290,7 +290,7 @@ describe('profile plugins API: components, grants and the uninstall contract', (
     await store.put(T, 'demo-bob', { 'hr-attributes.job_title': 'Cook', [PIC]: null }, 'work', 'admin'); // the in-memory store copies live into the work row: drop the photo from it
     assert.equal(PIC in (await store.get(T, 'demo-bob', 'work')), false, 'precondition: the branch row has no photo');
     assert.equal((await store.get(T, 'demo-bob', 'live'))[PIC], LIVE, 'precondition: main has the photo');
-    const listed = await app.get(ProfileService).directoryIds(); assert.ok(listed.includes('demo-bob'), 'demo-bob is in the directory: ' + listed.join(','));
+    const prof = app.get(ProfileService); const realIds = prof.directoryIds.bind(prof); prof.directoryIds = async () => ['demo-bob']; // this module has no user directory: the list is the fixture person only
     const before = await api().get(`/tenants/${T}/users-pictures`).set(adm);
     assert.equal(before.body.pictures['demo-bob'], LIVE, 'the list shows demo-bob\'s photo from the live source');
     const sheet0 = await api().get(`/tenants/${T}/users/demo-bob/profile`).set(adm);
@@ -308,6 +308,7 @@ describe('profile plugins API: components, grants and the uninstall contract', (
     assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/disable`).set(adm)).status, 201);
     const off = await api().get(`/tenants/${T}/users-pictures`).set(adm);
     assert.deepEqual(off.body.pictures, {}, 'a disabled picture plugin shows no photo anywhere');
+    prof.directoryIds = realIds;
     assert.equal((await api().post(`/tenants/${T}/plugins/profile-picture/enable`).set(adm).send({ grants: { uiComponents: true } })).status, 201);
   });
   it('uninstall takes the plugin\'s profile configuration with it and reports the purge', async () => {
