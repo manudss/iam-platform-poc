@@ -202,7 +202,7 @@ nav a.active { background: var(--sidebar-active); color: var(--sidebar-ink); box
 .picker .ptitle{margin:0;padding:.15rem .55rem;font-size:.72rem;font-weight:700;text-transform:uppercase;color:var(--muted)}
 .picker .prowbtn{display:flex;align-items:center;gap:.6rem;box-sizing:border-box;width:100%;min-height:2.75rem;margin:0;padding:0 .55rem;border:0;border-radius:.45rem;background:transparent;color:var(--ink);font:inherit;font-size:.88rem;font-weight:600;text-align:left;cursor:pointer;white-space:nowrap}
 .picker .prowbtn:hover:not(:disabled){background:var(--row-hover)}.picker .prowbtn:disabled{opacity:.45;cursor:default}
-.picker .pi{width:1.2rem;text-align:center;color:var(--muted)}
+.picker .pi{width:1.2rem;height:1.2rem;flex:none;text-align:center;color:var(--muted)}.picker svg.pi{padding:.1rem;box-sizing:border-box}
 .picker .prow{display:flex;gap:.4rem;min-height:2.75rem;align-items:center;padding:0 .3rem}
 .picker .rebase-ask{padding:.5rem .55rem;border-radius:.45rem;background:var(--warn-soft);color:var(--warn-ink);font-size:.84rem}
 .picker .rebase-ask p{margin:0 0 .5rem}.picker .rebase-ask .act{display:flex;gap:.5rem}
