@@ -20,17 +20,19 @@ else if(p.endsWith('/workspace/personal'))j={branch:'demo-alice',status:'reused'
 else if(p.endsWith('/workspace'))j={diff:{rows:{total:0},tables:[]}};
 else if(p.endsWith('/versioning/branches'))j={branches:[{name:'main',commit:'a',protected:true,default:true,aheadOfDefault:0,behindDefault:0},{name:'demo-alice',commit:'b',protected:false,default:false,aheadOfDefault:1,behindDefault:0}]};
 else if(p.endsWith('/plugins/menu'))j={entries:[]};else if(p.endsWith('/plugins'))j={plugins:[]};
-else if(p.endsWith('/me/profile'))j={values:{[KEY]:PIC},fields,policy:'immediate',pending:[],sections:{roles:[],organizations:[]}};
+else if(p.endsWith('/me/profile')){if(!meSlow){meSlow=true;await new Promise(r=>setTimeout(r,1500));}j={values:{[KEY]:PIC},fields,policy:'immediate',pending:[],sections:{roles:[],organizations:[]}};}
+else if(false)j={values:{[KEY]:PIC},fields,policy:'immediate',pending:[],sections:{roles:[],organizations:[]}};
 else if(p.endsWith('/users-pictures'))j={pictures:{'demo-alice':PIC}};
 else if(p.endsWith('/users/demo-alice/profile'))j={fields,values:{[KEY]:PIC},sections:{roles:[],organizations:[]}};
 else if(p.endsWith('/users'))j={users};
 else if(p.includes('branding')){await route.fulfill({status:404,json:{}});return;}
 await route.fulfill({json:j});});
+let meSlow=false; // the first /me/profile answer arrives after the working branch is selected: the header must still end on the photo
 const shot=async n=>{await page.screenshot({path:`${out}/${mobile?'mobile':'desktop'}-${n}.png`,fullPage:true});};
 const listCheck=async()=>{await page.locator('#user-open-demo-alice').waitFor();
  const row=page.locator('tr',{has:page.locator('#user-open-demo-alice')});await row.locator('app-avatar img').waitFor();assert.equal(await row.locator('app-avatar img').getAttribute('src'),PIC,'photo in the list');
  const bob=page.locator('tr',{has:page.locator('#user-open-demo-bob')});assert.equal(await bob.locator('app-avatar img').count(),0,'no photo, no image');assert.match(await bob.locator('app-avatar').innerText(),/BD/,'initials fallback');};
-await page.goto('http://127.0.0.1:14212/users');await listCheck();await shot('users-branch');
+await page.goto('http://127.0.0.1:14212/users');await listCheck();await page.locator('#user-menu-button img.av').waitFor({timeout:8000});assert.equal(await page.locator('#user-menu-button img.av').getAttribute('src'),PIC,'photo in the header');await shot('users-branch');
 await page.locator('#user-open-demo-alice').click();await page.locator('#user-editor').waitFor();await page.locator('#user-editor img').first().waitFor();assert.equal(await page.locator('#user-editor img').first().getAttribute('src'),PIC,'photo in the sheet (branch)');assert.equal(await page.locator('#user-save').count(),1);await shot('sheet-branch');
 await page.getByRole('button',{name:'Cancel'}).click();
 await page.locator('#branch-picker-button').click();await page.locator('.brow',{hasText:'main'}).click();

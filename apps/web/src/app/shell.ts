@@ -1,7 +1,7 @@
 import { ApplyDialog } from './apply-dialog';
 import { Brand, Branding } from './branding';
 import { canOpen, screenOf } from './access';
-import { Component, computed, effect, ElementRef, HostListener, inject, signal, ViewChild } from '@angular/core';
+import { Component, computed, effect, ElementRef, HostListener, inject, signal, untracked, ViewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
@@ -241,6 +241,8 @@ export class Shell {
       if (this.router.url.startsWith('/my-profile')) this.meDirty = true; else if (this.meDirty) { this.meDirty = false; void this.loadMe(); } });
     // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
     effect(() => { this.s.pluginsVersion(); this.s.branch(); this.s.branchEpoch(); void this.loadPluginMenu(); });
+    // The first loadMe() starts before the working branch is selected, and api.call() drops a result whose branch changed in flight: the header kept the initials. Reload whenever the branch settles or changes.
+    effect(() => { this.s.branch(); untracked(() => { void this.loadMe(); }); });
     effect(()=>{this.s.branch();this.s.branchEpoch();this.s.adminToken();void this.loadBranding();});
     effect(()=>{const n=this.s.branchWrites();const fresh=n>this.seenWrites;this.seenWrites=n;if(fresh)void this.onBranchWrite();});
     this.title.set(this.leafTitle());
