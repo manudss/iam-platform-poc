@@ -767,7 +767,7 @@ export class AuthnService implements OnApplicationBootstrap {
     return { outcome: 'deny', reason: 'account-blocked', message: refusalMessage(shown) };
   }
   /** A failed answer counts toward the automatic lock, only when an administrator turned it on. Unknown accounts are never given a block. */
-  private async recordFailure(s: Session) {
+  private async recordFailure(s: Pick<Session, 'tenant' | 'subject' | 'branch' | 'known'> & { chain?: { id: string } }) {
     const settings = (await this.signinSecurity(s.tenant, s.branch)).lockout;
     if (!settings.enabled || !s.known) return;
     const k = `${s.tenant}/${s.subject}`, now = this.now(), list = [...(this.lockFails.get(k) ?? []).filter((x) => now - x < settings.windowMs), now];
@@ -775,7 +775,27 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!lockoutVerdict(list, now, settings, s.subject).lock) return;
     this.lockFails.delete(k);
     await this.blocks.add(s.tenant, { subject: s.subject, kind: 'locked', message: 'Too many failed attempts. Try again later or ask an administrator.', origin: 'automatic', setBy: 'system', setAt: now, ...(settings.hold ? { hold: true } : { until: now + settings.lockMs }) });
-    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'locked' });
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain?.id, outcome: 'locked' });
+  }
+  /** The classic single-password path (no chain is live) goes through the same account blocks and automatic lock as chains: a block must
+   * never depend on which sign-in method is configured. `before`: a locked account evaluates no password. `after`: the password was
+   * right, a block in force is shown now (never before the proof), a wrong one counts toward the lock. */
+  async classicBefore(tenant: string, subject: string, branch?: string): Promise<GateResponse | null> {
+    if (!(await this.known(tenant, subject, branch))) return null;
+    if (inForce((await this.blocks.list(tenant, subject)).filter((b) => b.kind === 'locked'), this.now()).length) {
+      this.audit({ tenant, subject, outcome: 'refused-while-locked' });
+      return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
+    }
+    return null;
+  }
+  async classicAfter(tenant: string, subject: string, ok: boolean, branch?: string): Promise<GateResponse | null> {
+    const known = await this.known(tenant, subject, branch);
+    if (!ok) { await this.recordFailure({ tenant, subject, branch, known }); return null; }
+    if (!known) return null;
+    const shown = shownBlock(await this.blocks.list(tenant, subject), this.now());
+    if (!shown) { this.lockFails.delete(`${tenant}/${subject}`); return null; }
+    this.audit({ tenant, subject, outcome: 'blocked', kind: shown.kind, block: shown.id });
+    return { outcome: 'deny', reason: 'account-blocked', message: refusalMessage(shown) };
   }
   private async check(s: Session, answers: Record<string, string>): Promise<GateResponse> {
     const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;

@@ -87,10 +87,14 @@ export class AuthGateController {
     if (typeof b?.tenant !== 'string' || typeof b.subject !== 'string' || typeof b.password !== 'string') throw new HttpException({ outcome: 'error', code: 'bad-request' }, 400);
     { const refuse = await this.testRefusal(b); if (refuse) return { outcome: 'deny', reason: 'branch-test', message: refuse }; }
     try {
+      const pre = this.authn ? await this.authn.classicBefore(b.tenant, b.subject, typeof b.branch === 'string' && b.branch ? b.branch : undefined) : null;
+      if (pre) return pre;
       const registry = workspaceMode() ? await this.branches.get(typeof b.branch === 'string' && b.branch ? b.branch : 'main') : this.reg;
       let passwordChangedAt: number | undefined;
       if (this.users) { try { passwordChangedAt = await this.users.passwordChangedAt(b.tenant, b.subject); } catch { passwordChangedAt = undefined; } }
       const r = await registry.callSlot<AuthenticateResult>(b.tenant, 'auth.password', 'auth.authenticate', { tenant: b.tenant, subject: b.subject, credential: { password: b.password }, ...(passwordChangedAt ? { passwordChangedAt } : {}) });
+      const post = this.authn ? await this.authn.classicAfter(b.tenant, b.subject, r.result.outcome === 'allow', typeof b.branch === 'string' && b.branch ? b.branch : undefined) : null;
+      if (post) return post;
       return r.result.outcome === 'allow' ? { outcome: 'allow', servedBy: r.servedBy, ...(this.authn ? { claims: sessionClaims(await this.authn.signinSession(b.tenant, typeof b.branch === 'string' && b.branch ? b.branch : undefined)) } : {}) } : { outcome: 'deny', reason: r.result.outcome === 'deny' ? r.result.reason : 'challenge-unsupported', servedBy: r.servedBy };
     } catch (e) {
       throw new HttpException({ outcome: 'error', code: (e as { code?: string }).code ?? 'plugin-failed' }, 503);

@@ -84,3 +84,7 @@ No seed change and no secret in the repository. The shipped chains already conta
 ## Blocked sign-in card
 
 The sign-in page of the core shows a refusal caused by a block as a card: the type as title, the administrator's message and the reference. The API builds the text as `<Type>. <message> Reference BLK-XXXX.`; the core recognises exactly that shape (a strict `BLK-` reference) and falls back to the plain error page for anything else. The shape is unit tested in `authz.rs`.
+
+## The classic password path
+
+When no sign-in chain is live, the single base-password path is used. It goes through the same blocks and the same automatic lock: a locked account evaluates no password, a block in force is shown only after the password is proved, and a wrong password counts toward the lock. A block never depends on which sign-in method is configured. This was found by the real-browser test (`scripts/account-blocks-e2e.mjs`), which signs in before any chain exists.
