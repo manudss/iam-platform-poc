@@ -3,7 +3,7 @@
  * API guard read the same map. A request that belongs to no known screen is `unmapped`: only the super admin rule (any resource) opens it.
  * Each entry lists the screens that may reach the route (any one is enough): the Dolt explorer shares a few read routes between its screens.
  */
-export const SCREENS = ['dashboard', 'users', 'profile-fields', 'roles', 'profile-reviews', 'my-profile', 'authentication', 'assignments', 'activation', 'organizations', 'applications', 'policies', 'workflows', 'plugins', 'customisation', 'templates', 'event-bus', 'mcp', 'dolt-home', 'dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'dolt-data', 'dolt-edit', 'dolt-sql', 'branch-manage', 'authority-edit'] as const;
+export const SCREENS = ['dashboard', 'users', 'profile-fields', 'roles', 'profile-reviews', 'my-profile', 'authentication', 'assignments', 'activation', 'organizations', 'applications', 'policies', 'workflows', 'plugins', 'customisation', 'templates', 'event-bus', 'mcp', 'dolt-home', 'dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-branches', 'dolt-data', 'dolt-edit', 'dolt-sql', 'branch-manage', 'authority-edit', 'account-blocks'] as const;
 export type Screen = (typeof SCREENS)[number];
 
 const DOLT_READ: Screen[] = ['dolt-branches', 'dolt-pulls', 'dolt-compare', 'dolt-history', 'dolt-home'];
@@ -52,6 +52,9 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'branding': return ['customisation'];
     case 'mail-templates': case 'templates': return ['templates'];
     case 'signup': return seg[1] === 'delivery-status' ? ['profile-fields'] : ['users'];
+    // Setting and lifting account blocks is a right of its own, assigned to roles by a screen:open rule. Security settings sit with Authentication.
+    case 'account-blocks': case 'accounts': return ['account-blocks'];
+    case 'security': return ['authentication'];
     case 'auth': case 'authn': case 'session': case 'sessions': case 'enrollments': return ['authentication'];
     case 'app-connectors': case 'applications': return ['applications'];
     default: return [];

@@ -18,7 +18,7 @@ export interface AppEvent {
 /** Every application event kind of the platform: the canonical list mirrors WF_EVENTS (workflows/model.ts). */
 export const APP_EVENT_KINDS = [
   'policy.changed',
-  'user.created', 'user.department-changed', 'user.disabled',
+  'user.created', 'user.department-changed', 'user.disabled', 'user.blocked', 'user.unblocked',
   'signup.requested', 'signup.approved',
   'profile.updated', 'profile.review-resolved',
   'organization.member-added',
