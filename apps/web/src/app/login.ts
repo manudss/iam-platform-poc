@@ -3,6 +3,7 @@ import { Component, PLATFORM_ID, PendingTasks, REQUEST, TransferState, inject, m
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
+import { STEP_UP_SUBJECT_KEY } from './step-up';
 import { SigninChain, SigninOptions, apiUrl } from './api';
 
 /** Hydration handoff: the options the server fetched to render /login, so the browser does not refetch them (and flash "Loading...") on startup. */
@@ -161,7 +162,10 @@ export class CallbackPage {
         }
       } catch { /* a broken stash never blocks the sign-in */ }
       await this.s.refresh().catch(() => undefined);
-      const back = safeReturn(sessionStorage.getItem(RETURN_KEY)); sessionStorage.removeItem(RETURN_KEY);
+      let back = safeReturn(sessionStorage.getItem(RETURN_KEY)); sessionStorage.removeItem(RETURN_KEY);
+      // A re-sign-in for a stronger level must end on the same account: another account is not carried into the request that asked for it.
+      const before = sessionStorage.getItem(STEP_UP_SUBJECT_KEY); sessionStorage.removeItem(STEP_UP_SUBJECT_KEY);
+      if (before && before !== (await this.s.loadAccess().then((a) => a.subject).catch(() => ''))) { back = '/my-applications'; this.s.say('You signed in with a different account, so the request was not continued.', 'error'); }
       await this.router.navigateByUrl(this.s.testBranch() ? '/my-profile' : back, { replaceUrl: true });
     } catch (e) {
       this.s.say((e as Error).message, 'error');

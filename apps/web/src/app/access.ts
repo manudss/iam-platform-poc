@@ -9,7 +9,7 @@ export interface Access { subject: string; admin: boolean; restricted: boolean; 
 /** The admin screen a console URL belongs to (same ids as the API screen map). Unknown pages: undefined (decided by the legacy admin rule). */
 export function screenOf(url: string): string | undefined {
   const p = '/' + url.split(/[?#]/)[0].replace(/^\/+/, '');
-  const exact: Record<string, string> = { '/overview': 'dashboard', '/users': 'users', '/profile-fields': 'profile-fields', '/roles': 'roles', '/profile-reviews': 'profile-reviews', '/my-profile': 'my-profile', '/auth-methods': 'authentication', '/assignments': 'assignments', '/assignments/matrix': 'assignments', '/activation': 'activation', '/applications': 'applications', '/policies': 'policies', '/plugins': 'plugins', '/event-bus': 'event-bus', '/mcp': 'mcp', '/workflows': 'workflows', '/review': 'assignments' };
+  const exact: Record<string, string> = { '/overview': 'dashboard', '/users': 'users', '/account-protection': 'account-blocks', '/profile-fields': 'profile-fields', '/roles': 'roles', '/profile-reviews': 'profile-reviews', '/my-profile': 'my-profile', '/auth-methods': 'authentication', '/assignments': 'assignments', '/assignments/matrix': 'assignments', '/activation': 'activation', '/applications': 'applications', '/policies': 'policies', '/plugins': 'plugins', '/event-bus': 'event-bus', '/mcp': 'mcp', '/workflows': 'workflows', '/review': 'assignments' };
   if (exact[p]) return exact[p];
   if (p.startsWith('/workflows')) return 'workflows';
   const d = /^\/database\/([a-z]+)/.exec(p);

@@ -220,6 +220,7 @@ export class Shell {
       { path: '/roles', label: 'Roles', icon: '⚖' },
       { path: '/profile-reviews', label: 'Profile reviews', icon: '✓' },
       { path: '/auth-methods', label: 'Authentication', icon: '⚿' },
+      { path: '/account-protection', label: 'Account protection', icon: '⛨' },
       { path: '/assignments', label: 'Assignments & changes', icon: '⇄' },
       { path: '/activation', label: 'Activation', icon: '⏻' }] },
     { title: 'Extensions', items: [{ path: '/plugins', label: 'Plugins', icon: '⬡' }, { path: '/event-bus', label: 'Event bus', icon: '≋' }, { path: '/mcp', label: 'MCP (AI)', icon: '⚡' }] },

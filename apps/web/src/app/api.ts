@@ -29,8 +29,10 @@ export function sessionCookieToken(cookieHeader: string): string {
 
 export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
 export interface SigninOptions { mode: 'choice' | 'legacy'; chains: SigninChain[]; note?: string }
-export interface SsoRequest { app: { id: string; name: string; description: string }; scopes: string[]; user: { sub: string; name: string }; allowed: boolean }
-export interface SamlRequest { app: { id: string; name: string; description: string }; attributes: string[]; user: { sub: string; name: string }; allowed: boolean }
+/** Present only when the application has a level rule that the current sign-in does not meet. */
+export interface Assurance { requiredLevel: number; currentLevel: number; reason?: string }
+export interface SsoRequest { app: { id: string; name: string; description: string }; scopes: string[]; user: { sub: string; name: string }; allowed: boolean; assurance?: Assurance }
+export interface SamlRequest { app: { id: string; name: string; description: string }; attributes: string[]; user: { sub: string; name: string }; allowed: boolean; assurance?: Assurance }
 export interface SamlAnswer { acsUrl: string; samlResponse: string; relayState?: string }
 export interface Violation { identity: string; roleA: string; roleB: string }
 export interface Change { branch: string; commit: string; violations: Violation[]; mergeable: boolean }
@@ -215,6 +217,8 @@ export class ApiClient {
   /** Successful tenant-scoped data writes (a POST/PUT/PATCH/DELETE the API accepted). The shell bar uses it to refresh
    *  the pending-changes counter and flash the pending-merge hint; failures (and 409 refusals) never reach it. */
   onDataMutation?: (m: { method: string; path: string; status: number }) => void;
+  /** The API refused an administration call because the sign-in level is too low (403 step-up-required): the console sends the person to the re-sign-in page. */
+  onStepUp?: (b: { requiredLevel: number; currentLevel: number }) => void;
   private async call<T>(method: string, path: string, body?: object, extra: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     if (this.token && this.expiresAt !== null && this.expiresAt <= Date.now()) throw this.unauthorized();
     const sentToken = this.token, sentEpoch = this.epoch, sentBranch=this.branch;
@@ -227,6 +231,7 @@ export class ApiClient {
     if(this.branch!==sentBranch)throw new Error('Working branch changed. Request result ignored.');
     if (this.epoch !== sentEpoch) throw new Error('Session changed. Request result ignored; check the current state.');
     if (r.status === 401) { if (this.token === sentToken) throw this.unauthorized(); throw new Error('Your session was just renewed. Please try the action again.'); }
+    if (r.status === 403 && (data as { code?: string }).code === 'step-up-required') { const d = data as { requiredLevel?: number; currentLevel?: number }; this.onStepUp?.({ requiredLevel: Number(d.requiredLevel) || 0, currentLevel: Number(d.currentLevel) || 0 }); }
     if (!r.ok && r.status !== 409) throw Object.assign(new Error((data as { message?: string }).message ?? `HTTP ${r.status}`), { body: data, status: r.status });
     if (method !== 'GET' && r.ok) this.onDataMutation?.({ method, path, status: r.status });
     return { status: r.status, data };

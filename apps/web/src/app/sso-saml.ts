@@ -1,5 +1,5 @@
 import { Component, inject, signal } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import type { SamlRequest } from './api';
 import { Session } from './session';
 
@@ -47,6 +47,7 @@ export const describeAttributes = (names: string[]) => names.map((n) => ATTR_TEX
 export class SsoSamlPage {
   private readonly s = inject(Session);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   protected readonly state = signal<'loading' | 'ready' | 'done' | 'error'>('loading');
   protected readonly error = signal('');
   protected readonly busy = signal(false);
@@ -56,7 +57,12 @@ export class SsoSamlPage {
   constructor() { void this.load(); }
   protected texts(r: SamlRequest) { return describeAttributes(r.attributes); }
   private async load() {
-    try { this.req.set(await this.s.api.samlRequest(this.rid)); this.state.set('ready'); }
+    try {
+      const r = await this.s.api.samlRequest(this.rid);
+      // The application has a level rule this sign-in does not meet: the person signs in again with a method that reaches it, then comes back here.
+      if (r.assurance) { void this.router.navigate(['/step-up'], { queryParams: { kind: 'app', app: r.app.name, level: r.assurance.requiredLevel, current: r.assurance.currentLevel, return: '/sso-saml/' + this.rid } }); return; }
+      this.req.set(r); this.state.set('ready');
+    }
     catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
   }
   protected async answer(d: 'allow' | 'deny') {
