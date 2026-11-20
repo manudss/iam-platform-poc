@@ -105,7 +105,7 @@ Production code: 42 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/plugins/v1/plugins-v1.spec.ts:383 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/profile/profile-dolt.e2e.spec.ts:211 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/profile/profile-dolt.e2e.spec.ts:220 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile-plugins.spec.ts:31 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile-plugins.spec.ts:33 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.spec.ts:33 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/signin-gate.e2e.spec.ts:56 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-bus/tests/inproc.rs:21 |

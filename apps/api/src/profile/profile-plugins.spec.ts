@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
+import { ProfileService, PROFILE_STORE } from './profile.service.js';
+import type { ProfileValueStore } from './store.js';
 import { BASE_FIELDS, toCatalog, validateFieldDecls } from './fields.js';
 import { DoltProfileStore, FieldRoute } from './store.js';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -283,6 +285,16 @@ describe('profile plugins API: components, grants and the uninstall contract', (
     assert.equal(r.status, 403, JSON.stringify(r.body));
   });
   it('photo endpoint: the admin sheet and the users-pictures list serve the live picture, administrators only, picture field only, nothing written', async () => {
+    // Old-branch situation, fictional person demo-bob: the working branch holds an older row WITHOUT the photo while main (live) has it.
+    const store = app.get<ProfileValueStore>(PROFILE_STORE); const LIVE = pngDataUrl(32); const PIC = 'profile-picture.picture';
+    await store.put(T, 'demo-bob', { 'hr-attributes.job_title': 'Cook' }, 'work', 'admin');
+    assert.equal(PIC in (await store.get(T, 'demo-bob', 'work')), false, 'precondition: the branch row has no photo');
+    assert.equal((await store.get(T, 'demo-bob', 'live'))[PIC], LIVE, 'precondition: main has the photo');
+    const listed = await app.get(ProfileService).directoryIds(); assert.ok(listed.includes('demo-bob'), 'demo-bob is in the directory: ' + listed.join(','));
+    const before = await api().get(`/tenants/${T}/users-pictures`).set(adm);
+    assert.equal(before.body.pictures['demo-bob'], LIVE, 'the list shows demo-bob\'s photo from the live source');
+    const sheet0 = await api().get(`/tenants/${T}/users/demo-bob/profile`).set(adm);
+    assert.equal(sheet0.body.values[PIC], LIVE, 'the sheet shows the live photo although the branch row lacks it');
     const sheet = await api().get(`/tenants/${T}/users/demo-bob/profile`).set(adm);
     assert.equal(sheet.status, 200, JSON.stringify(sheet.body));
     assert.ok(String(sheet.body.values['profile-picture.picture'] ?? '').startsWith('data:image/'), 'the admin sheet shows the person\'s live picture');
