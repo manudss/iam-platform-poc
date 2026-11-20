@@ -11,16 +11,16 @@ import { CoreGrpc } from './access/core-grpc.js';
 
 const root = resolve(process.cwd(), '../..');
 const coreBin = resolve(root, 'core/target/debug/iam-core');
-const HTTP = 'http://127.0.0.1:18096', GRPC = '127.0.0.1:18097', ADMIN = 'local-demo-admin-token';
+const HTTP = 'http://127.0.0.1:18196', GRPC = '127.0.0.1:18197', ADMIN = 'local-demo-admin-token';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe('gRPC decision (real core over tonic)', { skip: !existsSync(coreBin) && 'core binary missing' }, () => {
   let core: ChildProcess, g: CoreGrpc;
   before(async () => {
-    core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18096', IAM_CORE_GRPC_ADDR: GRPC, IAM_ISSUER: HTTP, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
+    core = spawn(coreBin, [], { cwd: resolve(root, 'core'), env: { ...process.env, IAM_CORE_ADDR: '127.0.0.1:18196', IAM_CORE_GRPC_ADDR: GRPC, IAM_ISSUER: HTTP, IAM_POLICY_FILE: resolve(root, 'policies/demo.cedar'), IAM_CORE_ADMIN_TOKEN: ADMIN }, stdio: 'ignore' });
     for (let i = 0; i < 100; i++) { try { if ((await fetch(`${HTTP}/health`)).ok) break; } catch { await sleep(100); } }
     // The gRPC listener can come up after the HTTP one: wait for its port too (a startup race, not a behaviour change).
-    for (let i = 0; i < 100; i++) { if (await new Promise<boolean>((ok) => { const c = connect(18097, '127.0.0.1'); c.once('connect', () => { c.destroy(); ok(true); }); c.once('error', () => ok(false)); })) break; await sleep(100); }
+    for (let i = 0; i < 100; i++) { if (await new Promise<boolean>((ok) => { const c = connect(18197, '127.0.0.1'); c.once('connect', () => { c.destroy(); ok(true); }); c.once('error', () => ok(false)); })) break; await sleep(100); }
     g = new CoreGrpc(GRPC);
   });
   after(() => { g?.close(); core?.kill(); });
