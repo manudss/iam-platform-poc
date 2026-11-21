@@ -22,6 +22,10 @@ export interface StepRow { run_id: string; node_id: string; status: StepStatus; 
  * are the static API catalog, not rows. */
 export interface TemplateRow { id: string; name: string; description: string; category: string; graph: WfGraph; trigger: WfTrigger | null; created_by: string; created_at: string }
 
+export interface TicketKey { tenant: string; connectionId: string; project: string; issueKey: string }
+export interface TicketLink extends TicketKey { account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string; runId: string }
+export interface TicketLinkRow { tenant: string; connection_id: string; project: string; issue_key: string; account: string; source: string; spreadsheet_id: string; sheet_id: number; key_column: string; key_value: string; phase1_run: string; status: 'open' | 'claimed' | 'done'; claimed_run: string | null }
+
 @Injectable()
 export class WorkflowStore {
   constructor(@Optional() private readonly v?: VersioningService) {}
@@ -52,6 +56,8 @@ export class WorkflowStore {
           // Existing demo databases: add the output/input columns once (idempotent).
           for (const col of ['output', 'input']) { const [cols] = await m.query(`show columns from workflow_steps like '${col}'`); if (!(cols as unknown[]).length) await m.query(`alter table workflow_steps add column ${col} JSON NULL`); }
           // One-time migration marker: without it, a definition deleted on main would be resurrected from a stale meta row at the next restart.
+          // Durable ticket > account > sheet-row correlation written by the creation workflow. Operational state (not on a branch, never rolled back with one): the Done workflow resolves it, Jira text is never the authority.
+          await m.query('CREATE TABLE IF NOT EXISTS workflow_ticket_links (tenant VARCHAR(32) NOT NULL, connection_id VARCHAR(40) NOT NULL, project VARCHAR(20) NOT NULL, issue_key VARCHAR(40) NOT NULL, account VARCHAR(64) NOT NULL, source VARCHAR(20) NOT NULL, spreadsheet_id VARCHAR(80) NOT NULL, sheet_id INT NOT NULL, key_column VARCHAR(60) NOT NULL, key_value VARCHAR(200) NOT NULL, phase1_run VARCHAR(40) NOT NULL, status VARCHAR(10) NOT NULL, claimed_run VARCHAR(40) NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, connection_id, project, issue_key))');
           await m.query('CREATE TABLE IF NOT EXISTS workflow_store_meta (k VARCHAR(40) NOT NULL PRIMARY KEY, v VARCHAR(200) NOT NULL)');
         } finally { await m.end(); }
         // Definitions moved to the versioned database: create the table on main and copy any pre-existing meta rows ONCE (startup-only code, never reachable from a request).
@@ -250,6 +256,40 @@ export class WorkflowStore {
   async deleteRun(id: string): Promise<void> {
     const m = await this.meta();
     try { await m.query('delete from workflow_steps where run_id = ?', [id]); await m.query('delete from workflow_runs where id = ?', [id]); } finally { await m.end(); }
+  }
+  /** Ticket links: insert once; the same content again is an idempotent retry, different content for the same ticket is refused (never overwritten). */
+  async putTicketLink(l: TicketLink): Promise<TicketLinkRow> {
+    const m = await this.meta();
+    try {
+      await m.query('insert ignore into workflow_ticket_links (tenant, connection_id, project, issue_key, account, source, spreadsheet_id, sheet_id, key_column, key_value, phase1_run, status, claimed_run, created_at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,null,now(3),now(3))',
+        [l.tenant, l.connectionId, l.project, l.issueKey, l.account, l.source, l.spreadsheetId, l.sheetId, l.keyColumn, l.keyValue, l.runId, 'open']);
+      const row = await this.ticketLinkOn(m, l);
+      if (!row) throw new Error('ticket link not recorded');
+      const same = row.account === l.account && row.source === l.source && row.spreadsheet_id === l.spreadsheetId && Number(row.sheet_id) === l.sheetId && row.key_column === l.keyColumn && row.key_value === l.keyValue;
+      if (!same) throw new Error('ticket link conflict: this ticket is already linked to another account or row');
+      return row;
+    } finally { await m.end(); }
+  }
+  private async ticketLinkOn(m: Connection, k: TicketKey): Promise<TicketLinkRow | null> {
+    const [r] = await m.query('select * from workflow_ticket_links where tenant = ? and connection_id = ? and project = ? and issue_key = ?', [k.tenant, k.connectionId, k.project, k.issueKey]);
+    return ((r as TicketLinkRow[])[0]) ?? null;
+  }
+  async getTicketLink(k: TicketKey): Promise<TicketLinkRow | null> { const m = await this.meta(); try { return await this.ticketLinkOn(m, k); } finally { await m.end(); } }
+  /** One atomic UPDATE: only an open link, or one already claimed by THIS run, can be claimed. Anything else (absent, claimed by another run, done) returns null. */
+  async claimTicketLink(k: TicketKey, runId: string): Promise<TicketLinkRow | null> {
+    const m = await this.meta();
+    try {
+      const [res] = await m.query("update workflow_ticket_links set status = 'claimed', claimed_run = ?, updated_at = now(3) where tenant = ? and connection_id = ? and project = ? and issue_key = ? and (status = 'open' or (status = 'claimed' and claimed_run = ?))", [runId, k.tenant, k.connectionId, k.project, k.issueKey, runId]);
+      if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
+      return await this.ticketLinkOn(m, k);
+    } finally { await m.end(); }
+  }
+  async completeTicketLink(k: TicketKey, runId: string): Promise<boolean> {
+    const m = await this.meta();
+    try {
+      const [res] = await m.query("update workflow_ticket_links set status = 'done', updated_at = now(3) where tenant = ? and connection_id = ? and project = ? and issue_key = ? and status = 'claimed' and claimed_run = ?", [k.tenant, k.connectionId, k.project, k.issueKey, runId]);
+      return Number((res as { affectedRows?: number }).affectedRows) === 1;
+    } finally { await m.end(); }
   }
   /** Small durable key/value store in the meta db (cron last-fire markers). */
   async getMeta(k: string): Promise<string | null> {

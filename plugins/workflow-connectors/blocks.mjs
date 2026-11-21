@@ -719,7 +719,104 @@ const lyamSendSecretMail = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail];
+// ----------------------------------------------------- ticket > account > sheet row correlation (internal, durable) ----
+// The Jira summary and label are for readability only. The authority that links a Done ticket to an account and a sheet row is a record written by the creation workflow
+// in the server's own store, keyed by tenant + connection + project + issue key. The row is identified by a key column and value (never trusted as a row number: sorting moves rows).
+const ISSUE_RE = /^[A-Z][A-Z0-9]{1,19}-\d{1,9}$/;
+const PROJECT_RE = /^[A-Z][A-Z0-9]{1,19}$/;
+const CONN_RE = /^[A-Za-z0-9._-]{1,40}$/;
+const ticketRef = (cfg, what) => {
+  const connectionId = str(cfg.connectionId, `${what}.connectionId`, 40);
+  const project = str(cfg.project, `${what}.project`, 20);
+  const issueKey = str(cfg.issueKey, `${what}.issueKey`, 40);
+  if (!/\{\{/.test(connectionId) && !CONN_RE.test(connectionId)) bad(`${what}.connectionId: not a valid connection id`);
+  if (!/\{\{/.test(project) && !PROJECT_RE.test(project)) bad(`${what}.project: a Jira project key`);
+  if (!/\{\{/.test(issueKey) && !ISSUE_RE.test(issueKey)) bad(`${what}.issueKey: a Jira issue key such as KAN-12`);
+  return { connectionId, project, issueKey };
+};
+const ticketRefNow = (c, what) => {
+  if (!CONN_RE.test(c.connectionId) || !PROJECT_RE.test(c.project) || !ISSUE_RE.test(c.issueKey)) bad(`${what}: the ticket reference is not valid (connection, project, issue key)`);
+  return { connectionId: c.connectionId, project: c.project, issueKey: c.issueKey };
+};
+const ticketFields = [
+  { key: 'connectionId', label: 'Jira connection id', type: 'string', required: true, help: 'the managed Jira connection the ticket belongs to' },
+  { key: 'project', label: 'Jira project key', type: 'string', required: true, default: 'KAN' },
+  { key: 'issueKey', label: 'Ticket key', type: 'string', required: true, help: '{{steps.<jira-step>.key}} when linking, {{event.key}} when resolving' },
+];
+const lyamLinkTicket = {
+  type: 'lyam-link-ticket',
+  family: 'lyam',
+  label: 'Link the ticket to the account and the sheet row',
+  simulated: false,
+  category: 'real',
+  description: 'Writes the durable correlation the "badge done" workflow later resolves: ticket key > account > sheet row identity (key column and value). Operational state in the server store, not on the run branch. The same content again is an idempotent retry; a different account or row for the same ticket is refused, never overwritten.',
+  fields: [
+    ...ticketFields,
+    { key: 'account', label: 'User id', type: 'string', required: true, help: 'placeholders allowed' },
+    ...sheetSourceFields,
+    { key: 'keyColumn', label: 'Row key column', type: 'string', required: true, help: 'a column whose value is unique per person (for example email); the row is found again by it, not by its number' },
+    { key: 'keyValue', label: 'Row key value', type: 'string', required: true, help: 'e.g. {{event.email}}' },
+  ],
+  outputs: [{ key: 'linked', description: 'true when the correlation is recorded' }],
+  validate(cfg) { return { ...ticketRef(cfg, 'lyam-link-ticket'), account: userId(cfg.account, 'lyam-link-ticket.account'), ...sheetSource(cfg), keyColumn: str(cfg.keyColumn, 'lyam-link-ticket.keyColumn', 60), keyValue: str(cfg.keyValue, 'lyam-link-ticket.keyValue', 200) }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log('test run: would link the ticket to the account and the sheet row - nothing recorded'); return { linked: false }; }
+    if (!ctx.links) bad('lyam-link-ticket: ticket links are not available on this server');
+    const ref = ticketRefNow(c, 'lyam-link-ticket');
+    if (!/^[a-z0-9][a-z0-9._@-]{0,63}$/.test(c.account)) bad('lyam-link-ticket.account: not a valid user id');
+    if (!String(c.keyColumn).trim() || !String(c.keyValue).trim()) bad('lyam-link-ticket: the row key column and value must be filled');
+    const sheetId = c.source === 'google' ? Number(c.sheetId ?? 0) : 0;
+    await ctx.links.put({ ...ref, account: c.account, source: c.source, spreadsheetId: c.source === 'google' ? String(c.spreadsheetId) : 'demo-sheet', sheetId, keyColumn: String(c.keyColumn), keyValue: String(c.keyValue) });
+    ctx.log(`ticket ${ref.issueKey} linked to account "${c.account}" and the row identified by ${c.keyColumn}`);
+    return { linked: true };
+  },
+};
+const lyamResolveTicket = {
+  type: 'lyam-resolve-ticket',
+  family: 'lyam',
+  label: 'Resolve the account and the sheet row of a Done ticket',
+  simulated: false,
+  category: 'real',
+  description: 'Looks the ticket up in the server correlation written by the creation workflow and CLAIMS it for this run (one run per ticket). Refuses, with nothing changed, when there is no link, when it was already handled or claimed by another run, when the account does not exist on main or is no longer blocked. The Jira summary is never used to choose the account or the row.',
+  fields: ticketFields,
+  outputs: [{ key: 'account', description: 'The linked user id' }, { key: 'email', description: 'The e-mail recorded on that account on main (the only address the secret mail may use)' }, { key: 'source', description: 'demo-sheet or google' }, { key: 'spreadsheetId', description: 'Spreadsheet id (google)' }, { key: 'sheetId', description: 'Sheet id (google)' }, { key: 'keyColumn', description: 'Row key column' }, { key: 'keyValue', description: 'Row key value' }],
+  validate(cfg) { return ticketRef(cfg, 'lyam-resolve-ticket'); },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log('test run: would resolve the ticket link - nothing claimed'); return { account: null, email: null, source: null, spreadsheetId: null, sheetId: null, keyColumn: null, keyValue: null }; }
+    if (!ctx.links || !ctx.accounts?.activeBlocks || !ctx.users?.emailOf) bad('lyam-resolve-ticket: not available on this server');
+    const ref = ticketRefNow(c, 'lyam-resolve-ticket');
+    const l = await ctx.links.claim(ref);
+    if (!l) { ctx.log('ticket link refused: none, already handled, or claimed by another run. Nothing changed.'); bad('lyam-resolve-ticket: no open link for this ticket (absent, already handled, or claimed by another run)'); }
+    let email, blocks;
+    try { [email, blocks] = await Promise.all([ctx.users.emailOf(l.account, 'main'), ctx.accounts.activeBlocks(ctx.tenant, l.account)]); } catch { bad('lyam-resolve-ticket: the account state could not be read'); }
+    if (typeof email !== 'string' || !email) bad('lyam-resolve-ticket: the linked account does not exist on main (or has no e-mail)');
+    if (!Array.isArray(blocks) || blocks.length === 0) bad('lyam-resolve-ticket: the linked account is not blocked: refusing to continue');
+    ctx.log(`ticket ${ref.issueKey} resolved to account "${l.account}" (claimed by this run)`);
+    return { account: l.account, email, source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue };
+  },
+};
+const lyamCompleteTicket = {
+  type: 'lyam-complete-ticket',
+  family: 'lyam',
+  label: 'Mark the ticket link as handled',
+  simulated: false,
+  category: 'real',
+  description: 'Last step of the "badge done" workflow: marks the correlation done so the same ticket can never be processed again. Refuses when this run does not hold the claim.',
+  fields: ticketFields,
+  outputs: [{ key: 'completed', description: 'true when the link is marked done' }],
+  validate(cfg) { return ticketRef(cfg, 'lyam-complete-ticket'); },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log('test run: would mark the ticket link done - nothing written'); return { completed: false }; }
+    if (!ctx.links) bad('lyam-complete-ticket: not available on this server');
+    if (!(await ctx.links.complete(ticketRefNow(c, 'lyam-complete-ticket')))) bad('lyam-complete-ticket: this run does not hold the claim on that ticket');
+    return { completed: true };
+  },
+};
+
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

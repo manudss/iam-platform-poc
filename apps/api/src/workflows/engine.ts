@@ -45,7 +45,14 @@ interface EngineDeps {
   workspace?: WorkspaceEffects;
   secrets?: RunSecrets;
   users?: UserEffects;
+  links?: LinkEffects;
   log: { warn: (m: string) => void; error: (m: string) => void };
+}
+/** The durable ticket > account > sheet-row correlation (meta store). Every call is scoped to the run's tenant by the engine; a block never passes a tenant. */
+export interface LinkEffects {
+  put: (tenant: string, l: { connectionId: string; project: string; issueKey: string; account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string; runId: string }) => Promise<void>;
+  claim: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<{ account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string } | null>;
+  complete: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<boolean>;
 }
 /** What account blocks and security settings blocks may do. Operational effects apply at once (with audit and event), settings only patch a stored row the block writes on the run branch. */
 export interface AccountEffects {
@@ -95,6 +102,7 @@ export class WorkflowEngine implements OnModuleInit {
       workspace: this.workspaceEffects(v),
       secrets: new RunSecrets(),
       users: this.userEffects(),
+      links: this.linkEffects(store),
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
   }
@@ -114,6 +122,14 @@ export class WorkflowEngine implements OnModuleInit {
         if (!a.workflowId || !allowed.includes(a.workflowId)) throw new Error('lyam-publish-workspace: this workflow is not authorized to publish (an administrator lists its id in the publishAllowedWorkflows setting)');
         return publisher.publishForRun({ tenant, ...a });
       },
+    };
+  }
+
+  private linkEffects(store: WorkflowStore): LinkEffects {
+    return {
+      put: async (tenant, l) => { await store.putTicketLink({ tenant, ...l }); },
+      claim: async (tenant, k, runId) => { const r = await store.claimTicketLink({ tenant, ...k }, runId); return r ? { account: r.account, source: r.source, spreadsheetId: r.spreadsheet_id, sheetId: Number(r.sheet_id), keyColumn: r.key_column, keyValue: r.key_value } : null; },
+      complete: (tenant, k, runId) => store.completeTicketLink({ tenant, ...k }, runId),
     };
   }
 

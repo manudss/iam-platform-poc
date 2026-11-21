@@ -407,6 +407,12 @@ export function createWorkflowEngine(deps) {
       setTemporaryPassword: deps.users ? async ({ id, password, hours }) => { const branch = await ensureBranch(run, say); return deps.users.setTemporary(run.tenant, { runId: run.id, branch, id, password, hours }); } : undefined,
       // Durable intent of an irreversible effect, written right before it: from then on a crash leaves the step in review (no automatic resend).
       markEffectPending: intent => store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED', ...(intent ? { input: { effectIntent: intent } } : {}) }),
+      // Ticket links: the engine binds tenant and run; a block gives only the ticket and the target it links.
+      links: deps.links ? {
+        put: l => deps.links.put(run.tenant, { ...l, runId: run.id }),
+        claim: k => deps.links.claim(run.tenant, k, run.id),
+        complete: k => deps.links.complete(run.tenant, k, run.id),
+      } : undefined,
       runBranch: run.branch ?? null,
       config: managed ? { ...resolved.config, dryRun: simulation, ...(node.type.startsWith('google-sheets-') && !simulation ? { source: 'google' } : {}) } : resolved.config,
       settings,
