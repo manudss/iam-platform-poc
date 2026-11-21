@@ -233,6 +233,8 @@ describe('authentication methods and chains', () => {
       (svc as any).profileEmail = async (u: string) => (u === 'demo-bob' ? 'bob.profile@example.test' : undefined);
       try {
         await put(cfg([m('pw', 'password', 3), m('mail', 'email-otp', 4, { delivery: 'smtp' })], [{ id: 'pw-mail', name: 'Password then e-mail', steps: ['pw', 'mail'], level: 6 }], 'pw-mail')).expect(200);
+        const shown = (await http().get(`/tenants/${T}/signin/options`).expect(200)).body.chains.find((c: any) => c.id === 'pw-mail');
+        assert.equal(shown.simulated, false, 'a real notifier on the slot: the sign-in page does not call the e-mail step simulated'); assert.deepEqual(shown.steps.map((x: any) => x.simulated), [false, false]);
         const c1 = (await gate({ tenant: T, subject: 'demo-bob', answers: { password: 'demo-only-not-a-secret' } })).body;
         assert.equal(c1.outcome, 'challenge'); assert.equal(c1.step.type, 'email-otp'); assert.doesNotMatch(c1.step.message, /DEMO ONLY/);
         for (let i = 0; i < 60 && sent.length === 0; i++) await new Promise((r) => setTimeout(r, 100));
@@ -246,6 +248,14 @@ describe('authentication methods and chains', () => {
         for (let i = 0; i < 20 && sent.length > 1; i++) await new Promise((r) => setTimeout(r, 100));
         assert.equal(sent.length, 1);
       } finally { await reg.disable(T, 'notify-fake'); delete (svc as any).profileEmail; }
+    });
+
+    it('without a real notifier on the notify.default slot the sign-in page calls an e-mail step with delivery smtp SIMULATED (never promises a mail that will not come)', async () => {
+      await put(cfg([m('pw', 'password', 3), m('mail', 'email-otp', 4, { delivery: 'smtp' })], [{ id: 'pw-mail-sim', name: 'Password then e-mail', steps: ['pw', 'mail'], level: 6 }], 'pw-mail-sim')).expect(200);
+      const shown = (await http().get(`/tenants/${T}/signin/options`).expect(200)).body.chains.find((c: any) => c.id === 'pw-mail-sim');
+      assert.equal(shown.simulated, true);
+      assert.deepEqual(shown.steps.map((x: any) => [x.type, x.simulated]), [['password', false], ['email-otp', true]]);
+      assert.ok(shown.effectiveLevel < shown.declaredLevel, 'the effective level is capped by the really verified step');
     });
 
     it('a later step cannot be skipped or answered early, and a finished session cannot be reused', async () => {

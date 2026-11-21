@@ -18,8 +18,8 @@ Production code: 43 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:153 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:155 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:156 |
-| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:317 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:428 |
+| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:324 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:435 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:185 |
 | callSlot (blocking hook) | caller | notify.templates | apps/api/src/plugins/v1/mail-catalogue.ts:33 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:41 |
@@ -69,7 +69,7 @@ Production code: 43 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:70 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:81 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/auth-bus.e2e.spec.ts:88 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/authn.spec.ts:321 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/authn.spec.ts:331 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/branch-bus.e2e.spec.ts:56 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/branch-bus.e2e.spec.ts:57 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/plugins/v1/auth-password-policy.spec.ts:37 |

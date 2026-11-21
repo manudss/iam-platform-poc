@@ -292,6 +292,13 @@ export class AuthnService implements OnApplicationBootstrap {
         return [m.id, { real: v?.real === true, note: typeof v?.note === 'string' ? v.note : 'Method unavailable (its plugin failed).' }] as const;
       } catch { return [m.id, { real: false, note: 'Method unavailable (its plugin failed).' }] as const; }
     })));
+    // The e-mail code is only REAL when the notifier on the notify.default slot really delivers. The method's own verdict is config-only
+    // (delivery 'smtp' => real), so ask the slot the same question the sign-in itself asks: without a real notifier the page must say
+    // "simulated" (the code goes to the demo outbox), never promise a mail that will not come.
+    if (cfg.methods.some((m) => m.type === 'email-otp' && verdicts.get(m.id)?.real)) {
+      const cap = await this.notifyCapability(reg, tenant);
+      if (cap?.real !== true) for (const m of cfg.methods) if (m.type === 'email-otp' && verdicts.get(m.id)?.real) verdicts.set(m.id, { real: false, note: `SIMULATED: no mail is sent, the code goes to the demo outbox. ${cap?.note ?? 'The notifier on the notify.default slot did not declare real delivery.'}` });
+    }
     return cfg.chains.map((c) => analyzeChain(cfg, c, (m) => verdicts.get(m.id)));
   }
 
