@@ -70,6 +70,8 @@ export class VersioningController {
   @Post('pulls') openPull(@Param('tenant') t: string, @Body() b: { title?: string; body?: string; source?: string; target?: string }, @Req() r: Req_) { return this.prs.create(t, b ?? {}, r.user?.sub); }
   @Get('pulls/:id') pull(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Req() r: Req_) { return this.prs.get(t, id, r.user?.sub); }
   @Post('pulls/:id/comments') comment(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Body() b: { body?: string; kind?: string }, @Req() r: Req_) { return this.prs.comment(t, id, b ?? {}, r.user?.sub); }
+  @Post('pulls/:id/discard-change') discardChange(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Body() b: { table?: string; key?: Record<string, unknown>; columns?: string[]; expectedHead?: string }, @Req() r: Req_) { return this.prs.discardChange(t, id, b ?? {}, r.user?.sub); }
+  @Post('pulls/:id/edit-row') editRow(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Body() b: { table?: string; key?: Record<string, unknown>; values?: Record<string, unknown>; expectedHead?: string }, @Req() r: Req_) { return this.prs.editRow(t, id, b ?? {}, r.user?.sub); }
   @Post('pulls/:id/close') close(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number) { return this.prs.close(t, id); }
   @Post('pulls/:id/merge') merge(@Param('tenant') t: string, @Param('id', ParseIntPipe) id: number, @Req() r: Req_) { return this.prs.merge(t, id, r.user?.sub); }
 }

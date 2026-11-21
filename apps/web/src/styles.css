@@ -69,3 +69,10 @@ table.grid th, table.grid td { border: 0; border-bottom: 1px solid var(--line); 
 :root[data-theme='dark'] .brandlogo .for-dark { display: block; }
 
 button.danger{color:var(--on-bad)}
+
+/* Show/hide control on password and secret inputs (RevealPassword directive). */
+.reveal-wrap { display: inline-flex; align-items: stretch; gap: .35rem; max-width: 100%; }
+.reveal-wrap > input { flex: 1 1 auto; min-width: 0; }
+.reveal-btn { flex: none; min-width: 3.6rem; padding: 0 .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--field-bg); color: inherit; font: inherit; font-size: .85rem; cursor: pointer; }
+.reveal-btn:hover { background: var(--row-hover); }
+.reveal-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

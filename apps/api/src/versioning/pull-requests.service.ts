@@ -140,6 +140,20 @@ export class PullRequestService {
     } finally { await m.end(); }
   }
 
+  /** Row-level change of the SOURCE branch of an OPEN pull request. Source and target come from the pull request, never from the client. */
+  private async openSource(tenant: string, id: number) {
+    const m = await this.meta();
+    try { const pr = await this.row(m, tenant, id); if (pr.status !== 'open') throw new ConflictException('this pull request is not open'); return pr; } finally { await m.end(); }
+  }
+  async discardChange(tenant: string, id: number, b: { table?: string; key?: Record<string, unknown>; columns?: string[]; expectedHead?: string }, sub?: unknown) {
+    const pr = await this.openSource(tenant, id);
+    return this.v.discardChange(pr.source, pr.target, b.table as string, b.key as Record<string, unknown>, { columns: b.columns, expectedHead: b.expectedHead }, sub);
+  }
+  async editRow(tenant: string, id: number, b: { table?: string; key?: Record<string, unknown>; values?: Record<string, unknown>; expectedHead?: string }, sub?: unknown) {
+    const pr = await this.openSource(tenant, id);
+    return this.v.editRowChecked(pr.source, b.table as string, b.key as Record<string, unknown>, b.values as Record<string, unknown>, b.expectedHead, undefined, sub);
+  }
+
   async close(tenant: string, id: number) {
     const m = await this.meta();
     try {

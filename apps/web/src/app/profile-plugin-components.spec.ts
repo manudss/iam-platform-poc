@@ -196,6 +196,18 @@ describe('packaged profile components (plugins/*/screens/*.mjs)', () => {
     expect(el.shadowRoot!.textContent).toContain('<b>Evil</b>');
   });
 
+  it('the password and PIN fields have a show/hide control: hidden by default, only the typed value, focus kept on click, hidden when focus leaves', async () => {
+    const pw = await mount('iam-password-profile', ctx({ subject: 'u1' }), () => ({ status: 200, data: {} }));
+    const root = pw.shadowRoot!; const cur = root.querySelector('input.cur') as HTMLInputElement; const next = root.querySelector('input.next') as HTMLInputElement;
+    expect(cur.type).toBe('password'); expect(next.type).toBe('password');
+    const btns = root.querySelectorAll('.reveal-btn'); expect(btns.length).toBe(2);
+    const b = btns[1] as HTMLButtonElement; expect(b.getAttribute('type')).toBe('button'); expect(b.getAttribute('aria-pressed')).toBe('false');
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); b.dispatchEvent(down); expect(down.defaultPrevented).toBe(true);
+    b.click(); expect(next.type).toBe('text'); expect(cur.type).toBe('password'); expect(b.getAttribute('aria-pressed')).toBe('true');
+    const wrap = next.closest('.reveal-wrap')!;
+    wrap.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: b })); expect(next.type).toBe('text');
+    wrap.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null })); expect(next.type).toBe('password');
+  });
 });
 
 describe('PluginScreenLoader cache', () => {
@@ -236,4 +248,5 @@ describe('PluginScreenLoader cache', () => {
     await expect(loader.load('/api/t/plugins/p/assets/s.mjs', {})).rejects.toThrow('HTTP 500');
     expect(fetches).toBe(2);
   });
+
 });

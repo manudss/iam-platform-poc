@@ -1,3 +1,4 @@
+import { RevealPassword } from './reveal-password';
 import { Brand, Branding } from './branding';
 import { Component, signal } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
@@ -11,7 +12,7 @@ const CORE: Record<string, [string, string]> = { id: ['User ID', 'su-id'], displ
 
 /** Public account-request form on its own /signup page (no sign-in). Closed unless an administrator opened and applied it. It only sends a request. */
 @Component({
-  selector: 'app-signup', imports: [FormsModule, NgTemplateOutlet, ThemeSwitch, Brand], styleUrl: './login.css',
+  selector: 'app-signup', imports: [FormsModule, NgTemplateOutlet, ThemeSwitch, Brand, RevealPassword], styleUrl: './login.css',
   template: `
   <div class="auth-bg" aria-hidden="true"><img src="https://picsum.photos/1920/1080" alt="" loading="eager"></div>
   <div class="auth-veil" aria-hidden="true"></div>
