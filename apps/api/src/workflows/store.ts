@@ -279,7 +279,18 @@ export class WorkflowStore {
   async claimTicketLink(k: TicketKey, runId: string): Promise<TicketLinkRow | null> {
     const m = await this.meta();
     try {
-      const [res] = await m.query("update workflow_ticket_links set status = 'claimed', claimed_run = ?, updated_at = now(3) where tenant = ? and connection_id = ? and project = ? and issue_key = ? and (status = 'open' or (status = 'claimed' and claimed_run = ?))", [runId, k.tenant, k.connectionId, k.project, k.issueKey, runId]);
+      // Dolt answers a concurrent writer with a serialization failure instead of waiting: retry, the loser then sees the row already claimed by the other run and gets nothing.
+      let res: unknown;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          [res] = await m.query("update workflow_ticket_links set status = 'claimed', claimed_run = ?, updated_at = now(3) where tenant = ? and connection_id = ? and project = ? and issue_key = ? and (status = 'open' or (status = 'claimed' and claimed_run = ?))", [runId, k.tenant, k.connectionId, k.project, k.issueKey, runId]);
+          break;
+        } catch (e) {
+          const x = e as { code?: string; message?: string };
+          if (attempt >= 8 || !(x.code === 'ER_LOCK_DEADLOCK' || /serialization failure/i.test(x.message ?? ''))) throw e;
+          await new Promise((r) => setTimeout(r, 20 * attempt));
+        }
+      }
       if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
       return await this.ticketLinkOn(m, k);
     } finally { await m.end(); }
