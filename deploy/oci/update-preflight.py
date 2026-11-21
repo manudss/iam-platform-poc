@@ -14,10 +14,14 @@ string the updater will pass:
      group/other permissions (the reviewed installation is root 0700);
   3. the file's sha256 equals the reviewed pin passed as --verifier-sha256.
 
-GUARANTEE BOUNDARY: this is a STRUCTURAL preflight. It does not prove the
-verifier is correct (independent review does), does not touch the policy, and
-must run BEFORE the before-phase because the policy hash is captured into
-before.json - changing the policy mid-cycle fails closed by design.
+GUARANTEE BOUNDARY: this is a STRUCTURAL preflight and an OPERATOR CHECKLIST
+TOOL - it is NOT integrated into update.sh or the ordered queue and locks
+nothing automatically. It does not prove the verifier is correct (independent
+review does), does not run the controller's full policy_load, does not verify
+the authorized origin of the pin, parent-directory immutability or symlinks, and
+does not prove the verifier functionally succeeds. It never writes, and must run
+BEFORE the before-phase because the policy hash is captured into before.json -
+changing the policy mid-cycle fails closed by design.
 
 Usage: update-preflight.py --image ghcr.io/...@sha256:... --policy /opt/lyam/qualification.json \
          --verifier-sha256 <reviewed pin>

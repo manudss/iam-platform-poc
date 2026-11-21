@@ -13,9 +13,12 @@ For EVERY version in data/migrations/manifest.json except the initial baseline
 already released, it requires: (a) a NON-EMPTY deploy/oci/verify-<id>-*.py; (b) a
 NON-EMPTY deploy/oci/verify-<id>-*.test.py that references the verifier module;
 (c) the discovered test suite EXECUTED by this guard and reporting a non-zero
-number of passing tests; (d) a ci.yml run step (comment-stripped, not disabled by
-'if: false') executing that test file; (e) no previously shipped verify-* file
-deleted versus --base. It proves NOTHING semantic: not that a verifier actually
+number of passing tests; (d) a TEXT HEURISTIC finding that test file inside a
+ci.yml 'run:' block - full-line/trailing comments stripped, a literal 'if: false'
+step excluded, but 'run: echo <path>', 'if: ${{ false }}' or a disabled JOB are
+NOT detected; the suite is executed separately by this guard (c), the heuristic
+never proves CI ran it; (e) no previously shipped verify-* file deleted versus
+--base. It proves NOTHING semantic: not that a verifier actually
 proves its migration, not the image/policy binding, not review quality. The
 independent review, the sha256 pin and the live-policy entry installed BEFORE the
 before-phase remain the semantic gates. An unresolvable --base ref is UNKNOWN and
@@ -54,9 +57,12 @@ def strip_comment(line):
 
 
 def ci_runs_test(root, migration_id):
-    """A real, non-disabled ci.yml step must run the verifier test. Line-based
-    structural heuristic: full-line and trailing comments are stripped; a step
-    carrying 'if: false' does not count."""
+    """Heuristic presence of the verifier test file in a ci.yml 'run:' block.
+    Line-based structural heuristic only: full-line and trailing comments are
+    stripped; a step carrying a literal 'if: false' does not count. 'run: echo
+    <path>', 'if: ${{ false }}' and a disabled JOB are NOT detected. The suite
+    is executed separately by this guard (run_suite); this check never proves
+    CI ran it."""
     ci = Path(root, '.github/workflows/ci.yml')
     if not ci.is_file():
         return False
@@ -118,7 +124,7 @@ def missing_for(root, migration_id):
     elif not any(run_suite(root, test) for test in tests):
         missing.append('deploy/oci/verify-' + migration_id + '-*.test.py (suite must execute and report a non-zero number of passing tests)')
     if not ci_runs_test(root, migration_id):
-        missing.append('.github/workflows/ci.yml (a non-disabled run step executing the verifier tests, not a comment)')
+        missing.append('.github/workflows/ci.yml (heuristic presence of the verifier test file in a run block, not a comment; the suite is executed separately by this guard)')
     return missing
 
 
@@ -156,7 +162,8 @@ def main():
               'before the before-phase remain the semantic gates.', file=sys.stderr)
         return 1
     print('Structure OK: every non-baseline data migration ships its verifier, a counter-test '
-          'suite that executes with a non-zero test count, and the CI step (structural lint only).')
+          'suite this guard executes with a non-zero test count, and the ci.yml run-block '
+          'presence heuristic (structural lint only).')
     return 0
 
 
