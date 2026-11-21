@@ -226,7 +226,7 @@ describe('authentication methods and chains', () => {
       const reg = app.get(PluginRegistry);
       const sent: any[] = [];
       reg.register({ manifest: { apiVersion: 'plugin/v3', id: 'notify-fake', version: '1.0.0', name: 'Fake mailer', description: 'test notifier', publisher: 'iam-platform', kinds: ['notifier'], extends: 'notify-log', provides: ['notify.default'], hooks: [{ name: 'notify.send', mode: 'async' }, { name: 'notify.capability', mode: 'blocking' }], settings: [{ key: 'prefix', type: 'string', label: 'Prefix', default: 'fake' }], entrypoints: { handlers: 'handlers.mjs' }, security: { signed: true } } as any,
-        handlers: { 'notify.send': () => { return { delivered: true, real: true, id: 'fake-1' }; }, 'notify.capability': () => ({ real: true, note: 'fake real delivery' }) } as any });
+        handlers: { 'notify.send': (pl: any) => { sent.push(pl); return { delivered: true, real: true, id: 'fake-1' }; }, 'notify.capability': () => ({ real: true, note: 'fake real delivery' }) } as any });
       await reg.install(T, 'notify-fake', { install: true });
       await reg.enable(T, 'notify-fake', {});
       await app.get(BusHostRef).host!.sync(); // enabling only schedules the bus re-push; serve the fake now
