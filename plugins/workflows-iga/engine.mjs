@@ -90,6 +90,16 @@ export function createWorkflowEngine(deps) {
       await store.patchStep(runId, st.node_id, { status: 'failed', finished_at: now() });
       await store.updateRun(runId, { status: 'failed', error: 'External effect uncertain: reconcile at the provider before creating a new run.', finished_at: now() }); return;
     }
+    // A step left 'running' by a restart was cut in flight. A step that can have an effect outside the run (category real or any external block) is NEVER re-run by itself, and the run is
+    // never reported completed over it: the run fails closed and the step is marked, for a manual reconciliation. A computed or simulated step has no effect and simply restarts.
+    for (const st of await store.steps(runId)) if (st.status === 'running') {
+      const n = run.graph.nodes.find((x) => x.id === st.node_id);
+      const effectful = !n || externalBlock(n.type) || stepCategory(n.type) === 'real';
+      if (!effectful) { await store.patchStep(runId, st.node_id, { status: 'pending' }); continue; }
+      for (const o of await store.steps(runId)) if (o.status === 'pending') await store.patchStep(runId, o.node_id, { status: 'skipped' });
+      await store.patchStep(runId, st.node_id, { status: 'failed', error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED', finished_at: now() });
+      await store.updateRun(runId, { status: 'failed', error: `step "${n?.name ?? st.node_id}" was interrupted by a restart while it ran: its effect is unknown, reconcile before creating a new run.`.slice(0, 500), finished_at: now() }); return;
+    }
     const { order } = validateGraph(run.graph);
     const nodes = new Map(run.graph.nodes.map((n) => [n.id, n]));
     const edges = run.graph.edges;
@@ -369,17 +379,51 @@ export function createWorkflowEngine(deps) {
       const creation = node.type === 'google-sheets-add-row' || node.type === 'jira-create-issue' || (node.type === 'http-request' && !['GET', 'HEAD'].includes(resolved.config.method));
       if (creation) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
     } else if (!managed) settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
+    // A real mail is a non-repeatable external effect: if the process stops before the step is recorded done, the run stops for review (the provider idempotency key makes a deliberate new run return the same mail within 24 hours).
+    if (node.type === 'lyam-send-mail' && !run.test) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
+    // Publication to main: the branch and head are FROZEN by the run in this step's stored input BEFORE the call (durable intent). A resumed step reuses them; a branch that moved since is refused by the publisher.
+    let publishIntent;
+    if (node.type === 'lyam-publish-workspace' && !run.test && run.branch && deps.workspace) {
+      const prior = (await store.steps(run.id)).find(s => s.node_id === node.id)?.input?.publishIntent;
+      if (prior && prior.branch === run.branch && typeof prior.head === 'string') publishIntent = prior;
+      else {
+        const head = await deps.workspace.headOf(run.branch);
+        if (!head) throw new Error('The run branch has no head to publish');
+        publishIntent = { branch: run.branch, head };
+        await store.patchStep(run.id, node.id, { input: { publishIntent } });
+      }
+    }
     const sensitive = [secret];
     if (secret) {
       sensitive.push(Buffer.from(`${settings.jiraEmail ?? ''}:${secret}`).toString('base64'));
       try { for (const value of Object.values(JSON.parse(secret))) if (typeof value === 'string' && value.length > 8) sensitive.push(value); } catch {}
     }
-    const safe = value => { let text = String(value); for (const part of sensitive.filter(Boolean)) for (const variant of [part, JSON.stringify(part).slice(1, -1), encodeURIComponent(part)]) text = text.split(variant).join('[redacted]'); return text; };
+    // Run-scoped secrets (generated passwords) are redacted too, read at each call because a block may create one while it runs.
+    const safe = value => { let text = String(value); for (const part of [...sensitive, ...(deps.secrets?.valuesOf?.(run.id) ?? [])].filter(Boolean)) for (const variant of [part, JSON.stringify(part).slice(1, -1), encodeURIComponent(part)]) text = text.split(variant).join('[redacted]'); return text; };
 
     say(`block "${block.label ?? node.type}" provided by the ${provider} plugin`);
     const author = deps.authorOf(`wf-${run.started_by}`);
+    // The secret API a block gets depends on ITS type: only the generation block can create one, only set-temporary and the secret mail can resolve one (and only inside this run). No block ever receives a way to list them.
+    const secretUse = { 'lyam-set-temporary-password': 'set-temporary', 'lyam-send-secret-mail': 'mail' }[node.type];
+    const secrets = deps.secrets ? {
+      generate: () => { if (node.type !== 'lyam-generate-password') throw new Error('secret reference unavailable'); return deps.secrets.create(run.id, ['set-temporary', 'mail']); },
+      reveal: ref => { if (!secretUse) throw new Error('secret reference unavailable'); return deps.secrets.reveal(run.id, ref, secretUse); },
+      drop: ref => deps.secrets.drop(run.id, ref),
+    } : undefined;
     const ctx = {
       tenant: run.tenant,
+      secrets,
+      users: deps.users ? { firstAccess: (id, ref) => deps.users.firstAccess(run.tenant, id, ref), emailOf: (id, ref) => deps.users.emailOf(run.tenant, id, ref) } : undefined,
+      setTemporaryPassword: deps.users ? async ({ id, password, hours }) => { const branch = await ensureBranch(run, say); return deps.users.setTemporary(run.tenant, { runId: run.id, branch, id, password, hours }); } : undefined,
+      // Durable intent of an irreversible effect, written right before it: from then on a crash leaves the step in review (no automatic resend).
+      markEffectPending: intent => store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED', ...(intent ? { input: { effectIntent: intent } } : {}) }),
+      // Ticket links: the engine binds tenant and run; a block gives only the ticket and the target it links.
+      links: deps.links ? {
+        put: l => deps.links.put(run.tenant, { ...l, runId: run.id }),
+        claim: k => deps.links.claim(run.tenant, k, run.id),
+        complete: k => deps.links.complete(run.tenant, k, run.id),
+      } : undefined,
+      runBranch: run.branch ?? null,
       config: managed ? { ...resolved.config, dryRun: simulation, ...(node.type.startsWith('google-sheets-') && !simulation ? { source: 'google' } : {}) } : resolved.config,
       settings,
       dryRun: simulation,
@@ -387,6 +431,10 @@ export function createWorkflowEngine(deps) {
       outputs,
       // Account effects (block, unblock, security settings patch). A test run never applies them.
       accounts: deps.accounts,
+      workspace: deps.workspace,
+      workflowId: run.definition_id,
+      publishIntent,
+      hasRunBranch: !!run.branch,
       test: !!run.test,
       runId: run.id,
       branchWrite: async (fn, message) => {
@@ -402,6 +450,8 @@ export function createWorkflowEngine(deps) {
     };
     let output;
     try { output = await block.run(ctx); } catch { throw new Error('External action failed; check connection and provider status.'); }
+    // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
+    if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
     if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
     if (managed && !simulation) { try { output = JSON.parse(safe(JSON.stringify(output ?? {}))); } catch { output = {}; } }
 

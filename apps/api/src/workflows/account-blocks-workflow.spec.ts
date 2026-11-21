@@ -9,6 +9,7 @@ const calls: unknown[] = [];
 const accounts = {
   block: async (_t: string, a: unknown) => { calls.push(['block', a]); return { applied: true, blockId: 'b1' }; },
   unblock: async (_t: string, a: unknown) => { calls.push(['unblock', a]); return { lifted: 2 }; },
+  activeBlocks: async () => [],
   patchSecurity,
 };
 

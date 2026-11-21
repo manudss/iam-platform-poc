@@ -20,6 +20,30 @@
       "default": "",
       "help": "Exact destination host names this block may call. Empty refuses all outbound calls. Redirects are not followed. Only add hosts you trust; local/private hosts expose local services.",
       "group": "HTTP"
+    },
+    {
+      "key": "publishAllowedWorkflows",
+      "type": "string",
+      "label": "Publish block: authorized workflow ids",
+      "default": "",
+      "help": "Exact ids (comma separated) of the workflow definitions allowed to publish their run branch to main with the lyam-publish-workspace block. Empty refuses every publication. Read from main at run time: a run cannot change it.",
+      "group": "Publication"
+    },
+    {
+      "key": "mailAllowedRecipients",
+      "type": "string",
+      "label": "Mail block: allowed recipients",
+      "default": "",
+      "help": "Exact e-mail addresses (comma separated) the lyam-send-mail block may write to. Empty refuses every send. Set only to addresses the owner approved.",
+      "group": "Mail"
+    },
+    {
+      "key": "mailFrom",
+      "type": "string",
+      "label": "Mail block: sender address",
+      "default": "lyam@dss.name",
+      "help": "Must be on a domain verified at the mail provider. The provider API key is never a setting: it is the RESEND_API_KEY environment variable of the server.",
+      "group": "Mail"
     }
   ],
   "httpRoutes": [
