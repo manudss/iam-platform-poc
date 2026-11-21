@@ -770,15 +770,36 @@ export class DoltExplorer {
   }
   private protectedBranchNames() { return new Set(this.branches().filter((b) => b.protected).map((b) => b.name)); }
   protected canUndoCell(d: RowDiffView, r: RowDiff, c: string) { return r.type === 'modified' && this.changed(r, c) && !d.primaryKey!.includes(c); }
+  /** Sensitive fields (credential references, plugin runtime state) are never typed in by hand. */
+  protected canEditCell(d: RowDiffView, r: RowDiff, c: string) { return r.type !== 'removed' && !d.primaryKey!.includes(c) && c.toLowerCase() !== 'credential_revision' && !d.table.toLowerCase().startsWith('plugin_runtime_'); }
+  private rowKeyOf(d: RowDiffView, r: RowDiff) { const src = (r.to ?? r.from) as Record<string, unknown>; return Object.fromEntries(d.primaryKey!.map((k) => [k, src[k]])); }
+  /** The head of the source branch as it is NOW (the server refuses the action if it moved after this read). */
+  private async sourceHead(source: string): Promise<string | undefined> {
+    const r = await this.run(() => this.v.branches(), true);
+    return r?.branches.find((b) => b.name === source)?.commit;
+  }
+  private async afterChange(res: { commit: string; action: string } | undefined) {
+    if (!res) return;
+    const id = this.pr()!.pullRequest.id;
+    this.note.set(`Done (${shortHash(res.commit)}): ${res.action}.`); await this.refreshRefs(); await this.showPull(id); this.prTab.set('rows');
+  }
   /** Abandons one change of the source branch (whole row, or one field of a modified row), then reloads the diff and the checks. */
   protected async discardChange(d: RowDiffView, r: RowDiff, columns?: string[]) {
-    const p = this.pr()!.pullRequest; const src = (r.from ?? r.to) as Record<string, unknown>;
-    const key = Object.fromEntries(d.primaryKey!.map((k) => [k, src[k]]));
+    const p = this.pr()!.pullRequest; const sensitive = d.table.toLowerCase().startsWith('plugin_runtime_') || (columns ?? d.columns).some((c) => c.toLowerCase() === 'credential_revision');
     const what = columns ? `the change to ${columns.join(', ')}` : r.type === 'added' ? 'this added row' : r.type === 'removed' ? 'this removed row (it will come back)' : 'all changes to this row';
-    if (!confirm(`Abandon ${what} in ${d.table} on ${p.source}? Everything else on the branch stays. One commit is added to ${p.source}; the value goes back to what it was when the branch started, never to a new value.`)) return;
-    const head = this.branches().find((b) => b.name === p.source)?.commit;
-    const res = await this.run(() => this.v.discardChange(p.source, d.table, key, columns, head));
-    if (res) { this.note.set(`Done (${shortHash(res.commit)}): ${res.action}.`); await this.refreshRefs(); await this.showPull(p.id); this.prTab.set('rows'); }
+    const note = sensitive ? ` Credential and plugin fields take the CURRENT value of ${p.target}, never an older one.` : '';
+    if (!confirm(`Abandon ${what} in ${d.table} on ${p.source}? Everything else on the branch stays. One commit is added to ${p.source}.${note}`)) return;
+    const head = await this.sourceHead(p.source); if (!head) return;
+    await this.afterChange(await this.run(() => this.v.discardChange(p.id, d.table, this.rowKeyOf(d, r), head, columns)));
+  }
+  /** Types a new value for one field of the source branch (not for credential or plugin fields), e.g. to settle a conflict. */
+  protected async editCell(d: RowDiffView, r: RowDiff, c: string) {
+    const p = this.pr()!.pullRequest; const cur = (r.to ?? r.from)?.[c];
+    const typed = prompt(`New value for ${d.table}.${c} on ${p.source} (empty text stays empty; type NULL for no value). One commit is added to ${p.source}.`, cur === null || cur === undefined ? '' : String(cur));
+    if (typed === null) return;
+    const value: unknown = typed === 'NULL' ? null : typed;
+    const head = await this.sourceHead(p.source); if (!head) return;
+    await this.afterChange(await this.run(() => this.v.editRow(p.id, d.table, this.rowKeyOf(d, r), { [c]: value }, head)));
   }
   protected async sendComment(kind: 'comment' | 'approve') {
     const p = this.pr()!.pullRequest;

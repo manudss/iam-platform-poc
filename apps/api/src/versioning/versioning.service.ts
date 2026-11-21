@@ -354,47 +354,97 @@ export class VersioningService {
     });
   }
 
-  // ---------------------------------------------------------------------------------------- discard one change
+  // ---------------------------------------------------------------------------------------- one-row changes of a working branch (pull request diff)
 
   /**
-   * Abandons ONE change of a working branch, keeping every other change: the row (or only the named columns of a modified row) goes back to
-   * what it was where the branch diverged from `target` (the merge base, as in the three-dot diff). One commit, author = the signed-in user.
-   *  - added row: deleted; removed row: inserted back; modified row: the changed columns (or only `columns`) get their base values.
-   * It never writes a value that did not already exist on the base, so it cannot introduce a credential reference or plugin state: that is
-   * why it is allowed for credential_revision and plugin_runtime_* (where editing a value is refused) and the only way to drop such a change.
-   * A row that main also changed then no longer conflicts: the branch no longer touches it, so the merge takes main's version.
-   * Refused on protected branches (writeOn), with a stale expectedHead, with uncommitted work, or when the row has no change on the branch.
+   * Runs ONE single-row change on a working branch in one session, in one explicit transaction, and commits it. Stricter than writeOn,
+   * because these routes act on someone else's branch while it may be in use:
+   *  - `expectedHead` is REQUIRED and must still be the branch head (otherwise 409, nothing touched);
+   *  - the working set must be clean before, and exactly ONE row of ONE table may differ before the commit (otherwise rollback, 409);
+   *  - only that table is staged (never an "add all"), and the commit's parent must be `expectedHead`;
+   *  - on ANY failure only this session's transaction is rolled back. There is no reset --hard and no clean: another session's work is never erased.
    */
-  async discardChange(branch: string, table: string, key: Row, opts: { columns?: string[]; expectedHead?: string; message?: string; target?: string }, sub: unknown) {
-    tableName(table);
-    const target = branchName(opts.target ?? this.defaultBranch, 'target');
-    if (branch === target) throw new ForbiddenException(`${target} has no changes of its own to discard`);
-    return this.writeOn(branch, async (c) => {
-      if (opts.expectedHead) {
+  private branchTx(branch: string, expectedHead: unknown, fn: (c: Connection) => Promise<{ table: string; info: Row }>, message: string, sub: unknown): Promise<Row & { branch: string; table: string; commit: string }> {
+    branchName(branch);
+    if (typeof expectedHead !== 'string' || !HASH.test(expectedHead)) throw new BadRequestException('expectedHead (the 32-character head of the branch you reviewed) is required');
+    if (workspaceMode() && !applyContext.getStore() && branch !== currentBranch(true)) throw new ForbiddenException('Write must use globally selected branch');
+    if (this.isProtected(branch)) throw new ForbiddenException(`branch ${branch} is protected: open a pull request instead`);
+    return this.lock(async () => {
+      const c = await this.connect(undefined, false);
+      try {
+        const [bh] = await c.query('select count(*) n from dolt_branches where name = ?', [branch]);
+        if (Number((bh as { n: number }[])[0].n) !== 1) throw new NotFoundException(`unknown branch ${branch}`);
+        await c.query('CALL DOLT_CHECKOUT(?)', [branch]);
         const [h] = await c.query('select hashof(?) h', [branch]);
-        if ((h as { h: string }[])[0].h !== opts.expectedHead) throw new ConflictException('Working branch changed. Review again before discarding.');
-      }
+        if ((h as { h: string }[])[0].h !== expectedHead) throw new ConflictException('Working branch changed. Review again before changing it.');
+        await this.cleanOrFail(c, branch);
+        const { table, info } = await fn(c);
+        await c.query('CALL DOLT_ADD(?)', [table]);
+        const [sum] = await c.query("select * from dolt_diff_summary('HEAD', 'STAGED')");
+        const tables = (sum as Row[]).map((x) => String(x.to_table_name ?? x.from_table_name));
+        const [st] = await c.query("select * from dolt_diff_stat('HEAD', 'STAGED', ?)", [table]);
+        const changed = (st as Row[]).reduce((n, x) => n + Number(x.rows_added ?? 0) + Number(x.rows_modified ?? 0) + Number(x.rows_deleted ?? 0), 0);
+        const [un] = await c.query('select count(*) n from dolt_status where staged = 0');
+        if (tables.length !== 1 || tables[0] !== table || changed !== 1 || Number((un as { n: number }[])[0].n) !== 0) throw new ConflictException('The branch changed while this was prepared. Nothing was changed; review again.');
+        const [r] = await c.query("CALL DOLT_COMMIT('-m', ?, '--author', ?)", [commitMessage(message, 'change one row'), authorOf(sub)]);
+        const hash = String((r as { hash: string }[])[0].hash);
+        const [p] = await c.query('select parent_hash from dolt_commit_ancestors where commit_hash = ? and parent_index = 0', [hash]);
+        if ((p as { parent_hash: string }[])[0]?.parent_hash !== expectedHead) throw new ConflictException('The branch moved while committing. Nothing was kept.');
+        await c.query('COMMIT');
+        return { ...info, branch, table, commit: hash };
+      } catch (e) {
+        try { await c.query('ROLLBACK'); } catch { /* the session is closed below anyway */ }
+        throw mapSqlError(e);
+      } finally { await c.end(); }
+    });
+  }
+
+  private rowKey(cols: { name: string; key: string }[], key: Row) {
+    const pk = cols.filter((x) => x.key === 'PRI').map((x) => x.name);
+    if (!pk.length) throw new BadRequestException('this table has no primary key: use the SQL console');
+    if (!key || typeof key !== 'object' || Array.isArray(key) || Object.keys(key).length !== pk.length || !pk.every((p) => key[p] !== undefined && key[p] !== null)) throw new BadRequestException(`key must contain exactly the primary key columns: ${pk.join(', ')}`);
+    return pk;
+  }
+  private static val(v: unknown) { return v !== null && typeof v === 'object' && !(v instanceof Date) && !Buffer.isBuffer(v) ? JSON.stringify(v) : v; }
+  /** Credential references and plugin runtime state: never typed in by hand, never put back to an old value. */
+  private static sensitiveCol(table: string, n: string) { return n.toLowerCase() === 'credential_revision' || table.toLowerCase().startsWith('plugin_runtime_'); }
+
+  /**
+   * Abandons ONE change of a working branch (a pull request source), keeping every other change: the row (or only the named columns of a
+   * modified row) goes back to what it was where the branch diverged from `target` (the three-dot base). Added row: deleted. Removed row: put back.
+   * Sensitive data (credential_revision, plugin_runtime_*) is never put back to the OLD base value: it is set to what `target` holds NOW
+   * (read through its own connection, never a join across revisions), and a plugin runtime row is restored whole. If the target no longer
+   * has that row, the discard is refused. Nothing new is ever written: only a value that exists on the base or on the target.
+   * The caller (the pull request) supplies source and target; the client never chooses them. See branchTx for the isolation rules.
+   */
+  async discardChange(branch: string, target: string, table: string, key: Row, opts: { columns?: string[]; expectedHead?: unknown; message?: string }, sub: unknown) {
+    tableName(table); branchName(target, 'target');
+    if (branch === target) throw new ForbiddenException(`${target} has no changes of its own to discard`);
+    return this.branchTx(branch, opts.expectedHead, async (c) => {
       const cols = await this.columns(c, table);
       const names = new Set(cols.map((x) => x.name));
-      const pk = cols.filter((x) => x.key === 'PRI').map((x) => x.name);
-      if (!pk.length) throw new BadRequestException(`table ${table} has no primary key: use the SQL console`);
-      if (!key || typeof key !== 'object' || Array.isArray(key) || Object.keys(key).length !== pk.length || !pk.every((p) => key[p] !== undefined && key[p] !== null)) throw new BadRequestException(`key must contain exactly the primary key columns: ${pk.join(', ')}`);
+      const pk = this.rowKey(cols, key);
+      const val = VersioningService.val, sens = (n: string) => VersioningService.sensitiveCol(table, n);
       let only: string[] | undefined;
       if (opts.columns !== undefined) {
         if (!Array.isArray(opts.columns) || !opts.columns.length || opts.columns.length > 50 || opts.columns.some((x) => typeof x !== 'string' || !names.has(x))) throw new BadRequestException('columns must name existing columns');
         if (opts.columns.some((x) => pk.includes(x))) throw new BadRequestException('a key column cannot be discarded on its own: discard the whole row');
         only = opts.columns;
       }
-      const val = (v: unknown) => (v !== null && typeof v === 'object' && !(v instanceof Date) && !Buffer.isBuffer(v) ? JSON.stringify(v) : v);
-      // Base and branch values are read from the diff in a SEPARATE query (never joined across revisions).
+      // Base and branch values are read from the diff in a SEPARATE query.
       const where = '(' + pk.map(() => '?? = ?').join(' and ') + ') or (' + pk.map(() => '?? = ?').join(' and ') + ')';
       const wp = [...pk.flatMap((p) => [`to_${p}`, val(key[p])]), ...pk.flatMap((p) => [`from_${p}`, val(key[p])])];
-      const [d] = await c.query(`select * from dolt_diff(?, ?) where ${where} limit 2`, [`${target}...${branch}`, table, ...wp]);
+      const [d] = await c.query(`select * from dolt_diff(?, ?) where ${where} limit 2`, [`${target}...${(await this.headName(c))}`, table, ...wp]);
       const rows = d as Row[];
       if (rows.length !== 1) throw new NotFoundException(`no change to ${table} ${JSON.stringify(key)} on ${branch} since it diverged from ${target}`);
       const r = rows[0], type = String(r.diff_type);
       const base = (n: string) => r[`from_${n}`], mine = (n: string) => r[`to_${n}`];
       const kw = pk.flatMap((p) => [p, val(key[p])]), kwhere = pk.map(() => '?? = ?').join(' and ');
+      const targetRow = async (): Promise<Row> => {
+        const t = await this.at(target, async (tc) => (await tc.query(`select * from ?? where ${kwhere}`, [table, ...kw]))[0] as Row[]);
+        if (t.length !== 1) throw new ConflictException(`${target} no longer has this row: its credential or plugin state cannot be discarded to a known value. Nothing was changed.`);
+        return t[0];
+      };
       let what: string;
       if (type === 'added') {
         if (only) throw new BadRequestException('an added row has no earlier value: discard the whole row');
@@ -404,19 +454,46 @@ export class VersioningService {
       } else if (type === 'removed') {
         if (only) throw new BadRequestException('a removed row is put back whole: discard the whole row');
         const keys = cols.map((x) => x.name).filter((n) => `from_${n}` in r);
-        await c.query('insert into ?? (??) values (?)', [table, keys, keys.map((k) => val(base(k)))]);
+        const tr = keys.some(sens) ? await targetRow() : null;
+        await c.query('insert into ?? (??) values (?)', [table, keys, keys.map((k) => val(sens(k) ? tr![k] : base(k)))]);
         what = 'put the removed row back';
       } else if (type === 'modified') {
         const differing = cols.map((x) => x.name).filter((n) => !pk.includes(n) && `from_${n}` in r && `to_${n}` in r && JSON.stringify(val(base(n))) !== JSON.stringify(val(mine(n))));
-        const target_cols = only ? only.filter((n) => differing.includes(n)) : differing;
-        if (!target_cols.length) throw new NotFoundException('none of those columns changed on the branch');
-        const [res] = await c.query(`update ?? set ${target_cols.map(() => '?? = ?').join(', ')} where ${kwhere}`, [table, ...target_cols.flatMap((n) => [n, val(base(n))]), ...kw]);
+        const wholeRow = !only && table.toLowerCase().startsWith('plugin_runtime_');
+        const use = wholeRow ? cols.map((x) => x.name).filter((n) => !pk.includes(n)) : only ? only.filter((n) => differing.includes(n)) : differing;
+        if (!use.length) throw new NotFoundException('none of those columns changed on the branch');
+        const tr = use.some(sens) ? await targetRow() : null;
+        const restored = (n: string) => (sens(n) ? tr![n] : base(n));
+        const [res] = await c.query(`update ?? set ${use.map(() => '?? = ?').join(', ')} where ${kwhere}`, [table, ...use.flatMap((n) => [n, val(restored(n))]), ...kw]);
         if ((res as { affectedRows: number }).affectedRows !== 1) throw new ConflictException('the row is not on the branch any more');
-        what = `restored ${target_cols.join(', ')} to the base value`;
+        what = `restored ${use.join(', ')} (${use.some(sens) ? `sensitive fields to the current ${target} value, the others to the base value` : 'base value'})`;
       } else throw new BadRequestException('unsupported change type');
-      const hash = await this.commitAll(c, commitMessage(opts.message, `discard change in ${table}: ${what}`), authorOf(sub));
-      return { branch, table, key, change: type, action: what, commit: hash };
-    });
+      return { table, info: { key, change: type, action: what } };
+    }, opts.message ?? '', sub).then((out) => out);
+  }
+
+  /** A typed edit of ONE row of a working branch (pull request source). Credential references and plugin runtime state cannot be typed in. Same isolation as discardChange. */
+  async editRowChecked(branch: string, table: string, key: Row, values: Row, expectedHead: unknown, message: string | undefined, sub: unknown) {
+    tableName(table);
+    if (table.toLowerCase().startsWith('plugin_runtime_')) throw new ForbiddenException('Use Plugins to change runtime settings, grants and state');
+    if (!values || typeof values !== 'object' || Array.isArray(values) || !Object.keys(values).length || Object.keys(values).length > 50) throw new BadRequestException('values must be a non-empty object');
+    if (Object.keys(values).some((k) => k.toLowerCase() === 'credential_revision')) throw new ForbiddenException('Credential revisions are managed by Users only');
+    return this.branchTx(branch, expectedHead, async (c) => {
+      const cols = await this.columns(c, table);
+      const names = new Set(cols.map((x) => x.name));
+      const pk = this.rowKey(cols, key);
+      for (const k of Object.keys(values)) { if (!names.has(k)) throw new BadRequestException(`unknown column ${k}`); if (pk.includes(k)) throw new BadRequestException('a key column cannot be edited here'); }
+      const val = VersioningService.val, keys = Object.keys(values);
+      const [res] = await c.query(`update ?? set ${keys.map(() => '?? = ?').join(', ')} where ${pk.map(() => '?? = ?').join(' and ')}`, [table, ...keys.flatMap((k) => [k, val(values[k])]), ...pk.flatMap((p) => [p, val(key[p])])]);
+      if ((res as { affectedRows: number }).affectedRows !== 1) throw new NotFoundException(`no row with key ${JSON.stringify(key)} in ${table}`);
+      return { table, info: { key, change: 'edited', action: `edited ${keys.join(', ')}` } };
+    }, message ?? `edit ${table}: ${Object.keys(values).join(', ')}`, sub);
+  }
+
+  /** Name of the branch the connection is on (after DOLT_CHECKOUT). */
+  private async headName(c: Connection): Promise<string> {
+    const [r] = await c.query('select active_branch() b');
+    return String((r as { b: string }[])[0].b);
   }
 
   // ---------------------------------------------------------------------------------------- SQL console
