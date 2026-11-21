@@ -178,8 +178,14 @@ export class AuthnService implements OnApplicationBootstrap {
    * Saving security settings. Raising the administration level is refused when the person saving does not hold that level themselves right now,
    * or when no enabled chain without a simulated step reaches it: the change can never be the one that locks the administrators out.
    */
-  async saveSecurity(tenant: string, input: unknown, actor?: { sub: string; level: number }): Promise<SecurityConfig> {
-    const cfg = validateSecurity(input);
+  /** One security-setting write at a time (this process): the read-modify-write of saveSecurity, saveAppLevel and clearAppLevel never interleave. */
+  private secChain: Promise<unknown> = Promise.resolve();
+  private secLock<T>(fn: () => Promise<T>): Promise<T> { const run = this.secChain.then(fn); this.secChain = run.catch(() => undefined); return run; }
+  /** Application levels are NOT taken from the body: they belong to the application edit form (saveAppLevel) and a page that loaded them earlier must not put an old value back. */
+  async saveSecurity(tenant: string, input: unknown, actor?: { sub: string; level: number }): Promise<SecurityConfig> { return this.secLock(() => this.saveSecurityNow(tenant, input, actor)); }
+  private async saveSecurityNow(tenant: string, input: unknown, actor?: { sub: string; level: number }): Promise<SecurityConfig> {
+    const stored = storedSecurity(await this.workingSecurity(tenant));
+    const cfg = validateSecurity({ ...(input as object), appLevels: stored.appLevels });
     const before = await this.workingSecurity(tenant);
     if (cfg.adminMinLevel > before.adminMinLevel) {
       if (!actor || actor.level < cfg.adminMinLevel) throw new BadRequestException({ code: 'would-lock-out-the-applier', message: `Level ${cfg.adminMinLevel} is above your current sign-in (${actor?.level ?? 0}). Sign in with a stronger method first, so this change cannot lock you out.` });
@@ -189,7 +195,8 @@ export class AuthnService implements OnApplicationBootstrap {
     return cfg;
   }
   /** Sets ONE application's minimum level (0 removes it) from the application edit form. It changes only that application's minLevel: its maxAgeSeconds, the other applications and every other setting stay as they are, in a single write on the working branch. */
-  async saveAppLevel(tenant: string, appId: string, level: unknown): Promise<SecurityConfig> {
+  async saveAppLevel(tenant: string, appId: string, level: unknown): Promise<SecurityConfig> { return this.secLock(() => this.saveAppLevelNow(tenant, appId, level)); }
+  private async saveAppLevelNow(tenant: string, appId: string, level: unknown): Promise<SecurityConfig> {
     if (typeof level !== 'number' || !Number.isInteger(level) || level < 0 || level > 10) throw new BadRequestException({ code: 'bad-level', message: 'The level is a whole number from 0 (no minimum) to 10.' });
     const reg = await this.registry('work', true);
     const current = await reg.coreSettings(tenant, SECURITY_SETTINGS_ID);
@@ -201,7 +208,8 @@ export class AuthnService implements OnApplicationBootstrap {
     return parseSecurity(next);
   }
   /** Removes EVERY constraint stored for an application (minimum level and age limit): used when the application is deleted, so a new application with the same id inherits nothing. */
-  async clearAppLevel(tenant: string, appId: string): Promise<SecurityConfig> {
+  async clearAppLevel(tenant: string, appId: string): Promise<SecurityConfig> { return this.secLock(() => this.clearAppLevelNow(tenant, appId)); }
+  private async clearAppLevelNow(tenant: string, appId: string): Promise<SecurityConfig> {
     const reg = await this.registry('work', true);
     const current = await reg.coreSettings(tenant, SECURITY_SETTINGS_ID);
     const stored = storedSecurity(parseSecurity(current)); const levels = { ...(stored.appLevels as Record<string, unknown>) };

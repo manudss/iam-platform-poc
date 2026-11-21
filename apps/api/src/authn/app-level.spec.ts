@@ -9,7 +9,7 @@ import { parseSecurity } from '../accounts/security-config.js';
 function harness(initial: Record<string, unknown> | undefined) {
   const box = { value: initial, writes: 0 };
   const reg = { coreSettings: async () => box.value, putCoreSettings: async (_t: string, _id: string, v: Record<string, unknown>) => { box.value = v; box.writes++; } };
-  const self = { registry: async () => reg };
+  const self = Object.assign(Object.create(AuthnService.prototype), { registry: async () => reg, secChain: Promise.resolve() });
   return { box, save: (app: string, level: unknown) => (AuthnService.prototype.saveAppLevel as any).call(self, 't', app, level) };
 }
 const stored = { lockout: { enabled: true, maxFailures: 7, windowSeconds: 600, lockSeconds: 900, hold: false }, adminMinLevel: 4, adminMaxAgeSeconds: 600, holdAfterVerification: true, appLevels: { finance: { minLevel: 5, maxAgeSeconds: 300 }, hr: { minLevel: 3 } } };
@@ -34,9 +34,17 @@ describe('saveAppLevel (application edit form)', () => {
     assert.equal(h.box.writes, w);
   });
   it('clearAppLevel removes the level and the age limit; an unknown id writes nothing', async () => {
-    const h = harness(stored); const clear = (a: string) => (AuthnService.prototype.clearAppLevel as any).call({ registry: async () => ({ coreSettings: async () => h.box.value, putCoreSettings: async (_t: string, _i: string, v: any) => { h.box.value = v; h.box.writes++; } }) }, 't', a);
+    const h = harness(stored); const clear = (a: string) => (AuthnService.prototype.clearAppLevel as any).call(Object.assign(Object.create(AuthnService.prototype), { secChain: Promise.resolve(), registry: async () => ({ coreSettings: async () => h.box.value, putCoreSettings: async (_t: string, _i: string, v: any) => { h.box.value = v; h.box.writes++; } }) }), 't', a);
     await clear('finance'); const c = parseSecurity(h.box.value);
     assert.equal('finance' in c.appLevels, false); assert.deepEqual(c.appLevels.hr, { minLevel: 3 }); assert.equal(c.adminMinLevel, 4); assert.equal(h.box.writes, 1);
     await clear('ghost'); assert.equal(h.box.writes, 1);
+  });
+  it('concurrent writes on different applications are serialized: both land', async () => {
+    const box: { value: any } = { value: undefined };
+    const reg = { coreSettings: async () => { await new Promise((r) => setTimeout(r, 5)); return box.value; }, putCoreSettings: async (_t: string, _i: string, v: any) => { await new Promise((r) => setTimeout(r, 5)); box.value = v; } };
+    const self = Object.assign(Object.create(AuthnService.prototype), { registry: async () => reg, secChain: Promise.resolve() });
+    const save = (a: string, l: number) => (AuthnService.prototype.saveAppLevel as any).call(self, 't', a, l);
+    await Promise.all([save('a', 3), save('b', 4), save('c', 5)]);
+    assert.deepEqual(Object.keys(parseSecurity(box.value).appLevels).sort(), ['a', 'b', 'c']);
   });
 });

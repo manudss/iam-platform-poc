@@ -19,7 +19,7 @@ import { OidcProviderService, SsoInteractionController, SSO_DIRECTORY, DoltSsoDi
 import { SamlIdpService, SamlInteractionController } from '../../sso/saml.js';
 import { LaunchpadController, LaunchpadLogoController } from '../../sso/launchpad.js';
 import { SecretsService } from '../../integrations/secrets.service.js';
-import { AppConnectorController, AppConnectorService, APP_CONNECTOR_STORE, DoltAppConnectorStore, MemoryAppConnectorStore } from '../../connectors/app-connector.js';
+import { APP_LEVEL_CLEANUP, AppConnectorController, AppConnectorService, APP_CONNECTOR_STORE, DoltAppConnectorStore, MemoryAppConnectorStore } from '../../connectors/app-connector.js';
 import { PluginsAdminController } from './plugins-admin.controller.js';
 import { PluginHttpController } from './plugins-http.controller.js';
 import { AuthGuard } from '../../auth/auth.guard.js';
@@ -50,7 +50,7 @@ import { AccountBlocksController } from '../../accounts/blocks.controller.js';
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
   controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, AccountBlocksController, ProfileController, SignupController, TestAccountController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, LaunchpadController, LaunchpadLogoController, RolesController, SigninOptionsController, MailTemplatesController],
-  providers: [{ provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BrandingService, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
+  providers: [{ provide: APP_LEVEL_CLEANUP, useFactory: (a: AuthnService) => ({ clear: (t: string, id: string) => a.clearAppLevel(t, id) }), inject: [AuthnService] }, { provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BrandingService, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
     provide: MAIL_TEMPLATE_STORE,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltMailTemplateStore(v, (w) => currentBranch(w)) : new MemoryMailTemplateStore(),

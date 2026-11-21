@@ -5,6 +5,7 @@ import { AuthnService } from '../authn/flow.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { BlocksService, MANUAL_KINDS, MESSAGE_MAX } from './blocks.service.js';
 import { BLOCK_LABEL, blockReference } from './blocks.js';
+import { AppConnectorService } from '../connectors/app-connector.js';
 import { DEFAULT_SECURITY } from './security-config.js';
 
 /**
@@ -16,7 +17,7 @@ import { DEFAULT_SECURITY } from './security-config.js';
 @Controller('tenants/:tenant')
 export class AccountBlocksController {
   private readonly svc: BlocksService;
-  constructor(private readonly authn: AuthnService, @Optional() events?: ApplicationBus) {
+  constructor(private readonly authn: AuthnService, @Optional() events?: ApplicationBus, @Optional() private readonly apps?: AppConnectorService) {
     this.svc = new BlocksService(authn.blocks, (e) => events?.emit({ ...e, branch: 'main' } as never));
   }
   private admins = () => (process.env.IAM_API_ADMIN_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -38,7 +39,7 @@ export class AccountBlocksController {
   @Get('security') async settings(@Param('tenant') t: string) { return { tenant: t, working: await this.authn.workingSecurity(t), live: await this.authn.liveSecurity(t), defaults: DEFAULT_SECURITY }; }
   @Put('security') async put(@Param('tenant') t: string, @Body() b: { config?: unknown }, @Req() req: any) { assertNotBranchTest(req); return { saved: true, config: await this.authn.saveSecurity(t, b?.config, { sub: this.sub(req), level: Number(req.user?.auth_level ?? 0) }) }; }
   /** One application's minimum level, written from the application edit form (same guard and branch rules as PUT security). */
-  @Put('security/app-level/:appId') async putAppLevel(@Param('tenant') t: string, @Param('appId') appId: string, @Body() b: { level?: unknown }, @Req() req: any) { assertNotBranchTest(req); return { saved: true, config: await this.authn.saveAppLevel(t, appId, b?.level) }; }
+  @Put('security/app-level/:appId') async putAppLevel(@Param('tenant') t: string, @Param('appId') appId: string, @Body() b: { level?: unknown }, @Req() req: any) { assertNotBranchTest(req); if (typeof b?.level === 'number' && b.level > 0 && this.apps) await this.apps.get(t, appId); return { saved: true, config: await this.authn.saveAppLevel(t, appId, b?.level) }; }
   /** Drops everything stored for a deleted application. */
   @Delete('security/app-level/:appId') async deleteAppLevel(@Param('tenant') t: string, @Param('appId') appId: string, @Req() req: any) { assertNotBranchTest(req); return { saved: true, config: await this.authn.clearAppLevel(t, appId) }; }
 }

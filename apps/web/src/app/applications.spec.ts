@@ -70,10 +70,13 @@ describe('minimum sign-in level in the application edit form', () => {
     expect(page.levelAvailable()).toBe(false); page.edit(app); page.level.set(9); calls.length = 0; await page.save();
     expect(calls.some((c) => c.method !== 'GET' && c.path.startsWith('/security'))).toBe(false);
   });
-  it('deleting an application also clears every level setting stored for its id', async () => {
-    const { page, calls } = setup({ security: 'ok' }); await page.load(); calls.length = 0;
-    await page.remove(app);
-    const writes = calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`);
-    expect(writes).toEqual(['DELETE /app-connectors/finance', 'DELETE /security/app-level/finance']);
+  it('deleting an application is one call: the server clears the level entry, whatever this screen could read', async () => {
+    const { page, calls } = setup({ security: 'denied' }); await page.load(); calls.length = 0;
+    await page.remove(app); await new Promise((r) => setTimeout(r));
+    expect(calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)).toEqual(['DELETE /app-connectors/finance']);
+  });
+  it('shows a stored age limit read-only, and says it is inactive without a minimum', async () => {
+    const { f, page } = setup({ security: 'ok' }); await page.load(); page.edit(app); f.detectChanges();
+    expect(f.nativeElement.querySelector('#app-level-age').textContent).toContain('5 minutes');
   });
 });

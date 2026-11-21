@@ -58,6 +58,7 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   <div class="panel app-level-editor" id="app-level"><h4>Sign-in level</h4>
   <label>Minimum sign-in level for this application<app-level-select [value]="level()" (valueChange)="level.set($event)" [allowNone]="true" [disabled]="!levelAvailable() || s.branch()==='main'" label="Minimum sign-in level for this application" id="app-min-level" /></label>
   <p class="hint">A person who signed in below this level signs in again with a stronger method before the application opens. Levels are declared on the sign-in chains. No minimum turns the rule off for this application. Saved on the working branch; live after Apply, which refuses a level no sign-in chain can reach.</p>
+  @if (ageMinutes() > 0) { <p class="hint" id="app-level-age">A stored age limit applies to this application: sign-in no older than {{ageMinutes()}} minutes. It has no effect while there is no minimum, and applies again if you choose a level. It is removed when the application is deleted. It cannot be edited here.</p> }
   @if (!levelAvailable()) { <p class="hint" id="app-level-off">The sign-in level cannot be read or changed with your current access, so it is shown read-only.</p> }</div>
   <div class="panel app-logo-editor"><h4>Application logo</h4>
   <p class="hint">PNG, JPEG or WebP up to 64 KB, or SVG up to 50 KB. Stored in Dolt with the application, versioned on this branch and live after Apply.</p>
@@ -90,7 +91,8 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
 export class ApplicationsPage {
   protected readonly s = inject(Session);
   protected apps = signal<AppConnector[]>([]); protected note = signal(''); protected problem = signal(''); protected off = signal(false); protected editing = signal(false);
-  protected readonly level = signal(0); protected readonly levelAvailable = signal(false); private levelBefore = 0; private levels: Record<string, { minLevel: number }> = {};
+  protected readonly level = signal(0); protected readonly levelAvailable = signal(false); private levelBefore = 0; private levels: Record<string, { minLevel: number; maxAgeSeconds?: number }> = {};
+  protected readonly ageMinutes = signal(0);
   private readonly route = inject(ActivatedRoute); private wantEdit: string | null = this.route.snapshot.queryParamMap.get('edit');
   protected id = ''; protected name = ''; protected description = ''; protected protocol: Protocol = 'oidc'; protected uris = ''; protected entity = ''; protected acs = ''; protected mapping = ''; protected roles = ''; protected ref = ''; protected launch = '';
   protected logo = signal<string | null>(null);
@@ -117,13 +119,13 @@ export class ApplicationsPage {
   }
   private async run(method: string, path: string, body: object | undefined, ok: string) { const r = await this.s.api.raw<any>(method, path, body, this.h()); if (this.fail(r)) return false; this.note.set(ok + ' Saved on the working branch; live after Apply.'); this.problem.set(''); await this.load(); return true; }
   protected edit(a: AppConnector) {
-    this.level.set(this.levels[a.id]?.minLevel ?? 0); this.levelBefore = this.level();
+    this.level.set(this.levels[a.id]?.minLevel ?? 0); this.levelBefore = this.level(); this.ageMinutes.set(Math.round((this.levels[a.id]?.maxAgeSeconds ?? 0) / 60));
     this.logo.set(a.logo ?? null); this.editing.set(true); this.id = a.id; this.name = a.name; this.description = a.description; this.protocol = a.protocol; this.uris = a.redirect_uris.join('\n');
     this.entity = a.entity_id ?? ''; this.acs = a.acs_url ?? ''; this.mapping = formatMapping(a.attribute_mapping); this.roles = a.allowed_roles.join('\n'); this.ref = a.secret_ref ?? ''; this.launch = a.launch_url ?? '';
     this.nameid = a.nameid_format ?? 'emailAddress'; this.cert = a.sp_certificate ?? ''; this.signedReq = a.want_signed_requests; this.spMeta = '';
     this.scopeChecks = scopeChecksFromList(a.scopes ?? []); this.allowRefresh = a.allow_refresh_tokens;
   }
-  protected reset() { this.level.set(0); this.levelBefore = 0; this.logo.set(null); this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; this.scopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); this.allowRefresh = false; }
+  protected reset() { this.ageMinutes.set(0); this.level.set(0); this.levelBefore = 0; this.logo.set(null); this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; this.scopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); this.allowRefresh = false; }
   private body(): Record<string, unknown> {
     return { logo: this.logo(), name: this.name, description: this.description, protocol: this.protocol, redirect_uris: this.protocol === 'oidc' ? parseList(this.uris) : [], entity_id: this.protocol === 'saml' ? this.entity : null, acs_url: this.protocol === 'saml' ? this.acs : null, attribute_mapping: parseMapping(this.mapping), allowed_roles: parseList(this.roles), secret_ref: this.ref || null, launch_url: this.protocol === 'oidc' ? this.launch || null : null,
       nameid_format: this.protocol === 'saml' ? this.nameid : null, sp_certificate: this.protocol === 'saml' ? this.cert.trim() || null : null, want_signed_requests: this.protocol === 'saml' ? this.signedReq : false,
@@ -152,13 +154,6 @@ export class ApplicationsPage {
     this.reset();
   }
   protected toggle(a: AppConnector) { void this.run('PATCH', `/app-connectors/${encodeURIComponent(a.id)}`, { enabled: !a.enabled }, a.enabled ? 'Application disabled.' : 'Application enabled.'); }
-  protected async remove(a: AppConnector) {
-    if (!(await this.run('DELETE', `/app-connectors/${encodeURIComponent(a.id)}`, undefined, 'Application deleted.'))) return;
-    // Level and age limit left behind would apply silently to a new application created with the same id.
-    if (this.levelAvailable() && a.id in this.levels) {
-      const r = await this.s.api.raw<any>('DELETE', `/security/app-level/${encodeURIComponent(a.id)}`, undefined, this.h());
-      if (r.status >= 400) this.problem.set(`The application is deleted, but its level settings could not be cleared (${r.data?.message ?? 'refused'}). Create the application again with No minimum to clear it.`);
-      else await this.load();
-    }
-  }
+  /** The server removes the whole level entry (minimum and age limit) with the application, whatever this screen could read. */
+  protected remove(a: AppConnector) { void this.run('DELETE', `/app-connectors/${encodeURIComponent(a.id)}`, undefined, 'Application deleted.'); }
 }
