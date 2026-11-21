@@ -22,6 +22,10 @@ import { inForce } from '../accounts/blocks.js';
 import { patchSecurity } from '../accounts/security-config.js';
 import { UsersService } from '../users/users.service.js';
 import { RunSecrets } from './run-secrets.js';
+import { CorePolicySource } from '../policies/policy-studio.js';
+import { STEP_TYPES, substituteEventPayload, validateGraph } from './model.js';
+import { randomBytes } from 'node:crypto';
+import { BadRequestException } from '@nestjs/common';
 
 export { hasDataSteps } from './model.js';
 
@@ -114,6 +118,8 @@ export class WorkflowEngine implements OnModuleInit {
       users: this.userEffects(),
       links: this.linkEffects(store),
       tasks: tasks ?? undefined, reads: reads ?? undefined, iga: iga ?? undefined,
+      runs: this.runEffects(),
+      policies: { validate: async (_tenant: string, candidate: unknown) => { try { const r = await new CorePolicySource().validate(candidate as never); return { valid: true, ...(r && typeof r === 'object' ? r as unknown as Record<string, unknown> : {}) }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } } },
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
   }
@@ -155,6 +161,37 @@ export class WorkflowEngine implements OnModuleInit {
       },
       firstAccess: (tenant, id, ref) => users.firstAccessState(tenant, id, ref),
       emailOf: async (_tenant, id, ref) => { const e = ((await users.list(ref)).find((x) => x.id === id) as { email?: unknown } | undefined)?.email; return typeof e === 'string' ? e : null; },
+    };
+  }
+
+  /** Child runs and run reads (the lyam-start-workflow / lyam-read-run blocks). A child run is a normal
+   *  queued run started by 'workflow:<parent run id>': it validates and runs on the same engine. */
+  private runEffects() {
+    const store = this.store;
+    return {
+      get: async (tenant: string, runId: string) => {
+        const r = await store.getRun(tenant, runId);
+        if (!r) throw new BadRequestException(`lyam-read-run: unknown run "${runId}"`);
+        const steps = await store.steps(r.id);
+        return { id: r.id, definitionId: r.definition_id, name: r.name, status: r.status, error: r.error, startedBy: r.started_by, startedAt: r.started_at, finishedAt: r.finished_at, steps: steps.map((s) => ({ step: s.node_id, status: s.status, output: s.output })) };
+      },
+      start: async (tenant: string, workflowId: string, input: Record<string, unknown>, startedBy: string) => {
+        const d = await store.getDefinition(tenant, workflowId, currentBranch() ?? 'main');
+        if (!d) throw new BadRequestException(`lyam-start-workflow: unknown workflow "${workflowId}" on this ref`);
+        const payload: Record<string, string> = {};
+        for (const [k, v] of Object.entries(input ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) payload[k] = String(v).slice(0, 200);
+        const resolved = substituteEventPayload(d.graph, payload);
+        const { order, graph } = validateGraph(resolved);
+        const runId = `run-${randomBytes(6).toString('hex')}`;
+        const run: RunRow = { id: runId, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: currentBranch(), status: 'queued', error: null, started_by: startedBy, started_at: new Date().toISOString().slice(0, 23).replace('T', ' '), finished_at: null, test: false };
+        const steps: StepRow[] = order.map((nodeId: string) => {
+          const n = graph.nodes.find((x: { id: string }) => x.id === nodeId)!;
+          return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null };
+        });
+        await store.createRun(run, steps);
+        this.kick(run.id);
+        return { id: run.id, definitionId: d.id, started: true };
+      },
     };
   }
 

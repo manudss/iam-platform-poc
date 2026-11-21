@@ -446,6 +446,7 @@ export function createWorkflowEngine(deps) {
       hasRunBranch: !!run.branch,
       test: !!run.test,
       runId: run.id,
+      nodeId: node.id,
       // Durable-wait context: the wait payload recorded when this step last suspended (its task id), the
       // run starter (anti-self-approval), the branch the run started from, and the shared business
       // services (durable tasks, reads, IGA recertification, child runs). Absent when the server has none.
