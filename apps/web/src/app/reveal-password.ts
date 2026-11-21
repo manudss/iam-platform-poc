@@ -31,8 +31,10 @@ export class RevealPassword implements OnInit, OnDestroy {
     this.r.appendChild(wrap, btn);
     this.wrap = wrap; this.btn = btn;
     this.paint(false);
+    // A click keeps focus in the field (no blur before the toggle, Safari included). Focus leaving the field AND its button hides again.
+    this.off.push(this.r.listen(btn, 'mousedown', (e: Event) => e.preventDefault()));
     this.off.push(this.r.listen(btn, 'click', () => this.paint(this.el.type === 'password')));
-    this.off.push(this.r.listen(this.el, 'blur', (e: FocusEvent) => { if (e.relatedTarget !== btn) this.paint(false); }));
+    this.off.push(this.r.listen(wrap, 'focusout', (e: FocusEvent) => { const to = e.relatedTarget as Node | null; if (!to || !wrap.contains(to)) this.paint(false); }));
     this.off.push(this.r.listen('document', 'visibilitychange', () => { if (document.hidden) this.paint(false); }));
   }
 

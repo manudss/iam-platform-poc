@@ -22,8 +22,14 @@ describe('RevealPassword', () => {
     const f = mount(); const el: HTMLElement = f.nativeElement;
     const a = el.querySelector('#a') as HTMLInputElement; const btn = el.querySelector('.reveal-btn') as HTMLButtonElement;
     btn.click(); expect(a.type).toBe('text'); expect(btn.getAttribute('aria-pressed')).toBe('true'); expect(btn.getAttribute('aria-label')).toBe('Hide what you typed');
-    a.dispatchEvent(new FocusEvent('blur', { relatedTarget: null })); expect(a.type).toBe('password');
+    const wrap = a.closest('.reveal-wrap')!;
+    wrap.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: btn })); expect(a.type).toBe('text');   // moving to the button keeps it
+    wrap.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null })); expect(a.type).toBe('password');
     btn.click(); expect(a.type).toBe('text'); f.destroy(); expect(a.type).toBe('password');
+  });
+  it('a mouse press on the button does not take focus from the field (no blur before the click)', () => {
+    const f = mount(); const btn = (f.nativeElement as HTMLElement).querySelector('.reveal-btn') as HTMLButtonElement;
+    const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); btn.dispatchEvent(ev); expect(ev.defaultPrevented).toBe(true);
   });
   it('adds no control to disabled previews or to text inputs', () => {
     const f = mount(); const el: HTMLElement = f.nativeElement;
