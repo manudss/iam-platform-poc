@@ -9,7 +9,7 @@ import { RunSecrets } from './run-secrets.js';
 // The two Google Sheets nodes are swapped for text-transform nodes in the engine runs (real Sheets mode always calls Google): they are covered by the structural test only.
 const { createWorkflowEngine } = loadPluginModule('workflows-iga', 'engine.mjs') as any;
 const mailApi = loadPluginModule('workflow-connectors', 'mail-api.mjs') as any;
-class FakeMail { static calls: any[] = []; emails = { send: async (payload: any, opts: any) => { FakeMail.calls.push({ payload, opts }); return { data: { id: 'msg-1' } }; } }; }
+class FakeMail { static hang = false; static calls: any[] = []; emails = { send: async (payload: any, opts: any) => { FakeMail.calls.push({ payload, opts }); if (FakeMail.hang) { FakeMail.hang = false; return new Promise<never>(() => {}); } return { data: { id: 'msg-1' } }; } }; }
 const HOUR = 3_600_000;
 const tpl = (id: string) => OFFICIAL_TEMPLATES.find((t) => t.id === id)!;
 
@@ -31,7 +31,7 @@ function phase2Graph(rows: string) {
   return { nodes, edges: t.edges };
 }
 
-function world(opts: { rows?: string; link?: boolean; blocked?: boolean; account?: string; runId?: string; links?: ReturnType<typeof linkStore>; secrets?: RunSecrets } = {}) {
+function world(opts: { hang?: 'publish' | 'mail' | 'unblock'; head2?: string; rows?: string; link?: boolean; blocked?: boolean; account?: string; runId?: string; links?: ReturnType<typeof linkStore>; secrets?: RunSecrets } = {}) {
   const links = opts.links ?? linkStore(); const calls: string[] = []; const secrets = opts.secrets ?? new RunSecrets();
   const runId = opts.runId ?? 'run-b1';
   if (opts.link !== false && !opts.links) links.m.set(links.key('acme', { connectionId: 'jira-demo', project: 'KAN', issueKey: 'KAN-7' }), { account: opts.account ?? 'bao', source: 'google', spreadsheetId: 'sheet-1', sheetId: 0, keyColumn: 'email', keyValue: 'bao@example.test', status: 'open' });
@@ -40,8 +40,9 @@ function world(opts: { rows?: string; link?: boolean; blocked?: boolean; account
   const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-done', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'jira', started_at: 'now', finished_at: null, test: false };
   const { order } = validateGraph(phase2Graph(opts.rows ?? '1'));
   const steps = new Map<string, any>(); for (const id of order) steps.set(id, { run_id: runId, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null });
-  const store = { getRunById: async (id: string) => (id === runId ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, runningRuns: async () => [], step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); } };
-  const state = { fa: null as any, blocked: opts.blocked !== false, passwords: [] as string[] };
+  const store = { getRunById: async (id: string) => (id === runId ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, runningRuns: async () => (row.status === 'running' ? [row] : []), step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); } };
+  const state = { fa: null as any, blocked: opts.blocked !== false, passwords: [] as string[], hung: '' as string, headCalls: 0, publishHeads: [] as string[] };
+  const hangNow = (what: string) => { state.hung = what; return new Promise<never>(() => {}); };
   const HEAD = 'abcdef0123456789', MAIN = 'main000111222333';
   const deps = {
     store, secrets, log: { warn() {}, error() {} },
@@ -53,13 +54,14 @@ function world(opts: { rows?: string; link?: boolean; blocked?: boolean; account
       setTemporary: async (_t: string, a: any) => { calls.push('setTemporary'); state.passwords.push(a.password); state.fa = { required: true, expired: false, revision: 'rev-1', expiresAt: Date.now() + a.hours * HOUR }; return { revision: 'rev-1', expiresAt: state.fa.expiresAt }; },
       firstAccess: async () => state.fa, emailOf: async () => 'bao@example.test',
     },
-    accounts: { activeBlocks: async () => (state.blocked ? [{ kind: 'suspended' }] : []), unblock: async () => { calls.push('unblock'); state.blocked = false; return { lifted: 1 }; } },
-    workspace: { headOf: async () => HEAD, publish: async (_t: string, a: any) => { calls.push('publish'); return { published: true, branch: a.branch, sourceHead: a.expectedHead, mainCommit: MAIN, activation: 'applied' }; }, proof: async () => ({ mainCommit: MAIN, activation: 'applied', activationCommit: MAIN, containsHead: true }) },
+    accounts: { activeBlocks: async () => (state.blocked ? [{ kind: 'suspended' }] : []), unblock: async () => { calls.push('unblock'); const was = state.blocked; state.blocked = false; if (opts.hang === 'unblock' && !state.hung) return hangNow('unblock'); return { lifted: was ? 1 : 0 }; } },
+    workspace: { headOf: async () => (state.headCalls++ === 0 ? HEAD : (opts.head2 ?? HEAD)), publish: async (_t: string, a: any) => { calls.push('publish'); state.publishHeads.push(a.expectedHead); if (opts.hang === 'publish' && !state.hung) return hangNow('publish'); return { published: true, branch: a.branch, sourceHead: a.expectedHead, mainCommit: MAIN, activation: 'applied' }; }, proof: async () => ({ mainCommit: MAIN, activation: 'applied', activationCommit: MAIN, containsHead: true }) },
   };
-  return { row, steps, calls, state, links, secrets, engine: createWorkflowEngine(deps) };
+  const build = (sec: RunSecrets) => createWorkflowEngine({ ...deps, secrets: sec });
+  return { row, steps, calls, state, links, secrets, engine: build(secrets), build };
 }
 async function settle(w: ReturnType<typeof world>) { w.engine.kick(w.row.id); for (const until = Date.now() + 10000; ; ) { if (['completed', 'failed', 'canceled'].includes(w.row.status)) return w; if (Date.now() > until) throw new Error('no settle ' + w.row.status); await new Promise((r) => setTimeout(r, 30)); } }
-const withMail = async (fn: () => Promise<void>) => { const old = process.env.RESEND_API_KEY; process.env.RESEND_API_KEY = 'test-key-not-real'; const prev = mailApi.mailClient.Ctor; mailApi.mailClient.Ctor = FakeMail; FakeMail.calls = []; try { await fn(); } finally { mailApi.mailClient.Ctor = prev; if (old === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = old; } };
+const withMail = async (fn: () => Promise<void>) => { const old = process.env.RESEND_API_KEY; process.env.RESEND_API_KEY = 'test-key-not-real'; const prev = mailApi.mailClient.Ctor; mailApi.mailClient.Ctor = FakeMail; FakeMail.calls = []; FakeMail.hang = false; try { await fn(); } finally { mailApi.mailClient.Ctor = prev; if (old === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = old; } };
 
 describe('badge templates: structure', () => {
   it('both official templates validate and phase 2 keeps the required order, with the stop branch before any secret', () => {
@@ -112,5 +114,33 @@ describe('badge done on the real engine', () => {
       assert.deepEqual(w.calls, ['claim']); assert.equal(w.secrets.valuesOf('run-b1').length, 0); assert.equal(FakeMail.calls.length, 0);
       assert.equal([...w.links.m.values()][0].status, 'claimed');
     }
+  }));
+});
+
+async function until(cond: () => boolean) { for (const t = Date.now() + 8000; !cond(); ) { if (Date.now() > t) throw new Error('condition not reached'); await new Promise((r) => setTimeout(r, 20)); } }
+async function restart(w: ReturnType<typeof world>) { const e2 = w.build(new RunSecrets()); e2.resume(); for (const t = Date.now() + 10000; !['completed', 'failed', 'canceled'].includes(w.row.status) || w.row.status === 'running'; ) { if (Date.now() > t) throw new Error('no settle after restart ' + w.row.status); await new Promise((r) => setTimeout(r, 30)); } return w; }
+
+describe('badge done: process crash and restart (the first engine is abandoned mid-call, a second one resumes from the stored state)', () => {
+  it('crash during publish: the resume does NOT republish by itself; the step is marked interrupted, the run fails closed (never completed), nothing is regenerated, no mail, no unblock', async () => withMail(async () => {
+    const w = world({ hang: 'publish' }); w.engine.kick(w.row.id); await until(() => w.state.hung === 'publish');
+    await restart(w);
+    assert.equal(w.row.status, 'failed'); assert.match(String(w.row.error), /interrupted by a restart/); assert.equal(w.steps.get('publish')!.error, 'INTERRUPTED_IN_FLIGHT');
+    assert.equal(w.state.publishHeads.length, 1, 'no second publish call'); assert.equal(FakeMail.calls.length, 0);
+    assert.equal(w.state.passwords.length, 1, 'set-temporary ran once and the password was not regenerated');
+    assert.equal(w.calls.includes('unblock'), false); assert.equal([...w.links.m.values()][0].status, 'claimed');
+    assert.equal(w.steps.get('mail')!.status, 'skipped');
+  }));
+  it('crash during the mail call: the resume stops for review, never resends, never unblocks, never marks the ticket done', async () => withMail(async () => {
+    FakeMail.hang = true; const w = world({ hang: undefined }); w.engine.kick(w.row.id); await until(() => FakeMail.calls.length === 1);
+    await restart(w);
+    assert.equal(w.row.status, 'failed'); assert.match(String(w.row.error), /External effect uncertain/);
+    assert.equal(FakeMail.calls.length, 1, 'no second send'); assert.equal(w.calls.includes('unblock'), false); assert.equal(w.calls.includes('complete'), false);
+    assert.equal([...w.links.m.values()][0].status, 'claimed'); assert.equal(w.state.passwords.length, 1);
+  }));
+  it('crash during the unblock: the resume does not re-run it by itself and never reports completed; the mail is not resent; the ticket stays claimed for reconciliation', async () => withMail(async () => {
+    const w = world({ hang: 'unblock' }); w.engine.kick(w.row.id); await until(() => w.state.hung === 'unblock');
+    await restart(w);
+    assert.equal(w.row.status, 'failed'); assert.equal(w.steps.get('unblock')!.error, 'INTERRUPTED_IN_FLIGHT'); assert.equal(FakeMail.calls.length, 1, 'the mail is not sent again');
+    assert.equal(w.calls.filter((c) => c === 'unblock').length, 1); assert.equal([...w.links.m.values()][0].status, 'claimed'); assert.equal(w.steps.get('done')!.status, 'skipped');
   }));
 });

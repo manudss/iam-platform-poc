@@ -90,6 +90,16 @@ export function createWorkflowEngine(deps) {
       await store.patchStep(runId, st.node_id, { status: 'failed', finished_at: now() });
       await store.updateRun(runId, { status: 'failed', error: 'External effect uncertain: reconcile at the provider before creating a new run.', finished_at: now() }); return;
     }
+    // A step left 'running' by a restart was cut in flight. A step that can have an effect outside the run (category real or any external block) is NEVER re-run by itself, and the run is
+    // never reported completed over it: the run fails closed and the step is marked, for a manual reconciliation. A computed or simulated step has no effect and simply restarts.
+    for (const st of await store.steps(runId)) if (st.status === 'running') {
+      const n = run.graph.nodes.find((x) => x.id === st.node_id);
+      const effectful = !n || externalBlock(n.type) || stepCategory(n.type) === 'real';
+      if (!effectful) { await store.patchStep(runId, st.node_id, { status: 'pending' }); continue; }
+      for (const o of await store.steps(runId)) if (o.status === 'pending') await store.patchStep(runId, o.node_id, { status: 'skipped' });
+      await store.patchStep(runId, st.node_id, { status: 'failed', error: 'INTERRUPTED_IN_FLIGHT', finished_at: now() });
+      await store.updateRun(runId, { status: 'failed', error: `step "${n?.name ?? st.node_id}" was interrupted by a restart while it ran: its effect is unknown, reconcile before creating a new run.`.slice(0, 500), finished_at: now() }); return;
+    }
     const { order } = validateGraph(run.graph);
     const nodes = new Map(run.graph.nodes.map((n) => [n.id, n]));
     const edges = run.graph.edges;
