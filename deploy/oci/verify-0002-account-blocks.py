@@ -26,11 +26,24 @@ What is proven:
      verified image): each captured iam/main root equals DOLT_HASHOF_DB of its own
      commit, so both working sets were clean at capture time; the head advanced by
      exactly ONE commit on top of the captured before-head, with the exact migration
-     commit message; that commit touches only policy_rules data (every diff_summary
-     flag present and explicitly valued; schema_change refused when absent, NULL or
-     true) and adds exactly one row - default/screen-account-blocks with the frozen
-     Cedar text from apps/api/src/migrations/v0002/rule.ts, no existing row touched;
-     the current working set is clean.
+     commit message; that commit touches only policy_rules data and adds exactly one
+     row - default/screen-account-blocks with the frozen Cedar text from
+     apps/api/src/migrations/v0002/rule.ts, no existing row touched; the current
+     working set is clean.
+     Live dialect (host-proven on the deployed Dolt 2.6.1, fixtures collected
+     2026-11-21 under maintenance, read-only): dolt_diff_summary/dolt_diff ACCEPT
+     the raw before/after commit hashes (an earlier report of 'target commit not
+     found' was a miscopied probe hash, not a Dolt limit); the summary columns are
+     from_table_name/to_table_name (there is no table_name column) with diff_type,
+     data_change and schema_change rendered as the STRINGS '1'/'0'; dolt_diff on a
+     pure addition OMITS the from_set_name/from_id/from_cedar keys while to_* and
+     from_commit/to_commit stay present; an empty result (clean dolt_status) renders
+     as {} WITHOUT a rows key; DOLT_HASHOF_DB('<raw hash>') is REFUSED (1105 invalid
+     ref spec) while the revision database '<db>/<commit>' + DOLT_HASHOF_DB('HEAD'),
+     DOLT_HASHOF_DB('<branch>') and DOLT_HASHOF_DB('WORKING') are accepted. Only
+     this exact dialect is accepted: absent flags, NULLs, booleans in place of the
+     strings, omitted to_* keys, unexpected commit binding or any other shape are
+     UNKNOWN, never success.
   C. Full fresh recapture, through the controller's own immutable capture machinery
      (sibling qualification-container.mjs for Dolt+Bao, controller postgres() for
      PostgreSQL, same credential-file hashing, live migration ledger), compared for
@@ -69,8 +82,6 @@ RULE_CEDAR = (
 )
 POLICY_PATH = '/opt/lyam/qualification.json'
 ACTIVATIONS_TABLE = 'public.activations'
-TRUTHY = (True, 1, '1', 'true', 't')
-FALSY = (False, 0, '0', 'false', 'f')
 
 
 def fail(message):
@@ -163,7 +174,13 @@ def find_container(image):
 def dolt_query(container, database, sql):
     out = run(['docker', 'exec', '-i', container, 'dolt', '--host', '127.0.0.1', '--port', '3307', '--no-tls',
                '-u', 'root', '--password', '', '--use-db=' + database, 'sql', '-r', 'json', '-q', sql])
-    rows = json.loads(out).get('rows')
+    payload = json.loads(out)
+    if payload == {}:
+        # Host-verified on Dolt 2.6.1: an empty result (clean dolt_status) renders
+        # as {} with NO rows key. Only that exact empty object means zero rows; any
+        # other shape without a rows list is UNKNOWN, never an empty success.
+        return []
+    rows = payload.get('rows')
     if not isinstance(rows, list):
         fail('Dolt inventory unknown')
     return rows
@@ -207,29 +224,39 @@ def check_live_dolt(container, moved_before, moved_after, after_dolt):
         fail('iam/main did not advance by exactly one commit on top of the captured head')
     if log[0]['message'] != COMMIT_MESSAGE:
         fail('unexpected migration commit message')
+    # Host-proven Dolt 2.6.1 dialect (see module docstring): raw commit hashes are
+    # accepted by the diff table functions - keep the binding to the EXACT captured
+    # commits, no relative refs; summary columns are from_table_name/to_table_name
+    # with '1'/'0' STRING flags; a pure addition omits the from_* row keys.
     summary = dolt_query(container, DOLT_DATABASE,
-                         "SELECT table_name, diff_type, data_change, schema_change FROM dolt_diff_summary('%s','%s')" % (head_before, head_after))
+                         "SELECT from_table_name, to_table_name, diff_type, data_change, schema_change FROM dolt_diff_summary('%s','%s')" % (head_before, head_after))
     if len(summary) != 1:
         fail('migration commit touches other than exactly one table')
     line = summary[0]
-    if not {'table_name', 'diff_type', 'data_change', 'schema_change'} <= set(line.keys()):
+    if not {'from_table_name', 'to_table_name', 'diff_type', 'data_change', 'schema_change'} <= set(line.keys()):
         fail('diff summary flags absent: UNKNOWN, not success')
-    if line['table_name'] != 'policy_rules' or line['diff_type'] != 'modified':
+    if line['from_table_name'] != 'policy_rules' or line['to_table_name'] != 'policy_rules' or line['diff_type'] != 'modified':
         fail('migration commit touches more than policy_rules data')
-    if line['data_change'] not in TRUTHY or line['schema_change'] not in FALSY:
+    if line['data_change'] != '1' or line['schema_change'] != '0':
         fail('diff summary flags unknown or schema changed')
     diff = dolt_query(container, DOLT_DATABASE,
                       "SELECT * FROM dolt_diff('%s','%s','policy_rules')" % (head_before, head_after))
     if len(diff) != 1:
         fail('policy_rules changed by other than exactly one row')
     row = diff[0]
-    columns = ('diff_type', 'from_set_name', 'from_id', 'from_cedar', 'to_set_name', 'to_id', 'to_cedar')
-    if not set(columns) <= set(row.keys()):
-        fail('diff row columns absent: UNKNOWN, not success')
+    if 'diff_type' not in row:
+        fail('diff row kind absent: UNKNOWN, not success')
     if row['diff_type'] != 'added':
         fail('policy_rules row is not a pure addition')
-    if any(row[column] is not None for column in ('from_set_name', 'from_id', 'from_cedar')):
+    # The row must be bound to the exact migration commits it claims to compare.
+    if not {'from_commit', 'to_commit'} <= set(row.keys()) or row['from_commit'] != head_before or row['to_commit'] != head_after:
+        fail('diff row is not bound to the exact migration commits')
+    # On a pure addition Dolt 2.6.1 OMITS the from_* row keys: absent or NULL both
+    # mean 'no prior row', and only here; omitted to_* keys are UNKNOWN, not success.
+    if any(row.get(column) is not None for column in ('from_set_name', 'from_id', 'from_cedar')):
         fail('an existing policy_rules row was modified')
+    if not {'to_set_name', 'to_id', 'to_cedar'} <= set(row.keys()):
+        fail('added policy rule columns absent: UNKNOWN, not success')
     if row['to_set_name'] != RULE_SET or row['to_id'] != RULE_ID or row['to_cedar'] != RULE_CEDAR:
         fail('added policy rule is not the frozen account-blocks rule')
     status = dolt_query(container, branch_ref, 'SELECT * FROM dolt_status')

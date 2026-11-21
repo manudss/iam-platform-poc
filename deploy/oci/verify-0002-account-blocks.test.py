@@ -51,6 +51,26 @@ def fixtures(policy_hash):
     return before, after
 
 
+def summary_row(**overrides):
+    """Host-proven dolt_diff_summary row on the deployed Dolt 2.6.1 (fixtures
+    dolt-fixtures-v4, 2026-11-21): columns from_table_name/to_table_name (there is
+    no table_name column) and flags as the STRINGS '1'/'0'."""
+    row = {'from_table_name': 'policy_rules', 'to_table_name': 'policy_rules',
+           'diff_type': 'modified', 'data_change': '1', 'schema_change': '0'}
+    row.update(overrides)
+    return row
+
+
+def diff_row(**overrides):
+    """Host-proven dolt_diff row for the pure addition: Dolt 2.6.1 OMITS the
+    from_set_name/from_id/from_cedar keys; to_* and from/to_commit stay present."""
+    row = {'diff_type': 'added', 'from_commit': HEAD_BEFORE, 'from_commit_date': '2026-11-20 08:58:38.942000',
+           'to_commit': HEAD_AFTER, 'to_commit_date': '2026-11-21 11:59:29.231000',
+           'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR}
+    row.update(overrides)
+    return row
+
+
 def _harness(before, after, overrides=None):
     """All external seams stubbed from the fixtures: one docker point, the fresh-capture
     functions, and the controller module (real compare, stubbed postgres/policy_load)."""
@@ -62,10 +82,10 @@ def _harness(before, after, overrides=None):
         'before_revision_root': ROOT_BEFORE,  # what the revision database iam/<before-head> reports
         'ps': CONTAINER,
         'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}],
-        'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': False}],
-        'diff': [{'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
-                  'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR}],
+        'summary': [summary_row()],
+        'diff': [diff_row()],
         'status': [],
+        'status_raw': None,  # verbatim CLI payload override for malformed-shape tests
         'activation_rows': [{'h': 'a1', 'j': {'commit_hash': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
                             {'h': 'a2', 'j': {'commit_hash': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'applied'}}],
         'capture': {'dolt': after['dolt'], 'bao': after['bao']},
@@ -107,7 +127,10 @@ def _harness(before, after, overrides=None):
             if 'dolt_diff(' in sql:
                 return json.dumps({'rows': state['diff']})
             if 'dolt_status' in sql:
-                return json.dumps({'rows': state['status']})
+                if state.get('status_raw') is not None:
+                    return state['status_raw']
+                # Host-verified: an empty result renders as {} with NO rows key.
+                return json.dumps({'rows': state['status']}) if state['status'] else '{}'
             raise AssertionError('unexpected dolt sql: ' + sql)
         if 'psql' in args:
             sql = args[-1]
@@ -266,46 +289,90 @@ class Verify(unittest.TestCase):
         self.expect_fail({'log': [{'commit_hash': HEAD_AFTER, 'message': 'relabelled'}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}]})
 
     def test_extra_table_in_commit(self):
-        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': False},
-                                      {'table_name': 'users', 'diff_type': 'modified', 'data_change': True, 'schema_change': False}]})
+        self.expect_fail({'summary': [summary_row(), summary_row(from_table_name='users', to_table_name='users')]})
 
     def test_summary_flags_absent_is_unknown_not_false(self):
-        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True}]})
+        row = summary_row()
+        del row['data_change']
+        self.expect_fail({'summary': [row]})
 
     def test_summary_schema_change_null_is_unknown(self):
-        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': None}]})
+        self.expect_fail({'summary': [summary_row(schema_change=None)]})
 
     def test_summary_schema_change_true(self):
-        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': True}]})
+        self.expect_fail({'summary': [summary_row(schema_change='1')]})
 
     def test_summary_data_change_absent(self):
-        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'schema_change': False}]})
+        row = summary_row()
+        del row['schema_change']
+        self.expect_fail({'summary': [row]})
 
     def test_summary_diff_type_unexpected(self):
-        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'added', 'data_change': True, 'schema_change': True}]})
+        self.expect_fail({'summary': [summary_row(diff_type='added', schema_change='1')]})
+
+    def test_summary_boolean_flags_refused(self):
+        # The deployed Dolt renders the flags as STRINGS; a boolean is not '1'/'0'.
+        self.expect_fail({'summary': [summary_row(data_change=True)]})
+        self.expect_fail({'summary': [summary_row(schema_change=False)]})
+
+    def test_summary_data_change_zero(self):
+        self.expect_fail({'summary': [summary_row(data_change='0')]})
+
+    def test_summary_to_table_mismatch(self):
+        self.expect_fail({'summary': [summary_row(to_table_name='users')]})
+
+    def test_summary_from_table_mismatch(self):
+        self.expect_fail({'summary': [summary_row(from_table_name='users')]})
 
     def test_rule_text_mismatch(self):
-        self.expect_fail({'diff': [{'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
-                                    'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': 'permit(principal, action, resource);'}]})
+        self.expect_fail({'diff': [diff_row(to_cedar='permit(principal, action, resource);')]})
 
-    def test_diff_column_absent_is_unknown(self):
-        row = {'diff_type': 'added', 'from_set_name': None, 'from_id': None,
-               'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR}
+    def test_diff_to_column_absent_is_unknown(self):
+        # On an addition only the from_* keys may be omitted; an omitted to_* key
+        # is UNKNOWN, never success.
+        row = diff_row()
+        del row['to_cedar']
+        self.expect_fail({'diff': [row]})
+
+    def test_diff_from_keys_present_but_null_passes(self):
+        # Absence-or-NULL: explicitly present NULL from_* keys mean the same as omitted.
+        self.run_verifier({'diff': [diff_row(from_set_name=None, from_id=None, from_cedar=None)]})
+
+    def test_diff_from_key_valued_fails(self):
+        # A valued from_* key on the single row means an existing rule was touched.
+        self.expect_fail({'diff': [diff_row(from_id='screen-users')]})
+
+    def test_diff_type_key_absent_is_unknown(self):
+        row = diff_row()
+        del row['diff_type']
+        self.expect_fail({'diff': [row]})
+
+    def test_diff_not_bound_to_exact_commits(self):
+        self.expect_fail({'diff': [diff_row(to_commit=HEAD_BEFORE)]})
+        self.expect_fail({'diff': [diff_row(from_commit=HEAD_AFTER)]})
+
+    def test_diff_commit_keys_absent_is_unknown(self):
+        row = diff_row()
+        del row['from_commit']
+        del row['to_commit']
         self.expect_fail({'diff': [row]})
 
     def test_existing_row_modified(self):
-        self.expect_fail({'diff': [{'diff_type': 'modified', 'from_set_name': 'default', 'from_id': 'screen-users', 'from_cedar': 'x',
-                                    'to_set_name': 'default', 'to_id': 'screen-users', 'to_cedar': 'y'}]})
+        self.expect_fail({'diff': [diff_row(diff_type='modified', from_set_name='default', from_id='screen-users',
+                                            from_cedar='x', to_id='screen-users', to_cedar='y')]})
 
     def test_two_rows_changed(self):
-        self.expect_fail({'diff': [
-            {'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
-             'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR},
-            {'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
-             'to_set_name': v.RULE_SET, 'to_id': 'other', 'to_cedar': 'x'}]})
+        self.expect_fail({'diff': [diff_row(), diff_row(to_id='other', to_cedar='x')]})
 
     def test_dirty_working_set(self):
         self.expect_fail({'status': [{'table_name': 'sessions', 'status': 'modified'}]})
+
+    def test_status_malformed_payload_is_unknown(self):
+        # Only the exact {} empty object means zero rows; any other shape without a
+        # rows list is UNKNOWN, never an empty success.
+        self.expect_fail({'status_raw': '{"unexpected": []}'})
+        self.expect_fail({'status_raw': '{"rows": null, "extra": 1}'})
+
 
     # -- fresh complete recapture rejections -------------------------------------
     def test_live_branch_created_after_capture(self):
