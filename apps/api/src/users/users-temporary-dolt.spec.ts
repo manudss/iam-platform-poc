@@ -14,6 +14,7 @@ import { WorkflowEngine } from '../workflows/engine.js';
 import { BlockStore } from '../accounts/block-store.js';
 import { canSignIn } from '../accounts/blocks.js';
 import { branchContext } from '../workspace/context.js';
+import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
 // UsersService temporary password, first access and credential revision on a REAL Dolt, with a credential file in a temp dir. Fictional accounts only. Skipped when DOLT_BIN is missing (CI provides it).
 const bin = process.env.DOLT_BIN ?? '', have = existsSync(bin);
 const TEMP = 'Temp-Pass-Fictional-1', NEXT = 'Next-Pass-Fictional-2', SEED = 'Seed-Pass-Fictional-0';
@@ -129,5 +130,76 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
       assert.equal(await svc.authenticate('acme-demo', 'fict-b', TEMP + '5'), true);
       assert.equal(await svc.authenticate('acme-demo', 'fict-b', SEED), false);
     } finally { delete process.env.IAM_WORKSPACE_MODE; }
+  });
+  describe('publication by a run (real WorkspacePublisher and real versioning, activation stubbed)', () => {
+    let activations: string[]; let mode: 'ok' | 'fail';
+    let state: any; // what activation.current() answers
+    const mkPub = () => {
+      const registries = { drop: () => {}, get: async () => ({}) };
+      const activation = {
+        applyEnabled: true,
+        current: async () => state,
+        activate: async (_t: string, commit: string, requestId: string) => { activations.push(commit); if (mode === 'fail') { state = { state: 'failed', commit, requestId }; return state; } state = { state: 'applied', commit, requestId }; return state; },
+      };
+      return new WorkspacePublisher(v as never, registries as never, activation as never, undefined, undefined);
+    };
+    const runBranch = async (name: string, id: string) => {
+      await svc.seedAccount({ id, display_name: id, department: 'IT', manager_id: null, email: `${id}@example.invalid` }, SEED);
+      await v.createBranch(name, 'main');
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try { await branchContext.run({ branch: name }, () => svc.setTemporaryPassword('acme-demo', 'fict-admin', id, TEMP + 'P', 2)); } finally { delete process.env.IAM_WORKSPACE_MODE; }
+      return (await v.branches()).branches.find((b: any) => b.name === name)!.commit as string;
+    };
+    const mainHead = async () => (await v.branches()).branches.find((b: any) => b.name === 'main')!.commit as string;
+    it('happy path: the temporary password goes live on main, activation applied, result read back from the real state', async () => {
+      activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
+      const head = await runBranch('run-pub-1', 'fict-p1');
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const r: any = await mkPub().publishForRun({ tenant: 'acme-demo', runId: 'run-1', workflowId: 'wf-fict', branch: 'run-pub-1', expectedHead: head });
+        assert.equal(r.published, true); assert.equal(r.mainCommit, await mainHead()); assert.equal(activations.length, 1);
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+      assert.equal(await svc.authenticate('acme-demo', 'fict-p1', TEMP + 'P'), true);
+      assert.equal((await svc.firstAccessState('acme-demo', 'fict-p1')).required, true);
+    });
+    it('crash after merge, before activation: not reported as published, the data is already on main; a retry of the same head, in the same process or after a restart, only activates and never merges twice', async () => {
+      activations = []; mode = 'fail'; state = { state: 'applied', commit: 'old' };
+      const head = await runBranch('run-pub-2', 'fict-p2');
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const pub = mkPub();
+        await assert.rejects(() => pub.publishForRun({ tenant: 'acme-demo', runId: 'run-2', workflowId: 'wf-fict', branch: 'run-pub-2', expectedHead: head }), /not confirmed/);
+        const mergedMain = await mainHead();
+        assert.equal(await svc.authenticate('acme-demo', 'fict-p2', TEMP + 'P'), true);       // merged: the data is on main even though activation failed
+        // same process, same head: resumes
+        mode = 'ok';
+        const r1: any = await pub.publishForRun({ tenant: 'acme-demo', runId: 'run-2', workflowId: 'wf-fict', branch: 'run-pub-2', expectedHead: head });
+        assert.equal(r1.published, true); assert.equal(await mainHead(), mergedMain);         // no second merge commit
+        assert.equal(activations.length, 2);
+        // a restart (new instance, the pending map is lost) after another failed activation of the same state
+        mode = 'fail'; state = { state: 'failed', commit: mergedMain, requestId: `workspace-${mergedMain}` };
+        mode = 'ok';
+        const r2: any = await mkPub().publishForRun({ tenant: 'acme-demo', runId: 'run-2', workflowId: 'wf-fict', branch: 'run-pub-2', expectedHead: head });
+        assert.equal(r2.published, true); assert.equal(await mainHead(), mergedMain);
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+    });
+    it('a block written while the publication runs is neither lost nor undone, and the workflow unblock then lifts only its own kind', async () => {
+      activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
+      const head = await runBranch('run-pub-3', 'fict-p3');
+      const blocks = new BlockStore(join(dir, 'blocks3', 'b.json'));
+      const fx = (WorkflowEngine.prototype as any).accountEffects.call({ authn: { blocks }, events: { emit: () => {} } });
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const [pub, blk] = await Promise.all([
+          mkPub().publishForRun({ tenant: 'acme-demo', runId: 'run-3', workflowId: 'wf-fict', branch: 'run-pub-3', expectedHead: head }),
+          fx.block('acme-demo', { runId: 'run-3', subject: 'fict-p3', kind: 'suspended', message: 'Badge in preparation.' }),
+        ]);
+        assert.equal((pub as any).published, true); assert.equal(blk.applied, true);
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+      assert.equal(canSignIn(await blocks.list('acme-demo', 'fict-p3'), Date.now()), false);
+      assert.equal(await svc.authenticate('acme-demo', 'fict-p3', TEMP + 'P'), true);
+      assert.equal((await fx.unblock('acme-demo', { runId: 'run-3', subject: 'fict-p3', kind: 'suspended' })).lifted, 1);
+      assert.equal(canSignIn(await blocks.list('acme-demo', 'fict-p3'), Date.now()), true);
+    });
   });
 });
