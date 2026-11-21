@@ -77,7 +77,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', String(PORT), '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break;
       await new Promise((r) => setTimeout(r, 150));
     }
-    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice', IAM_API_IGA_SUBJECTS: 'demo-alice' });
+    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13432);
@@ -298,6 +298,34 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     await waitRun(started.run.id, ['canceled']);
     const after = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; status: string }[] };
     assert.equal(after.tasks.find((t) => t.id === task!.id)!.status, 'canceled', 'canceling the run canceled its task: no orphan approval');
+  });
+
+  it('recertification journey: campaign > review task > pool decision > resume > strict close (real Dolt)', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Recert journey', graph: { nodes: [
+      { id: 'c1', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Q4 recert demo-bob', users: 'demo-bob', ref: 'main' } },
+      { id: 'c2', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.c1.id}}', assignTo: 'iga' } },
+      { id: 'c3', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.c1.id}}' } },
+      { id: 'c4', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.c1.id}}' } },
+    ], edges: [{ from: 'c1', to: 'c2' }, { from: 'c2', to: 'c3' }, { from: 'c3', to: 'c4' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const inbox = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; assignee: string; run_id: string | null; detail: Record<string, unknown> }[] };
+    const review = inbox.tasks.find((t) => t.run_id === started.run.id && t.kind === 'iga-review');
+    assert.ok(review, 'the review task exists');
+    assert.equal(review!.assignee, 'demo-alice', 'the iga pool resolves to its first member for the inbox');
+    const selfDecide = await call('POST', `/workflow-tasks/${review!.id}/decision`, { decision: 'approved' });
+    assert.equal(selfDecide.status, 403, 'the run starter never decides (anti-self-approval)');
+    const decidedCall = await call('POST', `/workflow-tasks/${review!.id}/decision`, { decision: 'approved' }, { token: `${T}:iga-reviewer` });
+    assert.ok(decidedCall.status < 300, JSON.stringify(decidedCall.body).slice(0, 200));
+    const decided = decidedCall.body as { status: string; decided_by: string };
+    assert.equal(decided.decided_by, 'iga-reviewer', 'another pool member decided');
+    const v = await waitRun(started.run.id, ['completed']);
+    const closeStep = v.steps.find((st) => st.node_id === 'c4')!;
+    assert.equal(closeStep.status, 'done');
+    const evidence = (closeStep.output as Record<string, unknown>)?.evidence as Record<string, unknown>;
+    assert.ok(typeof evidence?.digest === 'string' && (evidence.digest as string).length === 64, 'the closing evidence carries its digest');
+    assert.equal((evidence?.totals as Record<string, unknown>)?.approved, 1);
+    assert.equal((await ok('GET', `/workflow-tasks?scope=all`) as never as { tasks: { status: string }[] }).tasks.filter((t) => t.status === 'open').length, 0, 'no open task remains');
   });
 
   it('tags: free-form labels are validated, saved, listed and updated', async () => {

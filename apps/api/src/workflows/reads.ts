@@ -23,9 +23,18 @@ export class WorkflowReads {
   }
   private static has(rows: unknown): boolean { return Number(((rows as { n: number }[])[0] ?? { n: 0 }).n) > 0; }
 
+  /** Optional identity columns differ per schema (the demo has neither email nor login_enabled): probe once
+   *  per call, never assume. */
+  private async identityColumns(c: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }): Promise<Set<string>> {
+    const [r] = await c.query("select column_name from information_schema.columns where table_schema = database() and table_name = 'identities'");
+    return new Set((r as { column_name: string }[]).map((x) => x.column_name));
+  }
+
   async readUser(tenant: string, ref: string, id: string) {
     return this.db(ref, async (c) => {
-      const [u] = await c.query('select id, display_name, department, manager_id, email, login_enabled from identities where id = ?', [id]);
+      const cols = await this.identityColumns(c);
+      const opt = ['email', 'login_enabled'].filter((x) => cols.has(x));
+      const [u] = await c.query(`select id, display_name, department, manager_id${opt.length ? ', ' + opt.join(', ') : ''} from identities where id = ?`, [id]);
       const user = (u as Record<string, unknown>[])[0];
       if (!user) throw new BadRequestException(`unknown identity "${id}"`);
       const [roles] = await c.query('select role_id from assignments where identity_id = ? order by role_id', [id]);
@@ -34,20 +43,22 @@ export class WorkflowReads {
         const [fv] = await c.query('select field_key, value from profile_field_values where tenant = ? and subject = ? order by field_key limit 200', [tenant, id]);
         for (const r of fv as { field_key: string; value: unknown }[]) fields[r.field_key] = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
       } catch { /* profile values table absent on this branch: no values */ }
-      return { id: String(user.id), displayName: String(user.display_name ?? ''), department: user.department === null ? null : String(user.department), manager: user.manager_id === null ? null : String(user.manager_id), email: user.email === null ? null : String(user.email), loginEnabled: user.login_enabled === undefined ? true : !!user.login_enabled, roles: (roles as { role_id: string }[]).map((r) => r.role_id), profileFields: fields };
+      return { id: String(user.id), displayName: String(user.display_name ?? ''), department: user.department === null ? null : String(user.department), manager: user.manager_id === null ? null : String(user.manager_id), email: !cols.has('email') || user.email === null ? null : String(user.email), loginEnabled: !cols.has('login_enabled') ? null : !!user.login_enabled, roles: (roles as { role_id: string }[]).map((r) => r.role_id), profileFields: fields };
     });
   }
 
   async listUsers(tenant: string, ref: string, f: { query?: string; department?: string; manager?: string; limit?: number; offset?: number }) {
     return this.db(ref, async (c) => {
+      const cols = await this.identityColumns(c);
       const where = ['1=1'], vals: unknown[] = [];
-      if (f.query) { where.push('(id like ? escape \'\\\\\' or display_name like ? escape \'\\\\\' or email like ? escape \'\\\\\')'); vals.push(LIKE(f.query), LIKE(f.query), LIKE(f.query)); }
+      if (f.query) { const q = cols.has('email') ? '(id like ? escape \'\\\\\' or display_name like ? escape \'\\\\\' or email like ? escape \'\\\\\')' : '(id like ? escape \'\\\\\' or display_name like ? escape \'\\\\\')'; where.push(q); vals.push(LIKE(f.query), LIKE(f.query)); if (cols.has('email')) vals.push(LIKE(f.query)); }
       if (f.department) { where.push('department = ?'); vals.push(f.department); }
       if (f.manager) { where.push('manager_id = ?'); vals.push(f.manager); }
       const limit = clamp(f.limit, 50, 200), offset = Math.max(0, Number(f.offset) || 0);
-      const [rows] = await c.query(`select id, display_name, department, manager_id, email, login_enabled from identities where ${where.join(' and ')} order by id limit ? offset ?`, [...vals, limit, offset]);
+      const opt = ['email', 'login_enabled'].filter((x) => cols.has(x));
+      const [rows] = await c.query(`select id, display_name, department, manager_id${opt.length ? ', ' + opt.join(', ') : ''} from identities where ${where.join(' and ')} order by id limit ? offset ?`, [...vals, limit, offset]);
       const [cnt] = await c.query(`select count(*) n from identities where ${where.join(' and ')}`, vals);
-      return { count: Number((cnt as { n: number }[])[0].n), users: (rows as Record<string, unknown>[]).map((u) => ({ id: String(u.id), displayName: String(u.display_name ?? ''), department: u.department === null ? null : String(u.department), manager: u.manager_id === null ? null : String(u.manager_id), email: u.email === null ? null : String(u.email), loginEnabled: u.login_enabled === undefined ? true : !!u.login_enabled })) };
+      return { count: Number((cnt as { n: number }[])[0].n), users: (rows as Record<string, unknown>[]).map((u) => ({ id: String(u.id), displayName: String(u.display_name ?? ''), department: u.department === null ? null : String(u.department), manager: u.manager_id === null ? null : String(u.manager_id), email: !cols.has('email') || u.email === null ? null : String(u.email), loginEnabled: !cols.has('login_enabled') ? null : !!u.login_enabled })) };
     });
   }
 

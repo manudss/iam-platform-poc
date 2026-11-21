@@ -222,7 +222,7 @@ const lyamUpdateUser = writeBlock('lyam-update-user', 'Update a user', 'REAL wri
         if (c.displayName !== undefined) { sets.push('display_name = ?'); vals.push(c.displayName); }
         if (c.department !== undefined) { sets.push('department = ?'); vals.push(c.department || null); }
         if (c.manager !== undefined) { sets.push('manager_id = ?'); vals.push(c.manager || null); }
-        if (c.email !== undefined) { sets.push('email = ?'); vals.push(c.email || null); }
+        if (c.email !== undefined) { const [cols] = await db.query("select column_name from information_schema.columns where table_schema = database() and table_name = 'identities' and column_name = 'email'"); if (!(cols ?? []).length) bad('lyam-update-user: this schema has no identities.email column (the demo schema): the email change is refused, not silently dropped'); sets.push('email = ?'); vals.push(c.email || null); }
         if (!sets.length) bad('lyam-update-user: at least one attribute to update');
         const [r] = await db.query(`update identities set ${sets.join(', ')} where id = ?`, [...vals, c.id]);
         if (!Number(r?.affectedRows)) bad(`lyam-update-user: unknown identity "${c.id}" on the run branch`);
@@ -238,6 +238,8 @@ const lyamSetLoginEnabled = writeBlock('lyam-set-login-enabled', 'Enable or disa
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would set login_enabled=${c.enabled} for "${c.id}" on the run branch`); return { id: c.id, enabled: c.enabled, updated: false }; }
     await ctx.branchWrite(async (db) => {
+        const [cols] = await db.query("select column_name from information_schema.columns where table_schema = database() and table_name = 'identities' and column_name = 'login_enabled'");
+        if (!(cols ?? []).length) bad('lyam-set-login-enabled: this schema has no identities.login_enabled column (the demo schema): use lyam-block-account for an immediate operational block');
         const [r] = await db.query('update identities set login_enabled = ? where id = ?', [c.enabled ? 1 : 0, c.id]);
         if (!Number(r?.affectedRows)) bad(`lyam-set-login-enabled: unknown identity "${c.id}" on the run branch`);
     }, `workflow: ${c.enabled ? 'enable' : 'disable'} login ${c.id}`);
@@ -298,7 +300,7 @@ const igaCreateCampaign = writeBlock('iga-create-campaign', 'IGA: create a recer
     { key: 'role', label: 'Scope: role id', type: 'string' },
     { key: 'users', label: 'Scope: user ids (comma-separated)', type: 'string' },
     { key: 'ref', label: 'Snapshot ref', type: 'string', default: 'main' },
-], (cfg) => ({ name: str(cfg.name, 'iga-create-campaign.name', 120), kind: str(cfg.kind, 'iga-create-campaign.kind', 24, false) || 'user-access', ref: str(cfg.ref, 'iga-create-campaign.ref', 80, false) || 'main', scope: { department: str(cfg.department, 'department', 80, false) || undefined, role: str(cfg.role, 'role', 64, false) || undefined, users: str(cfg.users, 'users', 2000, false) ? str(cfg.users, 'users', 2000).split(',').map((x) => x.trim()).filter(Boolean) : undefined } }), async (ctx) => {
+], (cfg) => ({ name: str(cfg.name, 'iga-create-campaign.name', 120), kind: str(cfg.kind, 'iga-create-campaign.kind', 24, false) || 'user-access', department: str(cfg.department, 'department', 80, false) || undefined, role: str(cfg.role, 'role', 64, false) || undefined, users: str(cfg.users, 'users', 2000, false) || undefined, ref: str(cfg.ref, 'iga-create-campaign.ref', 80, false) || 'main', scope: { department: str(cfg.department, 'department', 80, false) || undefined, role: str(cfg.role, 'role', 64, false) || undefined, users: str(cfg.users, 'users', 2000, false) ? str(cfg.users, 'users', 2000).split(',').map((x) => x.trim()).filter(Boolean) : undefined } }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would snapshot the campaign "${c.name}" on ${c.ref}`); return { id: 'test', name: c.name, status: 'test' }; }
     const camp = await need(ctx.iga, 'iga-create-campaign').createCampaign(ctx.tenant, `workflow:${ctx.runId}`, c);
@@ -507,7 +509,7 @@ const proposeBlock = (type, label, description, fields, detail) => ({
     type, family: 'lyam', label, simulated: false, category: 'real', description,
     fields,
     outputs: [{ key: 'taskId', description: 'The durable task id' }, { key: 'decision', description: 'approved or refused' }, { key: 'decidedBy', description: 'Who decided' }],
-    validate(cfg) { return detail(cfg); },
+    validate(cfg) { const out = detail(cfg); for (const f of fields) if (!(f.key in out) && cfg[f.key] !== undefined && cfg[f.key] !== null && cfg[f.key] !== '') out[f.key] = cfg[f.key]; return out; },
     async run(ctx) {
         const c = ctx.config;
         const tasks = need(ctx.tasks, type);
@@ -576,10 +578,11 @@ const lyamRequestPublish = {
         { key: 'await', label: 'Wait for the approval', type: 'select', options: ['yes', 'no'], default: 'yes' },
     ],
     outputs: [{ key: 'pullRequest', description: 'The pull request (id, source, target)' }, { key: 'reused', description: 'An open PR already existed' }, { key: 'decision', description: 'approved (when awaited)' }, { key: 'decidedBy', description: 'Who approved' }],
-    validate(cfg) { return { title: str(cfg.title, 'title', 200, false), awaitPub: str(cfg['await'], 'await', 3, false) !== 'no' }; },
+    validate(cfg) { return { title: str(cfg.title, 'title', 200, false), ['await']: str(cfg['await'], 'await', 3, false) === 'no' ? 'no' : 'yes' }; },
     async run(ctx) {
         const publish = need(ctx.publish, 'lyam-request-publish');
         const c = ctx.config;
+        const awaitPub = c['await'] !== 'no';
         if (ctx.resumeWait?.taskId) {
             const chk = await need(ctx.tasks, 'lyam-request-publish').check(ctx.tenant, ctx.resumeWait.taskId);
             const t = chk.task;
@@ -588,10 +591,10 @@ const lyamRequestPublish = {
             if (chk.state === 'decided') bad(`lyam-request-publish: the publication was refused${t?.justification ? `: ${t.justification}` : ''}`);
             throw new WorkflowSuspend({ taskId: ctx.resumeWait.taskId, kind: 'lyam-request-publish' });
         }
-        if (ctx.test || ctx.dryRun) { ctx.log('test run: would request the publication of the run branch'); return { pullRequest: { id: 0 }, reused: false, decision: c.awaitPub ? 'approved' : null, decidedBy: c.awaitPub ? 'test' : null }; }
+        if (ctx.test || ctx.dryRun) { ctx.log('test run: would request the publication of the run branch'); return { pullRequest: { id: 0 }, reused: false, decision: awaitPub ? 'approved' : null, decidedBy: awaitPub ? 'test' : null }; }
         const { pullRequest: pr, reused } = await publish.request(ctx.tenant, ctx.runId, c.title || `Workflow run ${ctx.runId}`);
         ctx.log(`pull request #${pr.id} ${reused ? 'reused' : 'opened'} (${pr.source} -> ${pr.target})`);
-        if (!c.awaitPub) return { pullRequest: pr, reused, decision: null, decidedBy: null };
+        if (!awaitPub) return { pullRequest: pr, reused, decision: null, decidedBy: null };
         const t = await need(ctx.tasks, 'lyam-request-publish').request({ tenant: ctx.tenant, kind: 'publish-approval', title: `Publish run ${ctx.runId}: PR #${pr.id}`, detail: { pr, decisions: ['approved', 'refused'] }, assignee: 'admin', preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
         throw new WorkflowSuspend({ taskId: t.id, kind: 'lyam-request-publish' });
     },

@@ -472,7 +472,16 @@ export function createWorkflowEngine(deps) {
       },
     };
     let output;
-    try { output = await block.run(ctx); } catch (e) { if (e instanceof WorkflowSuspend) throw e; throw new Error('External action failed; check connection and provider status.'); }
+    try { output = await block.run(ctx); } catch (e) {
+      if (e instanceof WorkflowSuspend) throw e;
+      // Public business errors (4xx thrown by the block's own validation, allowlisted) surface with their
+      // message; anything else (provider errors, unexpected exceptions, messages carrying a secret) stays masked.
+      const st = typeof e?.getStatus === 'function' ? e.getStatus() : e?.status;
+      const msg = typeof e?.message === 'string' ? e.message.slice(0, 500) : '';
+      const leaks = deps.secrets && msg && deps.secrets.valuesOf(run.id).some((v) => v && msg.includes(v));
+      if (typeof st === 'number' && st >= 400 && st < 500 && msg && !leaks) { const pub = new Error(msg); pub.status = st; throw pub; }
+      throw new Error('External action failed; check connection and provider status.');
+    }
     // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
     if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
     if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');

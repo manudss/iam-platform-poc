@@ -171,19 +171,19 @@ describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', 
   });
   it('lyam-request-publish: await=no returns the PR, await=yes suspends then resolves on the human decision', async () => {
     const publish = { request: async () => ({ pullRequest: { id: 7, source: 'wf-run-1', target: 'main' }, reused: false }), diff: async () => null };
-    const out = await run1('lyam-request-publish', mk({ publish: publish as never, runBranch: 'wf-run-1', config: { awaitPub: false } }).c as never);
+    const out = await run1('lyam-request-publish', mk({ publish: publish as never, runBranch: 'wf-run-1', config: { await: 'no' } }).c as never);
     assert.equal((out.pullRequest as Record<string, unknown>).id, 7);
     const requested: Record<string, unknown>[] = [];
     let chk: Record<string, unknown> = { state: 'open', task: { id: 'task-5', status: 'open' } };
     const tasks = { check: async () => chk, request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-5' }; } };
-    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { awaitPub: true } }).c), /waiting/);
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' } }).c), /waiting/);
     assert.equal(requested[0].kind, 'publish-approval');
     assert.equal(requested[0].assignee, 'admin');
     chk = { state: 'decided', task: { id: 'task-5', status: 'decided', decision: 'approved', decided_by: 'root', detail: { pr: { id: 7 } } } };
-    const done = await run1('lyam-request-publish', mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { awaitPub: true }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c as never);
+    const done = await run1('lyam-request-publish', mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c as never);
     assert.equal(done.decision, 'approved');
     assert.equal(done.decidedBy, 'root');
     chk = { state: 'decided', task: { id: 'task-5', status: 'decided', decision: 'refused', justification: 'bad data' } };
-    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { awaitPub: true }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c), /refused: bad data/);
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c), /refused: bad data/);
   });
 });
