@@ -11,7 +11,6 @@ import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
-import { parseSecurity } from '../accounts/security-config.js';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
 
 let testBus: TestBus | undefined;
@@ -32,7 +31,7 @@ describe('application level: server-side rules on the real routes', () => {
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; process.env.IAM_AUTHN_FILE = env.f; await app.close(); });
   const http = () => request(app.getHttpServer()); const adm = { 'x-api-admin-token': ADMIN };
   const setLevel = (id: string, level: unknown) => http().put(`/tenants/${T}/security/app-level/${id}`).set(adm).send({ level });
-  const apps = async () => parseSecurity((await svc.workingSecurity(T)) as any).appLevels;
+  const apps = async () => (await svc.workingSecurity(T)).appLevels;   // workingSecurity already returns the parsed config: parsing it again falls back to the defaults
   const putRaw = async (appLevels: object) => { const cur = await svc.workingSecurity(T); const reg: any = await (svc as any).registry('work', true); const { storedSecurity } = await import('../accounts/security-config.js'); await reg.putCoreSettings(T, 'security', storedSecurity({ ...cur, appLevels } as any)); };
 
   it('a level above 0 needs an existing application; the level then lives in the one security setting', async () => {
