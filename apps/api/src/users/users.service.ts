@@ -37,7 +37,7 @@ export class UsersService {
   async onModuleInit() {
     if (workspaceMode()) await this.init();
     // Inconsistent start: temporary-password flags exist but the directory is not the sign-in authority. Loud, never silent (the guards would not apply).
-    if (process.env.IAM_DIRECTORY_AUTH !== '1') { try { if (Object.values(await this.credentials()).some((r) => (r as { firstAccess?: unknown }).firstAccess)) console.error('users: temporary-password flags exist but IAM_DIRECTORY_AUTH is not 1, the forced change is NOT enforced'); } catch (e) { console.error('users: could not read the credential record at start, the first-access state is UNKNOWN (reads refuse closed at sign-in):', (e as Error)?.code ?? 'error'); } }
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') { try { if (Object.values(await this.credentials()).some((r) => (r as { firstAccess?: unknown }).firstAccess)) console.error('users: temporary-password flags exist but IAM_DIRECTORY_AUTH is not 1, the forced change is NOT enforced'); } catch (e) { console.error('users: could not read the credential record at start, the first-access state is UNKNOWN (reads refuse closed at sign-in):', (e as { code?: string })?.code ?? 'error'); } }
   }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
   private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string; firstAccess?: { expiresAt: number } }>> {
