@@ -15,7 +15,7 @@
 .ls-tip { position: fixed; z-index: 1000; left: 0; top: 0; width: 17rem; overflow: auto; box-sizing: border-box; padding: .6rem .7rem; background: var(--card); color: var(--ink); border: 1px solid var(--field-line); border-radius: .6rem; box-shadow: 0 10px 30px var(--shadow-color); font-size: .85rem; line-height: 1.35; pointer-events: none; }
 .ls-tip ul { list-style: none; margin: .35rem 0 0; padding: 0; } .ls-tip li { padding: .12rem 0; } .ls-tip li.dim { color: var(--label); } .ls-tip .strike { text-decoration: line-through; } .ls-tip p { margin: .35rem 0 0; } .ls-tip .warn { color: var(--bad); font-weight: 600; } .ls-tip .hint { color: var(--label); font-size: .78rem; }
 .ls-warn { margin: .35rem 0 0; font-size: .82rem; color: var(--bad); }
-@media (max-width: 600px) { .ls-tip { max-height: 45vh; } }
+@media (max-width: 600px) { .ls-tip { max-height: 40vh; } }
 .ls-tip strong { margin-right: .5rem; } .ls-tip li.tc { padding: .3rem 0; border-top: 1px solid var(--line); } .ls-tip .tx { display: flex; flex-direction: column; gap: .15rem; } .ls-tip .tx b { color: var(--ink); } .ls-tip .sub { color: var(--label); font-size: .78rem; } .ls-tip .sim { color: var(--bad); }
 .ls-tip .tag { margin-left: .4rem; font-size: .7rem; font-weight: 600; padding: .05rem .4rem; border-radius: .7rem; background: var(--chip-bg); color: var(--chip-ink); }
 .ls-tip li.dim .strike { text-decoration: line-through; }

@@ -37,7 +37,7 @@ export class LevelGauge { readonly level = input.required<number>(); protected r
     @if (value() === 0 && allowNone()) { <b class="none">No minimum</b> } @else { <b>{{ value() }}</b><span class="of">of 10</span><app-level-gauge [level]="value()" /> }<span class="car" aria-hidden="true">▾</span>
   </button>
   @if (open()) {
-    <ul class="ls-list" role="listbox" [attr.aria-label]="label()" [attr.aria-activedescendant]="optId(active())" tabindex="-1">
+    <ul class="ls-list" role="listbox" (click)="$event.preventDefault()" [attr.aria-label]="label()" [attr.aria-activedescendant]="optId(active())" tabindex="-1">
       @if (allowNone()) {
         <li role="option" class="none" [attr.id]="optId(0)" [attr.aria-selected]="value() === 0" [class.sel]="value() === 0" [class.act]="active() === 0" data-level="0" (pointerdown)="optDown(0, $event)" (pointercancel)="optCancel()" (click)="tap(0)" (mouseenter)="active.set(0)"><b>No minimum</b></li>
       }
@@ -110,7 +110,15 @@ export class LevelSelect {
   private place(el: HTMLElement) {
     const vw = window.innerWidth, vh = window.innerHeight, m = 8;
     el.style.maxHeight = `${vh - 2 * m}px`;
-    if (vw <= 600) { Object.assign(el.style, { left: `${m}px`, right: `${m}px`, width: 'auto', top: 'auto', bottom: `${m}px` }); return; }
+    if (vw <= 600) {
+      // Bottom sheet capped at 40% of the viewport, on the side opposite the option being touched so it never covers the list.
+      el.style.maxHeight = `${Math.min(vh - 2 * m, Math.round(vh * 0.4))}px`;
+      const opt0 = this.open() ? this.host.nativeElement.querySelector(`li[data-level="${this.active()}"]`) as HTMLElement | null : null;
+      const r0 = (opt0 ?? this.host.nativeElement.querySelector('button') as HTMLElement).getBoundingClientRect();
+      const top = (r0.top + r0.bottom) / 2 > vh / 2;
+      Object.assign(el.style, { left: `${m}px`, right: `${m}px`, width: 'auto', top: top ? `${m}px` : 'auto', bottom: top ? 'auto' : `${m}px` });
+      return;
+    }
     const w = Math.min(272, vw - 2 * m); el.style.width = `${w}px`; el.style.right = 'auto'; el.style.bottom = 'auto';
     const h = el.getBoundingClientRect().height;
     const list = this.host.nativeElement.querySelector('.ls-list') as HTMLElement | null;

@@ -147,4 +147,17 @@ describe('LevelSelect', () => {
     expect(f.nativeElement.querySelectorAll('li[aria-disabled]').length).toBe(0); expect(tipEl()!.textContent).toContain('could not be loaded');
     f.componentRef.setInput('chainsError', false); f.detectChanges(); expect(tipEl()!.textContent).toContain('No sign-in chain is defined');
   });
+  it('inside a wrapping <label>, a click on an option does not re-activate the button (the list stays open)', () => {
+    TestBed.configureTestingModule({ imports: [LevelSelect] });
+    const f = TestBed.createComponent(LevelSelect);
+    f.componentRef.setInput('value', 3); f.detectChanges();
+    const label = document.createElement('label'); document.body.appendChild(label); label.appendChild(f.nativeElement);
+    (f.nativeElement.querySelector('button') as HTMLElement).click(); f.detectChanges();
+    expect(f.nativeElement.querySelector('.ls-list')).toBeTruthy();
+    // a label default action would have clicked the button again and toggled the list
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    (f.nativeElement.querySelector('li[data-level="5"]') as HTMLElement).dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    label.remove();
+  });
 });
