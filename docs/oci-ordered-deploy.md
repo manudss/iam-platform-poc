@@ -159,21 +159,40 @@ A verifier such as `deploy/oci/verify-0002-account-blocks.py` is root-owned, ins
 in the independent policy under `transformationVerifiers` keyed by the **exact** `--image` string the
 updater passes, including the repository prefix (`ghcr.io/manudss/iam-platform-poc@sha256:...`), not
 a bare or shortened digest. The controller invokes it as `verifier <before.json> <after.json>` with
-the private hash-only evidence. It must prove every declared transformation of that exact transition
-and preservation of everything else, exit 0 only on complete proof, and treat anything unknown as
-failure. Hash-only evidence alone cannot prove commit content, so the verifier additionally performs
-read-only live checks (single running container of the verified image, Dolt log/diff of the migration
-commit, clean working set, captured heads/roots and PostgreSQL row-hash multisets still matching live)
-without ever printing values.
+the private hash-only evidence, which is only read, never modified. It must prove every declared
+transformation of that exact transition and preservation of everything else, exit 0 only on complete
+proof, and treat anything unknown as failure. Hash-only evidence alone cannot prove commit content,
+so the verifier additionally performs read-only live checks: each captured Dolt root must equal the
+database hash of its own commit (a dirty working set at capture time is UNKNOWN, not silently
+accepted), the migration commit chain/content is read from live Dolt with every diff flag present
+and explicitly valued (absent or NULL flags are UNKNOWN), and a COMPLETE fresh recapture through the
+controller's own immutable capture machinery (Dolt+Bao container script, controller PostgreSQL
+surfaces, credential files, migration ledger) must equal the historical after-capture exactly - a
+database, branch, table, secret or ledger entry created after the capture is detected.
 
 The policy file is hashed into each `before.json`: **changing the policy between the before and after
 phases of one update fails closed** (`qualification policy changed mid-update`). A verifier entry can
-therefore never be added to rescue an already-failed after-phase. When an update fails only for a
-missing verifier, the reviewed recovery is: review and install the verifier, run it manually against
-the preserved evidence pair to prove the transition that already happened, then re-run the complete
-update cycle (fresh evidence directory) under the unchanged policy; the fresh before/after pair must
-show no changes at all. Do not modify the policy mid-cycle, do not delete the preserved evidence, and
-do not lift the gate on the strength of the manual verifier run alone.
+therefore never be added to rescue an already-failed after-phase. And while the failed run's
+maintenance marker still stands, the updater refuses to start over a gate it does not own, so a plain
+re-run is not available either. The reviewed recovery for this situation is an EXPLICIT exceptional
+operation, never a silent bypass:
+
+1. Review and install the verifier; do not touch the policy.
+2. `recover-0002-proof.py` (read-only): full verifier pass on the preserved evidence pair, the
+   controller's immutable smoke re-run on the gated candidate (real OIDC login per origin, negative
+   redirect, journal, ledger), gate still 503 on every origin, exact marker ownership token with a
+   dead owner process, both runner locks free, queue state exactly the reviewed failed entry. It
+   writes one private hash-only PASS report; any failure means no lift and no journal change.
+3. Only after the coordinated owner approval, `recover-0002-close.py --approval-ref <reference>`:
+   requires a fresh PASS proof, frozen runner/policy/evidence/queue hashes, re-checks every
+   precondition live, archives the queue state (pending+failed preserved) and proof into a private
+   incident bundle, lifts the marker, proves 200 on every origin and a real post-lift OIDC smoke,
+   re-arms with the archived token on ANY failure with no journal change - and only then appends the
+   reviewed entry to the queue history (same SHA/parent/digest, existing entries untouched) in one
+   atomic fsynced write, with a separate incident trace linking failure, proofs and approval.
+
+Do not modify the policy mid-cycle, do not delete the preserved evidence, and do not lift the gate on
+the strength of anything but this reviewed sequence.
 
 ### Existing HTTP-loopback copies
 
