@@ -20,10 +20,10 @@ const ADMIN = 'x'.repeat(20), GATE = 'gate-token-1234', T = 'acme-demo', PW = 'd
 
 /** A stand-in for the directory: the flow only asks it three questions (is the account known, is the first-access rule in force, complete the change). It mirrors the real revision contract. */
 class FakeUsers {
-  revision = 'r1'; flagged = true; expired = false; completeCalls = 0; policyOk = true; sameAsTemp = false;
+  revision = 'r1'; flagged = true; expired = false; completeCalls = 0; stateCalls = 0; policyOk = true; sameAsTemp = false;
   async list() { return [{ id: 'demo-alice', login_enabled: true, hasCredential: true, email: 'alice@example.test', credential_revision: this.revision }]; }
   async passwordChangedAt() { return undefined; }
-  async firstAccessState(_t: string, id: string) { return id === 'demo-alice' && this.flagged ? { required: true as const, expired: this.expired, revision: this.revision } : { required: false as const }; }
+  async firstAccessState(_t: string, id: string) { this.stateCalls++; return id === 'demo-alice' && this.flagged ? { required: true as const, expired: this.expired, revision: this.revision } : { required: false as const }; }
   async completeFirstAccess(_t: string, _id: string, _next: string, expected: string) {
     this.completeCalls++;
     if (!this.flagged || expected !== this.revision) return { ok: false as const, reason: 'not-required' as const };
@@ -106,5 +106,14 @@ describe('first access: forced password change inside the sign-in chain', () => 
     await put({ methods: [], chains: [], defaultChain: null }).expect(200); reset();
     assert.equal((await gate({ tenant: T, subject: 'demo-alice', password: PW })).body.reason, 'password-change-required');
     fake.flagged = false; assert.equal((await gate({ tenant: T, subject: 'demo-alice', password: PW })).body.outcome, 'allow');
+  });
+  it('COMPATIBILITY only (not a security proof): outside directory mode the rule is never consulted, and a substituted password plugin with a flagged account is the reason the admin action refuses there', async () => {
+    const was = process.env.IAM_DIRECTORY_AUTH; delete process.env.IAM_DIRECTORY_AUTH;
+    try {
+      await put({ methods: [], chains: [], defaultChain: null }).expect(200); reset();
+      const r = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body;
+      assert.equal(fake.stateCalls, 0, 'the directory is not asked about the rule without directory mode');
+      assert.ok(!String(r.reason ?? '').startsWith('password-change'), 'no first-access refusal is produced outside directory mode');
+    } finally { if (was === undefined) delete process.env.IAM_DIRECTORY_AUTH; else process.env.IAM_DIRECTORY_AUTH = was; }
   });
 });

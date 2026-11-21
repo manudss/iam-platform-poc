@@ -34,7 +34,11 @@ export class UsersService {
   /** Injected clock (tests). */
   now: () => number = () => Date.now();
   private ready?: Promise<void>;
-  async onModuleInit() { if (workspaceMode()) await this.init(); }
+  async onModuleInit() {
+    if (workspaceMode()) await this.init();
+    // Inconsistent start: temporary-password flags exist but the directory is not the sign-in authority. Loud, never silent (the guards would not apply).
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') { try { if (Object.values(await this.credentials()).some((r) => (r as { firstAccess?: unknown }).firstAccess)) console.error('users: temporary-password flags exist but IAM_DIRECTORY_AUTH is not 1, the forced change is NOT enforced'); } catch { /* no credential file yet */ } }
+  }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
   private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string; firstAccess?: { expiresAt: number } }>> {
     try { return JSON.parse(await readFile(this.path, 'utf8')); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw e; }
@@ -160,8 +164,12 @@ export class UsersService {
     const h = Number(hours);
     if (!Number.isFinite(h) || h <= 0 || h > UsersService.TEMP_MAX_HOURS) throw new BadRequestException(`hours: more than 0 and at most ${UsersService.TEMP_MAX_HOURS}`);
     if (actor === id) throw new ForbiddenException('an administrator cannot set a temporary password on their own account');
+    // Without directory authentication no sign-in uses the directory credential: the flag would protect nothing and the administrator would believe otherwise. Refuse clearly.
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') throw new ConflictException('directory authentication is off (IAM_DIRECTORY_AUTH is not 1): a temporary password would not be enforced, nothing was changed');
     const saved = await this.save(id, { password }, false, undefined, tenant, { expiresAt: this.now() + Math.round(h * 3_600_000) });
-    return { id, mustChange: true, expiresInHours: h, saved: !!saved };
+    const ref = currentBranch(true);
+    // On a workspace branch the credential only takes effect once that branch is published on main: say so, never imply it is already enforced.
+    return { id, mustChange: true, expiresInHours: h, saved: !!saved, ref, enforced: ref === 'main', pendingPublication: ref !== 'main' };
   }
   /** Self-service password change (profile Security component): the current password re-authenticates the request. Writes on main, like every live self-service edit. */
   async changePassword(tenant: string, id: string, current: string, next: string) {
