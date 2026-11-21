@@ -9,13 +9,13 @@ import { SECURITY_SETTING_KEYS } from '../accounts/security-config.js';
 
 // Stubs only: no Dolt, no activation, no network.
 const HEAD = 'aaaaaaaaaaaa1111', MAIN0 = 'bbbbbbbbbbbb2222', MAIN1 = 'cccccccccccc3333';
-function setup(o: { branchHead?: string; selfMerge?: boolean; activationState?: string; mergedCommit?: string; mainAfter?: string } = {}) {
+function setup(o: { diffTables?: string[]; diffFails?: boolean; branchHead?: string; selfMerge?: boolean; activationState?: string; mergedCommit?: string; mainAfter?: string } = {}) {
   const calls: { merge: number; activate: number; maxParallel: number; parallel: number; actors: string[]; messages: string[] } = { merge: 0, activate: 0, maxParallel: 0, parallel: 0, actors: [], messages: [] };
   let main = MAIN0; const head = { v: o.branchHead ?? HEAD };
   const v = {
     defaultBranch: 'main',
     branches: async () => ({ branches: [{ name: 'main', commit: main }, { name: 'workflow/abc', commit: head.v }] }),
-    diffSummary: async () => ({ tables: [{ name: 'identities' }] }),
+    diffSummary: async () => { if (o.diffFails) throw new Error('diff failed'); return { tables: (o.diffTables ?? ['identities']).map((name) => ({ name })) }; },
     mergeInto: async (_s: string, _t: string, message: string, actor: string) => { calls.parallel++; calls.maxParallel = Math.max(calls.maxParallel, calls.parallel); calls.merge++; calls.actors.push(actor); calls.messages.push(message); await new Promise((r) => setTimeout(r, 10)); main = o.mainAfter ?? MAIN1; calls.parallel--; return { mergeable: true, commit: o.mergedCommit ?? MAIN1, reasons: [], violations: [] }; },
   };
   const state = o.activationState ?? 'applied';
@@ -31,7 +31,7 @@ const run = async <T>(fn: () => Promise<T>) => { process.env.IAM_WORKSPACE_MODE 
 describe('workflow publication: WorkspacePublisher.publishForRun', () => {
   it('publishes, reads the real state back, and uses a short reserved actor with run, workflow and head in the message', async () => {
     const t = setup(); const r = await run(() => t.pub.publishForRun(A));
-    assert.deepEqual(r, { published: true, branch: 'workflow/abc', sourceHead: HEAD, mainCommit: MAIN1, activation: 'applied' });
+    assert.deepEqual(r, { published: true, branch: 'workflow/abc', sourceHead: HEAD, mainCommit: MAIN1, activation: 'applied', tables: ['identities'] });
     assert.equal(t.calls.merge, 1); assert.equal(t.calls.activate, 1);
     assert.match(t.calls.actors[0], /^wf-[0-9a-f]{10}$/); assert.ok(!t.calls.actors[0].includes(':'));
     assert.match(t.calls.messages[0], /run-1/); assert.match(t.calls.messages[0], /wf-badge/); assert.match(t.calls.messages[0], /aaaaaaaaaaaa/);
@@ -53,6 +53,11 @@ describe('workflow publication: WorkspacePublisher.publishForRun', () => {
   it('two publications at once are serialized: one merge at a time', async () => {
     const t = setup(); await Promise.allSettled([run(() => t.pub.publishForRun(A)), run(() => t.pub.publishForRun({ ...A, runId: 'run-2' }))]);
     assert.equal(t.calls.maxParallel, 1);
+  });
+  it('refuses a branch that changes the publication settings, and an unreadable diff: nothing merged', async () => {
+    const t = setup({ diffTables: ['identities', 'plugin_runtime_settings'] });
+    await assert.rejects(() => run(() => t.pub.publishForRun(A)), /plugin_runtime_settings/); assert.equal(t.calls.merge, 0);
+    const u = setup({ diffFails: true }); await assert.rejects(() => run(() => u.pub.publishForRun(A)), /could not be read/); assert.equal(u.calls.merge, 0);
   });
   it('a human Apply can never carry the reserved workflow identity prefix', async () => {
     const t = setup();

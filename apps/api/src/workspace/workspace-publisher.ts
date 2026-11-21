@@ -12,6 +12,8 @@ import { applyContext, workspaceMode } from './context.js';
  * same refusals, same pre and post checks, same retry after a failed activation. The single-writer queue and the pending map live here so that
  * every caller (the human Apply, the rebase, a future workflow block) is serialized through the same queue. The branch is an explicit argument.
  */
+/** Tables a workflow publication may never change (minimum list; a per-workflow whitelist of publishable tables is the stricter form, to settle with the reviewer). */
+export const FORBIDDEN_WORKFLOW_TABLES=['plugin_runtime_settings'];
 @Injectable()
 export class WorkspacePublisher {
  private chain:Promise<unknown>=Promise.resolve();
@@ -44,11 +46,16 @@ export class WorkspacePublisher {
    const info=(await this.v.branches()).branches.find(x=>x.name===branch);
    if(!info)throw new BadRequestException('unknown branch');
    if(info.commit!==head)throw new ConflictException('The working branch moved since the run recorded its head: nothing published');
-   const r:any=await this.publishOnce(branch,{confirm:true,expectedHead:head},workflowActor(a.workflowId),a.tenant,`Publish workflow run ${a.runId} (workflow ${a.workflowId}) from ${branch}@${head.slice(0,12)}`.slice(0,200));
+   // A workflow publishes a whole branch, so it must not carry configuration that widens what workflows may do (the publication whitelist lives in plugin_runtime_settings), and an unreadable diff is a refusal.
+   let tables:string[];
+   try{tables=((await this.v.diffSummary(this.v.defaultBranch,branch,false)).tables??[]).map((t:any)=>String(t?.name??t));}catch{throw new ConflictException('Publication by a workflow refused: the difference between main and the branch could not be read');}
+   const forbidden=tables.filter(t=>FORBIDDEN_WORKFLOW_TABLES.includes(t));
+   if(forbidden.length)throw new ConflictException(`Publication by a workflow refused: the branch changes ${forbidden.join(', ')}, which only a person may apply`);
+   const r:any=await this.publishOnce(branch,{confirm:true,expectedHead:head},workflowActor(a.workflowId),a.tenant,`Publish workflow run ${a.runId} (workflow ${a.workflowId}) from ${branch}@${head.slice(0,12)} tables: ${tables.join(',')}`.slice(0,300));
    const main=(await this.v.branches()).branches.find(x=>x.name===this.v.defaultBranch);
    const cur=await this.activation.current(a.tenant);
    if(!r?.applied||!main||r.commit!==main.commit||cur?.state!=='applied'||cur.commit!==main.commit)throw new ConflictException('Publication not confirmed by the real state: data merged but not live, or main moved. Nothing is reported as published');
-   return {published:true,branch,sourceHead:head,mainCommit:main.commit,activation:cur.state};
+   return {published:true,branch,sourceHead:head,mainCommit:main.commit,activation:cur.state,tables};
   });
  }
 
