@@ -13,12 +13,12 @@ describe('migration CLI on real Dolt, including every dirty branch', { skip: !bi
   const home=mkdtempSync(join(tmpdir(),'migration-partial-'));mkdirSync(join(home,'dolt'));
   const env={...process.env,HOME:home,DOLT_BIN:bin,IAM_DEMO_HOME:home,IAM_MIGRATION_SOURCE_ROOT:root,IAM_MIGRATION_BOOT_ID:'partial'};
   try {
-   for(const [key,value] of [['user.name','test'],['user.email','test@example.invalid']]) assert.equal(spawnSync(bin!,['config','--global','--add',key,value],{env}).status,0);
+   for(const [key,value] of [['user.name','test'],['user.email','test@example.invalid'],['metrics.disabled','true']]) assert.equal(spawnSync(bin!,['config','--global','--add',key,value],{env}).status,0);
    const data=spawnSync(bin!,['sql','-q','CREATE DATABASE iam; USE iam; CREATE TABLE custom_work (id int); INSERT INTO custom_work VALUES (42)'],{cwd:join(home,'dolt'),env});assert.equal(data.status,0);
    const result=spawnSync(process.execPath,[cli,'prepare','empty'],{env});assert.notEqual(result.status,0);
    assert.equal(new MigrationJournal(home,readManifest(root).versions).read(),undefined);
    const kept=spawnSync(bin!,['sql','-q','SELECT id FROM iam.custom_work'],{cwd:join(home,'dolt'),env,encoding:'utf8'});assert.equal(kept.status,0);assert.match(kept.stdout,/42/);
-  }finally{rmSync(home,{recursive:true,force:true,maxRetries:10,retryDelay:300});}
+  }finally{rmSync(home,{recursive:true,force:true,maxRetries:20,retryDelay:500});}
  });
 
  it('initializes fresh preview once, refuses interrupted retry and never reseeds populated data; adoption is read-only',()=>{
@@ -29,6 +29,11 @@ describe('migration CLI on real Dolt, including every dirty branch', { skip: !bi
   const run=(args:string[],extra={})=>spawnSync(process.execPath,[cli,...args],{cwd:root,env:{...env,...extra},encoding:'utf8'});
   try{
    dolt(['config','--global','--add','user.name','migration-test']);dolt(['config','--global','--add','user.email','migration@example.invalid']);
+   // Dolt telemetry spools to $HOME/.dolt/eventsData and flushes asynchronously at process
+   // shutdown (dolthub/dolt#10021): on a loaded runner that flush can still be writing while
+   // the finally below removes the temp home, failing rmdir with ENOTEMPTY. The home here is
+   // throwaway, so disable telemetry at the source for every dolt invocation in this test.
+   dolt(['config','--global','--add','metrics.disabled','true']);
    assert.notEqual(run(['prepare','empty'],{IAM_DEMO_SEED_MODE:'never'}).status,0);
    assert.equal(run(['prepare','empty']).status,0);
    const j=new MigrationJournal(home,readManifest(root).versions);assert.equal(j.read()?.pending?.phase,'initial-api');
@@ -54,6 +59,6 @@ describe('migration CLI on real Dolt, including every dirty branch', { skip: !bi
    dolt(['--use-db=iam/personal/kept','sql','-q',"UPDATE roles SET label='changed' WHERE id='custom-role'"]);
    assert.notEqual(run(['adopt-existing-v1',plan,'--confirm-reviewed-backup-and-existing-v1']).status,0);
    if(priorHome===undefined)delete process.env.HOME;else process.env.HOME=priorHome;
-  } finally { if(old===undefined)delete process.env.DOLT_BIN;else process.env.DOLT_BIN=old;rmSync(home,{recursive:true,force:true,maxRetries:10,retryDelay:300}); }
+  } finally { if(old===undefined)delete process.env.DOLT_BIN;else process.env.DOLT_BIN=old;rmSync(home,{recursive:true,force:true,maxRetries:20,retryDelay:500}); }
  });
 });

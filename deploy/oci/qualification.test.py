@@ -44,4 +44,43 @@ class Preserve(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    file=Path(d)/'private.json';q.private_json(file,{'ok':True});self.assertEqual(file.stat().st_mode&0o777,0o600)
    with self.assertRaises(FileExistsError):q.private_json(file,{})
+class Stages(unittest.TestCase):
+ def tearDown(self):q._state['stage']='POLICY'
+ def test_mark_closed_enum(self):
+  q.mark('CAPTURE');self.assertEqual(q.current_stage(),'CAPTURE')
+  with self.assertRaises(ValueError):q.mark('BOGUS')
+ def test_child_stage_extraction_closed_enum_only(self):
+  self.assertEqual(q.child_stage('Qualification UNKNOWN or failed (stage=BAO_WALK). Preserve private evidence and keep maintenance armed.'),'BAO_WALK')
+  self.assertIsNone(q.child_stage('anything without marker'))
+  self.assertIsNone(q.child_stage('(stage=NOT_A_STAGE)'))
+  self.assertIsNone(q.child_stage('(stage=secretvalue)'))
+  self.assertIsNone(q.child_stage('(stage=)'))
+  self.assertEqual(q.child_stage('(stage=DOLT_QUERY)\n(stage=BAO_WALK)'),'BAO_WALK')
+  self.assertIsNone(q.child_stage(None))
+ def test_cmd_child_failure_raises_stage_failure(self):
+  with self.assertRaises(q.StageFailure) as c:q.cmd(['sh','-c','echo "Qualification UNKNOWN or failed (stage=BAO_WALK). Preserve private evidence and keep maintenance armed." >&2; exit 1'],child=True)
+  self.assertEqual(c.exception.stage,'BAO_WALK')
+  q.mark('CAPTURE')
+  with self.assertRaises(q.StageFailure) as c:q.cmd(['sh','-c','echo "unexpected unclassified child output" >&2; exit 1'],child=True)
+  self.assertEqual(c.exception.stage,'CAPTURE')
+  with self.assertRaises(ValueError):q.cmd(['sh','-c','exit 1'])
+ def test_before_phase_reports_child_stage_without_exception_content(self):
+  import subprocess,threading,http.server,os,shutil
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);(root/'data').mkdir();(root/'data'/'x.json').write_text('{}')
+   (root/'barrier').write_text('armed');(root/'env').write_text('');(root/'bao-token').write_text('fixture')
+   (root/'auth.json').write_text('{"username":"u","password":"p"}')
+   policy={'format':1,'origins':['http://127.0.0.1:19091'],'issuer':'http://127.0.0.1:8080','tenant':'demo','pgContainer':'pg','pgUser':'u','pgDatabase':'db','network':'none','authFile':str(root/'auth.json'),'baoMetadataRoots':['secret/metadata/iam'],'baoAddress':'http://127.0.0.1:18200','baoTokenFile':str(root/'bao-token'),'credentialFiles':['x.json'],'appendOnlyTables':[],'isolatedLoopbackTest':True}
+   (root/'policy.json').write_text(json.dumps(policy))
+   handler=type('H',(http.server.BaseHTTPRequestHandler,),{'do_GET':lambda s:(s.send_response(503),s.end_headers()),'log_message':lambda s,*a:None})
+   server=http.server.HTTPServer(('127.0.0.1',19091),handler);threading.Thread(target=server.serve_forever,daemon=True).start()
+   bin_dir=root/'bin';bin_dir.mkdir()
+   docker=bin_dir/'docker';docker.write_text('#!/bin/sh\nif [ "$1" = inspect ]; then echo false; exit 0; fi\nif [ "$1" = run ]; then echo "Qualification UNKNOWN or failed (stage=BAO_WALK). Preserve private evidence and keep maintenance armed." >&2; exit 1; fi\nexit 1\n');docker.chmod(0o755)
+   env=dict(os.environ,PATH=str(bin_dir)+':'+os.environ['PATH'])
+   args=['python3',str(Path(__file__).with_name('qualification.py')),'--phase','before','--container','api','--image','img','--env-file',str(root/'env'),'--data-dir',str(root/'data'),'--backup-dir',str(root/'data'),'--barrier-file',str(root/'barrier'),'--target-image','img','--evidence-dir',str(root/'evidence'),'--policy',str(root/'policy.json'),'--isolated-loopback-test']
+   r=subprocess.run(args,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60)
+   server.shutdown()
+   self.assertEqual(r.returncode,1)
+   self.assertIn('stage=BAO_WALK',r.stderr)
+   self.assertNotIn('Traceback',r.stderr);self.assertNotIn('fixture',r.stderr)
 if __name__=='__main__':unittest.main()

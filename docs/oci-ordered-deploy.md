@@ -152,6 +152,95 @@ read-only offline Dolt inventory in the helper image, real PG17 SQL, metadata-on
 permissions/coverage, the actual hosted form fields, and TLS front checks. Missing inputs
 or implementation failures leave maintenance armed and are blockers, never success claims.
 
+### Digest-specific transformation verifiers
+
+A verifier such as `deploy/oci/verify-0002-account-blocks.py` is root-owned, installed next to
+`qualification.py` (same directory; it imports the controller's comparison), executable, and listed
+in the independent policy under `transformationVerifiers` keyed by the **exact** `--image` string the
+updater passes, including the repository prefix (`ghcr.io/manudss/iam-platform-poc@sha256:...`), not
+a bare or shortened digest. The controller invokes it as `verifier <before.json> <after.json>` with
+the private hash-only evidence, which is only read, never modified. It must prove every declared
+transformation of that exact transition and preservation of everything else, exit 0 only on complete
+proof, and treat anything unknown as failure. Hash-only evidence alone cannot prove commit content,
+so the verifier additionally performs read-only live checks with a two-class guarantee. On the one
+TRANSFORMED branch (iam/main): the captured AFTER root must equal the database hash of its own branch
+commit via DOLT_HASHOF_DB('<branch>') with DOLT_HASHOF_DB('WORKING') proving a clean working set, and
+the captured BEFORE root must equal DOLT_HASHOF_DB('HEAD') inside the host-proven revision database
+'<database>/<before-commit>' - a dirty working set at either capture time is UNKNOWN, not silently
+accepted (raw commit hashes are rejected as DOLT_HASHOF_DB refspecs by the deployed Dolt 2.6.1; on
+database iam, branch refs, WORKING, HEAD and the revision database are host-proven coherent). On every
+UNCHANGED branch the guarantee is PRESERVATION, not commit/root binding: the live session identity
+(DATABASE()), the branch head (dolt_branches, the capture's own read path) and DOLT_HASHOF_DB('WORKING')
+must equal the capture exactly, before and after and at the fresh recapture; any head or root drift is
+refused, while a pre-existing dirty working set preserved identically is accepted - cleanliness is only
+required where a commit is claimed to explain the state. Named refs and revision databases are NOT used
+on unchanged branches: on this host they returned another database's root for iam_meta while DATABASE()
+kept echoing the requested name (fixtures 2026-11-21; mechanism unproven, not attributed to a defect).
+No ref is ever created.
+CI enforces the supply side: a PR that adds a version to data/migrations/manifest.json must ship deploy/oci/verify-<id>-*.py, its counter-test suite and the ci.yml step running it (deploy/oci/migration-verifier-guard.py). This is a structural aid only: it checks that the pieces exist (and runs the counter-test suite separately), it does not prove that the verifier is valid, that the ci.yml step really runs in CI, or that the host policy matches. It does not remove the possibility of a fail-closed host stop at deploy time, and it is not a qualified nominal path.
+On the host side, BETWEEN cycles only, the operator installs the reviewed verifier root 0700, adds the exact target image key to the live policy's transformationVerifiers, and proves it with the read-only deploy/oci/update-preflight.py (--image <exact ref> --verifier-sha256 <reviewed pin>) BEFORE update.sh starts its before-phase - the policy hash is captured into before.json, so a mid-cycle policy change fails closed by design. The preflight is an operator checklist tool, NOT a lock wired into update.sh or the queue; its ci.yml presence check in the guard is a text heuristic (the suite is executed separately by the guard), and the preflight checks structure only (exact key, root ownership, 0700, pin). The independent review remains the semantic gate, and each new data transition needs its OWN verifier wired to its OWN image pair.
+The migration commit chain/content is read from live Dolt with every diff flag present
+and explicitly valued (absent or NULL flags are UNKNOWN), and a COMPLETE fresh recapture through the
+controller's own immutable capture machinery (Dolt+Bao container script, controller PostgreSQL
+surfaces, credential files, migration ledger) must equal the historical after-capture exactly - a
+database, branch, table, secret or ledger entry created after the capture is detected.
+
+The policy file is hashed into each `before.json`: **changing the policy between the before and after
+phases of one update fails closed** (`qualification policy changed mid-update`). A verifier entry can
+therefore never be added to rescue an already-failed after-phase. And while the failed run's
+maintenance marker still stands, the updater refuses to start over a gate it does not own, so a plain
+re-run is not available either. The reviewed recovery for this situation is an EXPLICIT exceptional
+operation, never a silent bypass:
+
+1. Review and install the verifier; do not touch the policy.
+2. `recover-0002-proof.py` (no business-data mutation; its audited OIDC logins create ordinary
+   session/audit events and it creates its report files): full verifier pass on the preserved
+   evidence pair, the controller's immutable smoke re-run on the gated candidate (real OIDC login
+   per origin, negative redirect, journal, ledger), gate still 503 on every origin, exact marker
+   ownership token with a dead owner process, both runner locks free, queue state exactly the
+   reviewed failed entry. Runner hashes cover the queue runner at its REAL installed path
+   (`/usr/local/libexec/lyam-queue/ordered-queue.py`), never a copy; the effective environment
+   configuration is frozen into the report. One private hash-only PASS report; any failure means
+   no lift and no journal change.
+3. Only after the coordinated owner approval, `recover-0002-close.py --approval-ref <reference>`
+   (the reference RECORDS the external approval; it is a trace field, not a permission check):
+   requires a fresh PASS proof (stale or future-dated reports are refused), frozen
+   runner/policy/evidence/queue/env hashes, re-checks every precondition live (including exactly
+   one container of the verified image, running and stable for at least 30s), runs the COMPLETE
+   verifier recapture again under both locks immediately before any lift, archives the queue state
+   (pending+failed), the proof AND both evidence files into a private incident bundle, then lifts
+   the marker, proves 200 on every origin, re-runs the real OIDC smoke and a complete post-smoke
+   recapture - strict on every surface (schema, sequence DEFINITIONS, Dolt, Bao, credentials,
+   ledger) except declared append-only PostgreSQL table rows and sequence CURRENT VALUES; row
+   comparison walks the union of hashes with every multiplicity preserved, so a vanished row is
+   always caught; sequences are monotonic counters: advancement is allowed, any rewind
+   (last_value down, is_called True->False) or unknown type/shape is refused; the activation
+   journal must stay exactly as captured; only declared audit tables may grow, counted and
+   traced. Only then the reviewed entry is
+   appended to the queue history (same SHA/parent/digest, existing entries untouched) in one atomic
+   fsynced write, with a separate incident trace linking failure, proofs and approval.
+
+Failure semantics of the closure (faithful exit codes, no silent claims):
+  - 1: aborted before any lift - gate untouched, no journal change;
+  - 2: failure after lift, gate re-armed with the archived token AND 503 re-confirmed on every
+    origin - no journal change;
+  - 3: failure after lift, re-arm attempted but 503 NOT re-confirmed - gate state unknown, the
+    operator must verify the origins immediately; OR the queue file could not be re-read after a
+    failed journal append - journal state UNKNOWN (never claimed unadvanced), operator reconciles;
+  - 4: the incident trace failed AFTER the journal append - partial commit: the journal advanced
+    and the verified front stays open (re-arming would contradict the journal); the operator
+    completes the trace from the private archive.
+SIGTERM/SIGINT during the lifted window take the same re-arm path, and ANY interruption of the
+journal append (error, timeout or signal) resolves the journal state by INTEGRALLY comparing the
+queue file with the expected repaired state and the original: advanced, unchanged or UNKNOWN -
+never claimed from local sequencing. No in-process mechanism can survive SIGKILL, a power loss or
+an OOM kill between lift and re-arm: those are documented residual limits requiring operator
+reconciliation (check every origin for 503, re-arm manually with the archived token, reconcile the
+journal against the private incident archive), not a promise of perfect protection.
+
+Do not modify the policy mid-cycle, do not delete the preserved evidence, and do not lift the gate on
+the strength of anything but this reviewed sequence.
+
 ### Existing HTTP-loopback copies
 
 For existing isolated copies whose preserved issuer/redirect origins are HTTP loopback,
