@@ -38,6 +38,12 @@ try {
   await page.fill('[name=applicationSearch]','no-such-application'); await page.getByText('No applications match your search.').waitFor();
   await page.fill('[name=applicationSearch]','');
   await page.screenshot({path:out+'/desktop-light.png',fullPage:true});
+  // The reload above restarts the branch bootstrap: clicking Organise while the pill still
+  // shows "Opening your branch..." races the branch-selection repaint, which can drop the
+  // just-entered edit mode before #lp-save ever paints (CI run 44943785951 failed exactly
+  // here: desktop-light.png caught the pill mid-bootstrap, the failure shot showed the
+  // branch ready in normal view). Mirror the mobile flow's proven guard (573eec4).
+  await page.waitForFunction(()=>document.querySelector('.pillbtn')?.textContent.includes('personal/'));
   await page.click('#lp-organise'); await page.waitForSelector('#lp-save'); assert.equal(await page.locator('.lp-launch').count(),0);
   const other=page.locator('[aria-label="Other applications"] .lp-card');
   const ids=await other.evaluateAll(xs=>xs.map(x=>x.dataset.app));
