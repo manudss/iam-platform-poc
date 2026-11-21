@@ -1,4 +1,3 @@
-import { FirstAccessStore } from './first-access-store.js';
 import { initializeDirectoryV1 } from '../migrations/v0001/directory.js';
 import { migrationPaths } from '../migrations/cli.js';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
@@ -35,7 +34,7 @@ export class UsersService {
   private ready?: Promise<void>;
   async onModuleInit() { if (workspaceMode()) await this.init(); }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
-  private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string }>> {
+  private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string; firstAccess?: { expiresAt: number } }>> {
     try { return JSON.parse(await readFile(this.path, 'utf8')); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw e; }
   }
   /** Salted hashes of previous passwords, keyed by `tenant:id`, newest first (entry 0 = current). Same storage
@@ -72,7 +71,7 @@ export class UsersService {
     const r = await reg.callSlot<PasswordValidateResult>(tenant, 'auth.password', 'auth.password.validate', { tenant, subject: id, candidate, userInfo: { login: id, displayName: String(user?.display_name ?? ''), email: String(user?.email ?? '') }, history: await this.passwordHistory(tenant, id), now: Date.now() } satisfies PasswordValidatePayload);
     return { ok: !!r.result.ok, errors: Array.isArray(r.result.errors) ? r.result.errors.map(String).slice(0, 8) : [] };
   }
-  private async password(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }) {
+  private async password(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }, firstAccess?: { expiresAt: number }) {
     const all = await this.credentials(), salt = pre?.salt ?? randomBytes(24).toString('hex');
     const revision = randomBytes(20).toString('hex');
     const hash = pre?.hash ?? scryptSync(password, salt, 64).toString('hex');
@@ -80,7 +79,8 @@ export class UsersService {
     // cannot track is refused, fail closed). A crash between the two writes leaves one extra history entry whose
     // password never became current: the reuse rule only gets stricter, never weaker, and the next successful
     // change restores the dates. The reverse order would silently lose the entry and weaken reuse prevention.
-    all[revision] = { subject:id, salt, hash };
+    // The must-change flag and its server-side expiry live IN the credential record of this revision: one atomic rename writes hash and flag together, so no crash or branch operation can separate them.
+    all[revision] = { subject:id, salt, hash, ...(firstAccess ? { firstAccess: { expiresAt: firstAccess.expiresAt } } : {}) };
     await this.recordHistory(tenant, id, salt, hash);
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     await writeFile(this.path + '.tmp', JSON.stringify(all), { mode: 0o600 }); await rename(this.path + '.tmp', this.path);
@@ -159,23 +159,21 @@ export class UsersService {
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} changed their password`]); }
     }));
   }
-  readonly firstAccess = new FirstAccessStore();
-  /** Is the "change at first sign-in" rule in force for this account on `ref`? Only while the record's revision is the account's CURRENT credential revision. A store error propagates: callers refuse (fail closed). */
+  /** Is the "change at first sign-in" rule in force for this account on `ref`? It is a property of the account's CURRENT credential record (same record as the hash), so it is in force exactly when that credential is live. A read error propagates: callers refuse (fail closed). */
   async firstAccessState(tenant: string, id: string, ref = 'main'): Promise<{ required: false } | { required: true; expired: boolean }> {
-    const rec = await this.firstAccess.get(tenant, id); if (!rec) return { required: false };
-    const row = (await this.list(ref)).find((x) => x.id === id);
-    if (!row || String(row.credential_revision) !== rec.revision) return { required: false };
-    return { required: true, expired: rec.expiresAt <= Date.now() };
+    const row = (await this.list(ref)).find((x) => x.id === id); if (!row) return { required: false };
+    const rec = (await this.credentials())[String(row.credential_revision)];
+    if (!rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id)) return { required: false };
+    return { required: true, expired: rec.firstAccess.expiresAt <= Date.now() };
   }
   /** The forced change, called only by the sign-in flow after the full chain proved the account. Single winner: the record is re-read under the writer lock and consumed by revision. The temporary password is never accepted as the new one. */
   async completeFirstAccess(tenant: string, id: string, next: string): Promise<{ ok: true } | { ok: false; reason: 'not-required' | 'expired' | 'same-as-temporary' | 'policy'; errors?: string[] }> {
     await this.init();
     return this.v.lock(async () => {
-      const rec = await this.firstAccess.get(tenant, id), row = (await this.list('main')).find((x) => x.id === id);
-      if (!rec || !row || String(row.credential_revision) !== rec.revision) return { ok: false as const, reason: 'not-required' as const };
-      if (rec.expiresAt <= Date.now()) return { ok: false as const, reason: 'expired' as const };
-      const cur = (await this.credentials())[rec.revision];
-      if (cur && timingSafeEqual(Buffer.from(cur.hash, 'hex'), scryptSync(next, cur.salt, 64))) return { ok: false as const, reason: 'same-as-temporary' as const };
+      const row = (await this.list('main')).find((x) => x.id === id), rec = row ? (await this.credentials())[String(row.credential_revision)] : undefined;
+      if (!row || !rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id)) return { ok: false as const, reason: 'not-required' as const };
+      if (rec.firstAccess.expiresAt <= Date.now()) return { ok: false as const, reason: 'expired' as const };
+      if (timingSafeEqual(Buffer.from(rec.hash, 'hex'), scryptSync(next, rec.salt, 64))) return { ok: false as const, reason: 'same-as-temporary' as const };
       const check = await this.checkPasswordPolicy(tenant, id, next, row as { display_name?: unknown; email?: unknown });
       if (!check.ok) return { ok: false as const, reason: 'policy' as const, errors: check.errors };
       const revision = await this.password(tenant, id, next);
@@ -184,7 +182,6 @@ export class UsersService {
         const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
         if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} completed the first-access password change`]); }
       });
-      await this.firstAccess.clear(tenant, id, rec.revision);
       return { ok: true as const };
     });
   }
