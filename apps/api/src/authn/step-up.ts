@@ -14,7 +14,12 @@ export function checkAssurance(s: SessionAssurance | undefined, r: Requirement, 
   return { ok: true };
 }
 
-export interface ChainOption { id: string; name: string; enabled: boolean; effectiveLevel: number; simulated: boolean; /** the person has set up every method of the chain */ enrolled: boolean }
+export interface ChainOption {
+  id: string; name: string; enabled: boolean; effectiveLevel: number; simulated: boolean; /** the person has set up every method of the chain */ enrolled: boolean;
+  /** What the sign-in page shows for the chain, carried so the re-sign-in page renders the same rows, filtered. */
+  declaredLevel: number; mfa: boolean; recommended: boolean;
+  steps: { name: string; type: string; simulated: boolean }[];
+}
 
 /** Only chains that reach the level, are enabled, have no simulated step and that this person can really complete. Never a weaker one. */
 export function eligibleChains(chains: readonly ChainOption[], minLevel: number): ChainOption[] {
@@ -46,11 +51,15 @@ export function methodEnrolled(type: string, rec: EnrollmentView | undefined): b
   return false;
 }
 /** The chains of a configuration as options for a re-sign-in: effective level, simulated, and whether this person can complete every step. */
-export function chainOptions(cfg: { methods: { id: string; type: string; enabled: boolean }[]; chains: { id: string; name: string; steps: string[] }[] }, analysis: Record<string, { effectiveLevel: number; simulatedSteps: string[] }>, status: Record<string, EnrollmentView>): ChainOption[] {
+export function chainOptions(cfg: { methods: { id: string; type: string; enabled: boolean; name?: string }[]; chains: { id: string; name: string; level?: number; steps: string[] }[]; defaultChain?: string | null }, analysis: Record<string, { effectiveLevel: number; simulatedSteps: string[]; mfa?: boolean }>, status: Record<string, EnrollmentView>): ChainOption[] {
   return cfg.chains.map((c) => {
-    const steps = c.steps.map((s) => cfg.methods.find((m) => m.id === s));
+    const methods = c.steps.map((s) => cfg.methods.find((m) => m.id === s));
     const a = analysis[c.id];
-    return { id: c.id, name: c.name, enabled: steps.every((m) => !!m?.enabled), effectiveLevel: a?.effectiveLevel ?? 0, simulated: (a?.simulatedSteps.length ?? 0) > 0, enrolled: steps.every((m) => !!m && methodEnrolled(m.type, status[m.id])) };
+    return {
+      id: c.id, name: c.name, enabled: methods.every((m) => !!m?.enabled), effectiveLevel: a?.effectiveLevel ?? 0, simulated: (a?.simulatedSteps.length ?? 0) > 0, enrolled: methods.every((m) => !!m && methodEnrolled(m.type, status[m.id])),
+      declaredLevel: c.level ?? a?.effectiveLevel ?? 0, mfa: a?.mfa ?? c.steps.length > 1, recommended: cfg.defaultChain === c.id,
+      steps: c.steps.map((s, i) => ({ name: methods[i]?.name ?? s, type: methods[i]?.type ?? '', simulated: a?.simulatedSteps.includes(s) ?? false })),
+    };
   });
 }
 

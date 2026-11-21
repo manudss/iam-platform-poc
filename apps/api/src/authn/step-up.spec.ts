@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { adminReachability, chainOptions, methodEnrolled, checkAssurance, eligibleChains, sameAccount, type ChainOption } from './step-up.js';
 
-const c = (id: string, level: number, o: Partial<ChainOption> = {}): ChainOption => ({ id, name: id, enabled: true, effectiveLevel: level, simulated: false, enrolled: true, ...o });
+const c = (id: string, level: number, o: Partial<ChainOption> = {}): ChainOption => ({ id, name: id, enabled: true, effectiveLevel: level, simulated: false, enrolled: true, declaredLevel: level, mfa: false, recommended: false, steps: [], ...o });
 
 describe('assurance check', () => {
   it('no requirement: open', () => assert.equal(checkAssurance(undefined, { minLevel: 0 }, 0).ok, true));
@@ -37,14 +37,21 @@ describe('same account and admin reachability', () => {
 });
 
 describe('options for a re-sign-in', () => {
-  const cfg = { methods: [{ id: 'pw', type: 'password', enabled: true }, { id: 'tp', type: 'totp', enabled: true }, { id: 'pk', type: 'passkey', enabled: true }],
-    chains: [{ id: 'basic', name: 'Password', steps: ['pw'] }, { id: 'mfa', name: 'Password then authenticator', steps: ['pw', 'tp'] }, { id: 'key', name: 'Passkey', steps: ['pk'] }] };
-  const an = { basic: { effectiveLevel: 3, simulatedSteps: [] }, mfa: { effectiveLevel: 8, simulatedSteps: [] }, key: { effectiveLevel: 9, simulatedSteps: [] } };
+  const cfg = { methods: [{ id: 'pw', type: 'password', enabled: true, name: 'Password' }, { id: 'tp', type: 'totp', enabled: true, name: 'Authenticator app' }, { id: 'pk', type: 'passkey', enabled: true, name: 'Passkey' }],
+    chains: [{ id: 'basic', name: 'Password', level: 3, steps: ['pw'] }, { id: 'mfa', name: 'Password then authenticator', level: 8, steps: ['pw', 'tp'] }, { id: 'key', name: 'Passkey', level: 9, steps: ['pk'] }] };
+  const an = { basic: { effectiveLevel: 3, simulatedSteps: [] as string[], mfa: false }, mfa: { effectiveLevel: 8, simulatedSteps: [] as string[], mfa: true }, key: { effectiveLevel: 9, simulatedSteps: [] as string[], mfa: false } };
   it('offers only chains the person has set up, that reach the level, never a weaker one', () => {
     const opts = chainOptions(cfg, an, { tp: { totp: true } });
     assert.deepEqual(eligibleChains(opts, 8).map((c) => c.id), ['mfa']);
     assert.deepEqual(eligibleChains(chainOptions(cfg, an, {}), 8), []);
     assert.deepEqual(eligibleChains(opts, 3).map((c) => c.id), ['basic', 'mfa']);
+  });
+  it('carries the sign-in page display shape: declared level, steps detail, mfa and the default flag', () => {
+    const full = chainOptions({ ...cfg, defaultChain: 'mfa' }, an, { tp: { totp: true } });
+    const mfa = full.find((x) => x.id === 'mfa')!;
+    assert.equal(mfa.declaredLevel, 8); assert.equal(mfa.mfa, true); assert.equal(mfa.recommended, true);
+    assert.deepEqual(mfa.steps, [{ name: 'Password', type: 'password', simulated: false }, { name: 'Authenticator app', type: 'totp', simulated: false }]);
+    assert.equal(full.find((x) => x.id === 'basic')!.recommended, false);
   });
   it('an enrolment is required for authenticator, PIN, passkey and external providers', () => {
     assert.equal(methodEnrolled('password', undefined), true); assert.equal(methodEnrolled('totp', undefined), false);

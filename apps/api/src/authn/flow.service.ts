@@ -138,7 +138,7 @@ export class AuthnService implements OnApplicationBootstrap {
   /** Chains the person can complete to reach `minLevel` (never a weaker one, never simulated, only what they have set up). */
   async stepUpOptions(tenant: string, subject: string, minLevel: number): Promise<ChainOption[]> {
     const cfg = await this.liveConfig(tenant);
-    const analysis = Object.fromEntries(cfg.chains.map((c) => { const a = analyzeChain(cfg, c); return [c.id, { effectiveLevel: a.effectiveLevel, simulatedSteps: a.simulatedSteps }]; }));
+    const analysis = Object.fromEntries(cfg.chains.map((c) => { const a = analyzeChain(cfg, c); return [c.id, { effectiveLevel: a.effectiveLevel, simulatedSteps: a.simulatedSteps, mfa: a.mfa }]; }));
     return eligibleChains(chainOptions(cfg, analysis, await this.enroll.status(tenant, subject) as never), minLevel);
   }
   /** The rule for administration pages: the level (and optional freshness) of the sign-in behind the session. Off at 0. */

@@ -31,10 +31,11 @@ export class AuthnSelfController {
     return { m, type: methodType(m.type)! };
   }
 
-  /** The sign-in chains this person can complete to reach a level (for a re-sign-in): never a weaker one, only what they have set up. */
+  /** The sign-in chains this person can complete to reach a level (for a re-sign-in): never a weaker one, only what they have set up.
+   *  Each chain carries the same display shape as the public sign-in options, so the re-sign-in page shows the same rows, filtered. */
   @Get('me/step-up') async stepUp(@Param('tenant') t: string, @Req() req: { user: { sub: string }; query: { level?: string } }) {
     const level = Math.min(10, Math.max(0, Number(req.query?.level ?? 0) || 0));
-    return { level, chains: (await this.authn.stepUpOptions(t, req.user.sub, level)).map((c) => ({ id: c.id, name: c.name, level: c.effectiveLevel })) };
+    return { level, chains: await this.authn.stepUpOptions(t, req.user.sub, level) };
   }
   /** What the person has, per method instance (never the secrets themselves). */
   @Get('me/enrollments') async enrollments(@Param('tenant') t: string, @Req() req: { user: { sub: string } }) {
