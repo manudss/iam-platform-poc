@@ -20,8 +20,8 @@ const ADMIN = 'x'.repeat(20), GATE = 'gate-token-1234', T = 'acme-demo', PW = 'd
 
 /** A stand-in for the directory: the flow only asks it three questions (is the account known, is the first-access rule in force, complete the change). It mirrors the real revision contract. */
 class FakeUsers {
-  revision = 'r1'; flagged = true; expired = false; completeCalls = 0; stateCalls = 0; policyOk = true; sameAsTemp = false;
-  async list() { return [{ id: 'demo-alice', login_enabled: true, hasCredential: true, email: 'alice@example.test', credential_revision: this.revision }]; }
+  revision = 'r1'; flagged = true; expired = false; completeCalls = 0; stateCalls = 0; loginEnabled = true; policyOk = true; sameAsTemp = false;
+  async list() { return [{ id: 'demo-alice', login_enabled: this.loginEnabled, hasCredential: true, email: 'alice@example.test', credential_revision: this.revision }]; }
   async passwordChangedAt() { return undefined; }
   async firstAccessState(_t: string, id: string) { this.stateCalls++; return id === 'demo-alice' && this.flagged ? { required: true as const, expired: this.expired, revision: this.revision } : { required: false as const }; }
   async completeFirstAccess(_t: string, _id: string, _next: string, expected: string) {
@@ -46,7 +46,7 @@ describe('first access: forced password change inside the sign-in chain', () => 
   const http = () => request(app.getHttpServer());
   const adm = { 'x-api-admin-token': ADMIN };
   const gate = (b: object) => http().post('/internal/auth/authenticate').set('x-gate-token', GATE).send(b);
-  const reset = () => { fake.revision = 'r1'; fake.flagged = true; fake.expired = false; fake.completeCalls = 0; fake.stateCalls = 0; fake.policyOk = true; fake.sameAsTemp = false; };
+  const reset = () => { fake.revision = 'r1'; fake.flagged = true; fake.expired = false; fake.completeCalls = 0; fake.stateCalls = 0; fake.loginEnabled = true; fake.policyOk = true; fake.sameAsTemp = false; };
   const put = (c: unknown) => http().put(`/tenants/${T}/auth`).set(adm).send({ config: c });
   const chain = { methods: [{ id: 'pw', type: 'password', name: 'pw', enabled: true, level: 3, config: {} }], chains: [{ id: 'pw-only', name: 'Password', steps: ['pw'], level: 3 }], defaultChain: 'pw-only' };
   const prevDir = process.env.IAM_DIRECTORY_AUTH;
@@ -115,5 +115,26 @@ describe('first access: forced password change inside the sign-in chain', () => 
       assert.equal(fake.stateCalls, 0, 'the directory is not asked about the rule without directory mode');
       assert.ok(!String(r.reason ?? '').startsWith('password-change'), 'no first-access refusal is produced outside directory mode');
     } finally { if (was === undefined) delete process.env.IAM_DIRECTORY_AUTH; else process.env.IAM_DIRECTORY_AUTH = was; }
+  });
+  const submit = (session: string) => gate({ tenant: T, session, answers: { newpw: 'n3w-demo-only-pass', confirm: 'n3w-demo-only-pass' } });
+  for (const kind of ['suspended', 'locked'] as const) {
+    it(`a ${kind} block placed after the challenge wins: refused, the temporary password is not consumed, no token, a fresh chain is needed`, async () => {
+      reset(); const c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body; assert.equal(c.outcome, 'challenge');
+      const b = await svc.blocks.add(T, { subject: 'demo-alice', kind, message: 'Held for the badge check.', origin: 'admin', setBy: 'admin-test', setAt: Date.now(), hold: true });
+      try {
+        const r = (await submit(c.session)).body;
+        assert.equal(r.outcome, 'deny'); assert.ok(!('claims' in r) && !('code' in r) && !('token' in r));
+        assert.equal(fake.completeCalls, 0, 'the temporary password is not consumed'); assert.equal(fake.flagged, true);
+        assert.equal((await submit(c.session)).body.outcome, 'deny', 'the session is gone');
+      } finally { await svc.blocks.lift(T, 'demo-alice', b.id); }
+      assert.equal((await gate({ tenant: T, subject: 'demo-alice', password: PW })).body.outcome, 'challenge', 'after the block is lifted a fresh chain shows the change again');
+    });
+  }
+  it('a login disabled after the challenge wins: refused, nothing consumed', async () => {
+    reset(); const c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body; assert.equal(c.outcome, 'challenge');
+    fake.loginEnabled = false;
+    const r = (await submit(c.session)).body;
+    assert.equal(r.outcome, 'deny'); assert.equal(fake.completeCalls, 0); assert.equal(fake.flagged, true);
+    assert.equal((await submit(c.session)).body.outcome, 'deny');
   });
 });

@@ -878,6 +878,13 @@ export class AuthnService implements OnApplicationBootstrap {
     const fail = (error: string) => { s.change!.tries++; if (s.change!.tries >= MAX_TRIES) { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Start again.' } as GateResponse; } return this.changeChallenge(s, error); };
     const a = answers.newpw, b = answers.confirm;
     if (typeof a !== 'string' || a.length < 1 || a.length > 128 || a !== b) return fail('The two passwords must match.');
+    // A block or a disabled login placed AFTER the challenge wins: re-checked before the temporary password is consumed (nothing is consumed, no token). A fresh chain is needed after a refusal.
+    const recheck = async (): Promise<GateResponse | null> => {
+      const blocked = await this.blockGate(s); if (blocked) { this.sessions.delete(s.id); return blocked; }
+      if (!(await this.known(s.tenant, s.subject, s.branch))) { this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'first-access-refused-unknown-or-disabled' }); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
+      return null;
+    };
+    try { const early = await recheck(); if (early) return early; } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
     let r: Awaited<ReturnType<UsersService['completeFirstAccess']>>;
     try { r = await this.users!.completeFirstAccess(s.tenant, s.subject, a, s.change!.revision); } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
     if (!r.ok) {
@@ -888,6 +895,8 @@ export class AuthnService implements OnApplicationBootstrap {
     }
     s.change = undefined;
     this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'first-access-changed' });
+    // Last look before the allow: a block placed between the first check and the end of the change still wins (the new password is kept, no code or token is issued). The block service is not under the credential writer lock, so this narrows the window to the calls between this read and the allow, it does not make it zero.
+    try { const late = await recheck(); if (late) return late; } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
     return this.finish(s);
   }
   /** The final allow with the claims. */
