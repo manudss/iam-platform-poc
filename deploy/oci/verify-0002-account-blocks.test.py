@@ -51,25 +51,29 @@ def fixtures(policy_hash):
     return before, after
 
 
-def harness(before, after, overrides=None):
+def _harness(before, after, overrides=None):
     """All external seams stubbed from the fixtures: one docker point, the fresh-capture
     functions, and the controller module (real compare, stubbed postgres/policy_load)."""
     overrides = overrides or {}
     state = {
-        'roots': {HEAD_BEFORE: ROOT_BEFORE, HEAD_AFTER: ROOT_AFTER},
+        'sql_log': [],
+        'committed_drift': {},  # 'db/branch' -> wrong root: captured root not its branch commit
+        'working_drift': {},    # 'db/branch' -> wrong root: uncommitted changes live
         'ps': CONTAINER,
         'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}],
         'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': False}],
         'diff': [{'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
                   'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR}],
         'status': [],
-        'activation_rows': [{'h': 'a1', 'j': {'commit': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
-                            {'h': 'a2', 'j': {'commit': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'applied'}}],
+        'activation_rows': [{'h': 'a1', 'j': {'commit_hash': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
+                            {'h': 'a2', 'j': {'commit_hash': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'applied'}}],
         'capture': {'dolt': after['dolt'], 'bao': after['bao']},
         'credentials_live': after['credentials'],
         'ledger_live': after['migrationLedger'],
         'postgres_live': after['postgres']}
     state.update(overrides)
+    harness_last.clear()
+    harness_last.update(state)
 
     def run(args, input_text=None):
         if args[:2] == ['docker', 'ps']:
@@ -78,9 +82,18 @@ def harness(before, after, overrides=None):
             return json.dumps([{'Config': {'Image': v.NEW_IMAGE}, 'State': {'Running': True}}])
         if 'dolt' in args:
             sql = args[-1]
+            state['sql_log'].append(sql)
             if 'DOLT_HASHOF_DB(' in sql:
-                head = sql.split("DOLT_HASHOF_DB('", 1)[1].split("'", 1)[0]
-                return json.dumps({'rows': [{'root': state['roots'].get(head)}]})
+                ref = sql.split("DOLT_HASHOF_DB('", 1)[1].split("'", 1)[0]
+                use_db = [a[len('--use-db='):] for a in args if a.startswith('--use-db=')][0]
+                item = next((i for i in after['dolt'] if i['database'] + '/' + i['branch'] == use_db), None)
+                if item is None:
+                    raise AssertionError('unexpected use-db: ' + use_db)
+                if ref == 'WORKING':
+                    return json.dumps({'rows': [{'root': state['working_drift'].get(use_db, item['root'])}]})
+                if ref != item['branch']:
+                    return json.dumps({'rows': []})  # unknown refspec, as the deployed Dolt behaves
+                return json.dumps({'rows': [{'root': state['committed_drift'].get(use_db, item['root'])}]})
             if 'FROM dolt_log' in sql:
                 return json.dumps({'rows': state['log']})
             if 'dolt_diff_summary' in sql:
@@ -106,6 +119,15 @@ def harness(before, after, overrides=None):
             mock.patch.object(v, 'container_capture', lambda c, p: state['capture']),
             mock.patch.object(v, 'container_credentials', lambda c, files: state['credentials_live']),
             mock.patch.object(v, 'container_ledger', lambda c: state['ledger_live'])]
+
+
+harness_last = {}
+
+
+def harness(before, after, overrides=None):
+    global harness_last
+    patchers = _harness(before, after, overrides)
+    return patchers
 
 
 class Verify(unittest.TestCase):
@@ -199,11 +221,26 @@ class Verify(unittest.TestCase):
         self.expect_fail(after=self.mutate_after(revert))
 
     # -- commit content rejections ----------------------------------------------
-    def test_before_root_not_bound_to_its_commit(self):
-        self.expect_fail({'roots': {HEAD_BEFORE: 'otherroot' + ROOT_BEFORE[9:], HEAD_AFTER: ROOT_AFTER}})
+    def test_moved_root_not_bound_to_its_branch_commit(self):
+        self.expect_fail({'committed_drift': {'iam/main': 'otherroot' + ROOT_AFTER[9:]}})
 
-    def test_after_root_not_bound_to_its_commit(self):
-        self.expect_fail({'roots': {HEAD_BEFORE: ROOT_BEFORE, HEAD_AFTER: 'dirtyworking' + ROOT_AFTER[12:]}})
+    def test_unmoved_root_not_bound_to_its_branch_commit(self):
+        self.expect_fail({'committed_drift': {'dolt/main': 'drifted00' + OTHER_ROOT[9:]}})
+
+    def test_live_working_set_dirty_via_root(self):
+        self.expect_fail({'working_drift': {'iam/main': 'dirtyworking' + ROOT_AFTER[12:]}})
+
+    def test_dolt_queries_use_only_version_proven_refs(self):
+        # The deployed Dolt 2.6.1 REJECTS raw commit hashes as DOLT_HASHOF_DB refspecs
+        # and accepts branch refs and WORKING (host-verified). Pin the emitted queries
+        # to the proven forms: no raw hash may ever reach DOLT_HASHOF_DB.
+        self.run_verifier()
+        hashof_refs = [sql.split("DOLT_HASHOF_DB('", 1)[1].split("'", 1)[0]
+                       for sql in harness_last['sql_log'] if 'DOLT_HASHOF_DB(' in sql]
+        self.assertTrue(hashof_refs)
+        for ref in hashof_refs:
+            self.assertIn(ref, ('WORKING', 'main', 'personal/demo-alice'))
+            self.assertNotIn(ref, (HEAD_BEFORE, HEAD_AFTER))
 
     def test_two_commits(self):
         self.expect_fail({'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': 'surprise', 'message': 'x'}]})
@@ -282,13 +319,20 @@ class Verify(unittest.TestCase):
         self.expect_fail(after=after)
 
     def test_activation_of_wrong_commit(self):
-        rows = [{'h': 'a1', 'j': {'commit': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
-                {'h': 'a2', 'j': {'commit': 'unrelatedcommit', 'tenant': 'acme-demo', 'state': 'applied'}}]
+        rows = [{'h': 'a1', 'j': {'commit_hash': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
+                {'h': 'a2', 'j': {'commit_hash': 'unrelatedcommit', 'tenant': 'acme-demo', 'state': 'applied'}}]
         self.expect_fail({'activation_rows': rows})
 
     def test_activation_unknown_state(self):
-        rows = [{'h': 'a1', 'j': {'commit': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
-                {'h': 'a2', 'j': {'commit': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'mystery'}}]
+        rows = [{'h': 'a1', 'j': {'commit_hash': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
+                {'h': 'a2', 'j': {'commit_hash': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'mystery'}}]
+        self.expect_fail({'activation_rows': rows})
+
+    def test_activation_legacy_commit_key_absent_is_unknown(self):
+        # The deployed schema exposes commit_hash; a row keyed by the old API name
+        # must not be recognized as the migration publication.
+        rows = [{'h': 'a1', 'j': {'commit_hash': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
+                {'h': 'a2', 'j': {'commit': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'applied'}}]
         self.expect_fail({'activation_rows': rows})
 
     # -- environment rejections ---------------------------------------------------

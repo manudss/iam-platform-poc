@@ -175,15 +175,35 @@ def pg_query(policy, sql):
     return json.loads(out)
 
 
-def check_live_dolt(container, moved_before, moved_after):
+def bind_live_roots(container, dolt_items):
+    """Every captured root must be the database hash of its own branch commit on the
+    LIVE deployment, with a clean working set. Only read paths proven against the
+    deployed Dolt version are used: raw commit hashes are REJECTED as DOLT_HASHOF_DB
+    refspecs (host-verified), branch refs and WORKING are accepted.
+    DOLT_HASHOF_DB('<branch>') binds the captured root to the branch's commit;
+    DOLT_HASHOF_DB('WORKING') equal to the same root proves the working set carries
+    no uncommitted change. The captured heads are tied to live by the complete
+    recapture. The before-capture root of the moved branch needs no separate query:
+    dolt_log proves the migration commit sits directly on the captured before-head
+    and the hash-to-hash diff proves the commit contains ONLY the declared row, so a
+    dirty before working set is impossible - anything staged along with the
+    migration would appear in that diff. No ref is ever created."""
+    for item in dolt_items:
+        branch = item['branch']
+        if "'" in branch or "'" in item['database']:
+            fail('Dolt ref name unsafe')
+        ref = item['database'] + '/' + branch
+        rows = dolt_query(container, ref, "SELECT DOLT_HASHOF_DB('%s') AS root" % branch)
+        if len(rows) != 1 or rows[0].get('root') != item['root']:
+            fail('captured root is not the database hash of its branch commit')
+        rows = dolt_query(container, ref, "SELECT DOLT_HASHOF_DB('WORKING') AS root")
+        if len(rows) != 1 or rows[0].get('root') != item['root']:
+            fail('live working set carries uncommitted changes')
+
+
+def check_live_dolt(container, moved_before, moved_after, after_dolt):
     head_before, head_after = moved_before['head'], moved_after['head']
     branch_ref = DOLT_DATABASE + '/' + DOLT_BRANCH
-    # Each captured root must be the database hash of its own commit: both working sets
-    # were clean at capture time, so the root movement is exactly the commit's content.
-    for head, captured_root in ((head_before, moved_before['root']), (head_after, moved_after['root'])):
-        rows = dolt_query(container, branch_ref, "SELECT DOLT_HASHOF_DB('%s') AS root" % head)
-        if len(rows) != 1 or rows[0].get('root') != captured_root:
-            fail('captured working root is not the database hash of its commit')
     log = dolt_query(container, branch_ref, 'SELECT commit_hash, message FROM dolt_log LIMIT 2')
     if len(log) != 2 or any('commit_hash' not in row or 'message' not in row for row in log):
         fail('Dolt log shape unknown')
@@ -219,6 +239,7 @@ def check_live_dolt(container, moved_before, moved_after):
     status = dolt_query(container, branch_ref, 'SELECT * FROM dolt_status')
     if status:
         fail('iam/main has uncommitted changes beyond the migration commit')
+    bind_live_roots(container, after_dolt)
     return head_after
 
 
@@ -277,7 +298,8 @@ def check_activation_append(policy, before, after, migration_head):
     if len(new_rows) != 1:
         fail('could not isolate the appended activation journal row')
     appended = new_rows[0]
-    if appended.get('commit') != migration_head or appended.get('tenant') != policy['tenant']:
+    # The live column is commit_hash (host-verified on the deployed schema).
+    if appended.get('commit_hash') != migration_head or appended.get('tenant') != policy['tenant']:
         fail('appended activation row is not the publication of the migration commit for this tenant')
     if appended.get('state') not in ('pending', 'recorded', 'applied'):
         fail('appended activation row has an unknown state')
@@ -290,7 +312,7 @@ def verify(before_path, after_path, policy_path=POLICY_PATH):
     after = json.loads(Path(after_path).read_text())
     moved_before, moved_after = check_evidence(before, after, policy, controller, policy_path)
     container = find_container(NEW_IMAGE)
-    migration_head = check_live_dolt(container, moved_before, moved_after)
+    migration_head = check_live_dolt(container, moved_before, moved_after, after['dolt'])
     recapture_and_tie(container, policy, controller, after)
     check_activation_append(policy, before, after, migration_head)
 

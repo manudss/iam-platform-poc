@@ -178,18 +178,42 @@ re-run is not available either. The reviewed recovery for this situation is an E
 operation, never a silent bypass:
 
 1. Review and install the verifier; do not touch the policy.
-2. `recover-0002-proof.py` (read-only): full verifier pass on the preserved evidence pair, the
-   controller's immutable smoke re-run on the gated candidate (real OIDC login per origin, negative
-   redirect, journal, ledger), gate still 503 on every origin, exact marker ownership token with a
-   dead owner process, both runner locks free, queue state exactly the reviewed failed entry. It
-   writes one private hash-only PASS report; any failure means no lift and no journal change.
-3. Only after the coordinated owner approval, `recover-0002-close.py --approval-ref <reference>`:
-   requires a fresh PASS proof, frozen runner/policy/evidence/queue hashes, re-checks every
-   precondition live, archives the queue state (pending+failed preserved) and proof into a private
-   incident bundle, lifts the marker, proves 200 on every origin and a real post-lift OIDC smoke,
-   re-arms with the archived token on ANY failure with no journal change - and only then appends the
-   reviewed entry to the queue history (same SHA/parent/digest, existing entries untouched) in one
-   atomic fsynced write, with a separate incident trace linking failure, proofs and approval.
+2. `recover-0002-proof.py` (no business-data mutation; its audited OIDC logins create ordinary
+   session/audit events and it creates its report files): full verifier pass on the preserved
+   evidence pair, the controller's immutable smoke re-run on the gated candidate (real OIDC login
+   per origin, negative redirect, journal, ledger), gate still 503 on every origin, exact marker
+   ownership token with a dead owner process, both runner locks free, queue state exactly the
+   reviewed failed entry. Runner hashes cover the queue runner at its REAL installed path
+   (`/usr/local/libexec/lyam-queue/ordered-queue.py`), never a copy; the effective environment
+   configuration is frozen into the report. One private hash-only PASS report; any failure means
+   no lift and no journal change.
+3. Only after the coordinated owner approval, `recover-0002-close.py --approval-ref <reference>`
+   (the reference RECORDS the external approval; it is a trace field, not a permission check):
+   requires a fresh PASS proof (stale or future-dated reports are refused), frozen
+   runner/policy/evidence/queue/env hashes, re-checks every precondition live (including exactly
+   one container of the verified image, running and stable for at least 30s), runs the COMPLETE
+   verifier recapture again under both locks immediately before any lift, archives the queue state
+   (pending+failed), the proof AND both evidence files into a private incident bundle, then lifts
+   the marker, proves 200 on every origin, re-runs the real OIDC smoke and a complete post-smoke
+   recapture - strict everywhere except declared append-only PostgreSQL tables, where captured rows
+   must all still be present and growth is bounded and traced (the activation journal must stay
+   exactly as captured; only declared audit tables may grow). Only then the reviewed entry is
+   appended to the queue history (same SHA/parent/digest, existing entries untouched) in one atomic
+   fsynced write, with a separate incident trace linking failure, proofs and approval.
+
+Failure semantics of the closure (faithful exit codes, no silent claims):
+  - 1: aborted before any lift - gate untouched, no journal change;
+  - 2: failure after lift, gate re-armed with the archived token AND 503 re-confirmed on every
+    origin - no journal change;
+  - 3: failure after lift, re-arm attempted but 503 NOT re-confirmed - gate state unknown, the
+    operator must verify the origins immediately;
+  - 4: the incident trace failed AFTER the journal append - partial commit: the journal advanced
+    and the verified front stays open (re-arming would contradict the journal); the operator
+    completes the trace from the private archive.
+SIGTERM/SIGINT during the lifted window take the same re-arm path. No in-process mechanism can
+survive SIGKILL, a power loss or an OOM kill between lift and re-arm: after ANY abnormal
+termination the operator MUST check every origin for 503 and re-arm manually with the archived
+token.
 
 Do not modify the policy mid-cycle, do not delete the preserved evidence, and do not lift the gate on
 the strength of anything but this reviewed sequence.

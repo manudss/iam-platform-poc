@@ -4,7 +4,11 @@ migration-0002 deployment (queue entry bc38aae / image ...7c5ce38f, failed exit 
 
 This is NOT the nominal qualification path and does not replace it: the nominal
 controller keeps refusing this mid-update policy situation. This collector gathers,
-WITHOUT ANY MUTATION, every proof an owner-approved exceptional gate lift needs:
+WITHOUT ANY BUSINESS-DATA MUTATION, every proof an owner-approved exceptional gate
+lift needs. Honest scope: the audited OIDC logins below create ordinary session and
+audit events (as any login does), and the report files are created; no user, policy
+or application data is read out or changed, and the gate, queue and runners are
+never touched:
 
   1. the reviewed digest-specific verifier (sibling verify-0002-account-blocks.py)
      passes on the preserved historical evidence pair - which already includes a
@@ -47,8 +51,23 @@ NEW_IMAGE = 'ghcr.io/manudss/iam-platform-poc@' + NEW_DIGEST
 OLD_IMAGE = 'ghcr.io/manudss/iam-platform-poc@' + OLD_DIGEST
 # sha256 of the reviewed sibling verifier file; a repo test pins this constant to the
 # reviewed bytes. Any change to the verifier requires a new review and a new pin.
-REVIEWED_VERIFIER_SHA256 = '54f2f29fc072e3cdf5dc03fac1c7685f9059d8a54a818a4582686b682e6b40ba'
-RUNNER_FILES = ['update.sh', 'ordered-queue.py', 'qualification.py', 'qualification-container.mjs', 'verify-0002-account-blocks.py']
+REVIEWED_VERIFIER_SHA256 = 'f9e913d66929e507a3b5cd07402037c5a90ac108989e75754628a6b6b7f37c8c'
+RUNNER_FILES = ['update.sh', 'qualification.py', 'qualification-container.mjs', 'verify-0002-account-blocks.py']
+# The queue runner is hashed at its REAL installed path, not a staging copy.
+QUEUE_RUNNER = '/usr/local/libexec/lyam-queue/ordered-queue.py'
+
+
+def effective_env(env_file):
+    """The effective runtime configuration, frozen into the report for the closure."""
+    return {'barrierFile': getconf(env_file, 'LYAM_FRONT_BARRIER_FILE') or '/var/lib/lyam-front-gate/MAINTENANCE',
+            'updateLock': getconf(env_file, 'LYAM_LOCK_FILE') or '/opt/lyam/.update.lock',
+            'container': getconf(env_file, 'LYAM_CONTAINER') or 'lyam'}
+
+
+def runner_paths(bin_dir, queue_runner):
+    paths = {name: str(Path(bin_dir) / name) for name in RUNNER_FILES}
+    paths['ordered-queue.py'] = queue_runner
+    return paths
 
 
 def fail(message):
@@ -125,7 +144,8 @@ def lock_free(path):
         os.close(fd)
 
 
-def collect(before_path, after_path, evidence_out, policy_path, queue_state, env_file, bin_dir):
+def collect(before_path, after_path, evidence_out, policy_path, queue_state, env_file, bin_dir,
+            queue_runner=QUEUE_RUNNER):
     controller = load_sibling(bin_dir, 'qualification.py', 'qualification_controller')
     verifier = load_sibling(bin_dir, 'verify-0002-account-blocks.py', 'reviewed_verifier')
     policy = controller.policy_load(policy_path)
@@ -153,7 +173,8 @@ def collect(before_path, after_path, evidence_out, policy_path, queue_state, env
             fail('an origin is not behind maintenance while proving')
 
     # 4. Marker identity: exact failed-run token, dead owner process.
-    barrier_file = getconf(env_file, 'LYAM_FRONT_BARRIER_FILE') or '/var/lib/lyam-front-gate/MAINTENANCE'
+    env_eff = effective_env(env_file)
+    barrier_file = env_eff['barrierFile']
     token = Path(barrier_file).read_text().strip() if Path(barrier_file).is_file() else ''
     match = re.fullmatch(r'lyam-update:(\d+):(\d{8}T\d{6}Z)', token)
     if not match:
@@ -162,8 +183,7 @@ def collect(before_path, after_path, evidence_out, policy_path, queue_state, env
         fail('the maintenance owner process is still alive: not ours to take')
 
     # 5. Locks free, queue state exactly the failed entry this proof covers.
-    update_lock = getconf(env_file, 'LYAM_LOCK_FILE') or '/opt/lyam/.update.lock'
-    if not lock_free(update_lock) or not lock_free(queue_state + '.lock'):
+    if not lock_free(env_eff['updateLock']) or not lock_free(queue_state + '.lock'):
         fail('an updater or queue run is in flight')
     state = json.loads(Path(queue_state).read_text())
     history = state.get('history', [])
@@ -189,7 +209,8 @@ def collect(before_path, after_path, evidence_out, policy_path, queue_state, env
         'beforeSha256': sha256_file(before_path),
         'afterSha256': sha256_file(after_path),
         'queueStateSha256': sha256_file(queue_state),
-        'runnerSha256': {name: sha256_file(Path(bin_dir) / name) for name in RUNNER_FILES},
+        'runnerSha256': {name: sha256_file(path) for name, path in runner_paths(bin_dir, queue_runner).items()},
+        'envEffective': env_eff,
         'barrier': {'file': barrier_file, 'token': token},
         'gate': {origin: 503 for origin in policy['origins']},
         'smoke': {'journal': smoke.get('journal'), 'ledger': ledger},
@@ -209,9 +230,11 @@ def main():
     parser.add_argument('--queue-state', default=QUEUE_STATE)
     parser.add_argument('--env-file', default=ENV_FILE)
     parser.add_argument('--bin-dir', default=BIN_DIR)
+    parser.add_argument('--queue-runner', default=QUEUE_RUNNER,
+                        help='REAL installed path of the queue runner (hashed, never a copy)')
     args = parser.parse_args()
     try:
-        report = collect(args.before, args.after, args.evidence_out, args.policy, args.queue_state, args.env_file, args.bin_dir)
+        report = collect(args.before, args.after, args.evidence_out, args.policy, args.queue_state, args.env_file, args.bin_dir, args.queue_runner)
     except Exception:
         print('Recovery proof failed or UNKNOWN. No lift, no journal change; keep maintenance armed.', file=sys.stderr)
         return 1
