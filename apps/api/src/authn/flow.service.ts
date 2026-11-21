@@ -895,12 +895,12 @@ export class AuthnService implements OnApplicationBootstrap {
     }
     s.change = undefined;
     this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'first-access-changed' });
-    // Last look before the allow: a block placed between the first check and the end of the change still wins (the new password is kept, no code or token is issued). The block service is not under the credential writer lock, so this narrows the window to the calls between this read and the allow, it does not make it zero.
-    try { const late = await recheck(); if (late) return late; } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
-    return this.finish(s);
+    // Last look: done inside finish(), after the claims are computed, as the very last read before the allow. A block or disabled login OBSERVED by that read refuses (the new password stays saved, no code or token is issued). Not atomic with the code and token the core issues afterwards, and not serialized with the block service: a block written after that read is not seen, as on an ordinary sign-in.
+    return this.finish(s, async () => { try { return await recheck(); } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' } as GateResponse; } });
   }
   /** The final allow with the claims. */
-  private async finish(s: Session): Promise<GateResponse> {
+  /** `lastCheck` runs after the claims are computed, as the last read before the allow: a refusal it returns replaces the allow. It narrows the window, it is not atomic with the code and token the core issues afterwards. */
+  private async finish(s: Session, lastCheck?: () => Promise<GateResponse | null>): Promise<GateResponse> {
     this.sessions.delete(s.id); this.fails.delete(`${s.tenant}/${s.branch ?? 'live'}/${s.subject}`);
     // Factor 'other' (federation) never counts toward MFA by itself: a federated step asserts a sign-in happened
     // at the provider, not an independent factor of THIS service (docs/sso-federation.md).
@@ -912,6 +912,7 @@ export class AuthnService implements OnApplicationBootstrap {
       auth_simulated: s.done.filter((d) => !d.real).map((d) => d.id),
       ...sessionClaims(await this.signinSession(s.tenant, s.branch)),
     };
+    if (lastCheck) { const refused = await lastCheck(); if (refused) return refused; }
     this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'allow', mfa: claims.auth_mfa, level: claims.auth_level });
     return { outcome: 'allow', subject: s.subject, chain: s.chain.id, claims };
   }
