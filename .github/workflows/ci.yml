@@ -180,6 +180,9 @@ jobs:
           python3 deploy/oci/recover-0002.test.py
           python3 deploy/oci/migration-verifier-guard.test.py
           python3 deploy/oci/update-preflight.test.py
+          python3 deploy/oci/front-barrier-check.test.py
+          command -v bwrap >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap; }
+          python3 deploy/oci/qualification-container.test.py
           node --check deploy/oci/qualification-container.mjs
           node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
