@@ -13,7 +13,7 @@ import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { appRequirement, chainOptions, checkAssurance, eligibleChains, type ChainOption, type StepUpVerdict } from './step-up.js';
-import { SECURITY_SETTINGS_ID, SecurityConfig, parseSecurity, storedSecurity, validateSecurity } from '../accounts/security-config.js';
+import { SECURITY_SETTINGS_ID, SecurityConfig, parseSecurity, patchSecurity, storedSecurity, validateSecurity } from '../accounts/security-config.js';
 import { BlockStore } from '../accounts/block-store.js';
 import { inForce, lockoutVerdict, refusalMessage, shownBlock } from '../accounts/blocks.js';
 import { ExternalIdentity, ExternalProfile, ExternalStart, ProviderRefusal, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, externalRefusalMessage, mint, mintPkceVerifier, pkceChallenge } from './federation.js';
@@ -187,6 +187,18 @@ export class AuthnService implements OnApplicationBootstrap {
     }
     await (await this.registry('work', true)).putCoreSettings(tenant, SECURITY_SETTINGS_ID, storedSecurity(cfg));
     return cfg;
+  }
+  /** Sets ONE application's minimum level (0 removes it) from the application edit form. It changes only that application's minLevel: its maxAgeSeconds, the other applications and every other setting stay as they are, in a single write on the working branch. */
+  async saveAppLevel(tenant: string, appId: string, level: unknown): Promise<SecurityConfig> {
+    if (typeof level !== 'number' || !Number.isInteger(level) || level < 0 || level > 10) throw new BadRequestException({ code: 'bad-level', message: 'The level is a whole number from 0 (no minimum) to 10.' });
+    const reg = await this.registry('work', true);
+    const current = await reg.coreSettings(tenant, SECURITY_SETTINGS_ID);
+    let next = patchSecurity(current, `appLevel.${appId}`, String(level));
+    // Level 0 drops the entry in patchSecurity; an age limit already stored for this application is kept (it has no effect while the level is 0).
+    const kept = parseSecurity(current).appLevels[appId]?.maxAgeSeconds;
+    if (level === 0 && kept) next = storedSecurity(validateSecurity({ ...next, appLevels: { ...(next.appLevels as object), [appId]: { minLevel: 0, maxAgeSeconds: kept } } }));
+    await reg.putCoreSettings(tenant, SECURITY_SETTINGS_ID, next);
+    return parseSecurity(next);
   }
   async liveConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('live')).coreSettings(tenant, CORE_SETTINGS_ID)); }
   async workingConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('work')).coreSettings(tenant, CORE_SETTINGS_ID)); }

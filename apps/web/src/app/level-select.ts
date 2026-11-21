@@ -20,10 +20,13 @@ export class LevelGauge { readonly level = input.required<number>(); protected r
   template: `
   <button type="button" class="ls-btn" role="combobox" aria-haspopup="listbox" [attr.aria-expanded]="open()" [attr.aria-label]="label()" [id]="id()" [disabled]="disabled()"
           (click)="toggle()" (keydown)="key($event)">
-    <b>{{ value() }}</b><span class="of">of 10</span><app-level-gauge [level]="value()" /><span class="car" aria-hidden="true">▾</span>
+    @if (value() === 0 && allowNone()) { <b class="none">No minimum</b> } @else { <b>{{ value() }}</b><span class="of">of 10</span><app-level-gauge [level]="value()" /> }<span class="car" aria-hidden="true">▾</span>
   </button>
   @if (open()) {
     <ul class="ls-list" role="listbox" [attr.aria-label]="label()" tabindex="-1">
+      @if (allowNone()) {
+        <li role="option" class="none" [attr.aria-selected]="value() === 0" [class.sel]="value() === 0" [class.act]="active() === 0" data-level="0" (click)="pick(0)" (mouseenter)="active.set(0)"><b>No minimum</b></li>
+      }
       @for (n of levels; track n) {
         <li role="option" [attr.aria-selected]="n === value()" [class.sel]="n === value()" [class.act]="n === active()" [attr.data-level]="n" (click)="pick(n)" (mouseenter)="active.set(n)">
           <b>{{ n }}</b><app-level-gauge [level]="n" />
@@ -38,6 +41,8 @@ export class LevelSelect {
   readonly label = input('Level');
   readonly id = input('');
   readonly disabled = input(false);
+  /** Adds a first entry, "No minimum" (value 0), for settings where 0 means off. */
+  readonly allowNone = input(false);
   readonly valueChange = output<number>();
   protected readonly levels = LEVELS;
   protected readonly open = signal(false);
@@ -51,8 +56,8 @@ export class LevelSelect {
     if (!this.open()) { if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); this.toggle(); } return; }
     if (k === 'Escape') { e.preventDefault(); this.open.set(false); }
     else if (k === 'ArrowDown') { e.preventDefault(); this.active.set(Math.min(10, this.active() + 1)); }
-    else if (k === 'ArrowUp') { e.preventDefault(); this.active.set(Math.max(1, this.active() - 1)); }
-    else if (k === 'Home') { e.preventDefault(); this.active.set(1); }
+    else if (k === 'ArrowUp') { e.preventDefault(); this.active.set(Math.max(this.allowNone() ? 0 : 1, this.active() - 1)); }
+    else if (k === 'Home') { e.preventDefault(); this.active.set(this.allowNone() ? 0 : 1); }
     else if (k === 'End') { e.preventDefault(); this.active.set(10); }
     else if (k === 'Enter' || k === ' ') { e.preventDefault(); this.pick(this.active()); }
   }

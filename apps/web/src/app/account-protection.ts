@@ -1,6 +1,7 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { LevelGauge, LevelSelect } from './level-select';
 import { Session } from './session';
 
 export interface BlockRow { id: string; kind: string; message: string; origin: string; setBy: string; setAt: number; until?: number; hold?: boolean; reference: string }
@@ -11,9 +12,9 @@ export interface SecurityForm { lockEnabled: boolean; maxFailures: number; windo
 export function toForm(c: { lockout: { enabled: boolean; maxFailures: number; windowMs: number; lockMs: number }; adminMinLevel: number; adminMaxAgeSeconds: number; holdAfterVerification: boolean; appLevels: Record<string, { minLevel: number }> }): SecurityForm {
   return { lockEnabled: c.lockout.enabled, maxFailures: c.lockout.maxFailures, windowMinutes: Math.round(c.lockout.windowMs / 60000), lockMinutes: Math.round(c.lockout.lockMs / 60000), adminMinLevel: c.adminMinLevel, adminMaxAgeMinutes: Math.round(c.adminMaxAgeSeconds / 60), holdAfterVerification: c.holdAfterVerification, appLevels: Object.entries(c.appLevels).map(([id, v]) => ({ id, level: v.minLevel })) };
 }
-export function fromForm(f: SecurityForm, keep: { exempt: string[]; hold: boolean }) {
-  const appLevels: Record<string, { minLevel: number }> = {};
-  for (const a of f.appLevels) if (a.id.trim() && a.level > 0) appLevels[a.id.trim()] = { minLevel: Number(a.level) };
+/** Application levels are set in each application's edit form (one source: this setting). This page never rewrites them: `keep.appLevels` is what was loaded, age limits included. */
+export function fromForm(f: SecurityForm, keep: { exempt: string[]; hold: boolean; appLevels?: Record<string, { minLevel: number; maxAgeSeconds?: number }> }) {
+  const appLevels = keep.appLevels ?? {};
   return { lockout: { enabled: f.lockEnabled, maxFailures: Number(f.maxFailures), windowSeconds: Math.round(f.windowMinutes * 60), lockSeconds: Math.round(f.lockMinutes * 60), hold: keep.hold, exempt: keep.exempt }, adminMinLevel: Number(f.adminMinLevel), adminMaxAgeSeconds: Math.round(f.adminMaxAgeMinutes * 60), holdAfterVerification: f.holdAfterVerification, appLevels };
 }
 
@@ -24,7 +25,7 @@ export function fromForm(f: SecurityForm, keep: { exempt: string[]; hold: boolea
  */
 @Component({
   selector: 'app-account-protection',
-  imports: [FormsModule],
+  imports: [FormsModule, RouterLink, LevelSelect, LevelGauge],
   template: `
 <div class="head"><div class="grow"><h2>Account protection</h2><span class="cnt">Block accounts, and set the automatic locks and sign-in levels.</span></div></div>
 @if (error()) { <p class="msg error" role="alert" id="ap-error">{{error()}}</p> }
@@ -66,14 +67,15 @@ export function fromForm(f: SecurityForm, keep: { exempt: string[]; hold: boolea
     <h3>Self sign-up</h3>
     <label class="check"><input type="checkbox" name="holdAfterVerification" [(ngModel)]="form.holdAfterVerification" id="ap-hold-verif" /> After approval, keep the new account blocked until an admin or a workflow unblocks it</label>
     <h3>Sign-in level</h3>
-    <label>Administration pages need level (0 = off)<input type="number" min="0" max="10" name="adminMinLevel" [(ngModel)]="form.adminMinLevel" id="ap-admin-level" /></label>
-    <label>Administration sign-in no older than (minutes, 0 = no limit)<input type="number" min="0" max="10080" name="adminMaxAge" [(ngModel)]="form.adminMaxAgeMinutes" id="ap-admin-age" /></label>
+    <label>Administration pages need at least<app-level-select [value]="form.adminMinLevel" (valueChange)="form.adminMinLevel = $event" [allowNone]="true" label="Minimum level for administration pages" id="ap-admin-level" /></label>
+    <label>Ask the administrator to sign in again after (minutes)<input type="number" min="0" max="10080" name="adminMaxAge" [(ngModel)]="form.adminMaxAgeMinutes" id="ap-admin-age" /></label>
+    <p class="hint" id="ap-admin-age-help">This is not a second level. The first setting is how strong the sign-in must be; this one is how recent it must be. With 15, an administrator whose sign-in is older than 15 minutes signs in again. 0 means no age limit for administrator sign-in only; the other checks still apply.</p>
     <p class="hint">Levels are declared on the sign-in chains, never added up. A person who is below the level signs in again with a method that reaches it; nobody is offered a weaker one.</p>
     <h4>Applications</h4>
-    @for (a of form.appLevels; track $index) {
-      <div class="mrow"><input [name]="'app-id-' + $index" [(ngModel)]="a.id" placeholder="Application id" aria-label="Application id" /><input type="number" min="0" max="10" [name]="'app-level-' + $index" [(ngModel)]="a.level" aria-label="Minimum level" /><button class="secondary" type="button" (click)="removeApp($index)">Remove</button></div>
-    }
-    <button class="secondary" type="button" id="ap-add-app" (click)="addApp()">Add an application level</button>
+    <p class="hint">The minimum level of an application is set when you edit the application. Applications with a minimum:</p>
+    @for (a of appRows(); track a.id) {
+      <div class="mrow"><span class="grow"><b>{{a.id}}</b></span><span>{{a.level}} <app-level-gauge [level]="a.level" /></span><a class="secondary" [routerLink]="['/applications']" [queryParams]="{ edit: a.id }">Edit application</a></div>
+    } @empty { <p class="hint" id="ap-no-app-level">No application has a minimum level yet.</p> }
     <div class="row"><button id="ap-save" [disabled]="busy()" (click)="save()">Save on my working branch</button></div>
     <p class="hint" id="ap-live">Live now: lock {{liveText()}}. Changes go live with Review &amp; Apply.</p>
   </section>
@@ -95,7 +97,7 @@ export class AccountProtectionPage {
   protected readonly max = computed(() => this.listing().messageMax);
   protected subject = ''; protected kind = 'suspended'; protected message = ''; protected until = ''; protected hold = false;
   protected form: SecurityForm = { lockEnabled: true, maxFailures: 5, windowMinutes: 15, lockMinutes: 15, adminMinLevel: 0, adminMaxAgeMinutes: 0, holdAfterVerification: false, appLevels: [] };
-  private keep = { exempt: [] as string[], hold: false };
+  private keep = { exempt: [] as string[], hold: false, appLevels: {} as Record<string, { minLevel: number; maxAgeSeconds?: number }> };
   constructor() { this.subject = inject(ActivatedRoute).snapshot.queryParamMap.get('subject') ?? ''; void this.load(); }
   protected label(k: string) { return this.listing().labels[k] ?? k; }
   protected when(t: number) { return new Date(t).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }); }
@@ -106,7 +108,7 @@ export class AccountProtectionPage {
       const [l, sec, users] = await Promise.all([api.raw<Listing>('GET', '/account-blocks'), api.raw<{ working: any; live: any }>('GET', '/security'), api.users().catch(() => [])]);
       this.listing.set(l.data); if (!this.kinds().includes(this.kind) && this.kinds().length) this.kind = this.kinds()[0];
       this.people.set(users.map((u: any) => ({ id: u.id, display_name: u.display_name })));
-      this.form = toForm(sec.data.working); this.keep = { exempt: [...(sec.data.working.lockout.exempt ?? [])], hold: !!sec.data.working.lockout.hold };
+      this.form = toForm(sec.data.working); this.keep = { exempt: [...(sec.data.working.lockout.exempt ?? [])], hold: !!sec.data.working.lockout.hold, appLevels: JSON.parse(JSON.stringify(sec.data.working.appLevels ?? {})) };
       const lv = sec.data.live; this.liveText.set(lv.lockout.enabled ? `${lv.lockout.maxFailures} failures in ${Math.round(lv.lockout.windowMs / 60000)} min, locked ${Math.round(lv.lockout.lockMs / 60000)} min` : 'off');
     } catch (e) { this.error.set((e as Error).message); }
     this.loading.set(false);
@@ -122,7 +124,6 @@ export class AccountProtectionPage {
     void this.run(async () => { await this.s.api.raw('POST', `/accounts/${encodeURIComponent(this.subject.trim())}/blocks`, { kind: this.kind, message: this.message.trim(), ...(until ? { until } : {}), hold: this.hold }); this.message = ''; this.until = ''; this.hold = false; this.subject = ''; }, 'Account blocked. It applies at its next sign-in.');
   }
   protected lift(subject: string, b: BlockRow) { void this.run(() => this.s.api.raw('DELETE', `/accounts/${encodeURIComponent(subject)}/blocks/${encodeURIComponent(b.id)}`), 'Block lifted.'); }
-  protected addApp() { this.form.appLevels = [...this.form.appLevels, { id: '', level: 8 }]; }
-  protected removeApp(i: number) { this.form.appLevels = this.form.appLevels.filter((_, n) => n !== i); }
+  protected appRows() { return this.form.appLevels.filter((a) => a.level > 0); }
   protected save() { void this.run(() => this.s.api.raw('PUT', '/security', { config: fromForm(this.form, this.keep) }), 'Saved on your working branch. It goes live with Review & Apply.'); }
 }

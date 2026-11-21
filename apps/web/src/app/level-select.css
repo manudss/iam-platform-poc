@@ -8,3 +8,5 @@
 .ls-list li b { width: 1.4rem; text-align: right; color: var(--ink); }
 .ls-list li.act { background: var(--accent-soft); } .ls-list li.sel { background: var(--accent); } .ls-list li.sel b { color: var(--accent-ink); }
 @media (max-width: 600px) { .ls-list { position: static; margin-top: .4rem; max-height: none; } .ls-list li { min-height: 2.5rem; } }
+
+.ls-btn b.none, .ls-list li.none b { width: auto; min-width: 0; text-align: left; font-weight: 600; }

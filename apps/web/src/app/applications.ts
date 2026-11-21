@@ -1,5 +1,7 @@
 import { Component, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute } from '@angular/router';
+import { LevelSelect } from './level-select';
 import { Session } from './session';
 
 export type Protocol = 'oidc' | 'saml';
@@ -36,7 +38,7 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
 
 /** Applications plugin screen: the third-party applications that sign in through this platform (OIDC or SAML). Configuration only for now; saved on the working branch, live after Apply. No secret is entered here: only the name of a secret in the secret store. */
 @Component({
-  selector: 'app-applications', imports: [FormsModule], styleUrl: './pages.css',
+  selector: 'app-applications', imports: [FormsModule, LevelSelect], styleUrl: './pages.css',
   template: `
   <p class="lead">Applications (plugin). Register the third-party applications that sign in through this platform, in OpenID Connect or SAML.</p>
   <p class="hint">OpenID Connect applications sign in through the OIDC provider plugin; SAML 2.0 applications sign in through the SAML IdP plugin. Secrets are never typed here, only the name of the secret in the secret store. An application is closed until you choose which roles may open it. Fictional demo only.</p>
@@ -53,6 +55,10 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   <div class="row"><label>ID<input name="aid" [(ngModel)]="id" pattern="[a-z0-9-]{1,32}" [disabled]="editing()" /></label><label>Name<input name="aname" [(ngModel)]="name" maxlength="80" /></label>
   <label>Protocol<select name="aproto" [(ngModel)]="protocol"><option value="oidc">OpenID Connect</option><option value="saml">SAML 2.0</option></select></label></div>
   <div class="row"><label>Description<input name="adesc" [(ngModel)]="description" maxlength="240" /></label></div>
+  <div class="panel app-level-editor" id="app-level"><h4>Sign-in level</h4>
+  <label>Minimum sign-in level for this application<app-level-select [value]="level()" (valueChange)="level.set($event)" [allowNone]="true" [disabled]="!levelAvailable() || s.branch()==='main'" label="Minimum sign-in level for this application" id="app-min-level" /></label>
+  <p class="hint">A person who signed in below this level signs in again with a stronger method before the application opens. Levels are declared on the sign-in chains. No minimum turns the rule off for this application. Saved on the working branch; live after Apply, which refuses a level no sign-in chain can reach.</p>
+  @if (!levelAvailable()) { <p class="hint" id="app-level-off">The sign-in level cannot be read or changed with your current access, so it is shown read-only.</p> }</div>
   <div class="panel app-logo-editor"><h4>Application logo</h4>
   <p class="hint">PNG, JPEG or WebP up to 64 KB, or SVG up to 50 KB. Stored in Dolt with the application, versioned on this branch and live after Apply.</p>
   @if (logo()) { <img class="app-logo-preview" [src]="logo()" alt="Application logo preview" /> }
@@ -84,6 +90,8 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
 export class ApplicationsPage {
   protected readonly s = inject(Session);
   protected apps = signal<AppConnector[]>([]); protected note = signal(''); protected problem = signal(''); protected off = signal(false); protected editing = signal(false);
+  protected readonly level = signal(0); protected readonly levelAvailable = signal(false); private levelBefore = 0; private levels: Record<string, { minLevel: number }> = {};
+  private readonly route = inject(ActivatedRoute); private wantEdit: string | null = this.route.snapshot.queryParamMap.get('edit');
   protected id = ''; protected name = ''; protected description = ''; protected protocol: Protocol = 'oidc'; protected uris = ''; protected entity = ''; protected acs = ''; protected mapping = ''; protected roles = ''; protected ref = ''; protected launch = '';
   protected logo = signal<string | null>(null);
   protected async uploadLogo(event: Event) {
@@ -101,16 +109,21 @@ export class ApplicationsPage {
       const r = await this.s.api.raw<any>('GET', '/app-connectors', undefined, this.h());
       if (r.status === 404) { this.off.set(true); this.problem.set(''); return; }
       if (this.fail(r)) return; this.off.set(false); this.apps.set(r.data.apps); this.problem.set('');
+      // The one source of the level is the security setting (working branch). Without access to it the selector is read-only, never a wider right than before.
+      const sec = await this.s.api.raw<any>('GET', '/security', undefined, this.h());
+      if (sec.status < 400 && sec.data?.working) { this.levels = sec.data.working.appLevels ?? {}; this.levelAvailable.set(true); } else { this.levels = {}; this.levelAvailable.set(false); }
+      if (this.wantEdit) { const a = this.apps().find((x: AppConnector) => x.id === this.wantEdit); this.wantEdit = null; if (a) this.edit(a); }
     } catch (e) { this.problem.set((e as Error).message); }
   }
   private async run(method: string, path: string, body: object | undefined, ok: string) { const r = await this.s.api.raw<any>(method, path, body, this.h()); if (this.fail(r)) return false; this.note.set(ok + ' Saved on the working branch; live after Apply.'); this.problem.set(''); await this.load(); return true; }
   protected edit(a: AppConnector) {
+    this.level.set(this.levels[a.id]?.minLevel ?? 0); this.levelBefore = this.level();
     this.logo.set(a.logo ?? null); this.editing.set(true); this.id = a.id; this.name = a.name; this.description = a.description; this.protocol = a.protocol; this.uris = a.redirect_uris.join('\n');
     this.entity = a.entity_id ?? ''; this.acs = a.acs_url ?? ''; this.mapping = formatMapping(a.attribute_mapping); this.roles = a.allowed_roles.join('\n'); this.ref = a.secret_ref ?? ''; this.launch = a.launch_url ?? '';
     this.nameid = a.nameid_format ?? 'emailAddress'; this.cert = a.sp_certificate ?? ''; this.signedReq = a.want_signed_requests; this.spMeta = '';
     this.scopeChecks = scopeChecksFromList(a.scopes ?? []); this.allowRefresh = a.allow_refresh_tokens;
   }
-  protected reset() { this.logo.set(null); this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; this.scopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); this.allowRefresh = false; }
+  protected reset() { this.level.set(0); this.levelBefore = 0; this.logo.set(null); this.editing.set(false); this.id = this.name = this.description = this.uris = this.entity = this.acs = this.mapping = this.roles = this.ref = this.launch = ''; this.protocol = 'oidc'; this.nameid = 'emailAddress'; this.cert = ''; this.signedReq = false; this.spMeta = ''; this.scopeChecks = scopeChecksFromList(['profile', 'email', 'roles']); this.allowRefresh = false; }
   private body(): Record<string, unknown> {
     return { logo: this.logo(), name: this.name, description: this.description, protocol: this.protocol, redirect_uris: this.protocol === 'oidc' ? parseList(this.uris) : [], entity_id: this.protocol === 'saml' ? this.entity : null, acs_url: this.protocol === 'saml' ? this.acs : null, attribute_mapping: parseMapping(this.mapping), allowed_roles: parseList(this.roles), secret_ref: this.ref || null, launch_url: this.protocol === 'oidc' ? this.launch || null : null,
       nameid_format: this.protocol === 'saml' ? this.nameid : null, sp_certificate: this.protocol === 'saml' ? this.cert.trim() || null : null, want_signed_requests: this.protocol === 'saml' ? this.signedReq : false,
@@ -128,8 +141,24 @@ export class ApplicationsPage {
   }
   protected async save() {
     const ok = this.editing() ? await this.run('PATCH', `/app-connectors/${encodeURIComponent(this.id)}`, this.body(), 'Application saved.') : await this.run('POST', '/app-connectors', { id: this.id, ...this.body() }, 'Application added.');
-    if (ok) this.reset();
+    if (!ok) return;
+    // Two writes, in this order: the application, then its level (one setting, one write, nothing else in that setting touched). If the second fails, the application is saved,
+    // the form stays open with the chosen level and says so: saving again retries only the level.
+    if (this.levelAvailable() && this.level() !== this.levelBefore) {
+      const r = await this.s.api.raw<any>('PUT', `/security/app-level/${encodeURIComponent(this.id)}`, { level: this.level() }, this.h());
+      if (r.status >= 400) { this.editing.set(true); this.note.set(''); this.problem.set(`The application is saved, but its minimum level was NOT saved: ${Array.isArray(r.data?.message) ? r.data.message.join(' ') : r.data?.message ?? 'refused'}. Save again to retry the level.`); return; }
+      this.levelBefore = this.level();
+    }
+    this.reset();
   }
   protected toggle(a: AppConnector) { void this.run('PATCH', `/app-connectors/${encodeURIComponent(a.id)}`, { enabled: !a.enabled }, a.enabled ? 'Application disabled.' : 'Application enabled.'); }
-  protected remove(a: AppConnector) { void this.run('DELETE', `/app-connectors/${encodeURIComponent(a.id)}`, undefined, 'Application deleted.'); }
+  protected async remove(a: AppConnector) {
+    if (!(await this.run('DELETE', `/app-connectors/${encodeURIComponent(a.id)}`, undefined, 'Application deleted.'))) return;
+    // A level left behind would apply silently to a new application created with the same id.
+    if (this.levelAvailable() && (this.levels[a.id]?.minLevel ?? 0) > 0) {
+      const r = await this.s.api.raw<any>('PUT', `/security/app-level/${encodeURIComponent(a.id)}`, { level: 0 }, this.h());
+      if (r.status >= 400) this.problem.set(`The application is deleted, but its minimum level could not be cleared (${r.data?.message ?? 'refused'}). Create the application again with No minimum to clear it.`);
+      else await this.load();
+    }
+  }
 }
