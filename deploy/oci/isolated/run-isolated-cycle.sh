@@ -43,6 +43,47 @@ fail() { echo "FATAL: $*" >&2; exit 1; }
 
 [ -f "$ROOT/.github/workflows/ci.yml" ] || fail "repo root not resolved from $ISO"
 
+# --- bounded failure diagnostics -----------------------------------------------------------
+# On ANY failure after the stack started, the EXIT trap collects ONE fixed-schema JSON
+# diagnostic via collect-failure-logs.sh (per container: status, restart count, exit code,
+# read status, counters of a FIXED pattern list; no keys/backups/env files/cold archives).
+# Raw log lines are processed in memory and discarded: no original line, value or error
+# text reaches disk, stdout or the artifact.
+# The trap saves the original exit code FIRST and exits with it explicitly, even when the
+# collection itself fails; an incomplete collection is reported loudly. STACK_STARTED is
+# set BEFORE `compose up` so a partial compose failure is still diagnosed. Defined before
+# all validation so the --selftest-trap test entry and the real run share this one path.
+STACK_STARTED=0
+collect_on_exit() {
+  rc=$?
+  trap - EXIT
+  if [ "$rc" -ne 0 ] && [ "$STACK_STARTED" = 1 ]; then
+    "$ISO/collect-failure-logs.sh" "$ISO_WORK" "$rc" \
+      || echo "FAILURE DIAGNOSTICS INCOMPLETE: one or more container logs could not be collected" >&2
+  fi
+  exit "$rc"
+}
+trap collect_on_exit EXIT
+
+# Closed cycle-step enum: the diagnostics document reports the LAST mark reached, so a
+# failure localizes to a stage with NO free text exported. mark() refuses anything
+# outside the enum; the step file lives at the runner-owned ISO_WORK root. diagnose-
+# containers.py carries the same enum - a test pins both copies identical.
+STEPS_ALL='BOOT RENDER_CONFIG PRECHECKS INSTALL_VERIFIER S1_PREPARE S1_COMPOSE S1_PG_WAIT S1_BAO_BOOTSTRAP S1_API_RUN S1_API_HEALTH S1_FRONT BARRIER_CHECK PRECONDITIONS PREFLIGHT UPDATE_POSITIVE VERIFY_POSITIVE S1_TEARDOWN S2_PREPARE S2_COMPOSE S2_PG_WAIT S2_BAO_BOOTSTRAP S2_API_RUN S2_API_HEALTH S2_FRONT UPDATE_NEGATIVE VERIFY_NEGATIVE NEGATIVE_CAUSE EXPORT_EVIDENCE HASH_SUMS CLEANUP DONE'
+STEP='BOOT'
+mark() {
+  case " $STEPS_ALL " in *" $1 "*) ;; *) fail "internal: unknown cycle step '$1'" ;; esac
+  STEP="$1"
+  if [ -n "${ISO_WORK:-}" ] && [ -d "$ISO_WORK" ]; then printf '%s' "$STEP" > "$ISO_WORK/cycle-step"; fi
+}
+
+if [ "${1:-}" = "--selftest-trap" ]; then
+  # test-only entry: exercise the REAL trap + collector with a caller work dir and exit code
+  ISO_WORK="$(realpath -m "${2:?usage: --selftest-trap <ISO_WORK> <exit-code>}")"
+  STACK_STARTED=1
+  exit "${3:?usage: --selftest-trap <ISO_WORK> <exit-code>}"
+fi
+
 # --- ISO_WORK: canonicalize BEFORE creating anything (defect: /tmp/../opt/lyam escapes) --
 case "$RAW_WORK" in /*) ;; *) fail "ISO_WORK must be absolute" ;; esac
 ISO_WORK="$(realpath -m "$RAW_WORK")"
@@ -61,7 +102,12 @@ fi
 for tool in docker jq python3 curl realpath; do command -v "$tool" >/dev/null || fail "$tool missing"; done
 
 # --- render config (checkout = repo ROOT, so <checkout>/deploy/oci/isolated/... resolves) -
-mkdir -p "$ISO_WORK"/{data,backups,gate,bao-storage,bao-keys,evidence}
+mkdir -p "$ISO_WORK"/{data,backups,gate,bao-keys,evidence}
+mark RENDER_CONFIG
+# bao-storage is NOT created runner-owned: the openbao container runs as its image user
+# and a runner-owned bind dir is the exact crash-loop prepare-dirs.sh exists to prevent
+# (first diagnostic run 2026-11-21 failed on this). prepare_bao_dir fixes it from the
+# image's own default uid/gid before every stack_up.
 ENV_FILE="$ISO_WORK/lyam.env"
 COMPOSE_ENV="$ISO_WORK/compose.env"
 POLICY="$ISO_WORK/qualification.isolated.json"
@@ -93,6 +139,7 @@ jq -e '[.origins[] | select(startswith("https://"))] | length == 0' "$POLICY" >/
 [ "$(jq -r .tenant "$POLICY")" = "acme-demo" ] || fail "policy tenant must match the seeded tenant (acme-demo)"
 
 # --- daemon and pre-existing resources (any state), still before any mutation -------------
+mark PRECHECKS
 docker info >/dev/null 2>&1 || fail "docker unavailable"
 names="$(docker ps -aq --format '{{.Names}}')"
 for n in lyam pg bao; do printf '%s\n' "$names" | grep -qx "$n" && fail "production container $n present"; done
@@ -103,6 +150,7 @@ docker volume inspect lyam-isolated_pg-iso-data >/dev/null 2>&1 && fail "pre-exi
 [ -z "$(docker ps -q --filter "ancestor=$OLD_IMAGE")" ] || fail "a container of the OLD image is already running"
 
 # --- reviewed verifier, pinned and installed with the layout its imports require ---------
+mark INSTALL_VERIFIER
 echo "$VERIFIER_PIN  $ISO/verify-0002-isolated-test.py" | sha256sum -c - >/dev/null \
   || fail "test verifier sha256 differs from the reviewed pin"
 sudo install -D -o root -m 0600 "$OCI/qualification.py" "$VROOT/qualification.py"
@@ -123,17 +171,35 @@ compose() { docker compose --env-file "$COMPOSE_ENV" -f "$ISO/docker-compose.iso
 health() { docker exec api-iso node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; }
 front_code() { curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true; }
 
+prepare_bao_dir() {  # ownership from the IMAGE's default user (never a hardcoded uid)
+  local uid gid
+  uid="$(docker run --rm --entrypoint id openbao/openbao:2.7.2 -u)" || fail "could not read the openbao image uid"
+  gid="$(docker run --rm --entrypoint id openbao/openbao:2.7.2 -g)" || fail "could not read the openbao image gid"
+  case "$uid" in ''|*[!0-9]*) fail "unexpected uid from the openbao image: '$uid'" ;; esac
+  case "$gid" in ''|*[!0-9]*) fail "unexpected gid from the openbao image: '$gid'" ;; esac
+  sudo install -d -m 700 -o "$uid" -g "$gid" "$ISO_WORK/bao-storage"
+}
+
 stack_up() {  # companions + bao bootstrap + OLD-image app + front; a FULL before state
+  mark "${CYCLE}_PREPARE"
+  prepare_bao_dir
+  STACK_STARTED=1  # BEFORE compose: even a partial compose failure is diagnosed
+  mark "${CYCLE}_COMPOSE"
   compose up -d pg-iso bao-iso
+  mark "${CYCLE}_PG_WAIT"
   local i=0
   while [ $i -lt 30 ]; do docker exec pg-iso pg_isready -U lyam -d lyam >/dev/null 2>&1 && break; sleep 2; i=$((i + 1)); done
   docker exec pg-iso pg_isready -U lyam -d lyam >/dev/null || fail "pg-iso not ready"
+  mark "${CYCLE}_BAO_BOOTSTRAP"
   bash "$ISO/bao-bootstrap-isolated.sh" "$ISO_WORK/bao-keys" "$ENV_FILE"
+  mark "${CYCLE}_API_RUN"
   docker run -d --name api-iso --restart on-failure \
     -p 127.0.0.1:8081:8080 -v "$ISO_WORK/data:/data" \
     --env-file "$ENV_FILE" --network lyam-iso-net "$OLD_IMAGE" >/dev/null
+  mark "${CYCLE}_API_HEALTH"
   i=0; while [ $i -lt 60 ]; do health && break; sleep 5; i=$((i + 1)); done
   health || fail "api-iso (OLD image) never became healthy"
+  mark "${CYCLE}_FRONT"
   compose up -d caddy-iso
   i=0; while [ $i -lt 12 ]; do [ "$(front_code)" = "200" ] && break; sleep 5; i=$((i + 1)); done
   [ "$(front_code)" = "200" ] || fail "front never proxied the backend"
@@ -143,12 +209,14 @@ stack_down() {  # everything, volumes included: the next stack is provably fresh
   docker rm -f api-iso >/dev/null 2>&1 || true
   compose down -v >/dev/null
   sudo rm -rf "$ISO_WORK/data" "$ISO_WORK/bao-storage" "$ISO_WORK/bao-keys"
-  mkdir -p "$ISO_WORK/data" "$ISO_WORK/bao-storage" "$ISO_WORK/bao-keys"
+  mkdir -p "$ISO_WORK/data" "$ISO_WORK/bao-keys"
 }
 
+CYCLE=S1
 stack_up
 
 # --- gate drill, always with an explicit disposable barrier file --------------------------
+mark BARRIER_CHECK
 export LYAM_FRONT_BARRIER_FILE="$ISO_WORK/gate/MAINTENANCE"
 [ "$(realpath -m "$LYAM_FRONT_BARRIER_FILE")" = "$LYAM_FRONT_BARRIER_FILE" ] || fail "barrier path not canonical"
 case "$LYAM_FRONT_BARRIER_FILE" in "$ISO_WORK"/*) ;; *) fail "barrier file escaped ISO_WORK" ;; esac
@@ -156,6 +224,7 @@ case "$LYAM_FRONT_BARRIER_FILE" in "$ISO_WORK"/*) ;; *) fail "barrier file escap
 IAM_PUBLIC_ORIGIN=http://127.0.0.1:8080 bash "$OCI/front-barrier-check.sh"
 
 # --- preconditions, verified not assumed ---------------------------------------------------
+mark PRECONDITIONS
 ledger="$(docker exec api-iso cat /data/migrations/journal.json)"
 printf '%s' "$ledger" | jq -e '.format == 1 and (.pending | not) and ([.entries[].id] | index("0002") | not) and (.entries[-1].id == "0001")' >/dev/null \
   || fail "seed ledger is not the expected BEFORE state (stopped at 0001, no 0002)"
@@ -168,25 +237,32 @@ docker exec pg-iso psql -U lyam -d lyam -tAc 'SELECT count(*) FROM public.activa
   || fail "activations table unreadable - preconditions unproven"
 
 # --- preflight (operator checklist tool; the gate is the cycle itself) ---------------------
+mark PREFLIGHT
 sudo python3 "$OCI/update-preflight.py" --image "$NEW_IMAGE" --policy "$POLICY" --verifier-sha256 "$VERIFIER_PIN"
 
 # --- POSITIVE: the nominal cycle, gate lifted by update.sh itself --------------------------
+mark UPDATE_POSITIVE
 sudo -E env LYAM_ISOLATED_POLICY="$POLICY" \
   bash "$OCI/update.sh" --require-qualification --image "$NEW_IMAGE" --env-file "$ENV_FILE" \
   | tee "$ISO_WORK/evidence/positive-update.log"
+mark VERIFY_POSITIVE
 [ "$(docker inspect -f '{{.Config.Image}}' api-iso)" = "$NEW_IMAGE" ] || fail "container is not the NEW image after a green update"
 [ "$(front_code)" = "200" ] || fail "front not open after a green update"
 echo "POSITIVE CYCLE: nominal qualification passed, gate lifted by update.sh"
 
 # --- NEGATIVE: a FULLY REBUILT fresh BEFORE stack, policy without the verifier entry -------
+mark S1_TEARDOWN
 stack_down
+CYCLE=S2
 stack_up
+mark UPDATE_NEGATIVE
 set +e
 sudo -E env LYAM_ISOLATED_POLICY="$POLICY_NEG" \
   bash "$OCI/update.sh" --require-qualification --image "$NEW_IMAGE" --env-file "$ENV_FILE" \
   > "$ISO_WORK/evidence/negative-update.log" 2>&1
 neg_rc=$?
 set -e
+mark VERIFY_NEGATIVE
 # update.sh by design: healthy NEW version, qualification fails, gate re-armed, NO blind
 # rollback -> exit 4, container NEW, origin 503. Anything else is a protocol failure.
 [ "$neg_rc" -eq 4 ] || fail "negative run rc=$neg_rc, expected exactly 4 (gate re-armed, no rollback)"
@@ -200,6 +276,7 @@ set -e
 # The qualification evidence directories are root-owned 0700 (the controller runs as
 # root): selection, validation and reading of EVID_NEG all happen inside this ONE
 # privileged block - no unprivileged ls/cat of root evidence.
+mark NEGATIVE_CAUSE
 sudo ISO_WORK="$ISO_WORK" python3 - "$VROOT/qualification.py" "$POLICY_NEG" "$NEW_IMAGE" <<'PYDIAG'
 import importlib.util, json, os, sys
 from pathlib import Path
@@ -234,6 +311,7 @@ echo "NEGATIVE CYCLE: closed failure reproduced exactly (rc=4, NEW behind gate, 
 # Privileged export of the whole capture set (root 0700 dirs) into a runner-readable
 # package for the artifact upload. NO masked fallback: if the export fails, the run
 # fails here - an announced archive that never copied is not evidence.
+mark EXPORT_EVIDENCE
 sudo ISO_WORK="$ISO_WORK" RUNNER_UID="$(id -u)" RUNNER_GID="$(id -g)" python3 - <<'PYEXP'
 import os, shutil, sys
 from pathlib import Path
@@ -252,10 +330,13 @@ for path in [out, *[p for p in out.rglob('*')]]:
     os.chown(path, uid, gid)
 print('evidence export:', count, 'files from', len(list(out.iterdir())), 'capture sets')
 PYEXP
+mark HASH_SUMS
 ( cd "$ISO_WORK/evidence" && find . -type f ! -name SHA256SUMS -exec sha256sum {} + > SHA256SUMS )
 # The negative run's marker belongs to this throwaway run; removing it here is drill
 # cleanup, valid only because the whole stack is disposable.
+mark CLEANUP
 rm -f "$ISO_WORK/gate/MAINTENANCE"
 docker rm -f api-iso >/dev/null
 compose down -v >/dev/null
 echo "ISOLATED CYCLE COMPLETE - evidence in $ISO_WORK/evidence"
+mark DONE
