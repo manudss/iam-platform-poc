@@ -7,6 +7,39 @@ import { WorkflowStore } from './store.js';
 
 export type ConnectionProvider = 'google-sheets' | 'jira' | 'http';
 export interface WorkflowConnection { id: string; tenant: string; name: string; provider: ConnectionProvider; config: Record<string, string>; secretRef: string | null; revision: string; }
+/** Closed set of failure classes shown to the admin. Upstream text, status bodies, identifiers and secrets never reach the result or the logs. */
+export type ProbeFailure = 'configuration' | 'secret-store' | 'credential-format' | 'credential-rejected' | 'forbidden' | 'not-found' | 'api-disabled' | 'network' | 'upstream-status' | 'unknown';
+const PROBE_FAILURE_MESSAGE: Record<ProbeFailure, string> = {
+  configuration: 'Read-only check failed: the connection settings are incomplete or invalid.',
+  'secret-store': 'Read-only check failed: the stored credential could not be read.',
+  'credential-format': 'Read-only check failed: the credential does not have the expected format.',
+  'credential-rejected': 'Read-only check failed: the service rejected the credential (401 or invalid grant).',
+  forbidden: 'Read-only check failed: the credential is valid but not allowed to read this resource (403, scopes or sharing).',
+  'not-found': 'Read-only check failed: the service did not find the site, project or document (404).',
+  'api-disabled': 'Read-only check failed: the service API is not enabled for this account.',
+  network: 'Read-only check failed: the service could not be reached from this server.',
+  'upstream-status': 'Read-only check failed: the service answered with an unexpected status.',
+  unknown: 'Read-only check failed. Check connection configuration and service access.',
+};
+/** Reads only status numbers, error codes and fixed keywords. Returns a class, never the upstream text. */
+export function classifyProbeError(e: unknown): ProbeFailure {
+  const err = e as {code?: unknown; status?: unknown; response?: {status?: unknown}; message?: unknown; name?: unknown} | null;
+  const status = Number(err?.response?.status ?? err?.status ?? (typeof err?.code === 'number' ? err.code : NaN));
+  const code = typeof err?.code === 'string' ? err.code : '';
+  const msg = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
+  // An HTTP status from the service comes first: a parse error elsewhere must not hide it.
+  if (Number.isFinite(status) && status > 0) {
+    if (status === 401) return 'credential-rejected';
+    if (status === 403) return msg.includes('has not been used in project') && msg.includes('before or it is disabled') ? 'api-disabled' : 'forbidden';
+    if (status === 404) return 'not-found';
+    return 'upstream-status';
+  }
+  if (msg.includes('invalid_grant') || msg.includes('invalid_client') || msg.includes('unauthorized_client')) return 'credential-rejected';
+  if (err?.name === 'SyntaxError' || msg.includes('private key') || msg.includes('client_email') || msg.includes('pem routines') || msg.includes('asn1')) return 'credential-format';
+  if (['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EHOSTUNREACH'].includes(code) || msg.includes('external request failed') || msg.includes('external request timed out') || msg.includes('destination lookup') || msg.includes('non-public destination') || msg.includes('response interrupted')) return 'network';
+  if (msg.includes('missing spreadsheet') || msg.includes('https url')) return 'configuration';
+  return 'unknown';
+}
 const tenantId = (t: string) => { if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(t)) throw new BadRequestException('invalid connection tenant'); return t; };
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 export function connectionId(value: unknown): string { if (typeof value !== 'string' || !ID.test(value)) throw new BadRequestException('invalid connection id'); return value; }
@@ -75,9 +108,9 @@ export class WorkflowConnections {
       const id = connectionId(existingId);
       const c = await this.store.getConnection(tenant, id, currentBranch());
       if (!c || c.provider !== clean.provider) throw new NotFoundException('connection missing or wrong provider');
-      if (!secret) { try { secret = (await this.resolve(tenant, currentBranch(), id, clean.provider)).secret; } catch { return this.probeFailed(); } }
+      if (!secret) { try { secret = (await this.resolve(tenant, currentBranch(), id, clean.provider)).secret; } catch { return this.probeFailed('secret-store'); } }
     }
-    if (clean.provider !== 'http' && !secret) return this.probeFailed();
+    if (clean.provider !== 'http' && !secret) return this.probeFailed('configuration');
     // Raw form secrets never enter Dolt, OpenBao, response bodies or error strings.
     const settings = this.settings(clean.provider, clean.config, secret);
     return this.probe(clean.provider, clean.config, settings);
@@ -85,7 +118,7 @@ export class WorkflowConnections {
   private settings(provider: ConnectionProvider, config: Record<string,string>, secret: string): Record<string, unknown> {
     return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
   }
-  private probeFailed() { return {status: 'Failed', checkedAt: new Date().toISOString(), readOnly: true, message: 'Read-only check failed. Check connection configuration and service access.'}; }
+  private probeFailed(reason: ProbeFailure = 'unknown') { return {status: 'Failed', checkedAt: new Date().toISOString(), readOnly: true, reason, message: PROBE_FAILURE_MESSAGE[reason]}; }
   protected async httpProbe(url: string, options: unknown) {
     const transport = loadPluginModule('workflow-connectors', 'http-transport.mjs') as {safeHttp: (url: string, opts: unknown) => Promise<{status:number}>};
     return transport.safeHttp(url, options);
@@ -99,10 +132,10 @@ export class WorkflowConnections {
       } else {
         const headers: Record<string,string> = provider === 'jira' ? {Authorization: 'Basic ' + Buffer.from(`${settings.jiraEmail}:${settings.jiraApiToken}`).toString('base64')} : settings.httpConnectionToken ? {Authorization: `Bearer ${settings.httpConnectionToken}`} : {};
         const result = await this.httpProbe(provider === 'jira' ? new URL('/rest/api/3/myself', config.instanceUrl).toString() : config.baseUrl, {method: provider === 'jira' ? 'GET' : 'HEAD', headers});
-        if (result.status < 200 || result.status >= 300) throw new Error('probe unsuccessful');
+        if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('probe unsuccessful'), {status: result.status});
       }
       return {status: 'Verified', checkedAt: new Date().toISOString(), readOnly: true};
-    } catch { return this.probeFailed(); }
+    } catch (e) { return this.probeFailed(classifyProbeError(e)); }
   }
   async resolve(tenant: string, ref: string, id: string, provider: ConnectionProvider) {
     const c = await this.store.getConnection(tenant, connectionId(id), ref);

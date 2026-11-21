@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { WorkflowConnections, validateConnection } from './connections.js';
+import { WorkflowConnections, validateConnection, classifyProbeError } from './connections.js';
 import {mock} from 'node:test';
 import { branchContext } from '../workspace/context.js';
 
@@ -53,4 +53,68 @@ describe('managed workflow connections', () => {
     await assert.rejects(()=>h.service.testDraft('t',{name:'HTTP',provider:'http',config:{baseUrl:'https://example.com'},existingId:r.connection.id}));
   });
 
+});
+
+describe('read-only check failure classes', () => {
+  it('maps errors to a closed class from status, code and fixed keywords only', () => {
+    const e = (o: any) => Object.assign(new Error(o.message ?? 'x'), o);
+    assert.equal(classifyProbeError(e({ status: 401 })), 'credential-rejected');
+    assert.equal(classifyProbeError(e({ message: 'invalid_grant: Invalid grant: account not found' })), 'credential-rejected');
+    assert.equal(classifyProbeError(e({ response: { status: 403 }, message: 'Google Sheets API has not been used in project 123 before or it is disabled' })), 'api-disabled');
+    assert.equal(classifyProbeError(e({ response: { status: 403 }, message: 'The caller does not have permission' })), 'forbidden');
+    assert.equal(classifyProbeError(e({ response: { status: 403 }, message: 'User is disabled' })), 'forbidden');
+    // a service status wins over a parse error and over ambiguous keywords
+    assert.equal(classifyProbeError(Object.assign(new SyntaxError('Unexpected token'), { status: 500 })), 'upstream-status');
+    assert.equal(classifyProbeError(Object.assign(new Error('private key rejected'), { response: { status: 404 } })), 'not-found');
+    assert.equal(classifyProbeError(e({ response: { status: 404 } })), 'not-found');
+    assert.equal(classifyProbeError(e({ code: 'ENOTFOUND' })), 'network');
+    assert.equal(classifyProbeError(e({ message: 'external request timed out' })), 'network');
+    assert.equal(classifyProbeError(new SyntaxError('Unexpected token')), 'credential-format');
+    assert.equal(classifyProbeError(e({ status: 500 })), 'upstream-status');
+    assert.equal(classifyProbeError(e({ message: 'missing spreadsheet' })), 'configuration');
+    assert.equal(classifyProbeError('boom'), 'unknown');
+  });
+  it('a failed Jira check returns the class and a fixed message, never the upstream text or the credential', async () => {
+    const h = setup();
+    const stub = mock.method(h.service as any, 'httpProbe', async () => ({ status: 401, body: { message: 'UPSTREAM-DETAIL-SHOULD-NOT-LEAK' } }));
+    try {
+      const r: any = await h.service.testDraft('t', { ...jira, secret: 'FICTIONAL-SECRET-VALUE' });
+      assert.equal(r.status, 'Failed'); assert.equal(r.reason, 'credential-rejected');
+      const text = JSON.stringify(r);
+      assert.ok(!text.includes('FICTIONAL-SECRET-VALUE') && !text.includes('UPSTREAM-DETAIL') && !text.includes('test@example.invalid'));
+    } finally { stub.mock.restore(); }
+  });
+  it('an unreachable service is classified as network', async () => {
+    const h = setup();
+    const stub = mock.method(h.service as any, 'httpProbe', async () => { throw new Error('external request failed'); });
+    try { assert.equal(((await h.service.testDraft('t', { ...jira, secret: 'FICTIONAL' })) as any).reason, 'network'); } finally { stub.mock.restore(); }
+  });
+});
+
+describe('failed checks leak nothing sensitive', () => {
+  const SENSITIVE = ['FICTIONAL-TOKEN-xyz', 'fictional-header-secret', 'iam/workflow-connections/t/secret-ref', 'service-account-key-material'];
+  const noLeak = (text: string) => { for (const v of SENSITIVE) assert.ok(!text.includes(v), `leaked ${v}`); };
+  it('a Sheets failure carrying sensitive text in message, headers and secret path returns only the class, and nothing reaches console or logger', async () => {
+    const h = setup();
+    const lines: string[] = [];
+    const spies = ['log', 'error', 'warn', 'info', 'debug'].map(k => mock.method(console as any, k, (...a: unknown[]) => { lines.push(a.map(String).join(' ')); }));
+    const out = mock.method(process.stdout, 'write', (c: unknown) => { lines.push(String(c)); return true; });
+    const err = mock.method(process.stderr, 'write', (c: unknown) => { lines.push(String(c)); return true; });
+    const nock = Object.assign(new Error(`Request failed ${SENSITIVE.join(' ')}`), { response: { status: 403, headers: { authorization: SENSITIVE[1] }, data: { secretRef: SENSITIVE[2] } }, config: { headers: { Authorization: SENSITIVE[0] } } });
+    const httpStub = mock.method(h.service as any, 'httpProbe', async () => { throw nock; });
+    try {
+      const r: any = await h.service.testDraft('t', { ...jira, secret: SENSITIVE[0] });
+      noLeak(JSON.stringify(r));
+      assert.equal(r.reason, 'forbidden');
+    } finally { httpStub.mock.restore(); spies.forEach(s => s.mock.restore()); out.mock.restore(); err.mock.restore(); }
+    noLeak(lines.join('\n'));
+  });
+  it('a saved connection whose stored credential cannot be read reports secret-store without the reference', async () => {
+    const h = setup();
+    const saved = await h.service.save('t', undefined, { ...jira, secret: 'FICTIONAL' });
+    h.secrets.clear();
+    const r: any = await h.service.testDraft('t', { ...jira, existingId: saved.connection.id });
+    assert.equal(r.status, 'Failed'); assert.equal(r.reason, 'secret-store');
+    noLeak(JSON.stringify(r)); assert.ok(!JSON.stringify(r).includes('iam/workflow-connections'));
+  });
 });
