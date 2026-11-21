@@ -59,6 +59,7 @@ def _harness(before, after, overrides=None):
         'sql_log': [],
         'committed_drift': {},  # 'db/branch' -> wrong root: captured root not its branch commit
         'working_drift': {},    # 'db/branch' -> wrong root: uncommitted changes live
+        'before_revision_root': ROOT_BEFORE,  # what the revision database iam/<before-head> reports
         'ps': CONTAINER,
         'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}],
         'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': False}],
@@ -86,6 +87,11 @@ def _harness(before, after, overrides=None):
             if 'DOLT_HASHOF_DB(' in sql:
                 ref = sql.split("DOLT_HASHOF_DB('", 1)[1].split("'", 1)[0]
                 use_db = [a[len('--use-db='):] for a in args if a.startswith('--use-db=')][0]
+                if use_db == 'iam/' + HEAD_BEFORE:
+                    # Host-proven revision-database syntax: HEAD at the before commit.
+                    if ref != 'HEAD':
+                        return json.dumps({'rows': []})
+                    return json.dumps({'rows': [{'root': state['before_revision_root']}]})
                 item = next((i for i in after['dolt'] if i['database'] + '/' + i['branch'] == use_db), None)
                 if item is None:
                     raise AssertionError('unexpected use-db: ' + use_db)
@@ -230,6 +236,12 @@ class Verify(unittest.TestCase):
     def test_live_working_set_dirty_via_root(self):
         self.expect_fail({'working_drift': {'iam/main': 'dirtyworking' + ROOT_AFTER[12:]}})
 
+    def test_before_root_not_bound_to_its_commit(self):
+        # A diff between commits can never exclude that the before-capture recorded
+        # uncommitted changes which were then lost: the before root must bind to the
+        # before commit through the host-proven revision database.
+        self.expect_fail({'before_revision_root': 'drifted00' + ROOT_BEFORE[9:]})
+
     def test_dolt_queries_use_only_version_proven_refs(self):
         # The deployed Dolt 2.6.1 REJECTS raw commit hashes as DOLT_HASHOF_DB refspecs
         # and accepts branch refs and WORKING (host-verified). Pin the emitted queries
@@ -239,8 +251,10 @@ class Verify(unittest.TestCase):
                        for sql in harness_last['sql_log'] if 'DOLT_HASHOF_DB(' in sql]
         self.assertTrue(hashof_refs)
         for ref in hashof_refs:
-            self.assertIn(ref, ('WORKING', 'main', 'personal/demo-alice'))
+            self.assertIn(ref, ('WORKING', 'HEAD', 'main', 'personal/demo-alice'))
             self.assertNotIn(ref, (HEAD_BEFORE, HEAD_AFTER))
+        # The before-commit binding uses the host-proven revision-database syntax.
+        self.assertTrue(any("DOLT_HASHOF_DB('HEAD')" in sql for sql in harness_last['sql_log']))
 
     def test_two_commits(self):
         self.expect_fail({'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': 'surprise', 'message': 'x'}]})

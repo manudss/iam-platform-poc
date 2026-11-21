@@ -183,11 +183,7 @@ def bind_live_roots(container, dolt_items):
     DOLT_HASHOF_DB('<branch>') binds the captured root to the branch's commit;
     DOLT_HASHOF_DB('WORKING') equal to the same root proves the working set carries
     no uncommitted change. The captured heads are tied to live by the complete
-    recapture. The before-capture root of the moved branch needs no separate query:
-    dolt_log proves the migration commit sits directly on the captured before-head
-    and the hash-to-hash diff proves the commit contains ONLY the declared row, so a
-    dirty before working set is impossible - anything staged along with the
-    migration would appear in that diff. No ref is ever created."""
+    recapture. No ref is ever created on the live database."""
     for item in dolt_items:
         branch = item['branch']
         if "'" in branch or "'" in item['database']:
@@ -240,6 +236,7 @@ def check_live_dolt(container, moved_before, moved_after, after_dolt):
     if status:
         fail('iam/main has uncommitted changes beyond the migration commit')
     bind_live_roots(container, after_dolt)
+    bind_before_root(container, moved_before)
     return head_after
 
 
@@ -281,6 +278,19 @@ def recapture_and_tie(container, policy, controller, after):
         fail('credential files drifted since the captured evidence')
     if container_ledger(container) != after['migrationLedger']:
         fail('migration ledger drifted since the captured evidence')
+
+
+def bind_before_root(container, moved_before):
+    """The BEFORE-capture root must be the database hash of the before COMMIT: a
+    hash-to-hash diff between commits can never exclude that the before-capture
+    recorded uncommitted changes which were then lost. Host-proven on the deployed
+    Dolt 2.6.1: the REVISION DATABASE name '<database>/<commit>' is accepted and
+    DOLT_HASHOF_DB('HEAD') there returns exactly the captured root - read-only, no
+    ref mutation, no copy."""
+    revision_db = DOLT_DATABASE + '/' + moved_before['head']
+    rows = dolt_query(container, revision_db, "SELECT DOLT_HASHOF_DB('HEAD') AS root")
+    if len(rows) != 1 or rows[0].get('root') != moved_before['root']:
+        fail('before-capture root is not the database hash of the before commit')
 
 
 def check_activation_append(policy, before, after, migration_head):

@@ -78,7 +78,7 @@ SHA_PARENT = '0744782c075b4cd2b694088d7a3ac99af7914bc2'
 NEW_DIGEST = 'sha256:7c5ce38f03b378afbb060e6092706a03503c47eac58c2cbca943d15d0d652201'
 OLD_DIGEST = 'sha256:accbd340a59db8a87762f9cdb338a6aca70f92f99a5a5c9e5ba2425f8f3eb3de'
 NEW_IMAGE = 'ghcr.io/manudss/iam-platform-poc@' + NEW_DIGEST
-REVIEWED_VERIFIER_SHA256 = 'f9e913d66929e507a3b5cd07402037c5a90ac108989e75754628a6b6b7f37c8c'
+REVIEWED_VERIFIER_SHA256 = '7f2991e21b183979ac6735586e03c70e26b7615aeae356a3e6afe7b48b94fd0f'
 RUNNER_FILES = ['update.sh', 'qualification.py', 'qualification-container.mjs', 'verify-0002-account-blocks.py']
 # The queue runner is hashed at its REAL installed path, not a staging copy.
 QUEUE_RUNNER = '/usr/local/libexec/lyam-queue/ordered-queue.py'
@@ -117,10 +117,15 @@ def sha256_file(path):
 
 
 def http_status(url):
+    """HTTP status, or 0 for ANY transport error/timeout (unknown, never an escape):
+    a network failure must degrade a probe to 'not the expected status', never
+    propagate and corrupt the faithful end-state report."""
     try:
         return urllib.request.urlopen(url, timeout=15).status
     except urllib.error.HTTPError as e:
         return e.code
+    except Exception:
+        return 0
 
 
 def pid_alive(pid):
@@ -247,22 +252,34 @@ def recapture_after_smoke(verifier, controller, container, policy, after):
         fail('migration ledger drifted (post-smoke recapture)')
     pg = controller.postgres(policy)
     old_pg = after['postgres']
-    if pg.get('schema') != old_pg.get('schema') or pg.get('sequences') != old_pg.get('sequences'):
-        fail('PostgreSQL schema drifted (post-smoke recapture)')
+    # Total equality on every surface EXCEPT rows of declared append-only tables and
+    # sequence current values (monotonic counters that authorized appends advance).
+    # Schema, sequence DEFINITIONS and any other key: strict equality.
+    if set(pg) != set(old_pg):
+        fail('PostgreSQL surface inventory drifted (post-smoke recapture)')
+    for key in pg:
+        if key in ('rows', 'sequences'):
+            continue
+        if pg[key] != old_pg[key]:
+            fail('PostgreSQL ' + key + ' drifted (post-smoke recapture)')
+    if set(pg.get('sequences', {})) != set(old_pg.get('sequences', {})):
+        fail('PostgreSQL sequence inventory drifted (post-smoke recapture)')
     old_rows = old_pg.get('rows', {})
     new_rows = pg.get('rows', {})
     if set(new_rows) != set(old_rows):
         fail('PostgreSQL table inventory drifted (post-smoke recapture)')
     declared = set(policy.get('appendOnlyTables') or [])
     appended = {}
-    for table, new_multiset in new_rows.items():
-        old_multiset = old_rows.get(table, {})
-        extra = 0
-        for row_hash, count in new_multiset.items():
-            delta = count - old_multiset.get(row_hash, 0)
-            if delta < 0:
+    for table in old_rows:
+        old_multiset = old_rows[table]
+        new_multiset = new_rows[table]
+        # Union of hashes, every multiplicity preserved: any decrease - including a
+        # hash that vanished entirely - is a disappearance.
+        for row_hash in set(old_multiset) | set(new_multiset):
+            if new_multiset.get(row_hash, 0) < old_multiset.get(row_hash, 0):
                 fail('a PostgreSQL row disappeared (post-smoke recapture)')
-            extra += delta
+        extra = sum(new_multiset.get(row_hash, 0) - old_multiset.get(row_hash, 0)
+                    for row_hash in new_multiset)
         if not extra:
             continue
         if table == verifier.ACTIVATIONS_TABLE:
@@ -381,6 +398,10 @@ def close(args):
         lifted = False
         journal_advanced = False
         step = 'lift'
+        # Trace steps BEFORE irreversible operations: a crash then leaves private
+        # evidence of how far the closure went.
+        private_json(incident / 'progress-1-lift-started.json',
+                     {'step': 'lift', 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
         try:
             os.unlink(barrier_file)
             lifted = True
@@ -405,8 +426,24 @@ def close(args):
                                         'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
             del repaired['pending']
             del repaired['failed']
-            queue.atomic(Path(args.queue_state), repaired)
-            journal_advanced = True
+            private_json(incident / 'progress-2-journal-append-started.json',
+                         {'step': 'journal-append', 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
+            try:
+                queue.atomic(Path(args.queue_state), repaired)
+                journal_advanced = True
+            except Exception:
+                # The atomic write may have REPLACED the file and only then failed
+                # (fsync): resolve the uncertain state from the queue file itself,
+                # never from local sequencing. None = the file could not even be read.
+                try:
+                    actual = json.loads(Path(args.queue_state).read_text())
+                    journal_advanced = bool(actual.get('history')) \
+                        and actual['history'][-1].get('sha') == SHA_118 \
+                        and actual['history'][-1].get('digest') == NEW_DIGEST \
+                        and 'pending' not in actual and 'failed' not in actual
+                except Exception:
+                    journal_advanced = None
+                raise
             step = 'incident-trace'
             private_json(incident / 'incident-trace.json', {
                 'format': 1,
@@ -433,7 +470,12 @@ def close(args):
                 raise CloseFailure(step, None, True,
                                    'journal advanced and verified front left open; only the incident trace is missing')
             confirmed, note = rearm(barrier_file, token, policy, args)
-            raise CloseFailure(step, confirmed, False, note)
+            if journal_advanced is None:
+                # The queue file could not even be re-read after the failed append:
+                # fail-closed default (gate re-armed) but the journal state is
+                # UNKNOWN - the operator must reconcile it before anything else.
+                note = 'journal state UNKNOWN after a failed append; ' + note
+            raise CloseFailure(step, confirmed, journal_advanced, note)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         return {'history': len(repaired['history']), 'incident': str(incident)}
@@ -468,6 +510,8 @@ def main():
         print('Exceptional closure FAILED: ' + json.dumps(report), file=sys.stderr)
         if e.journal_advanced:
             return 4
+        if e.journal_advanced is None:
+            return 3
         if e.rearm_confirmed is True:
             return 2
         return 3

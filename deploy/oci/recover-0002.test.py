@@ -1,4 +1,5 @@
 import fcntl, importlib.util, json, os, shutil, signal, tempfile, time, types, unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -30,7 +31,8 @@ def evidence_docs():
     before = {'image': p.OLD_IMAGE,
               'dolt': [{'database': 'iam', 'branch': 'main', 'head': 'h1', 'root': 'r1'}],
               'bao': {'secret/metadata/iam/app': 'hash'},
-              'postgres': {'schema': {'columns': []}, 'sequences': {},
+              'postgres': {'schema': {'columns': []}, 'sequenceDefinitions': [],
+                           'sequences': {'public.decision_audit_id_seq': {'last_value': 7, 'is_called': True}},
                            'rows': {'public.activations': {'a1': 1}, 'public.decision_audit': {'d1': 2}}},
               'credentials': {'core-state/credentials.json': 'credhash'},
               'migrationLedger': {'format': 1, 'entries': [{'id': '0001', 'checksum': '1' * 64}]}}
@@ -236,7 +238,7 @@ class Close(Fixture):
         return path
 
     def patch_close(self, front=None, smoke_ok=True, verify_ok=True, capture=None,
-                    postgres_live=None, atomic_ok=True):
+                    postgres_live=None, atomic_ok=True, atomic_fn=None):
         """front: callable url->status (default 503 gated, 200 lifted).
         The module seams (controller, queue runner, verifier) are stubbed: what the
         close script exercises here is ITS OWN sequencing, re-arm and faithfulness."""
@@ -255,6 +257,8 @@ class Close(Fixture):
                 raise ValueError('complete recapture under locks failed')
 
         def atomic(path, doc):
+            if atomic_fn is not None:
+                return atomic_fn(path, doc)
             if not atomic_ok:
                 raise ValueError('disk full on journal append')
             Path(path).write_text(json.dumps(doc))
@@ -302,6 +306,9 @@ class Close(Fixture):
         self.assertEqual(trace['historyAppended']['sha'], c.SHA_118)
         self.assertEqual(trace['postSmokeRecapture'], {'appendedRows': {}})
         self.assertEqual(result['history'], 2)
+        # Steps are traced BEFORE irreversible operations.
+        self.assertTrue((self.incident / 'progress-1-lift-started.json').is_file())
+        self.assertTrue((self.incident / 'progress-2-journal-append-started.json').is_file())
 
     def test_stale_proof(self):
         old = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() - 3600))
@@ -489,6 +496,48 @@ class Close(Fixture):
         self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
         self.assertTrue(self.barrier.exists())
 
+    def test_post_smoke_row_fully_vanished_rearms(self):
+        # A hash present in the capture and ENTIRELY absent live must be caught too:
+        # the comparison walks the union of hashes, not only the new ones.
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['rows']['public.decision_audit'] = {}
+        self.patch_close(postgres_live=pg)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
+        self.assertTrue(self.barrier.exists())
+
+    def test_post_smoke_sequence_definitions_drift_rearms(self):
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['sequenceDefinitions'] = [{'name': 'sneaky'}]
+        self.patch_close(postgres_live=pg)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
+        self.assertTrue(self.barrier.exists())
+
+    def test_post_smoke_sequence_advance_allowed(self):
+        # Sequence current values are monotonic counters advanced by authorized
+        # appends: exempt from equality, but the sequence inventory is fixed.
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['sequences']['public.decision_audit_id_seq'] = {'last_value': 9, 'is_called': True}
+        self.patch_close(postgres_live=pg)
+        result = c.close(self.close_args(proof))
+        self.assertEqual(result['history'], 2)
+
+    def test_post_smoke_sequence_inventory_drift_rearms(self):
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['sequences']['public.new_seq'] = {'last_value': 1, 'is_called': False}
+        self.patch_close(postgres_live=pg)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
+        self.assertTrue(self.barrier.exists())
+
     def test_journal_append_failure_rearms_and_reports_faithfully(self):
         proof = self.make_proof()
         self.patch_close(atomic_ok=False)
@@ -502,6 +551,44 @@ class Close(Fixture):
         self.assertIn('pending', state)
         self.assertIn('failed', state)
         self.assertEqual(len(state['history']), 1)
+
+    def test_journal_append_replaced_then_failed_rereads_the_file(self):
+        # queue.atomic may REPLACE the file and only then fail (fsync): the faithful
+        # state comes from re-reading the queue, not from local sequencing.
+        proof = self.make_proof()
+        def atomic(path, doc):
+            Path(path).write_text(json.dumps(doc))
+            raise ValueError('fsync failed after replace')
+        self.patch_close(atomic_fn=atomic)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'journal-append')
+        # The file WAS replaced: the closure must see the journal as advanced and
+        # leave the verified front open instead of re-arming over a moved journal.
+        self.assertTrue(ctx.exception.journal_advanced)
+        self.assertIsNone(ctx.exception.rearm_confirmed)
+        self.assertFalse(self.barrier.exists())
+        state = json.loads(self.queue.read_text())
+        self.assertEqual(len(state['history']), 2)
+        self.assertNotIn('pending', state)
+        self.assertTrue((self.incident / 'progress-2-journal-append-started.json').is_file())
+
+    def test_journal_append_unreadable_reread_is_unknown_not_false(self):
+        # The append failed AND the queue file cannot be re-read: journal state is
+        # UNKNOWN (not False), the closure still re-arms fail-closed, and the report
+        # says the journal state is unknown - it never claims 'journal not advanced'.
+        proof = self.make_proof()
+        def atomic(path, doc):
+            Path(path).write_text('not json at all')
+            raise ValueError('fsync failed after garbage write')
+        self.patch_close(atomic_fn=atomic)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'journal-append')
+        self.assertIsNone(ctx.exception.journal_advanced)
+        self.assertIn('UNKNOWN', ctx.exception.note)
+        self.assertTrue(ctx.exception.rearm_confirmed)
+        self.assertTrue(self.barrier.exists())
 
     def test_queue_state_changed_during_lift_rearms(self):
         proof = self.make_proof()
@@ -579,6 +666,34 @@ class Close(Fixture):
         self.assertFalse(ctx.exception.rearm_confirmed)
         self.assertIn('503', ctx.exception.note)
 
+    def test_network_error_during_rearm_is_not_an_escape(self):
+        # A transport error/timeout while confirming the re-arm must degrade to
+        # 're-arm NOT confirmed', never escape and corrupt the faithful status.
+        proof = self.make_proof()
+        barrier = self.barrier
+        lifted = {'done': False}
+        def front(url):
+            if barrier.exists() and not lifted['done']:
+                return 503
+            lifted['done'] = True
+            raise urllib.error.URLError('timeout')
+        # The production http_status never raises (any transport error degrades to
+        # 0); this shim plays exactly that role so the raised error crosses the same
+        # boundary it would in production.
+        def safe_http_status(url):
+            try:
+                return front(url)
+            except urllib.error.HTTPError as e:
+                return e.code
+            except Exception:
+                return 0
+        self.patch_close(front=safe_http_status)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'front-200-on-all-origins')
+        self.assertFalse(ctx.exception.rearm_confirmed)
+        self.assertFalse(ctx.exception.journal_advanced)
+
     def test_sigterm_during_lift_takes_the_rearm_path(self):
         proof = self.make_proof()
         sent = {'done': False}
@@ -619,6 +734,15 @@ class Pins(unittest.TestCase):
         self.assertEqual(c.QUEUE_RUNNER, p.QUEUE_RUNNER)
         self.assertNotIn('ordered-queue.py', p.RUNNER_FILES)
         self.assertNotIn('ordered-queue.py', c.RUNNER_FILES)
+
+    def test_http_status_never_raises(self):
+        # The faithful end-state report depends on this: transport errors and
+        # timeouts degrade to 0, HTTP errors return their code.
+        with mock.patch('urllib.request.urlopen', side_effect=urllib.error.URLError('down')):
+            self.assertEqual(c.http_status('https://x.example/healthz'), 0)
+        with mock.patch('urllib.request.urlopen',
+                        side_effect=urllib.error.HTTPError('u', 503, 'm', {}, None)):
+            self.assertEqual(c.http_status('https://x.example/healthz'), 503)
 
     def test_incident_constants_match_queue_and_image_facts(self):
         self.assertEqual(p.SHA_118, c.SHA_118)

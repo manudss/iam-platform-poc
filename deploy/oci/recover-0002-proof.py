@@ -51,7 +51,7 @@ NEW_IMAGE = 'ghcr.io/manudss/iam-platform-poc@' + NEW_DIGEST
 OLD_IMAGE = 'ghcr.io/manudss/iam-platform-poc@' + OLD_DIGEST
 # sha256 of the reviewed sibling verifier file; a repo test pins this constant to the
 # reviewed bytes. Any change to the verifier requires a new review and a new pin.
-REVIEWED_VERIFIER_SHA256 = 'f9e913d66929e507a3b5cd07402037c5a90ac108989e75754628a6b6b7f37c8c'
+REVIEWED_VERIFIER_SHA256 = '7f2991e21b183979ac6735586e03c70e26b7615aeae356a3e6afe7b48b94fd0f'
 RUNNER_FILES = ['update.sh', 'qualification.py', 'qualification-container.mjs', 'verify-0002-account-blocks.py']
 # The queue runner is hashed at its REAL installed path, not a staging copy.
 QUEUE_RUNNER = '/usr/local/libexec/lyam-queue/ordered-queue.py'

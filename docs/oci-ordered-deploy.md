@@ -162,9 +162,13 @@ a bare or shortened digest. The controller invokes it as `verifier <before.json>
 the private hash-only evidence, which is only read, never modified. It must prove every declared
 transformation of that exact transition and preservation of everything else, exit 0 only on complete
 proof, and treat anything unknown as failure. Hash-only evidence alone cannot prove commit content,
-so the verifier additionally performs read-only live checks: each captured Dolt root must equal the
-database hash of its own commit (a dirty working set at capture time is UNKNOWN, not silently
-accepted), the migration commit chain/content is read from live Dolt with every diff flag present
+so the verifier additionally performs read-only live checks: each captured AFTER Dolt root must equal
+the database hash of its own branch commit via DOLT_HASHOF_DB('<branch>') with DOLT_HASHOF_DB('WORKING')
+proving a clean working set (raw commit hashes are rejected as refspecs by the deployed Dolt 2.6.1;
+branch refs, WORKING and HEAD are host-proven), and the captured BEFORE root of the moved branch must
+equal DOLT_HASHOF_DB('HEAD') inside the host-proven revision database '<database>/<before-commit>' -
+a dirty working set at either capture time is UNKNOWN, not silently accepted. No ref is ever created.
+The migration commit chain/content is read from live Dolt with every diff flag present
 and explicitly valued (absent or NULL flags are UNKNOWN), and a COMPLETE fresh recapture through the
 controller's own immutable capture machinery (Dolt+Bao container script, controller PostgreSQL
 surfaces, credential files, migration ledger) must equal the historical after-capture exactly - a
@@ -195,9 +199,11 @@ operation, never a silent bypass:
    verifier recapture again under both locks immediately before any lift, archives the queue state
    (pending+failed), the proof AND both evidence files into a private incident bundle, then lifts
    the marker, proves 200 on every origin, re-runs the real OIDC smoke and a complete post-smoke
-   recapture - strict everywhere except declared append-only PostgreSQL tables, where captured rows
-   must all still be present and growth is bounded and traced (the activation journal must stay
-   exactly as captured; only declared audit tables may grow). Only then the reviewed entry is
+   recapture - strict on every surface (schema, sequence DEFINITIONS, Dolt, Bao, credentials,
+   ledger) except declared append-only PostgreSQL table rows and sequence CURRENT VALUES (monotonic
+   counters); row comparison walks the union of hashes with every multiplicity preserved, so a
+   vanished row is always caught; the activation journal must stay exactly as captured; only
+   declared audit tables may grow, counted and traced. Only then the reviewed entry is
    appended to the queue history (same SHA/parent/digest, existing entries untouched) in one atomic
    fsynced write, with a separate incident trace linking failure, proofs and approval.
 
@@ -206,7 +212,8 @@ Failure semantics of the closure (faithful exit codes, no silent claims):
   - 2: failure after lift, gate re-armed with the archived token AND 503 re-confirmed on every
     origin - no journal change;
   - 3: failure after lift, re-arm attempted but 503 NOT re-confirmed - gate state unknown, the
-    operator must verify the origins immediately;
+    operator must verify the origins immediately; OR the queue file could not be re-read after a
+    failed journal append - journal state UNKNOWN (never claimed unadvanced), operator reconciles;
   - 4: the incident trace failed AFTER the journal append - partial commit: the journal advanced
     and the verified front stays open (re-arming would contradict the journal); the operator
     completes the trace from the private archive.
