@@ -1,6 +1,8 @@
 import { stepUpView } from './step-up';
+import { SigninChain } from './api';
 
-const chains = [{ id: 'pw', name: 'Password', level: 3 }, { id: 'tot', name: 'Password, then authenticator', level: 8 }, { id: 'pk', name: 'Passkey', level: 9 }];
+const ch = (id: string, name: string, level: number): SigninChain => ({ id, name, declaredLevel: level, effectiveLevel: level, mfa: false, simulated: false, recommended: false, steps: [] });
+const chains = [ch('pw', 'Password', 3), ch('tot', 'Password, then authenticator', 8), ch('pk', 'Passkey', 9)];
 describe('re-sign-in page wording and choices', () => {
   it('an application: names it, both levels, and lists only chains that reach the level (never the weaker one)', () => {
     const v = stepUpView({ kind: 'app', app: 'Finance', required: 8, current: 3, chains });

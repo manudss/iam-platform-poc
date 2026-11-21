@@ -170,11 +170,19 @@ try {
   assert.ok(ids.includes('password-then-authenticator'), 'offers the authenticator chain: ' + ids.join(','));
   assert.ok(!ids.includes('password-only') && !ids.includes('password-then-e-mail-code'), 'never a weaker chain: ' + ids.join(','));
 
-  // ---- 8. the console re-sign-in page lists only those chains (real API)
+  // ---- 8. the console re-sign-in page lists only those chains, with the sign-in page's own rows (real API)
   await page.addInitScript((t) => { try { localStorage.setItem('iam.session', t); } catch {} }, T1);
   await page.goto(`${BASE}/step-up?kind=admin&level=8&current=3`);
-  await page.waitForSelector('text=Password then authenticator', { timeout: 15000 });
-  assert.doesNotMatch(await bodyText(), /Password only/); await shot('8-step-up-page');
+  const row = page.locator('#signin-methods [data-chain="password-then-authenticator"]');
+  await row.waitFor({ timeout: 15000 });
+  assert.equal(await page.locator('[data-chain="password-only"]').count(), 0, 'never a weaker chain on the page');
+  assert.equal(await page.locator('[data-chain="password-then-e-mail-code"]').count(), 0, 'never a simulated chain on the page');
+  assert.doesNotMatch(await bodyText(), /Password only/);
+  assert.match((await row.innerText()), /Password . Authenticator app/, 'the row names the steps like the sign-in page');
+  assert.match((await row.innerText()), /declared level 8 of 10/, 'the row carries the declared-level line like the sign-in page');
+  assert.equal(await row.locator('.dots i.on').count(), 8, 'the level gauge shows 8 of 10');
+  assert.ok(await page.locator('#su-reason').count(), 'the reason is stated above the list');
+  await shot('8-step-up-page');
   assert.deepEqual(errors.filter((e) => !/step-up|403/.test(e)), []);
   console.log('PASS account blocks: card after first factor, self-block refused, unblock, automatic lock, chains, level 8, step-up-required, unreachable level refused, re-sign-in page');
 } catch (e) {
