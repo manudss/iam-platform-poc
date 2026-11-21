@@ -173,4 +173,18 @@ describe('LevelSelect', () => {
     down(el.querySelector('button')!, 'touch'); li(7).dispatchEvent(new MouseEvent('mouseenter')); f.detectChanges();
     expect(li(7).classList.contains('act')).toBe(false);
   });
+  it('touch: a late emulated mouseenter after the tap keeps the tapped level active; a real mouse move switches back to mouse behaviour', () => {
+    TestBed.configureTestingModule({ imports: [LevelSelect] });
+    const f = TestBed.createComponent(LevelSelect);
+    f.componentRef.setInput('value', 2); f.componentRef.setInput('restrict', true); f.componentRef.setInput('chains', CH); f.detectChanges();
+    const el: HTMLElement = f.nativeElement;
+    (el.querySelector('button') as HTMLElement).click(); f.detectChanges();
+    const li = (n: number) => el.querySelector(`li[data-level="${n}"]`) as HTMLElement;
+    const move = (e: Element, type: string) => { const ev = new Event('pointermove', { bubbles: true }); Object.defineProperty(ev, 'pointerType', { value: type }); e.dispatchEvent(ev); };
+    down(li(10), 'touch'); li(10).click(); f.detectChanges();
+    li(2).dispatchEvent(new MouseEvent('mouseenter')); f.detectChanges();   // emulated, after the click
+    expect(li(10).classList.contains('act')).toBe(true);
+    move(li(4), 'mouse'); li(4).dispatchEvent(new MouseEvent('mouseenter')); f.detectChanges();
+    expect(li(4).classList.contains('act')).toBe(true);
+  });
 });

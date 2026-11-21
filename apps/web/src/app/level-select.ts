@@ -33,16 +33,16 @@ export class LevelGauge { readonly level = input.required<number>(); protected r
   imports: [LevelGauge],
   template: `
   <button type="button" class="ls-btn" role="combobox" aria-haspopup="listbox" [attr.aria-expanded]="open()" [attr.aria-label]="label()" [id]="id()" [disabled]="disabled()"
-          [attr.aria-describedby]="tipOn() ? tipId : null" (click)="toggle()" (keydown)="key($event)" (pointerdown)="ptr($event)" (mouseenter)="hoverIn()" (mouseleave)="hoverOut()" (focus)="focusIn($event)" (blur)="focusOut()">
+          [attr.aria-describedby]="tipOn() ? tipId : null" (click)="toggle()" (keydown)="key($event)" (pointerdown)="ptr($event)" (pointermove)="ptr($event)" (mouseenter)="hoverIn()" (mouseleave)="hoverOut()" (focus)="focusIn($event)" (blur)="focusOut()">
     @if (value() === 0 && allowNone()) { <b class="none">No minimum</b> } @else { <b>{{ value() }}</b><span class="of">of 10</span><app-level-gauge [level]="value()" /> }<span class="car" aria-hidden="true">▾</span>
   </button>
   @if (open()) {
     <ul class="ls-list" role="listbox" (click)="$event.preventDefault()" [attr.aria-label]="label()" [attr.aria-activedescendant]="optId(active())" tabindex="-1">
       @if (allowNone()) {
-        <li role="option" class="none" [attr.id]="optId(0)" [attr.aria-selected]="value() === 0" [class.sel]="value() === 0" [class.act]="active() === 0" data-level="0" (pointerdown)="optDown(0, $event)" (pointercancel)="optCancel()" (click)="tap(0)" (mouseenter)="optHover(0)"><b>No minimum</b></li>
+        <li role="option" class="none" [attr.id]="optId(0)" [attr.aria-selected]="value() === 0" [class.sel]="value() === 0" [class.act]="active() === 0" data-level="0" (pointerdown)="optDown(0, $event)" (pointermove)="ptr($event)" (pointercancel)="optCancel()" (click)="tap(0)" (mouseenter)="optHover(0)"><b>No minimum</b></li>
       }
       @for (n of levels; track n) {
-        <li role="option" [attr.id]="optId(n)" [attr.aria-selected]="n === value()" [attr.aria-disabled]="blocked(n) ? true : null" [class.sel]="n === value()" [class.act]="n === active()" [class.off]="blocked(n)" [attr.data-level]="n" (pointerdown)="optDown(n, $event)" (pointercancel)="optCancel()" (click)="tap(n)" (mouseenter)="optHover(n)">
+        <li role="option" [attr.id]="optId(n)" [attr.aria-selected]="n === value()" [attr.aria-disabled]="blocked(n) ? true : null" [class.sel]="n === value()" [class.act]="n === active()" [class.off]="blocked(n)" [attr.data-level]="n" (pointerdown)="optDown(n, $event)" (pointermove)="ptr($event)" (pointercancel)="optCancel()" (click)="tap(n)" (mouseenter)="optHover(n)">
           <b>{{ n }}</b><app-level-gauge [level]="n" />@if (blocked(n)) { <small class="nm">no method</small> }
         </li>
       }
@@ -150,12 +150,12 @@ export class LevelSelect {
   protected optDown(n: number, e: PointerEvent) { this.pointer = e.pointerType; this.wasActive = this.active() === n; this.cancelled = false; }
   /** Emulated mouseenter after a touch must not move the active option (the tooltip would show another level than the button). */
   protected optHover(n: number) { if (this.pointer !== 'touch') this.active.set(n); }
-  protected optCancel() { this.pointer = ''; this.wasActive = false; this.cancelled = true; }
+  protected optCancel() { this.wasActive = false; this.cancelled = true; }
   /** Touch: the first tap on an option only shows its tooltip (it becomes active), a tap on the already active option picks it. Mouse, pen and keyboard pick at once. A cancelled gesture (scroll) never picks. */
   protected tap(n: number) {
     if (this.cancelled) { this.cancelled = false; return; }
-    if (this.blocked(n)) { this.pointer = ''; this.wasActive = false; this.active.set(n); return; }   // a blocked level still becomes the tooltip's subject, so the reason is readable on touch
-    const touch = this.pointer === 'touch'; const was = this.wasActive; this.pointer = ''; this.wasActive = false;
+    if (this.blocked(n)) { this.wasActive = false; this.active.set(n); return; }   // a blocked level still becomes the tooltip's subject, so the reason is readable on touch
+    const touch = this.pointer === 'touch'; const was = this.wasActive; this.wasActive = false;
     if (touch && !was) { this.active.set(n); return; }
     this.pick(n);
   }
