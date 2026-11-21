@@ -88,7 +88,7 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
     assert.equal(await svc.authenticate('acme-demo', 'fict-a', TEMP + '3'), true);
     const st = await svc.firstAccessState('acme-demo', 'fict-a'); assert.equal(st.required && st.revision, r1);
   });
-  it('block and temporary password written concurrently both hold; the workflow unblock lifts only its own kind and survives a concurrent lift', async () => {
+  it('block and temporary password written concurrently both hold; the unblock lifts only blocks its own run set and survives a concurrent lift', async () => {
     const blocks = new BlockStore(join(dir, 'blocks', 'b.json'));
     const events: any[] = [];
     const fx = (WorkflowEngine.prototype as any).accountEffects.call({ authn: { blocks }, events: { emit: (e: unknown) => events.push(e) } });
@@ -101,14 +101,34 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
     const st = await svc.firstAccessState(T, 'fict-a'); assert.equal(st.required, true);
     assert.equal(await svc.authenticate(T, 'fict-a', TEMP + '4'), true);
     assert.equal(canSignIn(await blocks.list(T, 'fict-a'), Date.now()), false);
-    // an administrator also set a lockout on the same account: it must survive the workflow unblock
+    // an administrator lockout and another run's block on the same account: both must survive the unblock
     await blocks.add(T, { subject: 'fict-a', kind: 'locked', message: 'Admin lockout.', origin: 'admin', setBy: 'fict-admin', setAt: Date.now() } as never);
-    const [x, y] = await Promise.all([fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended' }), fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended' })]);
+    await fx.block(T, { runId: 'run-other', subject: 'fict-a', kind: 'pending_approval', message: 'Other run.' });
+    const [x, y] = await Promise.all([fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended', ownerRun: run }), fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended', ownerRun: run })]);
     assert.ok(x.lifted + y.lifted >= 1);
-    const left = await blocks.list(T, 'fict-a'); assert.deepEqual(left.map((b) => b.kind), ['locked']);
+    const left = await blocks.list(T, 'fict-a'); assert.deepEqual(left.map((b) => b.kind).sort(), ['locked', 'pending_approval']);
     assert.equal(canSignIn(left, Date.now()), false);
     assert.equal(await svc.authenticate(T, 'fict-a', TEMP + '4'), true);   // the password flow is untouched by the unblock
-    const none = await fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended' }); assert.equal(none.lifted, 0);
+    const none = await fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended', ownerRun: run }); assert.equal(none.lifted, 0); assert.equal(none.remaining, 2);
+  });
+  it('double phase 1 on the same account: one owned suspension survives (last writer wins), the other run fails closed and a sequential retry cannot take the block over', async () => {
+    const blocks = new BlockStore(join(dir, 'blocks4', 'b.json'));
+    const fx = (WorkflowEngine.prototype as any).accountEffects.call({ authn: { blocks }, events: { emit: () => {} } });
+    const T = 'acme-demo';
+    const [a, b] = await Promise.all([
+      fx.block(T, { runId: 'run-a', subject: 'fict-d', kind: 'suspended', message: 'Badge A.' }),
+      fx.block(T, { runId: 'run-b', subject: 'fict-d', kind: 'suspended', message: 'Badge B.' }),
+    ]);
+    assert.equal(a.applied && b.applied, true, 'check-then-add is not atomic across runs: both believe they blocked');
+    const inForce = await blocks.list(T, 'fict-d');
+    assert.equal(inForce.length, 1, 'the store serializes writes and the same kind replaces: a single suspension survives');
+    const winner = inForce[0].setBy === 'workflow:run-a' ? 'run-a' : 'run-b';
+    const loser = winner === 'run-a' ? 'run-b' : 'run-a';
+    const r = await fx.unblock(T, { runId: loser, subject: 'fict-d', kind: 'suspended', ownerRun: loser });
+    assert.equal(r.lifted, 0, 'the losing run never lifts the surviving block'); assert.equal(r.remaining, 1, 'its phase 2 then fails closed');
+    const retry = await fx.block(T, { runId: 'run-c', subject: 'fict-d', kind: 'suspended', message: 'Retry.' });
+    assert.equal(retry.applied, false, 'a sequential new run sees the block and does not take it over'); assert.equal(retry.blockId, inForce[0].id);
+    assert.equal((await blocks.list(T, 'fict-d'))[0].setBy, `workflow:${winner}`);
   });
   it('workspace mode: the temporary password lives on the run branch only; main keeps the old password until the branch is merged, then the first-access rule is in force on main', async () => {
     await svc.seedAccount({ id: 'fict-b', display_name: 'Fictional B', department: 'IT', manager_id: null, email: 'b@example.invalid' }, SEED);
@@ -183,7 +203,7 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
         assert.equal(r2.published, true); assert.equal(await mainHead(), mergedMain);
       } finally { delete process.env.IAM_WORKSPACE_MODE; }
     });
-    it('a block written while the publication runs is neither lost nor undone, and the workflow unblock then lifts only its own kind', async () => {
+    it('a block written while the publication runs is neither lost nor undone, and the workflow unblock then lifts the block its own run set', async () => {
       activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
       const head = await runBranch('run-pub-3', 'fict-p3');
       const blocks = new BlockStore(join(dir, 'blocks3', 'b.json'));
@@ -198,7 +218,8 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
       } finally { delete process.env.IAM_WORKSPACE_MODE; }
       assert.equal(canSignIn(await blocks.list('acme-demo', 'fict-p3'), Date.now()), false);
       assert.equal(await svc.authenticate('acme-demo', 'fict-p3', TEMP + 'P'), true);
-      assert.equal((await fx.unblock('acme-demo', { runId: 'run-3', subject: 'fict-p3', kind: 'suspended' })).lifted, 1);
+      const un = await fx.unblock('acme-demo', { runId: 'run-3', subject: 'fict-p3', kind: 'suspended', ownerRun: 'run-3' });
+      assert.equal(un.lifted, 1); assert.equal(un.remaining, 0);
       assert.equal(canSignIn(await blocks.list('acme-demo', 'fict-p3'), Date.now()), true);
     });
   });
