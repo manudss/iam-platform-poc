@@ -57,7 +57,6 @@ export class WorkflowStore {
           for (const col of ['output', 'input']) { const [cols] = await m.query(`show columns from workflow_steps like '${col}'`); if (!(cols as unknown[]).length) await m.query(`alter table workflow_steps add column ${col} JSON NULL`); }
           // One-time migration marker: without it, a definition deleted on main would be resurrected from a stale meta row at the next restart.
           // Durable ticket > account > sheet-row correlation written by the creation workflow. Operational state (not on a branch, never rolled back with one): the Done workflow resolves it, Jira text is never the authority.
-          await m.query('CREATE TABLE IF NOT EXISTS workflow_ticket_links (tenant VARCHAR(32) NOT NULL, connection_id VARCHAR(40) NOT NULL, project VARCHAR(20) NOT NULL, issue_key VARCHAR(40) NOT NULL, account VARCHAR(64) NOT NULL, source VARCHAR(20) NOT NULL, spreadsheet_id VARCHAR(80) NOT NULL, sheet_id INT NOT NULL, key_column VARCHAR(60) NOT NULL, key_value VARCHAR(200) NOT NULL, phase1_run VARCHAR(40) NOT NULL, status VARCHAR(10) NOT NULL, claimed_run VARCHAR(40) NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, connection_id, project, issue_key))');
           await m.query('CREATE TABLE IF NOT EXISTS workflow_store_meta (k VARCHAR(40) NOT NULL PRIMARY KEY, v VARCHAR(200) NOT NULL)');
         } finally { await m.end(); }
         // Definitions moved to the versioned database: create the table on main and copy any pre-existing meta rows ONCE (startup-only code, never reachable from a request).
@@ -257,10 +256,18 @@ export class WorkflowStore {
     const m = await this.meta();
     try { await m.query('delete from workflow_steps where run_id = ?', [id]); await m.query('delete from workflow_runs where id = ?', [id]); } finally { await m.end(); }
   }
+  private ticketLinksReady?: Promise<void>;
+  /** The ticket-link table is created on FIRST WRITE, never at boot. The deploy qualification hashes every Dolt database before and after a restart on a new image: a schema change at boot on a database written by the previous release is an unverified transformation that keeps the front closed. A read of a table that does not exist yet answers "no link". */
+  private async ensureTicketLinks(m: Connection): Promise<void> {
+    if (!this.ticketLinksReady) this.ticketLinksReady = m.query('CREATE TABLE IF NOT EXISTS workflow_ticket_links (tenant VARCHAR(32) NOT NULL, connection_id VARCHAR(40) NOT NULL, project VARCHAR(20) NOT NULL, issue_key VARCHAR(40) NOT NULL, account VARCHAR(64) NOT NULL, source VARCHAR(20) NOT NULL, spreadsheet_id VARCHAR(80) NOT NULL, sheet_id INT NOT NULL, key_column VARCHAR(60) NOT NULL, key_value VARCHAR(200) NOT NULL, phase1_run VARCHAR(40) NOT NULL, status VARCHAR(10) NOT NULL, claimed_run VARCHAR(40) NULL, created_at DATETIME(3) NOT NULL, updated_at DATETIME(3) NOT NULL, PRIMARY KEY (tenant, connection_id, project, issue_key))').then(() => undefined).catch((e) => { this.ticketLinksReady = undefined; throw e; });
+    await this.ticketLinksReady;
+  }
+  private static noTable(e: unknown): boolean { const x = e as { code?: string; errno?: number }; return x?.code === 'ER_NO_SUCH_TABLE' || x?.errno === 1146; }
   /** Ticket links: insert once; the same content again is an idempotent retry, different content for the same ticket is refused (never overwritten). */
   async putTicketLink(l: TicketLink): Promise<TicketLinkRow> {
     const m = await this.meta();
     try {
+      await this.ensureTicketLinks(m);
       await m.query('insert ignore into workflow_ticket_links (tenant, connection_id, project, issue_key, account, source, spreadsheet_id, sheet_id, key_column, key_value, phase1_run, status, claimed_run, created_at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,null,now(3),now(3))',
         [l.tenant, l.connectionId, l.project, l.issueKey, l.account, l.source, l.spreadsheetId, l.sheetId, l.keyColumn, l.keyValue, l.runId, 'open']);
       const row = await this.ticketLinkOn(m, l);
@@ -271,8 +278,10 @@ export class WorkflowStore {
     } finally { await m.end(); }
   }
   private async ticketLinkOn(m: Connection, k: TicketKey): Promise<TicketLinkRow | null> {
-    const [r] = await m.query('select * from workflow_ticket_links where tenant = ? and connection_id = ? and project = ? and issue_key = ?', [k.tenant, k.connectionId, k.project, k.issueKey]);
-    return ((r as TicketLinkRow[])[0]) ?? null;
+    try {
+      const [r] = await m.query('select * from workflow_ticket_links where tenant = ? and connection_id = ? and project = ? and issue_key = ?', [k.tenant, k.connectionId, k.project, k.issueKey]);
+      return ((r as TicketLinkRow[])[0]) ?? null;
+    } catch (e) { if (WorkflowStore.noTable(e)) return null; throw e; }
   }
   async getTicketLink(k: TicketKey): Promise<TicketLinkRow | null> { const m = await this.meta(); try { return await this.ticketLinkOn(m, k); } finally { await m.end(); } }
   /** One atomic UPDATE: only an open link, or one already claimed by THIS run, can be claimed. Anything else (absent, claimed by another run, done) returns null. */
@@ -286,6 +295,7 @@ export class WorkflowStore {
           [res] = await m.query("update workflow_ticket_links set status = 'claimed', claimed_run = ?, updated_at = now(3) where tenant = ? and connection_id = ? and project = ? and issue_key = ? and (status = 'open' or (status = 'claimed' and claimed_run = ?))", [runId, k.tenant, k.connectionId, k.project, k.issueKey, runId]);
           break;
         } catch (e) {
+          if (WorkflowStore.noTable(e)) return null;   // no link was ever written
           const x = e as { code?: string; message?: string };
           if (attempt >= 8 || !(x.code === 'ER_LOCK_DEADLOCK' || /serialization failure/i.test(x.message ?? ''))) throw e;
           await new Promise((r) => setTimeout(r, 20 * attempt));
@@ -298,7 +308,8 @@ export class WorkflowStore {
   async completeTicketLink(k: TicketKey, runId: string): Promise<boolean> {
     const m = await this.meta();
     try {
-      const [res] = await m.query("update workflow_ticket_links set status = 'done', updated_at = now(3) where tenant = ? and connection_id = ? and project = ? and issue_key = ? and status = 'claimed' and claimed_run = ?", [k.tenant, k.connectionId, k.project, k.issueKey, runId]);
+      let res: unknown;
+      try { [res] = await m.query("update workflow_ticket_links set status = 'done', updated_at = now(3) where tenant = ? and connection_id = ? and project = ? and issue_key = ? and status = 'claimed' and claimed_run = ?", [k.tenant, k.connectionId, k.project, k.issueKey, runId]); } catch (e) { if (WorkflowStore.noTable(e)) return false; throw e; }
       return Number((res as { affectedRows?: number }).affectedRows) === 1;
     } finally { await m.end(); }
   }
