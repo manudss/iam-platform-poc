@@ -1,7 +1,7 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { LevelGauge, LevelSelect } from './level-select';
+import { LevelChain, LevelGauge, LevelSelect, levelChains } from './level-select';
 import { Session } from './session';
 
 export interface BlockRow { id: string; kind: string; message: string; origin: string; setBy: string; setAt: number; until?: number; hold?: boolean; reference: string }
@@ -67,7 +67,7 @@ export function fromForm(f: SecurityForm, keep: { exempt: string[]; hold: boolea
     <h3>Self sign-up</h3>
     <label class="check"><input type="checkbox" name="holdAfterVerification" [(ngModel)]="form.holdAfterVerification" id="ap-hold-verif" /> After approval, keep the new account blocked until an admin or a workflow unblocks it</label>
     <h3>Sign-in level</h3>
-    <label>Administration pages need at least<app-level-select [value]="form.adminMinLevel" (valueChange)="form.adminMinLevel = $event" [allowNone]="true" label="Minimum level for administration pages" id="ap-admin-level" /></label>
+    <label>Administration pages need at least<app-level-select [value]="form.adminMinLevel" (valueChange)="form.adminMinLevel = $event" [allowNone]="true" [chains]="chains()" [restrict]="true" label="Minimum level for administration pages" id="ap-admin-level" /></label>
     <label>Ask the administrator to sign in again after (minutes)<input type="number" min="0" max="10080" name="adminMaxAge" [(ngModel)]="form.adminMaxAgeMinutes" id="ap-admin-age" /></label>
     <p class="hint" id="ap-admin-age-help">This is not a second level. The first setting is how strong the sign-in must be; this one is how recent it must be. With 15, an administrator whose sign-in is older than 15 minutes signs in again. 0 means no age limit for administrator sign-in only; the other checks still apply.</p>
     <p class="hint">Levels are declared on the sign-in chains, never added up. A person who is below the level signs in again with a method that reaches it; nobody is offered a weaker one.</p>
@@ -83,6 +83,7 @@ export function fromForm(f: SecurityForm, keep: { exempt: string[]; hold: boolea
   styles: ['.card{margin-bottom:1rem}label{display:grid;gap:.25rem;margin:.6rem 0}.check{display:flex;flex-direction:row;gap:.5rem;align-items:center}.row{display:flex;gap:.5rem;margin-top:.75rem}.mrow{display:flex;gap:.75rem;align-items:center;padding:.4rem 0}.grow{flex:1;display:grid}.pill{padding:.1rem .5rem;border-radius:1rem;background:var(--bad-soft);color:var(--bad-ink);font-size:.85rem}.dtabs{display:flex;gap:.5rem;margin:.5rem 0 1rem}.dtabs .on{font-weight:700}.blk{border-top:1px solid var(--line);padding:.5rem 0}'],
 })
 export class AccountProtectionPage {
+  protected readonly chains = signal<LevelChain[]>([]);
   private readonly s = inject(Session);
   protected readonly tab = signal<'blocks' | 'settings'>('blocks');
   protected readonly loading = signal(true);
@@ -106,6 +107,7 @@ export class AccountProtectionPage {
     try {
       const api = this.s.api;
       const [l, sec, users] = await Promise.all([api.raw<Listing>('GET', '/account-blocks'), api.raw<{ working: any; live: any }>('GET', '/security'), api.users().catch(() => [])]);
+      try { const au = await api.raw<any>('GET', '/auth'); this.chains.set(au.status < 400 && au.data?.working ? levelChains(au.data.working.config, au.data.working.analyses ?? []) : []); } catch { this.chains.set([]); }
       this.listing.set(l.data); if (!this.kinds().includes(this.kind) && this.kinds().length) this.kind = this.kinds()[0];
       this.people.set(users.map((u: any) => ({ id: u.id, display_name: u.display_name })));
       this.form = toForm(sec.data.working); this.keep = { exempt: [...(sec.data.working.lockout.exempt ?? [])], hold: !!sec.data.working.lockout.hold, appLevels: JSON.parse(JSON.stringify(sec.data.working.appLevels ?? {})) };

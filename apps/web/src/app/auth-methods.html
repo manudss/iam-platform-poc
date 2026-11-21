@@ -93,7 +93,7 @@
         <p class="hint">{{ newEntry()?.description }}</p>
         <h4>Common</h4>
         <label>Name<input type="text" name="newname" [(ngModel)]="newName" maxlength="60" [placeholder]="newEntry()?.name ?? ''" /></label>
-        <label>Level<app-level-select [value]="newLevel()" (valueChange)="newLevel.set($event)" label="Level of the new instance" /></label>
+        <label>Level<app-level-select [value]="newLevel()" [chains]="levelChains()" (valueChange)="newLevel.set($event)" label="Level of the new instance" /></label>
         <label class="inline"><input type="checkbox" name="newuse" [(ngModel)]="newUse" /> Put in the sign-in list now, at position <input type="number" class="pos" name="newpos" min="1" [max]="used().length + 1" [(ngModel)]="newPos" [disabled]="!newUse" /></label>
         @for (g of newGroups(); track g.name) {
           <h4>{{ g.name }} <span class="from">from plugin</span></h4>
@@ -122,7 +122,7 @@
           } @else { <p class="hint">Chain &middot; built into the core</p> }
           <h4>Common <span class="core">core</span></h4>
           <label>Name<input type="text" class="name" name="ename" [ngModel]="e.name" (ngModelChange)="rename(e, $event)" maxlength="60" /></label>
-          <label>Level<app-level-select [value]="e.level" (valueChange)="setLevel(e, $event)" [label]="'Level of ' + e.name" /></label>
+          <label>Level<app-level-select [value]="e.level" [chains]="levelChains()" (valueChange)="setLevel(e, $event)" [label]="'Level of ' + e.name" /></label>
           @if (e.kind==='chain') { <p class="hint">A chain cannot be declared below its strongest step ({{ chain(e) ? minLevel(e) : 1 }}).</p> }
           <label class="inline"><input type="checkbox" name="erec" [ngModel]="isRecommended(e)" (ngModelChange)="setRecommended(e, $event)" [disabled]="!e.inUse" /> Recommended on the sign-in page</label>
           @if (e.kind==='method') {
