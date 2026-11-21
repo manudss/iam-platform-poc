@@ -164,6 +164,7 @@ describe('first access: forced password change inside the sign-in chain', () => 
   it('MFA: with a second factor in the chain the change page comes only AFTER every factor, the rule is not consulted before, and nothing is consumed until the change', async () => {
     const mfa = { methods: [{ id: 'pw', type: 'password', name: 'pw', enabled: true, level: 3, config: {} }, { id: 'pin', type: 'digit-code', name: 'pin', enabled: true, level: 3, config: {} }], chains: [{ id: 'pw-pin', name: 'Password then PIN', steps: ['pw', 'pin'], level: 4 }], defaultChain: 'pw-pin' };
     await put(mfa).expect(200); reset();
+    (svc as any).fails.clear(); (svc as any).starts.clear();   // earlier tests in this file spent this account's throttle budget
     const pin = (await http().post(`/tenants/${T}/auth/enrollments/demo-alice/pin`).set(adm).send({ length: 6 }).expect(201)).body.shownOnce.pin as string;
     let r = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body;
     assert.equal(r.outcome, 'challenge'); assert.equal(r.step.methodId, 'pin', 'the second factor comes before the change page');
