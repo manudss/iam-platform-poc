@@ -160,4 +160,17 @@ describe('LevelSelect', () => {
     expect(ev.defaultPrevented).toBe(true);
     label.remove();
   });
+  it('touch: tapping a blocked level shows its tooltip without picking; an emulated mouseenter after touch does not move the active option', () => {
+    TestBed.configureTestingModule({ imports: [LevelSelect] });
+    const f = TestBed.createComponent(LevelSelect);
+    f.componentRef.setInput('value', 2); f.componentRef.setInput('restrict', true); f.componentRef.setInput('chains', CH); f.detectChanges();
+    const el: HTMLElement = f.nativeElement;
+    (el.querySelector('button') as HTMLElement).click(); f.detectChanges();
+    const li = (n: number) => el.querySelector(`li[data-level="${n}"]`) as HTMLElement;
+    down(li(5), 'touch'); li(5).dispatchEvent(new MouseEvent('mouseenter')); li(5).click(); f.detectChanges();
+    expect(li(5).classList.contains('act')).toBe(true);   // 5 is blocked (no chain at 4-7 except none): subject of the tooltip
+    expect(li(2).classList.contains('sel')).toBe(true);   // value unchanged
+    down(el.querySelector('button')!, 'touch'); li(7).dispatchEvent(new MouseEvent('mouseenter')); f.detectChanges();
+    expect(li(7).classList.contains('act')).toBe(false);
+  });
 });
