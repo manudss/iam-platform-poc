@@ -13,6 +13,7 @@ import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from '../workflows/engine.js';
 import { BlockStore } from '../accounts/block-store.js';
 import { canSignIn } from '../accounts/blocks.js';
+import { branchContext } from '../workspace/context.js';
 // UsersService temporary password, first access and credential revision on a REAL Dolt, with a credential file in a temp dir. Fictional accounts only. Skipped when DOLT_BIN is missing (CI provides it).
 const bin = process.env.DOLT_BIN ?? '', have = existsSync(bin);
 const TEMP = 'Temp-Pass-Fictional-1', NEXT = 'Next-Pass-Fictional-2', SEED = 'Seed-Pass-Fictional-0';
@@ -107,5 +108,26 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
     assert.equal(canSignIn(left, Date.now()), false);
     assert.equal(await svc.authenticate(T, 'fict-a', TEMP + '4'), true);   // the password flow is untouched by the unblock
     const none = await fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended' }); assert.equal(none.lifted, 0);
+  });
+  it('workspace mode: the temporary password lives on the run branch only; main keeps the old password until the branch is merged, then the first-access rule is in force on main', async () => {
+    await svc.seedAccount({ id: 'fict-b', display_name: 'Fictional B', department: 'IT', manager_id: null, email: 'b@example.invalid' }, SEED);
+    const mainRev = await rev('fict-b');
+    await v.createBranch('run-fict', 'main');
+    process.env.IAM_WORKSPACE_MODE = '1';
+    try {
+      const r = await branchContext.run({ branch: 'run-fict' }, () => svc.setTemporaryPassword('acme-demo', 'fict-admin', 'fict-b', TEMP + '5', 2));
+      assert.equal(r.ref, 'run-fict'); assert.equal(r.pendingPublication, true);
+      assert.equal(await rev('fict-b'), mainRev);                                             // main untouched
+      assert.deepEqual(await svc.firstAccessState('acme-demo', 'fict-b'), { required: false });  // no rule on main yet
+      assert.equal(await svc.authenticate('acme-demo', 'fict-b', SEED), true);
+      assert.equal(await svc.authenticate('acme-demo', 'fict-b', TEMP + '5'), false);
+      const onBranch = await svc.firstAccessState('acme-demo', 'fict-b', 'run-fict'); assert.equal(onBranch.required, true);
+      // plain Dolt merge of the branch into main (the publisher's checks and activation are NOT exercised here)
+      await v.lock(() => v.at('main', async (c) => { await c.query("call dolt_merge('run-fict')"); }));
+      const merged = await svc.firstAccessState('acme-demo', 'fict-b');
+      assert.equal(merged.required, true); assert.equal(merged.required && merged.revision, onBranch.required ? onBranch.revision : '');
+      assert.equal(await svc.authenticate('acme-demo', 'fict-b', TEMP + '5'), true);
+      assert.equal(await svc.authenticate('acme-demo', 'fict-b', SEED), false);
+    } finally { delete process.env.IAM_WORKSPACE_MODE; }
   });
 });

@@ -111,3 +111,36 @@ describe('managed workflow connections', () => {
     } finally {stub.mock.restore(); process.env.IAM_WORKFLOW_REAL_CONNECTIONS=prev;}
   });
 });
+
+describe('a connection of the same id on a run branch never receives the credential of main', () => {
+  const seed = async () => {
+    const h = setup(); const saved = await h.service.save('t', undefined, {...jira, secret:'FICTIONAL-MAIN-TOKEN'});
+    const id = saved.connection.id; const main = h.rows.get(`t:main:${id}`) ?? [...h.rows.values()][0];
+    return {h, id, main};
+  };
+  const homonym = (h: any, id: string, main: any, patch: any) => { const {ref: _r, ...base} = main; h.rows.set(`t:run-x:${id}`, {...base, ...patch, ref: 'run-x'}); };
+  it('main still resolves with its own credential', async () => {
+    const {h, id} = await seed();
+    const key = [...h.rows.keys()][0]; const row = h.rows.get(key); if (!key.includes(':main:')) { h.rows.delete(key); h.rows.set(`t:main:${id}`, row); }
+    assert.equal((await h.service.resolve('t', 'main', id, 'jira')).secret, 'FICTIONAL-MAIN-TOKEN');
+  });
+  it('a homonym on the run branch with another destination and the same secret reference is refused (credential sealed to its destination)', async () => {
+    const {h, id, main} = await seed();
+    const key = [...h.rows.keys()][0]; const row = h.rows.get(key); h.rows.delete(key); h.rows.set(`t:main:${id}`, row);
+    homonym(h, id, row, {config: {...row.config, instanceUrl: 'https://evil.atlassian.net'}});
+    await assert.rejects(() => h.service.resolve('t', 'run-x', id, 'jira'), /not bound/);
+    assert.equal((await h.service.resolve('t', 'main', id, 'jira')).secret, 'FICTIONAL-MAIN-TOKEN');
+  });
+  it('a homonym with no secret reference gets no credential and does not fall back to main', async () => {
+    const {h, id} = await seed();
+    const key = [...h.rows.keys()][0]; const row = h.rows.get(key); h.rows.delete(key); h.rows.set(`t:main:${id}`, row);
+    homonym(h, id, row, {secretRef: undefined});
+    await assert.rejects(() => h.service.resolve('t', 'run-x', id, 'jira'), /secret not configured/);
+  });
+  it('a homonym pointing at the secret of another connection id is refused', async () => {
+    const {h, id} = await seed();
+    const key = [...h.rows.keys()][0]; const row = h.rows.get(key); h.rows.delete(key); h.rows.set(`t:main:${id}`, row);
+    homonym(h, id, row, {secretRef: row.secretRef.replace(`/${id}/`, '/other-conn/')});
+    await assert.rejects(() => h.service.resolve('t', 'run-x', id, 'jira'), /invalid scoped secret reference/);
+  });
+});
