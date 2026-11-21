@@ -799,7 +799,7 @@ export class AuthnService implements OnApplicationBootstrap {
       this.lockFails.delete(`${tenant}/${subject}`);
       // Classic single-password mode has no chain to carry the forced change: a temporary password is refused (closed) while the rule is in force. Documented limit: use a chain to complete the change.
       let fa: Awaited<ReturnType<UsersService['firstAccessState']>> = { required: false };
-      if (this.users) { try { fa = await this.users.firstAccessState(tenant, subject, branch ?? 'main'); } catch { fa = { required: true, expired: false, revision: '' }; } }
+      if (process.env.IAM_DIRECTORY_AUTH === '1' && this.users) { try { fa = await this.users.firstAccessState(tenant, subject, branch ?? 'main'); } catch { fa = { required: true, expired: false, revision: '' }; } }
       if (fa.required) { this.audit({ tenant, subject, outcome: 'first-access-refused-classic' }); return { outcome: 'deny', reason: 'password-change-required', message: 'Your password is temporary and must be changed. Sign in with a method that supports the change, or ask an administrator.' }; }
       return null;
     }
@@ -858,7 +858,7 @@ export class AuthnService implements OnApplicationBootstrap {
   }
   /** The forced change of a temporary password. Runs only once the chain is complete and no block is in force. A store or directory error refuses (fail closed). */
   private async firstAccessGate(s: Session): Promise<GateResponse | null> {
-    if (!s.known || !this.users) return null;
+    if (!s.known || !this.users || process.env.IAM_DIRECTORY_AUTH !== '1') return null;   // same switch as the directory password path: without it no credential record exists to carry the rule
     let st: Awaited<ReturnType<UsersService['firstAccessState']>>;
     try { st = await this.users.firstAccessState(s.tenant, s.subject, s.branch ?? 'main'); } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
     if (!st.required) return null;
