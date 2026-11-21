@@ -124,7 +124,7 @@ describe('badge done: process crash and restart (the first engine is abandoned m
   it('crash during publish: the resume does NOT republish by itself; the step is marked interrupted, the run fails closed (never completed), nothing is regenerated, no mail, no unblock', async () => withMail(async () => {
     const w = world({ hang: 'publish' }); w.engine.kick(w.row.id); await until(() => w.state.hung === 'publish');
     await restart(w);
-    assert.equal(w.row.status, 'failed'); assert.match(String(w.row.error), /interrupted by a restart/); assert.equal(w.steps.get('publish')!.error, 'INTERRUPTED_IN_FLIGHT');
+    assert.equal(w.row.status, 'failed'); assert.match(String(w.row.error), /interrupted by a restart/); assert.equal(w.steps.get('publish')!.error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED');
     assert.equal(w.state.publishHeads.length, 1, 'no second publish call'); assert.equal(FakeMail.calls.length, 0);
     assert.equal(w.state.passwords.length, 1, 'set-temporary ran once and the password was not regenerated');
     assert.equal(w.calls.includes('unblock'), false); assert.equal([...w.links.m.values()][0].status, 'claimed');
@@ -140,7 +140,7 @@ describe('badge done: process crash and restart (the first engine is abandoned m
   it('crash during the unblock: the resume does not re-run it by itself and never reports completed; the mail is not resent; the ticket stays claimed for reconciliation', async () => withMail(async () => {
     const w = world({ hang: 'unblock' }); w.engine.kick(w.row.id); await until(() => w.state.hung === 'unblock');
     await restart(w);
-    assert.equal(w.row.status, 'failed'); assert.equal(w.steps.get('unblock')!.error, 'INTERRUPTED_IN_FLIGHT'); assert.equal(FakeMail.calls.length, 1, 'the mail is not sent again');
+    assert.equal(w.row.status, 'failed'); assert.equal(w.steps.get('unblock')!.error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED'); assert.equal(FakeMail.calls.length, 1, 'the mail is not sent again');
     assert.equal(w.calls.filter((c) => c === 'unblock').length, 1); assert.equal([...w.links.m.values()][0].status, 'claimed'); assert.equal(w.steps.get('done')!.status, 'skipped');
   }));
 });

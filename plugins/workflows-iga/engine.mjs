@@ -97,7 +97,7 @@ export function createWorkflowEngine(deps) {
       const effectful = !n || externalBlock(n.type) || stepCategory(n.type) === 'real';
       if (!effectful) { await store.patchStep(runId, st.node_id, { status: 'pending' }); continue; }
       for (const o of await store.steps(runId)) if (o.status === 'pending') await store.patchStep(runId, o.node_id, { status: 'skipped' });
-      await store.patchStep(runId, st.node_id, { status: 'failed', error: 'INTERRUPTED_IN_FLIGHT', finished_at: now() });
+      await store.patchStep(runId, st.node_id, { status: 'failed', error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED', finished_at: now() });
       await store.updateRun(runId, { status: 'failed', error: `step "${n?.name ?? st.node_id}" was interrupted by a restart while it ran: its effect is unknown, reconcile before creating a new run.`.slice(0, 500), finished_at: now() }); return;
     }
     const { order } = validateGraph(run.graph);
