@@ -119,6 +119,7 @@ describe('first access: forced password change inside the sign-in chain', () => 
   const submit = (session: string) => gate({ tenant: T, session, answers: { newpw: 'n3w-demo-only-pass', confirm: 'n3w-demo-only-pass' } });
   for (const kind of ['suspended', 'locked'] as const) {
     it(`a ${kind} block placed after the challenge wins: refused, the temporary password is not consumed, no token, a fresh chain is needed`, async () => {
+      await put(chain).expect(200);
       reset(); const c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body; assert.equal(c.outcome, 'challenge');
       const b = await svc.blocks.add(T, { subject: 'demo-alice', kind, message: 'Held for the badge check.', origin: 'admin', setBy: 'admin-test', setAt: Date.now(), hold: true });
       try {
@@ -131,6 +132,7 @@ describe('first access: forced password change inside the sign-in chain', () => 
     });
   }
   it('a login disabled after the challenge wins: refused, nothing consumed', async () => {
+    await put(chain).expect(200);
     reset(); const c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body; assert.equal(c.outcome, 'challenge');
     fake.loginEnabled = false;
     const r = (await submit(c.session)).body;
@@ -138,6 +140,7 @@ describe('first access: forced password change inside the sign-in chain', () => 
     assert.equal((await submit(c.session)).body.outcome, 'deny');
   });
   it('last check: a block observed at the final read refuses with no claims (the new password stays saved), and a directory error there refuses closed', async () => {
+    await put(chain).expect(200);
     reset(); let c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body;
     let b: { id: string } | undefined;
     fake.afterComplete = async () => { b = await svc.blocks.add(T, { subject: 'demo-alice', kind: 'suspended', message: 'Held for the badge check.', origin: 'admin', setBy: 'admin-test', setAt: Date.now(), hold: true }); };
@@ -145,12 +148,13 @@ describe('first access: forced password change inside the sign-in chain', () => 
       const r = (await submit(c.session)).body;
       assert.equal(r.outcome, 'deny'); assert.ok(!('claims' in r)); assert.equal(fake.completeCalls, 1); assert.equal(fake.flagged, false, 'the password change itself was completed');
     } finally { if (b) await svc.blocks.lift(T, 'demo-alice', b.id); }
-    reset(); c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body;
+    await put(chain).expect(200); reset(); c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body;
     fake.afterComplete = () => { fake.failListNow = true; };
     const e = (await submit(c.session)).body;
     assert.equal(e.outcome, 'deny'); assert.ok(!('claims' in e));
   });
   it('two simultaneous submissions and a replay: at most one allow, the other is refused, nothing leaks', async () => {
+    await put(chain).expect(200);
     reset(); const c = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body;
     const [x, y] = await Promise.all([submit(c.session), submit(c.session)]);
     const allows = [x.body, y.body].filter((r: any) => r.outcome === 'allow').length;
