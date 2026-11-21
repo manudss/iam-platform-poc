@@ -24,8 +24,8 @@ def child_stage(stderr):
     found=[t for t in _CHILD_RE.findall(stderr or '') if t in CHILD_STAGES]
     return found[-1] if found else None
 
-def cmd(args, input=None, child=False):
-    r=subprocess.run(args,input=input,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
+def cmd(args, input=None, child=False, timeout=180):
+    r=subprocess.run(args,input=input,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
     if r.returncode:
         if child:raise StageFailure(child_stage(r.stderr) or current_stage())
         raise ValueError('command failed, private diagnostic inspection required')
@@ -94,11 +94,40 @@ def policy_load(path, isolated_loopback=False):
     if not all(isinstance(p[k],list) for k in ['baoMetadataRoots','credentialFiles','appendOnlyTables']):raise ValueError('policy coverage invalid')
     return p
 
+def auth_probe(container, image, p, runner=None, timeout=90):
+    """Pre-gate probe: prove the configured qualification credentials still complete the
+    OIDC login the after-phase smoke needs, against the RUNNING current version, BEFORE
+    the maintenance gate is armed (stale static credentials discovered only at the
+    smoke phase are the recurring incident class). A probe failure leaves the gate and
+    the running service untouched. Side-effect boundary: ONE real password login (first
+    origin only; later origins get a form-only check) - issuer-side session/audit
+    entries may be created and account lockout policies apply; the authorization code
+    is never redeemed, and no application data, gate or deployment state changes.
+    HONEST SCOPE: the image-identity check below is near-tautological (the caller just
+    read that same image from the same container) and the probe says NOTHING about
+    public reachability or TLS - it proves only that these credentials complete this
+    login against this locally running container."""
+    runner=runner or cmd
+    mark('AFTER_IMAGE')
+    inspect=json.loads(runner(['docker','inspect',container]))
+    if inspect[0]['Config']['Image']!=image or not inspect[0]['State']['Running']:raise ValueError('auth probe target must be the running current image')
+    mark('SMOKE')
+    source=Path(__file__).with_name('qualification-container.mjs').read_text()
+    auth=json.loads(Path(p['authFile']).read_text())
+    # Whitelisted payload ONLY: the probe needs the expected origins and the credentials,
+    # nothing else from the policy - a policy-derived redirect target (e.g. localBase)
+    # must never reach the credential-bearing child.
+    runner(['docker','exec','-i',container,'node','--input-type=module','-e',source,'authprobe'],json.dumps({'origins':p['origins'],'auth':auth}),child=True,timeout=timeout)
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after'],required=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after','authprobe'],required=True)
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
     parser.add_argument('--isolated-loopback-test',action='store_true')
     parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
+    if a.phase=='authprobe':
+        _state['probe']=True
+        auth_probe(a.container,a.image,p)
+        print('Qualification auth probe passed: the configured credentials completed the OIDC login against the running current version; the maintenance gate was never armed (issuer-side session/audit entries may have been created)')
+        return
     mark('BARRIER')
     if not Path(a.barrier_file).is_file():raise ValueError('maintenance barrier absent')
     for origin in p['origins']:
@@ -164,4 +193,6 @@ if __name__=='__main__':
     try:main();sys.exit(0)
     except StageFailure as e:stage=e.stage
     except Exception:stage=current_stage()
+    if _state.get('probe'):
+        print('Qualification auth probe failed or UNKNOWN (stage=%s). The maintenance gate was never armed; the running service is untouched (issuer-side session/audit entries may exist).'%stage,file=sys.stderr);sys.exit(1)
     print('Qualification failed or UNKNOWN (stage=%s). Keep maintenance armed and inspect private evidence.'%stage,file=sys.stderr);sys.exit(1)

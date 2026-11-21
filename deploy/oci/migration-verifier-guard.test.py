@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -48,14 +49,32 @@ class Guard(unittest.TestCase):
         sh(self.root, 'add', '-A')
         sh(self.root, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', message)
 
-    def add_verifier(self, suite=SUITE):
+    def add_verifier(self, suite=SUITE, pins=True):
         (self.root / 'deploy/oci/verify-0002-account-blocks.py').write_text('# verifier proving migration 0002\n')
         if suite is not None:
             (self.root / 'deploy/oci/verify-0002-account-blocks.test.py').write_text(suite)
+        if pins:
+            self.add_pins()
+
+    def add_pins(self, sha256=None, path='deploy/oci/verify-0002-account-blocks.py'):
+        digest = sha256 or hashlib.sha256((self.root / 'deploy/oci/verify-0002-account-blocks.py').read_bytes()).hexdigest()
+        (self.root / 'deploy/oci/transformation-verifiers.json').write_text(json.dumps(
+            {'format': 1, 'verifiers': {'0002': {'path': path, 'sha256': digest}}}))
 
     def add_ci_step(self, prefix='      '):
         ci = self.root / '.github/workflows/ci.yml'
         ci.write_text(ci.read_text() + prefix + '- run: python3 deploy/oci/verify-0002-account-blocks.test.py\n')
+
+    def test_two_new_versions_in_one_change_refused(self):
+        # Base carries only the baseline; the change adds 0002 AND 0003: the controller
+        # binds one verifier per image, so this must be refused, never silently latest-only.
+        (self.root / 'data/migrations/manifest.json').write_text(json.dumps(MANIFEST_0001))
+        self.commit('base with baseline only')
+        manifest = {'format': 1, 'versions': MANIFEST_0002['versions'] + [
+            {'id': '0003', 'name': 'more', 'files': {'c.sql': 'q' * 64}, 'checksum': 'r' * 64}]}
+        (self.root / 'data/migrations/manifest.json').write_text(json.dumps(manifest))
+        missing = g.guard(self.root, 'HEAD')
+        self.assertTrue(any('more than one new migration version' in m and '0002' in m and '0003' in m for m in missing))
 
     # -- pass paths --------------------------------------------------------------
     def test_baseline_only_passes(self):
@@ -66,6 +85,26 @@ class Guard(unittest.TestCase):
         self.add_verifier()
         self.add_ci_step()
         self.assertEqual(g.guard(self.root, self.base), [])
+
+    def test_missing_pin_entry_fails(self):
+        self.add_verifier(pins=False)
+        self.add_ci_step()
+        missing = g.guard(self.root, self.base)
+        self.assertTrue(any('transformation-verifiers.json' in item and 'unreadable' in item for item in missing))
+
+    def test_wrong_pin_fails(self):
+        self.add_verifier()
+        self.add_pins(sha256='0' * 64)
+        self.add_ci_step()
+        missing = g.guard(self.root, self.base)
+        self.assertTrue(any('recorded pin differs from the verifier bytes' in item for item in missing))
+
+    def test_pin_path_mismatch_fails(self):
+        self.add_verifier()
+        self.add_pins(path='deploy/oci/elsewhere.py')
+        self.add_ci_step()
+        missing = g.guard(self.root, self.base)
+        self.assertTrue(any('pin entry path must be the shipped verifier' in item for item in missing))
 
     def test_base_commit_without_manifest_passes(self):
         # A REAL base commit that predates the manifest (initial release), distinct

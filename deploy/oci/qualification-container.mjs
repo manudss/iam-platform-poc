@@ -88,6 +88,41 @@ async function smoke(){
  if(expected.versions.length!==ledger.entries.length||expected.versions.some((v,i)=>v.id!==ledger.entries[i].id||v.checksum!==ledger.entries[i].checksum))throw Error('migration history mismatch');
  return {journal,ledger:ledger.entries.map(e=>({id:e.id,checksum:e.checksum}))};
 }
+async function authprobe(){
+ // Pre-gate probe. ONE real password login per probe, on the FIRST origin only: the
+ // configured account can be an administrator with a lockout policy, and every login
+ // writes issuer-side session/audit entries. Later origins are checked WITHOUT
+ // re-testing the password (authorize form reachable only). The FIRST failure stops
+ // the probe; there is no retry loop. The authorization code is never redeemed.
+ // Bound: every fetch carries its own 15s AbortSignal so a hung origin cannot leave
+ // an orphaned client until the caller's timeout kills the container exec.
+ // Fixture-test seam, ENVIRONMENT ONLY: the stdin payload is policy-derived and must
+ // never redirect these credential-bearing requests, so a payload key is ignored by
+ // construction. The controller's docker exec sets no such variable, hence the
+ // production shape stays the in-container 8080.
+ const local=typeof process.env.LYAM_AUTHPROBE_LOCAL_BASE==='string'?process.env.LYAM_AUTHPROBE_LOCAL_BASE:'http://127.0.0.1:8080';
+ const T=()=>({signal:AbortSignal.timeout(15000)});
+ mark('SMOKE_HEALTH');
+ if(!(await fetch(local+'/healthz',T())).ok)throw Error('edge health failed');
+ const credentials=p.auth;
+ if(typeof credentials.username!=='string'||typeof credentials.password!=='string')throw Error('auth input missing');
+ let tested=false;
+ for(const origin of p.origins){
+  mark('SMOKE_LOGIN');
+  const verifier=randomBytes(32).toString('base64url'),challenge=createHash('sha256').update(verifier).digest('base64url'),state=randomBytes(16).toString('hex');
+  const params=new URLSearchParams({client_id:'demo-web',redirect_uri:origin+'/callback',response_type:'code',state,code_challenge:challenge,code_challenge_method:'S256',chain:'password-only'});
+  const page=await fetch(local+'/core/authorize?'+params,{redirect:'manual',...T()}),html=await page.text();
+  if(page.status!==200||!html.includes('name="username"'))throw Error('expected origin/form refused');
+  if(tested)continue;
+  tested=true;
+  const fields={};for(const m of html.matchAll(/<input\b[^>]*>/gi)){const tag=m[0],name=tag.match(/\bname="([^"]+)"/i)?.[1],value=tag.match(/\bvalue="([^"]*)"/i)?.[1]??'';if(name&&!['username','password'].includes(name))fields[name]=value.replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'");}
+  fields.username=credentials.username;fields.password=credentials.password;
+  const logged=await fetch(local+'/core/authorize/login',{method:'POST',redirect:'manual',headers:{'content-type':'application/x-www-form-urlencoded',cookie:page.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ')},body:new URLSearchParams(fields),...T()});
+  if(logged.status!==302)throw Error('real OIDC login failed');
+  const location=new URL(logged.headers.get('location')??'');if(location.origin!==origin||location.pathname!=='/callback'||location.searchParams.get('state')!==state||!location.searchParams.get('code'))throw Error('OIDC redirect/state failed');
+ }
+ return {authprobe:tested?'login-ok':'no-origin'};
+}
 try{
  // mode selection, stdin read (262144 bound) and JSON parse stay INSIDE the boundary:
  // any failure reports stage=INPUT/MODE only, never a stack or an input snippet.
@@ -98,6 +133,7 @@ try{
  let result;
  if(mode==='capture')result={dolt:dolt(),bao:await bao()};
  else if(mode==='smoke')result=await smoke();
+ else if(mode==='authprobe')result=await authprobe();
  else throw Error('invalid mode');
  mark('OUTPUT');
  console.log(JSON.stringify(result));

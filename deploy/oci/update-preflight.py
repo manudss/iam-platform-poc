@@ -5,7 +5,8 @@ Run by the operator BETWEEN cycles, before update.sh --image <ref> starts its
 before-phase. It never writes anything. It proves, for the exact target image
 string the updater will pass:
 
-  1. the policy parses (format 1) and lists transformationVerifiers[<exact image>]
+  1. the policy parses with the controller's own policy_load (single parser contract)
+     and lists transformationVerifiers[<exact image>]
      - the qualification controller fails closed without it, which is what put
        the demo under maintenance after #118. Near-miss keys (same repository,
      different digest) are reported explicitly: a verifier for ANOTHER digest is
@@ -14,10 +15,15 @@ string the updater will pass:
      group/other permissions (the reviewed installation is root 0700);
   3. the file's sha256 equals the reviewed pin passed as --verifier-sha256.
 
-GUARANTEE BOUNDARY: this is a STRUCTURAL preflight and an OPERATOR CHECKLIST
-TOOL - it is NOT integrated into update.sh or the ordered queue and locks
-nothing automatically. It does not prove the verifier is correct (independent
-review does), does not run the controller's full policy_load, does not verify
+WIRING: the ordered queue invokes this preflight cold, per entry whose target
+digest the operator's private preflight config pins, BEFORE the updater arms the
+front gate (the SSH guard accepts only the constant `drain` argv, so the binding
+arrives via that root-owned 0600 config, never via CI flags or plan fields). It
+also remains an operator checklist tool between cycles.
+
+GUARANTEE BOUNDARY: this is a STRUCTURAL preflight. It does not run inside
+update.sh itself. It does not prove the verifier is correct (independent
+review does), does not verify
 the authorized origin of the pin, parent-directory immutability or symlinks, and
 does not prove the verifier functionally succeeds. It never writes, and must run
 BEFORE the before-phase because the policy hash is captured into before.json -
@@ -28,15 +34,20 @@ Usage: update-preflight.py --image ghcr.io/...@sha256:... --policy /opt/lyam/qua
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import stat
 import sys
 from pathlib import Path
 
-
-def policy_load(path):
-    return json.loads(Path(path).read_text())
+# Single parser contract: the policy is parsed EXACTLY as the qualification
+# controller parses it (qualification.policy_load), so a policy the controller
+# would refuse mid-cycle is refused here, cold, instead.
+_spec = importlib.util.spec_from_file_location('qualification', Path(__file__).with_name('qualification.py'))
+_controller = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_controller)
+policy_load = _controller.policy_load
 
 
 def owner_uid(path):

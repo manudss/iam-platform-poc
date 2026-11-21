@@ -27,6 +27,7 @@ fails closed; only a base commit that genuinely has no manifest yet passes.
 Usage (CI): migration-verifier-guard.py --base origin/main
 """
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -110,6 +111,35 @@ def run_suite(root, test_file):
     return result.returncode == 0 and match is not None and int(match.group(1)) > 0
 
 
+def pin_missing(root, migration_id, scripts):
+    """Reviewed-pin coverage: the checked-in deploy/oci/transformation-verifiers.json
+    must record, for every non-baseline migration, the verifier path and its exact
+    sha256. The guard re-computes the hash from the file bytes - the recorded pin is
+    mechanical evidence, never trusted as input. This is what the enqueue step
+    attaches to the plan, so the drain-time preflight compares the INSTALLED verifier
+    against REVIEWED repo bytes, not against a value authored in the plan itself."""
+    pins_path = Path(root, 'deploy/oci/transformation-verifiers.json')
+    try:
+        pins = json.loads(pins_path.read_text())
+    except Exception:
+        return ['deploy/oci/transformation-verifiers.json (reviewed pin file, unreadable: UNKNOWN)']
+    if pins.get('format') != 1 or not isinstance(pins.get('verifiers'), dict):
+        return ['deploy/oci/transformation-verifiers.json (format 1 with a verifiers object required)']
+    entry = pins['verifiers'].get(migration_id)
+    if not isinstance(entry, dict):
+        return ['deploy/oci/transformation-verifiers.json (no reviewed pin entry for ' + migration_id + ')']
+    path, recorded = entry.get('path'), entry.get('sha256')
+    target = Path(root, path) if isinstance(path, str) else None
+    if not isinstance(path, str) or not any(str(Path(root, path)) == str(script) for script in scripts):
+        return ['deploy/oci/transformation-verifiers.json (pin entry path must be the shipped verifier for ' + migration_id + ')']
+    if not isinstance(recorded, str) or not re.fullmatch(r'[a-f0-9]{64}', recorded):
+        return ['deploy/oci/transformation-verifiers.json (pin entry sha256 must be a 64-char hex string)']
+    actual = hashlib.sha256(Path(target).read_bytes()).hexdigest()
+    if recorded != actual:
+        return ['deploy/oci/transformation-verifiers.json (recorded pin differs from the verifier bytes)']
+    return []
+
+
 def missing_for(root, migration_id):
     missing = []
     found = sorted(Path(root, 'deploy/oci').glob('verify-' + migration_id + '-*.py'))
@@ -125,6 +155,7 @@ def missing_for(root, migration_id):
         missing.append('deploy/oci/verify-' + migration_id + '-*.test.py (suite must execute and report a non-zero number of passing tests)')
     if not ci_runs_test(root, migration_id):
         missing.append('.github/workflows/ci.yml (heuristic presence of the verifier test file in a run block, not a comment; the suite is executed separately by this guard)')
+    missing.extend(pin_missing(root, migration_id, scripts))
     return missing
 
 
@@ -141,6 +172,17 @@ def guard(root, base):
         return ['base ref ' + base + ' unresolvable: UNKNOWN, not a pass']
     versions = json.loads(Path(root, 'data/migrations/manifest.json').read_text()).get('versions', [])
     missing = []
+    # One target image gets ONE policy-listed verifier, which must prove ALL of that
+    # image's declared transformations. A change introducing several new versions would
+    # silently bind only the latest migration's verifier: refuse it - split the change
+    # or ship a single composed verifier proving every new version together.
+    new_versions = [entry['id'] for entry in versions[1:] if entry['id'] not in known]
+    if len(new_versions) > 1:
+        missing.append('a single change introduces more than one new migration version ('
+                       + ', '.join(new_versions) + '): the controller binds ONE verifier per target '
+                       'image, which must prove ALL declared transformations of that image - split '
+                       'the change or ship one composed verifier; refusing to silently pick only the latest')
+
     for entry in versions[1:]:  # versions[0] is the adopted baseline, predating this mechanism
         missing.extend(missing_for(root, entry['id']))
     missing.extend('deleted previously shipped verifier: ' + name for name in deleted_verifiers(root, base))

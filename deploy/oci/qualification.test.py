@@ -44,6 +44,61 @@ class Preserve(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    file=Path(d)/'private.json';q.private_json(file,{'ok':True});self.assertEqual(file.stat().st_mode&0o777,0o600)
    with self.assertRaises(FileExistsError):q.private_json(file,{})
+class AuthProbe(unittest.TestCase):
+ def setUp(self):
+  q._state['stage']='POLICY';q._state.pop('probe',None)
+  d=tempfile.TemporaryDirectory();self.addCleanup(d.cleanup)
+  auth=Path(d.name)/'auth.json';auth.write_text(json.dumps({'username':'u','password':'p'}))
+  self.p={'authFile':str(auth),'origins':['https://demo.example']}
+ def tearDown(self):q._state['stage']='POLICY';q._state.pop('probe',None)
+ def _run(self,runner):return None
+ def test_probe_happy_path_invokes_authprobe_mode_inside_running_current(self):
+  calls=[]
+  def fake(args,input=None,child=False,timeout=180):
+   calls.append((args,child,timeout,input))
+   if args[:2]==['docker','inspect']:return json.dumps([{'Config':{'Image':'img-old'},'State':{'Running':True}}])
+   return '{}'
+  self._run(fake)
+  q.auth_probe('lyam','img-old',self.p,runner=fake)
+  exec_call=[c for c in calls if c[0][:2]==['docker','exec']][0]
+  self.assertIn('authprobe',exec_call[0]);self.assertTrue(exec_call[1]);self.assertEqual(exec_call[2],90)
+  self.assertEqual(q.current_stage(),'SMOKE')
+ def test_probe_payload_is_whitelisted_policy_redirect_never_forwarded(self):
+  # The policy is operator data: a key like localBase must NEVER reach the
+  # credential-bearing child. Only origins + auth cross the boundary.
+  sent=[]
+  def fake(args,input=None,child=False,timeout=180):
+   if args[:2]==['docker','inspect']:return json.dumps([{'Config':{'Image':'img-old'},'State':{'Running':True}}])
+   sent.append(json.loads(input));return '{}'
+  self._run(fake)
+  self.p['localBase']='http://169.254.169.254/';self.p['issuer']='https://issuer.example'
+  q.auth_probe('lyam','img-old',self.p,runner=fake)
+  self.assertEqual(sorted(sent[0].keys()),['auth','origins'])
+  self.assertEqual(sent[0]['auth'],{'username':'u','password':'p'})
+ def test_probe_refuses_wrong_or_stopped_target(self):
+  def fake(args,input=None,child=False,timeout=180):return json.dumps([{'Config':{'Image':'img-OTHER'},'State':{'Running':True}}])
+  self._run(fake)
+  with self.assertRaises(ValueError):q.auth_probe('lyam','img-old',self.p,runner=fake)
+  self.assertEqual(q.current_stage(),'AFTER_IMAGE')
+  def fake2(args,input=None,child=False,timeout=180):return json.dumps([{'Config':{'Image':'img-old'},'State':{'Running':False}}])
+  with self.assertRaises(ValueError):q.auth_probe('lyam','img-old',self.p,runner=fake2)
+ def test_probe_login_failure_is_closed_stage_failure(self):
+  def fake(args,input=None,child=False,timeout=180):
+   if args[:2]==['docker','inspect']:return json.dumps([{'Config':{'Image':'img-old'},'State':{'Running':True}}])
+   raise q.StageFailure('SMOKE_LOGIN')
+  self._run(fake)
+  with self.assertRaises(q.StageFailure) as ctx:q.auth_probe('lyam','img-old',self.p,runner=fake)
+  self.assertEqual(ctx.exception.stage,'SMOKE_LOGIN')
+ def test_probe_bounded_timeout(self):
+  seen={}
+  def fake(args,input=None,child=False,timeout=180):
+   seen['timeout']=timeout
+   if args[:2]==['docker','inspect']:return json.dumps([{'Config':{'Image':'img-old'},'State':{'Running':True}}])
+   return '{}'
+  self._run(fake)
+  q.auth_probe('lyam','img-old',self.p,runner=fake,timeout=45)
+  self.assertEqual(seen['timeout'],45)
+
 class Stages(unittest.TestCase):
  def tearDown(self):q._state['stage']='POLICY'
  def test_mark_closed_enum(self):

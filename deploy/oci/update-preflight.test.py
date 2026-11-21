@@ -30,8 +30,26 @@ class Preflight(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def write_policy(self, verifiers, fmt=1):
-        self.policy_path.write_text(json.dumps({'format': fmt, 'transformationVerifiers': verifiers}))
+    def write_policy(self, verifiers, fmt=1, **overrides):
+        # Full controller schema (qualification.policy_load): the preflight parses the
+        # policy with the controller's own parser, so fixtures must satisfy it.
+        policy = {'format': fmt,
+                  'origins': ['https://reviewed-host.example.invalid'],
+                  'issuer': 'https://reviewed-host.example.invalid/core',
+                  'tenant': 'fixture-tenant',
+                  'network': 'fixture-net',
+                  'pgContainer': 'fixture-pg',
+                  'pgUser': 'lyam',
+                  'pgDatabase': 'lyam',
+                  'baoAddress': 'http://fixture-bao:8200',
+                  'baoTokenFile': '/private/fixture-token',
+                  'baoMetadataRoots': ['secret/metadata/iam'],
+                  'authFile': '/private/fixture-smoke-auth.json',
+                  'credentialFiles': ['core-state/credentials.json'],
+                  'appendOnlyTables': ['public.activations'],
+                  'transformationVerifiers': verifiers}
+        policy.update(overrides)
+        self.policy_path.write_text(json.dumps(policy))
 
     def check(self, image=IMAGE, pin=None, uid=0):
         with mock.patch.object(p, 'owner_uid', return_value=uid):
@@ -56,7 +74,17 @@ class Preflight(unittest.TestCase):
 
     def test_bad_format(self):
         self.write_policy({IMAGE: str(self.verifier)}, fmt=2)
-        self.assertIn('policy format is not 1', self.check())
+        self.assertEqual(self.check(), ['policy unreadable or not JSON: UNKNOWN'])
+
+    def test_controller_refused_policy_is_unknown(self):
+        # A policy the controller would reject mid-cycle (non-TLS origin) is refused
+        # cold by the shared parser instead of being discovered behind the gate.
+        self.write_policy({IMAGE: str(self.verifier)}, origins=['http://insecure.example.invalid'])
+        self.assertEqual(self.check(), ['policy unreadable or not JSON: UNKNOWN'])
+
+    def test_incomplete_policy_is_unknown(self):
+        self.policy_path.write_text(json.dumps({'format': 1, 'transformationVerifiers': {IMAGE: str(self.verifier)}}))
+        self.assertEqual(self.check(), ['policy unreadable or not JSON: UNKNOWN'])
 
     def test_relative_path(self):
         self.write_policy({IMAGE: 'relative/verify.py'})

@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "verifiers": {
+    "0002": {
+      "path": "deploy/oci/verify-0002-account-blocks.py",
+      "sha256": "00aedbcb7721b819db1dfc8fa5b7f256074be16feceebec26c360f434a310e52"
+    }
+  }
+}
