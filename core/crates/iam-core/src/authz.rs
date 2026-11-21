@@ -68,7 +68,12 @@ button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;c
 .demo{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:.55rem;padding:.5rem .7rem;color:var(--warn-ink)}
 .demo.tag{display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.78rem;line-height:1.5;vertical-align:middle}
 .foot{margin:1.2rem 0 0;font-size:.78rem;color:var(--muted)}
-@media (max-width:480px){.login{padding:1rem}.card{padding:1.4rem}}"#;
+@media (max-width:480px){.login{padding:1rem}.card{padding:1.4rem}}
+.reveal-wrap>input{flex:1 1 auto;min-width:0}
+.reveal-btn{flex:none;min-width:3.6rem;padding:0 .6rem;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:.85rem;cursor:pointer;opacity:.85}
+.reveal-btn:hover{opacity:1}
+.reveal-btn:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+"#;
 
 const ICON_AUTO: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>"#;
 const ICON_LIGHT: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>"#;
@@ -123,6 +128,8 @@ fn frame(title: &str, card: &str, theme: &str, back: &str, script: bool) -> Stri
     let suffix = if parts.len()==2 { format!("?{}",parts.join("&amp;")) } else { String::new() };
     let attr = if theme == "light" || theme == "dark" { format!(" data-theme=\"{theme}\"") } else { String::new() };
     let wa = if script { format!("<script>{WA_JS}</script>") } else { String::new() };
+    // A page with a password field also carries the show/hide script (pinned by its own hash). Without JavaScript the field simply stays a password field.
+    let wa = if card.contains("type=\"password\"") { format!("{wa}<script>{REVEAL_JS}</script>") } else { wa };
     format!("<!doctype html><html lang=\"en\"{attr}><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>{}</title><link rel=\"icon\" href=\"/api/tenants/acme-demo/branding/favicon.svg{suffix}\" type=\"image/svg+xml\"><link rel=\"icon\" href=\"/favicon-32.png\" sizes=\"32x32\" type=\"image/png\"><link rel=\"apple-touch-icon\" href=\"/favicon-180.png\"><style>{}{CSS}</style><link rel=\"stylesheet\" href=\"/api/tenants/acme-demo/branding/theme.css{suffix}\"></head>\
 <body><div class=\"auth-bg\" aria-hidden=\"true\"><img src=\"https://picsum.photos/1920/1080\" alt=\"\"></div><div class=\"auth-veil\" aria-hidden=\"true\"></div>{}\
@@ -133,6 +140,7 @@ fn frame(title: &str, card: &str, theme: &str, back: &str, script: bool) -> Stri
 }
 
 fn page(status: StatusCode, body: String, form_target: Option<&str>, script: bool) -> Response {
+    let body_has_reveal = body.contains(&format!("<script>{REVEAL_JS}</script>"));
     let mut r = (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response();
     let h = r.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -142,7 +150,12 @@ fn page(status: StatusCode, body: String, form_target: Option<&str>, script: boo
     // brand assets and the picsum background (it redirects to fastly.picsum.photos, so both hosts are allowed).
     // Browsers also apply form-action to the redirect that follows the POST: the (already validated, registered) redirect origin must be allowed.
     // The form target origin belongs to form-action; the script-src directive (passkey pages only) stays hash-only.
-    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'self' 'unsafe-inline'; form-action 'self'{}{}", form_target.map(|o| format!(" {o}")).unwrap_or_default(), if script { format!("; script-src '{}'", wa_script_hash()) } else { String::new() });
+    // script-src lists only the hashes of the inline scripts this very page carries (passkey ceremony, password show/hide); never 'unsafe-inline'.
+    let mut hashes: Vec<String> = Vec::new();
+    if script { hashes.push(format!("'{}'", wa_script_hash())); }
+    if body_has_reveal { hashes.push(format!("'{}'", reveal_script_hash())); }
+    let script_src = if hashes.is_empty() { String::new() } else { format!("; script-src {}", hashes.join(" ")) };
+    let csp = format!("default-src 'none'; img-src 'self' https://picsum.photos https://fastly.picsum.photos; style-src 'self' 'unsafe-inline'; form-action 'self'{}{}", form_target.map(|o| format!(" {o}")).unwrap_or_default(), script_src);
     if let Ok(v) = HeaderValue::from_str(&csp) { h.insert(header::CONTENT_SECURITY_POLICY, v); }
     r
 }
@@ -284,6 +297,28 @@ fn wa_script_hash() -> &'static str {
     use sha2::Digest as _;
     static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     HASH.get_or_init(|| format!("sha256-{}", base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(WA_JS.as_bytes()))))
+}
+
+/// Show/hide control for password inputs on the sign-in pages (including the forced password change). It only flips the input's own type
+/// between password and text, for what is being typed now; stored secrets are never shown. A press on the button keeps focus in the field,
+/// and the value is hidden again when focus leaves the field and its button. The button is a real button with an accessible name and aria-pressed.
+pub const REVEAL_JS: &str = r#"(function(){var ins=document.querySelectorAll('input[type="password"]');
+Array.prototype.forEach.call(ins,function(input){if(input.parentNode&&input.parentNode.className==='reveal-wrap')return;
+var wrap=document.createElement('span');wrap.className='reveal-wrap';input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);
+var btn=document.createElement('button');btn.type='button';btn.className='reveal-btn';wrap.appendChild(btn);
+function paint(show){input.type=show?'text':'password';btn.textContent=show?'Hide':'Show';btn.setAttribute('aria-pressed',String(show));var l=show?'Hide what you typed':'Show what you typed';btn.setAttribute('aria-label',l);btn.title=l}
+paint(false);
+btn.addEventListener('mousedown',function(e){e.preventDefault()});
+btn.addEventListener('click',function(){paint(input.type==='password')});
+wrap.addEventListener('focusout',function(e){if(!e.relatedTarget||!wrap.contains(e.relatedTarget))paint(false)});
+document.addEventListener('visibilitychange',function(){if(document.hidden)paint(false)});
+})})();"#;
+
+fn reveal_script_hash() -> &'static str {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| format!("sha256-{}", base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(REVEAL_JS.as_bytes()))))
 }
 
 /// The passkey ceremony script, still served same-origin (compat + a cheap probe that the edge routes
@@ -655,7 +690,7 @@ mod tests {
         assert_eq!(send(&c, post_login(&login_body("nobody", "x"))).await.0, StatusCode::UNAUTHORIZED);
         // HTML injection through parameters is escaped in the form
         let (_, _, body) = send(&c, get(&q("").replace("st%20ate", "%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E"))).await;
-        assert!(!body.contains("<script>") && body.contains("&lt;script&gt;"));
+        assert!(!body.contains("<script>alert") && body.contains("&lt;script&gt;"));
         // wrong verifier burns the code
         let (_, h, _) = send(&c, post_login(&login_body("demo-bob", "demo-only-not-a-secret"))).await;
         let code = h[header::LOCATION].to_str().unwrap().split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
@@ -900,8 +935,11 @@ mod tests {
         let (st, h, body) = send(&c, Request::builder().uri("/authorize/webauthn.js").body(Body::empty()).unwrap()).await;
         assert_eq!(st, StatusCode::OK);
         assert!(h[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/javascript") && body.contains("navigator.credentials.get"), "{body}");
+        // the first page has a password field: its only script is the pinned show/hide one, never the passkey ceremony
         let (_, h, _) = send(&c, get(&q(""))).await;
-        assert!(!h[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("script-src"));
+        let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        let script_src = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src")).unwrap_or("");
+        assert_eq!(script_src, format!("script-src '{}'", super::reveal_script_hash()), "{csp}");
     }
     #[test]
     fn malformed_webauthn_options_render_nothing() {
@@ -1037,7 +1075,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn framed_pages_carry_the_common_frame_and_no_script() {
+    async fn framed_pages_carry_the_common_frame_and_only_the_pinned_reveal_script() {
         let c = core();
         let (_, h, body) = send(&c, get(&q(""))).await;
         // default is auto: no data-theme attr, but the selector marks it current
@@ -1047,9 +1085,11 @@ mod tests {
         assert!(body.contains("aria-current=\"true\""));
         assert!(body.contains("IAM next generation"));
         assert!(body.contains("branding/logo-horizontal-light.svg") && body.contains("branding/logo-horizontal-dark.svg") && body.contains("branding/theme.css"));
-        assert!(!body.contains("<script"), "framed pages stay scriptless");
+        assert_eq!(body.matches("<script").count(), 1, "the only script is the show/hide one");
+        assert!(body.contains(&format!("<script>{}</script>", super::REVEAL_JS)));
         let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
-        assert!(csp.contains("img-src 'self' https://picsum.photos https://fastly.picsum.photos") && !csp.contains("script-src"), "{csp}");
+        assert!(csp.contains("img-src 'self' https://picsum.photos https://fastly.picsum.photos") && csp.contains(&format!("script-src '{}'", super::reveal_script_hash())), "{csp}");
+        assert!(!csp.contains("script-src 'unsafe") && !csp.contains("script-src *"), "{csp}");
         // the error page is framed too
         let (_, _, body) = send(&c, get(&q("").replace("localhost%3A4200", "evil.example"))).await;
         assert!(body.contains("https://picsum.photos/1920/1080") && body.contains("IAM next generation") && body.contains("Sign-in error"));

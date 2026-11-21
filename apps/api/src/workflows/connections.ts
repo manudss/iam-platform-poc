@@ -1,6 +1,6 @@
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { SecretsService } from '../integrations/secrets.service.js';
 import { currentBranch } from '../workspace/context.js';
 import { WorkflowStore } from './store.js';
@@ -43,21 +43,43 @@ export function classifyProbeError(e: unknown): ProbeFailure {
 const tenantId = (t: string) => { if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(t)) throw new BadRequestException('invalid connection tenant'); return t; };
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 export function connectionId(value: unknown): string { if (typeof value !== 'string' || !ID.test(value)) throw new BadRequestException('invalid connection id'); return value; }
+/** https://api.atlassian.com/ex/jira/<cloudId>: the gateway of one Jira site (tokens with scopes only work there). */
+const jiraGateway = (url: URL) => url.hostname === 'api.atlassian.com' && /^\/ex\/jira\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\/?$/i.test(url.pathname);
+/** Read-only check: a site origin reads the current account; a gateway reads one project page (a scoped token may lack read:me). */
+const jiraProbeUrl = (instanceUrl: string) => { const u = new URL(instanceUrl); return jiraGateway(u) ? `${u.origin}${u.pathname.replace(/\/$/, '')}/rest/api/3/project/search?maxResults=1` : new URL('/rest/api/3/myself', u).toString(); };
 export const connectionProvider = (type: string): ConnectionProvider | null => type.startsWith('google-sheets-') ? 'google-sheets' : type.startsWith('jira-') ? 'jira' : type === 'http-request' ? 'http' : null;
+/** Config fields that decide WHERE the stored credential is sent or as WHOM it acts: changing one needs the credential typed again, so a stored secret never follows a new destination. */
+const BOUND = ['instanceUrl', 'baseUrl', 'siteUrl', 'email', 'userEmail', 'spreadsheetId', 'sheetId'];
+/** The seal kept WITH the secret in the secret store (outside Dolt): provider and every bound field. resolve() recomputes it from the stored configuration, so a row edited in Dolt by any other path never receives the credential. */
+export const bindOf = (provider: string, config: Record<string, string>) => createHash('sha256').update(JSON.stringify([provider, ...BOUND.map(k => config[k] ?? '')])).digest('hex');
+/** Real external connections are OFF unless the server is explicitly started for them (a private space). Never inferred from data, never settable from a workflow or a connection. */
+export const realConnectionsEnabled = () => process.env.IAM_WORKFLOW_REAL_CONNECTIONS === '1';
+const requireRealEnabled = () => { if (!realConnectionsEnabled()) throw new ServiceUnavailableException('real external connections are disabled on this server (IAM_WORKFLOW_REAL_CONNECTIONS is not 1): nothing was saved, read or called'); };
+export const destinationChanged = (before: Record<string, string>, after: Record<string, string>) => BOUND.some(k => (before[k] ?? '') !== (after[k] ?? ''));
 export function validateConnection(body: Record<string, unknown>) {
   if (Object.keys(body).some(k => !['name', 'provider', 'config', 'secret'].includes(k))) throw new BadRequestException('unknown connection field');
   const provider = body.provider as ConnectionProvider;
   if (!['google-sheets', 'jira', 'http'].includes(provider)) throw new BadRequestException('invalid connection provider');
   const name = String(body.name ?? '').trim(); if (!name || name.length > 80) throw new BadRequestException('connection name required (max 80)');
   const raw = body.config; if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('connection config must be an object');
-  const allowed = provider === 'jira' ? ['instanceUrl', 'email'] : provider === 'google-sheets' ? ['userEmail', 'spreadsheetId', 'sheetId'] : ['baseUrl'];
+  const allowed = provider === 'jira' ? ['instanceUrl', 'email', 'siteUrl'] : provider === 'google-sheets' ? ['userEmail', 'spreadsheetId', 'sheetId'] : ['baseUrl'];
   const config: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) { if (!allowed.includes(k) || typeof v !== 'string' || v.length > 300) throw new BadRequestException('invalid connection config'); config[k] = v; }
   if (provider === 'jira' || provider === 'http') {
     let url: URL; try { url = new URL(config[provider === 'jira' ? 'instanceUrl' : 'baseUrl']); } catch { throw new BadRequestException('HTTPS URL required'); }
-    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port || (provider === 'jira' && !/^[a-z0-9-]+\.atlassian\.net$/i.test(url.hostname))) throw new BadRequestException('invalid connection HTTPS URL');
-    if (provider === 'jira' && url.pathname !== '/') throw new BadRequestException('Jira URL must be its site origin');
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port) throw new BadRequestException('invalid connection HTTPS URL');
+    if (provider === 'jira') {
+      // A site origin (classic token) or the Atlassian gateway of one site (the only form a token with scopes accepts).
+      if (!jiraGateway(url) && !/^[a-z0-9-]+\.atlassian\.net$/i.test(url.hostname)) throw new BadRequestException('invalid connection HTTPS URL');
+      if (!jiraGateway(url) && url.pathname !== '/') throw new BadRequestException('Jira URL must be its site origin');
+    }
     config[provider === 'jira' ? 'instanceUrl' : 'baseUrl'] = url.toString();
+  }
+  if (provider === 'jira' && config.siteUrl !== undefined) {
+    // Optional: the browsable site, used only to build ticket links when instanceUrl is a gateway.
+    let site: URL; try { site = new URL(config.siteUrl); } catch { throw new BadRequestException('invalid Jira site URL'); }
+    if (site.protocol !== 'https:' || site.username || site.password || site.search || site.hash || site.port || site.pathname !== '/' || !/^[a-z0-9-]+\.atlassian\.net$/i.test(site.hostname)) throw new BadRequestException('invalid Jira site URL');
+    config.siteUrl = site.toString();
   }
   if (provider === 'jira' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.email ?? '')) throw new BadRequestException('Jira account email required');
   if (provider === 'google-sheets' && config.sheetId && !/^\d{1,12}$/.test(config.sheetId)) throw new BadRequestException('sheet ID must be numeric');
@@ -81,11 +103,13 @@ export class WorkflowConnections {
     const previous = id ? await this.store.getConnection(tenant, cid, ref) : null;
     if (id && !previous) throw new NotFoundException('unknown connection');
     if (previous && previous.provider !== clean.provider) throw new BadRequestException('connection provider cannot change');
+    if (previous?.secretRef && !clean.secret && destinationChanged(previous.config, clean.config)) throw new BadRequestException('changing the destination or the account needs the credential entered again');
     const revision = randomUUID(); let secretRef = previous?.secretRef ?? null;
     if (clean.secret) {
+      requireRealEnabled();
       if (!this.secrets.enabled) throw new ServiceUnavailableException('OpenBao is not configured; no plaintext credential fallback');
       secretRef = `iam/workflow-connections/${tenantId(tenant)}/${cid}/${revision}`;
-      await this.secrets.put(secretRef, { value: clean.secret });
+      await this.secrets.put(secretRef, { value: clean.secret, bind: bindOf(clean.provider, clean.config) });
     }
     const connection: WorkflowConnection = { id: cid, tenant, name: clean.name, provider: clean.provider, config: clean.config, secretRef, revision };
     await this.store.putConnection(connection, ref);
@@ -94,6 +118,7 @@ export class WorkflowConnections {
   async remove(tenant: string, id: string) { const cid = connectionId(id); if (!await this.store.deleteConnection(tenant, cid, currentBranch(true))) throw new NotFoundException('unknown connection'); return { deleted: cid }; }
   /** Explicit operator action: read-only probe, no remote response data or secret in the response. */
   async test(tenant: string, id: string) {
+    requireRealEnabled();
     const ref = currentBranch(), c = await this.store.getConnection(tenant, connectionId(id), ref);
     if (!c) throw new NotFoundException('unknown connection');
     try { const {settings} = await this.resolve(tenant, ref, id, c.provider); return {...await this.probe(c.provider, c.config, settings), id: c.id, revision: c.revision}; }
@@ -103,11 +128,13 @@ export class WorkflowConnections {
   async testDraft(tenant: string, body: Record<string, unknown>) {
     const {existingId, ...input} = body;
     const clean = validateConnection(input);
+    requireRealEnabled();
     let secret = clean.secret ?? '';
     if (existingId !== undefined) {
       const id = connectionId(existingId);
       const c = await this.store.getConnection(tenant, id, currentBranch());
       if (!c || c.provider !== clean.provider) throw new NotFoundException('connection missing or wrong provider');
+      if (!secret && destinationChanged(c.config, clean.config)) throw new BadRequestException('changing the destination or the account needs the credential entered again');
       if (!secret) { try { secret = (await this.resolve(tenant, currentBranch(), id, clean.provider)).secret; } catch { return this.probeFailed('secret-store'); } }
     }
     if (clean.provider !== 'http' && !secret) return this.probeFailed('configuration');
@@ -116,7 +143,7 @@ export class WorkflowConnections {
     return this.probe(clean.provider, clean.config, settings);
   }
   private settings(provider: ConnectionProvider, config: Record<string,string>, secret: string): Record<string, unknown> {
-    return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
+    return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraSiteUrl: config.siteUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
   }
   private probeFailed(reason: ProbeFailure = 'unknown') { return {status: 'Failed', checkedAt: new Date().toISOString(), readOnly: true, reason, message: PROBE_FAILURE_MESSAGE[reason]}; }
   protected async httpProbe(url: string, options: unknown) {
@@ -131,19 +158,24 @@ export class WorkflowConnections {
         await adapter.runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', {auth: {type: 'CUSTOM_AUTH', props: {serviceAccount: settings.googleServiceAccount, userEmail: settings.googleUserEmail || undefined}}, propsValue: {spreadsheetId: config.spreadsheetId, sheetId: Number(config.sheetId || 0), includeTeamDrives: false, first_row_headers: true}});
       } else {
         const headers: Record<string,string> = provider === 'jira' ? {Authorization: 'Basic ' + Buffer.from(`${settings.jiraEmail}:${settings.jiraApiToken}`).toString('base64')} : settings.httpConnectionToken ? {Authorization: `Bearer ${settings.httpConnectionToken}`} : {};
-        const result = await this.httpProbe(provider === 'jira' ? new URL('/rest/api/3/myself', config.instanceUrl).toString() : config.baseUrl, {method: provider === 'jira' ? 'GET' : 'HEAD', headers});
+        const result = await this.httpProbe(provider === 'jira' ? jiraProbeUrl(config.instanceUrl) : config.baseUrl, {method: provider === 'jira' ? 'GET' : 'HEAD', headers});
         if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('probe unsuccessful'), {status: result.status});
       }
       return {status: 'Verified', checkedAt: new Date().toISOString(), readOnly: true};
     } catch (e) { return this.probeFailed(classifyProbeError(e)); }
   }
   async resolve(tenant: string, ref: string, id: string, provider: ConnectionProvider) {
+    requireRealEnabled();
     const c = await this.store.getConnection(tenant, connectionId(id), ref);
     if (!c || c.tenant !== tenant || c.id !== id || c.provider !== provider) throw new NotFoundException('connection missing or wrong provider');
     let secret = '';
     if (c.secretRef) {
       if (!new RegExp(`^iam/workflow-connections/${tenantId(tenant)}/${connectionId(c.id)}/[a-f0-9-]{36}$`).test(c.secretRef)) throw new ConflictException('invalid scoped secret reference');
-      try { secret = (await this.secrets.get(c.secretRef))?.value ?? ''; } catch { throw new ServiceUnavailableException('connection secret unavailable'); }
+      let rec: { value?: string; bind?: string } | undefined;
+      try { rec = await this.secrets.get(c.secretRef) as { value?: string; bind?: string } | undefined; } catch { throw new ServiceUnavailableException('connection secret unavailable'); }
+      secret = rec?.value ?? '';
+      // The credential was sealed to one provider, destination, account and target when it was entered: any other configuration (a row edited in Dolt, a merge, a future endpoint) never receives it. A record without the seal is refused.
+      if (secret && rec?.bind !== bindOf(provider, c.config)) throw new ConflictException('the stored credential is not bound to this connection destination: enter it again');
     }
     if (provider !== 'http' && !secret) throw new ServiceUnavailableException('connection secret not configured');
     // Revalidate persisted config and credentials too: versioned metadata is not trusted input.

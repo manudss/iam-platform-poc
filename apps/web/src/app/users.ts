@@ -1,3 +1,4 @@
+import { RevealPassword } from './reveal-password';
 import { Component, HostListener, inject, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
@@ -71,7 +72,7 @@ export function userStats(users: UserProfile[]): UserStats {
   };
 }
 
-@Component({ selector: 'app-users', imports: [FormsModule, RouterLink, RolesRights, UserPluginSections, UserAvatar], styleUrl: './users.css', template: `
+@Component({ selector: 'app-users', imports: [FormsModule, RouterLink, RolesRights, UserPluginSections, UserAvatar, RevealPassword], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
 <p class="hint">Fictional demo only: do not enter real personal data. The data is kept on the server's disk and is backed up before each update, but this is a demo and nothing here is guaranteed to be kept. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
@@ -166,8 +167,16 @@ export function userStats(users: UserProfile[]): UserStats {
   @if(key){<h4>Roles &amp; rights</h4><app-roles-rights [userId]="key" />}
   <h4>Security</h4>
   <label class="inline"><input type="checkbox" name="enabled" [(ngModel)]="form.login_enabled" /> Allow sign-in</label>
-  <label>{{key ? 'New password (leave blank to keep)' : 'Password'}}<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" [required]="!key" /></label>
-  <p class="hint">12 to 128 characters. Sent only in the request body; never returned in the table, SQL, history or logs. Do not use a real password in this public demo.</p>
+  @if (!key) {
+  <label>Temporary password<input type="password" name="userPassword" [(ngModel)]="password" autocomplete="new-password" minlength="12" maxlength="128" required /></label>
+  <label>Valid for (hours, at most 168)<input type="number" name="userTempHours" [(ngModel)]="tempHours" min="1" max="168" step="1" required /></label>
+  <p class="hint">The person must choose their own password at first sign-in. Sent only in the request body; never returned in the table, SQL, history or logs. Do not use a real password in this public demo.</p>
+  } @else if (!readOnly()) {
+  <p class="hint">An administrator cannot set a permanent password. Set a temporary one: the person must choose a new password at the next sign-in.</p>
+  <label>Temporary password<input type="password" name="tempPassword" [(ngModel)]="tempPassword" autocomplete="new-password" minlength="12" maxlength="128" /></label>
+  <label>Valid for (hours, at most 168)<input type="number" name="tempPasswordHours" [(ngModel)]="tempHours" min="1" max="168" step="1" /></label>
+  <button type="button" class="secondary" id="user-temp-password" (click)="setTemporary()" [disabled]="busy() || !tempPassword">Set temporary password</button>
+  }
   @if (key && form.login_enabled && !readOnly()) {<div class="danger-zone"><p>Disabling sign-in applies on the working branch and takes effect only after Review &amp; Apply.</p><button type="button" class="danger" id="user-disable" (click)="disableAndSave()" [disabled]="busy()">Disable sign-in</button></div>}
   </fieldset>
   <div class="foot">@if (!readOnly()) {<button class="grow" id="user-save" [disabled]="busy()">Save user to branch</button>}<button type="button" class="secondary" [class.grow]="readOnly()" (click)="cancel()">{{readOnly() ? 'Close' : 'Cancel'}}</button></div>
@@ -190,7 +199,7 @@ export class UsersPage {
   protected menuFor = signal<string | null>(null);
   protected partialSave = signal(false);
   private savedDetails = '';
-  protected key: string | null = null; protected password = ''; protected form = { id: '', display_name: '', email: '', department: '', manager_id: '', login_enabled: true };
+  protected key: string | null = null; protected password = ''; protected tempPassword = ''; protected tempHours = 72; protected form = { id: '', display_name: '', email: '', department: '', manager_id: '', login_enabled: true };
 
   protected readonly initials = initials; protected readonly deptColor = deptColor;
   protected readonly userStatus = userStatus; protected readonly statusLabel = statusLabel;
@@ -224,7 +233,7 @@ export class UsersPage {
   private async loadP(id: string) { const request = this.profileRequest, branch = this.s.branch(); try { const r = await this.s.api.raw<any>('GET', '/users/' + encodeURIComponent(id) + '/profile', undefined, this.h()); if (r.status < 400 && this.editing() && this.pvalsFor === id && this.key === id && request === this.profileRequest && branch === this.s.branch()) { this.pfields.set(r.data.fields.filter((f: any) => !f.key.startsWith('base.'))); this.pvals.set(r.data.values); } } catch { /* profile fields are optional */ } }
   protected setP(k: string, v: unknown) { this.pvals.update((x) => ({ ...x, [k]: v })); this.pchanged[k] = v === '' ? null : v; }
   protected boolStr(k: string) { const v = this.pvals()[k]; return v === true ? 'true' : v === false ? 'false' : ''; }
-  protected cancel() { this.partialSave.set(false); this.savedDetails = ''; this.password = ''; this.editing.set(false); this.pvals.set({}); this.pfields.set([]); this.pvalsFor = null; ++this.profileRequest; }
+  protected cancel() { this.partialSave.set(false); this.savedDetails = ''; this.password = ''; this.tempPassword = ''; this.editing.set(false); this.pvals.set({}); this.pfields.set([]); this.pvalsFor = null; ++this.profileRequest; }
   ngOnDestroy() { this.cancel(); }
   protected disableAndSave() { this.form.login_enabled = false; void this.save(); }
   protected async quickToggle(u: UserProfile) {
@@ -234,15 +243,25 @@ export class UsersPage {
       await this.load(); this.note.set((u.login_enabled ? 'Sign-in disabled for ' : 'Sign-in enabled for ') + u.id + '. Apply is required before live sign-in changes.');
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
+  /** Admin: a TEMPORARY password for an existing person. The value is typed here, sent once, never kept. */
+  protected async setTemporary() {
+    if (this.readOnly() || !this.key || !this.tempPassword) return;
+    this.busy.set(true);
+    try {
+      const r = await this.s.api.raw<any>('POST', '/users/' + encodeURIComponent(this.key) + '/temporary-password', { password: this.tempPassword, hours: Number(this.tempHours) }, this.h());
+      if (r.status >= 400) throw new Error(Array.isArray(r.data?.message) ? r.data.message.join(' ') : r.data?.message ?? 'Temporary password not set');
+      this.note.set(r.data?.pendingPublication ? 'Temporary password saved on the working branch. It is active only after Review & Apply.' : 'Temporary password set. The person must choose a new password at the next sign-in.');
+    } catch (e) { this.note.set('Temporary password not set: ' + (e as Error).message); } finally { this.tempPassword = ''; this.busy.set(false); }
+  }
   protected async save() {
     if (this.readOnly()) return; // main is read only: the sheet opens for reading, the API refuses writes anyway
     this.busy.set(true);
     try {
-      const b: Record<string, unknown> = { ...this.form }; if (this.password) b['password'] = this.password;
+      const b: Record<string, unknown> = { ...this.form }; if (!this.key && this.password) { b['password'] = this.password; b['hours'] = Number(this.tempHours); }
       // The directory and plugin stores use separate requests. Keep a checkpoint so an error in the
       // second cannot look like an all-or-nothing failure, and retries do not repeat a password reset.
       const details = JSON.stringify([this.s.branch(), this.key, this.form]);
-      if (this.savedDetails !== details || this.password) {
+      if (this.savedDetails !== details || (!this.key && this.password)) {
         await this.s.api.saveUser(this.key, b, this.s.adminToken());
         this.savedDetails = details; this.password = '';
       }

@@ -1,3 +1,4 @@
+import { RevealPassword } from '../reveal-password';
 import { Component, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
@@ -12,7 +13,7 @@ export function visibleConnections(rows: WorkflowConnection[], query: string) {
 export function probeFor(c: WorkflowConnection, probes: Record<string, ConnectionProbe>) {
   const p = probes[c.id]; return p?.revision === c.revision ? p : null;
 }
-@Component({selector: 'app-workflow-connections', imports: [FormsModule, RouterLink], styleUrl: '../pages.css', styles: [`
+@Component({selector: 'app-workflow-connections', imports: [FormsModule, RouterLink, RevealPassword], styleUrl: '../pages.css', styles: [`
 .wfc-tabs { display:flex; gap:1.5rem; border-bottom:1px solid var(--line); padding:.7rem 0; margin-bottom:1.4rem; }
 .wfc-tabs a { color:var(--muted); text-decoration:none; padding:.3rem 0; }
 .wfc-tabs a.current { color:var(--acc2); border-bottom:2px solid var(--acc2); font-weight:600; }

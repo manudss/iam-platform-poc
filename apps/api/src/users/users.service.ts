@@ -31,10 +31,16 @@ export class UsersService {
     if (!workspaceMode()) return this.modules.get(PluginRegistry, { strict: false });
     return this.modules.get(BranchRegistries, { strict: false }).get(branchContext.getStore()?.branch ?? 'main');
   }
+  /** Injected clock (tests). */
+  now: () => number = () => Date.now();
   private ready?: Promise<void>;
-  async onModuleInit() { if (workspaceMode()) await this.init(); }
+  async onModuleInit() {
+    if (workspaceMode()) await this.init();
+    // Inconsistent start: temporary-password flags exist but the directory is not the sign-in authority. Loud, never silent (the guards would not apply).
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') { try { if (Object.values(await this.credentials()).some((r) => (r as { firstAccess?: unknown }).firstAccess)) console.error('users: temporary-password flags exist but IAM_DIRECTORY_AUTH is not 1, the forced change is NOT enforced'); } catch (e) { console.error('users: could not read the credential record at start, the first-access state is UNKNOWN (reads refuse closed at sign-in):', (e as { code?: string })?.code ?? 'error'); } }
+  }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
-  private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string }>> {
+  private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string; firstAccess?: { expiresAt: number } }>> {
     try { return JSON.parse(await readFile(this.path, 'utf8')); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw e; }
   }
   /** Salted hashes of previous passwords, keyed by `tenant:id`, newest first (entry 0 = current). Same storage
@@ -71,7 +77,14 @@ export class UsersService {
     const r = await reg.callSlot<PasswordValidateResult>(tenant, 'auth.password', 'auth.password.validate', { tenant, subject: id, candidate, userInfo: { login: id, displayName: String(user?.display_name ?? ''), email: String(user?.email ?? '') }, history: await this.passwordHistory(tenant, id), now: Date.now() } satisfies PasswordValidatePayload);
     return { ok: !!r.result.ok, errors: Array.isArray(r.result.errors) ? r.result.errors.map(String).slice(0, 8) : [] };
   }
-  private async password(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }) {
+  private credWrites: Promise<unknown> = Promise.resolve();
+  /** Every write of the credential file (and its history) is serialized in this process: the file is read, extended and renamed whole, so two concurrent writers would otherwise lose an entry. */
+  private password(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }, firstAccess?: { expiresAt: number }): Promise<string> {
+    const run = this.credWrites.then(() => this.passwordLocked(tenant, id, password, pre, firstAccess));
+    this.credWrites = run.catch(() => undefined);
+    return run;
+  }
+  private async passwordLocked(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }, firstAccess?: { expiresAt: number }) {
     const all = await this.credentials(), salt = pre?.salt ?? randomBytes(24).toString('hex');
     const revision = randomBytes(20).toString('hex');
     const hash = pre?.hash ?? scryptSync(password, salt, 64).toString('hex');
@@ -79,7 +92,8 @@ export class UsersService {
     // cannot track is refused, fail closed). A crash between the two writes leaves one extra history entry whose
     // password never became current: the reuse rule only gets stricter, never weaker, and the next successful
     // change restores the dates. The reverse order would silently lose the entry and weaken reuse prevention.
-    all[revision] = { subject:id, salt, hash };
+    // The must-change flag and its server-side expiry live IN the credential record of this revision: one atomic rename writes hash and flag together, so no crash or branch operation can separate them.
+    all[revision] = { subject:id, salt, hash, ...(firstAccess ? { firstAccess: { expiresAt: firstAccess.expiresAt } } : {}) };
     await this.recordHistory(tenant, id, salt, hash);
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     await writeFile(this.path + '.tmp', JSON.stringify(all), { mode: 0o600 }); await rename(this.path + '.tmp', this.path);
@@ -117,7 +131,7 @@ export class UsersService {
       return true;
     }));
   }
-  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo') {
+  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo', temporary?: { expiresAt: number }) {
     const branch = currentBranch(true); await this.validate(tenant, pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {
       const [rows] = await c.query('select * from identities where id=?', [id]); const prev = (rows as Record<string, unknown>[])[0];
@@ -125,7 +139,7 @@ export class UsersService {
       const r = { display_name:'', department:'', manager_id:null, email:null, login_enabled:true, ...prev, ...b };
       if (r.manager_id) { let cur: unknown = r.manager_id; for (let n = 0; cur && n < 100; n++) { if (cur === id) throw new BadRequestException(`${r.manager_id} already reports (directly or not) to ${id}: this would make a loop in the management chain`); const [up] = await c.query('select manager_id from identities where id=?', [cur]); cur = (up as { manager_id: string | null }[])[0]?.manager_id; } const [m] = await c.query('select id from identities where id=?', [r.manager_id]); if (!(m as unknown[]).length || r.manager_id === id) throw new BadRequestException('manager must be another existing user'); }
       if (!pre && typeof b.password === 'string') { const check = await this.checkPasswordPolicy(tenant, id, b.password, r); if (!check.ok) throw new BadRequestException(check.errors.join('; ') || 'the password does not respect the policy'); }
-      const revision = pre ? await this.password(tenant, id, '', pre) : b.password !== undefined ? await this.password(tenant, id, b.password as string) : prev?.credential_revision ?? null;
+      const revision = pre ? await this.password(tenant, id, '', pre) : b.password !== undefined ? await this.password(tenant, id, b.password as string, undefined, temporary) : prev?.credential_revision ?? null;
       await c.query('insert into identities (id,display_name,manager_id,department,email,login_enabled,credential_revision) values (?,?,?,?,?,?,?) on duplicate key update display_name=values(display_name),manager_id=values(manager_id),department=values(department),email=values(email),login_enabled=values(login_enabled),credential_revision=values(credential_revision)', [id,r.display_name,r.manager_id || null,r.department,r.email || null,r.login_enabled,revision]);
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query('call dolt_commit(\'-m\',?)', [`users: ${create ? 'create' : 'update'} ${id}`]); }
@@ -143,6 +157,28 @@ export class UsersService {
     }
     return saved;
   }
+  static readonly TEMP_MAX_HOURS = 168;
+  /** Admin creation of a person: the password is TEMPORARY (must change at first sign-in, server-side expiry). Same refusals as the temporary-password action. */
+  async createWithTemporaryPassword(tenant: string, id: string, body: Record<string, unknown>, hours: unknown) {
+    if (typeof body.password !== 'string' || !body.password) throw new BadRequestException('a temporary password is required for a new person');
+    const h = Number(hours);
+    if (!Number.isFinite(h) || h <= 0 || h > UsersService.TEMP_MAX_HOURS) throw new BadRequestException(`hours: more than 0 and at most ${UsersService.TEMP_MAX_HOURS}`);
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') throw new ConflictException('directory authentication is off (IAM_DIRECTORY_AUTH is not 1): a temporary password would not be enforced, nothing was created');
+    return this.save(id, body, true, undefined, tenant, { expiresAt: this.now() + Math.round(h * 3_600_000) });
+  }
+  /** Admin (or workflow) action: set a TEMPORARY password. It is a normal save of the password with the must-change flag and a server-side expiry in the same credential record. Never the bootstrap, seed, sign-up or self-service paths. The caller has already passed AuthGuard, AdminGuard and assertSuperAdmin. */
+  async setTemporaryPassword(tenant: string, actor: string, id: string, password: unknown, hours: unknown) {
+    if (typeof password !== 'string' || !password) throw new BadRequestException('password required');
+    const h = Number(hours);
+    if (!Number.isFinite(h) || h <= 0 || h > UsersService.TEMP_MAX_HOURS) throw new BadRequestException(`hours: more than 0 and at most ${UsersService.TEMP_MAX_HOURS}`);
+    if (actor === id) throw new ForbiddenException('an administrator cannot set a temporary password on their own account');
+    // Without directory authentication no sign-in uses the directory credential: the flag would protect nothing and the administrator would believe otherwise. Refuse clearly.
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') throw new ConflictException('directory authentication is off (IAM_DIRECTORY_AUTH is not 1): a temporary password would not be enforced, nothing was changed');
+    const saved = await this.save(id, { password }, false, undefined, tenant, { expiresAt: this.now() + Math.round(h * 3_600_000) });
+    const ref = currentBranch(true);
+    // On a workspace branch the credential only takes effect once that branch is published on main: say so, never imply it is already enforced.
+    return { id, mustChange: true, expiresInHours: h, saved: !!saved, ref, pendingPublication: ref !== 'main', note: ref !== 'main' ? 'Saved on a workspace branch only: not active until it is published on main and activated; the previous password stays valid until then. Publication must read back the live state (identity revision on main, activation applied, rule required).' : 'Saved on main. Activation of the live state is not verified by this response.' };
+  }
   /** Self-service password change (profile Security component): the current password re-authenticates the request. Writes on main, like every live self-service edit. */
   async changePassword(tenant: string, id: string, current: string, next: string) {
     if (typeof next !== 'string' || next.length > 128) throw new BadRequestException('password: at most 128 characters');
@@ -157,6 +193,32 @@ export class UsersService {
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} changed their password`]); }
     }));
+  }
+  /** Is the "change at first sign-in" rule in force for this account on `ref`? It is a property of the account's CURRENT credential record (same record as the hash), so it is in force exactly when that credential is live. A read error propagates: callers refuse (fail closed). */
+  async firstAccessState(tenant: string, id: string, ref = 'main'): Promise<{ required: false } | { required: true; expired: boolean; revision: string; expiresAt: number }> {
+    const row = (await this.list(ref)).find((x) => x.id === id); if (!row) return { required: false };
+    const rec = (await this.credentials())[String(row.credential_revision)];
+    if (!rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id)) return { required: false };
+    return { required: true, expired: rec.firstAccess.expiresAt <= this.now(), revision: String(row.credential_revision), expiresAt: rec.firstAccess.expiresAt };
+  }
+  /** The forced change, called only by the sign-in flow after the full chain proved the account. Single winner: the record is re-read under the writer lock and consumed by revision. The temporary password is never accepted as the new one. */
+  async completeFirstAccess(tenant: string, id: string, next: string, expectedRevision: string): Promise<{ ok: true } | { ok: false; reason: 'not-required' | 'expired' | 'same-as-temporary' | 'policy'; errors?: string[] }> {
+    await this.init();
+    return this.v.lock(async () => {
+      const row = (await this.list('main')).find((x) => x.id === id), rec = row ? (await this.credentials())[String(row.credential_revision)] : undefined;
+      if (!row || !rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id) || String(row.credential_revision) !== expectedRevision) return { ok: false as const, reason: 'not-required' as const };   // expectedRevision: the credential the person PROVED in this session; a reset to another revision meanwhile is never consumed
+      if (rec.firstAccess.expiresAt <= this.now()) return { ok: false as const, reason: 'expired' as const };
+      if (timingSafeEqual(Buffer.from(rec.hash, 'hex'), scryptSync(next, rec.salt, 64))) return { ok: false as const, reason: 'same-as-temporary' as const };
+      const check = await this.checkPasswordPolicy(tenant, id, next, row as { display_name?: unknown; email?: unknown });
+      if (!check.ok) return { ok: false as const, reason: 'policy' as const, errors: check.errors };
+      const revision = await this.password(tenant, id, next);
+      await this.v.at('main', async (c) => {
+        await c.query('update identities set credential_revision=? where id=?', [revision, id]);
+        const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
+        if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} completed the first-access password change`]); }
+      });
+      return { ok: true as const };
+    });
   }
   /** `ref` is the data branch whose directory answers: 'main' for live sign-in, the tested branch for a branch test sign-in (accounts created there exist only there). */
   async authenticate(tenant: string, id: string, password: string, ref = 'main') {

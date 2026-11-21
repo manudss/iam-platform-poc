@@ -1,3 +1,4 @@
+import { RevealPassword } from './reveal-password';
 import { ApplyDialog } from './apply-dialog';
 import { Brand, Branding } from './branding';
 import { canOpen, screenOf } from './access';
@@ -15,7 +16,7 @@ interface NavItem { path: string; label: string; icon: string; order?: number }
 interface NavGroup { title: string; items: NavItem[] }
 
 /** Administration layout: grouped sidebar, top bar with the signed-in identity, status bar and the page outlet. */
-@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer, ThemeSwitch, Brand, ApplyDialog], templateUrl: './shell.html', styleUrl: './shell.css' })
+@Component({ selector: 'app-shell', imports: [RouterOutlet, RouterLink, RouterLinkActive, FormsModule, SessionTimer, ThemeSwitch, Brand, ApplyDialog, RevealPassword], templateUrl: './shell.html', styleUrl: './shell.css' })
 export class Shell {
   @ViewChild(ApplyDialog) protected applyDialog!: ApplyDialog;
   private readonly branding = inject(Branding);
