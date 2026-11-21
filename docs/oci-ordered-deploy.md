@@ -177,6 +177,7 @@ required where a commit is claimed to explain the state. Named refs and revision
 on unchanged branches: on this host they returned another database's root for iam_meta while DATABASE()
 kept echoing the requested name (fixtures 2026-11-21; mechanism unproven, not attributed to a defect).
 No ref is ever created.
+CI enforces the supply side: a PR that adds a version to data/migrations/manifest.json must ship deploy/oci/verify-<id>-*.py, its counter-test suite and the ci.yml step running it (deploy/oci/migration-verifier-guard.py) - the host's fail-closed stop then never surprises a deploy.
 The migration commit chain/content is read from live Dolt with every diff flag present
 and explicitly valued (absent or NULL flags are UNKNOWN), and a COMPLETE fresh recapture through the
 controller's own immutable capture machinery (Dolt+Bao container script, controller PostgreSQL

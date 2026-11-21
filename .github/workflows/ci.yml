@@ -62,6 +62,11 @@ jobs:
         run: |
           git fetch origin main
           node scripts/data-migrations.mjs --base origin/main
+      # A PR that adds a data migration must ship its reviewed digest-specific verifier,
+      # counter-tests and the CI step running them - otherwise the host qualification
+      # fails closed at deploy time (that is what put the demo under maintenance after #118).
+      - name: Migration verifier guard
+        run: python3 deploy/oci/migration-verifier-guard.py --base origin/main
       - name: Event circuit inventory guard
         run: node scripts/event-inventory.mjs --check
       - run: cargo build -p iam-core --locked
@@ -173,6 +178,7 @@ jobs:
           python3 deploy/oci/qualification.test.py
           python3 deploy/oci/verify-0002-account-blocks.test.py
           python3 deploy/oci/recover-0002.test.py
+          python3 deploy/oci/migration-verifier-guard.test.py
           node --check deploy/oci/qualification-container.mjs
           node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
