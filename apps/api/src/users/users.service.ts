@@ -1,3 +1,4 @@
+import { FirstAccessStore } from './first-access-store.js';
 import { initializeDirectoryV1 } from '../migrations/v0001/directory.js';
 import { migrationPaths } from '../migrations/cli.js';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
@@ -157,6 +158,35 @@ export class UsersService {
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} changed their password`]); }
     }));
+  }
+  readonly firstAccess = new FirstAccessStore();
+  /** Is the "change at first sign-in" rule in force for this account on `ref`? Only while the record's revision is the account's CURRENT credential revision. A store error propagates: callers refuse (fail closed). */
+  async firstAccessState(tenant: string, id: string, ref = 'main'): Promise<{ required: false } | { required: true; expired: boolean }> {
+    const rec = await this.firstAccess.get(tenant, id); if (!rec) return { required: false };
+    const row = (await this.list(ref)).find((x) => x.id === id);
+    if (!row || String(row.credential_revision) !== rec.revision) return { required: false };
+    return { required: true, expired: rec.expiresAt <= Date.now() };
+  }
+  /** The forced change, called only by the sign-in flow after the full chain proved the account. Single winner: the record is re-read under the writer lock and consumed by revision. The temporary password is never accepted as the new one. */
+  async completeFirstAccess(tenant: string, id: string, next: string): Promise<{ ok: true } | { ok: false; reason: 'not-required' | 'expired' | 'same-as-temporary' | 'policy'; errors?: string[] }> {
+    await this.init();
+    return this.v.lock(async () => {
+      const rec = await this.firstAccess.get(tenant, id), row = (await this.list('main')).find((x) => x.id === id);
+      if (!rec || !row || String(row.credential_revision) !== rec.revision) return { ok: false as const, reason: 'not-required' as const };
+      if (rec.expiresAt <= Date.now()) return { ok: false as const, reason: 'expired' as const };
+      const cur = (await this.credentials())[rec.revision];
+      if (cur && timingSafeEqual(Buffer.from(cur.hash, 'hex'), scryptSync(next, cur.salt, 64))) return { ok: false as const, reason: 'same-as-temporary' as const };
+      const check = await this.checkPasswordPolicy(tenant, id, next, row as { display_name?: unknown; email?: unknown });
+      if (!check.ok) return { ok: false as const, reason: 'policy' as const, errors: check.errors };
+      const revision = await this.password(tenant, id, next);
+      await this.v.at('main', async (c) => {
+        await c.query('update identities set credential_revision=? where id=?', [revision, id]);
+        const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
+        if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query("call dolt_commit('-m',?)", [`users: ${id} completed the first-access password change`]); }
+      });
+      await this.firstAccess.clear(tenant, id, rec.revision);
+      return { ok: true as const };
+    });
   }
   /** `ref` is the data branch whose directory answers: 'main' for live sign-in, the tested branch for a branch test sign-in (accounts created there exist only there). */
   async authenticate(tenant: string, id: string, password: string, ref = 'main') {

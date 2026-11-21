@@ -64,6 +64,8 @@ interface Session {
   done: { id: string; type: string; real: boolean }[];
   prepared?: { prompt: Prompt; state: Record<string, any> };
   tries: number;
+  /** The forced first-access password change is pending: set only after the WHOLE chain proved the account (and the block gate passed); the only step left before the allow. */
+  change?: { tries: number };
   /** The authorize params captured by the core at the external start (returned as `resume` after the callback). */
   authorize?: Record<string, string>;
   /** The running external round-trip: state/nonce/verifier live HERE, never in the browser beyond the state itself. */
@@ -793,7 +795,14 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!ok) { await this.recordFailure({ tenant, subject, branch, known }); return null; }
     if (!known) return null;
     const shown = shownBlock(await this.blocks.list(tenant, subject), this.now());
-    if (!shown) { this.lockFails.delete(`${tenant}/${subject}`); return null; }
+    if (!shown) {
+      this.lockFails.delete(`${tenant}/${subject}`);
+      // Classic single-password mode has no chain to carry the forced change: a temporary password is refused (closed) while the rule is in force. Documented limit: use a chain to complete the change.
+      let fa: Awaited<ReturnType<UsersService['firstAccessState']>> = { required: false };
+      if (this.users) { try { fa = await this.users.firstAccessState(tenant, subject, branch ?? 'main'); } catch { fa = { required: true, expired: false }; } }
+      if (fa.required) { this.audit({ tenant, subject, outcome: 'first-access-refused-classic' }); return { outcome: 'deny', reason: 'password-change-required', message: 'Your password is temporary and must be changed. Sign in with a method that supports the change, or ask an administrator.' }; }
+      return null;
+    }
     this.audit({ tenant, subject, outcome: 'blocked', kind: shown.kind, block: shown.id });
     return { outcome: 'deny', reason: 'account-blocked', message: refusalMessage(shown) };
   }
@@ -804,6 +813,7 @@ export class AuthnService implements OnApplicationBootstrap {
       this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'refused-while-locked' });
       return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     }
+    if (s.change) return this.checkChange(s, Object.fromEntries(Object.entries(answers).filter(([k, v]) => /^[a-z0-9]{1,12}$/.test(k) && typeof v === 'string' && v.length <= 256)) as Record<string, string>);
     const clean: Record<string, string> = {};
     // One answer value is at most 256 chars, except the passkey ceremony answer: a signed WebAuthn JSON of a few KB.
     for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= (k === 'webauthn' ? 16384 : 256) && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
@@ -842,6 +852,45 @@ export class AuthnService implements OnApplicationBootstrap {
     const blocked = await this.blockGate(s);
     if (blocked) { this.sessions.delete(s.id); return blocked; }
     if (s.index < s.steps.length) { await this.prepare(s); return this.challenge(s); }
+    const forced = await this.firstAccessGate(s);
+    if (forced) return forced;
+    return this.finish(s);
+  }
+  /** The forced change of a temporary password. Runs only once the chain is complete and no block is in force. A store or directory error refuses (fail closed). */
+  private async firstAccessGate(s: Session): Promise<GateResponse | null> {
+    if (!s.known || !this.users) return null;
+    let st: Awaited<ReturnType<UsersService['firstAccessState']>>;
+    try { st = await this.users.firstAccessState(s.tenant, s.subject, s.branch ?? 'main'); } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
+    if (!st.required) return null;
+    if (st.expired || (s.branch && s.branch !== 'main')) {
+      this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: st.expired ? 'first-access-expired' : 'first-access-refused-on-branch' });
+      return { outcome: 'deny', reason: 'password-change-expired', message: 'Your temporary password has expired. Ask an administrator for a new one.' };
+    }
+    s.change = { tries: 0 };
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'first-access-change-required' });
+    return this.changeChallenge(s);
+  }
+  private changeChallenge(s: Session, error?: string): GateResponse {
+    return { outcome: 'challenge', session: s.id, step: { index: s.steps.length, total: s.steps.length + 1, methodId: 'first-access-change', type: 'password-change', title: 'Choose a new password', message: 'Your password is temporary. Choose a new one to finish signing in.', fields: [{ name: 'newpw', label: 'New password', type: 'password', maxLength: 128 }, { name: 'confirm', label: 'Confirm the new password', type: 'password', maxLength: 128 }] }, ...(error ? { error } : {}) };
+  }
+  private async checkChange(s: Session, answers: Record<string, string>): Promise<GateResponse> {
+    const fail = (error: string) => { s.change!.tries++; if (s.change!.tries >= MAX_TRIES) { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Start again.' } as GateResponse; } return this.changeChallenge(s, error); };
+    const a = answers.newpw, b = answers.confirm;
+    if (typeof a !== 'string' || a.length < 1 || a.length > 128 || a !== b) return fail('The two passwords must match.');
+    let r: Awaited<ReturnType<UsersService['completeFirstAccess']>>;
+    try { r = await this.users!.completeFirstAccess(s.tenant, s.subject, a); } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
+    if (!r.ok) {
+      if (r.reason === 'policy') return fail(`The password does not respect the policy: ${(r.errors ?? []).join('; ') || 'rejected'}`);
+      if (r.reason === 'same-as-temporary') return fail('Choose a password different from the temporary one.');
+      this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: `first-access-${r.reason}` });
+      return { outcome: 'deny', reason: 'password-change-expired', message: r.reason === 'expired' ? 'Your temporary password has expired. Ask an administrator for a new one.' : 'Sign-in failed. Start again.' };
+    }
+    s.change = undefined;
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'first-access-changed' });
+    return this.finish(s);
+  }
+  /** The final allow with the claims. */
+  private async finish(s: Session): Promise<GateResponse> {
     this.sessions.delete(s.id); this.fails.delete(`${s.tenant}/${s.branch ?? 'live'}/${s.subject}`);
     // Factor 'other' (federation) never counts toward MFA by itself: a federated step asserts a sign-in happened
     // at the provider, not an independent factor of THIS service (docs/sso-federation.md).
