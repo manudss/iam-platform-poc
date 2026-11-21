@@ -152,6 +152,54 @@ read-only offline Dolt inventory in the helper image, real PG17 SQL, metadata-on
 permissions/coverage, the actual hosted form fields, and TLS front checks. Missing inputs
 or implementation failures leave maintenance armed and are blockers, never success claims.
 
+### Pre-gate qualification auth probe (`--phase authprobe`)
+
+What it is. While the CURRENT version still serves and BEFORE `update.sh` arms the maintenance gate, `update.sh`
+calls `$LYAM_POST_UPDATE_CHECK --phase authprobe`. The checker runs `docker exec` inside the running current
+container and proves the credentials in the policy's `authFile` can still complete the OIDC password login
+the after-phase smoke needs. A stale credential then refuses the update with the gate never armed and the
+running service untouched, instead of being found at the smoke phase behind maintenance.
+
+What it does on the network (only the container's own local base, `http://127.0.0.1:8080`): `GET /healthz`,
+one `GET /core/authorize` per origin (form reachable), and ONE `POST /core/authorize/login` on the FIRST origin.
+The public origins are only used as `redirect_uri` values and are never contacted. The authorization code is
+never redeemed (no `/core/token`), no application API is called, there is no retry, and each call times out
+after 15 seconds. The first failure stops the probe.
+
+Account. There is no dedicated probe account in this repository. The probe reads the same `authFile` as the
+existing smoke and uses the same `password-only` chain as the smoke, so it adds no new account or chain
+dependency. WHICH account that file holds is host state the repository cannot show (it may be a demo
+account such as demo-alice); the operator states it before installation. If that account is an
+administrator, remember the probe adds one login per update cycle on it.
+
+Side effects. One real password login per cycle creates ordinary issuer-side session and audit entries and counts
+toward any account lockout or throttling policy. It does not change application data, the gate or the queue.
+
+Scope limit. It says nothing about public reachability or TLS. It proves only that these credentials
+complete this login against the locally running current container.
+
+When the current container is not running the probe cannot run and the update is refused (nothing is bypassed
+silently). A deliberate recovery sets `LYAM_AUTH_PROBE=off` in the environment file; the updater logs a loud
+warning, and it never disables the probe while the current version is serving.
+
+Coherent installation (the host files are installed copies, so merging this change alters none of them). Install
+together, BETWEEN cycles, with the queue idle, from the reviewed merged main, and record the hashes:
+`update.sh`, `qualification.py`, `qualification-container.mjs`, `ordered-queue.py`, `update-preflight.py`.
+`update.sh` passes `--phase authprobe` and `--target-image`, `--evidence-dir` to `$LYAM_POST_UPDATE_CHECK`, a
+file that belongs to the host (example path `/opt/lyam/bin/post-update-check`) and is not in the repository.
+Operator check before the first update with the new `update.sh`: that executable is `qualification.py` from the
+same reviewed main (same sha256) or a reviewed wrapper that forwards the phase and all options. A new `update.sh`
+with a checker that lacks the `authprobe` phase refuses every update before the gate is armed (service intact,
+deployments blocked).
+
+Preflight configuration is a separate decision. Installing `ordered-queue.py` WITHOUT
+`/opt/lyam/deploy-preflight.json` keeps the migration cold-check inactive: a missing verifier for a migrating
+digest is then only caught by the controller during the cycle (the #118 class: site already behind
+maintenance). That is reduced coverage, not an equivalent protection. With the file present, every plan digest
+must be pinned (migrating deploy) or declared `noTransform` (the operator's statement, not a proof), otherwise the
+drain refuses the plan before any state write; the digest only exists after the image is built, so this costs one
+host action per merge. Arm the pin for the digest of the next migrating deploy.
+
 ### Digest-specific transformation verifiers
 
 A verifier such as `deploy/oci/verify-0002-account-blocks.py` is root-owned, installed next to
