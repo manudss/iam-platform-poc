@@ -73,7 +73,14 @@ export class UsersService {
     const r = await reg.callSlot<PasswordValidateResult>(tenant, 'auth.password', 'auth.password.validate', { tenant, subject: id, candidate, userInfo: { login: id, displayName: String(user?.display_name ?? ''), email: String(user?.email ?? '') }, history: await this.passwordHistory(tenant, id), now: Date.now() } satisfies PasswordValidatePayload);
     return { ok: !!r.result.ok, errors: Array.isArray(r.result.errors) ? r.result.errors.map(String).slice(0, 8) : [] };
   }
-  private async password(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }, firstAccess?: { expiresAt: number }) {
+  private credWrites: Promise<unknown> = Promise.resolve();
+  /** Every write of the credential file (and its history) is serialized in this process: the file is read, extended and renamed whole, so two concurrent writers would otherwise lose an entry. */
+  private password(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }, firstAccess?: { expiresAt: number }): Promise<string> {
+    const run = this.credWrites.then(() => this.passwordLocked(tenant, id, password, pre, firstAccess));
+    this.credWrites = run.catch(() => undefined);
+    return run;
+  }
+  private async passwordLocked(tenant: string, id: string, password: string, pre?: { salt: string; hash: string }, firstAccess?: { expiresAt: number }) {
     const all = await this.credentials(), salt = pre?.salt ?? randomBytes(24).toString('hex');
     const revision = randomBytes(20).toString('hex');
     const hash = pre?.hash ?? scryptSync(password, salt, 64).toString('hex');
@@ -120,7 +127,7 @@ export class UsersService {
       return true;
     }));
   }
-  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo') {
+  async save(id: string, b: Record<string, unknown>, create: boolean, pre?: { salt: string; hash: string }, tenant = 'acme-demo', temporary?: { expiresAt: number }) {
     const branch = currentBranch(true); await this.validate(tenant, pre ? { ...b, password: 'x'.repeat(12) } : b, create); if (b.id !== undefined && b.id !== id) throw new BadRequestException('user id cannot be changed'); await this.init();
     const save = async (c: import('mysql2/promise').Connection) => {
       const [rows] = await c.query('select * from identities where id=?', [id]); const prev = (rows as Record<string, unknown>[])[0];
@@ -128,7 +135,7 @@ export class UsersService {
       const r = { display_name:'', department:'', manager_id:null, email:null, login_enabled:true, ...prev, ...b };
       if (r.manager_id) { let cur: unknown = r.manager_id; for (let n = 0; cur && n < 100; n++) { if (cur === id) throw new BadRequestException(`${r.manager_id} already reports (directly or not) to ${id}: this would make a loop in the management chain`); const [up] = await c.query('select manager_id from identities where id=?', [cur]); cur = (up as { manager_id: string | null }[])[0]?.manager_id; } const [m] = await c.query('select id from identities where id=?', [r.manager_id]); if (!(m as unknown[]).length || r.manager_id === id) throw new BadRequestException('manager must be another existing user'); }
       if (!pre && typeof b.password === 'string') { const check = await this.checkPasswordPolicy(tenant, id, b.password, r); if (!check.ok) throw new BadRequestException(check.errors.join('; ') || 'the password does not respect the policy'); }
-      const revision = pre ? await this.password(tenant, id, '', pre) : b.password !== undefined ? await this.password(tenant, id, b.password as string) : prev?.credential_revision ?? null;
+      const revision = pre ? await this.password(tenant, id, '', pre) : b.password !== undefined ? await this.password(tenant, id, b.password as string, undefined, temporary) : prev?.credential_revision ?? null;
       await c.query('insert into identities (id,display_name,manager_id,department,email,login_enabled,credential_revision) values (?,?,?,?,?,?,?) on duplicate key update display_name=values(display_name),manager_id=values(manager_id),department=values(department),email=values(email),login_enabled=values(login_enabled),credential_revision=values(credential_revision)', [id,r.display_name,r.manager_id || null,r.department,r.email || null,r.login_enabled,revision]);
       const [dirty] = await c.query("select table_name from dolt_status where table_name='identities'");
       if ((dirty as unknown[]).length) { await c.query("call dolt_add('identities')"); await c.query('call dolt_commit(\'-m\',?)', [`users: ${create ? 'create' : 'update'} ${id}`]); }
@@ -145,6 +152,16 @@ export class UsersService {
       if (!!prev.login_enabled && saved && !saved.login_enabled) this.events?.emit({ type: 'user.disabled', tenant, branch, at, payload: { subject: id } });
     }
     return saved;
+  }
+  static readonly TEMP_MAX_HOURS = 168;
+  /** Admin (or workflow) action: set a TEMPORARY password. It is a normal save of the password with the must-change flag and a server-side expiry in the same credential record. Never the bootstrap, seed, sign-up or self-service paths. The caller has already passed AuthGuard, AdminGuard and assertSuperAdmin. */
+  async setTemporaryPassword(tenant: string, actor: string, id: string, password: unknown, hours: unknown) {
+    if (typeof password !== 'string' || !password) throw new BadRequestException('password required');
+    const h = Number(hours);
+    if (!Number.isFinite(h) || h <= 0 || h > UsersService.TEMP_MAX_HOURS) throw new BadRequestException(`hours: more than 0 and at most ${UsersService.TEMP_MAX_HOURS}`);
+    if (actor === id) throw new ForbiddenException('an administrator cannot set a temporary password on their own account');
+    const saved = await this.save(id, { password }, false, undefined, tenant, { expiresAt: this.now() + Math.round(h * 3_600_000) });
+    return { id, mustChange: true, expiresInHours: h, saved: !!saved };
   }
   /** Self-service password change (profile Security component): the current password re-authenticates the request. Writes on main, like every live self-service edit. */
   async changePassword(tenant: string, id: string, current: string, next: string) {

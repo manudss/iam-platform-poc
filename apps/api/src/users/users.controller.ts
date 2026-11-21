@@ -17,4 +17,6 @@ export class UsersController {
     return { users: [...mine, ...refs] }; }
   @Post() async create(@Param('tenant') t: string, @Req() req: { user: { sub: string } }, @Body() b: Record<string, unknown>) { this.check(t); await assertSuperAdmin(t, req.user.sub, 'Creating a person'); return this.users.save(String(b?.id ?? ''), b, true, undefined, t); }
   @Put(':id') async update(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: Record<string, unknown>) { this.check(t); await assertSuperAdmin(t, req.user.sub, 'Changing a person record'); return this.users.save(id, b, false, undefined, t); }
+  /** Sets a temporary password: the person must choose a new one at the next sign-in. The password is never returned or logged. */
+  @Post(':id/temporary-password') async temporary(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: { password?: unknown; hours?: unknown }) { this.check(t); await assertSuperAdmin(t, req.user.sub, 'Setting a temporary password'); return this.users.setTemporaryPassword(t, req.user.sub, id, b?.password, b?.hours); }
 }
