@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { runPieceAction } from './adapter.mjs';
 import { serviceAccountAuth, readGoogleRows, writeGoogleRow } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
+import { readDoneIssues } from './jira-api.mjs';
 
 /**
  * The block catalogue this plugin exposes on the `workflows.blocks` surface (SPIKE).
@@ -575,6 +576,25 @@ export const TRIGGER_EVENTS = {
       return list
         .filter((r) => String(r.values[watch] ?? '') === watchValue && String(r.values[done] ?? '') !== doneValue);
     },
+  },
+};
+
+
+TRIGGER_EVENTS['jira.issue-done'] = {
+  label: 'A Jira ticket is in Done (watched every minute)',
+  payload: ['key', 'summary', 'status', 'updated'],
+  configFields: [
+    { key: 'connectionId', label: 'Managed Jira connection', type: 'string', required: true },
+    { key: 'project', label: 'Jira project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'label', label: 'Only tickets with this label', type: 'string', default: 'badge-demo' },
+    { key: 'doneStatus', label: 'Status name that means done', type: 'string', default: 'Done' },
+    { key: 'lookbackDays', label: 'Look back (days, 1-30)', type: 'number', default: 7 },
+  ],
+  /** Returns the done tickets (read-only search). The core poller starts one run per ticket key. */
+  async poll(config, { settings, log }) {
+    const issues = await readDoneIssues(settings, config);
+    log?.(`jira: ${issues.length} ticket(s) in the done status`);
+    return issues;
   },
 };
 
