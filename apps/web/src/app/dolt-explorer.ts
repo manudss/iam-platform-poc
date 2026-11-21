@@ -6,7 +6,7 @@ import { FormsModule } from '@angular/forms';
 import { ApiClient, BranchInfo, BranchProtection, ColumnInfo, CommitInfo, DiffSummary, PullRequestDetail, PullRequestInfo, RowDiff, SqlResult, TableData, VersioningClient, cellText, shortHash } from './api';
 
 export type Tab = 'home' | 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
-interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }
+interface RowDiffView { table: string; columns: string[]; primaryKey?: string[]; rows: RowDiff[]; truncated: boolean }
 /** One past version of a row: the commit that touched it, who wrote it and why, plus the column-level old -> new. */
 interface RowHistEntry { commit: string; author: string; date: string; message: string; changes: { col: string; from: unknown; to: unknown }[]; created: boolean; baseline?: boolean; values: Record<string, unknown> }
 /** A data workbench tab, bound to a branch for its whole life: a table tab shows rows of one (table, branch); a row tab edits one row (key null = a new row) of one (table, branch). */
@@ -762,6 +762,44 @@ export class DoltExplorer {
     const p = this.pr()?.pullRequest; if (!p) return;
     const r = await this.run(() => this.v.diffTable(table, p.target, p.source, true), true);
     if (r) this.prRowDiffs.update((m) => ({ ...m, [table]: r }));
+  }
+  /** Row actions in the pull request diff: only an open request whose source branch is not protected, on a table with a primary key. */
+  protected canDiscard(d: RowDiffView | null | undefined): boolean {
+    const p = this.pr()?.pullRequest;
+    return !!p && p.status === 'open' && !!d?.primaryKey?.length && !this.protectedBranchNames().has(p.source);
+  }
+  private protectedBranchNames() { return new Set(this.branches().filter((b) => b.protected).map((b) => b.name)); }
+  protected canUndoCell(d: RowDiffView, r: RowDiff, c: string) { return r.type === 'modified' && this.changed(r, c) && !d.primaryKey!.includes(c); }
+  /** Sensitive fields (credential references, plugin runtime state) are never typed in by hand. */
+  protected canEditCell(d: RowDiffView, r: RowDiff, c: string) { return r.type !== 'removed' && !d.primaryKey!.includes(c) && c.toLowerCase() !== 'credential_revision' && !d.table.toLowerCase().startsWith('plugin_runtime_'); }
+  private rowKeyOf(d: RowDiffView, r: RowDiff) { const src = (r.to ?? r.from) as Record<string, unknown>; return Object.fromEntries(d.primaryKey!.map((k) => [k, src[k]])); }
+  /** The head of the source branch as it is NOW (the server refuses the action if it moved after this read). */
+  private async sourceHead(source: string): Promise<string | undefined> {
+    const r = await this.run(() => this.v.branches(), true);
+    return r?.branches.find((b) => b.name === source)?.commit;
+  }
+  private async afterChange(res: { commit: string | null; action: string } | undefined) {
+    if (!res) return;
+    const id = this.pr()!.pullRequest.id;
+    this.note.set(res.commit ? `Done (${shortHash(res.commit)}): ${res.action}.` : `Nothing to change: ${res.action}.`); await this.refreshRefs(); await this.showPull(id); this.prTab.set('rows');
+  }
+  /** Abandons one change of the source branch (whole row, or one field of a modified row), then reloads the diff and the checks. */
+  protected async discardChange(d: RowDiffView, r: RowDiff, columns?: string[]) {
+    const p = this.pr()!.pullRequest; const sensitive = d.table.toLowerCase().startsWith('plugin_runtime_') || (columns ?? d.columns).some((c) => c.toLowerCase() === 'credential_revision');
+    const what = columns ? `the change to ${columns.join(', ')}` : r.type === 'added' ? 'this added row' : r.type === 'removed' ? 'this removed row (it will come back)' : 'all changes to this row';
+    const note = sensitive ? ` Credential and plugin fields take the CURRENT value of ${p.target}, never an older one.` : '';
+    if (!confirm(`Abandon ${what} in ${d.table} on ${p.source}? Everything else on the branch stays. One commit is added to ${p.source}.${note}`)) return;
+    const head = await this.sourceHead(p.source); if (!head) return;
+    await this.afterChange(await this.run(() => this.v.discardChange(p.id, d.table, this.rowKeyOf(d, r), head, columns)));
+  }
+  /** Types a new value for one field of the source branch (not for credential or plugin fields), e.g. to settle a conflict. */
+  protected async editCell(d: RowDiffView, r: RowDiff, c: string) {
+    const p = this.pr()!.pullRequest; const cur = (r.to ?? r.from)?.[c];
+    const typed = prompt(`New value for ${d.table}.${c} on ${p.source} (empty text stays empty; type NULL for no value). One commit is added to ${p.source}.`, cur === null || cur === undefined ? '' : String(cur));
+    if (typed === null) return;
+    const value: unknown = typed === 'NULL' ? null : typed;
+    const head = await this.sourceHead(p.source); if (!head) return;
+    await this.afterChange(await this.run(() => this.v.editRow(p.id, d.table, this.rowKeyOf(d, r), { [c]: value }, head)));
   }
   protected async sendComment(kind: 'comment' | 'approve') {
     const p = this.pr()!.pullRequest;
