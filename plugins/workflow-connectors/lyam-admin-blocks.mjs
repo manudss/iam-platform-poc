@@ -17,6 +17,7 @@
  */
 import { createRequire } from 'node:module';
 import { WorkflowSuspend } from '../workflows-iga/model.mjs';
+import { APP_CONNECTOR_DDL } from '../app-connector/handlers.mjs';
 
 const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
@@ -355,26 +356,54 @@ const igaPrepareRemediation = writeBlock('iga-prepare-remediation', 'IGA: prepar
     return r;
 });
 
-const igaCloseCampaign = writeBlock('iga-close-campaign', 'IGA: close the campaign', 'REAL: closes the campaign with its complete evidence file (scope, items, decisions, remediation, refs, digest). Strict: an undecided item or a denied item without applied remediation blocks the closure, unless allowIncomplete records it explicitly.', [
-    { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
-    { key: 'allowIncomplete', label: 'Allow incomplete closure', type: 'select', options: ['no', 'yes'], default: 'no' },
-], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-close-campaign.campaignId', 48), allowIncomplete: str(cfg.allowIncomplete, 'allowIncomplete', 3, false) === 'yes' }), async (ctx) => {
-    const c = ctx.config;
-    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would close campaign ${c.campaignId}`); return { campaign: c.campaignId, status: 'test' }; }
-    const r = await need(ctx.iga, 'iga-close-campaign').close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { allowIncomplete: c.allowIncomplete });
-    ctx.log(`campaign ${c.campaignId} closed (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
-    return r;
-});
+const igaCloseCampaign = {
+    type: 'iga-close-campaign', family: 'lyam', label: 'IGA: close the campaign', simulated: false, category: 'real',
+    description: 'REAL: closes the campaign with its complete evidence file (scope, items, decisions, remediation, refs, digest). Strict: an undecided item or a denied item without applied remediation blocks the closure. An incomplete closure is possible ONLY through a human exception: the block opens a decision task for the IGA pool with the unresolved items, and the closing evidence records who authorized it and why.',
+    fields: [{ key: 'campaignId', label: 'Campaign id', type: 'string', required: true }],
+    outputs: [{ key: 'campaign', description: 'The campaign id' }, { key: 'status', description: 'closed' }, { key: 'evidence', description: 'The evidence file' }],
+    validate(cfg) { return { campaignId: str(cfg.campaignId, 'iga-close-campaign.campaignId', 48) }; },
+    async run(ctx) {
+        const c = ctx.config;
+        const iga = need(ctx.iga, 'iga-close-campaign');
+        if (ctx.resumeWait?.taskId) {
+            const chk = await need(ctx.tasks, 'iga-close-campaign').check(ctx.tenant, ctx.resumeWait.taskId);
+            const t = chk.task;
+            if (chk.state === 'decided' && t?.decision === 'approved') {
+                const r = await iga.close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { exception: { by: t.decided_by, justification: t.justification } });
+                ctx.log(`campaign ${c.campaignId} closed with a human exception authorized by ${t.decided_by} (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
+                return r;
+            }
+            if (t?.status === 'canceled') bad('iga-close-campaign: the closure exception task was canceled');
+            if (chk.state === 'decided') bad(`iga-close-campaign: the closure exception was refused${t?.justification ? `: ${t.justification}` : ''}`);
+            throw new WorkflowSuspend({ taskId: ctx.resumeWait.taskId, kind: 'iga-close-campaign' });
+        }
+        if (ctx.test || ctx.dryRun) { ctx.log(`test run: would close campaign ${c.campaignId}`); return { campaign: c.campaignId, status: 'test' }; }
+        try {
+            const r = await iga.close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, {});
+            ctx.log(`campaign ${c.campaignId} closed (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
+            return r;
+        } catch (e) {
+            const status = typeof e?.getStatus === 'function' ? e.getStatus() : e?.status;
+            if (status !== 409 || !/not complete/.test(e?.message ?? '')) throw e;
+            const { items } = await iga.listItems(ctx.tenant, c.campaignId);
+            const unresolved = items.filter((i) => ['pending', 'requeued', 'denied', 'remediation-prepared'].includes(i.state)).map((i) => ({ item: i.id, identity: i.identity, state: i.state }));
+            const t = await need(ctx.tasks, 'iga-close-campaign').request({ tenant: ctx.tenant, kind: 'iga-close-exception', title: `Close campaign ${c.campaignId} with ${unresolved.length} unresolved item(s)`, detail: { campaignId: c.campaignId, unresolved, decisions: ['approved', 'refused'] }, assignee: 'iga', preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
+            ctx.log(`campaign incomplete: closure exception task ${t.id} opened for the IGA pool`);
+            throw new WorkflowSuspend({ taskId: t.id, kind: 'iga-close-campaign' });
+        }
+    },
+};
 
 const igaMarkRemediated = writeBlock('iga-mark-remediated', 'IGA: record an applied remediation', 'REAL: records that the remediation of an item was APPLIED (the calling workflow applied it on its run branch, e.g. with revoke steps; the run id is the proof). A decision alone never marks an item remediated.', [
     { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
     { key: 'item', label: 'Item id', type: 'string', required: true },
+    { key: 'runId', label: 'Proof: completed remediation run id', type: 'string', required: true },
     { key: 'note', label: 'Note', type: 'string' },
-], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-mark-remediated.campaignId', 48), item: str(cfg.item, 'iga-mark-remediated.item', 48), note: str(cfg.note, 'note', 500, false) }), async (ctx) => {
+], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-mark-remediated.campaignId', 48), item: str(cfg.item, 'iga-mark-remediated.item', 48), runId: str(cfg.runId, 'iga-mark-remediated.runId', 40), note: str(cfg.note, 'note', 500, false) }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would record the remediation of item ${c.item}`); return { item: c.item, state: 'test' }; }
-    const r = await need(ctx.iga, 'iga-mark-remediated').markRemediated(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, c.item, { runId: ctx.runId, note: c.note });
-    ctx.log(`item ${c.item} remediated (proof run ${ctx.runId})`);
+    const r = await need(ctx.iga, 'iga-mark-remediated').markRemediated(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, c.item, { runId: c.runId, note: c.note });
+    ctx.log(`item ${c.item} remediated (proof run ${c.runId}, verified on the campaign ref)`);
     return r;
 });
 
@@ -436,7 +465,7 @@ const lyamCreateApplication = writeBlock('lyam-create-application', 'Create an a
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would create application "${c.id}" on the run branch`); return { id: c.id, created: false }; }
     await ctx.branchWrite(async (db) => {
-        await db.query("create table if not exists app_connectors (tenant varchar(32) not null, id varchar(32) not null, name varchar(80) not null, description varchar(240) not null, protocol varchar(8) not null, enabled tinyint not null, config longtext not null, primary key (tenant, id))");
+        await db.query(APP_CONNECTOR_DDL); // the app-connector plugin owns this schema: never a divergent copy
         const [ex] = await db.query('select id from app_connectors where tenant = ? and id = ?', [ctx.tenant, c.id]);
         if ((ex ?? []).length) bad(`lyam-create-application: the application "${c.id}" already exists (changing its protocol or config could hijack redirects: do it in the console after review)`);
         await db.query('insert into app_connectors (tenant, id, name, description, protocol, enabled, config) values (?,?,?,?,?,0,?)', [ctx.tenant, c.id, c.name, c.description, c.protocol, JSON.stringify(c.config)]);
@@ -522,12 +551,59 @@ const lyamRevokeDelegationRequest = proposeBlock('lyam-revoke-delegation-request
     [{ key: 'task', label: 'Task id', type: 'string', required: true }, { key: 'reason', label: 'Reason', type: 'text', required: true }, { key: 'assignee', label: 'Decider', type: 'string', default: 'admin' }],
     (cfg) => ({ title: `Revoke the delegation of task ${str(cfg.task, 'task', 48)}`, detail: { task: str(cfg.task, 'task', 48), reason: str(cfg.reason, 'reason', 500) }, assignee: str(cfg.assignee, 'assignee', 64, false) || 'admin' }));
 
+const lyamReadDiff = {
+    type: 'lyam-read-diff', family: 'lyam', label: 'Read the run branch diff', simulated: false, category: 'real',
+    description: 'Reads the Dolt diff summary between the base ref and the run branch: exactly what a publication will review. Real only (a test run has no branch).',
+    fields: [],
+    outputs: [{ key: 'diff', description: 'The diff summary (tables, adds, removes, changes)' }],
+    validate() { return {}; },
+    async run(ctx) {
+        const publish = need(ctx.publish, 'lyam-read-diff');
+        if (ctx.test || ctx.dryRun) { ctx.log('test run: would read the run branch diff'); return { diff: null }; }
+        if (!ctx.runBranch) bad('lyam-read-diff: this run has no data branch (simulated steps only)');
+        const base = ctx.baseBranch ?? 'main';
+        const diff = await publish.diff(base, ctx.runBranch);
+        ctx.log(`diff ${base}..${ctx.runBranch} read`);
+        return { diff };
+    },
+};
+
+const lyamRequestPublish = {
+    type: 'lyam-request-publish', family: 'lyam', label: 'Request the publication of the run branch', simulated: false, category: 'real',
+    description: 'Opens (or reuses) the Dolt pull request reviewing the run branch. With await=yes the run SUSPENDS until an administrator approves the publication task (a refusal fails the run). The merge itself always stays a human action.',
+    fields: [
+        { key: 'title', label: 'Pull request title', type: 'string' },
+        { key: 'await', label: 'Wait for the approval', type: 'select', options: ['yes', 'no'], default: 'yes' },
+    ],
+    outputs: [{ key: 'pullRequest', description: 'The pull request (id, source, target)' }, { key: 'reused', description: 'An open PR already existed' }, { key: 'decision', description: 'approved (when awaited)' }, { key: 'decidedBy', description: 'Who approved' }],
+    validate(cfg) { return { title: str(cfg.title, 'title', 200, false), awaitPub: str(cfg['await'], 'await', 3, false) !== 'no' }; },
+    async run(ctx) {
+        const publish = need(ctx.publish, 'lyam-request-publish');
+        const c = ctx.config;
+        if (ctx.resumeWait?.taskId) {
+            const chk = await need(ctx.tasks, 'lyam-request-publish').check(ctx.tenant, ctx.resumeWait.taskId);
+            const t = chk.task;
+            if (chk.state === 'decided' && t?.decision === 'approved') { ctx.log(`publication approved by ${t.decided_by}`); return { pullRequest: t.detail?.pr ?? null, reused: false, decision: 'approved', decidedBy: t.decided_by }; }
+            if (t?.status === 'canceled') bad('lyam-request-publish: the publication task was canceled');
+            if (chk.state === 'decided') bad(`lyam-request-publish: the publication was refused${t?.justification ? `: ${t.justification}` : ''}`);
+            throw new WorkflowSuspend({ taskId: ctx.resumeWait.taskId, kind: 'lyam-request-publish' });
+        }
+        if (ctx.test || ctx.dryRun) { ctx.log('test run: would request the publication of the run branch'); return { pullRequest: { id: 0 }, reused: false, decision: c.awaitPub ? 'approved' : null, decidedBy: c.awaitPub ? 'test' : null }; }
+        const { pullRequest: pr, reused } = await publish.request(ctx.tenant, ctx.runId, c.title || `Workflow run ${ctx.runId}`);
+        ctx.log(`pull request #${pr.id} ${reused ? 'reused' : 'opened'} (${pr.source} -> ${pr.target})`);
+        if (!c.awaitPub) return { pullRequest: pr, reused, decision: null, decidedBy: null };
+        const t = await need(ctx.tasks, 'lyam-request-publish').request({ tenant: ctx.tenant, kind: 'publish-approval', title: `Publish run ${ctx.runId}: PR #${pr.id}`, detail: { pr, decisions: ['approved', 'refused'] }, assignee: 'admin', preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
+        throw new WorkflowSuspend({ taskId: t.id, kind: 'lyam-request-publish' });
+    },
+};
+
 export const LYAM_ADMIN_BLOCKS = [
     // P0
     lyamRequestApproval,
     lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
     lyamUpdateUser, lyamSetLoginEnabled, lyamCreateRole, lyamProposeRoleRemoval,
     igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaMarkRemediated, igaCloseCampaign, igaReadCampaign,
+    lyamReadDiff, lyamRequestPublish,
     // P1
     lyamCreateOrganization, lyamAssignOrganization, lyamCreateApplication, lyamCheckAccountBlocks, lyamStartWorkflow, lyamReadRun,
     // P2

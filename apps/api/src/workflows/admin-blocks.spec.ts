@@ -109,6 +109,20 @@ describe('workflow blocks: IGA recertification socle', () => {
       getCampaign: async () => ({ id: 'iga-1', status: 'open' }),
     };
   };
+  it('iga-close-campaign: strict close, incomplete closure only through a human exception', async () => {
+    const closeCalls: unknown[] = [];
+    const conflict = Object.assign(new Error('this campaign is not complete: 1 undecided item(s), 0 denied item(s)'), { getStatus: () => 409 });
+    const iga = { ...fakeIga(), listItems: async () => ({ items: [{ id: 'item-1', identity: 'emp', state: 'pending' }] }), close: async (_t: string, _a: string, _c: string, input: unknown) => { closeCalls.push(input); if (!closeCalls.length || !((input as Record<string, unknown>).exception)) throw conflict; return { campaign: 'iga-1', status: 'closed', evidence: { digest: 'abc123' } }; } };
+    const requested: Record<string, unknown>[] = [];
+    const tasks = { check: async () => ({ state: 'decided', task: { id: 'task-9', status: 'decided', decision: 'approved', decided_by: 'iga-two', justification: 'accepted risk' } }), request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-9' }; } };
+    const b = externalBlock('iga-close-campaign')!;
+    await assert.rejects(b.run(mk({ iga: iga as never, tasks: tasks as never, config: { campaignId: 'iga-1' } }).c), /waiting/);
+    assert.equal(requested[0].kind, 'iga-close-exception');
+    assert.equal((requested[0].detail as Record<string, unknown[]>).unresolved.length, 1);
+    const out = await run1('iga-close-campaign', mk({ iga: iga as never, tasks: tasks as never, config: { campaignId: 'iga-1' }, resumeWait: { taskId: 'task-9', kind: 'iga-close-campaign' } }).c as never);
+    assert.equal(out.status, 'closed');
+    assert.deepEqual(closeCalls[1], { exception: { by: 'iga-two', justification: 'accepted risk' } }, 'the evidence names the human who authorized the exception');
+  });
   it('create/list/open/await/record/prepare/close go through the service, test runs stay dry', async () => {
     const iga = fakeIga();
     assert.equal((await run1('iga-create-campaign', mk({ iga: iga as never, config: { name: 'Q4', kind: 'user-access', ref: 'main', scope: {} } }).c as never)).id, 'iga-1');
@@ -145,5 +159,31 @@ describe('workflow blocks: P2 proposals (never apply, always a human decision)',
   });
   it('lyam-validate-policy refuses without the policies service', async () => {
     await assert.rejects(externalBlock('lyam-validate-policy')!.run(mk({ config: { policy: '{}' } }).c), /not available/);
+  });
+});
+
+describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', () => {
+  it('lyam-read-diff needs a run branch and returns the publish diff', async () => {
+    const publish = { diff: async (from: string, to: string) => ({ from, to, tables: [{ table: 'roles', adds: 1 }] }) };
+    await assert.rejects(externalBlock('lyam-read-diff')!.run(mk({ publish: publish as never, runBranch: null }).c), /no data branch/);
+    const out = await run1('lyam-read-diff', mk({ publish: publish as never, runBranch: 'wf-run-1' }).c as never);
+    assert.deepEqual((out.diff as Record<string, unknown>).to, 'wf-run-1');
+  });
+  it('lyam-request-publish: await=no returns the PR, await=yes suspends then resolves on the human decision', async () => {
+    const publish = { request: async () => ({ pullRequest: { id: 7, source: 'wf-run-1', target: 'main' }, reused: false }), diff: async () => null };
+    const out = await run1('lyam-request-publish', mk({ publish: publish as never, runBranch: 'wf-run-1', config: { awaitPub: false } }).c as never);
+    assert.equal((out.pullRequest as Record<string, unknown>).id, 7);
+    const requested: Record<string, unknown>[] = [];
+    let chk: Record<string, unknown> = { state: 'open', task: { id: 'task-5', status: 'open' } };
+    const tasks = { check: async () => chk, request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-5' }; } };
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { awaitPub: true } }).c), /waiting/);
+    assert.equal(requested[0].kind, 'publish-approval');
+    assert.equal(requested[0].assignee, 'admin');
+    chk = { state: 'decided', task: { id: 'task-5', status: 'decided', decision: 'approved', decided_by: 'root', detail: { pr: { id: 7 } } } };
+    const done = await run1('lyam-request-publish', mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { awaitPub: true }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c as never);
+    assert.equal(done.decision, 'approved');
+    assert.equal(done.decidedBy, 'root');
+    chk = { state: 'decided', task: { id: 'task-5', status: 'decided', decision: 'refused', justification: 'bad data' } };
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { awaitPub: true }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c), /refused: bad data/);
   });
 });

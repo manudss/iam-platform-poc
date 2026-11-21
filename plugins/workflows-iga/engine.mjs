@@ -457,6 +457,7 @@ export function createWorkflowEngine(deps) {
       reads: deps.reads,
       iga: deps.iga,
       runs: deps.runs,
+      publish: deps.publish,
       policies: deps.policies,
       pluginsAdmin: deps.pluginsAdmin,
       branchWrite: async (fn, message) => {
@@ -471,7 +472,7 @@ export function createWorkflowEngine(deps) {
       },
     };
     let output;
-    try { output = await block.run(ctx); } catch { throw new Error('External action failed; check connection and provider status.'); }
+    try { output = await block.run(ctx); } catch (e) { if (e instanceof WorkflowSuspend) throw e; throw new Error('External action failed; check connection and provider status.'); }
     // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
     if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
     if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');

@@ -57,7 +57,7 @@ const waitRun = async (id: string, want: string[], timeoutMs = 20000): Promise<R
   for (;;) {
     const v = (await ok('GET', `/workflow-runs/${id}`)) as RunView;
     if (want.includes(v.run.status)) return v;
-    if (Date.now() > until) throw new Error(`run ${id} still ${v.run.status}, wanted ${want}`);
+    if (Date.now() > until) throw new Error(`run ${id} still ${v.run.status}, wanted ${want}, error: ${v.run.error}`);
     await new Promise((r) => setTimeout(r, 120));
   }
 };
@@ -77,7 +77,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', String(PORT), '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break;
       await new Promise((r) => setTimeout(r, 150));
     }
-    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN });
+    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice', IAM_API_IGA_SUBJECTS: 'demo-alice' });
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13432);
@@ -86,6 +86,8 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     await ok('POST', '/plugins/workflows-iga/install', {});
     await ok('POST', '/plugins/workflows-iga/enable', {});
     assert.equal((await call('GET', '/workflows')).status, 200, 'workflows must answer once the plugin is enabled');
+    await ok('POST', '/plugins/workflow-connectors/install', {});
+    await ok('POST', '/plugins/workflow-connectors/enable', {});
   });
   after(async () => { await app?.close(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
@@ -280,6 +282,22 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     await ok('POST', `/workflow-runs/${started.run.id}/cancel`);
     const v = await waitRun(started.run.id, ['canceled']);
     assert.equal(v.run.status, 'canceled');
+  });
+
+  it('cancel also cancels the durable approval task (the task service is really injected, not undefined)', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Approval wait', graph: { nodes: [
+      { id: 'a', type: 'lyam-request-approval', name: 'approve', config: { title: 'Go?', assignee: 'admin' } },
+    ], edges: [] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const before = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; status: string; run_id: string | null }[] };
+    const task = before.tasks.find((t) => t.run_id === started.run.id);
+    assert.ok(task, 'a durable approval task was opened by the waiting block');
+    assert.equal(task!.status, 'open');
+    await ok('POST', `/workflow-runs/${started.run.id}/cancel`);
+    await waitRun(started.run.id, ['canceled']);
+    const after = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; status: string }[] };
+    assert.equal(after.tasks.find((t) => t.id === task!.id)!.status, 'canceled', 'canceling the run canceled its task: no orphan approval');
   });
 
   it('tags: free-form labels are validated, saved, listed and updated', async () => {

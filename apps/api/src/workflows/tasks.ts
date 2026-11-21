@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { ApplicationBus } from '../events/application-bus.service.js';
 // Value import used only inside the lazy getter below (never at module scope): no load-order cycle.
@@ -27,9 +28,26 @@ export interface TaskCheck { state: 'open' | 'decided'; task: TaskRow }
 export class WorkflowTasksService {
   constructor(private readonly store: WorkflowStore, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly modules?: ModuleRef) {}
 
-  /** The engine, resolved lazily (module wiring order): absent in unit tests and minimal servers. */
+  private readonly log = new Logger('workflow-tasks');
+  private engineWarned = false;
+  /** The engine, resolved lazily (module wiring order): absent in unit tests and minimal servers.
+   *  A resolution failure on a wired server is logged once, never swallowed silently. */
   private engine(): WorkflowEngine | undefined {
-    try { return this.modules?.get(WorkflowEngine, { strict: false }); } catch { return undefined; }
+    if (!this.modules) return undefined;
+    try { return this.modules.get(WorkflowEngine, { strict: false }); }
+    catch (e) { if (!this.engineWarned) { this.engineWarned = true; this.log.warn(`workflow engine unresolved: task decisions cannot resume runs (${(e as Error).message})`); } return undefined; }
+  }
+  private kick(runId: string | null) {
+    if (!runId) return;
+    const e = this.engine();
+    if (e) e.kick(runId);
+    else if (this.modules && !this.engineWarned) { this.engineWarned = true; this.log.warn(`run ${runId} not resumed: no workflow engine on this server`); }
+  }
+  /** The members of a named decider pool ('admin' or 'iga'): every member may decide, not just the first. */
+  poolMembers(name: string): string[] {
+    if (name === 'iga') { const pool = (process.env.IAM_API_IGA_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean); return pool.length ? pool : this.admins(); }
+    if (name === 'admin') return this.admins();
+    return [];
   }
 
   private emit(tenant: string, type: string, payload: Record<string, string>) {
@@ -68,6 +86,7 @@ export class WorkflowTasksService {
       created_at: now(), due_at: a.dueInSeconds ? ts(Date.now() + a.dueInSeconds * 1000) : null, reminded_at: null, decided_at: null,
     };
     if (a.escalateTo) t.detail = { ...t.detail, escalateTo: a.escalateTo };
+    if (t.assignee === 'admin' || t.assignee === 'iga') t.detail = { ...t.detail, pool: t.assignee };
     t.assignee = this.resolveAssignee(t.assignee);
     if (t.assignee === t.detail?.identity || t.assignee === t.detail?.subject) {
       // The beneficiary never receives their own certification task: the pool takes it instead.
@@ -113,16 +132,17 @@ export class WorkflowTasksService {
       if (t.detail?.identity === actor || t.detail?.subject === actor) throw new ForbiddenException('anti-self-approval: the beneficiary of a request cannot decide their own review');
     }
     const isAdmin = this.isAdmin(actor);
-    const saved = isAdmin
+    const pool = typeof t.detail?.pool === 'string' ? this.poolMembers(t.detail.pool) : [];
+    const saved = isAdmin || pool.includes(actor)
       ? await this.store.decideTaskAs(id, actor, d, just || null, now())
       : await this.store.decideTask(id, actor, d, just || null, now());
     if (!saved) {
       const again = await this.store.getTask(id);
       if (again && again.status === 'decided') throw new ConflictException(`this task was just decided by ${again.decided_by}`);
-      throw new ForbiddenException('only the assigned decider (or their delegate) can decide this task');
+      throw new ForbiddenException('only the assigned decider, a member of the decider pool, or their delegate can decide this task');
     }
     this.emit(tenant, 'workflow.task-decided', { task: id, kind: t.kind, decision: d, actor });
-    if (saved.run_id) this.engine()?.kick(saved.run_id);
+    this.kick(saved.run_id);
     return saved;
   }
 
@@ -131,8 +151,11 @@ export class WorkflowTasksService {
     const t = await this.store.getTask(id);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
-    const target = this.resolveAssignee(String(to ?? ''));
-    if (!this.isAdmin(actor) && t.assignee !== actor && t.delegated_to !== actor) throw new ForbiddenException('only the assigned decider can delegate this task');
+    const rawTo = String(to ?? '').trim();
+    const target = this.resolveAssignee(rawTo);
+    const pool = typeof t.detail?.pool === 'string' ? this.poolMembers(t.detail.pool) : [];
+    if (!this.isAdmin(actor) && !pool.includes(actor) && t.assignee !== actor && t.delegated_to !== actor) throw new ForbiddenException('only the assigned decider (or a pool member) can delegate this task');
+    if (rawTo === 'admin' || rawTo === 'iga') await this.store.patchTaskDetail(id, { pool: rawTo }); else await this.store.patchTaskDetail(id, { pool: null });
     const saved = await this.store.delegateTask(id, target, t.due_at ?? now());
     if (!saved) throw new ConflictException('this task is no longer open');
     this.emit(tenant, 'workflow.task-assigned', { task: id, kind: t.kind, title: t.title, assignee: target, actor });
@@ -153,10 +176,15 @@ export class WorkflowTasksService {
     for (const t of open.filter((x) => x.status === 'open')) {
       if (!t.due_at || Date.parse(t.due_at) > Date.now() || t.reminded_at) continue;
       const escalateTo = typeof t.detail?.escalateTo === 'string' ? t.detail.escalateTo : null;
-      if (escalateTo) await this.store.delegateTask(t.id, escalateTo, t.due_at);
+      let resolved: string | null = null;
+      if (escalateTo) {
+        try { resolved = this.resolveAssignee(escalateTo); if (escalateTo === 'admin' || escalateTo === 'iga') await this.store.patchTaskDetail(t.id, { pool: escalateTo }); }
+        catch (e) { this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (${(e as Error).message}): the task stays with ${t.assignee}`); }
+      }
+      if (resolved) await this.store.delegateTask(t.id, resolved, t.due_at);
       await this.store.markTaskReminded(t.id, now());
-      this.emit(t.tenant, 'workflow.task-overdue', { task: t.id, kind: t.kind, assignee: escalateTo ?? t.assignee });
-      if (t.run_id) this.engine()?.kick(t.run_id); // a waiting block re-evaluates (and keeps waiting on the escalated task)
+      this.emit(t.tenant, 'workflow.task-overdue', { task: t.id, kind: t.kind, assignee: resolved ?? t.assignee });
+      this.kick(t.run_id); // a waiting block re-evaluates (and keeps waiting on the escalated task)
       n++;
     }
     return n;

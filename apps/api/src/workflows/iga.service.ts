@@ -163,6 +163,9 @@ export class WorkflowsIgaService {
 
   /** Step 4b: the remediation of an item was APPLIED (through a controlled change, e.g. the run branch of
    *  the calling workflow): record the application and its proof. Never called by a decision alone. */
+  /** A remediation is 'remediated' only when the revoked roles are EFFECTIVELY gone on the campaign ref
+   *  (published): a completed run id is required as proof, and the live assignments are re-read. A revocation
+   *  sitting on an unmerged run branch is reported as such, never as applied. */
   async markRemediated(tenant: string, actor: string, campaignId: string, itemId: string, proof: { runId?: unknown; note?: unknown }) {
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
@@ -170,7 +173,23 @@ export class WorkflowsIgaService {
     const item = items.find((x) => x.id === itemId);
     if (!item) throw new NotFoundException('unknown item');
     if (item.state !== 'remediation-prepared') throw new ConflictException(`this item is ${item.state}: prepare its remediation first`);
-    await this.store.igaUpdateItem(itemId, { state: 'remediated', payload: { ...item.payload, remediatedBy: actor, remediatedAt: now(), remediationProof: { runId: proof.runId ?? null, note: String(proof.note ?? '').slice(0, 500) } } });
+    const runId = String(proof.runId ?? '').trim();
+    if (!runId) throw new BadRequestException('remediation proof: the id of the workflow run that applied the remediation is required (a note alone never suffices)');
+    const run = await this.store.getRun(tenant, runId);
+    if (!run) throw new BadRequestException(`remediation proof: unknown run "${runId}" for this tenant`);
+    if (run.status !== 'completed') throw new ConflictException(`remediation proof: run ${runId} is ${run.status}, not completed`);
+    const roles = (item.payload?.roles as string[] | undefined) ?? [];
+    if (roles.length) {
+      if (!this.reads) throw new BadRequestException('the remediation cannot be verified on this server (reads unavailable): refusing to mark remediated on trust');
+      const onRef = (await this.reads.listAssignments(campaign.ref, { identity: item.identity })).assignments.map((a) => a.role).filter((r) => roles.includes(r));
+      if (onRef.length) {
+        let onBranch = onRef;
+        if (run.branch) { try { onBranch = (await this.reads.listAssignments(run.branch, { identity: item.identity })).assignments.map((a) => a.role).filter((r) => roles.includes(r)); } catch { onBranch = onRef; } }
+        if (!onBranch.length) throw new ConflictException(`the role(s) ${onRef.join(', ')} are revoked on run branch ${run.branch} but that branch is not published to ${campaign.ref}: publish it, then mark remediated`);
+        throw new ConflictException(`the role(s) ${onRef.join(', ')} are still assigned to ${item.identity} on ${campaign.ref}: the remediation is not effective`);
+      }
+    }
+    await this.store.igaUpdateItem(itemId, { state: 'remediated', payload: { ...item.payload, remediatedBy: actor, remediatedAt: now(), remediationProof: { runId, verifiedOn: campaign.ref, note: String(proof.note ?? '').slice(0, 500) } } });
     this.emit(tenant, 'iga.remediation-resolved', { campaign: campaignId, subject: item.identity, role: (item.payload?.roles as string[] | undefined)?.join(',') ?? '*', result: 'remediated' });
     return { item: itemId, state: 'remediated' };
   }
@@ -178,16 +197,26 @@ export class WorkflowsIgaService {
   /** Step 5: close with the complete evidence file (scope, items, decisions, remediation, refs).
    *  Strict: an undecided item, or a denied item without applied remediation, blocks the closure unless
    *  allowIncomplete records it explicitly in the evidence. */
-  async close(tenant: string, actor: string, campaignId: string, input: { allowIncomplete?: unknown } = {}) {
+  /** Strict close. An incomplete campaign closes ONLY through a traced human exception (an authorized
+   *  decider approved it with a justification): never through a workflow config flag. */
+  async close(tenant: string, actor: string, campaignId: string, input: { exception?: { by?: unknown; justification?: unknown } } = {}) {
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is already closed');
     const items = (await this.listItems(tenant, campaignId)).items;
     const pending = items.filter((i) => i.state === 'pending' || i.state === 'requeued');
     const unremediated = items.filter((i) => i.state === 'denied' || i.state === 'remediation-prepared');
-    if ((pending.length || unremediated.length) && !input.allowIncomplete) {
-      throw new ConflictException(`this campaign is not complete: ${pending.length} undecided item(s), ${unremediated.length} denied item(s) without applied remediation (close with allowIncomplete to record an explicit incomplete closure)`);
+    let incomplete: Record<string, unknown> | null = null;
+    if (pending.length || unremediated.length) {
+      const by = String(input.exception?.by ?? '').trim();
+      const justification = String(input.exception?.justification ?? '').trim();
+      if (!by || by.startsWith('workflow:') || !justification) {
+        throw new ConflictException(`this campaign is not complete: ${pending.length} undecided item(s), ${unremediated.length} denied item(s) without applied remediation. An incomplete closure needs a human exception (an authorized decider, with a justification), never a config flag.`);
+      }
+      incomplete = { authorizedBy: by, justification: justification.slice(0, 1000),
+        undecided: pending.map((i) => ({ item: i.id, identity: i.identity, state: i.state })),
+        unremediated: unremediated.map((i) => ({ item: i.id, identity: i.identity, state: i.state })) };
     }
-    const evidence: Record<string, unknown> = { incompleteClosure: pending.length + unremediated.length > 0 ? { undecided: pending.length, unremediated: unremediated.length } : null,
+    const evidence: Record<string, unknown> = { incompleteClosure: incomplete,
       campaign: campaign.id, kind: campaign.kind, name: campaign.name, ref: campaign.ref, scope: campaign.scope,
       createdBy: campaign.created_by, createdAt: campaign.created_at, closedBy: actor, closedAt: now(),
       totals: { items: items.length, approved: items.filter((i) => i.state === 'approved').length, denied: items.filter((i) => i.state === 'denied').length, remediationPrepared: items.filter((i) => i.state === 'remediation-prepared').length, remediated: items.filter((i) => i.state === 'remediated').length, undecided: pending.length },

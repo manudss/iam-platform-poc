@@ -1,6 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
+import { ModuleRef } from '@nestjs/core';
+import { Logger } from '@nestjs/common';
+import { WorkflowTasksService } from './tasks.js';
 import { blockCatalogue, runStepCategory, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -17,7 +20,16 @@ export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean
 /** API surface of the workflows feature. All state changes are validated here; the engine only executes. */
 @Injectable()
 export class WorkflowsService {
-  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly tasks?: import('./tasks.js').WorkflowTasksService) {}
+  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly modules?: ModuleRef) {}
+
+  private tasksWarned = false;
+  /** The durable task service, resolved lazily (an import() type annotation emits Object metadata and Nest
+   *  would inject undefined). A resolution failure is logged once, never swallowed. */
+  private tasksSvc(): WorkflowTasksService | undefined {
+    if (!this.modules) return undefined;
+    try { return this.modules.get(WorkflowTasksService, { strict: false }); }
+    catch (e) { if (!this.tasksWarned) { this.tasksWarned = true; new Logger('workflows').warn(`task service unresolved: run cancellation will not cancel tasks (${(e as Error).message})`); } return undefined; }
+  }
 
   /** The registry of the current workspace branch (plugin enablement is per tenant AND branch). */
   private async registry(): Promise<PluginRegistry> {
@@ -344,7 +356,7 @@ export class WorkflowsService {
     const view = await this.runView(tenant, runId);
     if (view.run.status !== 'queued' && view.run.status !== 'running' && view.run.status !== 'waiting') throw new ConflictException(`this run is already ${view.run.status}`);
     this.engine.cancelFlag(view.run.id);
-    await this.tasks?.cancelForRun(tenant, view.run.id);
+    await this.tasksSvc()?.cancelForRun(tenant, view.run.id);
     // A run parked between steps (queued, or running without a live executor after a crash) is canceled here.
     await this.store.updateRun(view.run.id, { status: 'canceled', finished_at: now() });
     return this.runView(tenant, view.run.id);

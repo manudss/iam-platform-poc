@@ -389,6 +389,23 @@ export class WorkflowStore {
       return this.getTask(id);
     } finally { await m.end(); }
   }
+  /** Merges keys into a task's detail JSON (null deletes the key). Used by delegation/escalation to carry the decider pool. */
+  async patchTaskDetail(id: string, patch: Record<string, unknown>): Promise<void> {
+    const t = await this.getTask(id);
+    if (!t) return;
+    const detail: Record<string, unknown> = { ...(t.detail ?? {}) };
+    for (const [k, v] of Object.entries(patch)) { if (v === null) delete detail[k]; else detail[k] = v; }
+    const m = await this.meta();
+    try { await m.query('update workflow_tasks set detail = ? where id = ?', [JSON.stringify(detail), id]); }
+    catch (e) { if (!WorkflowStore.noTable(e)) throw e; }
+    finally { await m.end(); }
+  }
+  /** Direct children of a run (fanout bound for lyam-start-workflow). */
+  async countRunsStartedBy(tenant: string, starter: string): Promise<number> {
+    const m = await this.meta();
+    try { const [r] = await m.query('select count(*) as n from workflow_runs where tenant = ? and started_by = ?', [tenant, starter]); return Number((r as { n: number }[])[0]?.n ?? 0); }
+    finally { await m.end(); }
+  }
   /** Admin or system override (self-approval guard checked by the caller, or N/A for system decisions). */
   async decideTaskAs(id: string, actor: string, decision: string, justification: string | null, at: string): Promise<TaskRow | null> {
     const m = await this.meta();

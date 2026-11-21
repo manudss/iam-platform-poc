@@ -5,6 +5,7 @@ import { forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { validateSettings } from '../plugins/v1/settings.js';
 import { VersioningService } from '../versioning/versioning.service.js';
+import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { authorOf } from '../versioning/guards.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
@@ -41,6 +42,7 @@ export { hasDataSteps } from './model.js';
  * replacement plugin extending `workflows-engine-base` takes over with no core change. A run in flight
  * when the provider changes finishes on the engine instance that started it.
  */
+interface PublishEffects { diff: (from: string, to: string) => Promise<unknown>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: unknown; reused: boolean }> }
 interface EngineDeps {
   store: WorkflowStore;
   versioning: { createBranch: (branch: string, base: string) => Promise<unknown>; writeOn: <T>(branch: string, fn: (c: unknown) => Promise<T>) => Promise<T>; defaultBranch: string; deleteBranch?: (branch: string) => Promise<unknown> };
@@ -57,6 +59,7 @@ interface EngineDeps {
   tasks?: WorkflowTasksService;
   reads?: WorkflowReads;
   iga?: WorkflowsIgaService;
+  publish?: PublishEffects;
   runs?: unknown;
   policies?: unknown;
   pluginsAdmin?: unknown;
@@ -100,7 +103,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown, @Optional() @Inject(forwardRef(() => PullRequestService)) private readonly prs?: unknown) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -119,6 +122,7 @@ export class WorkflowEngine implements OnModuleInit {
       links: this.linkEffects(store),
       tasks: (tasks ?? undefined) as WorkflowTasksService | undefined, reads: (reads ?? undefined) as WorkflowReads | undefined, iga: (iga ?? undefined) as WorkflowsIgaService | undefined,
       runs: this.runEffects(),
+      publish: this.publishEffects(v),
       policies: { validate: async (_tenant: string, candidate: unknown) => { try { const r = await new CorePolicySource().validate(candidate as never); return { valid: true, ...(r && typeof r === 'object' ? r as unknown as Record<string, unknown> : {}) }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } } },
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
@@ -179,15 +183,17 @@ export class WorkflowEngine implements OnModuleInit {
         const d = await store.getDefinition(tenant, workflowId, currentBranch() ?? 'main');
         if (!d) throw new BadRequestException(`lyam-start-workflow: unknown workflow "${workflowId}" on this ref`);
         if (!d.active) throw new BadRequestException(`lyam-start-workflow: the workflow "${workflowId}" is disabled`);
-        // Sub-workflow chain guard: a disabled definition never starts, nesting stops at 8 runs, and a starter cycle is rejected before any run is queued.
-        const seen: string[] = [];
+        // Sub-workflow guards: a disabled definition never starts; the SAME definition never appears twice in
+        // the starter chain (runaway recursion — unique run ids alone detect nothing); nesting stops at 8 runs;
+        // a run starts at most 32 direct children (fanout bound).
         let parentRef: string | null = startedBy.startsWith('workflow:') ? startedBy.slice('workflow:'.length) : null;
-        while (parentRef) {
-          if (seen.includes(parentRef)) throw new BadRequestException('lyam-start-workflow: cycle detected in the sub-workflow starter chain');
-          seen.push(parentRef);
-          if (seen.length > 8) throw new BadRequestException('lyam-start-workflow: sub-workflow nesting too deep (8 runs maximum)');
+        if (parentRef && (await store.countRunsStartedBy(tenant, startedBy)) >= 32) throw new BadRequestException(`lyam-start-workflow: run ${parentRef} already started 32 child runs (fanout bound)`);
+        for (let depth = 0; parentRef; depth++) {
+          if (depth >= 8) throw new BadRequestException('lyam-start-workflow: sub-workflow nesting too deep (8 runs maximum)');
           const parent: RunRow | null = await store.getRun(tenant, parentRef);
-          parentRef = parent?.started_by?.startsWith('workflow:') ? parent.started_by.slice('workflow:'.length) : null;
+          if (!parent) break;
+          if (parent.definition_id === d.id) throw new BadRequestException(`lyam-start-workflow: the workflow "${workflowId}" is already running upstream in this starter chain (recursive invocation refused)`);
+          parentRef = parent.started_by?.startsWith('workflow:') ? parent.started_by.slice('workflow:'.length) : null;
         }
         const payload: Record<string, string> = {};
         for (const [k, v] of Object.entries(input ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) payload[k] = String(v).slice(0, 200);
@@ -202,6 +208,34 @@ export class WorkflowEngine implements OnModuleInit {
         await store.createRun(run, steps);
         this.kick(run.id);
         return { id: run.id, definitionId: d.id, started: true };
+      },
+    };
+  }
+
+  /** Publication of a run branch: the Dolt diff, and opening (or reusing) the pull request a human reviews.
+   *  The merge itself stays a human action; absent in minimal servers, the blocks refuse honestly. */
+  private publishEffects(v: VersioningService): PublishEffects | undefined {
+    const prs = this.prs as PullRequestService | undefined;
+    const store = this.store;
+    if (!prs) return undefined;
+    return {
+      diff: async (from: string, to: string) => v.diffSummary(from, to, true),
+      request: async (tenant: string, runId: string, title: string) => {
+        const r = await store.getRun(tenant, runId);
+        if (!r) throw new BadRequestException(`lyam-request-publish: unknown run "${runId}"`);
+        if (r.test) throw new BadRequestException('lyam-request-publish: a test run has no publishable branch');
+        if (!r.branch) throw new BadRequestException('lyam-request-publish: this run only had simulated steps: there is no data branch to publish');
+        const target = r.base_branch ?? 'main';
+        const open = await prs.list(tenant, 'open');
+        const existing = (open.pullRequests as { source: string }[]).find((p) => p.source === r.branch);
+        if (existing) return { pullRequest: existing as unknown, reused: true };
+        try {
+          const pr = await prs.create(tenant, { title, body: `Data changes produced by workflow run ${r.id} on branch ${r.branch}. The merge stays a human action.`, source: r.branch, target }, `workflow:${runId}`);
+          return { pullRequest: pr as unknown, reused: false };
+        } catch (e) {
+          if ((e as { status?: number }).status === 409) { const again = await prs.list(tenant, 'open'); const pr = (again.pullRequests as { source: string }[]).find((p) => p.source === r.branch); if (pr) return { pullRequest: pr as unknown, reused: true }; }
+          throw e;
+        }
       },
     };
   }
