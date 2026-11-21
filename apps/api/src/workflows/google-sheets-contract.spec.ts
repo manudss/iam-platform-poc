@@ -63,3 +63,34 @@ describe('Google Sheets installed-piece contract (network fixtures, not live Goo
     assert.equal(read!.rowNumber, 4); assert.equal((read!.row as any).prenom, 'Alex');
   });
 });
+
+describe('google-sheets-update through the block with the installed piece (network fixtures, not live Google)', () => {
+  const COLUMN = 'badge fait / mail envoyé';
+  const key = () => { const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } }); return JSON.stringify({ type: 'service_account', client_email: 'fixture@fictional.iam.gserviceaccount.com', private_key: privateKey, token_uri: 'https://oauth2.googleapis.com/token' }); };
+  function fixture(hdr: string[]) {
+    nock.disableNetConnect();
+    nock('https://oauth2.googleapis.com').persist().post('/token').reply(200, { access_token: 'FICTIONAL-GOOGLE-TOKEN', token_type: 'Bearer', expires_in: 3600 });
+    nock('https://www.googleapis.com').persist().post('/oauth2/v4/token').reply(200, { access_token: 'FICTIONAL-GOOGLE-TOKEN', token_type: 'Bearer', expires_in: 3600 });
+    nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional-contract-sheet').reply(200, { sheets: [{ properties: { sheetId: 7, title: 'Candidates' } }] });
+    nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(function(uri: string) {
+      const range = decodeURIComponent(uri.split('/values/')[1]);
+      return [200, { values: range.includes('A1:ZZZ1') ? [hdr] : [hdr, ['Martin', 'Camille', 'finance', 'employee', 'OK', 'ok']] }];
+    });
+  }
+  const run = (settings: unknown) => externalBlock('google-sheets-update')!.run({ config: { ...source, rowNumber: '2', column: COLUMN, value: 'ok' }, settings, dryRun: false, log: () => {} } as any);
+  it('a missing column fails before any write and leaves the sheet untouched', async () => {
+    fixture([...headers]);
+    let writes = 0;
+    nock('https://sheets.googleapis.com').persist().put(/\/values\//).reply(() => { writes++; return [200, {}]; });
+    await assert.rejects(() => run({ googleServiceAccount: key() }), /unique/);
+    assert.equal(writes, 0);
+  });
+  it('once the column exists the same step writes only that cell, in the right column letter', async () => {
+    fixture([...headers, COLUMN]);
+    let body: any;
+    const write = nock('https://sheets.googleapis.com').put(/\/values\/.*A2%3AZZZ2/).query(true).reply(200, (_u: string, b: any) => { body = b; return { updatedRange: 'Candidates!G2', updatedCells: 1 }; });
+    const out = await run({ googleServiceAccount: key() });
+    assert.equal((out as any).updated, true); assert.ok(write.isDone());
+    assert.deepEqual(body.values, [[null, null, null, null, null, null, 'ok']]);
+  });
+});

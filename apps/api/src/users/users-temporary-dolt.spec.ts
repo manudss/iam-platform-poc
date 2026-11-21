@@ -10,6 +10,9 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { UsersService } from './users.service.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
+import { WorkflowEngine } from '../workflows/engine.js';
+import { BlockStore } from '../accounts/block-store.js';
+import { canSignIn } from '../accounts/blocks.js';
 // UsersService temporary password, first access and credential revision on a REAL Dolt, with a credential file in a temp dir. Fictional accounts only. Skipped when DOLT_BIN is missing (CI provides it).
 const bin = process.env.DOLT_BIN ?? '', have = existsSync(bin);
 const TEMP = 'Temp-Pass-Fictional-1', NEXT = 'Next-Pass-Fictional-2', SEED = 'Seed-Pass-Fictional-0';
@@ -82,5 +85,27 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
     assert.equal(await rev('fict-a'), r1);
     assert.equal(await svc.authenticate('acme-demo', 'fict-a', TEMP + '3'), true);
     const st = await svc.firstAccessState('acme-demo', 'fict-a'); assert.equal(st.required && st.revision, r1);
+  });
+  it('block and temporary password written concurrently both hold; the workflow unblock lifts only its own kind and survives a concurrent lift', async () => {
+    const blocks = new BlockStore(join(dir, 'blocks', 'b.json'));
+    const events: any[] = [];
+    const fx = (WorkflowEngine.prototype as any).accountEffects.call({ authn: { blocks }, events: { emit: (e: unknown) => events.push(e) } });
+    const T = 'acme-demo', run = 'run-fict';
+    const [blk] = await Promise.all([
+      fx.block(T, { runId: run, subject: 'fict-a', kind: 'suspended', message: 'Badge in preparation.' }),
+      svc.setTemporaryPassword(T, 'fict-admin', 'fict-a', TEMP + '4', 2),
+    ]);
+    assert.equal(blk.applied, true);
+    const st = await svc.firstAccessState(T, 'fict-a'); assert.equal(st.required, true);
+    assert.equal(await svc.authenticate(T, 'fict-a', TEMP + '4'), true);
+    assert.equal(canSignIn(await blocks.list(T, 'fict-a'), Date.now()), false);
+    // an administrator also set a lockout on the same account: it must survive the workflow unblock
+    await blocks.add(T, { subject: 'fict-a', kind: 'locked', message: 'Admin lockout.', origin: 'admin', setBy: 'fict-admin', setAt: Date.now() } as never);
+    const [x, y] = await Promise.all([fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended' }), fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended' })]);
+    assert.ok(x.lifted + y.lifted >= 1);
+    const left = await blocks.list(T, 'fict-a'); assert.deepEqual(left.map((b) => b.kind), ['locked']);
+    assert.equal(canSignIn(left, Date.now()), false);
+    assert.equal(await svc.authenticate(T, 'fict-a', TEMP + '4'), true);   // the password flow is untouched by the unblock
+    const none = await fx.unblock(T, { runId: run, subject: 'fict-a', kind: 'suspended' }); assert.equal(none.lifted, 0);
   });
 });

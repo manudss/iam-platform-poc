@@ -162,8 +162,10 @@ export class WorkflowEngine implements OnModuleInit {
       },
       unblock: async (tenant, a) => {
         const blocks = (await authn.blocks.list(tenant, a.subject)).filter((b) => !a.kind || b.kind === a.kind);
-        for (const b of blocks) await svc.unblock({ tenant, actor: `workflow:${a.runId}`, subject: a.subject, blockId: b.id });
-        return { lifted: blocks.length };
+        let lifted = 0;
+        // Two concurrent lifts of the same block: the loser finds it already gone, which is the wanted end state, not a failure.
+        for (const b of blocks) { try { await svc.unblock({ tenant, actor: `workflow:${a.runId}`, subject: a.subject, blockId: b.id }); lifted++; } catch (e) { if ((e as { status?: number }).status !== 404) throw e; } }
+        return { lifted };
       },
       activeBlocks: async (tenant, subject) => inForce(await authn.blocks.list(tenant, subject), Date.now()).map((b) => ({ kind: b.kind })),
       patchSecurity,
