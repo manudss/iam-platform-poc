@@ -158,6 +158,14 @@ export class UsersService {
     return saved;
   }
   static readonly TEMP_MAX_HOURS = 168;
+  /** Admin creation of a person: the password is TEMPORARY (must change at first sign-in, server-side expiry). Same refusals as the temporary-password action. */
+  async createWithTemporaryPassword(tenant: string, id: string, body: Record<string, unknown>, hours: unknown) {
+    if (typeof body.password !== 'string' || !body.password) throw new BadRequestException('a temporary password is required for a new person');
+    const h = Number(hours);
+    if (!Number.isFinite(h) || h <= 0 || h > UsersService.TEMP_MAX_HOURS) throw new BadRequestException(`hours: more than 0 and at most ${UsersService.TEMP_MAX_HOURS}`);
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') throw new ConflictException('directory authentication is off (IAM_DIRECTORY_AUTH is not 1): a temporary password would not be enforced, nothing was created');
+    return this.save(id, body, true, undefined, tenant, { expiresAt: this.now() + Math.round(h * 3_600_000) });
+  }
   /** Admin (or workflow) action: set a TEMPORARY password. It is a normal save of the password with the must-change flag and a server-side expiry in the same credential record. Never the bootstrap, seed, sign-up or self-service paths. The caller has already passed AuthGuard, AdminGuard and assertSuperAdmin. */
   async setTemporaryPassword(tenant: string, actor: string, id: string, password: unknown, hours: unknown) {
     if (typeof password !== 'string' || !password) throw new BadRequestException('password required');
