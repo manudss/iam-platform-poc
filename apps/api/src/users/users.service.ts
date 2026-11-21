@@ -37,7 +37,7 @@ export class UsersService {
   async onModuleInit() {
     if (workspaceMode()) await this.init();
     // Inconsistent start: temporary-password flags exist but the directory is not the sign-in authority. Loud, never silent (the guards would not apply).
-    if (process.env.IAM_DIRECTORY_AUTH !== '1') { try { if (Object.values(await this.credentials()).some((r) => (r as { firstAccess?: unknown }).firstAccess)) console.error('users: temporary-password flags exist but IAM_DIRECTORY_AUTH is not 1, the forced change is NOT enforced'); } catch { /* no credential file yet */ } }
+    if (process.env.IAM_DIRECTORY_AUTH !== '1') { try { if (Object.values(await this.credentials()).some((r) => (r as { firstAccess?: unknown }).firstAccess)) console.error('users: temporary-password flags exist but IAM_DIRECTORY_AUTH is not 1, the forced change is NOT enforced'); } catch (e) { console.error('users: could not read the credential record at start, the first-access state is UNKNOWN (reads refuse closed at sign-in):', (e as Error)?.code ?? 'error'); } }
   }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
   private async credentials(): Promise<Record<string, { salt: string; hash: string; subject?: string; firstAccess?: { expiresAt: number } }>> {
@@ -169,7 +169,7 @@ export class UsersService {
     const saved = await this.save(id, { password }, false, undefined, tenant, { expiresAt: this.now() + Math.round(h * 3_600_000) });
     const ref = currentBranch(true);
     // On a workspace branch the credential only takes effect once that branch is published on main: say so, never imply it is already enforced.
-    return { id, mustChange: true, expiresInHours: h, saved: !!saved, ref, enforced: ref === 'main', pendingPublication: ref !== 'main' };
+    return { id, mustChange: true, expiresInHours: h, saved: !!saved, ref, pendingPublication: ref !== 'main', note: ref !== 'main' ? 'Saved on a workspace branch only: not active until it is published on main and activated; the previous password stays valid until then. Publication must read back the live state (identity revision on main, activation applied, rule required).' : 'Saved on main. Activation of the live state is not verified by this response.' };
   }
   /** Self-service password change (profile Security component): the current password re-authenticates the request. Writes on main, like every live self-service edit. */
   async changePassword(tenant: string, id: string, current: string, next: string) {
