@@ -429,6 +429,12 @@ export class AuthnService implements OnApplicationBootstrap {
     if (st.type === 'webauthn') { const w = await this.enroll.webauthnRecord(tenant, subject, st.id); return w ? { webauthn: w } : {}; }
     return {};
   }
+  /** Verdict of one step for the sign-in page: the method's own (config-only) verdict, made SIMULATED for an e-mail step when the notifier does not declare real delivery. */
+  private async verifiedStep(reg: PluginRegistry, tenant: string, m: { type: string; config: Record<string, unknown> }, cap: { real: boolean; note?: string } | undefined): Promise<{ real: boolean; note: string }> {
+    const v = await this.verification(reg, tenant, m);
+    if (m.type === 'email-otp' && v.real && cap?.real !== true) return { real: false, note: `SIMULATED: no mail is sent, the code goes to the demo outbox. ${cap?.note ?? 'The notifier on the notify.default slot did not declare real delivery.'}` };
+    return v;
+  }
   private async notifyCapability(reg: PluginRegistry, tenant: string) {
     // Delivery of one-time codes goes through the notify.default slot (P1-E): the plugin chosen on the slot
     // sends (durable emission); its notify.capability answer says whether delivery is real or simulated.
@@ -486,12 +492,15 @@ export class AuthnService implements OnApplicationBootstrap {
   }
   private async computeOptions(reg: PluginRegistry, tenant: string, branch?: string) {
     const cfg = await this.signinConfig(tenant, branch), list = await this.offered(cfg, reg, tenant);
+    const capability = list.some((c) => c.steps.some((id) => cfg.methods.find((x) => x.id === id)?.type === 'email-otp')) ? await this.notifyCapability(reg, tenant) : undefined;
     return {
       mode: list.length ? 'choice' as const : 'legacy' as const,
       chains: await Promise.all(list.map(async (c) => {
-        const a = analyzeChain(cfg, c);
+        // The same verdict feeds the chain summary and its steps: an e-mail step is only REAL when the notifier on the notify.default slot delivers.
+        const steps = await Promise.all(c.steps.map(async (id) => { const m = cfg.methods.find((x) => x.id === id)!; return [m, await this.verifiedStep(reg, tenant, m, capability)] as const; }));
+        const a = analyzeChain(cfg, c, (m) => steps.find(([x]) => x.id === m.id)?.[1]);
         return { id: c.id, name: c.name, declaredLevel: c.level, effectiveLevel: a.effectiveLevel, mfa: a.mfa, simulated: a.simulatedSteps.length > 0, recommended: cfg.defaultChain === c.id,
-          steps: await Promise.all(c.steps.map(async (id) => { const m = cfg.methods.find((x) => x.id === id)!; return { name: m.name, type: m.type, simulated: !(await this.verification(reg, tenant, m)).real }; })), ...(c.note ? { note: c.note } : {}) };
+          steps: steps.map(([m, v]) => ({ name: m.name, type: m.type, simulated: !v.real })), ...(c.note ? { note: c.note } : {}) };
       })),
       note: 'Levels are declared by an administrator (10 = strongest), not measured. A simulated step proves nothing.',
       ...(branch ? { branch, test: true as const } : {}),
