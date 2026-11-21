@@ -50,6 +50,19 @@ class Queue(unittest.TestCase):
   missing=Path(self.tmp.name)/'no-such-config.json'
   q.deploy(self.path,plan(1,2),'update',self.runok,preflight_config=missing)
   self.assertEqual([c[0] for c in self.calls],['update'])
+ def test_populated_history_written_by_the_real_queue_resumes_with_absent_config(self):
+  # Host-shaped state: the history is built by the queue itself over many cycles (entries carry sha, parent, digest and the
+  # 'at' stamp), then resumed by a later overlapping plan, a stale older plan and a new tail, all with NO preflight config.
+  missing=Path(self.tmp.name)/'no-such-config.json'
+  q.deploy(self.path,plan(1,2,3,4,5,6),'update',self.runok,preflight_config=missing)
+  before=q.load(self.path);self.assertEqual(len(before['history']),6);self.assertTrue(all('at' in e for e in before['history'][1:]))
+  self.calls.clear()
+  q.deploy(self.path,plan(3,4,5,6,7,8),'update',self.runok,preflight_config=missing)       # overlaps four confirmed entries, two new
+  self.assertEqual(len(self.calls),2);self.assertEqual([e['sha'] for e in q.load(self.path)['history']],[S(i) for i in range(1,9)])
+  self.assertEqual([e['digest'] for e in q.load(self.path)['history'][:6]],[e['digest'] for e in before['history']])  # confirmed digests untouched
+  self.calls.clear()
+  q.deploy(self.path,plan(2,3,4),'update',self.runok,preflight_config=missing)             # stale older runner: nothing to do
+  self.assertEqual(self.calls,[]);self.assertEqual(len(q.load(self.path)['history']),8)
  def test_pinned_entry_preflighted_before_updater_order_preserved(self):
   cfg,pf=self.config({D(2):format(2,'064x')},no_transform=[D(3)])
   q.deploy(self.path,plan(1,2,3),'update',self.runok,preflight_config=cfg)
