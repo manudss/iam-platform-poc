@@ -5,15 +5,16 @@ import { WorkspacePublisher, workflowActor } from '../workspace/workspace-publis
 import { WorkflowEngine } from './engine.js';
 import { externalBlock } from './model.js';
 import { branchContext } from '../workspace/context.js';
+import { SECURITY_SETTING_KEYS } from '../accounts/security-config.js';
 
 // Stubs only: no Dolt, no activation, no network.
 const HEAD = 'aaaaaaaaaaaa1111', MAIN0 = 'bbbbbbbbbbbb2222', MAIN1 = 'cccccccccccc3333';
 function setup(o: { branchHead?: string; selfMerge?: boolean; activationState?: string; mergedCommit?: string; mainAfter?: string } = {}) {
   const calls: { merge: number; activate: number; maxParallel: number; parallel: number; actors: string[]; messages: string[] } = { merge: 0, activate: 0, maxParallel: 0, parallel: 0, actors: [], messages: [] };
-  let main = MAIN0;
+  let main = MAIN0; const head = { v: o.branchHead ?? HEAD };
   const v = {
     defaultBranch: 'main',
-    branches: async () => ({ branches: [{ name: 'main', commit: main }, { name: 'workflow/abc', commit: o.branchHead ?? HEAD }] }),
+    branches: async () => ({ branches: [{ name: 'main', commit: main }, { name: 'workflow/abc', commit: head.v }] }),
     diffSummary: async () => ({ tables: [{ name: 'identities' }] }),
     mergeInto: async (_s: string, _t: string, message: string, actor: string) => { calls.parallel++; calls.maxParallel = Math.max(calls.maxParallel, calls.parallel); calls.merge++; calls.actors.push(actor); calls.messages.push(message); await new Promise((r) => setTimeout(r, 10)); main = o.mainAfter ?? MAIN1; calls.parallel--; return { mergeable: true, commit: o.mergedCommit ?? MAIN1, reasons: [], violations: [] }; },
   };
@@ -22,7 +23,7 @@ function setup(o: { branchHead?: string; selfMerge?: boolean; activationState?: 
   const registries = { drop: () => undefined, get: async () => ({}) };
   const protection = { effective: () => ({ protected: o.selfMerge === false, selfMerge: o.selfMerge !== false }) };
   const pub = new WorkspacePublisher(v as never, registries as never, activation as never, undefined, protection as never);
-  return { pub, calls };
+  return { pub, calls, head };
 }
 const A = { tenant: 'acme-demo', runId: 'run-1', workflowId: 'wf-badge', branch: 'workflow/abc', expectedHead: HEAD };
 const run = async <T>(fn: () => Promise<T>) => { process.env.IAM_WORKSPACE_MODE = '1'; return branchContext.run({ branch: 'workflow/abc' }, fn); };
@@ -52,6 +53,18 @@ describe('workflow publication: WorkspacePublisher.publishForRun', () => {
   it('two publications at once are serialized: one merge at a time', async () => {
     const t = setup(); await Promise.allSettled([run(() => t.pub.publishForRun(A)), run(() => t.pub.publishForRun({ ...A, runId: 'run-2' }))]);
     assert.equal(t.calls.maxParallel, 1);
+  });
+  it('a human Apply can never carry the reserved workflow identity prefix', async () => {
+    const t = setup();
+    for (const actor of ['wf-0123456789', 'WF-abc', 'wf-']) await assert.rejects(() => run(() => t.pub.publish('acme-demo', 'workflow/abc', actor, { confirm: true, expectedHead: HEAD })), /reserved for workflow publication/, actor);
+    assert.equal(t.calls.merge, 0);
+  });
+  it('a pending publication is keyed by branch AND head: a retry of the same head does not merge twice, a moved head is a new publication', async () => {
+    const t = setup({ activationState: 'failed' });
+    const a = () => run(() => t.pub.publish('acme-demo', 'workflow/abc', 'alice', { confirm: true, expectedHead: t.head.v }));
+    const r1: any = await a(); assert.equal(r1.retryRequired, true); assert.equal(t.calls.merge, 1);
+    await a(); assert.equal(t.calls.merge, 1, 'same head: resumes the activation only');
+    t.head.v = 'ffffffffffff6666'; await a(); assert.equal(t.calls.merge, 2, 'moved head: merged again, never the old pending commit');
   });
   it('workflowActor is stable, has no colon, and two ids never share it', () => {
     assert.equal(workflowActor('wf-a'), workflowActor('wf-a')); assert.notEqual(workflowActor('wf-a'), workflowActor('wf-b'));
@@ -89,5 +102,8 @@ describe('workflow publication: the server gate and the block', () => {
     const ok = await b.run({ workspace: { publish: async () => ({ published: true, branch: 'b', sourceHead: HEAD, mainCommit: MAIN1, activation: 'applied' }) }, hasRunBranch: true, publishIntent: { branch: 'b', head: HEAD }, workflowId: 'wf-badge', tenant: 't', runId: 'r', log: () => undefined });
     assert.deepEqual(ok, { published: true, mainCommit: MAIN1, sourceHead: HEAD });
     await assert.rejects(() => b.run({ workspace: { publish: async () => ({ published: false }) }, hasRunBranch: true, publishIntent: { branch: 'b', head: HEAD }, workflowId: 'w', tenant: 't', runId: 'r', log: () => undefined }), /not confirmed/);
+  });
+  it('the security-setting block can change no publication setting: its keys are the security ones only', () => {
+    for (const k of SECURITY_SETTING_KEYS) assert.doesNotMatch(k, /publish|allowed|workflow/i, k);
   });
 });

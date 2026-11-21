@@ -15,12 +15,17 @@ import { applyContext, workspaceMode } from './context.js';
 @Injectable()
 export class WorkspacePublisher {
  private chain:Promise<unknown>=Promise.resolve();
+ /** Keyed by branch AND the exact head being published: a retry only ever resumes the publication of that very head. */
  private pending=new Map<string,{source:string;commit:string}>();
+ private pendingKey(branch:string,head:string){return `${branch}@${head}`;}
  constructor(private readonly v:VersioningService,private readonly registries:BranchRegistries,private readonly activation:ActivationService,@Optional() private readonly authn?:AuthnService,@Optional() private readonly protection?:BranchProtectionService){}
  /** Runs fn after every earlier queued publication or rebase, one at a time. */
  serialize<T>(fn:()=>Promise<T>):Promise<T>{const run=this.chain.then(fn);this.chain=run.catch(()=>undefined);return run;}
  /** `branch` may be a function: it is then read INSIDE the queue, as the controller always did (a refusal is a rejection, never a synchronous throw). */
- publish(tenant:string,branch:string|(()=>string),actor:string,b:{confirm?:boolean;expectedHead?:string}){return this.serialize(()=>this.publishOnce(typeof branch==='function'?branch():branch,b,actor,tenant));}
+ publish(tenant:string,branch:string|(()=>string),actor:string,b:{confirm?:boolean;expectedHead?:string}){
+  // The `wf-` identity is reserved for workflow publication: a person signing in under such an id is refused, so a human Apply can never pass as a workflow.
+  if(/^wf-/i.test(String(actor??'')))throw new BadRequestException('This identity prefix is reserved for workflow publication');
+  return this.serialize(()=>this.publishOnce(typeof branch==='function'?branch():branch,b,actor,tenant));}
  /**
   * Publication by a workflow run (the only non-human caller). Stricter than the human Apply, never looser: the branch AND its head are explicit and frozen by the run
   * (a branch that moved since is refused, never "the current head"), the actor is a short reserved identity (no ':' and under every truncation limit, so two workflows never share an author),
@@ -56,7 +61,7 @@ export class WorkspacePublisher {
   // Refused before anything is merged: a level nobody can reach would lock the administrators out. The live rule is untouched.
   const blocked=await this.authn?.applyBlocker(tenant,branch);if(blocked)throw new ConflictException({code:'unreachable-level',message:`Apply refused: ${blocked}`,reasons:[blocked],violations:[]});
   const latest=await this.activation.current(tenant);
-  const retry=this.pending.get(branch)??(latest?.state==='failed'&&latest.requestId===`workspace-${latest.commit}`&&latest.commit===(await this.v.branches()).branches.find(x=>x.name==='main')?.commit&&(await this.v.diffSummary('main',branch,false)).tables.length===0?{source:info.commit,commit:latest.commit}:undefined);
+  const retry=this.pending.get(this.pendingKey(branch,info.commit))??(latest?.state==='failed'&&latest.requestId===`workspace-${latest.commit}`&&latest.commit===(await this.v.branches()).branches.find(x=>x.name==='main')?.commit&&(await this.v.diffSummary('main',branch,false)).tables.length===0?{source:info.commit,commit:latest.commit}:undefined);
   if(!this.activation.applyEnabled)throw new BadRequestException('Apply requires a configured live permission engine');
   let r=retry&&retry.source===info.commit?{mergeable:true,commit:retry.commit,reasons:[],violations:[]}:await applyContext.run(true,()=>this.v.mergeInto(branch,'main',message??`Apply workspace ${branch}`,actor,b.expectedHead));
   // Fresh seeded workspaces still need a first live permissions snapshot. Keep the normal
@@ -68,13 +73,13 @@ export class WorkspacePublisher {
    }
   }
   if(!r.mergeable||!r.commit)throw new ConflictException({message:`Apply refused: ${r.reasons.join('; ')}`,reasons:r.reasons,violations:r.violations});
-  this.pending.set(branch,{source:info.commit,commit:r.commit});
+  this.pending.set(this.pendingKey(branch,info.commit),{source:info.commit,commit:r.commit});
   this.registries.drop('main');await this.registries.get('main');
   // main also carries what other merged branches brought: check the exact version about to go live.
   const blockedMain=await this.authn?.applyBlocker(tenant,'main');if(blockedMain)throw new ConflictException({code:'unreachable-level',message:`Apply refused: ${blockedMain}. The data is merged but not live; the active rule is unchanged.`,reasons:[blockedMain],violations:[]});
   const activation=await this.activation.activate(tenant,r.commit,`workspace-${r.commit}`);
   if(activation.state!=='applied')return {applied:false,merged:true,retryRequired:true,branch,commit:r.commit,activation,message:'Data merged into main, but permission activation failed. Retry Apply on this branch; no second merge is needed.'};
-  this.pending.delete(branch);return {applied:true,branch,commit:r.commit,activation};
+  this.pending.delete(this.pendingKey(branch,info.commit));return {applied:true,branch,commit:r.commit,activation};
  }
 }
 
