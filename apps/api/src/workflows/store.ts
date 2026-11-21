@@ -404,7 +404,7 @@ export class WorkflowStore {
     const m = await this.meta();
     try {
       let res: unknown;
-      try { [res] = await m.query("update workflow_tasks set delegated_to = ?, reminded_at = null, due_at = ? where id = ? and status = 'open'", [to, at, id]); }
+      try { [res] = await m.query("update workflow_tasks set delegated_to = ?, due_at = ? where id = ? and status = 'open'", [to, at, id]); }
       catch (e) { if (WorkflowStore.noTable(e)) return null; throw e; }
       if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
       return this.getTask(id);
@@ -490,6 +490,16 @@ export class WorkflowStore {
 
   /** Every open task past its deadline and not yet reminded, across ALL tenants (the cron scan is
    *  platform-wide: a task's tenant is on its row). */
+  /** Every task a campaign opened (its id is in the JSON detail), across the 200-row inbox cap. */
+  async listTasksByCampaign(tenant: string, campaignId: string): Promise<TaskRow[]> {
+    const m = await this.meta();
+    try {
+      await this.ensureTasks(m);
+      const [r] = await m.query("select * from workflow_tasks where tenant = ? and json_unquote(json_extract(detail, '$.campaignId')) = ? order by created_at limit 1000", [tenant, campaignId]);
+      return (r as Record<string, unknown>[]).map(WorkflowStore.task);
+    } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
+  }
+
   async listDueTasks(at: string): Promise<TaskRow[]> {
     const m = await this.meta();
     try {

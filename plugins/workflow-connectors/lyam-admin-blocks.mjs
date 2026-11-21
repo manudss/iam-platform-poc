@@ -37,7 +37,12 @@ const jsonObj = (v, what) => {
 };
 const need = (svc, what) => { if (!svc) bad(`${what}: this service is not available on this server`); return svc; };
 /** The ref a read targets: the run's base branch (default), or the run's own working branch. */
-const readRef = (ctx, cfg) => str(cfg.ref, 'ref', 80, false) === 'run' ? (ctx.runBranch ?? ctx.baseBranch) : (str(cfg.ref, 'ref', 80, false) || ctx.baseBranch || 'main');
+const readRef = (ctx, cfg) => {
+    const r = str(cfg.ref, 'ref', 80, false);
+    if (r === 'run') return ctx.runBranch ?? ctx.baseBranch;
+    if (r && !/^[A-Za-z0-9][A-Za-z0-9/_-]{0,79}$/.test(r)) bad('ref: a branch name (letters, digits, / _ -)');
+    return r || ctx.baseBranch || 'main';
+};
 
 // ---- P0: human approvals and tasks -------------------------------------------------------------------
 
@@ -247,7 +252,9 @@ const lyamCreateRole = writeBlock('lyam-create-role', 'Create a role', 'REAL wri
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would create role "${c.id}" on the run branch`); return { id: c.id, created: false }; }
     await ctx.branchWrite(async (db) => {
-        await db.query('insert into roles (id, label, is_sensitive) values (?,?,?) on duplicate key update label = values(label), is_sensitive = values(is_sensitive)', [c.id, c.label, c.sensitive ? 1 : 0]);
+        const [ex] = await db.query('select id from roles where id = ?', [c.id]);
+        if ((ex ?? []).length) bad(`lyam-create-role: the role "${c.id}" already exists (changing it, including its sensitivity, needs a controlled proposal, not a workflow upsert)`);
+        await db.query('insert into roles (id, label, is_sensitive) values (?,?,?)', [c.id, c.label, c.sensitive ? 1 : 0]);
     }, `workflow: create role ${c.id}`);
     ctx.log(`role "${c.id}" written on the run branch`);
     return { id: c.id, created: true };
@@ -327,10 +334,9 @@ const igaAwaitDecisions = {
     async run(ctx) {
         const c = ctx.config;
         const iga = need(ctx.iga, 'iga-await-decisions');
-        const tasks = need(ctx.tasks, 'iga-await-decisions');
         if (ctx.test || ctx.dryRun) { ctx.log(`test run: would await the decisions of campaign ${c.campaignId}`); return { decisions: [], open: 0 }; }
-        const inbox = await tasks.inbox(ctx.tenant, '', 'all');
-        const campaignTasks = inbox.tasks.filter((t) => t.detail?.campaignId === c.campaignId && t.kind === 'iga-review');
+        const { tasks: campaignTasks } = await iga.reviewTasks(ctx.tenant, c.campaignId);
+        if (!campaignTasks.length) bad(`iga-await-decisions: no review task opened for campaign ${c.campaignId} (iga-open-review-tasks must run first)`);
         const open = campaignTasks.filter((t) => t.status === 'open');
         if (open.length) { ctx.log(`${open.length} review task(s) still open: the run waits`); throw new WorkflowSuspend({ kind: 'iga-review', campaignId: c.campaignId, taskIds: open.map((t) => t.id).join(',') }); }
         const rec = await iga.recordTaskDecisions(ctx.tenant, campaignTasks.map((t) => t.id));
@@ -349,13 +355,26 @@ const igaPrepareRemediation = writeBlock('iga-prepare-remediation', 'IGA: prepar
     return r;
 });
 
-const igaCloseCampaign = writeBlock('iga-close-campaign', 'IGA: close the campaign', 'REAL: closes the campaign with its complete evidence file (scope, items, decisions, remediation, refs, digest).', [
+const igaCloseCampaign = writeBlock('iga-close-campaign', 'IGA: close the campaign', 'REAL: closes the campaign with its complete evidence file (scope, items, decisions, remediation, refs, digest). Strict: an undecided item or a denied item without applied remediation blocks the closure, unless allowIncomplete records it explicitly.', [
     { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
-], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-close-campaign.campaignId', 48) }), async (ctx) => {
+    { key: 'allowIncomplete', label: 'Allow incomplete closure', type: 'select', options: ['no', 'yes'], default: 'no' },
+], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-close-campaign.campaignId', 48), allowIncomplete: str(cfg.allowIncomplete, 'allowIncomplete', 3, false) === 'yes' }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would close campaign ${c.campaignId}`); return { campaign: c.campaignId, status: 'test' }; }
-    const r = await need(ctx.iga, 'iga-close-campaign').close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId);
+    const r = await need(ctx.iga, 'iga-close-campaign').close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { allowIncomplete: c.allowIncomplete });
     ctx.log(`campaign ${c.campaignId} closed (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
+    return r;
+});
+
+const igaMarkRemediated = writeBlock('iga-mark-remediated', 'IGA: record an applied remediation', 'REAL: records that the remediation of an item was APPLIED (the calling workflow applied it on its run branch, e.g. with revoke steps; the run id is the proof). A decision alone never marks an item remediated.', [
+    { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
+    { key: 'item', label: 'Item id', type: 'string', required: true },
+    { key: 'note', label: 'Note', type: 'string' },
+], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-mark-remediated.campaignId', 48), item: str(cfg.item, 'iga-mark-remediated.item', 48), note: str(cfg.note, 'note', 500, false) }), async (ctx) => {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would record the remediation of item ${c.item}`); return { item: c.item, state: 'test' }; }
+    const r = await need(ctx.iga, 'iga-mark-remediated').markRemediated(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, c.item, { runId: ctx.runId, note: c.note });
+    ctx.log(`item ${c.item} remediated (proof run ${ctx.runId})`);
     return r;
 });
 
@@ -410,14 +429,17 @@ const lyamCreateApplication = writeBlock('lyam-create-application', 'Create an a
     { key: 'config', label: 'Config (JSON, no secrets)', type: 'text' },
 ], (cfg) => {
     const conf = jsonObj(cfg.config, 'lyam-create-application.config');
-    for (const k of Object.keys(conf)) if (/secret|password|token|private.?key/i.test(k) && typeof conf[k] === 'string' && conf[k] && k !== 'secret_ref') bad(`lyam-create-application.config.${k}: secrets never transiting a workflow (use a server-side secret_ref)`);
+    const deepScan = (o, path) => { for (const [k, v] of Object.entries(o ?? {})) { const p = path ? `${path}.${k}` : k; if (/secret|password|token|private.?key|credential/i.test(k) && k !== 'secret_ref' && v !== null && v !== undefined && v !== '') bad(`lyam-create-application.config.${p}: secrets never transiting a workflow (use a server-side secret_ref)`); if (typeof v === 'object' && v !== null) deepScan(v, p); } };
+    deepScan(conf, '');
     return { id: idf(cfg.id, 'lyam-create-application.id'), name: str(cfg.name, 'lyam-create-application.name', 80), description: str(cfg.description, 'description', 240, false), protocol: str(cfg.protocol, 'protocol', 8, false) || 'oidc', config: conf };
 }, async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would create application "${c.id}" on the run branch`); return { id: c.id, created: false }; }
     await ctx.branchWrite(async (db) => {
         await db.query("create table if not exists app_connectors (tenant varchar(32) not null, id varchar(32) not null, name varchar(80) not null, description varchar(240) not null, protocol varchar(8) not null, enabled tinyint not null, config longtext not null, primary key (tenant, id))");
-        await db.query('insert into app_connectors (tenant, id, name, description, protocol, enabled, config) values (?,?,?,?,?,0,?) on duplicate key update name = values(name), description = values(description), protocol = values(protocol), config = values(config)', [ctx.tenant, c.id, c.name, c.description, c.protocol, JSON.stringify(c.config)]);
+        const [ex] = await db.query('select id from app_connectors where tenant = ? and id = ?', [ctx.tenant, c.id]);
+        if ((ex ?? []).length) bad(`lyam-create-application: the application "${c.id}" already exists (changing its protocol or config could hijack redirects: do it in the console after review)`);
+        await db.query('insert into app_connectors (tenant, id, name, description, protocol, enabled, config) values (?,?,?,?,?,0,?)', [ctx.tenant, c.id, c.name, c.description, c.protocol, JSON.stringify(c.config)]);
     }, `workflow: create application ${c.id}`);
     ctx.log(`application "${c.id}" written on the run branch (disabled: an administrator enables it after review)`);
     return { id: c.id, created: true };
@@ -505,7 +527,7 @@ export const LYAM_ADMIN_BLOCKS = [
     lyamRequestApproval,
     lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
     lyamUpdateUser, lyamSetLoginEnabled, lyamCreateRole, lyamProposeRoleRemoval,
-    igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaCloseCampaign, igaReadCampaign,
+    igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaMarkRemediated, igaCloseCampaign, igaReadCampaign,
     // P1
     lyamCreateOrganization, lyamAssignOrganization, lyamCreateApplication, lyamCheckAccountBlocks, lyamStartWorkflow, lyamReadRun,
     // P2

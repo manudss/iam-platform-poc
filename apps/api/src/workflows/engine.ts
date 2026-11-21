@@ -178,6 +178,17 @@ export class WorkflowEngine implements OnModuleInit {
       start: async (tenant: string, workflowId: string, input: Record<string, unknown>, startedBy: string) => {
         const d = await store.getDefinition(tenant, workflowId, currentBranch() ?? 'main');
         if (!d) throw new BadRequestException(`lyam-start-workflow: unknown workflow "${workflowId}" on this ref`);
+        if (!d.active) throw new BadRequestException(`lyam-start-workflow: the workflow "${workflowId}" is disabled`);
+        // Sub-workflow chain guard: a disabled definition never starts, nesting stops at 8 runs, and a starter cycle is rejected before any run is queued.
+        const seen: string[] = [];
+        let parentRef: string | null = startedBy.startsWith('workflow:') ? startedBy.slice('workflow:'.length) : null;
+        while (parentRef) {
+          if (seen.includes(parentRef)) throw new BadRequestException('lyam-start-workflow: cycle detected in the sub-workflow starter chain');
+          seen.push(parentRef);
+          if (seen.length > 8) throw new BadRequestException('lyam-start-workflow: sub-workflow nesting too deep (8 runs maximum)');
+          const parent: RunRow | null = await store.getRun(tenant, parentRef);
+          parentRef = parent?.started_by?.startsWith('workflow:') ? parent.started_by.slice('workflow:'.length) : null;
+        }
         const payload: Record<string, string> = {};
         for (const [k, v] of Object.entries(input ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) payload[k] = String(v).slice(0, 200);
         const resolved = substituteEventPayload(d.graph, payload);

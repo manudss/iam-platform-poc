@@ -40,6 +40,21 @@ export class WorkflowTasksService {
   private admins(): string[] { return (process.env.IAM_API_ADMIN_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean); }
   isAdmin(sub: unknown): boolean { return typeof sub === 'string' && this.admins().includes(sub); }
 
+  /** A decider name is never a magic literal: 'admin' resolves to the administrator subjects (the same
+   *  list the admin capability uses), 'iga' to the campaign pool (IAM_API_IGA_SUBJECTS, fallback admins).
+   *  Anything else must be a concrete user id. */
+  resolveAssignee(name: string): string {
+    const n = String(name ?? '').trim();
+    if (n === 'admin' || n === 'iga') {
+      const pool = n === 'iga' ? (process.env.IAM_API_IGA_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean) : [];
+      const resolved = (pool.length ? pool : this.admins())[0];
+      if (!resolved) throw new BadRequestException(`the "${n}" decider pool is empty on this server (no ${n === 'iga' ? 'IAM_API_IGA_SUBJECTS or IAM_API_ADMIN_SUBJECTS' : 'IAM_API_ADMIN_SUBJECTS'} subject)`);
+      return resolved;
+    }
+    if (!/^[a-z0-9][a-z0-9._@-]{0,63}$/.test(n)) throw new BadRequestException('assignee: a user id, "admin" or "iga"');
+    return n;
+  }
+
   /** Creates (or returns, idempotent by run step) the task a waiting block asks for. */
   async request(a: TaskRequest): Promise<TaskRow> {
     // A re-run of the same waiting step reuses its task: never a second task for the same run step+kind.
@@ -53,6 +68,13 @@ export class WorkflowTasksService {
       created_at: now(), due_at: a.dueInSeconds ? ts(Date.now() + a.dueInSeconds * 1000) : null, reminded_at: null, decided_at: null,
     };
     if (a.escalateTo) t.detail = { ...t.detail, escalateTo: a.escalateTo };
+    t.assignee = this.resolveAssignee(t.assignee);
+    if (t.assignee === t.detail?.identity || t.assignee === t.detail?.subject) {
+      // The beneficiary never receives their own certification task: the pool takes it instead.
+      const pool = (process.env.IAM_API_IGA_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      const fallback = [...pool, ...this.admins()].find((x) => x !== t.assignee);
+      if (fallback) t.assignee = fallback;
+    }
     const saved = await this.store.putTask(t);
     this.emit(a.tenant, 'workflow.task-assigned', { task: saved.id, kind: saved.kind, title: saved.title, assignee: saved.assignee, actor: `workflow:${a.runId}` });
     return saved;
@@ -86,6 +108,9 @@ export class WorkflowTasksService {
         if (!run.started_by.startsWith('workflow:')) break;
         run = await this.store.getRunById(run.started_by.slice('workflow:'.length));
       }
+      // Nor the beneficiary of the request (a certification, an access grant...): the run starter check
+      // above covers the initiator, this one the subject.
+      if (t.detail?.identity === actor || t.detail?.subject === actor) throw new ForbiddenException('anti-self-approval: the beneficiary of a request cannot decide their own review');
     }
     const isAdmin = this.isAdmin(actor);
     const saved = isAdmin
@@ -106,8 +131,7 @@ export class WorkflowTasksService {
     const t = await this.store.getTask(id);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
-    const target = String(to ?? '').trim();
-    if (!/^[a-z0-9][a-z0-9.-]{0,63}$/.test(target)) throw new BadRequestException('delegate to a user id (lowercase, digits, dots, hyphens)');
+    const target = this.resolveAssignee(String(to ?? ''));
     if (!this.isAdmin(actor) && t.assignee !== actor && t.delegated_to !== actor) throw new ForbiddenException('only the assigned decider can delegate this task');
     const saved = await this.store.delegateTask(id, target, t.due_at ?? now());
     if (!saved) throw new ConflictException('this task is no longer open');

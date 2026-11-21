@@ -119,16 +119,17 @@ describe('workflow blocks: IGA recertification socle', () => {
     assert.deepEqual(iga.calls, ['create', 'list', 'open', 'prepare', 'close']);
     assert.equal((await run1('iga-create-campaign', mk({ test: true, iga: iga as never, config: { name: 'Q4', kind: 'user-access', ref: 'main', scope: {} } }).c as never)).status, 'test');
   });
-  it('iga-await-decisions suspends while a review is open, records once all decided', async () => {
-    const iga = fakeIga();
+  it('iga-await-decisions suspends while a review is open, records once all decided, refuses with no task', async () => {
     const openTask: Record<string, unknown> = { id: 'task-1', kind: 'iga-review', status: 'open', detail: { campaignId: 'iga-1' } };
-    const svc = { inbox: async () => ({ tasks: [openTask] }) };
+    const iga = { ...fakeIga(), reviewTasks: async () => ({ tasks: [openTask] }) };
     const b = externalBlock('iga-await-decisions')!;
-    await assert.rejects(b.run(mk({ tasks: svc as never, iga: iga as never, config: { campaignId: 'iga-1' } }).c), /waiting/);
+    await assert.rejects(b.run(mk({ iga: iga as never, config: { campaignId: 'iga-1' } }).c), /waiting/);
     openTask.status = 'decided';
-    const out = await run1('iga-await-decisions', mk({ tasks: svc as never, iga: iga as never, config: { campaignId: 'iga-1' } }).c as never);
+    const out = await run1('iga-await-decisions', mk({ iga: iga as never, config: { campaignId: 'iga-1' } }).c as never);
     assert.deepEqual(iga.calls, ['record']);
     assert.equal(out.open, 0);
+    const empty = { ...fakeIga(), reviewTasks: async () => ({ tasks: [] }) };
+    await assert.rejects(b.run(mk({ iga: empty as never, config: { campaignId: 'iga-1' } }).c), /no review task/);
   });
 });
 

@@ -100,6 +100,12 @@ export class WorkflowsIgaService {
     return { campaign: campaignId, opened: out.length, tasks: out, actor };
   }
 
+  /** The review tasks of a campaign (dedicated query, no inbox cap). */
+  async reviewTasks(tenant: string, campaignId: string) {
+    await this.get(tenant, campaignId);
+    return { tasks: await this.store.listTasksByCampaign(tenant, campaignId) };
+  }
+
   /** Step 3: record a decided review task on its item. Anti-self-approval: a decider reviewing their OWN access re-queues the item to the iga pool and is recorded as a conflict. */
   async recordTaskDecisions(tenant: string, taskIds: string[]) {
     const out: { task: string; item: string | null; recorded: string | null }[] = [];
@@ -112,7 +118,8 @@ export class WorkflowsIgaService {
       if (!campaignId || !itemId) { out.push({ task: taskId, item: null, recorded: null }); continue; }
       const items = (await this.listItems(tenant, campaignId)).items;
       const item = items.find((x) => x.id === itemId);
-      if (!item || item.state !== 'pending') { out.push({ task: taskId, item: itemId, recorded: null }); continue; }
+      // pending: first review; requeued: the review after a refused self-review. Anything else is done.
+      if (!item || (item.state !== 'pending' && item.state !== 'requeued')) { out.push({ task: taskId, item: itemId, recorded: null }); continue; }
       const decision = chk.task.decision === 'approved' ? 'approved' : 'denied';
       if (chk.task.decided_by && chk.task.decided_by === item.identity) {
         await this.store.igaUpdateItem(itemId, { state: 'requeued', decision_reason: `self-review refused for ${chk.task.decided_by}` });
@@ -154,13 +161,33 @@ export class WorkflowsIgaService {
     return { campaign: campaignId, remediation: out, actor };
   }
 
-  /** Step 5: close with the complete evidence file (scope, items, decisions, remediation, refs). */
-  async close(tenant: string, actor: string, campaignId: string) {
+  /** Step 4b: the remediation of an item was APPLIED (through a controlled change, e.g. the run branch of
+   *  the calling workflow): record the application and its proof. Never called by a decision alone. */
+  async markRemediated(tenant: string, actor: string, campaignId: string, itemId: string, proof: { runId?: unknown; note?: unknown }) {
+    const campaign = await this.get(tenant, campaignId);
+    if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
+    const items = (await this.listItems(tenant, campaignId)).items;
+    const item = items.find((x) => x.id === itemId);
+    if (!item) throw new NotFoundException('unknown item');
+    if (item.state !== 'remediation-prepared') throw new ConflictException(`this item is ${item.state}: prepare its remediation first`);
+    await this.store.igaUpdateItem(itemId, { state: 'remediated', payload: { ...item.payload, remediatedBy: actor, remediatedAt: now(), remediationProof: { runId: proof.runId ?? null, note: String(proof.note ?? '').slice(0, 500) } } });
+    this.emit(tenant, 'iga.remediation-resolved', { campaign: campaignId, subject: item.identity, role: (item.payload?.roles as string[] | undefined)?.join(',') ?? '*', result: 'remediated' });
+    return { item: itemId, state: 'remediated' };
+  }
+
+  /** Step 5: close with the complete evidence file (scope, items, decisions, remediation, refs).
+   *  Strict: an undecided item, or a denied item without applied remediation, blocks the closure unless
+   *  allowIncomplete records it explicitly in the evidence. */
+  async close(tenant: string, actor: string, campaignId: string, input: { allowIncomplete?: unknown } = {}) {
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is already closed');
     const items = (await this.listItems(tenant, campaignId)).items;
     const pending = items.filter((i) => i.state === 'pending' || i.state === 'requeued');
-    const evidence: Record<string, unknown> = {
+    const unremediated = items.filter((i) => i.state === 'denied' || i.state === 'remediation-prepared');
+    if ((pending.length || unremediated.length) && !input.allowIncomplete) {
+      throw new ConflictException(`this campaign is not complete: ${pending.length} undecided item(s), ${unremediated.length} denied item(s) without applied remediation (close with allowIncomplete to record an explicit incomplete closure)`);
+    }
+    const evidence: Record<string, unknown> = { incompleteClosure: pending.length + unremediated.length > 0 ? { undecided: pending.length, unremediated: unremediated.length } : null,
       campaign: campaign.id, kind: campaign.kind, name: campaign.name, ref: campaign.ref, scope: campaign.scope,
       createdBy: campaign.created_by, createdAt: campaign.created_at, closedBy: actor, closedAt: now(),
       totals: { items: items.length, approved: items.filter((i) => i.state === 'approved').length, denied: items.filter((i) => i.state === 'denied').length, remediationPrepared: items.filter((i) => i.state === 'remediation-prepared').length, remediated: items.filter((i) => i.state === 'remediated').length, undecided: pending.length },

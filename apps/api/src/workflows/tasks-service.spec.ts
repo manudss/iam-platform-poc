@@ -42,6 +42,14 @@ describe('WorkflowTasksService (real service, in-memory store)', () => {
     assert.deepEqual(kicks, ['run-42']);
     await assert.rejects(s.decide('acme', 'task-1', 'boss', 'approved', ''), /already decided/);
   });
+  it('tenant isolation: a task of another tenant is not found (decide, delegate)', async () => {
+    tasks = new Map([['task-1', mkTask({ tenant: 'acme' })]]);
+    const { s } = svc();
+    await assert.rejects(s.decide('globex', 'task-1', 'boss', 'approved', ''), /unknown task/);
+    await assert.rejects(s.delegate('globex', 'task-1', 'boss', 'carol'), /unknown task/);
+    const still = await s.decide('acme', 'task-1', 'boss', 'approved', '');
+    assert.equal(still.status, 'decided');
+  });
   it('anti-self-approval follows the starter chain through sub-workflows', async () => {
     tasks = new Map([['task-1', mkTask({ run_id: 'run-child' })]]);
     runs = new Map([
