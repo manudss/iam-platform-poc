@@ -778,10 +778,10 @@ export class DoltExplorer {
     const r = await this.run(() => this.v.branches(), true);
     return r?.branches.find((b) => b.name === source)?.commit;
   }
-  private async afterChange(res: { commit: string; action: string } | undefined) {
+  private async afterChange(res: { commit: string | null; action: string } | undefined) {
     if (!res) return;
     const id = this.pr()!.pullRequest.id;
-    this.note.set(`Done (${shortHash(res.commit)}): ${res.action}.`); await this.refreshRefs(); await this.showPull(id); this.prTab.set('rows');
+    this.note.set(res.commit ? `Done (${shortHash(res.commit)}): ${res.action}.` : `Nothing to change: ${res.action}.`); await this.refreshRefs(); await this.showPull(id); this.prTab.set('rows');
   }
   /** Abandons one change of the source branch (whole row, or one field of a modified row), then reloads the diff and the checks. */
   protected async discardChange(d: RowDiffView, r: RowDiff, columns?: string[]) {

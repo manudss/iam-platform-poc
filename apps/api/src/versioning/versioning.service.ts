@@ -364,7 +364,7 @@ export class VersioningService {
    *  - only that table is staged (never an "add all"), and the commit's parent must be `expectedHead`;
    *  - on ANY failure only this session's transaction is rolled back. There is no reset --hard and no clean: another session's work is never erased.
    */
-  private branchTx(branch: string, expectedHead: unknown, fn: (c: Connection) => Promise<{ table: string; info: Row }>, message: string, sub: unknown): Promise<Row & { branch: string; table: string; commit: string }> {
+  private branchTx(branch: string, expectedHead: unknown, fn: (c: Connection) => Promise<{ table: string; info: Row; noop?: boolean }>, message: string, sub: unknown): Promise<Row & { branch: string; table: string; commit: string | null }> {
     branchName(branch);
     if (typeof expectedHead !== 'string' || !HASH.test(expectedHead)) throw new BadRequestException('expectedHead (the 32-character head of the branch you reviewed) is required');
     if (workspaceMode() && !applyContext.getStore() && branch !== currentBranch(true)) throw new ForbiddenException('Write must use globally selected branch');
@@ -378,19 +378,29 @@ export class VersioningService {
         const [h] = await c.query('select hashof(?) h', [branch]);
         if ((h as { h: string }[])[0].h !== expectedHead) throw new ConflictException('Working branch changed. Review again before changing it.');
         await this.cleanOrFail(c, branch);
-        const { table, info } = await fn(c);
+        const { table, info, noop } = await fn(c);
+        if (noop) { await c.query('ROLLBACK'); return { ...info, branch, table, commit: null, noChange: true }; }
         await c.query('CALL DOLT_ADD(?)', [table]);
         const [sum] = await c.query("select * from dolt_diff_summary('HEAD', 'STAGED')");
         const tables = (sum as Row[]).map((x) => String(x.to_table_name ?? x.from_table_name));
         const [st] = await c.query("select * from dolt_diff_stat('HEAD', 'STAGED', ?)", [table]);
         const changed = (st as Row[]).reduce((n, x) => n + Number(x.rows_added ?? 0) + Number(x.rows_modified ?? 0) + Number(x.rows_deleted ?? 0), 0);
         const [un] = await c.query('select count(*) n from dolt_status where staged = 0');
+        // The write changed nothing: the row already had the target value. That is not a stale head, so report it as a no-op.
+        if (tables.length === 0 && changed === 0 && Number((un as { n: number }[])[0].n) === 0) { await c.query('ROLLBACK'); return { ...info, branch, table, commit: null, noChange: true }; }
         if (tables.length !== 1 || tables[0] !== table || changed !== 1 || Number((un as { n: number }[])[0].n) !== 0) throw new ConflictException('The branch changed while this was prepared. Nothing was changed; review again.');
         const [r] = await c.query("CALL DOLT_COMMIT('-m', ?, '--author', ?)", [commitMessage(message, 'change one row'), authorOf(sub)]);
         const hash = String((r as { hash: string }[])[0].hash);
         const [p] = await c.query('select parent_hash from dolt_commit_ancestors where commit_hash = ? and parent_index = 0', [hash]);
         if ((p as { parent_hash: string }[])[0]?.parent_hash !== expectedHead) throw new ConflictException('The branch moved while committing. Nothing was kept.');
         await c.query('COMMIT');
+        // Verify through a DIFFERENT connection that the commit really is on the branch with the reviewed head as parent. A mismatch is reported, never auto-undone.
+        const v2 = await this.connect();
+        try {
+          const [seen] = await v2.query('select count(*) n from dolt_log(?) where commit_hash = ?', [branch, hash]);
+          const [par] = await v2.query('select parent_hash from dolt_commit_ancestors where commit_hash = ? and parent_index = 0', [hash]);
+          if (Number((seen as { n: number }[])[0].n) !== 1 || (par as { parent_hash: string }[])[0]?.parent_hash !== expectedHead) throw new ConflictException(`Commit ${hash} was written but could not be confirmed on ${branch} with the reviewed head as its parent (the branch may have moved at the same time). Nothing was undone: review the branch history.`);
+        } finally { await v2.end(); }
         return { ...info, branch, table, commit: hash };
       } catch (e) {
         try { await c.query('ROLLBACK'); } catch { /* the session is closed below anyway */ }
@@ -436,11 +446,19 @@ export class VersioningService {
       const wp = [...pk.flatMap((p) => [`to_${p}`, val(key[p])]), ...pk.flatMap((p) => [`from_${p}`, val(key[p])])];
       const [d] = await c.query(`select * from dolt_diff(?, ?) where ${where} limit 2`, [`${target}...${(await this.headName(c))}`, table, ...wp]);
       const rows = d as Row[];
-      if (rows.length !== 1) throw new NotFoundException(`no change to ${table} ${JSON.stringify(key)} on ${branch} since it diverged from ${target}`);
+      if (rows.length !== 1) {
+        // No change since the divergence. If the row already equals the target's, that is a harmless no-op, not an error and not a stale head.
+        const mineRows = (await c.query(`select * from ?? where ${pk.map(() => '?? = ?').join(' and ')}`, [table, ...pk.flatMap((p) => [p, val(key[p])])]))[0] as Row[];
+        const theirs = await this.at(target, async (tc) => (await tc.query(`select * from ?? where ${pk.map(() => '?? = ?').join(' and ')}`, [table, ...pk.flatMap((p) => [p, val(key[p])])]))[0] as Row[]);
+        const same = mineRows.length === theirs.length && (mineRows.length === 0 || JSON.stringify(Object.entries(mineRows[0]).map(([k, x]) => [k, val(x)])) === JSON.stringify(Object.entries(theirs[0]).map(([k, x]) => [k, val(x)])));
+        if (same) return { table, info: { key, change: 'none', action: `already identical to ${target}: nothing to discard` }, noop: true };
+        throw new NotFoundException(`no change to ${table} ${JSON.stringify(key)} on ${branch} since it diverged from ${target}`);
+      }
       const r = rows[0], type = String(r.diff_type);
       const base = (n: string) => r[`from_${n}`], mine = (n: string) => r[`to_${n}`];
       const kw = pk.flatMap((p) => [p, val(key[p])]), kwhere = pk.map(() => '?? = ?').join(' and ');
       const targetRow = async (): Promise<Row> => {
+        if (target !== this.defaultBranch) throw new ForbiddenException(`credential and plugin state can only be discarded toward ${this.defaultBranch}, not ${target}`);
         const t = await this.at(target, async (tc) => (await tc.query(`select * from ?? where ${kwhere}`, [table, ...kw]))[0] as Row[]);
         if (t.length !== 1) throw new ConflictException(`${target} no longer has this row: its credential or plugin state cannot be discarded to a known value. Nothing was changed.`);
         return t[0];

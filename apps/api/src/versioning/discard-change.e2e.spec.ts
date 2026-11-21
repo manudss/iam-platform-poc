@@ -47,7 +47,7 @@ describe('discard one change of a working branch + real Dolt', { skip: !have && 
   const hash = async (b: string) => (await q('main', `select hashof('${b}') h`))[0].h as string;
   const cut = (n: string) => v.createBranch(n, 'main');
   const A = { id: 'demo-alice' };
-  const dc = async (b: string, table: string, key: any, o: { columns?: string[]; expectedHead?: string } = {}, sub = 't') => v.discardChange(b, 'main', table, key, { columns: o.columns, expectedHead: o.expectedHead ?? await hash(b) }, sub);
+  const dc = async (b: string, table: string, key: any, o: { columns?: string[]; expectedHead?: string; target?: string } = {}, sub = 't') => v.discardChange(b, o.target ?? 'main', table, key, { columns: o.columns, expectedHead: o.expectedHead ?? await hash(b) }, sub);
   const ed = async (b: string, table: string, key: any, values: any, head?: string) => v.editRowChecked(b, table, key, values, head ?? await hash(b), undefined, 't');
 
   before(async () => {
@@ -108,7 +108,7 @@ describe('discard one change of a working branch + real Dolt', { skip: !have && 
     await dc('d-rows', 'identities', { id: 'demo-bob' }, {}, 't');
     bob = (await q('d-rows', "select display_name, department from identities where id='demo-bob'"))[0];
     assert.deepEqual(bob, base);
-    await assert.rejects(() => dc('d-rows', 'identities', { id: 'demo-bob' }, {}, 't'), /no change/);
+    assert.equal((await dc('d-rows', 'identities', { id: 'demo-bob' }, {}, 't')).commit, null, 'already identical to main: no-op, no commit');
     await dc('d-rows', 'roles', { id: 'd-new' }, {}, 't');
     assert.equal((await q('d-rows', "select count(*) n from roles where id='d-new'"))[0].n, 0);
     await dc('d-rows', 'roles', { id: 'accountant' }, {}, 't');
@@ -180,6 +180,25 @@ describe('discard one change of a working branch + real Dolt', { skip: !have && 
     await assert.rejects(() => prs.editRow('acme', pr.id, { table: 'identities', key: { id: 'demo-bob' }, values: { department: 'x' }, expectedHead: h3 }, 't'), /not open/);
     await assert.rejects(() => prs.discardChange('acme', 9999, { table: 'identities', key: { id: 'demo-bob' }, expectedHead: head }, 't'), /not found|unknown|No pull/i);
   });
+  it('sensitive discards only go toward main; an already-identical row is a no-op, not an error; the commit is confirmed on the branch', async () => {
+    await cut('d-old'); await commitOn('d-old', "update identities set credential_revision='revOLD' where id='demo-alice'", 'old reference on an old branch');
+    await cut('d-tgt'); await commitOn('d-tgt', "update identities set credential_revision='revBRANCH2' where id='demo-alice'", 'branch');
+    const mainBefore = await hash('main'), h = await hash('d-tgt');
+    await assert.rejects(() => dc('d-tgt', 'identities', A, { columns: ['credential_revision'], target: 'd-old' }), /only be discarded toward main/);
+    assert.equal(await hash('d-tgt'), h); assert.equal(await hash('main'), mainBefore);
+    // after the branch is aligned on main, discarding again is a harmless no-op with no commit
+    const ok = await dc('d-tgt', 'identities', A, { columns: ['credential_revision'] });
+    assert.equal(ok.commit?.length, 32);
+    const again = await dc('d-tgt', 'identities', A, { columns: ['credential_revision'] });
+    assert.equal(again.commit, null); assert.equal((again as any).noChange, true); assert.match(String(again.action), /already identical/);
+    assert.equal((await q('d-tgt', 'select count(*) n from dolt_status'))[0].n, 0);
+    // a stale head is still a distinct, refused error
+    await assert.rejects(() => dc('d-tgt', 'identities', A, { columns: ['credential_revision'], expectedHead: 'e'.repeat(32) }), /Working branch changed/);
+    // the commit returned by a change is on the branch with the reviewed head as parent
+    const before = await hash('d-tgt'); const r = await ed('d-tgt', 'identities', { id: 'demo-bob' }, { department: 'Seen' }, before);
+    assert.equal(await hash('d-tgt'), r.commit);
+    assert.equal((await q('main', `select parent_hash p from dolt_commit_ancestors where commit_hash='${r.commit}' and parent_index=0`))[0].p, before);
+  });
   it('refuses the target itself, a protected branch, a bad key, bad columns and an unchanged row', async () => {
     await assert.rejects(() => dc('main', 'identities', A, {}, 't'), /no changes of its own/);
     await cut('prot-x'); await commitOn('prot-x', "update identities set department='Q' where id='demo-bob'", 'w');
@@ -188,7 +207,9 @@ describe('discard one change of a working branch + real Dolt', { skip: !have && 
     await assert.rejects(() => dc('prot-x', 'identities', { id: 'demo-bob', department: 'x' }, {}, 't'), /primary key/);
     await assert.rejects(() => dc('prot-x', 'identities', { id: 'demo-bob' }, { columns: ['nope'] }, 't'), /existing columns/);
     await assert.rejects(() => dc('prot-x', 'identities', { id: 'demo-bob' }, { columns: ['id'] }, 't'), /key column/);
-    await assert.rejects(() => dc('prot-x', 'identities', { id: 'demo-alice' }, {}, 't'), /no change/);
+    assert.equal((await dc('prot-x', 'identities', { id: 'demo-alice' }, {}, 't')).commit, null);
+    await withProtectionOff(() => commitOn('main', "insert into roles values ('late','Late',false)", 'main moves'));
+    await assert.rejects(() => dc('prot-x', 'roles', { id: 'late' }, {}, 't'), /no change/);
     await assert.rejects(() => dc('prot-x', 'identities; drop table roles', A, {}, 't'), /invalid table/);
     assert.equal((await q('prot-x', 'select count(*) n from dolt_status'))[0].n, 0);
   });

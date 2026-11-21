@@ -350,7 +350,7 @@ export class VersioningClient {
   diff(from: string, to: string, three: boolean) { return this.req<DiffSummary>('GET', `/diff${this.q({ from, to, three })}`); }
   diffTable(table: string, from: string, to: string, three: boolean) { return this.req<{ table: string; columns: string[]; primaryKey?: string[]; rows: RowDiff[]; truncated: boolean }>('GET', `/diff/${table}${this.q({ from, to, three })}`); }
   /** Abandons ONE change of the pull request's source branch (a row, or some columns of a modified row); source, target and sensitive-value rules are decided by the server. */
-  discardChange(pr: number, table: string, key: Record<string, unknown>, expectedHead: string, columns?: string[]) { return this.req<{ commit: string; action: string }>('POST', `/pulls/${pr}/discard-change`, { table, key, columns, expectedHead }); }
+  discardChange(pr: number, table: string, key: Record<string, unknown>, expectedHead: string, columns?: string[]) { return this.req<{ commit: string | null; action: string }>('POST', `/pulls/${pr}/discard-change`, { table, key, columns, expectedHead }); }
   /** Typed edit of one row of the pull request's source branch (never credential references or plugin runtime state). */
   editRow(pr: number, table: string, key: Record<string, unknown>, values: Record<string, unknown>, expectedHead: string) { return this.req<{ commit: string; action: string }>('POST', `/pulls/${pr}/edit-row`, { table, key, values, expectedHead }); }
   tables(ref: string) { return this.req<{ ref: string; kind: string; tables: { name: string; rows: number }[] }>('GET', `/tables${this.q({ ref })}`); }

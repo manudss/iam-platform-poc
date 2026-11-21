@@ -407,7 +407,7 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     await c['showPull'](8); c['tab'].set('pulls'); c['prTab'].set('rows'); f.detectChanges();
     (globalThis as any).__snap?.(f);
     const undo = [...el.querySelectorAll('.table-diff button.link')].map((b) => b.textContent?.trim());
-    expect(undo).toEqual(['undo', 'edit', 'undo', 'undo row']);
+    expect(undo).toEqual(['undo row', 'undo', 'edit', 'undo']);
     expect(el.querySelectorAll('.table-diff button.link[aria-label="Edit credential_revision"]').length).toBe(0);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     ([...el.querySelectorAll('.table-diff button.link')].find((b) => b.getAttribute('aria-label') === 'Abandon the change to credential_revision') as HTMLButtonElement).click(); await f.whenStable();
