@@ -18,7 +18,7 @@ describe('migration CLI on real Dolt, including every dirty branch', { skip: !bi
    const result=spawnSync(process.execPath,[cli,'prepare','empty'],{env});assert.notEqual(result.status,0);
    assert.equal(new MigrationJournal(home,readManifest(root).versions).read(),undefined);
    const kept=spawnSync(bin!,['sql','-q','SELECT id FROM iam.custom_work'],{cwd:join(home,'dolt'),env,encoding:'utf8'});assert.equal(kept.status,0);assert.match(kept.stdout,/42/);
-  }finally{rmSync(home,{recursive:true,force:true});}
+  }finally{rmSync(home,{recursive:true,force:true,maxRetries:10,retryDelay:300});}
  });
 
  it('initializes fresh preview once, refuses interrupted retry and never reseeds populated data; adoption is read-only',()=>{
@@ -54,6 +54,6 @@ describe('migration CLI on real Dolt, including every dirty branch', { skip: !bi
    dolt(['--use-db=iam/personal/kept','sql','-q',"UPDATE roles SET label='changed' WHERE id='custom-role'"]);
    assert.notEqual(run(['adopt-existing-v1',plan,'--confirm-reviewed-backup-and-existing-v1']).status,0);
    if(priorHome===undefined)delete process.env.HOME;else process.env.HOME=priorHome;
-  } finally { if(old===undefined)delete process.env.DOLT_BIN;else process.env.DOLT_BIN=old;rmSync(home,{recursive:true,force:true}); }
+  } finally { if(old===undefined)delete process.env.DOLT_BIN;else process.env.DOLT_BIN=old;rmSync(home,{recursive:true,force:true,maxRetries:10,retryDelay:300}); }
  });
 });

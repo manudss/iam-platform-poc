@@ -1,0 +1,2 @@
+/** Frozen text of the rule, identical to the one in policies/demo.cedar (a spec compares them). */
+export const ACCOUNT_BLOCKS_RULE = "@id(\"screen-account-blocks\")\n@description(\"Managing account blocks is a right of its own: administrators (main-merger) and managers hold it for now. Change this rule to give it to other roles.\")\n@pillar(\"access\")\npermit(principal, action == Action::\"screen:open\", resource == Screen::\"account-blocks\")\n  when { context has roles && (context.roles.contains(\"manager\") || context.roles.contains(\"main-merger\")) };";

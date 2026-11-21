@@ -50,6 +50,10 @@ input:focus{outline:2px solid var(--accent);border-color:var(--accent)}
 button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;color:var(--accent-ink);background:var(--accent);border:0;border-radius:.55rem;cursor:pointer}
 .linkbtn{display:block;box-sizing:border-box;margin-top:1.1rem;width:100%;padding:.7rem;font-weight:600;text-align:center;text-decoration:none;color:var(--accent-ink);background:var(--accent);border-radius:.55rem}
 .err{color:var(--bad)}
+.blk{border:1px solid var(--warn-line);background:var(--warn-soft);border-radius:.55rem;padding:.75rem .9rem;margin:.6rem 0}
+.blk p{color:var(--warn-ink)}
+.blk .ref{font-size:.85rem}
+.blk code{font-weight:600}
 .back{display:inline-block;margin-top:1rem}
 .dots{display:flex;gap:.5rem;justify-content:center;margin:1rem 0}
 .dots i{width:.85rem;height:.85rem;border-radius:50%;border:2px solid var(--accent)}
@@ -143,6 +147,24 @@ fn page(status: StatusCode, body: String, form_target: Option<&str>, script: boo
     r
 }
 fn error_page(status: StatusCode, msg: &str, theme: &str) -> Response { page(status, frame("Sign-in error", &format!("<h1 class=\"page-title\">Sign-in error</h1><p class=\"err\">{}</p>", esc(msg)), theme, "/authorize", false), None, false) }
+
+
+/// A refusal caused by an account block is built by the API as "<Type>. <message> Reference BLK-XXXX." and shown as a card: the type as the title,
+/// the administrator's message, and the reference to quote. Any other refusal text keeps the plain error page.
+fn split_block_refusal(msg: &str) -> Option<(String, String, String)> {
+    let (head, tail) = msg.rsplit_once(" Reference ")?;
+    let reference = tail.trim().trim_end_matches('.');
+    if !reference.starts_with("BLK-") || reference.len() > 12 || !reference[4..].bytes().all(|b| b.is_ascii_alphanumeric()) { return None; }
+    let (title, body) = head.split_once(". ").map(|(a, b)| (a.to_string(), b.trim().to_string())).unwrap_or((head.trim_end_matches('.').to_string(), String::new()));
+    if title.is_empty() || title.len() > 60 { return None; }
+    Some((title, body, reference.to_string()))
+}
+fn deny_page(status: StatusCode, msg: &str, theme: &str) -> Response {
+    match split_block_refusal(msg) {
+        Some((title, body, reference)) => page(status, frame("Sign-in error", &format!("<h1 class=\"page-title\">{}</h1><div class=\"blk\" id=\"blocked-card\">{}<p class=\"ref\">Reference <code>{}</code></p></div><p>Contact an administrator and quote this reference.</p>", esc(&title), if body.is_empty() { String::new() } else { format!("<p>{}</p>", esc(&body)) }, esc(&reference)), theme, "/authorize", false), None, false),
+        None => error_page(status, msg, theme),
+    }
+}
 
 
 fn hidden(p: &HashMap<String, String>) -> String {
@@ -403,6 +425,8 @@ pub async fn login(State(c): State<Arc<Core>>, headers: HeaderMap, Form(p): Form
             crate::gate::Step::Deny(m) => {
                 c.bus_emit("signin.refused", serde_json::json!({"subject": g("username"), "client_id": g("client_id")}), None);
                 let msg = m.unwrap_or_else(|| "Wrong user or password.".into());
+                // A block refusal (proved credentials, account blocked) is the card, not the sign-in form again.
+                if split_block_refusal(&msg).is_some() { return deny_page(StatusCode::UNAUTHORIZED, &msg, &theme); }
                 return match first_page().await { Some(f) => form(&p, Some(&msg), Some(&f), &theme), None => form(&p, Some(&msg), None, &theme) };
             }
             crate::gate::Step::Challenge(v) => return step_page(&p, &v, None, &theme),
@@ -449,7 +473,7 @@ pub async fn external_start(State(c): State<Arc<Core>>, headers: HeaderMap, Quer
             r
         }
         crate::gate::Step::ExternalSim(v) => sim_page(&p, session, &v, &theme),
-        crate::gate::Step::Deny(m) => error_page(StatusCode::UNAUTHORIZED, m.as_deref().unwrap_or("Sign-in failed. Check your details and try again."), &theme),
+        crate::gate::Step::Deny(m) => deny_page(StatusCode::UNAUTHORIZED, m.as_deref().unwrap_or("Sign-in failed. Check your details and try again."), &theme),
         _ => error_page(StatusCode::SERVICE_UNAVAILABLE, "sign-in is temporarily unavailable", &theme),
     }
 }
@@ -516,7 +540,7 @@ pub async fn external_callback(State(c): State<Arc<Core>>, headers: HeaderMap, Q
         crate::gate::Step::Challenge(v) => step_page(&p, &v, None, &theme),
         crate::gate::Step::Deny(m) => {
             c.bus_emit("signin.refused", json!({"client_id": g("client_id")}), None);
-            error_page(StatusCode::UNAUTHORIZED, m.as_deref().unwrap_or("Sign-in failed. Check your details and try again."), &theme)
+            deny_page(StatusCode::UNAUTHORIZED, m.as_deref().unwrap_or("Sign-in failed. Check your details and try again."), &theme)
         }
         // A member linking a provider from their profile: back to the console, or a bare confirmation page.
         crate::gate::Step::ExternalLinked(Some(url)) => {
@@ -1035,6 +1059,17 @@ mod tests {
         p.insert("state".into(), "s".into());
         let back = authorize_back(&p);
         assert!(back.starts_with("/authorize?response_type=code&") && back.contains("client_id=demo-web"));
+    }
+
+    #[test]
+    fn a_block_refusal_is_a_card_and_other_texts_stay_plain() {
+        let (t, b, r) = split_block_refusal("Account suspended. Paused while we check a payment. Reference BLK-7F3A.").unwrap();
+        assert_eq!((t.as_str(), b.as_str(), r.as_str()), ("Account suspended", "Paused while we check a payment.", "BLK-7F3A"));
+        let (t, b, _) = split_block_refusal("Account locked. Reference BLK-91D0.").unwrap();
+        assert_eq!((t.as_str(), b.as_str()), ("Account locked", ""));
+        assert!(split_block_refusal("Sign-in failed. Check your details and try again.").is_none());
+        assert!(split_block_refusal("Sorry. Reference BLK-<script>.").is_none());
+        assert!(split_block_refusal("Sorry. Reference ABC-1234.").is_none());
     }
 }
 

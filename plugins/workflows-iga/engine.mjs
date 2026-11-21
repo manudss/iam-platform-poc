@@ -385,6 +385,10 @@ export function createWorkflowEngine(deps) {
       dryRun: simulation,
       log: line => say(safe(line)),
       outputs,
+      // Account effects (block, unblock, security settings patch). A test run never applies them.
+      accounts: deps.accounts,
+      test: !!run.test,
+      runId: run.id,
       branchWrite: async (fn, message) => {
         const branch = await ensureBranch(run, say);
         await deps.branchRun(branch, () => deps.versioning.writeOn(branch, async (c) => {

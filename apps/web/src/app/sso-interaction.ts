@@ -1,5 +1,5 @@
 import { Component, inject, signal } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import type { SsoRequest } from './api';
 import { Session } from './session';
 
@@ -42,6 +42,7 @@ export const describeScopes = (scopes: string[]) => scopes.filter((s) => s in SC
 export class SsoInteractionPage {
   private readonly s = inject(Session);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   protected readonly state = signal<'loading' | 'ready' | 'error'>('loading');
   protected readonly error = signal('');
   protected readonly busy = signal(false);
@@ -51,7 +52,12 @@ export class SsoInteractionPage {
   constructor() { void this.load(); }
   protected texts(r: SsoRequest) { return describeScopes(r.scopes); }
   private async load() {
-    try { this.req.set(await this.s.api.ssoRequest(this.uid)); this.state.set('ready'); }
+    try {
+      const r = await this.s.api.ssoRequest(this.uid);
+      // The application has a level rule this sign-in does not meet: the person signs in again with a method that reaches it, then comes back here.
+      if (r.assurance) { void this.router.navigate(['/step-up'], { queryParams: { kind: 'app', app: r.app.name, level: r.assurance.requiredLevel, current: r.assurance.currentLevel, return: '/sso-interaction/' + this.uid } }); return; }
+      this.req.set(r); this.state.set('ready');
+    }
     catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
   }
   protected async answer(d: 'allow' | 'deny') {

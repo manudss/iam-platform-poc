@@ -23,6 +23,12 @@ describe('persistent application migration journal', () => {
   assert.equal(j.read()?.entries.length,1);assert.equal(j.read()?.pending?.id,'0002');
   await assert.rejects(migrate(j,'two',actions(calls)),/interrupted/);assert.deepEqual(calls,['0002']);
  });
+ it('a refused preflight leaves no pending marker, so the previous image still starts and the next boot retries',async()=>{
+  const j=fresh(),calls:string[]=[];j.adopt(hash('backup'));let refuse=true;
+  const acts=[{id:'0002',preflight:async()=>{if(refuse)throw Error('policy_rules dirty');},run:async()=>{calls.push('run');},verify:async()=>{}},{id:'0003',run:async()=>{},verify:async()=>{}}];
+  await assert.rejects(migrate(j,'one',acts),/dirty/);assert.equal(j.read()?.pending,undefined);assert.equal(j.read()?.entries.length,1);assert.deepEqual(calls,[]);
+  refuse=false;await migrate(j,'two',acts);assert.equal(j.read()?.entries.length,3);assert.deepEqual(calls,['run']);
+ });
  it('verification failure never records success',async()=>{
   const j=fresh();j.adopt(hash('backup'));await assert.rejects(migrate(j,'one',[{id:'0002',run:async()=>{},verify:async()=>{throw Error('verify');}}]));
   assert.equal(j.read()?.pending?.phase,'verify');assert.equal(j.read()?.entries.length,1);

@@ -90,6 +90,12 @@ permit(principal, action == Action::"screen:open", resource)
 permit(principal, action == Action::"screen:open", resource)
   when { resource in [Screen::"dashboard", Screen::"users", Screen::"profile-fields", Screen::"roles", Screen::"profile-reviews", Screen::"my-profile", Screen::"authentication", Screen::"assignments", Screen::"activation", Screen::"organizations", Screen::"applications", Screen::"policies", Screen::"workflows", Screen::"plugins", Screen::"customisation", Screen::"templates", Screen::"event-bus", Screen::"mcp", Screen::"dolt-pulls", Screen::"dolt-compare", Screen::"dolt-history", Screen::"dolt-branches", Screen::"branch-manage", Screen::"authority-edit"] && context has roles && context.roles.contains("main-merger") };
 
+@id("screen-account-blocks")
+@description("Managing account blocks is a right of its own: administrators (main-merger) and managers hold it for now. Change this rule to give it to other roles.")
+@pillar("access")
+permit(principal, action == Action::"screen:open", resource == Screen::"account-blocks")
+  when { context has roles && (context.roles.contains("manager") || context.roles.contains("main-merger")) };
+
 @id("screen-my-profile")
 @description("Everyone signed in opens their own profile.")
 @pillar("access")

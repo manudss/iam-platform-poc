@@ -6,7 +6,7 @@ import { branchContext } from './context.js';
 
 const NOTHING = 'nothing to merge: the target already contains the source';
 const HEAD = '0123456789abcdef';
-function setup(reasons = [NOTHING], latest?: { state: string; commit: string; requestId?: string }) {
+function setup(reasons = [NOTHING], latest?: { state: string; commit: string; requestId?: string }, blocker: (branch: string) => string | null = () => null) {
   const activated: string[] = [];
   const v = {
     branches: async () => ({ branches: [{ name: 'main', commit: HEAD }, { name: 'work', commit: HEAD }] }),
@@ -16,7 +16,7 @@ function setup(reasons = [NOTHING], latest?: { state: string; commit: string; re
   const activation = { applyEnabled: true, current: async () => latest,
     activate: async (_tenant: string, commit: string) => { activated.push(commit); return { state: 'applied', commit }; } };
   const registries = { drop: () => undefined, get: async () => ({}) };
-  const controller = new WorkspaceController(v as never, registries as never, activation as never, {} as never, {} as never);
+  const controller = new WorkspaceController(v as never, registries as never, activation as never, {} as never, {} as never, { applyBlocker: async (_t: string, b: string) => blocker(b) } as never);
   const apply = (body: { confirm?: boolean; expectedHead?: string } = { confirm: true }) => branchContext.run({ branch: 'work' }, () => controller.apply(body, { user: { sub: 'demo-alice' } }, 'acme-demo'));
   return { activated, apply };
 }
@@ -46,4 +46,15 @@ describe('human Apply first activation without data changes', () => {
   it('keeps the normal merge-and-activate path', async () => {
     const t = setup([]); assert.equal((await t.apply()).applied, true); assert.deepEqual(t.activated, [HEAD]);
   });
+});
+describe('Apply never makes an unreachable sign-in level live', () => {
+  it('refuses on the branch before anything is merged or activated', async () => {
+    const t = setup([], undefined, (b) => (b === 'work' ? 'Administration level 5 cannot be reached' : null));
+    await assert.rejects(t.apply(), /Apply refused: Administration level 5/); assert.deepEqual(t.activated, []);
+  });
+  it('refuses on the merged main, so a level another merge brought cannot go live either', async () => {
+    const t = setup([], undefined, (b) => (b === 'main' ? 'Application finance asks for level 8' : null));
+    await assert.rejects(t.apply(), /not live; the active rule is unchanged/); assert.deepEqual(t.activated, []);
+  });
+  it('lets a reachable change through', async () => { const t = setup([]); assert.equal((await t.apply()).applied, true); });
 });

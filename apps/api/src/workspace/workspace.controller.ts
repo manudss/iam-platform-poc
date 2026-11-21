@@ -5,7 +5,8 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { currentBranch, applyContext, workspaceMode } from './context.js';
 import { ActivationService } from '../activation/activation.service.js';
-import { Param } from '@nestjs/common';
+import { Param, Optional } from '@nestjs/common';
+import { AuthnService } from '../authn/flow.service.js';
 import { SOD_SQL } from '../dolt/dolt.service.js';
 import { PersonalBranchService } from './personal-branch.service.js';
 import { BranchTestService } from './branch-test.js';
@@ -14,7 +15,7 @@ import { BranchTestService } from './branch-test.js';
 export class WorkspaceController {
  private chain:Promise<unknown>=Promise.resolve();
  private pending=new Map<string,{source:string;commit:string}>();
- constructor(private readonly v:VersioningService,private readonly registries:BranchRegistries,private readonly activation:ActivationService,private readonly personal:PersonalBranchService,private readonly branchTest:BranchTestService){}
+ constructor(private readonly v:VersioningService,private readonly registries:BranchRegistries,private readonly activation:ActivationService,private readonly personal:PersonalBranchService,private readonly branchTest:BranchTestService,@Optional() private readonly authn?:AuthnService){}
  @Post('personal') ensurePersonal(@Param('tenant')tenant:string,@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);return this.personal.ensure(tenant,req.user?.sub);}
  @Post('personal/rename') renamePersonal(@Param('tenant')tenant:string,@Body()b:{name?:string},@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);return this.personal.rename(tenant,req.user?.sub,b?.name);}
  @Post('personal/release') releasePersonal(@Param('tenant')tenant:string,@Req()req:{user:{sub:string;branch?:string}}){assertNotBranchTest(req);return this.personal.release(tenant,req.user?.sub);}
@@ -41,6 +42,8 @@ export class WorkspaceController {
   if(b.expectedHead && b.expectedHead!==info.commit)throw new ConflictException('Working branch changed. Review again before Apply.');
   // Read registry first: unknown providers/grants are never manufactured by a merge.
   this.registries.drop(branch);await this.registries.get(branch);
+  // Refused before anything is merged: a level nobody can reach would lock the administrators out. The live rule is untouched.
+  const blocked=await this.authn?.applyBlocker(tenant,branch);if(blocked)throw new ConflictException({code:'unreachable-level',message:`Apply refused: ${blocked}`,reasons:[blocked],violations:[]});
   const latest=await this.activation.current(tenant);
   const retry=this.pending.get(branch)??(latest?.state==='failed'&&latest.requestId===`workspace-${latest.commit}`&&latest.commit===(await this.v.branches()).branches.find(x=>x.name==='main')?.commit&&(await this.v.diffSummary('main',branch,false)).tables.length===0?{source:info.commit,commit:latest.commit}:undefined);
   if(!this.activation.applyEnabled)throw new BadRequestException('Apply requires a configured live permission engine');
@@ -56,6 +59,8 @@ export class WorkspaceController {
   if(!r.mergeable||!r.commit)throw new ConflictException({message:`Apply refused: ${r.reasons.join('; ')}`,reasons:r.reasons,violations:r.violations});
   this.pending.set(branch,{source:info.commit,commit:r.commit});
   this.registries.drop('main');await this.registries.get('main');
+  // main also carries what other merged branches brought: check the exact version about to go live.
+  const blockedMain=await this.authn?.applyBlocker(tenant,'main');if(blockedMain)throw new ConflictException({code:'unreachable-level',message:`Apply refused: ${blockedMain}. The data is merged but not live; the active rule is unchanged.`,reasons:[blockedMain],violations:[]});
   const activation=await this.activation.activate(tenant,r.commit,`workspace-${r.commit}`);
   if(activation.state!=='applied')return {applied:false,merged:true,retryRequired:true,branch,commit:r.commit,activation,message:'Data merged into main, but permission activation failed. Retry Apply on this branch; no second merge is needed.'};
   this.pending.delete(branch);return {applied:true,branch,commit:r.commit,activation};

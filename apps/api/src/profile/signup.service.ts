@@ -44,9 +44,10 @@ const plugin = loadPluginModule('directory', 'signup.mjs') as SignupPluginModule
 @Injectable()
 export class SignupService {
   private readonly notifier?: PluginRegistry;
+  private readonly events?: ApplicationBus;
   private readonly manager: ReturnType<SignupPluginModule['createSignupManager']>;
   constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry) {
-    this.notifier = reg;
+    this.notifier = reg; this.authn = authn; this.events = events;
     this.manager = plugin.createSignupManager({
       signupOpen: (t) => profile.signupOpen(t),
       schema: (t, ctx, ref) => profile.schema(t, ctx, ref) as never,
@@ -87,6 +88,19 @@ export class SignupService {
   submit(tenant: string, body: unknown, ip: string) { return this.manager.submit(tenant, body, ip); }
   confirm(tenant: string, token: unknown) { return this.manager.confirm(tenant, token); }
   list() { return this.manager.list(); }
-  approve(tenant: string, id: string, actor: string) { return this.manager.approve(tenant, id, actor); }
+  private readonly authn?: AuthnService;
+  /**
+   * Approval creates the account (on the working branch). When the tenant keeps new accounts blocked until someone or a workflow lifts the block
+   * (setting holdAfterVerification), the account is also given a `pending_approval` hold block: it cannot sign in, even after Apply, until the block is lifted.
+   * The e-mail confirmation and the administrator approval stay what they were; this only adds the hold.
+   */
+  async approve(tenant: string, id: string, actor: string) {
+    const out = await this.manager.approve(tenant, id, actor);
+    if (this.authn && (await this.authn.liveSecurity(tenant)).holdAfterVerification) {
+      await this.authn.blocks.add(tenant, { subject: id, kind: 'pending_approval', message: 'Your account was created and is waiting to be activated.', origin: 'automatic', setBy: 'system', setAt: Date.now(), hold: true });
+      this.events?.emit({ type: 'user.blocked', tenant, branch: 'main', at: new Date().toISOString(), payload: { subject: id, kind: 'pending_approval', actor: 'system' } });
+    }
+    return out;
+  }
   reject(id: string) { return this.manager.reject(id); }
 }

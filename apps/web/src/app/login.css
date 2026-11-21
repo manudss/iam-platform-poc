@@ -28,24 +28,7 @@
 form { display: grid; gap: .5rem; margin-top: .6rem; }
 .foot { margin: 1.2rem 0 0; font-size: .78rem; color: var(--muted); }
 
-/* Sign-in methods: one card row per chain, name + recommended tag, steps line and the level gauge. */
-.methods { list-style: none; margin: .8rem 0 0; padding: 0; display: grid; gap: .6rem; }
-.methods li { display: block; }
-.m { display: flex; align-items: center; gap: .8rem; width: 100%; margin: 0; text-align: left; background: var(--auth-field); border: 1px solid var(--line); border-radius: .8rem; padding: .7rem .85rem; color: var(--ink); transition: border-color .15s; }
-.m:hover:not(:disabled) { background: var(--auth-field); border-color: var(--accent); }
-.m.rec { border: 1.5px solid var(--acc2); }
-.m .ic { flex: none; width: 2.3rem; height: 2.3rem; border-radius: .65rem; display: grid; place-items: center; background: var(--chip-bg); color: var(--chip-ink); }
-.m .ic svg { width: 1.1rem; height: 1.1rem; }
-.m .tx { flex: 1; min-width: 0; }
-.m .tx b { display: block; font-size: .92rem; }
-.m .tx .sub { display: block; color: var(--muted); font-size: .78rem; }
-.m .chev { flex: none; width: 1rem; height: 1rem; color: var(--muted); }
-/* The recommended tag keeps white text on the accent in both themes (was overridden by the muted sub-line color). */
-.m .tx .tag { display: inline-block; vertical-align: middle; font-size: .62rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: .12rem .45rem; margin-left: .3rem; white-space: nowrap; }
-.dots { display: flex; gap: 2.5px; margin-top: .35rem; }
-.dots i { width: 14px; height: 5px; border-radius: 3px; background: var(--bar-off); }
-.dots i.on { background: var(--acc2); }
-.sim { color: var(--warn-ink); }
+/* The sign-in method rows live in signin-methods.ts (shared with the re-sign-in page). */
 
 .newhere { display: flex; align-items: center; gap: .8rem; margin: 1.3rem 0 0; }
 .newhere::before, .newhere::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
@@ -62,7 +45,6 @@ form { display: grid; gap: .5rem; margin-top: .6rem; }
   .hero { padding: 1.4rem; }
 }
 .pvf { display: block; margin: .8rem 0; font-weight: 600; } .pvf input { display: block; width: 100%; margin-top: .3rem; }
-.m.pv { outline: 3px solid var(--acc2); outline-offset: 2px; }
 
 .req { color: var(--bad); }
 .alert-err { display: flex; gap: .6rem; background: var(--bad-soft); border: 1px solid var(--bad-line); border-left: 4px solid var(--bad); color: var(--bad-ink); border-radius: .6rem; padding: .7rem .8rem; margin: .8rem 0; font-size: .9rem; line-height: 1.45; }

@@ -44,6 +44,8 @@ export const WF_EVENTS = {
     'user.created': { label: 'A user is created (joiner)', payload: ['subject', 'displayName', 'department', 'email'] },
     'user.department-changed': { label: "A user's department changes (mover)", payload: ['subject', 'from', 'to'] },
     'user.disabled': { label: 'A user account is disabled (leaver)', payload: ['subject'] },
+    'user.blocked': { label: 'An account is blocked (suspended, disabled, locked, waiting)', payload: ['subject', 'kind', 'actor'] },
+    'user.unblocked': { label: 'A block on an account is lifted', payload: ['subject', 'kind', 'actor'] },
     'signup.requested': { label: 'A sign-up request is submitted (registration)', payload: ['subject', 'email'] },
     'signup.approved': { label: 'A sign-up request is approved', payload: ['subject', 'email'] },
     'profile.updated': { label: "A user's profile values are updated", payload: ['subject', 'keys', 'actor'] },

@@ -3,7 +3,9 @@ import { Component, PLATFORM_ID, PendingTasks, REQUEST, TransferState, inject, m
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
+import { STEP_UP_SUBJECT_KEY } from './step-up';
 import { SigninChain, SigninOptions, apiUrl } from './api';
+import { SigninMethods } from './signin-methods';
 
 /** Hydration handoff: the options the server fetched to render /login, so the browser does not refetch them (and flash "Loading...") on startup. */
 const OPTIONS_KEY = makeStateKey<SigninOptions>('iam-signin-options');
@@ -32,7 +34,7 @@ export function previewMessage(d: unknown): { chains: SigninChain[]; highlight: 
   return { chains, highlight: typeof x['highlight'] === 'string' ? x['highlight'] : '', view: x['view'] === 'step' ? 'step' : 'list', step: Math.max(0, Number(x['step']) || 0), dark: x['dark'] === true };
 }
 
-@Component({ selector: 'app-login', imports: [ThemeSwitch, Brand], templateUrl: './login.html', styleUrl: './login.css' })
+@Component({ selector: 'app-login', imports: [ThemeSwitch, Brand, SigninMethods], templateUrl: './login.html', styleUrl: './login.css' })
 export class LoginPage {
   protected readonly s = inject(Session);
   protected readonly branding = inject(Branding);
@@ -121,17 +123,6 @@ export class LoginPage {
     await Promise.all([signup(), options()]);
   }
 
-  protected stepNames(c: SigninChain) { return c.steps.map((x) => x.name).join(' \u2192 '); }
-
-  /** Leading icon of a chain from its step types: authenticator app, e-mail code, PIN keypad, else a plain password key. */
-  protected icon(c: SigninChain): 'shield' | 'mail' | 'pin' | 'key' {
-    const t = c.steps.map((x) => x.type);
-    if (t.some((x) => /totp|authenticator/i.test(x))) return 'shield';
-    if (t.some((x) => /mail/i.test(x))) return 'mail';
-    if (t.some((x) => /pin/i.test(x))) return 'pin';
-    return 'key';
-  }
-
   protected async signIn(chain?: string) {
     if (this.preview()) return; // preview: no sign-in, nothing sent
     this.busy.set(true);
@@ -161,7 +152,10 @@ export class CallbackPage {
         }
       } catch { /* a broken stash never blocks the sign-in */ }
       await this.s.refresh().catch(() => undefined);
-      const back = safeReturn(sessionStorage.getItem(RETURN_KEY)); sessionStorage.removeItem(RETURN_KEY);
+      let back = safeReturn(sessionStorage.getItem(RETURN_KEY)); sessionStorage.removeItem(RETURN_KEY);
+      // A re-sign-in for a stronger level must end on the same account: another account is not carried into the request that asked for it.
+      const before = sessionStorage.getItem(STEP_UP_SUBJECT_KEY); sessionStorage.removeItem(STEP_UP_SUBJECT_KEY);
+      if (before && before !== (await this.s.loadAccess().then((a) => a.subject).catch(() => ''))) { back = '/my-applications'; this.s.say('You signed in with a different account, so the request was not continued.', 'error'); }
       await this.router.navigateByUrl(this.s.testBranch() ? '/my-profile' : back, { replaceUrl: true });
     } catch (e) {
       this.s.say((e as Error).message, 'error');

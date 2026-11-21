@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Inject, Injectable, Logger, OnModuleInit, Optional, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Inject, Injectable, Logger, OnModuleInit, Optional, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { AuthnService } from '../authn/flow.service.js';
 import { HttpAdapterHost } from '@nestjs/core';
 import type { Connection } from 'mysql2/promise';
 import { AuthGuard, assertNotBranchTest } from '../auth/auth.guard.js';
@@ -131,7 +132,20 @@ export class OidcProviderService implements OnModuleInit {
 @UseGuards(AuthGuard)
 @Controller('sso/:tenant/interaction')
 export class SsoInteractionController {
-  constructor(private readonly o: OidcProviderService) {}
-  @Get(':uid') details(@Param('tenant') t: string, @Param('uid') uid: string, @Req() r: { user: { sub: string; branch?: string } }) { assertNotBranchTest(r); return this.o.details(t, uid, r.user.sub, r); }
-  @Post(':uid/complete') complete(@Param('tenant') t: string, @Param('uid') uid: string, @Body() b: { decision?: unknown }, @Req() r: { user: { sub: string; branch?: string } }) { assertNotBranchTest(r); return this.o.complete(t, uid, r.user.sub, b?.decision, r); }
+  constructor(private readonly o: OidcProviderService, private readonly authn: AuthnService) {}
+  @Get(':uid') async details(@Param('tenant') t: string, @Param('uid') uid: string, @Req() r: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(r);
+    const d: any = await this.o.details(t, uid, r.user.sub, r);
+    // The console reads this to ask for a stronger sign-in BEFORE showing the consent.
+    const a = d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true as const };
+    // Present only when a level rule applies and is not met: an application without a rule keeps the exact same answer.
+    return a.ok ? d : { ...d, assurance: a };
+  }
+  @Post(':uid/complete') async complete(@Param('tenant') t: string, @Param('uid') uid: string, @Body() b: { decision?: unknown }, @Req() r: { user: { sub: string; branch?: string } }) {
+    assertNotBranchTest(r);
+    // If the request cannot be read, the normal completion below answers with its own error, unchanged.
+    const d: any = await this.o.details(t, uid, r.user.sub, r).catch(() => undefined);
+    const a = d?.app?.id ? await this.authn.appAssurance(t, String(d.app.id), r.user.sub, r.user as never) : { ok: true as const };
+    if (!a.ok) throw new ForbiddenException({ ...a, message: 'This application needs a stronger sign-in.' });
+    return this.o.complete(t, uid, r.user.sub, b?.decision, r); }
 }

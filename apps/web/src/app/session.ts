@@ -57,6 +57,8 @@ export class Session implements OnDestroy {
     const req = inject(REQUEST, { optional: true });
     if (req) { const t = sessionCookieToken(req.headers.get('cookie') ?? ''); if (t && this.api.adoptServer(t)) this.signedIn(); }
     // The shell bar listens to accepted data writes to refresh its pending-changes counter and flash the pending-merge hint.
+    // A level rule on the administration pages: remember where the person was and offer the stronger sign-in, never a dead end.
+    this.api.onStepUp = (b) => { const url = this.router.url; if (url.startsWith('/step-up')) return; void this.router.navigate(['/step-up'], { queryParams: { kind: 'admin', level: b.requiredLevel, current: b.currentLevel, return: url.split('#')[0] } }); };
     this.api.onDataMutation = (m) => { this.lastWritePath.set(m.path); this.branchWrites.update((x) => x + 1); };
   }
   /** Heartbeat of accepted data writes (never failures); `lastWritePath` distinguishes branch data from branch bookkeeping. */

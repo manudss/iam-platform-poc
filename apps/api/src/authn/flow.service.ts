@@ -11,6 +11,11 @@ import { AuthnConfig, ChainAnalysis, CORE_SETTINGS_ID, EMPTY_CONFIG, SEED_CONFIG
 import { SESSION_SETTINGS_ID, SessionConfig, parseSession, sessionClaims, validateSession } from './session-config.js';
 import { branchName } from '../versioning/guards.js';
 import { EnrollmentStore } from './enroll-store.js';
+import { AdminGuard } from '../auth/admin.guard.js';
+import { appRequirement, chainOptions, checkAssurance, eligibleChains, type ChainOption, type StepUpVerdict } from './step-up.js';
+import { SECURITY_SETTINGS_ID, SecurityConfig, parseSecurity, storedSecurity, validateSecurity } from '../accounts/security-config.js';
+import { BlockStore } from '../accounts/block-store.js';
+import { inForce, lockoutVerdict, refusalMessage, shownBlock } from '../accounts/blocks.js';
 import { ExternalIdentity, ExternalProfile, ExternalStart, ProviderRefusal, buildAuthorizeUrl, callbackUrl as externalCallbackUrl, checkStart, exchangeOidc, exchangeUserinfo, externalRefusalMessage, mint, mintPkceVerifier, pkceChallenge } from './federation.js';
 import { DemoOutbox, Prompt, methodType, methodTypes } from './methods.js';
 
@@ -78,11 +83,16 @@ export { DEMO_TOTP_SECRET, DEMO_PIN, DEMO_PIN8 } from '../migrations/v0001/authn
 @Injectable()
 export class AuthnService implements OnApplicationBootstrap {
   readonly enroll = new EnrollmentStore();
+  /** Account blocks (suspended, disabled, locked, waiting for approval or verification): checked by the core of the chain, never by a plugin. */
+  readonly blocks = new BlockStore();
+  private lockFails = new Map<string, number[]>();
   readonly outbox = new DemoOutbox();
   private sessions = new Map<string, Session>();
   private fails = new Map<string, number[]>();
   now = () => Date.now();
-  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService) {}
+  constructor(@Inject(PluginRegistry) private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly users?: UsersService) {
+    AdminGuard.assurance = (tenant, claims) => this.adminAssurance(tenant, claims);
+  }
 
   private async registry(ref: 'live' | 'work', write = false): Promise<PluginRegistry> {
     if (!workspaceMode()) return this.reg;
@@ -119,6 +129,63 @@ export class AuthnService implements OnApplicationBootstrap {
   async saveSession(tenant: string, input: unknown): Promise<SessionConfig> {
     const cfg = validateSession(input);
     await (await this.registry('work', true)).putCoreSettings(tenant, SESSION_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+    return cfg;
+  }
+  /** Account security settings (lockout, administration level): versioned like the session settings. Sign-in reads them on main, or on the tested branch. */
+  async signinSecurity(tenant: string, branch?: string): Promise<SecurityConfig> { return parseSecurity(await (await this.signinRegistry(branch)).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
+  async liveSecurity(tenant: string): Promise<SecurityConfig> { return parseSecurity(await (await this.registry('live')).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
+  async workingSecurity(tenant: string): Promise<SecurityConfig> { return parseSecurity(await (await this.registry('work')).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
+  /** Chains the person can complete to reach `minLevel` (never a weaker one, never simulated, only what they have set up). */
+  async stepUpOptions(tenant: string, subject: string, minLevel: number): Promise<ChainOption[]> {
+    const cfg = await this.liveConfig(tenant);
+    const analysis = Object.fromEntries(cfg.chains.map((c) => { const a = analyzeChain(cfg, c); return [c.id, { effectiveLevel: a.effectiveLevel, simulatedSteps: a.simulatedSteps, mfa: a.mfa }]; }));
+    return eligibleChains(chainOptions(cfg, analysis, await this.enroll.status(tenant, subject) as never), minLevel);
+  }
+  /** The rule for administration pages: the level (and optional freshness) of the sign-in behind the session. Off at 0. */
+  async adminAssurance(tenant: string, claims: { auth_level?: unknown; auth_time?: unknown } | undefined): Promise<StepUpVerdict> {
+    const sec = await this.liveSecurity(tenant);
+    if (sec.adminMinLevel <= 0) return { ok: true };
+    const level = typeof claims?.auth_level === 'number' ? claims.auth_level : 0;
+    const authTime = typeof claims?.auth_time === 'number' ? claims.auth_time * 1000 : 0;
+    const v = checkAssurance({ level, authTime }, { minLevel: sec.adminMinLevel, ...(sec.adminMaxAgeSeconds ? { maxAgeMs: sec.adminMaxAgeSeconds * 1000 } : {}) }, this.now());
+    if (v.ok) return v;
+    return v;
+  }
+  /** Whether at least one enabled chain, without a simulated step, declares and proves this level (configuration only, not who is enrolled). */
+  static reachable(cfg: AuthnConfig, minLevel: number): boolean {
+    return cfg.chains.some((c) => { if (!c.steps.every((id) => cfg.methods.find((m) => m.id === id)?.enabled)) return false; const a = analyzeChain(cfg, c); return !a.simulatedSteps.length && a.effectiveLevel >= minLevel; });
+  }
+  /**
+   * Checked before a data branch (or main) is applied: a level that no sign-in chain can reach would lock everybody out of administration
+   * (or out of one application). The change is refused here, upstream, and the rule that is live now stays exactly as it is.
+   */
+  async applyBlocker(tenant: string, branch: string): Promise<string | null> {
+    const ref = branch === 'main' ? undefined : branch;
+    const sec = await this.signinSecurity(tenant, ref), cfg = await this.signinConfig(tenant, ref);
+    if (sec.adminMinLevel > 0 && !AuthnService.reachable(cfg, sec.adminMinLevel)) return `Administration level ${sec.adminMinLevel} cannot be reached by any enabled sign-in chain without a simulated step. Lower the level or enable a chain that reaches it.`;
+    for (const [id, r] of Object.entries(sec.appLevels)) if (r.minLevel > 0 && !AuthnService.reachable(cfg, r.minLevel)) return `Application ${id} asks for level ${r.minLevel}, which no enabled sign-in chain without a simulated step can reach.`;
+    return null;
+  }
+  /** The level rule of one application against this session. Applications without a rule always pass. The answer names the chains the person can use to step up. */
+  async appAssurance(tenant: string, appId: string, subject: string, claims: { auth_level?: unknown; auth_time?: unknown } | undefined): Promise<{ ok: true } | (Extract<StepUpVerdict, { ok: false }> & { app: string; chains: { id: string; name: string; level: number }[] })> {
+    const req = appRequirement((await this.liveSecurity(tenant)).appLevels, appId);
+    if (!req) return { ok: true };
+    const v = checkAssurance({ level: typeof claims?.auth_level === 'number' ? claims.auth_level : 0, authTime: typeof claims?.auth_time === 'number' ? claims.auth_time * 1000 : 0 }, req, this.now());
+    if (v.ok) return v;
+    return { ...v, app: appId, chains: (await this.stepUpOptions(tenant, subject, req.minLevel)).map((c) => ({ id: c.id, name: c.name, level: c.effectiveLevel })) };
+  }
+  /**
+   * Saving security settings. Raising the administration level is refused when the person saving does not hold that level themselves right now,
+   * or when no enabled chain without a simulated step reaches it: the change can never be the one that locks the administrators out.
+   */
+  async saveSecurity(tenant: string, input: unknown, actor?: { sub: string; level: number }): Promise<SecurityConfig> {
+    const cfg = validateSecurity(input);
+    const before = await this.workingSecurity(tenant);
+    if (cfg.adminMinLevel > before.adminMinLevel) {
+      if (!actor || actor.level < cfg.adminMinLevel) throw new BadRequestException({ code: 'would-lock-out-the-applier', message: `Level ${cfg.adminMinLevel} is above your current sign-in (${actor?.level ?? 0}). Sign in with a stronger method first, so this change cannot lock you out.` });
+      if (!(await this.stepUpOptions(tenant, actor.sub, cfg.adminMinLevel)).length) throw new BadRequestException({ code: 'no-chain-reaches-level', message: `No enabled sign-in chain without a simulated step reaches level ${cfg.adminMinLevel} for you.` });
+    }
+    await (await this.registry('work', true)).putCoreSettings(tenant, SECURITY_SETTINGS_ID, storedSecurity(cfg));
     return cfg;
   }
   async liveConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('live')).coreSettings(tenant, CORE_SETTINGS_ID)); }
@@ -573,7 +640,7 @@ export class AuthnService implements OnApplicationBootstrap {
     // The link is the ONLY way in (docs/sso-federation.md): no link for this provider subject, no sign-in,
     // whatever the plugin answered. A linked account that is not the session's account is refused too.
     if (!verdict?.ok || !linked || (s.subject && linked.user !== s.subject)) {
-      this.fail(key); s.tries++;
+      this.fail(key); s.tries++; await this.recordFailure(s);
       this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, step: s.index, method: st.id, outcome: 'step-failed', via: 'external' });
       const message = verdict?.ok ? 'No account is linked to this provider sign-in.' : (typeof verdict?.message === 'string' && verdict.message.length <= 160 ? verdict.message : 'External sign-in failed. Try again.');
       if (s.index === 0 || s.tries >= MAX_TRIES) { this.sessions.delete(s.id); return deny('Sign-in failed. Check your details and try again.'); }
@@ -691,8 +758,52 @@ export class AuthnService implements OnApplicationBootstrap {
     const st = s.steps[s.index];
     return { outcome: 'challenge', session: s.id, step: { index: s.index, total: s.steps.length, methodId: st.id, type: st.type, ...s.prepared!.prompt }, ...(error ? { error } : {}) };
   }
+  /** The refusal for an account that carries a block, or null. Called once a step is proven, so the reason is never shown to someone who has not proved it (anti-enumeration). */
+  private async blockGate(s: Session): Promise<GateResponse | null> {
+    if (!s.known) return null;
+    const shown = shownBlock(await this.blocks.list(s.tenant, s.subject), this.now());
+    if (!shown) return null;
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'blocked', kind: shown.kind, block: shown.id });
+    return { outcome: 'deny', reason: 'account-blocked', message: refusalMessage(shown) };
+  }
+  /** A failed answer counts toward the automatic lock, only when an administrator turned it on. Unknown accounts are never given a block. */
+  private async recordFailure(s: Pick<Session, 'tenant' | 'subject' | 'branch' | 'known'> & { chain?: { id: string } }) {
+    const settings = (await this.signinSecurity(s.tenant, s.branch)).lockout;
+    if (!settings.enabled || !s.known) return;
+    const k = `${s.tenant}/${s.subject}`, now = this.now(), list = [...(this.lockFails.get(k) ?? []).filter((x) => now - x < settings.windowMs), now];
+    this.lockFails.set(k, list);
+    if (!lockoutVerdict(list, now, settings, s.subject).lock) return;
+    this.lockFails.delete(k);
+    await this.blocks.add(s.tenant, { subject: s.subject, kind: 'locked', message: 'Too many failed attempts. Try again later or ask an administrator.', origin: 'automatic', setBy: 'system', setAt: now, ...(settings.hold ? { hold: true } : { until: now + settings.lockMs }) });
+    this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain?.id, outcome: 'locked' });
+  }
+  /** The classic single-password path (no chain is live) goes through the same account blocks and automatic lock as chains: a block must
+   * never depend on which sign-in method is configured. `before`: a locked account evaluates no password. `after`: the password was
+   * right, a block in force is shown now (never before the proof), a wrong one counts toward the lock. */
+  async classicBefore(tenant: string, subject: string, branch?: string): Promise<GateResponse | null> {
+    if (!(await this.known(tenant, subject, branch))) return null;
+    if (inForce((await this.blocks.list(tenant, subject)).filter((b) => b.kind === 'locked'), this.now()).length) {
+      this.audit({ tenant, subject, outcome: 'refused-while-locked' });
+      return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
+    }
+    return null;
+  }
+  async classicAfter(tenant: string, subject: string, ok: boolean, branch?: string): Promise<GateResponse | null> {
+    const known = await this.known(tenant, subject, branch);
+    if (!ok) { await this.recordFailure({ tenant, subject, branch, known }); return null; }
+    if (!known) return null;
+    const shown = shownBlock(await this.blocks.list(tenant, subject), this.now());
+    if (!shown) { this.lockFails.delete(`${tenant}/${subject}`); return null; }
+    this.audit({ tenant, subject, outcome: 'blocked', kind: shown.kind, block: shown.id });
+    return { outcome: 'deny', reason: 'account-blocked', message: refusalMessage(shown) };
+  }
   private async check(s: Session, answers: Record<string, string>): Promise<GateResponse> {
     const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
+    // An account locked by too many failures does not evaluate any answer: guessing stops while the lock is in force.
+    if (s.known && inForce((await this.blocks.list(s.tenant, s.subject)).filter((b) => b.kind === 'locked'), this.now()).length) {
+      this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'refused-while-locked' });
+      return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
+    }
     const clean: Record<string, string> = {};
     // One answer value is at most 256 chars, except the passkey ceremony answer: a signed WebAuthn JSON of a few KB.
     for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= (k === 'webauthn' ? 16384 : 256) && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
@@ -728,6 +839,8 @@ export class AuthnService implements OnApplicationBootstrap {
   private async advance(s: Session): Promise<GateResponse> {
     const st = s.steps[s.index];
     s.done.push({ id: st.id, type: st.type, real: st.real }); s.index++;
+    const blocked = await this.blockGate(s);
+    if (blocked) { this.sessions.delete(s.id); return blocked; }
     if (s.index < s.steps.length) { await this.prepare(s); return this.challenge(s); }
     this.sessions.delete(s.id); this.fails.delete(`${s.tenant}/${s.branch ?? 'live'}/${s.subject}`);
     // Factor 'other' (federation) never counts toward MFA by itself: a federated step asserts a sign-in happened
@@ -735,7 +848,7 @@ export class AuthnService implements OnApplicationBootstrap {
     const real = s.done.filter((d) => d.real), factors = new Set(real.map((d) => methodType(d.type)!.factor).filter((f) => f !== 'other'));
     const claims = {
       amr: [...new Set(real.map((d) => methodType(d.type)!.amr))],
-      auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',
+      auth_time: Math.floor(this.now() / 1000), auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',
       auth_mfa: factors.size >= 2, auth_chain: s.chain.id, auth_methods: s.done.map((d) => d.id),
       auth_simulated: s.done.filter((d) => !d.real).map((d) => d.id),
       ...sessionClaims(await this.signinSession(s.tenant, s.branch)),

@@ -3,7 +3,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { Session } from './session';
 import { firstAllowedPath } from './access';
 
-const LABEL: Record<string, string> = { dashboard: 'the Dashboard', users: 'Users', 'profile-fields': 'Profile fields', roles: 'Roles', 'profile-reviews': 'Profile reviews', authentication: 'Authentication', assignments: 'Assignments', activation: 'Activation', applications: 'Applications', policies: 'Policies', plugins: 'Plugins', 'event-bus': 'the Event bus', mcp: 'MCP', workflows: 'Workflows', 'dolt-home': 'Database home', 'dolt-pulls': 'Pull requests', 'dolt-compare': 'Compare', 'dolt-history': 'History', 'dolt-branches': 'Branches', 'dolt-data': 'Database data', 'dolt-edit': 'Database edit', 'dolt-sql': 'Database SQL' };
+const LABEL: Record<string, string> = { 'account-blocks': 'Account protection', dashboard: 'the Dashboard', users: 'Users', 'profile-fields': 'Profile fields', roles: 'Roles', 'profile-reviews': 'Profile reviews', authentication: 'Authentication', assignments: 'Assignments', activation: 'Activation', applications: 'Applications', policies: 'Policies', plugins: 'Plugins', 'event-bus': 'the Event bus', mcp: 'MCP', workflows: 'Workflows', 'dolt-home': 'Database home', 'dolt-pulls': 'Pull requests', 'dolt-compare': 'Compare', 'dolt-history': 'History', 'dolt-branches': 'Branches', 'dolt-data': 'Database data', 'dolt-edit': 'Database edit', 'dolt-sql': 'Database SQL' };
 
 /** Reached by a typed URL or an old link: the menu already hides the screens the person cannot open. */
 @Component({ selector: 'app-access-denied', template: `

@@ -63,6 +63,7 @@ COPY data/demo/ /app/data/demo/
 # Frozen migration sources are checksummed at runtime and in CI, independent of transpilation.
 COPY data/migrations/ /app/migration-source/data/migrations/
 COPY apps/api/src/migrations/v0001/ /app/migration-source/apps/api/src/migrations/v0001/
+COPY apps/api/src/migrations/v0002/ /app/migration-source/apps/api/src/migrations/v0002/
 COPY --from=apibuild /src/apps/api/dist /app/api/dist
 COPY --from=apibuild /src/apps/api/node_modules /app/api/node_modules
 COPY --from=apibuild /src/apps/api/package.json /app/api/package.json

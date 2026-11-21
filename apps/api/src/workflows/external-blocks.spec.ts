@@ -31,7 +31,7 @@ describe('contributed block catalogue (workflow-connectors)', () => {
     }
   });
   it('merges the plugin blocks and trigger events into the workflow model', () => {
-    for (const t of ['http-request', 'text-transform', 'google-sheets-read', 'google-sheets-update', 'jira-create-issue', 'lyam-create-user']) {
+    for (const t of ['http-request', 'text-transform', 'google-sheets-read', 'google-sheets-update', 'jira-create-issue', 'lyam-create-user', 'lyam-block-account', 'lyam-unblock-account', 'lyam-security-setting']) {
       const b = externalBlock(t);
       assert.ok(b, `${t} merged`);
       assert.equal(b!.pluginId, 'workflow-connectors');
@@ -51,7 +51,7 @@ describe('contributed block catalogue (workflow-connectors)', () => {
   it('badges text-transform as COMPUTED (really runs, no external effect); the other blocks stay REAL-capable', () => {
     const cat = new Map(blockCatalogue().map((b) => [b.type, b.category]));
     assert.equal(cat.get('text-transform'), 'computed');
-    for (const t of ['http-request', 'google-sheets-read', 'google-sheets-update', 'google-sheets-add-row', 'jira-create-issue', 'jira-search-issues', 'lyam-create-user'])
+    for (const t of ['http-request', 'google-sheets-read', 'google-sheets-update', 'google-sheets-add-row', 'jira-create-issue', 'jira-search-issues', 'lyam-create-user', 'lyam-block-account', 'lyam-unblock-account', 'lyam-security-setting'])
       assert.equal(cat.get(t), 'real', `${t} real-capable`);
     for (const t of ['wait', 'notify', 'fail']) assert.equal(cat.get(t), 'simulated');
     for (const t of ['assign-role', 'revoke-role', 'set-department', 'set-profile-field']) assert.equal(cat.get(t), 'real');

@@ -22,6 +22,7 @@ export const pluginsMatcher: UrlMatcher = (segs: UrlSegment[]) =>
 export const routes: Routes = [
   { path: 'callback', component: CallbackPage },
   { path: 'sso-interaction/:uid', component: SsoInteractionPage, canActivate: [authGuard], title: 'Sign in to an application' },
+  { path: 'step-up', loadComponent: () => import('./step-up').then(m => m.StepUpPage), canActivate: [authGuard], title: 'Sign in again' },
   { path: 'sso-saml/:rid', component: SsoSamlPage, canActivate: [authGuard], title: 'Sign in to an application' },
   { path: 'signup', component: SignupPage, title: 'Create an account' },
   { path: 'privacy', component: PrivacyPage, title: 'Politique de confidentialité' },
@@ -39,6 +40,7 @@ export const routes: Routes = [
       { path: 'applications', loadComponent: () => import('./applications').then(m => m.ApplicationsPage), title: 'Applications', canActivate: [accessGuard, pluginGuard('app-connector')] },
       { path: 'policies', loadComponent: () => import('./policies').then(m => m.PoliciesPage), title: 'Policies', canActivate: [accessGuard, pluginGuard('policy-studio')] },
       { path: 'profile-reviews', loadComponent: () => import('./profile-reviews').then(m => m.ProfileReviewsPage), title: 'Profile reviews', canActivate: [accessGuard] },
+      { path: 'account-protection', canActivate: [accessGuard], loadComponent: () => import('./account-protection').then(m => m.AccountProtectionPage), title: 'Account protection' },
       { path: 'roles', canActivate: [accessGuard], loadComponent: () => import('./roles-admin').then(m => m.RolesAdminPage), title: 'Roles' },
       { path: 'access-denied', loadComponent: () => import('./access-denied').then(m => m.AccessDeniedPage), title: 'Access denied' },
       { path: 'my-profile', loadComponent: () => import('./my-profile').then(m => m.MyProfilePage), title: 'My profile' },

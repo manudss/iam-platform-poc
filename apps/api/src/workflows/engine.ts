@@ -11,6 +11,11 @@ import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { resolveEngine } from '../plugins/v1/engines.js';
 import { RunRow, StepRow, WorkflowStore } from './store.js';
 import type { WfGraph } from './model.js';
+import { AuthnService } from '../authn/flow.service.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
+import { BlocksService } from '../accounts/blocks.service.js';
+import { inForce } from '../accounts/blocks.js';
+import { patchSecurity } from '../accounts/security-config.js';
 
 export { hasDataSteps } from './model.js';
 
@@ -33,7 +38,14 @@ interface EngineDeps {
   branchRun: <T>(branch: string, fn: () => Promise<T>) => Promise<T>;
   settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
   connectionFor?: (tenant: string, ref: string, id: string, type: string) => Promise<{ settings: Record<string, unknown>; secret: string }>;
+  accounts?: AccountEffects;
   log: { warn: (m: string) => void; error: (m: string) => void };
+}
+/** What account blocks and security settings blocks may do. Operational effects apply at once (with audit and event), settings only patch a stored row the block writes on the run branch. */
+export interface AccountEffects {
+  block: (tenant: string, a: { runId: string; subject: string; kind: string; message: string; untilSeconds?: number }) => Promise<{ applied: boolean; blockId: string }>;
+  unblock: (tenant: string, a: { runId: string; subject: string; kind?: string }) => Promise<{ lifted: number }>;
+  patchSecurity: (current: Record<string, unknown> | undefined, setting: string, value: string) => Record<string, unknown>;
 }
 interface WorkflowEngineApi {
   resume: () => Promise<void>;
@@ -47,7 +59,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -59,7 +71,30 @@ export class WorkflowEngine implements OnModuleInit {
         if (!this.connections || !provider) throw new Error('managed connections unavailable');
         return this.connections.resolve(tenant, ref, id, provider);
       },
+      accounts: this.accountEffects(),
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
+    };
+  }
+
+  private accountEffects(): AccountEffects | undefined {
+    const authn = this.authn; if (!authn) return undefined;
+    const svc = new BlocksService(authn.blocks, (e) => this.events?.emit({ ...e, branch: 'main' } as never));
+    const admins = () => (process.env.IAM_API_ADMIN_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    return {
+      // The workflow definition was reviewed and merged by people who hold the right: it acts with that right. The protections that no right overrides still apply (last active administrator).
+      block: async (tenant, a) => {
+        const now = Date.now();
+        const existing = inForce(await authn.blocks.list(tenant, a.subject), now).find((b) => b.kind === a.kind);
+        if (existing) return { applied: false, blockId: existing.id };
+        const b = await svc.block({ tenant, actor: `workflow:${a.runId}`, subject: a.subject, kind: a.kind, message: a.message, ...(a.untilSeconds ? { until: now + a.untilSeconds * 1000 } : {}), admins: admins() });
+        return { applied: true, blockId: b.id };
+      },
+      unblock: async (tenant, a) => {
+        const blocks = (await authn.blocks.list(tenant, a.subject)).filter((b) => !a.kind || b.kind === a.kind);
+        for (const b of blocks) await svc.unblock({ tenant, actor: `workflow:${a.runId}`, subject: a.subject, blockId: b.id });
+        return { lifted: blocks.length };
+      },
+      patchSecurity,
     };
   }
 
