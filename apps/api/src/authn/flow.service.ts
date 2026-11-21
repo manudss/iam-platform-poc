@@ -799,7 +799,7 @@ export class AuthnService implements OnApplicationBootstrap {
       this.lockFails.delete(`${tenant}/${subject}`);
       // Classic single-password mode has no chain to carry the forced change: a temporary password is refused (closed) while the rule is in force. Documented limit: use a chain to complete the change.
       let fa: Awaited<ReturnType<UsersService['firstAccessState']>> = { required: false };
-      if (process.env.IAM_DIRECTORY_AUTH === '1' && this.users) { try { fa = await this.users.firstAccessState(tenant, subject, branch ?? 'main'); } catch { fa = { required: true, expired: false, revision: '' }; } }
+      if (process.env.IAM_DIRECTORY_AUTH === '1' && this.users) { try { fa = await this.users.firstAccessState(tenant, subject, branch ?? 'main'); } catch { fa = { required: true, expired: false, revision: '', expiresAt: 0 }; } }
       if (fa.required) { this.audit({ tenant, subject, outcome: 'first-access-refused-classic' }); return { outcome: 'deny', reason: 'password-change-required', message: 'Your password is temporary and must be changed. Sign in with a method that supports the change, or ask an administrator.' }; }
       return null;
     }

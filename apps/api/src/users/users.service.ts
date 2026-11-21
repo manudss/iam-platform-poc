@@ -195,11 +195,11 @@ export class UsersService {
     }));
   }
   /** Is the "change at first sign-in" rule in force for this account on `ref`? It is a property of the account's CURRENT credential record (same record as the hash), so it is in force exactly when that credential is live. A read error propagates: callers refuse (fail closed). */
-  async firstAccessState(tenant: string, id: string, ref = 'main'): Promise<{ required: false } | { required: true; expired: boolean; revision: string }> {
+  async firstAccessState(tenant: string, id: string, ref = 'main'): Promise<{ required: false } | { required: true; expired: boolean; revision: string; expiresAt: number }> {
     const row = (await this.list(ref)).find((x) => x.id === id); if (!row) return { required: false };
     const rec = (await this.credentials())[String(row.credential_revision)];
     if (!rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id)) return { required: false };
-    return { required: true, expired: rec.firstAccess.expiresAt <= this.now(), revision: String(row.credential_revision) };
+    return { required: true, expired: rec.firstAccess.expiresAt <= this.now(), revision: String(row.credential_revision), expiresAt: rec.firstAccess.expiresAt };
   }
   /** The forced change, called only by the sign-in flow after the full chain proved the account. Single winner: the record is re-read under the writer lock and consumed by revision. The temporary password is never accepted as the new one. */
   async completeFirstAccess(tenant: string, id: string, next: string, expectedRevision: string): Promise<{ ok: true } | { ok: false; reason: 'not-required' | 'expired' | 'same-as-temporary' | 'policy'; errors?: string[] }> {

@@ -599,7 +599,127 @@ const lyamSecuritySetting = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace];
+// ------------------------------------------------- lyam connector: temporary password, then the secret mail ----
+const lyamGeneratePassword = {
+  type: 'lyam-generate-password',
+  family: 'lyam',
+  label: 'Generate a temporary password',
+  simulated: false,
+  category: 'real',
+  description: 'Creates a random password and keeps it in server memory for THIS run only. The step returns an opaque reference, never the value: only "Set as temporary password" and "Send the secret mail" of this run can use it. Nothing is written anywhere. A server restart loses it, the run then fails closed and starts again from this step.',
+  fields: [],
+  outputs: [{ key: 'passwordRef', description: 'Opaque reference to the password (not the password)' }],
+  validate() { return {}; },
+  async run(ctx) {
+    if (ctx.test || ctx.dryRun) { ctx.log('test run: no password generated'); return { passwordRef: null }; }
+    if (!ctx.secrets) bad('lyam-generate-password: secret handling is not available on this server');
+    const ref = ctx.secrets.generate();
+    ctx.log('temporary password generated and kept in memory for this run (reference only)');
+    return { passwordRef: ref };
+  },
+};
+
+const HOURS_RE = /^\d{1,4}(\.\d{1,2})?$/;
+const hoursOf = (v, what) => { const x = String(v ?? '').trim(); if (!/\{\{/.test(x) && (!HOURS_RE.test(x) || !(Number(x) > 0 && Number(x) <= 720))) bad(`${what}: hours, more than 0 and at most 720`); return x; };
+const lyamSetTemporaryPassword = {
+  type: 'lyam-set-temporary-password',
+  family: 'lyam',
+  label: 'Set the password as temporary',
+  simulated: false,
+  category: 'real',
+  description: 'REAL data write on the run branch only: records the generated password as a TEMPORARY one for the account (change forced at first sign-in, server-side expiry in hours). It is not active until the branch is published to main and activated. The login stays blocked until the unblock step. The password never appears in the output.',
+  fields: [
+    { key: 'subject', label: 'User id', type: 'string', required: true, help: 'placeholders allowed' },
+    { key: 'passwordRef', label: 'Password reference', type: 'string', required: true, help: 'from the generate step, e.g. {{steps.<id>.passwordRef}}' },
+    { key: 'hours', label: 'Temporary password validity (hours)', type: 'string', required: true, help: 'the real value; the mail shows the one recorded' },
+  ],
+  outputs: [{ key: 'subject', description: 'The user id' }, { key: 'revision', description: 'The credential revision written on the run branch' }, { key: 'expiresAt', description: 'Expiry (ms since epoch) recorded with the credential' }, { key: 'hours', description: 'The validity requested' }],
+  validate(cfg) { return { subject: userId(cfg.subject, 'lyam-set-temporary-password.subject'), passwordRef: str(cfg.passwordRef, 'lyam-set-temporary-password.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-set-temporary-password.hours') }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would set a temporary password for "${c.subject}" - nothing written`); return { subject: c.subject, revision: null, expiresAt: null, hours: Number(c.hours) }; }
+    if (!ctx.secrets || !ctx.setTemporaryPassword) bad('lyam-set-temporary-password: not available on this server');
+    if (!HOURS_RE.test(c.hours)) bad('lyam-set-temporary-password.hours: a number of hours');
+    const password = ctx.secrets.reveal(c.passwordRef);
+    const r = await ctx.setTemporaryPassword({ id: c.subject, password, hours: Number(c.hours) });
+    if (!r?.revision || !(r.expiresAt > 0)) bad('lyam-set-temporary-password: the credential was not confirmed with its first-access rule');
+    ctx.log(`temporary password recorded on the run branch for "${c.subject}" (revision ${String(r.revision).slice(0, 8)}, ${c.hours} h); not active until published`);
+    return { subject: c.subject, revision: String(r.revision), expiresAt: r.expiresAt, hours: Number(c.hours) };
+  },
+};
+
+/**
+ * The runtime guard before any mail that carries a secret. It re-reads the REAL state (never the workflow graph) and refuses on the first mismatch: nothing is sent.
+ * Checks: this run's published head is really contained in main and the live activation is applied on that main; the account holds the credential revision THIS run set, with the
+ * first-access rule required, not expired, expiry not later than the parameter allows; the recipient is the e-mail recorded on that identity; the account is still blocked (the unblock comes after).
+ */
+export async function verifySecretMailState(ctx, c) {
+  const need = (ok, why) => { if (!ok) { ctx.log(`secret mail refused: ${why}. Nothing was sent.`); bad(`lyam-send-secret-mail: ${why}`); } };
+  need(ctx.workspace?.proof && ctx.users?.firstAccess && ctx.users?.emailOf && ctx.accounts?.activeBlocks, 'the real-state checks are not available on this server');
+  let proof, fa, email, blocks;
+  try { [proof, fa, email, blocks] = await Promise.all([ctx.workspace.proof(ctx.tenant, c.sourceHead), ctx.users.firstAccess(c.account, 'main'), ctx.users.emailOf(c.account, 'main'), ctx.accounts.activeBlocks(ctx.tenant, c.account)]); }
+  catch { need(false, 'the real state could not be read'); }
+  need(proof && proof.activation === 'applied' && proof.containsHead === true && proof.activationCommit && proof.activationCommit === proof.mainCommit, 'main does not hold the head published by this run with an applied activation');
+  need(fa && fa.required === true && fa.expired === false, 'the account has no live first-access rule, or it expired');
+  need(String(fa.revision) === String(c.revision), 'the live credential is not the one this run set');
+  const ms = Number(c.hours) * 3_600_000;
+  need(fa.expiresAt > Date.now() && fa.expiresAt <= Date.now() + ms + 60_000, 'the recorded expiry does not match the validity parameter');
+  need(typeof email === 'string' && email.toLowerCase() === c.to.toLowerCase(), 'the recipient is not the e-mail recorded on this identity');
+  need(Array.isArray(blocks) && blocks.length > 0, 'the account is not blocked any more (the unblock step comes after the mail)');
+  return { expiresAt: fa.expiresAt };
+}
+
+const lyamSendSecretMail = {
+  type: 'lyam-send-secret-mail',
+  family: 'lyam',
+  label: 'Send the temporary password mail',
+  simulated: false,
+  category: 'real',
+  description: 'REAL and immediate, non repeatable: sends the temporary password to the recipient. Before sending it re-reads the real state (this run\'s publication live on main, the credential this run set, still required and not expired, the recipient is the identity\'s own e-mail, the account still blocked) and sends nothing otherwise. The text must contain [[password]] and [[expiry]]; the expiry shown is the recorded one. One attempt: an unknown result stops the run for review, never a second send. No fallback.',
+  fields: [
+    { key: 'account', label: 'User id', type: 'string', required: true, help: 'placeholders allowed' },
+    { key: 'to', label: 'Recipient (one address)', type: 'string', required: true, help: 'must be the e-mail of that identity and in the allowed recipients setting' },
+    { key: 'subject', label: 'Subject', type: 'string', required: true },
+    { key: 'text', label: 'Text', type: 'text', required: true, help: 'plain text with [[password]] and [[expiry]] (and optionally [[hours]])' },
+    { key: 'passwordRef', label: 'Password reference', type: 'string', required: true },
+    { key: 'hours', label: 'Validity (hours)', type: 'string', required: true, help: 'same value as the set-temporary step' },
+    { key: 'revision', label: 'Credential revision', type: 'string', required: true, help: '{{steps.<set-temporary>.revision}}' },
+    { key: 'sourceHead', label: 'Published head', type: 'string', required: true, help: '{{steps.<publish>.sourceHead}}' },
+  ],
+  outputs: [{ key: 'to', description: 'The recipient' }, { key: 'accepted', description: 'true when the provider accepted the mail (not proof of delivery)' }, { key: 'messageId', description: 'The provider message id' }, { key: 'expiresAt', description: 'The expiry shown in the mail' }],
+  validate(cfg) {
+    const to = str(cfg.to, 'lyam-send-secret-mail.to', 200);
+    if (!/\{\{/.test(to) && !MAIL_RE.test(to)) bad('lyam-send-secret-mail.to: one e-mail address');
+    const text = str(cfg.text, 'lyam-send-secret-mail.text', 4000);
+    if (!text.includes('[[password]]') || !text.includes('[[expiry]]')) bad('lyam-send-secret-mail.text: must contain [[password]] and [[expiry]]');
+    return { account: userId(cfg.account, 'lyam-send-secret-mail.account'), to, subject: str(cfg.subject, 'lyam-send-secret-mail.subject', 150), text, passwordRef: str(cfg.passwordRef, 'lyam-send-secret-mail.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-send-secret-mail.hours'), revision: str(cfg.revision, 'lyam-send-secret-mail.revision', 80), sourceHead: str(cfg.sourceHead, 'lyam-send-secret-mail.sourceHead', 80) };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (!MAIL_RE.test(c.to)) bad('lyam-send-secret-mail.to: one e-mail address');
+    if (/[\r\n]/.test(c.subject)) bad('lyam-send-secret-mail.subject: one line');
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send the temporary password mail to ${c.to} - nothing sent`); return { to: c.to, accepted: false, messageId: null, expiresAt: null }; }
+    if (!ctx.secrets || !ctx.markEffectPending) bad('lyam-send-secret-mail: not available on this server');
+    const allowed = String(ctx.settings?.mailAllowedRecipients ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-secret-mail: this recipient is not in the allowed recipients setting');
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) bad('lyam-send-secret-mail: RESEND_API_KEY is not set on the server (nothing sent)');
+    const { expiresAt } = await verifySecretMailState(ctx, c);
+    const password = ctx.secrets.reveal(c.passwordRef);
+    const body = c.text.split('[[password]]').join(password).split('[[expiry]]').join(new Date(expiresAt).toISOString().replace('T', ' ').slice(0, 16) + ' UTC').split('[[hours]]').join(String(Number(c.hours)));
+    const from = str(ctx.settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
+    const idempotencyKey = `wf-secretmail/${ctx.runId}/${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.account, c.revision])).digest('hex').slice(0, 16)}`;
+    // Durable intent first: from here a crash leaves the step in review and the run never sends a second time by itself.
+    await ctx.markEffectPending({ to: createHash('sha256').update(c.to.toLowerCase()).digest('hex').slice(0, 12), account: c.account, revision: c.revision, idempotencyKey });
+    const r = await sendOneMail({ apiKey, from, to: c.to, subject: c.subject, text: body, idempotencyKey });
+    if (!r?.id) bad('lyam-send-secret-mail: the provider did not return a message id');
+    ctx.secrets.drop(c.passwordRef);
+    ctx.log(`secret mail accepted by the provider for ${c.to} (message id ${r.id}); acceptance is not proof of delivery`);
+    return { to: c.to, accepted: true, messageId: r.id, expiresAt };
+  },
+};
+
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

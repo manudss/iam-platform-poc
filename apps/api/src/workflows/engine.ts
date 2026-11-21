@@ -17,6 +17,8 @@ import { ApplicationBus } from '../events/application-bus.service.js';
 import { BlocksService } from '../accounts/blocks.service.js';
 import { inForce } from '../accounts/blocks.js';
 import { patchSecurity } from '../accounts/security-config.js';
+import { UsersService } from '../users/users.service.js';
+import { RunSecrets } from './run-secrets.js';
 
 export { hasDataSteps } from './model.js';
 
@@ -41,18 +43,29 @@ interface EngineDeps {
   connectionFor?: (tenant: string, ref: string, id: string, type: string) => Promise<{ settings: Record<string, unknown>; secret: string }>;
   accounts?: AccountEffects;
   workspace?: WorkspaceEffects;
+  secrets?: RunSecrets;
+  users?: UserEffects;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 /** What account blocks and security settings blocks may do. Operational effects apply at once (with audit and event), settings only patch a stored row the block writes on the run branch. */
 export interface AccountEffects {
   block: (tenant: string, a: { runId: string; subject: string; kind: string; message: string; untilSeconds?: number }) => Promise<{ applied: boolean; blockId: string }>;
   unblock: (tenant: string, a: { runId: string; subject: string; kind?: string }) => Promise<{ lifted: number }>;
+  /** The blocks in force on an account, read live (guard before a secret mail). */
+  activeBlocks: (tenant: string, subject: string) => Promise<{ kind: string }[]>;
   patchSecurity: (current: Record<string, unknown> | undefined, setting: string, value: string) => Record<string, unknown>;
 }
 /** Publication of a run branch to main (the lyam-publish-workspace block). Absent when the server has no publisher: the block then refuses. */
 export interface WorkspaceEffects {
   headOf: (branch: string) => Promise<string | null>;
+  proof: (tenant: string, sourceHead: string) => Promise<{ mainCommit: string; activation: string; activationCommit: string; containsHead: boolean }>;
   publish: (tenant: string, a: { runId: string; workflowId: string; branch: string; expectedHead: string }) => Promise<{ published: boolean; branch: string; sourceHead: string; mainCommit: string; activation: string }>;
+}
+/** Temporary password on the run branch, and the real first-access state of an account on a ref (the credential revision and its server-side expiry; never the password). */
+export interface UserEffects {
+  setTemporary: (tenant: string, a: { runId: string; branch: string; id: string; password: string; hours: number }) => Promise<{ revision: string; expiresAt: number }>;
+  emailOf: (tenant: string, id: string, ref: string) => Promise<string | null>;
+  firstAccess: (tenant: string, id: string, ref: string) => Promise<{ required: false } | { required: true; expired: boolean; revision: string; expiresAt: number }>;
 }
 interface WorkflowEngineApi {
   resume: () => Promise<void>;
@@ -66,7 +79,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -80,6 +93,8 @@ export class WorkflowEngine implements OnModuleInit {
       },
       accounts: this.accountEffects(),
       workspace: this.workspaceEffects(v),
+      secrets: new RunSecrets(),
+      users: this.userEffects(),
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
   }
@@ -91,6 +106,7 @@ export class WorkflowEngine implements OnModuleInit {
   private workspaceEffects(v: VersioningService): WorkspaceEffects | undefined {
     const publisher = this.publisher; if (!publisher) return undefined;
     return {
+      proof: (tenant, sourceHead) => publisher.liveProof(tenant, sourceHead),
       headOf: async (branch) => (await v.branches()).branches.find((b) => b.name === branch)?.commit ?? null,
       publish: async (tenant, a) => {
         let allowed: string[] = [];
@@ -98,6 +114,20 @@ export class WorkflowEngine implements OnModuleInit {
         if (!a.workflowId || !allowed.includes(a.workflowId)) throw new Error('lyam-publish-workspace: this workflow is not authorized to publish (an administrator lists its id in the publishAllowedWorkflows setting)');
         return publisher.publishForRun({ tenant, ...a });
       },
+    };
+  }
+
+  private userEffects(): UserEffects | undefined {
+    const users = this.users; if (!users) return undefined;
+    return {
+      setTemporary: async (tenant, a) => {
+        await branchContext.run({ branch: a.branch }, () => users.setTemporaryPassword(tenant, `workflow:${a.runId}`, a.id, a.password, a.hours));
+        const st = await users.firstAccessState(tenant, a.id, a.branch);
+        if (!st.required) throw new Error('the temporary password was not recorded with the first-access rule');
+        return { revision: st.revision, expiresAt: st.expiresAt };
+      },
+      firstAccess: (tenant, id, ref) => users.firstAccessState(tenant, id, ref),
+      emailOf: async (_tenant, id, ref) => { const e = ((await users.list(ref)).find((x) => x.id === id) as { email?: unknown } | undefined)?.email; return typeof e === 'string' ? e : null; },
     };
   }
 
@@ -119,6 +149,7 @@ export class WorkflowEngine implements OnModuleInit {
         for (const b of blocks) await svc.unblock({ tenant, actor: `workflow:${a.runId}`, subject: a.subject, blockId: b.id });
         return { lifted: blocks.length };
       },
+      activeBlocks: async (tenant, subject) => inForce(await authn.blocks.list(tenant, subject), Date.now()).map((b) => ({ kind: b.kind })),
       patchSecurity,
     };
   }

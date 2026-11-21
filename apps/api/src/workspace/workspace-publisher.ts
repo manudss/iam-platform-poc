@@ -28,6 +28,14 @@ export class WorkspacePublisher {
   // The `wf-` identity is reserved for workflow publication: a person signing in under such an id is refused, so a human Apply can never pass as a workflow.
   if(/^wf-/i.test(String(actor??'')))throw new BadRequestException('This identity prefix is reserved for workflow publication');
   return this.serialize(()=>this.publishOnce(typeof branch==='function'?branch():branch,b,actor,tenant));}
+ /** Real-state read for a guard that must run right before an irreversible effect (a secret mail): the live commit of main, the activation state and commit, and whether main really contains the head this run published. Throws on any read error (the caller fails closed). */
+ async liveProof(tenant:string,sourceHead:string){
+  if(!/^[0-9a-z]{8,64}$/i.test(String(sourceHead)))throw new BadRequestException('sourceHead required');
+  const main=(await this.v.branches()).branches.find(x=>x.name===this.v.defaultBranch);if(!main)throw new ConflictException('main not found');
+  const cur=await this.activation.current(tenant);
+  const missing=await this.v.at(this.v.defaultBranch,async(c:any)=>Number(((await c.query('select count(*) n from dolt_log(?)',[`${main.commit}..${sourceHead}`]))[0] as any[])[0].n));
+  return {mainCommit:main.commit,activation:String(cur?.state??''),activationCommit:String(cur?.commit??''),containsHead:missing===0};
+ }
  /**
   * Publication by a workflow run (the only non-human caller). Stricter than the human Apply, never looser: the branch AND its head are explicit and frozen by the run
   * (a branch that moved since is refused, never "the current head"), the actor is a short reserved identity (no ':' and under every truncation limit, so two workflows never share an author),

@@ -388,12 +388,26 @@ export function createWorkflowEngine(deps) {
       sensitive.push(Buffer.from(`${settings.jiraEmail ?? ''}:${secret}`).toString('base64'));
       try { for (const value of Object.values(JSON.parse(secret))) if (typeof value === 'string' && value.length > 8) sensitive.push(value); } catch {}
     }
-    const safe = value => { let text = String(value); for (const part of sensitive.filter(Boolean)) for (const variant of [part, JSON.stringify(part).slice(1, -1), encodeURIComponent(part)]) text = text.split(variant).join('[redacted]'); return text; };
+    // Run-scoped secrets (generated passwords) are redacted too, read at each call because a block may create one while it runs.
+    const safe = value => { let text = String(value); for (const part of [...sensitive, ...(deps.secrets?.valuesOf?.(run.id) ?? [])].filter(Boolean)) for (const variant of [part, JSON.stringify(part).slice(1, -1), encodeURIComponent(part)]) text = text.split(variant).join('[redacted]'); return text; };
 
     say(`block "${block.label ?? node.type}" provided by the ${provider} plugin`);
     const author = deps.authorOf(`wf-${run.started_by}`);
+    // The secret API a block gets depends on ITS type: only the generation block can create one, only set-temporary and the secret mail can resolve one (and only inside this run). No block ever receives a way to list them.
+    const secretUse = { 'lyam-set-temporary-password': 'set-temporary', 'lyam-send-secret-mail': 'mail' }[node.type];
+    const secrets = deps.secrets ? {
+      generate: () => { if (node.type !== 'lyam-generate-password') throw new Error('secret reference unavailable'); return deps.secrets.create(run.id, ['set-temporary', 'mail']); },
+      reveal: ref => { if (!secretUse) throw new Error('secret reference unavailable'); return deps.secrets.reveal(run.id, ref, secretUse); },
+      drop: ref => deps.secrets.drop(run.id, ref),
+    } : undefined;
     const ctx = {
       tenant: run.tenant,
+      secrets,
+      users: deps.users ? { firstAccess: (id, ref) => deps.users.firstAccess(run.tenant, id, ref), emailOf: (id, ref) => deps.users.emailOf(run.tenant, id, ref) } : undefined,
+      setTemporaryPassword: deps.users ? async ({ id, password, hours }) => { const branch = await ensureBranch(run, say); return deps.users.setTemporary(run.tenant, { runId: run.id, branch, id, password, hours }); } : undefined,
+      // Durable intent of an irreversible effect, written right before it: from then on a crash leaves the step in review (no automatic resend).
+      markEffectPending: intent => store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED', ...(intent ? { input: { effectIntent: intent } } : {}) }),
+      runBranch: run.branch ?? null,
       config: managed ? { ...resolved.config, dryRun: simulation, ...(node.type.startsWith('google-sheets-') && !simulation ? { source: 'google' } : {}) } : resolved.config,
       settings,
       dryRun: simulation,
@@ -420,6 +434,8 @@ export function createWorkflowEngine(deps) {
     };
     let output;
     try { output = await block.run(ctx); } catch { throw new Error('External action failed; check connection and provider status.'); }
+    // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
+    if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
     if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
     if (managed && !simulation) { try { output = JSON.parse(safe(JSON.stringify(output ?? {}))); } catch { output = {}; } }
 
