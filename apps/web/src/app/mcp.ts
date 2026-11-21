@@ -1,3 +1,4 @@
+import { RevealPassword } from './reveal-password';
 import { DatePipe } from '@angular/common';
 import { Component, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -14,7 +15,7 @@ interface Grant { identity: string; upstream: string; tool: string; expiresAt: s
  * human to review - it can never approve, merge, apply, or pick an existing branch.
  */
 @Component({
-  selector: 'app-mcp', imports: [FormsModule, DatePipe], styleUrl: './pages.css',
+  selector: 'app-mcp', imports: [FormsModule, DatePipe, RevealPassword], styleUrl: './pages.css',
   template: `
   <p class="lead">AI access through the Model Context Protocol. A session gives an AI client (Claude, ChatGPT, VS Code…) read access to the data and the ability to prepare changes on its own data branch. Publishing stays human: the AI can only open a pull request.</p>
   <p class="hint">The secret is displayed once, at creation. Sessions expire (max 7 days) and can be revoked at any time. Every tool call and every table the AI reads or writes is traced below.</p>

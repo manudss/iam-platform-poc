@@ -1,3 +1,4 @@
+import { RevealPassword } from './reveal-password';
 import { Component, computed, effect, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
@@ -36,7 +37,7 @@ export const slug = (s: string, taken: string[]) => { const b = s.toLowerCase().
  * Drag and drop is doubled by buttons and arrow keys so every action works without a mouse. Pure list logic: auth-model.ts.
  */
 @Component({
-  selector: 'app-auth-methods', imports: [FormsModule, SessionSettings, LevelSelect, LevelGauge], styleUrl: './auth-methods.css', templateUrl: './auth-methods.html',
+  selector: 'app-auth-methods', imports: [FormsModule, SessionSettings, LevelSelect, LevelGauge, RevealPassword], styleUrl: './auth-methods.css', templateUrl: './auth-methods.html',
 })
 export class AuthMethodsPage {
   protected readonly s = inject(Session);

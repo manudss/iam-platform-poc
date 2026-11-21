@@ -1,3 +1,4 @@
+import { RevealPassword } from './reveal-password';
 import { Component, EventEmitter, Input, Output, computed, inject, signal } from '@angular/core';
 import { Session } from './session';
 import { FormsModule } from '@angular/forms';
@@ -14,7 +15,7 @@ import { ApiClient, FormModel, PluginAdminClient, PluginInfo, formValues, visibl
  */
 @Component({
   selector: 'app-plugins-admin',
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, RevealPassword],
   templateUrl: './plugins-admin.html',
   styleUrl: './plugins-admin.css',
 })

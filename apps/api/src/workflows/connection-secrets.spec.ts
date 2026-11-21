@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { spawn, ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { SecretsService } from '../integrations/secrets.service.js';
+process.env.IAM_WORKFLOW_REAL_CONNECTIONS = '1';   // real connections are off by default on a server; these specs exercise them with fictional values
 const bin=process.env.BAO_BIN??'';
 describe('immutable connection secret revisions with real OpenBao', {skip:!existsSync(bin)&&'BAO_BIN missing'},()=>{
   it('writes once, refuses an overwrite, reads the same reference and returns undefined for absent revisions',async()=>{

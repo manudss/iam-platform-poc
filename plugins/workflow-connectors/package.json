@@ -9,6 +9,7 @@
     "@activepieces/piece-jira-cloud": "0.6.4",
     "@activepieces/piece-text-helper": "0.6.7",
     "@nestjs/common": "^12.3.2",
-    "ipaddr.js": "2.2.0"
+    "ipaddr.js": "2.2.0",
+    "resend": "^6.37.0"
   }
 }

@@ -19,6 +19,7 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { WorkflowStore } from './store.js';
 import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
+process.env.IAM_WORKFLOW_REAL_CONNECTIONS = '1';   // real connections are off by default on a server; these specs exercise them with fictional values
 
 process.env.WF_CRON_TICK_MS = '2000'; // cron e2e: detect a matching minute within seconds, not 20 s
 const root = resolve(process.cwd(), '../..');

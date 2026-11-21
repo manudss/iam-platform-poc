@@ -197,3 +197,29 @@ describe('users page on main (read only) and pictures', () => {
     expect(page.photos()).toEqual({});
   });
 });
+
+describe('admin passwords are temporary only', () => {
+  let page: any; const calls: { method: string; path: string; body: any }[] = []; const saved: any[] = [];
+  beforeEach(() => {
+    calls.length = 0; saved.length = 0; TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [{ provide: Session, useValue: { branch: signal('work-a'), adminToken: () => '', api: {
+      saveUser: async (_k: string | null, b: any) => { saved.push(b); },
+      raw: async (method: string, path: string, body: any) => { calls.push({ method, path, body }); return { status: 200, data: { users: USERS, fields: [], values: {}, pendingPublication: true } }; },
+    } } }] });
+    page = TestBed.runInInjectionContext(() => new UsersPage()) as any;
+  });
+  it('editing a person never sends a password', async () => {
+    page.start(USERS[0]); page.password = 'must-not-travel-1'; page.tempPassword = 'x'.repeat(12);
+    await page.save(); expect(saved.length).toBe(1); expect('password' in saved[0]).toBe(false); expect('hours' in saved[0]).toBe(false);
+  });
+  it('creating a person sends the password as temporary, with its duration', async () => {
+    page.start(); page.form.id = 'new-person'; page.password = 'fictional-temp-1'; page.tempHours = 24;
+    await page.save(); expect(saved[0].password).toBe('fictional-temp-1'); expect(saved[0].hours).toBe(24); expect(page.password).toBe('');
+  });
+  it('the temporary password action posts to the temporary endpoint, is not kept, and says when it waits for Apply', async () => {
+    page.start(USERS[0]); page.tempPassword = 'fictional-temp-2'; page.tempHours = 12;
+    await page.setTemporary();
+    const c = calls.find((x) => x.path.endsWith('/temporary-password'))!; expect(c.method).toBe('POST'); expect(c.body).toEqual({ password: 'fictional-temp-2', hours: 12 });
+    expect(page.tempPassword).toBe(''); expect(page.note()).toContain('Review & Apply');
+  });
+});

@@ -2,7 +2,7 @@
   @if (note()) { <p class="msg" role="status">{{ note() }}</p> }
   @if (busy()) { <p class="hint">Working...</p> }
 
-  <ng-template #rowdiff let-d="diff">
+  <ng-template #rowdiff let-d="diff" let-act="act">
     @if (d) {
       <h4>Row changes in {{ d.table }}@if (d.truncated) { (first rows only) }</h4>
       <div class="scroll"><table class="grid">
@@ -10,11 +10,12 @@
         <tbody>
         @for (r of d.rows; track $index) {
           <tr [class]="diffClass(r.type)">
-            <td class="kind">{{ r.type }}</td>
+            <td class="kind">{{ r.type }}@if (act && canDiscard(d)) { <br><button type="button" class="link act" title="Abandon this whole row change, keep the others" (click)="discardChange(d, r)">{{ r.type === 'added' ? 'drop row' : r.type === 'removed' ? 'restore row' : 'undo row' }}</button> }</td>
             @for (c of d.columns; track c) {
               <td [class.chg]="changed(r, c)">
-                @if (r.type === 'modified' && changed(r, c)) { <s>{{ cell(r.from?.[c]) }}</s> {{ cell(r.to?.[c]) }} }
+                @if (r.type === 'modified' && changed(r, c)) { <s>{{ cell(r.from?.[c]) }}</s> {{ cell(r.to?.[c]) }}@if (act && canDiscard(d) && canUndoCell(d, r, c)) { <button type="button" class="link act" title="Abandon only this change, keep the others" [attr.aria-label]="'Abandon the change to ' + c" (click)="discardChange(d, r, [c])">undo</button> } }
                 @else { {{ cell((r.to ?? r.from)?.[c]) }} }
+                @if (act && canDiscard(d) && canEditCell(d, r, c)) { <button type="button" class="link act" title="Type another value for this field" [attr.aria-label]="'Edit ' + c" (click)="editCell(d, r, c)">edit</button> }
               </td>
             }
           </tr>
@@ -717,7 +718,7 @@
                       <span class="chip">{{ t.kind }}</span>
                     </button>
                     @if (prExpandedDiffs().has(t.table)) {
-                      <ng-container *ngTemplateOutlet="rowdiff; context: { diff: prRowDiffs()[t.table] ?? null }" />
+                      <ng-container *ngTemplateOutlet="rowdiff; context: { diff: prRowDiffs()[t.table] ?? null, act: true }" />
                     }
                   </div>
                 }

@@ -9,6 +9,7 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { WorkflowStore } from './store.js';
 import { WorkflowConnections } from './connections.js';
 import { branchContext } from '../workspace/context.js';
+process.env.IAM_WORKFLOW_REAL_CONNECTIONS = '1';   // real connections are off by default on a server; these specs exercise them with fictional values
 const bin = process.env.DOLT_BIN ?? '', have = existsSync(bin);
 describe('connection metadata on real Dolt', {skip:!have && 'DOLT_BIN missing'}, () => {
   let dir:string, process_:ChildProcess, service:WorkflowConnections, versioning:VersioningService;

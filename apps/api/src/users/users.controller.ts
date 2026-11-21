@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Req, UseGuards, NotFoundException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Req, UseGuards, NotFoundException, BadRequestException } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { assertSuperAdmin, filterPeople } from '../access/scope.js';
@@ -15,6 +15,9 @@ export class UsersController {
     const managerIds = new Set(rows.map((r) => String(r.manager_id ?? '')).filter(Boolean)); const refs: Row[] = [];
     for (const r of rows) if (managerIds.has(String(r.id)) && !have.has(String(r.id))) refs.push({ id: r.id, display_name: r.display_name, department: r.department, reference: true });
     return { users: [...mine, ...refs] }; }
-  @Post() async create(@Param('tenant') t: string, @Req() req: { user: { sub: string } }, @Body() b: Record<string, unknown>) { this.check(t); await assertSuperAdmin(t, req.user.sub, 'Creating a person'); return this.users.save(String(b?.id ?? ''), b, true, undefined, t); }
-  @Put(':id') async update(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: Record<string, unknown>) { this.check(t); await assertSuperAdmin(t, req.user.sub, 'Changing a person record'); return this.users.save(id, b, false, undefined, t); }
+  /** An administrator never sets a PERMANENT password. A new person gets a TEMPORARY one (hours required), changed at the first sign-in. The password is never returned or logged. */
+  @Post() async create(@Param('tenant') t: string, @Req() req: { user: { sub: string } }, @Body() b: Record<string, unknown>) { this.check(t); await assertSuperAdmin(t, req.user.sub, 'Creating a person'); const { hours, ...rest } = b ?? {}; return this.users.createWithTemporaryPassword(t, String(rest.id ?? ''), rest, hours); }
+  @Put(':id') async update(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: Record<string, unknown>) { this.check(t); if (b && Object.prototype.hasOwnProperty.call(b, 'password')) throw new BadRequestException('an administrator cannot set a permanent password: use the temporary password action'); await assertSuperAdmin(t, req.user.sub, 'Changing a person record'); return this.users.save(id, b, false, undefined, t); }
+  /** Sets a temporary password: the person must choose a new one at the next sign-in. The password is never returned or logged. */
+  @Post(':id/temporary-password') async temporary(@Param('tenant') t: string, @Param('id') id: string, @Req() req: { user: { sub: string } }, @Body() b: { password?: unknown; hours?: unknown }) { this.check(t); await assertSuperAdmin(t, req.user.sub, 'Setting a temporary password'); return this.users.setTemporaryPassword(t, req.user.sub, id, b?.password, b?.hours); }
 }

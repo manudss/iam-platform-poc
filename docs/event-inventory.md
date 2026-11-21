@@ -15,11 +15,11 @@ Production code: 43 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:118 |
 | ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:145 |
 | ApplicationBus.emit | emitter | user.blocked | apps/api/src/profile/signup.service.ts:101 |
-| ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:139 |
-| ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:141 |
-| ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:142 |
-| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:346 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:457 |
+| ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:153 |
+| ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:155 |
+| ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:156 |
+| callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:348 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:459 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:185 |
 | callSlot (blocking hook) | caller | notify.templates | apps/api/src/plugins/v1/mail-catalogue.ts:33 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:41 |
@@ -28,8 +28,8 @@ Production code: 43 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:166 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:231 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/profile/signup.service.ts:83 |
-| callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:71 |
-| callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:105 |
+| callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:77 |
+| callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:119 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:375 |
