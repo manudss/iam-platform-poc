@@ -387,6 +387,7 @@ export function createWorkflowEngine(deps) {
       outputs,
       // Account effects (block, unblock, security settings patch). A test run never applies them.
       accounts: deps.accounts,
+      mail: deps.mail,
       test: !!run.test,
       runId: run.id,
       branchWrite: async (fn, message) => {

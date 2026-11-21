@@ -20,6 +20,14 @@
       "default": "",
       "help": "Exact destination host names this block may call. Empty refuses all outbound calls. Redirects are not followed. Only add hosts you trust; local/private hosts expose local services.",
       "group": "HTTP"
+    },
+    {
+      "key": "mailAllowedRecipients",
+      "type": "string",
+      "label": "Mail block: allowed recipients",
+      "default": "",
+      "help": "Exact e-mail addresses (comma separated) the lyam-send-mail block may write to. Empty refuses every send. Set only to addresses the owner approved.",
+      "group": "Mail"
     }
   ],
   "httpRoutes": [

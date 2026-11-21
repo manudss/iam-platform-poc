@@ -1,5 +1,6 @@
 import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { runPieceAction } from './adapter.mjs';
 import { serviceAccountAuth, readGoogleRows, writeGoogleRow } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
@@ -352,7 +353,9 @@ const jiraCreateIssue = {
     });
     const key = String(result?.key ?? '');
     ctx.log(`Jira issue ${key} created (REAL, on ${instanceUrl})`);
-    return { key, url: key ? `${instanceUrl.replace(/\/$/, '')}/browse/${key}` : null };
+    // The browsable site: the connection's site URL (needed when instanceUrl is a gateway), else the site origin itself.
+    const site = String(ctx.settings?.jiraSiteUrl || (/^https:\/\/[a-z0-9-]+\.atlassian\.net\/?$/i.test(instanceUrl) ? instanceUrl : '')).replace(/\/$/, '');
+    return { key, url: key && site ? `${site}/browse/${key}` : null };
   },
 };
 
@@ -443,6 +446,43 @@ const lyamCreateUser = {
   },
 };
 
+
+
+// ------------------------------------------------------------------- lyam connector: send a mail ----
+const MAIL_RE = /^[^\s@,;<>]{1,64}@[^\s@,;<>]{1,190}\.[A-Za-z]{2,}$/;
+const lyamSendMail = {
+  type: 'lyam-send-mail',
+  family: 'lyam',
+  label: 'Send a mail (Resend)',
+  simulated: false,
+  category: 'real',
+  description: 'REAL and immediate: sends one mail through the notify.send hook (Resend when RESEND_API_KEY is set on the server). The recipient must be listed in the plugin setting "Mail block: allowed recipients" (empty refuses everything). The same run never sends the same mail twice. A step ends in error when the mail was not really delivered. A test run only logs. Never put a secret in the text.',
+  fields: [
+    { key: 'to', label: 'Recipient (one address)', type: 'string', required: true, help: 'placeholders allowed; must be in the allowed recipients setting' },
+    { key: 'subject', label: 'Subject', type: 'string', required: true },
+    { key: 'text', label: 'Text', type: 'text', required: true, help: 'plain text, up to 4000 characters, placeholders allowed' },
+  ],
+  outputs: [{ key: 'to', description: 'The recipient' }, { key: 'delivered', description: 'true when the mail was really delivered' }, { key: 'messageId', description: 'The provider message id' }],
+  validate(cfg) {
+    const to = str(cfg.to, 'lyam-send-mail.to', 200);
+    if (!/\{\{/.test(to) && !MAIL_RE.test(to)) bad('lyam-send-mail.to: one e-mail address');
+    return { to, subject: str(cfg.subject, 'lyam-send-mail.subject', 150), text: str(cfg.text, 'lyam-send-mail.text', 4000) };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (!MAIL_RE.test(c.to)) bad('lyam-send-mail.to: one e-mail address');
+    if (/[\r\n]/.test(c.subject)) bad('lyam-send-mail.subject: one line');
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send "${c.subject}" to ${c.to} - nothing sent`); return { to: c.to, delivered: false, messageId: null }; }
+    const allowed = String(ctx.settings?.mailAllowedRecipients ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-mail: this recipient is not in the allowed recipients setting (the owner approves each address)');
+    if (!ctx.mail) bad('lyam-send-mail: mail delivery is not available on this server');
+    const effectKey = `wf-mail:${ctx.runId}:${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.subject])).digest('hex').slice(0, 16)}`;
+    const r = await ctx.mail.send(ctx.tenant, { effectKey, to: c.to, subject: c.subject, text: c.text });
+    if (!r.delivered || !r.real) bad(`lyam-send-mail: the mail was not really delivered${r.degraded ? ` (${r.degraded})` : ''}`);
+    ctx.log(`mail sent to ${c.to} (provider id ${r.id ?? 'unknown'})`);
+    return { to: c.to, delivered: true, messageId: r.id ?? null };
+  },
+};
 
 // ------------------------------------------------------------ lyam connector: account blocks and security settings ----
 const KINDS = ['suspended', 'disabled', 'locked', 'pending_approval'];
@@ -536,7 +576,7 @@ const lyamSecuritySetting = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

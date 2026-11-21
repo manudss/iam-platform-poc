@@ -21,7 +21,7 @@ export function validateConnection(body: Record<string, unknown>) {
   if (!['google-sheets', 'jira', 'http'].includes(provider)) throw new BadRequestException('invalid connection provider');
   const name = String(body.name ?? '').trim(); if (!name || name.length > 80) throw new BadRequestException('connection name required (max 80)');
   const raw = body.config; if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('connection config must be an object');
-  const allowed = provider === 'jira' ? ['instanceUrl', 'email'] : provider === 'google-sheets' ? ['userEmail', 'spreadsheetId', 'sheetId'] : ['baseUrl'];
+  const allowed = provider === 'jira' ? ['instanceUrl', 'email', 'siteUrl'] : provider === 'google-sheets' ? ['userEmail', 'spreadsheetId', 'sheetId'] : ['baseUrl'];
   const config: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) { if (!allowed.includes(k) || typeof v !== 'string' || v.length > 300) throw new BadRequestException('invalid connection config'); config[k] = v; }
   if (provider === 'jira' || provider === 'http') {
@@ -33,6 +33,12 @@ export function validateConnection(body: Record<string, unknown>) {
       if (!jiraGateway(url) && url.pathname !== '/') throw new BadRequestException('Jira URL must be its site origin');
     }
     config[provider === 'jira' ? 'instanceUrl' : 'baseUrl'] = url.toString();
+  }
+  if (provider === 'jira' && config.siteUrl !== undefined) {
+    // Optional: the browsable site, used only to build ticket links when instanceUrl is a gateway.
+    let site: URL; try { site = new URL(config.siteUrl); } catch { throw new BadRequestException('invalid Jira site URL'); }
+    if (site.protocol !== 'https:' || site.username || site.password || site.search || site.hash || site.port || site.pathname !== '/' || !/^[a-z0-9-]+\.atlassian\.net$/i.test(site.hostname)) throw new BadRequestException('invalid Jira site URL');
+    config.siteUrl = site.toString();
   }
   if (provider === 'jira' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.email ?? '')) throw new BadRequestException('Jira account email required');
   if (provider === 'google-sheets' && config.sheetId && !/^\d{1,12}$/.test(config.sheetId)) throw new BadRequestException('sheet ID must be numeric');
@@ -91,7 +97,7 @@ export class WorkflowConnections {
     return this.probe(clean.provider, clean.config, settings);
   }
   private settings(provider: ConnectionProvider, config: Record<string,string>, secret: string): Record<string, unknown> {
-    return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
+    return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraSiteUrl: config.siteUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
   }
   private probeFailed() { return {status: 'Failed', checkedAt: new Date().toISOString(), readOnly: true, message: 'Read-only check failed. Check connection configuration and service access.'}; }
   protected async httpProbe(url: string, options: unknown) {
