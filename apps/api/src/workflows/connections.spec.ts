@@ -94,7 +94,7 @@ describe('read-only check failure classes', () => {
 describe('failed checks leak nothing sensitive', () => {
   const SENSITIVE = ['FICTIONAL-TOKEN-xyz', 'fictional-header-secret', 'iam/workflow-connections/t/secret-ref', 'service-account-key-material'];
   const noLeak = (text: string) => { for (const v of SENSITIVE) assert.ok(!text.includes(v), `leaked ${v}`); };
-  it('a Sheets failure carrying sensitive text in message, headers and secret path returns only the class, and nothing reaches console or logger', async () => {
+  it('a Jira (HTTP probe) failure carrying sensitive text in message, headers and secret path returns only the class, and nothing reaches console or logger', async () => {
     const h = setup();
     const lines: string[] = [];
     const spies = ['log', 'error', 'warn', 'info', 'debug'].map(k => mock.method(console as any, k, (...a: unknown[]) => { lines.push(a.map(String).join(' ')); }));
