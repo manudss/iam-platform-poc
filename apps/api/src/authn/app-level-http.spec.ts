@@ -25,7 +25,7 @@ describe('application level: server-side rules on the real routes', () => {
   let app: INestApplication, svc: AuthnService; const env = { a: process.env.IAM_API_ADMIN_TOKEN, f: process.env.IAM_AUTHN_FILE };
   before(async () => {
     process.env.IAM_API_ADMIN_TOKEN = ADMIN; process.env.IAM_AUTHN_FILE = join(mkdtempSync(join(tmpdir(), 'al-')), 'e.json');
-    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
+    const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: (ctx: any) => { ctx.switchToHttp().getRequest().user = { sub: 'test-admin' }; return true; } }).compile();
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService);
     const reg = app.get(PluginRegistry); await reg.install(T, 'app-connector', {}); await reg.enable(T, 'app-connector', {});
   });
