@@ -48,3 +48,22 @@ describe('saveAppLevel (application edit form)', () => {
     assert.deepEqual(Object.keys(parseSecurity(box.value).appLevels).sort(), ['a', 'b', 'c']);
   });
 });
+
+import { AppConnectorService } from '../connectors/app-connector.js';
+describe('application create and delete when the level cleanup fails', () => {
+  const svc = (clear: () => Promise<void>, engine: any) => Object.assign(Object.create(AppConnectorService.prototype), { levelCleanup: { clear }, engine: async () => engine });
+  it('delete: the application is gone, the error says so and names the retry; success path clears once', async () => {
+    let removed = 0, cleared = 0;
+    const eng = { remove: async () => { removed++; return { ok: true }; }, create: async () => ({ id: 'crm' }) };
+    const bad = svc(async () => { throw new Error('dolt down'); }, eng);
+    await assert.rejects(() => bad.remove('t', 'a', 'crm'), (e: any) => e.getStatus?.() === 503 && /deleted/.test(e.message) && /DELETE \/security\/app-level\/crm/.test(e.message) && !/dolt down/.test(e.message));
+    assert.equal(removed, 1);
+    const ok = svc(async () => { cleared++; }, eng); await ok.remove('t', 'a', 'crm'); assert.equal(cleared, 1);
+    await assert.rejects(() => bad.create('t', 'a', { id: 'crm' }), (e: any) => e.getStatus?.() === 503 && /created/.test(e.message));
+  });
+  it('a refused duplicate or failed removal never runs the cleanup', async () => {
+    let cleared = 0; const eng = { remove: async () => { throw Object.assign(new Error('nope'), { code: 'not_found' }); }, create: async () => { throw Object.assign(new Error('dup'), { code: 'conflict' }); } };
+    const s = svc(async () => { cleared++; }, eng);
+    await assert.rejects(() => s.remove('t', 'a', 'x')); await assert.rejects(() => s.create('t', 'a', { id: 'x' })); assert.equal(cleared, 0);
+  });
+});

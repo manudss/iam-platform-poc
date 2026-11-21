@@ -151,9 +151,9 @@ export class AuthnService implements OnApplicationBootstrap {
     if (v.ok) return v;
     return v;
   }
-  /** Whether at least one enabled chain, without a simulated step, declares and proves this level (configuration only, not who is enrolled). */
+  /** Whether at least one enabled chain (its own flag AND every method), without a simulated step, declares and proves this level (configuration only, not who is enrolled). */
   static reachable(cfg: AuthnConfig, minLevel: number): boolean {
-    return cfg.chains.some((c) => { if (!c.steps.every((id) => cfg.methods.find((m) => m.id === id)?.enabled)) return false; const a = analyzeChain(cfg, c); return !a.simulatedSteps.length && a.effectiveLevel >= minLevel; });
+    return cfg.chains.some((c) => { if (c.enabled === false || !c.steps.every((id) => cfg.methods.find((m) => m.id === id)?.enabled)) return false; const a = analyzeChain(cfg, c); return !a.simulatedSteps.length && a.effectiveLevel >= minLevel; });
   }
   /**
    * Checked before a data branch (or main) is applied: a level that no sign-in chain can reach would lock everybody out of administration

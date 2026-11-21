@@ -56,7 +56,7 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   <label>Protocol<select name="aproto" [(ngModel)]="protocol"><option value="oidc">OpenID Connect</option><option value="saml">SAML 2.0</option></select></label></div>
   <div class="row"><label>Description<input name="adesc" [(ngModel)]="description" maxlength="240" /></label></div>
   <div class="panel app-level-editor" id="app-level"><h4>Sign-in level</h4>
-  <label>Minimum sign-in level for this application<app-level-select [value]="level()" (valueChange)="level.set($event)" [allowNone]="true" [chains]="chains()" [restrict]="true" [disabled]="!levelAvailable() || s.branch()==='main'" label="Minimum sign-in level for this application" id="app-min-level" /></label>
+  <label>Minimum sign-in level for this application<app-level-select [value]="level()" (valueChange)="level.set($event)" [allowNone]="true" [chains]="chains()" [chainsError]="chainsError()" [restrict]="true" [disabled]="!levelAvailable() || s.branch()==='main'" label="Minimum sign-in level for this application" id="app-min-level" /></label>
   <p class="hint">A person who signed in below this level signs in again with a stronger method before the application opens. Levels are declared on the sign-in chains. No minimum turns the rule off for this application. Saved on the working branch; live after Apply, which refuses a level no sign-in chain can reach.</p>
   @if (ageMinutes() > 0) { <p class="hint" id="app-level-age">A stored age limit applies to this application: sign-in no older than {{ageMinutes()}} minutes. It has no effect while there is no minimum, and applies again if you choose a level. It is removed when the application is deleted. It cannot be edited here.</p> }
   @if (!levelAvailable()) { <p class="hint" id="app-level-off">The sign-in level cannot be read or changed with your current access, so it is shown read-only.</p> }</div>
@@ -89,7 +89,7 @@ export const parseList = (text: string): string[] => [...new Set(text.split(/[\n
   @if (editing()) { <button class="secondary" (click)="reset()">Cancel</button> }</section> }`,
 })
 export class ApplicationsPage {
-  protected readonly chains = signal<LevelChain[]>([]);
+  protected readonly chains = signal<LevelChain[]>([]); protected readonly chainsError = signal(false);
   protected readonly s = inject(Session);
   protected apps = signal<AppConnector[]>([]); protected note = signal(''); protected problem = signal(''); protected off = signal(false); protected editing = signal(false);
   protected readonly level = signal(0); protected readonly levelAvailable = signal(false); private levelBefore = 0; private levels: Record<string, { minLevel: number; maxAgeSeconds?: number }> = {};
@@ -114,7 +114,7 @@ export class ApplicationsPage {
       if (this.fail(r)) return; this.off.set(false); this.apps.set(r.data.apps); this.problem.set('');
       // The one source of the level is the security setting (working branch). Without access to it the selector is read-only, never a wider right than before.
       const sec = await this.s.api.raw<any>('GET', '/security', undefined, this.h());
-      try { const au = await this.s.api.raw<any>('GET', '/auth', undefined, this.h()); this.chains.set(au.status < 400 && au.data?.working ? levelChains(au.data.working.config, au.data.working.analyses ?? []) : []); } catch { this.chains.set([]); }
+      try { const au = await this.s.api.raw<any>('GET', '/auth', undefined, this.h()); if (au.status < 400 && au.data?.working) { this.chains.set(levelChains(au.data.working.config, au.data.working.analyses ?? [])); this.chainsError.set(false); } else { this.chains.set([]); this.chainsError.set(true); } } catch { this.chains.set([]); this.chainsError.set(true); }
       if (sec.status < 400 && sec.data?.working) { this.levels = sec.data.working.appLevels ?? {}; this.levelAvailable.set(true); } else { this.levels = {}; this.levelAvailable.set(false); }
       if (this.wantEdit) { const a = this.apps().find((x: AppConnector) => x.id === this.wantEdit); this.wantEdit = null; if (a) this.edit(a); }
     } catch (e) { this.problem.set((e as Error).message); }

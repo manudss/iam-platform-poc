@@ -1,6 +1,9 @@
 import { TestBed } from '@angular/core/testing';
+import { REACHABLE_FIXTURE } from './reachable-fixture';
 import { LevelChain, LevelSelect, levelChains, reachableLevel } from './level-select';
 
+const tipEl = () => document.body.querySelector('[role=tooltip]') as HTMLElement | null;
+const down = (el: Element, type: string) => { const e = new Event('pointerdown', { bubbles: true }); Object.defineProperty(e, 'pointerType', { value: type }); el.dispatchEvent(e); };
 const CH: LevelChain[] = [
   { id: 'pw', name: 'Password', level: 3, steps: ['Password'], usable: true },
   { id: 'mfa', name: 'Password + code', level: 8, steps: ['Password', 'Code'], usable: true },
@@ -64,30 +67,84 @@ describe('LevelSelect', () => {
   it('tooltip follows hover and the active option, lists chains, and the button points at it', () => {
     const { f, el } = open(true);
     (el.querySelector('li[data-level="8"]') as HTMLElement).dispatchEvent(new Event('mouseenter')); f.detectChanges();
-    const tip = el.querySelector('[role=tooltip]') as HTMLElement;
+    const tip = tipEl() as HTMLElement;
     expect(tip.getAttribute('data-for')).toBe('8'); expect(tip.textContent).toContain('Password + code'); expect(tip.textContent).toContain('declared level 8 of 10');
     expect(el.querySelector('button')!.getAttribute('aria-describedby')).toBe(tip.id);
     (el.querySelector('li[data-level="10"]') as HTMLElement).dispatchEvent(new Event('mouseenter')); f.detectChanges();
-    expect(el.querySelector('[role=tooltip]')!.textContent).toContain('No enabled chain');
+    expect(tipEl()!.textContent).toContain('No enabled chain');
   });
   it('closed: tooltip on hover of the button; keyboard focus too; gone otherwise', () => {
     TestBed.configureTestingModule({ imports: [LevelSelect] });
     const f = TestBed.createComponent(LevelSelect); f.componentRef.setInput('value', 3); f.componentRef.setInput('chains', CH); f.detectChanges();
     const b = f.nativeElement.querySelector('button') as HTMLButtonElement;
-    expect(f.nativeElement.querySelector('[role=tooltip]')).toBeNull();
-    b.dispatchEvent(new Event('mouseenter')); f.detectChanges(); expect(f.nativeElement.querySelector('[role=tooltip]')).not.toBeNull();
-    b.dispatchEvent(new Event('mouseleave')); f.detectChanges(); expect(f.nativeElement.querySelector('[role=tooltip]')).toBeNull();
-    b.dispatchEvent(new Event('focus')); f.detectChanges(); expect(f.nativeElement.querySelector('[role=tooltip]')).not.toBeNull();
+    expect(tipEl()).toBeNull();
+    b.dispatchEvent(new Event('mouseenter')); f.detectChanges(); expect(tipEl()).not.toBeNull();
+    b.dispatchEvent(new Event('mouseleave')); f.detectChanges(); expect(tipEl()).toBeNull();
+    (b as any).matches = () => true; b.dispatchEvent(new Event('focus')); f.detectChanges(); expect(tipEl()).not.toBeNull();
+    b.dispatchEvent(new Event('blur')); f.detectChanges(); expect(tipEl()).toBeNull();
+    (b as any).matches = () => false; b.dispatchEvent(new Event('focus')); f.detectChanges(); expect(tipEl()).toBeNull();
   });
   it('a saved unreachable level stays selected with a warning', () => {
     const { el } = open(true, 10);
     expect(el.querySelector('.ls-warn')!.textContent).toContain('Level 10 is saved'); expect(el.querySelector('button b')!.textContent).toContain('10');
   });
-  it('touch: first tap shows the tooltip, second tap picks', () => {
+  it('touch: first tap on another option only shows its tooltip (emulated mouseenter included), a tap on the active option picks', () => {
     const { f, seen, el } = open(true);
     const o8 = el.querySelector('li[data-level="8"]') as HTMLElement;
-    o8.dispatchEvent(new Event('touchstart')); o8.click(); f.detectChanges();
-    expect(seen).toEqual([]); expect(el.querySelector('[role=tooltip]')!.getAttribute('data-for')).toBe('8');
-    o8.dispatchEvent(new Event('touchstart')); o8.click(); expect(seen).toEqual([8]);
+    down(o8, 'touch'); o8.dispatchEvent(new Event('mouseenter')); o8.click(); f.detectChanges();
+    expect(seen).toEqual([]); expect(tipEl()!.getAttribute('data-for')).toBe('8');
+    down(o8, 'touch'); o8.dispatchEvent(new Event('mouseenter')); o8.click(); expect(seen).toEqual([8]);
+  });
+  it('touch: a cancelled gesture (scroll) never picks; the next tap starts again', () => {
+    const { f, seen, el } = open(true);
+    const o7 = el.querySelector('li[data-level="7"]') as HTMLElement;
+    down(o7, 'touch'); o7.dispatchEvent(new Event('pointercancel')); o7.click(); f.detectChanges();
+    expect(seen).toEqual([]);
+  });
+  it('mouse picks at once', () => {
+    const { el, seen } = open(true); const o = el.querySelector('li[data-level="7"]') as HTMLElement; down(o, 'mouse'); o.click(); expect(seen).toEqual([7]);
+  });
+  it('Escape hides the tooltip even when the list is closed, and hovering again shows it', () => {
+    TestBed.configureTestingModule({ imports: [LevelSelect] });
+    const f = TestBed.createComponent(LevelSelect); f.componentRef.setInput('value', 3); f.componentRef.setInput('chains', CH); f.detectChanges();
+    const b = f.nativeElement.querySelector('button') as HTMLButtonElement;
+    b.dispatchEvent(new Event('mouseenter')); f.detectChanges(); expect(tipEl()).not.toBeNull();
+    b.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); f.detectChanges(); expect(tipEl()).toBeNull();
+    b.dispatchEvent(new Event('mouseleave')); b.dispatchEvent(new Event('mouseenter')); f.detectChanges(); expect(tipEl()).not.toBeNull();
+  });
+  it('touch hover emulation on the closed button never shows a tooltip over the page', () => {
+    TestBed.configureTestingModule({ imports: [LevelSelect] });
+    const f = TestBed.createComponent(LevelSelect); f.componentRef.setInput('value', 3); f.componentRef.setInput('chains', CH); f.detectChanges();
+    const b = f.nativeElement.querySelector('button') as HTMLButtonElement;
+    down(b, 'touch'); b.dispatchEvent(new Event('mouseenter')); f.detectChanges(); expect(tipEl()).toBeNull();
+  });
+  it('the tooltip is an overlay placed inside the viewport (never past the right edge), and not in the component', async () => {
+    const { f, el } = open(true);
+    const rect = (l: number, r: number) => ({ left: l, right: r, top: 100, bottom: 400, width: r - l, height: 300, x: l, y: 100, toJSON() {} }) as DOMRect;
+    (el.querySelector('.ls-list') as HTMLElement).getBoundingClientRect = () => rect(window.innerWidth - 400, window.innerWidth - 10);
+    (el.querySelector('li[data-level="8"]') as HTMLElement).dispatchEvent(new Event('mouseenter')); f.detectChanges(); TestBed.flushEffects?.(); await Promise.resolve(); await Promise.resolve();
+    const tip = tipEl()!; expect(el.contains(tip)).toBe(false);
+    const left = parseFloat(tip.style.left), w = parseFloat(tip.style.width);
+    expect(left).toBeGreaterThanOrEqual(8); expect(left + w).toBeLessThanOrEqual(window.innerWidth - 8);
+  });
+  it('unreachable chains are struck and dimmed in the tooltip', () => {
+    const { f, el } = open(true);
+    (el.querySelector('li[data-level="8"]') as HTMLElement).dispatchEvent(new Event('mouseenter')); f.detectChanges();
+    const states = Array.from(tipEl()!.querySelectorAll('li.tc')).map((x) => [x.textContent!.includes('Badge'), x.getAttribute('data-state')]);
+    expect(states.find((s) => s[0])![1]).toBe('dim'); expect(tipEl()!.querySelectorAll('li.tc[data-state=ok]').length).toBe(1);
+  });
+  it('same rule as the server on the shared fixture (chain flag, disabled method, simulated step)', () => {
+    for (const [name, v] of Object.entries(REACHABLE_FIXTURE)) {
+      const chains = levelChains(JSON.parse(JSON.stringify(v.cfg)), JSON.parse(JSON.stringify(v.analyses)));
+      const got = Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => [String(n), reachableLevel(chains, n)]));
+      expect(got, name).toEqual(v.reachable);
+    }
+  });
+  it('chains that could not be loaded say so, which is not the same as no chain; nothing is disabled', () => {
+    TestBed.configureTestingModule({ imports: [LevelSelect] });
+    const f = TestBed.createComponent(LevelSelect); f.componentRef.setInput('value', 5); f.componentRef.setInput('restrict', true); f.componentRef.setInput('chainsError', true); f.detectChanges();
+    (f.nativeElement.querySelector('button') as HTMLButtonElement).click(); f.detectChanges();
+    expect(f.nativeElement.querySelectorAll('li[aria-disabled]').length).toBe(0); expect(tipEl()!.textContent).toContain('could not be loaded');
+    f.componentRef.setInput('chainsError', false); f.detectChanges(); expect(tipEl()!.textContent).toContain('No sign-in chain is defined');
   });
 });
