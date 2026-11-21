@@ -1,4 +1,4 @@
-# Isolated nominal qualification cycle (deploy/oci/isolated/). MANUAL trigger only:
+# Isolated nominal qualification cycle (deploy/oci/isolated/). Triggers: workflow_dispatch (needs the default branch) and, to test WITHOUT a merge, a push limited to the single test branch AND to this file's path (a harness-only push does not run it):
 # a run is the protocol's step, launched only after independent review and the owner's
 # GO. Constraints held by construction: GitHub-hosted STANDARD ubuntu-latest (free on
 # this public repository - no larger runner, no self-hosted), permissions limited to
@@ -9,6 +9,9 @@ name: isolated-nominal-qualification
 
 on:
   workflow_dispatch:
+  push:
+    branches: [test/isolated-nominal-harness-0016]
+    paths: ['.github/workflows/isolated-nominal.yml']
 
 permissions:
   contents: read
