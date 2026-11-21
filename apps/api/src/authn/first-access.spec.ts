@@ -161,4 +161,17 @@ describe('first access: forced password change inside the sign-in chain', () => 
     assert.ok(allows <= 1, 'never two allows from one challenge'); assert.equal(fake.completeCalls <= 1, true);
     assert.equal((await submit(c.session)).body.outcome, 'deny', 'replay after the session ended');
   });
+  it('MFA: with a second factor in the chain the change page comes only AFTER every factor, the rule is not consulted before, and nothing is consumed until the change', async () => {
+    const mfa = { methods: [{ id: 'pw', type: 'password', name: 'pw', enabled: true, level: 3, config: {} }, { id: 'pin', type: 'digit-code', name: 'pin', enabled: true, level: 3, config: {} }], chains: [{ id: 'pw-pin', name: 'Password then PIN', steps: ['pw', 'pin'], level: 4 }], defaultChain: 'pw-pin' };
+    await put(mfa).expect(200); reset();
+    const pin = (await http().post(`/tenants/${T}/auth/enrollments/demo-alice/pin`).set(adm).send({ length: 6 }).expect(201)).body.shownOnce.pin as string;
+    let r = (await gate({ tenant: T, subject: 'demo-alice', password: PW })).body;
+    assert.equal(r.outcome, 'challenge'); assert.equal(r.step.methodId, 'pin', 'the second factor comes before the change page');
+    assert.equal(fake.stateCalls, 0, 'the first-access rule is not consulted before the chain is complete'); assert.equal(fake.completeCalls, 0);
+    for (const d of pin) { const id = r.step.fields[0].keys.find((k: any) => k.digit === d).id; r = (await gate({ tenant: T, session: r.session, answers: { key: id } })).body; assert.equal(r.outcome, 'challenge'); }
+    r = (await gate({ tenant: T, session: r.session, answers: { action: 'submit' } })).body;
+    assert.equal(r.outcome, 'challenge'); assert.equal(r.step.methodId, 'first-access-change'); assert.ok(!('claims' in r)); assert.equal(fake.completeCalls, 0);
+    const done = (await submit(r.session)).body;
+    assert.equal(done.outcome, 'allow'); assert.ok(done.claims.amr.includes('pin')); assert.equal(fake.completeCalls, 1);
+  });
 });
