@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { PluginsV1Module } from '../plugins/v1/plugins-v1.module.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AuthnService } from './flow.service.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
 import { startTestBus, TestBus } from '../testing/test-bus.js';
 
 let testBus: TestBus | undefined;
@@ -41,6 +42,8 @@ describe('first access: forced password change inside the sign-in chain', () => 
     const mod = await Test.createTestingModule({ imports: [PluginsV1Module] }).overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
     app = mod.createNestApplication(); await app.init(); svc = app.get(AuthnService);
     fake = new FakeUsers(); (svc as any).users = fake;
+    // A method is usable only while its plugin is enabled on the slot (the shipped plugins register disabled): the MFA test needs the PIN method.
+    const reg = app.get(PluginRegistry); await reg.install(T, 'auth-digit-code', {}); await reg.enable(T, 'auth-digit-code', { uiComponents: true });
   });
   after(async () => { process.env.IAM_API_ADMIN_TOKEN = env.a; process.env.IAM_AUTH_GATE_TOKEN = env.g; process.env.IAM_AUTHN_FILE = env.f; await app.close(); });
   const http = () => request(app.getHttpServer());

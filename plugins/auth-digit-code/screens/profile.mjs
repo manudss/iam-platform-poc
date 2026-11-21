@@ -24,8 +24,8 @@ function withReveal(root) {
 const css = `
   .reveal-wrap { display: inline-flex; align-items: stretch; gap: .35rem; max-width: 100%; }
   .reveal-wrap > input { flex: 1 1 auto; min-width: 0; }
-  .reveal-btn { flex: none; min-width: 3.6rem; padding: 0 .6rem; border: 1px solid #cfd6e4; border-radius: 8px; background: #fff; color: inherit; font: inherit; font-size: .85rem; cursor: pointer; }
-  .reveal-btn:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }
+  .reveal-btn { flex: none; min-width: 3.6rem; padding: 0 .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--field-bg); color: inherit; font: inherit; font-size: .85rem; cursor: pointer; }
+  .reveal-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 :host{color:var(--ink)}
 .ppf{font:inherit}.ppf .row{display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin:.4em 0}
