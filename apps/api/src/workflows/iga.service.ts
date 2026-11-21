@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, forwardRef, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { WorkflowStore } from './store.js';
@@ -25,7 +25,11 @@ export interface IgaCampaign {
  */
 @Injectable()
 export class WorkflowsIgaService {
-  constructor(private readonly store: WorkflowStore, @Optional() private readonly tasks?: WorkflowTasksService, @Optional() private readonly reads?: WorkflowReads, @Optional() private readonly events?: ApplicationBus) {}
+  constructor(private readonly store: WorkflowStore, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasksRef?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly readsRef?: unknown, @Optional() private readonly events?: ApplicationBus) {}
+
+  /** Lazily-typed views (forwardRef tokens above: the class bindings are never evaluated at module load). */
+  private get tasks(): WorkflowTasksService | undefined { return this.tasksRef as WorkflowTasksService | undefined; }
+  private get reads(): WorkflowReads | undefined { return this.readsRef as WorkflowReads | undefined; }
 
   private emit(tenant: string, type: string, payload: Record<string, string>) { this.events?.emit({ type, tenant, branch: 'main', payload, at: now() }); }
 
@@ -75,7 +79,7 @@ export class WorkflowsIgaService {
   }
 
   /** Step 2: one review task per selected item. Idempotent per item. assignTo: a user id, 'manager' (the item's manager) or 'iga' (the campaign team pool). */
-  async openReviewTasks(tenant: string, actor: string, campaignId: string, input: { items?: unknown; assignTo?: unknown }) {
+  async openReviewTasks(tenant: string, actor: string, campaignId: string, input: { items?: unknown; assignTo?: unknown; runId?: string }) {
     if (!this.tasks) throw new BadRequestException('review tasks need the tasks service (server)');
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
@@ -89,7 +93,7 @@ export class WorkflowsIgaService {
       const t = await this.tasks.request({
         tenant, kind: 'iga-review', title: `Recertify ${i.identity} (${campaign.name})`,
         detail: { campaignId, itemId: i.id, identity: i.identity, roles: i.payload?.roles ?? [], decisions: ['approved', 'denied'] },
-        assignee, preventSelfApproval: true, runId: campaignId, nodeId: i.id,
+        assignee, preventSelfApproval: true, runId: input.runId ?? campaignId, nodeId: i.id,
       });
       out.push({ item: i.id, task: t.id, assignee: t.assignee });
     }
@@ -112,7 +116,7 @@ export class WorkflowsIgaService {
       const decision = chk.task.decision === 'approved' ? 'approved' : 'denied';
       if (chk.task.decided_by && chk.task.decided_by === item.identity) {
         await this.store.igaUpdateItem(itemId, { state: 'requeued', decision_reason: `self-review refused for ${chk.task.decided_by}` });
-        await this.tasks!.request({ tenant, kind: 'iga-review', title: `Recertify ${item.identity} (self-review requeued)`, detail: { ...detail, requeued: true }, assignee: 'iga', preventSelfApproval: true, runId: `${campaignId}-requeue`, nodeId: itemId });
+        await this.tasks!.request({ tenant, kind: 'iga-review', title: `Recertify ${item.identity} (self-review requeued)`, detail: { ...detail, requeued: true }, assignee: 'iga', preventSelfApproval: true, runId: chk.task.run_id ?? `${campaignId}-requeue`, nodeId: `${itemId}-requeue` });
         this.emit(tenant, 'iga.decision-recorded', { campaign: campaignId, subject: item.identity, role: '*', decision: 'requeued-self-review', actor: chk.task.decided_by });
         out.push({ task: taskId, item: itemId, recorded: 'requeued' });
         continue;

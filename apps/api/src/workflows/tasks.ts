@@ -1,6 +1,8 @@
-import { BadRequestException, ConflictException, ForbiddenException, forwardRef, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { randomBytes } from 'node:crypto';
 import { ApplicationBus } from '../events/application-bus.service.js';
+// Value import used only inside the lazy getter below (never at module scope): no load-order cycle.
 import { WorkflowEngine } from './engine.js';
 import { TaskRow, WorkflowStore } from './store.js';
 
@@ -23,7 +25,12 @@ export interface TaskCheck { state: 'open' | 'decided'; task: TaskRow }
  */
 @Injectable()
 export class WorkflowTasksService {
-  constructor(private readonly store: WorkflowStore, @Optional() private readonly events?: ApplicationBus, @Optional() @Inject(forwardRef(() => WorkflowEngine)) private readonly engine?: WorkflowEngine) {}
+  constructor(private readonly store: WorkflowStore, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly modules?: ModuleRef) {}
+
+  /** The engine, resolved lazily (module wiring order): absent in unit tests and minimal servers. */
+  private engine(): WorkflowEngine | undefined {
+    try { return this.modules?.get(WorkflowEngine, { strict: false }); } catch { return undefined; }
+  }
 
   private emit(tenant: string, type: string, payload: Record<string, string>) {
     this.events?.emit({ type, tenant, branch: 'main', payload, at: now() });
@@ -71,8 +78,14 @@ export class WorkflowTasksService {
     const just = String(justification ?? '').slice(0, 1000);
     if (d !== 'approved' && !just.trim()) throw new BadRequestException('a justification is required for a refusal');
     if (t.prevent_self) {
-      const run = t.run_id ? await this.store.getRunById(t.run_id) : null;
-      if (run && run.started_by === actor) throw new ForbiddenException('anti-self-approval: the person who started this workflow cannot decide its approval task');
+      // Anti-self-approval follows the CHAIN of starter runs: a task created by a sub-workflow is
+      // refused to the person who started its ancestor run too (bounded walk, workflow:<runId> links).
+      let run = t.run_id ? await this.store.getRunById(t.run_id) : null;
+      for (let depth = 0; run && depth < 10; depth++) {
+        if (run.started_by === actor) throw new ForbiddenException('anti-self-approval: the person who started this workflow cannot decide its approval task');
+        if (!run.started_by.startsWith('workflow:')) break;
+        run = await this.store.getRunById(run.started_by.slice('workflow:'.length));
+      }
     }
     const isAdmin = this.isAdmin(actor);
     const saved = isAdmin
@@ -84,7 +97,7 @@ export class WorkflowTasksService {
       throw new ForbiddenException('only the assigned decider (or their delegate) can decide this task');
     }
     this.emit(tenant, 'workflow.task-decided', { task: id, kind: t.kind, decision: d, actor });
-    if (saved.run_id) this.engine?.kick(saved.run_id);
+    if (saved.run_id) this.engine()?.kick(saved.run_id);
     return saved;
   }
 
@@ -110,8 +123,8 @@ export class WorkflowTasksService {
   }
 
   /** Deadline scan (called by the cron tick and on resume checks): overdue tasks escalate once. */
-  async scanOverdue(tenant?: string): Promise<number> {
-    const open = await this.store.listTasks(tenant ?? '', {});
+  async scanOverdue(): Promise<number> {
+    const open = await this.store.listDueTasks(now());
     let n = 0;
     for (const t of open.filter((x) => x.status === 'open')) {
       if (!t.due_at || Date.parse(t.due_at) > Date.now() || t.reminded_at) continue;
@@ -119,7 +132,7 @@ export class WorkflowTasksService {
       if (escalateTo) await this.store.delegateTask(t.id, escalateTo, t.due_at);
       await this.store.markTaskReminded(t.id, now());
       this.emit(t.tenant, 'workflow.task-overdue', { task: t.id, kind: t.kind, assignee: escalateTo ?? t.assignee });
-      if (t.run_id) this.engine?.kick(t.run_id); // a waiting block re-evaluates (and keeps waiting on the escalated task)
+      if (t.run_id) this.engine()?.kick(t.run_id); // a waiting block re-evaluates (and keeps waiting on the escalated task)
       n++;
     }
     return n;

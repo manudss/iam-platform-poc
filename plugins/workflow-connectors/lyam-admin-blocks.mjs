@@ -313,7 +313,7 @@ const igaOpenReviewTasks = writeBlock('iga-open-review-tasks', 'IGA: open the re
 ], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-open-review-tasks.campaignId', 48), assignTo: str(cfg.assignTo, 'assignTo', 64, false) || 'manager' }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would open the review tasks of campaign ${c.campaignId}`); return { campaign: c.campaignId, opened: 0, tasks: [] }; }
-    const r = await need(ctx.iga, 'iga-open-review-tasks').openReviewTasks(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { assignTo: c.assignTo });
+    const r = await need(ctx.iga, 'iga-open-review-tasks').openReviewTasks(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { assignTo: c.assignTo, runId: ctx.runId });
     ctx.log(`${r.opened} review task(s) open for campaign ${c.campaignId}`);
     return r;
 });

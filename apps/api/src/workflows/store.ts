@@ -352,7 +352,7 @@ export class WorkflowStore {
     const m = await this.meta();
     try {
       await this.ensureTasks(m);
-      await m.query('insert ignore into workflow_tasks (id, tenant, kind, title, detail, assignee, delegated_to, status, decision, justification, decided_by, run_id, node_id, prevent_self, created_at, due_at, reminded_at, decided_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [t.id, t.tenant, t.kind, t.title, JSON.stringify(t.detail ?? {}), t.assignee, t.delegated_to, t.status, t.decision, t.justification, t.decided_by, t.run_id, t.node_id, t.prevent_self ? 1 : 0, t.created_at, t.due_at, t.reminded_at, t.decided_at]);
+      await m.query('insert ignore into workflow_tasks (id, tenant, kind, title, detail, assignee, delegated_to, status, decision, justification, decided_by, run_id, node_id, prevent_self, created_at, due_at, reminded_at, decided_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [t.id, t.tenant, t.kind, t.title, JSON.stringify(t.detail ?? {}), t.assignee, t.delegated_to, t.status, t.decision, t.justification, t.decided_by, t.run_id, t.node_id, t.prevent_self ? 1 : 0, t.created_at, t.due_at, t.reminded_at, t.decided_at]);
       const got = await this.getTask(t.id);
       if (!got) throw new Error('task not recorded');
       return got;
@@ -486,6 +486,17 @@ export class WorkflowStore {
   async igaCloseCampaign(id: string, actor: string, at: string, evidence: Record<string, unknown>): Promise<void> {
     const m = await this.meta();
     try { await m.query("update iga_campaigns set status = 'closed', closed_by = ?, closed_at = ?, evidence = ? where id = ?", [actor, at, JSON.stringify(evidence), id]); } finally { await m.end(); }
+  }
+
+  /** Every open task past its deadline and not yet reminded, across ALL tenants (the cron scan is
+   *  platform-wide: a task's tenant is on its row). */
+  async listDueTasks(at: string): Promise<TaskRow[]> {
+    const m = await this.meta();
+    try {
+      await this.ensureTasks(m);
+      const [r] = await m.query("select * from workflow_tasks where status = 'open' and due_at is not null and due_at <= ? and reminded_at is null order by due_at limit 500", [at]);
+      return (r as Record<string, unknown>[]).map(WorkflowStore.task);
+    } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
   }
 
   async steps(runId: string): Promise<StepRow[]> {
