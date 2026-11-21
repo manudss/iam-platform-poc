@@ -10,6 +10,10 @@ export interface WorkflowConnection { id: string; tenant: string; name: string; 
 const tenantId = (t: string) => { if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(t)) throw new BadRequestException('invalid connection tenant'); return t; };
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 export function connectionId(value: unknown): string { if (typeof value !== 'string' || !ID.test(value)) throw new BadRequestException('invalid connection id'); return value; }
+/** https://api.atlassian.com/ex/jira/<cloudId>: the gateway of one Jira site (tokens with scopes only work there). */
+const jiraGateway = (url: URL) => url.hostname === 'api.atlassian.com' && /^\/ex\/jira\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\/?$/i.test(url.pathname);
+/** Read-only check: a site origin reads the current account; a gateway reads one project page (a scoped token may lack read:me). */
+const jiraProbeUrl = (instanceUrl: string) => { const u = new URL(instanceUrl); return jiraGateway(u) ? `${u.origin}${u.pathname.replace(/\/$/, '')}/rest/api/3/project/search?maxResults=1` : new URL('/rest/api/3/myself', u).toString(); };
 export const connectionProvider = (type: string): ConnectionProvider | null => type.startsWith('google-sheets-') ? 'google-sheets' : type.startsWith('jira-') ? 'jira' : type === 'http-request' ? 'http' : null;
 export function validateConnection(body: Record<string, unknown>) {
   if (Object.keys(body).some(k => !['name', 'provider', 'config', 'secret'].includes(k))) throw new BadRequestException('unknown connection field');
@@ -22,8 +26,12 @@ export function validateConnection(body: Record<string, unknown>) {
   for (const [k, v] of Object.entries(raw)) { if (!allowed.includes(k) || typeof v !== 'string' || v.length > 300) throw new BadRequestException('invalid connection config'); config[k] = v; }
   if (provider === 'jira' || provider === 'http') {
     let url: URL; try { url = new URL(config[provider === 'jira' ? 'instanceUrl' : 'baseUrl']); } catch { throw new BadRequestException('HTTPS URL required'); }
-    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port || (provider === 'jira' && !/^[a-z0-9-]+\.atlassian\.net$/i.test(url.hostname))) throw new BadRequestException('invalid connection HTTPS URL');
-    if (provider === 'jira' && url.pathname !== '/') throw new BadRequestException('Jira URL must be its site origin');
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port) throw new BadRequestException('invalid connection HTTPS URL');
+    if (provider === 'jira') {
+      // A site origin (classic token) or the Atlassian gateway of one site (the only form a token with scopes accepts).
+      if (!jiraGateway(url) && !/^[a-z0-9-]+\.atlassian\.net$/i.test(url.hostname)) throw new BadRequestException('invalid connection HTTPS URL');
+      if (!jiraGateway(url) && url.pathname !== '/') throw new BadRequestException('Jira URL must be its site origin');
+    }
     config[provider === 'jira' ? 'instanceUrl' : 'baseUrl'] = url.toString();
   }
   if (provider === 'jira' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.email ?? '')) throw new BadRequestException('Jira account email required');
@@ -98,7 +106,7 @@ export class WorkflowConnections {
         await adapter.runPieceAction('@activepieces/piece-google-sheets', 'get-many-rows', {auth: {type: 'CUSTOM_AUTH', props: {serviceAccount: settings.googleServiceAccount, userEmail: settings.googleUserEmail || undefined}}, propsValue: {spreadsheetId: config.spreadsheetId, sheetId: Number(config.sheetId || 0), includeTeamDrives: false, first_row_headers: true}});
       } else {
         const headers: Record<string,string> = provider === 'jira' ? {Authorization: 'Basic ' + Buffer.from(`${settings.jiraEmail}:${settings.jiraApiToken}`).toString('base64')} : settings.httpConnectionToken ? {Authorization: `Bearer ${settings.httpConnectionToken}`} : {};
-        const result = await this.httpProbe(provider === 'jira' ? new URL('/rest/api/3/myself', config.instanceUrl).toString() : config.baseUrl, {method: provider === 'jira' ? 'GET' : 'HEAD', headers});
+        const result = await this.httpProbe(provider === 'jira' ? jiraProbeUrl(config.instanceUrl) : config.baseUrl, {method: provider === 'jira' ? 'GET' : 'HEAD', headers});
         if (result.status < 200 || result.status >= 300) throw new Error('probe unsuccessful');
       }
       return {status: 'Verified', checkedAt: new Date().toISOString(), readOnly: true};

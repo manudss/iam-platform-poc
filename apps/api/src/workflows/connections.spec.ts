@@ -15,8 +15,13 @@ function setup(enabled = true) {
 describe('managed workflow connections', () => {
   it('rejects arbitrary secret references, unexpected fields and unsafe Jira destinations', () => {
     assert.throws(() => validateConnection({...jira, secretRef: 'other-tenant/token'}), /unknown/);
-    for (const instanceUrl of ['https://evil.invalid', 'http://team.atlassian.net', 'https://user:pass@team.atlassian.net', 'https://team.atlassian.net/path', 'https://team.atlassian.net?x=1']) assert.throws(() => validateConnection({...jira, config: {...jira.config, instanceUrl}}));
+    for (const instanceUrl of ['https://api.atlassian.com/ex/jira/not-a-uuid', 'https://api.atlassian.com/other', 'https://api.atlassian.com/', 'https://evil.invalid', 'http://team.atlassian.net', 'https://user:pass@team.atlassian.net', 'https://team.atlassian.net/path', 'https://team.atlassian.net?x=1']) assert.throws(() => validateConnection({...jira, config: {...jira.config, instanceUrl}}));
     assert.throws(() => validateConnection({...jira, provider:'google-sheets', config:{}, secret:'{"type":"service_account","token_uri":"https://evil.invalid"}'}));
+  });
+  it('accepts the gateway URL of one Jira site (tokens with scopes) and keeps it as given', () => {
+    const gw = 'https://api.atlassian.com/ex/jira/9963bb3b-629b-4729-b37a-c71e6fc94882';
+    const v = validateConnection({...jira, config: {...jira.config, instanceUrl: gw}}) as any;
+    assert.equal(v.config.instanceUrl.replace(/\/$/, ''), gw);
   });
   it('never saves credentials to metadata or returns them; immutable revisions preserve older branch configurations', async () => {
     const h = setup(); const saved = await h.service.save('tenant-a', undefined, {...jira, secret:'TEST-NOT-A-REAL-TOKEN'});
