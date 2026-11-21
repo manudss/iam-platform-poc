@@ -1,5 +1,6 @@
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
+import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { validateSettings } from '../plugins/v1/settings.js';
@@ -39,6 +40,7 @@ interface EngineDeps {
   settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
   connectionFor?: (tenant: string, ref: string, id: string, type: string) => Promise<{ settings: Record<string, unknown>; secret: string }>;
   accounts?: AccountEffects;
+  workspace?: WorkspaceEffects;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 /** What account blocks and security settings blocks may do. Operational effects apply at once (with audit and event), settings only patch a stored row the block writes on the run branch. */
@@ -46,6 +48,11 @@ export interface AccountEffects {
   block: (tenant: string, a: { runId: string; subject: string; kind: string; message: string; untilSeconds?: number }) => Promise<{ applied: boolean; blockId: string }>;
   unblock: (tenant: string, a: { runId: string; subject: string; kind?: string }) => Promise<{ lifted: number }>;
   patchSecurity: (current: Record<string, unknown> | undefined, setting: string, value: string) => Record<string, unknown>;
+}
+/** Publication of a run branch to main (the lyam-publish-workspace block). Absent when the server has no publisher: the block then refuses. */
+export interface WorkspaceEffects {
+  headOf: (branch: string) => Promise<string | null>;
+  publish: (tenant: string, a: { runId: string; workflowId: string; branch: string; expectedHead: string }) => Promise<{ published: boolean; branch: string; sourceHead: string; mainCommit: string; activation: string }>;
 }
 interface WorkflowEngineApi {
   resume: () => Promise<void>;
@@ -59,7 +66,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -72,7 +79,25 @@ export class WorkflowEngine implements OnModuleInit {
         return this.connections.resolve(tenant, ref, id, provider);
       },
       accounts: this.accountEffects(),
+      workspace: this.workspaceEffects(v),
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
+    };
+  }
+
+  /**
+   * The only server-side gate of a workflow publication is HERE, before any call: the exact immutable id of the workflow being executed (run.definition_id, set by the engine, never by a block
+   * config or a run input) must be listed in the `publishAllowedWorkflows` setting read from MAIN (never from the run branch, so a run cannot widen it). Absent, unreadable, malformed or empty = refusal.
+   */
+  private workspaceEffects(v: VersioningService): WorkspaceEffects | undefined {
+    const publisher = this.publisher; if (!publisher) return undefined;
+    return {
+      headOf: async (branch) => (await v.branches()).branches.find((b) => b.name === branch)?.commit ?? null,
+      publish: async (tenant, a) => {
+        let allowed: string[] = [];
+        try { allowed = String((await this.settingsFor(tenant, v.defaultBranch, 'workflow-connectors')).publishAllowedWorkflows ?? '').split(',').map((x) => x.trim()).filter(Boolean); } catch { throw new Error('lyam-publish-workspace: the authorization setting cannot be read (nothing published)'); }
+        if (!a.workflowId || !allowed.includes(a.workflowId)) throw new Error('lyam-publish-workspace: this workflow is not authorized to publish (an administrator lists its id in the publishAllowedWorkflows setting)');
+        return publisher.publishForRun({ tenant, ...a });
+      },
     };
   }
 

@@ -22,6 +22,14 @@
       "group": "HTTP"
     },
     {
+      "key": "publishAllowedWorkflows",
+      "type": "string",
+      "label": "Publish block: authorized workflow ids",
+      "default": "",
+      "help": "Exact ids (comma separated) of the workflow definitions allowed to publish their run branch to main with the lyam-publish-workspace block. Empty refuses every publication. Read from main at run time: a run cannot change it.",
+      "group": "Publication"
+    },
+    {
       "key": "mailAllowedRecipients",
       "type": "string",
       "label": "Mail block: allowed recipients",

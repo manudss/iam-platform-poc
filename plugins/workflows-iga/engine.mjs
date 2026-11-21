@@ -371,6 +371,18 @@ export function createWorkflowEngine(deps) {
     } else if (!managed) settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
     // A real mail is a non-repeatable external effect: if the process stops before the step is recorded done, the run stops for review (the provider idempotency key makes a deliberate new run return the same mail within 24 hours).
     if (node.type === 'lyam-send-mail' && !run.test) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
+    // Publication to main: the branch and head are FROZEN by the run in this step's stored input BEFORE the call (durable intent). A resumed step reuses them; a branch that moved since is refused by the publisher.
+    let publishIntent;
+    if (node.type === 'lyam-publish-workspace' && !run.test && run.branch && deps.workspace) {
+      const prior = (await store.steps(run.id)).find(s => s.node_id === node.id)?.input?.publishIntent;
+      if (prior && prior.branch === run.branch && typeof prior.head === 'string') publishIntent = prior;
+      else {
+        const head = await deps.workspace.headOf(run.branch);
+        if (!head) throw new Error('The run branch has no head to publish');
+        publishIntent = { branch: run.branch, head };
+        await store.patchStep(run.id, node.id, { input: { publishIntent } });
+      }
+    }
     const sensitive = [secret];
     if (secret) {
       sensitive.push(Buffer.from(`${settings.jiraEmail ?? ''}:${secret}`).toString('base64'));
@@ -389,6 +401,10 @@ export function createWorkflowEngine(deps) {
       outputs,
       // Account effects (block, unblock, security settings patch). A test run never applies them.
       accounts: deps.accounts,
+      workspace: deps.workspace,
+      workflowId: run.definition_id,
+      publishIntent,
+      hasRunBranch: !!run.branch,
       test: !!run.test,
       runId: run.id,
       branchWrite: async (fn, message) => {

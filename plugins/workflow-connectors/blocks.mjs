@@ -521,6 +521,27 @@ const lyamBlockAccount = {
   },
 };
 
+const lyamPublishWorkspace = {
+  type: 'lyam-publish-workspace',
+  family: 'lyam',
+  label: 'Publish the run branch to main',
+  simulated: false,
+  category: 'real',
+  description: 'REAL: merges this run\'s working branch into main and activates it, with the same checks as a human Apply (separation of duties, unreachable level, activation). Only workflows an administrator listed in the publishAllowedWorkflows setting may do it. The result is read back from the real state: it fails unless main moved to the activated commit. A test run publishes nothing. It is not a GitHub merge.',
+  fields: [],
+  outputs: [{ key: 'published', description: 'true only when main holds the branch and the activation is applied' }, { key: 'mainCommit', description: 'The commit of main that was activated' }, { key: 'sourceHead', description: 'The branch head that was published' }],
+  validate() { return {}; },
+  async run(ctx) {
+    if (ctx.test || ctx.dryRun) { ctx.log('test run: nothing published'); return { published: false }; }
+    if (!ctx.workspace) bad('lyam-publish-workspace: publication is not available on this server');
+    if (!ctx.hasRunBranch || !ctx.publishIntent) bad('lyam-publish-workspace: this run has no working branch to publish (an earlier step must write data)');
+    const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head });
+    if (!r || r.published !== true || !r.mainCommit) bad('lyam-publish-workspace: publication not confirmed by the real state');
+    ctx.log(`published ${r.branch} at ${String(r.sourceHead).slice(0, 12)}: main is now ${String(r.mainCommit).slice(0, 12)}, activation ${r.activation}`);
+    return { published: true, mainCommit: r.mainCommit, sourceHead: r.sourceHead };
+  },
+};
+
 const lyamUnblockAccount = {
   type: 'lyam-unblock-account',
   family: 'lyam',
@@ -578,7 +599,7 @@ const lyamSecuritySetting = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

@@ -15,7 +15,8 @@ import { WorkflowHooksController } from './hooks.controller.js';
 import { WorkflowSheetPollerService } from './sheet-poller.js';
 import { WorkflowJiraDonePollerService } from './jira-done-poller.js';
 import { WorkflowCronService } from './cron.js';
+import { WorkspaceModule } from '../workspace/workspace.module.js';
 import { WorkflowDemoSeed } from './demo-seed.js';
 
-@Module({ imports: [IntegrationsModule, EventsModule, VersioningModule, PluginsV1Module], controllers: [WorkflowConnectionsController, WorkflowsController, WorkflowHooksController], providers: [WorkflowConnections, WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService, WorkflowJiraDonePollerService, WorkflowCronService], exports: [WorkflowsService] })
+@Module({ imports: [IntegrationsModule, EventsModule, VersioningModule, PluginsV1Module, WorkspaceModule], controllers: [WorkflowConnectionsController, WorkflowsController, WorkflowHooksController], providers: [WorkflowConnections, WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService, WorkflowJiraDonePollerService, WorkflowCronService], exports: [WorkflowsService] })
 export class WorkflowsModule {}
