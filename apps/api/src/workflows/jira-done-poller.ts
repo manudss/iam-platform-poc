@@ -1,3 +1,4 @@
+import { safeReason } from './log-safe.js';
 import { dataReady } from '../migrations/readiness.js';
 import { WorkflowConnections } from './connections.js';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
@@ -37,7 +38,7 @@ export class WorkflowJiraDonePollerService implements OnModuleInit, OnModuleDest
     if (this.busy) return;
     this.busy = true;
     try { await branchContext.run({ branch: this.store.liveRef }, () => this.scan()); }
-    catch (e) { this.log.warn(`watch tick failed: ${(e as Error).message}`); }
+    catch (e) { this.log.warn(`watch tick failed: ${safeReason(e)}`); }
     finally { this.busy = false; }
   }
 
@@ -45,7 +46,7 @@ export class WorkflowJiraDonePollerService implements OnModuleInit, OnModuleDest
     const desc = externalEvent('jira.issue-done');
     if (!desc?.poll) return;
     let defs;
-    try { defs = await this.store.listAllDefinitions(this.store.liveRef); } catch (e) { this.log.warn(`watch scan failed: ${(e as Error).message}`); return; }
+    try { defs = await this.store.listAllDefinitions(this.store.liveRef); } catch (e) { this.log.warn(`watch scan failed: ${safeReason(e)}`); return; }
     const registry = workspaceMode() && this.branches ? await this.branches.get(this.store.liveRef) : this.reg;
     for (const d of defs.filter((x) => x.trigger?.event === 'jira.issue-done' && x.active !== false)) {
       if (!registry.isActive(d.tenant, 'workflows-iga') || !registry.isActive(d.tenant, 'workflow-connectors')) continue;
@@ -62,7 +63,7 @@ export class WorkflowJiraDonePollerService implements OnModuleInit, OnModuleDest
         try {
           const view = await this.wf.start(d.tenant, d.id, 'jira-done-watcher', { branch: this.store.liveRef, payload, eventId });
           this.log.log(`${d.id}: ticket ${t.key} -> run ${view.run.id} (${view.run.status})`);
-        } catch (e) { this.log.warn(`${d.id}: ticket ${t.key} could not start: ${(e as Error).message}`); }
+        } catch (e) { this.log.warn(`${d.id}: ticket ${t.key} could not start: ${safeReason(e)}`); }
       }
     }
   }
