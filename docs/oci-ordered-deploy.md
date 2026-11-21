@@ -200,10 +200,12 @@ operation, never a silent bypass:
    (pending+failed), the proof AND both evidence files into a private incident bundle, then lifts
    the marker, proves 200 on every origin, re-runs the real OIDC smoke and a complete post-smoke
    recapture - strict on every surface (schema, sequence DEFINITIONS, Dolt, Bao, credentials,
-   ledger) except declared append-only PostgreSQL table rows and sequence CURRENT VALUES (monotonic
-   counters); row comparison walks the union of hashes with every multiplicity preserved, so a
-   vanished row is always caught; the activation journal must stay exactly as captured; only
-   declared audit tables may grow, counted and traced. Only then the reviewed entry is
+   ledger) except declared append-only PostgreSQL table rows and sequence CURRENT VALUES; row
+   comparison walks the union of hashes with every multiplicity preserved, so a vanished row is
+   always caught; sequences are monotonic counters: advancement is allowed, any rewind
+   (last_value down, is_called True->False) or unknown type/shape is refused; the activation
+   journal must stay exactly as captured; only declared audit tables may grow, counted and
+   traced. Only then the reviewed entry is
    appended to the queue history (same SHA/parent/digest, existing entries untouched) in one atomic
    fsynced write, with a separate incident trace linking failure, proofs and approval.
 
@@ -217,10 +219,13 @@ Failure semantics of the closure (faithful exit codes, no silent claims):
   - 4: the incident trace failed AFTER the journal append - partial commit: the journal advanced
     and the verified front stays open (re-arming would contradict the journal); the operator
     completes the trace from the private archive.
-SIGTERM/SIGINT during the lifted window take the same re-arm path. No in-process mechanism can
-survive SIGKILL, a power loss or an OOM kill between lift and re-arm: after ANY abnormal
-termination the operator MUST check every origin for 503 and re-arm manually with the archived
-token.
+SIGTERM/SIGINT during the lifted window take the same re-arm path, and ANY interruption of the
+journal append (error, timeout or signal) resolves the journal state by INTEGRALLY comparing the
+queue file with the expected repaired state and the original: advanced, unchanged or UNKNOWN -
+never claimed from local sequencing. No in-process mechanism can survive SIGKILL, a power loss or
+an OOM kill between lift and re-arm: those are documented residual limits requiring operator
+reconciliation (check every origin for 503, re-arm manually with the archived token, reconcile the
+journal against the private incident archive), not a promise of perfect protection.
 
 Do not modify the policy mid-cycle, do not delete the preserved evidence, and do not lift the gate on
 the strength of anything but this reviewed sequence.

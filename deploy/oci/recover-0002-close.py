@@ -264,6 +264,24 @@ def recapture_after_smoke(verifier, controller, container, policy, after):
             fail('PostgreSQL ' + key + ' drifted (post-smoke recapture)')
     if set(pg.get('sequences', {})) != set(old_pg.get('sequences', {})):
         fail('PostgreSQL sequence inventory drifted (post-smoke recapture)')
+    # Sequence current values are monotonic counters: authorized appends may ADVANCE
+    # them, but any rewind (last_value down, is_called True->False) is a regression;
+    # unknown types or shapes are refused, not guessed.
+    for name, old_seq in old_pg.get('sequences', {}).items():
+        new_seq = pg['sequences'][name]
+        if not isinstance(old_seq, dict) or not isinstance(new_seq, dict) or set(new_seq) != set(old_seq):
+            fail('PostgreSQL sequence shape unknown (post-smoke recapture)')
+        old_last, new_last = old_seq.get('last_value'), new_seq.get('last_value')
+        if (not isinstance(old_last, int) or isinstance(old_last, bool)
+                or not isinstance(new_last, int) or isinstance(new_last, bool)):
+            fail('PostgreSQL sequence value unknown (post-smoke recapture)')
+        if new_last < old_last:
+            fail('PostgreSQL sequence rewound (post-smoke recapture)')
+        old_called, new_called = old_seq.get('is_called'), new_seq.get('is_called')
+        if not isinstance(old_called, bool) or not isinstance(new_called, bool):
+            fail('PostgreSQL sequence is_called unknown (post-smoke recapture)')
+        if old_called and not new_called:
+            fail('PostgreSQL sequence is_called regressed (post-smoke recapture)')
     old_rows = old_pg.get('rows', {})
     new_rows = pg.get('rows', {})
     if set(new_rows) != set(old_rows):
@@ -431,16 +449,21 @@ def close(args):
             try:
                 queue.atomic(Path(args.queue_state), repaired)
                 journal_advanced = True
-            except Exception:
-                # The atomic write may have REPLACED the file and only then failed
-                # (fsync): resolve the uncertain state from the queue file itself,
-                # never from local sequencing. None = the file could not even be read.
+            except BaseException:
+                # ANY interruption of the append - error, timeout or signal - leaves
+                # the journal state uncertain: the atomic write may have REPLACED the
+                # file and only then failed (fsync). Resolve from the queue file
+                # itself, never from local sequencing: INTEGRAL comparison with the
+                # expected repaired state or with the original; anything else - or an
+                # unreadable file - is UNKNOWN, never claimed unadvanced.
                 try:
                     actual = json.loads(Path(args.queue_state).read_text())
-                    journal_advanced = bool(actual.get('history')) \
-                        and actual['history'][-1].get('sha') == SHA_118 \
-                        and actual['history'][-1].get('digest') == NEW_DIGEST \
-                        and 'pending' not in actual and 'failed' not in actual
+                    if actual == repaired:
+                        journal_advanced = True
+                    elif actual == state:
+                        journal_advanced = False
+                    else:
+                        journal_advanced = None
                 except Exception:
                     journal_advanced = None
                 raise

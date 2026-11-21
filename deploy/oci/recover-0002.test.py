@@ -538,6 +538,47 @@ class Close(Fixture):
         self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
         self.assertTrue(self.barrier.exists())
 
+    def test_post_smoke_sequence_rewind_rearms(self):
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['sequences']['public.decision_audit_id_seq'] = {'last_value': 5, 'is_called': True}
+        self.patch_close(postgres_live=pg)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
+        self.assertTrue(self.barrier.exists())
+
+    def test_post_smoke_sequence_is_called_regression_rearms(self):
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['sequences']['public.decision_audit_id_seq'] = {'last_value': 7, 'is_called': False}
+        self.patch_close(postgres_live=pg)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
+        self.assertTrue(self.barrier.exists())
+
+    def test_post_smoke_sequence_unknown_value_type_rearms(self):
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['sequences']['public.decision_audit_id_seq'] = {'last_value': 'many', 'is_called': True}
+        self.patch_close(postgres_live=pg)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
+        self.assertTrue(self.barrier.exists())
+
+    def test_post_smoke_sequence_bool_last_value_rearms(self):
+        # bool is a subclass of int in Python: it must not pass as a sequence value.
+        proof = self.make_proof()
+        pg = json.loads(json.dumps(self.after_doc['postgres']))
+        pg['sequences']['public.decision_audit_id_seq'] = {'last_value': True, 'is_called': True}
+        self.patch_close(postgres_live=pg)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'post-smoke-complete-recapture')
+        self.assertTrue(self.barrier.exists())
+
     def test_journal_append_failure_rearms_and_reports_faithfully(self):
         proof = self.make_proof()
         self.patch_close(atomic_ok=False)
@@ -589,6 +630,41 @@ class Close(Fixture):
         self.assertIn('UNKNOWN', ctx.exception.note)
         self.assertTrue(ctx.exception.rearm_confirmed)
         self.assertTrue(self.barrier.exists())
+
+    def test_signal_during_append_after_replace_resolves_from_file(self):
+        # A signal (BaseException path) interrupting the append AFTER the file was
+        # replaced must still resolve the journal state from the file: advanced,
+        # front left open, no contradictory re-arm.
+        proof = self.make_proof()
+        def atomic(path, doc):
+            Path(path).write_text(json.dumps(doc))
+            raise c._Signalled('SIGTERM during append')
+        self.patch_close(atomic_fn=atomic)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'journal-append')
+        self.assertTrue(ctx.exception.journal_advanced)
+        self.assertIsNone(ctx.exception.rearm_confirmed)
+        self.assertFalse(self.barrier.exists())
+        state = json.loads(self.queue.read_text())
+        self.assertEqual(len(state['history']), 2)
+        self.assertNotIn('pending', state)
+
+    def test_signal_during_append_without_replace_rereads_original(self):
+        # Same interruption with the file untouched: integral comparison with the
+        # original state resolves journal NOT advanced; the gate re-arms.
+        proof = self.make_proof()
+        def atomic(path, doc):
+            raise c._Signalled('SIGTERM before write')
+        self.patch_close(atomic_fn=atomic)
+        with self.assertRaises(c.CloseFailure) as ctx:
+            c.close(self.close_args(proof))
+        self.assertEqual(ctx.exception.step, 'journal-append')
+        self.assertFalse(ctx.exception.journal_advanced)
+        self.assertTrue(ctx.exception.rearm_confirmed)
+        self.assertTrue(self.barrier.exists())
+        state = json.loads(self.queue.read_text())
+        self.assertIn('pending', state)
 
     def test_queue_state_changed_during_lift_rearms(self):
         proof = self.make_proof()
