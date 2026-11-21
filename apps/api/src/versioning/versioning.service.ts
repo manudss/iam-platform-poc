@@ -271,7 +271,9 @@ export class VersioningService {
     try {
       const f = await this.resolve(c, from), t = await this.resolve(c, to);
       const [rows] = await c.query(three ? 'select * from dolt_diff(?, ?) limit ?' : 'select * from dolt_diff(?, ?, ?) limit ?', three ? [`${f.name}...${t.name}`, table, lim + 1] : [f.name, t.name, table, lim + 1]);
-      return { table, truncated: (rows as Row[]).length > lim, ...shapeDiff((rows as Row[]).slice(0, lim)) };
+      let primaryKey: string[] = [];
+      if (t.kind === 'branch') { try { primaryKey = await this.at(t.name, async (cc) => (await this.columns(cc, table)).filter((x) => x.key === 'PRI').map((x) => x.name)); } catch { /* table absent on that branch: no key, no row actions */ } }
+      return { table, truncated: (rows as Row[]).length > lim, primaryKey, ...shapeDiff((rows as Row[]).slice(0, lim)) };
     } catch (e) { throw mapSqlError(e); } finally { await c.end(); }
   }
 
@@ -349,6 +351,71 @@ export class VersioningService {
       }
       const hash = await this.commitAll(c, commitMessage(message, `edit ${table}: ${ops.length} change(s)`), authorOf(sub));
       return { branch, table, commit: hash, operations: ops.length };
+    });
+  }
+
+  // ---------------------------------------------------------------------------------------- discard one change
+
+  /**
+   * Abandons ONE change of a working branch, keeping every other change: the row (or only the named columns of a modified row) goes back to
+   * what it was where the branch diverged from `target` (the merge base, as in the three-dot diff). One commit, author = the signed-in user.
+   *  - added row: deleted; removed row: inserted back; modified row: the changed columns (or only `columns`) get their base values.
+   * It never writes a value that did not already exist on the base, so it cannot introduce a credential reference or plugin state: that is
+   * why it is allowed for credential_revision and plugin_runtime_* (where editing a value is refused) and the only way to drop such a change.
+   * A row that main also changed then no longer conflicts: the branch no longer touches it, so the merge takes main's version.
+   * Refused on protected branches (writeOn), with a stale expectedHead, with uncommitted work, or when the row has no change on the branch.
+   */
+  async discardChange(branch: string, table: string, key: Row, opts: { columns?: string[]; expectedHead?: string; message?: string; target?: string }, sub: unknown) {
+    tableName(table);
+    const target = branchName(opts.target ?? this.defaultBranch, 'target');
+    if (branch === target) throw new ForbiddenException(`${target} has no changes of its own to discard`);
+    return this.writeOn(branch, async (c) => {
+      if (opts.expectedHead) {
+        const [h] = await c.query('select hashof(?) h', [branch]);
+        if ((h as { h: string }[])[0].h !== opts.expectedHead) throw new ConflictException('Working branch changed. Review again before discarding.');
+      }
+      const cols = await this.columns(c, table);
+      const names = new Set(cols.map((x) => x.name));
+      const pk = cols.filter((x) => x.key === 'PRI').map((x) => x.name);
+      if (!pk.length) throw new BadRequestException(`table ${table} has no primary key: use the SQL console`);
+      if (!key || typeof key !== 'object' || Array.isArray(key) || Object.keys(key).length !== pk.length || !pk.every((p) => key[p] !== undefined && key[p] !== null)) throw new BadRequestException(`key must contain exactly the primary key columns: ${pk.join(', ')}`);
+      let only: string[] | undefined;
+      if (opts.columns !== undefined) {
+        if (!Array.isArray(opts.columns) || !opts.columns.length || opts.columns.length > 50 || opts.columns.some((x) => typeof x !== 'string' || !names.has(x))) throw new BadRequestException('columns must name existing columns');
+        if (opts.columns.some((x) => pk.includes(x))) throw new BadRequestException('a key column cannot be discarded on its own: discard the whole row');
+        only = opts.columns;
+      }
+      const val = (v: unknown) => (v !== null && typeof v === 'object' && !(v instanceof Date) && !Buffer.isBuffer(v) ? JSON.stringify(v) : v);
+      // Base and branch values are read from the diff in a SEPARATE query (never joined across revisions).
+      const where = '(' + pk.map(() => '?? = ?').join(' and ') + ') or (' + pk.map(() => '?? = ?').join(' and ') + ')';
+      const wp = [...pk.flatMap((p) => [`to_${p}`, val(key[p])]), ...pk.flatMap((p) => [`from_${p}`, val(key[p])])];
+      const [d] = await c.query(`select * from dolt_diff(?, ?) where ${where} limit 2`, [`${target}...${branch}`, table, ...wp]);
+      const rows = d as Row[];
+      if (rows.length !== 1) throw new NotFoundException(`no change to ${table} ${JSON.stringify(key)} on ${branch} since it diverged from ${target}`);
+      const r = rows[0], type = String(r.diff_type);
+      const base = (n: string) => r[`from_${n}`], mine = (n: string) => r[`to_${n}`];
+      const kw = pk.flatMap((p) => [p, val(key[p])]), kwhere = pk.map(() => '?? = ?').join(' and ');
+      let what: string;
+      if (type === 'added') {
+        if (only) throw new BadRequestException('an added row has no earlier value: discard the whole row');
+        const [res] = await c.query(`delete from ?? where ${kwhere}`, [table, ...kw]);
+        if ((res as { affectedRows: number }).affectedRows !== 1) throw new ConflictException('the row is not on the branch any more');
+        what = 'removed the added row';
+      } else if (type === 'removed') {
+        if (only) throw new BadRequestException('a removed row is put back whole: discard the whole row');
+        const keys = cols.map((x) => x.name).filter((n) => `from_${n}` in r);
+        await c.query('insert into ?? (??) values (?)', [table, keys, keys.map((k) => val(base(k)))]);
+        what = 'put the removed row back';
+      } else if (type === 'modified') {
+        const differing = cols.map((x) => x.name).filter((n) => !pk.includes(n) && `from_${n}` in r && `to_${n}` in r && JSON.stringify(val(base(n))) !== JSON.stringify(val(mine(n))));
+        const target_cols = only ? only.filter((n) => differing.includes(n)) : differing;
+        if (!target_cols.length) throw new NotFoundException('none of those columns changed on the branch');
+        const [res] = await c.query(`update ?? set ${target_cols.map(() => '?? = ?').join(', ')} where ${kwhere}`, [table, ...target_cols.flatMap((n) => [n, val(base(n))]), ...kw]);
+        if ((res as { affectedRows: number }).affectedRows !== 1) throw new ConflictException('the row is not on the branch any more');
+        what = `restored ${target_cols.join(', ')} to the base value`;
+      } else throw new BadRequestException('unsupported change type');
+      const hash = await this.commitAll(c, commitMessage(opts.message, `discard change in ${table}: ${what}`), authorOf(sub));
+      return { branch, table, key, change: type, action: what, commit: hash };
     });
   }
 

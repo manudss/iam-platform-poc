@@ -348,7 +348,9 @@ export class VersioningClient {
   commit(hash: string) { return this.req<{ commit: string; message: string; author: string; date: string; parents: string[]; changes: TableSummary[] }>('GET', `/commits/${hash}`); }
   revert(hash: string, newBranch: string) { return this.req<{ branch: string; commit: string }>('POST', `/commits/${hash}/revert`, { newBranch }); }
   diff(from: string, to: string, three: boolean) { return this.req<DiffSummary>('GET', `/diff${this.q({ from, to, three })}`); }
-  diffTable(table: string, from: string, to: string, three: boolean) { return this.req<{ table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }>('GET', `/diff/${table}${this.q({ from, to, three })}`); }
+  diffTable(table: string, from: string, to: string, three: boolean) { return this.req<{ table: string; columns: string[]; primaryKey?: string[]; rows: RowDiff[]; truncated: boolean }>('GET', `/diff/${table}${this.q({ from, to, three })}`); }
+  /** Abandons ONE change of a working branch (a row, or only some columns of a modified row); every other change stays. */
+  discardChange(branch: string, table: string, key: Record<string, unknown>, columns?: string[], expectedHead?: string) { return this.req<{ commit: string; action: string }>('POST', `/branches/${encodeURIComponent(branch)}/discard-change`, { table, key, columns, expectedHead }); }
   tables(ref: string) { return this.req<{ ref: string; kind: string; tables: { name: string; rows: number }[] }>('GET', `/tables${this.q({ ref })}`); }
   rows(ref: string, table: string, offset = 0, limit = 25) { return this.req<TableData>('GET', `/tables/${table}${this.q({ ref, offset, limit })}`); }
   edit(branch: string, table: string, ops: object[], message: string) { return this.req<{ commit: string }>('POST', `/tables/${table}/edit`, { branch, ops, message }); }

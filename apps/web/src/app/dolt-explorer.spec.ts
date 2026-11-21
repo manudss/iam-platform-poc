@@ -399,6 +399,22 @@ describe('DoltExplorer (rendering with a fake API)', () => {
     c['prTab'].set('rows'); f.detectChanges();
     expect(el.querySelector('.table-diff tr.add')?.textContent).toContain('B');
   });
+  it('pull request rows: undo one field or one row of the source branch, protected sources get no buttons', async () => {
+    const diff = { from: 'main', to: 'feat-a', three: true, rows: { added: 0, modified: 1, removed: 0, total: 1 }, tables: [{ table: 'identities', from: null, kind: 'modified', dataChange: true, schemaChange: false, rows: { added: 0, modified: 1, removed: 0 } }], schema: [] };
+    const rows = { table: 'identities', columns: ['id', 'department', 'credential_revision'], primaryKey: ['id'], rows: [{ type: 'modified', from: { id: 'demo-alice', department: 'IT', credential_revision: 'r0' }, to: { id: 'demo-alice', department: 'Direction', credential_revision: 'r1' } }], truncated: false };
+    const detail = { pullRequest: { id: 8, title: 't', body: '', source: 'feat-a', target: 'main', status: 'open', author: 'demo-alice', createdAt: '', mergedAt: null, mergeCommit: null }, comments: [], approvals: [], requiredApprovals: 0, commits: [], diff, checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] } };
+    const { f, el, c, calls } = await mount(routes({ 'GET /versioning/pulls/8': () => ({ data: detail }), 'GET /versioning/diff/identities': () => ({ data: rows }), 'POST /versioning/branches/feat-a/discard-change': () => ({ data: { commit: 'a'.repeat(32), action: 'restored credential_revision to the base value' } }) }));
+    await c['showPull'](8); c['tab'].set('pulls'); c['prTab'].set('rows'); f.detectChanges();
+    const undo = [...el.querySelectorAll('.table-diff button.link')].map((b) => b.textContent?.trim());
+    expect(undo).toEqual(['undo', 'undo', 'undo row']);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    ([...el.querySelectorAll('.table-diff button.link')][1] as HTMLButtonElement).click(); await f.whenStable();
+    const post = calls.find((x) => x.method === 'POST' && x.path.includes('discard-change'))!;
+    expect(post.path).toBe('/versioning/branches/feat-a/discard-change');
+    expect(post.body).toEqual(expect.objectContaining({ table: 'identities', key: { id: 'demo-alice' }, columns: ['credential_revision'] }));
+    c['branches'].set([{ name: 'feat-a', protected: true } as never]); f.detectChanges();
+    expect(el.querySelectorAll('.table-diff button.link').length).toBe(0);
+  });
   it('pull requests: the new-PR form hides the open detail, and opening a PR closes the form', async () => {
     const detail = { pullRequest: { id: 5, title: 'Grant hr-partner', body: '', source: 'feat-a', target: 'main', status: 'open', author: 'demo-alice', createdAt: new Date().toISOString(), mergedAt: null, mergeCommit: null },
       comments: [], approvals: [], requiredApprovals: 1, commits: [], diff: null, checks: { mergeable: true, reasons: [], conflicts: 0, violations: [] } };

@@ -6,7 +6,7 @@ import { FormsModule } from '@angular/forms';
 import { ApiClient, BranchInfo, BranchProtection, ColumnInfo, CommitInfo, DiffSummary, PullRequestDetail, PullRequestInfo, RowDiff, SqlResult, TableData, VersioningClient, cellText, shortHash } from './api';
 
 export type Tab = 'home' | 'branches' | 'history' | 'compare' | 'data' | 'sql' | 'pulls';
-interface RowDiffView { table: string; columns: string[]; rows: RowDiff[]; truncated: boolean }
+interface RowDiffView { table: string; columns: string[]; primaryKey?: string[]; rows: RowDiff[]; truncated: boolean }
 /** One past version of a row: the commit that touched it, who wrote it and why, plus the column-level old -> new. */
 interface RowHistEntry { commit: string; author: string; date: string; message: string; changes: { col: string; from: unknown; to: unknown }[]; created: boolean; baseline?: boolean; values: Record<string, unknown> }
 /** A data workbench tab, bound to a branch for its whole life: a table tab shows rows of one (table, branch); a row tab edits one row (key null = a new row) of one (table, branch). */
@@ -762,6 +762,23 @@ export class DoltExplorer {
     const p = this.pr()?.pullRequest; if (!p) return;
     const r = await this.run(() => this.v.diffTable(table, p.target, p.source, true), true);
     if (r) this.prRowDiffs.update((m) => ({ ...m, [table]: r }));
+  }
+  /** Row actions in the pull request diff: only an open request whose source branch is not protected, on a table with a primary key. */
+  protected canDiscard(d: RowDiffView | null | undefined): boolean {
+    const p = this.pr()?.pullRequest;
+    return !!p && p.status === 'open' && !!d?.primaryKey?.length && !this.protectedBranchNames().has(p.source);
+  }
+  private protectedBranchNames() { return new Set(this.branches().filter((b) => b.protected).map((b) => b.name)); }
+  protected canUndoCell(d: RowDiffView, r: RowDiff, c: string) { return r.type === 'modified' && this.changed(r, c) && !d.primaryKey!.includes(c); }
+  /** Abandons one change of the source branch (whole row, or one field of a modified row), then reloads the diff and the checks. */
+  protected async discardChange(d: RowDiffView, r: RowDiff, columns?: string[]) {
+    const p = this.pr()!.pullRequest; const src = (r.from ?? r.to) as Record<string, unknown>;
+    const key = Object.fromEntries(d.primaryKey!.map((k) => [k, src[k]]));
+    const what = columns ? `the change to ${columns.join(', ')}` : r.type === 'added' ? 'this added row' : r.type === 'removed' ? 'this removed row (it will come back)' : 'all changes to this row';
+    if (!confirm(`Abandon ${what} in ${d.table} on ${p.source}? Everything else on the branch stays. One commit is added to ${p.source}; the value goes back to what it was when the branch started, never to a new value.`)) return;
+    const head = this.branches().find((b) => b.name === p.source)?.commit;
+    const res = await this.run(() => this.v.discardChange(p.source, d.table, key, columns, head));
+    if (res) { this.note.set(`Done (${shortHash(res.commit)}): ${res.action}.`); await this.refreshRefs(); await this.showPull(p.id); this.prTab.set('rows'); }
   }
   protected async sendComment(kind: 'comment' | 'approve') {
     const p = this.pr()!.pullRequest;

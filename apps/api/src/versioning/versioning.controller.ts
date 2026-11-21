@@ -57,6 +57,7 @@ export class VersioningController {
   // data
   @Get('tables') tables(@Query('ref') ref = this.v.defaultBranch) { return this.v.tables(ref); }
   @Get('tables/:table') rows(@Param('table') t: string, @Query('ref') ref = this.v.defaultBranch, @Query('limit') limit?: string, @Query('offset') offset?: string) { return this.v.tableRows(ref, t, Number(limit ?? 50), Number(offset ?? 0)); }
+  @Post('branches/:name/discard-change') discardChange(@Param('name') n: string, @Body() b: { table?: string; key?: Record<string, unknown>; columns?: string[]; expectedHead?: string; message?: string; target?: string }, @Req() r: Req_) { return this.v.discardChange(n, b?.table as string, b?.key as Record<string, unknown>, { columns: b?.columns, expectedHead: b?.expectedHead, message: b?.message, target: b?.target }, r.user?.sub); }
   @Post('tables/:table/edit') edit(@Param('table') t: string, @Body() b: { branch?: string; ops?: EditOp[]; message?: string }, @Req() r: Req_) { return this.v.editRows(b?.branch as string, t, b?.ops as EditOp[], b?.message, r.user?.sub); }
 
   // SQL console
