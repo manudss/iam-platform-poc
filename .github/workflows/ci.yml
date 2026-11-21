@@ -171,6 +171,7 @@ jobs:
         run: |
           python3 deploy/oci/ordered-queue.test.py
           python3 deploy/oci/qualification.test.py
+          python3 deploy/oci/verify-0002-account-blocks.test.py
           node --check deploy/oci/qualification-container.mjs
           node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)

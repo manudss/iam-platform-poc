@@ -152,6 +152,29 @@ read-only offline Dolt inventory in the helper image, real PG17 SQL, metadata-on
 permissions/coverage, the actual hosted form fields, and TLS front checks. Missing inputs
 or implementation failures leave maintenance armed and are blockers, never success claims.
 
+### Digest-specific transformation verifiers
+
+A verifier such as `deploy/oci/verify-0002-account-blocks.py` is root-owned, installed next to
+`qualification.py` (same directory; it imports the controller's comparison), executable, and listed
+in the independent policy under `transformationVerifiers` keyed by the **exact** `--image` string the
+updater passes, including the repository prefix (`ghcr.io/manudss/iam-platform-poc@sha256:...`), not
+a bare or shortened digest. The controller invokes it as `verifier <before.json> <after.json>` with
+the private hash-only evidence. It must prove every declared transformation of that exact transition
+and preservation of everything else, exit 0 only on complete proof, and treat anything unknown as
+failure. Hash-only evidence alone cannot prove commit content, so the verifier additionally performs
+read-only live checks (single running container of the verified image, Dolt log/diff of the migration
+commit, clean working set, captured heads/roots and PostgreSQL row-hash multisets still matching live)
+without ever printing values.
+
+The policy file is hashed into each `before.json`: **changing the policy between the before and after
+phases of one update fails closed** (`qualification policy changed mid-update`). A verifier entry can
+therefore never be added to rescue an already-failed after-phase. When an update fails only for a
+missing verifier, the reviewed recovery is: review and install the verifier, run it manually against
+the preserved evidence pair to prove the transition that already happened, then re-run the complete
+update cycle (fresh evidence directory) under the unchanged policy; the fresh before/after pair must
+show no changes at all. Do not modify the policy mid-cycle, do not delete the preserved evidence, and
+do not lift the gate on the strength of the manual verifier run alone.
+
 ### Existing HTTP-loopback copies
 
 For existing isolated copies whose preserved issuer/redirect origins are HTTP loopback,
