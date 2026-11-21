@@ -6,6 +6,7 @@ import nock from 'nock';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { externalBlock, externalEvent } from './model.js';
 import { WorkflowConnections } from './connections.js';
+process.env.IAM_WORKFLOW_REAL_CONNECTIONS = '1';   // real connections are off by default on a server; these specs exercise them with fictional values
 const helpers = loadPluginModule('workflow-connectors', 'sheets-api.mjs') as any;
 // Network fixtures exercise the INSTALLED Activepieces package, not a substitute
 // for its run() implementation. They are not evidence of a live Google account.
