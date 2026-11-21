@@ -10,25 +10,37 @@ invoked by deploy/oci/qualification.py, or manually by the operator, as
 
   verify-0002-account-blocks.py <before.json> <after.json>
 
-with the controller's private hash-only evidence files. It must prove the WHOLE
-declared transformation, including preservation outside it. It exits 0 only when
-every check below holds; anything unknown, missing, drifted or unexpected exits 1
-with a generic message (never print secret values; evidence contains hashes only).
+with the controller's private hash-only evidence files. The evidence files are only
+READ, never modified. The verifier must prove the WHOLE declared transformation,
+including preservation outside it. It exits 0 only when every check below holds;
+anything unknown, missing, drifted or unexpected exits 1 with a generic message
+(never print secret values; evidence contains hashes only).
 
 What is proven:
-  A. Evidence-internal: exact image pair, unchanged qualification policy (re-hashed
-     from the live policy file), migration ledger strictly extended by 0002 with the
-     manifest checksum and disposition "applied", Bao metadata and credential file
-     hashes identical, and the controller's own compare() reporting exactly ['dolt'].
-  B. Live-tied (read-only, against the single running container of the new image):
-     the iam/main Dolt head moved by exactly ONE commit, on top of the captured
-     before-head, with the exact migration commit message; that commit touches only
-     policy_rules and adds exactly one row - default/screen-account-blocks with the
-     frozen Cedar text from apps/api/src/migrations/v0002/rule.ts; the working set is
-     clean and every captured database/branch head+root still matches live; every
-     PostgreSQL row-hash multiset still matches the after-capture, and the single
-     appended public.activations row is the activation of exactly the migration
-     commit for the policy tenant.
+  A. Historical evidence (before.json vs after.json): exact image pair, unchanged
+     qualification policy (re-hashed from the live policy file), migration ledger
+     strictly extended by 0002 with the manifest checksum and disposition "applied",
+     Bao metadata and credential file hashes identical, and the controller's own
+     compare() reporting exactly ['dolt'] with only iam/main moving.
+  B. Commit content (read-only live Dolt SQL on the single running container of the
+     verified image): each captured iam/main root equals DOLT_HASHOF_DB of its own
+     commit, so both working sets were clean at capture time; the head advanced by
+     exactly ONE commit on top of the captured before-head, with the exact migration
+     commit message; that commit touches only policy_rules data (every diff_summary
+     flag present and explicitly valued; schema_change refused when absent, NULL or
+     true) and adds exactly one row - default/screen-account-blocks with the frozen
+     Cedar text from apps/api/src/migrations/v0002/rule.ts, no existing row touched;
+     the current working set is clean.
+  C. Full fresh recapture, through the controller's own immutable capture machinery
+     (sibling qualification-container.mjs for Dolt+Bao, controller postgres() for
+     PostgreSQL, same credential-file hashing, live migration ledger), compared for
+     exact equality with the historical after-capture: every database/branch
+     inventory (a branch or database created after the capture is detected), PG
+     rows/schema/sequences/sequence definitions, Bao metadata, credential files and
+     the ledger. Any drift since the capture is UNKNOWN.
+  D. The single appended public.activations row (allowed append-only growth between
+     before and after) is isolated live and must be the publication of exactly the
+     migration commit for the policy tenant.
 """
 import hashlib
 import json
@@ -57,6 +69,8 @@ RULE_CEDAR = (
 )
 POLICY_PATH = '/opt/lyam/qualification.json'
 ACTIVATIONS_TABLE = 'public.activations'
+TRUTHY = (True, 1, '1', 'true', 't')
+FALSY = (False, 0, '0', 'false', 'f')
 
 
 def fail(message):
@@ -83,11 +97,7 @@ def load_controller():
     return module
 
 
-def truthy(value):
-    return value in (True, 1, '1', 'true', 't')
-
-
-def check_evidence(before, after, policy, policy_path=POLICY_PATH):
+def check_evidence(before, after, policy, controller, policy_path=POLICY_PATH):
     if before.get('image') != OLD_IMAGE or after.get('image') != NEW_IMAGE:
         fail('image pair is not the verified transition')
     if before.get('transportCoverage') != 'TLS_EXPECTED_ORIGINS' or after.get('transportCoverage') != before.get('transportCoverage'):
@@ -133,10 +143,9 @@ def check_evidence(before, after, policy, policy_path=POLICY_PATH):
     if moved_before['head'] == moved_after['head'] or moved_before['root'] == moved_after['root']:
         fail('declared transformation did not happen')
 
-    controller = load_controller()
     if controller.compare(before, after, policy) != ['dolt']:
         fail('controller preservation comparison is not exactly the Dolt change')
-    return moved_before, moved_after, after_index
+    return moved_before, moved_after
 
 
 def find_container(image):
@@ -166,53 +175,94 @@ def pg_query(policy, sql):
     return json.loads(out)
 
 
-def check_live_dolt(container, moved_before, moved_after, after_index):
+def check_live_dolt(container, moved_before, moved_after):
     head_before, head_after = moved_before['head'], moved_after['head']
     branch_ref = DOLT_DATABASE + '/' + DOLT_BRANCH
+    # Each captured root must be the database hash of its own commit: both working sets
+    # were clean at capture time, so the root movement is exactly the commit's content.
+    for head, captured_root in ((head_before, moved_before['root']), (head_after, moved_after['root'])):
+        rows = dolt_query(container, branch_ref, "SELECT DOLT_HASHOF_DB('%s') AS root" % head)
+        if len(rows) != 1 or rows[0].get('root') != captured_root:
+            fail('captured working root is not the database hash of its commit')
     log = dolt_query(container, branch_ref, 'SELECT commit_hash, message FROM dolt_log LIMIT 2')
-    if len(log) != 2 or log[0].get('commit_hash') != head_after or log[1].get('commit_hash') != head_before:
+    if len(log) != 2 or any('commit_hash' not in row or 'message' not in row for row in log):
+        fail('Dolt log shape unknown')
+    if log[0]['commit_hash'] != head_after or log[1]['commit_hash'] != head_before:
         fail('iam/main did not advance by exactly one commit on top of the captured head')
-    if log[0].get('message') != COMMIT_MESSAGE:
+    if log[0]['message'] != COMMIT_MESSAGE:
         fail('unexpected migration commit message')
     summary = dolt_query(container, DOLT_DATABASE,
                          "SELECT table_name, diff_type, data_change, schema_change FROM dolt_diff_summary('%s','%s')" % (head_before, head_after))
-    if len(summary) != 1 or summary[0].get('table_name') != 'policy_rules' or not truthy(summary[0].get('data_change')) or truthy(summary[0].get('schema_change')):
+    if len(summary) != 1:
+        fail('migration commit touches other than exactly one table')
+    line = summary[0]
+    if not {'table_name', 'diff_type', 'data_change', 'schema_change'} <= set(line.keys()):
+        fail('diff summary flags absent: UNKNOWN, not success')
+    if line['table_name'] != 'policy_rules' or line['diff_type'] != 'modified':
         fail('migration commit touches more than policy_rules data')
+    if line['data_change'] not in TRUTHY or line['schema_change'] not in FALSY:
+        fail('diff summary flags unknown or schema changed')
     diff = dolt_query(container, DOLT_DATABASE,
                       "SELECT * FROM dolt_diff('%s','%s','policy_rules')" % (head_before, head_after))
     if len(diff) != 1:
         fail('policy_rules changed by other than exactly one row')
     row = diff[0]
-    if row.get('diff_type') != 'added':
+    columns = ('diff_type', 'from_set_name', 'from_id', 'from_cedar', 'to_set_name', 'to_id', 'to_cedar')
+    if not set(columns) <= set(row.keys()):
+        fail('diff row columns absent: UNKNOWN, not success')
+    if row['diff_type'] != 'added':
         fail('policy_rules row is not a pure addition')
-    if any(row.get('from_' + column) is not None for column in ('set_name', 'id', 'cedar')):
+    if any(row[column] is not None for column in ('from_set_name', 'from_id', 'from_cedar')):
         fail('an existing policy_rules row was modified')
-    if row.get('to_set_name') != RULE_SET or row.get('to_id') != RULE_ID or row.get('to_cedar') != RULE_CEDAR:
+    if row['to_set_name'] != RULE_SET or row['to_id'] != RULE_ID or row['to_cedar'] != RULE_CEDAR:
         fail('added policy rule is not the frozen account-blocks rule')
-
     status = dolt_query(container, branch_ref, 'SELECT * FROM dolt_status')
     if status:
         fail('iam/main has uncommitted changes beyond the migration commit')
-    for (database, branch), want in after_index.items():
-        heads = dolt_query(container, database, 'SELECT name, hash FROM dolt_branches ORDER BY name')
-        live_head = {item['name']: item['hash'] for item in heads}.get(branch)
-        live_root_rows = dolt_query(container, database + '/' + branch, "SELECT DOLT_HASHOF_DB('WORKING') AS root")
-        live_root = live_root_rows[0].get('root') if live_root_rows else None
-        if live_head != want['head'] or live_root != want['root']:
-            fail('captured Dolt state no longer matches live; something changed since the capture')
     return head_after
 
 
-def check_live_postgres(policy, before, after, migration_head):
-    row_hashes = ("SELECT coalesce(json_agg(s),'[]') FROM (SELECT encode(sha256(convert_to(to_jsonb(t)::text,'UTF8')),'hex') h, count(*) n FROM %s t GROUP BY 1) s")
-    for table, want in after['postgres']['rows'].items():
-        live = {item['h']: item['n'] for item in pg_query(policy, row_hashes % table)}
-        if live != want:
-            fail('captured PostgreSQL rows no longer match live for ' + table)
-    for name, want in after['postgres']['sequences'].items():
-        live = pg_query(policy, 'SELECT row_to_json(s) FROM (SELECT last_value, is_called FROM ' + name + ') s')
-        if live != want:
-            fail('captured PostgreSQL sequence no longer matches live for ' + name)
+def container_capture(container, policy):
+    """Fresh Dolt+Bao capture through the controller's own immutable container script."""
+    source = Path(__file__).with_name('qualification-container.mjs').read_text()
+    token = Path(policy['baoTokenFile']).read_text().strip()
+    out = run(['docker', 'exec', '-i', container, 'node', '--input-type=module', '-e', source, 'capture'],
+              input_text=json.dumps({**policy, 'running': True, 'baoToken': token}))
+    return json.loads(out)
+
+
+def container_credentials(container, credential_files):
+    """Same hashing as the controller: sha256 of each covered file's bytes, None when absent."""
+    script = ("const{createHash}=require('crypto'),{readFileSync}=require('fs');"
+              "const out={};for(const f of JSON.parse(process.argv[1])){"
+              "try{out[f]=createHash('sha256').update(readFileSync('/data/'+f)).digest('hex')}catch{out[f]=null}}"
+              "console.log(JSON.stringify(out))")
+    return json.loads(run(['docker', 'exec', '-i', container, 'node', '-e', script, json.dumps(credential_files)]))
+
+
+def container_ledger(container):
+    return json.loads(run(['docker', 'exec', '-i', container, 'cat', '/data/migrations/journal.json']))
+
+
+def recapture_and_tie(container, policy, controller, after):
+    """A complete fresh capture must equal the historical after-capture everywhere:
+    full Dolt database/branch inventory, Bao metadata, all PostgreSQL surfaces,
+    credential files and the migration ledger. Any drift since the capture is UNKNOWN."""
+    fresh = container_capture(container, policy)
+    if fresh.get('dolt') != after['dolt']:
+        fail('Dolt inventory drifted since the captured evidence')
+    if fresh.get('bao') != after['bao']:
+        fail('Bao metadata drifted since the captured evidence')
+    if controller.postgres(policy) != after['postgres']:
+        fail('PostgreSQL state drifted since the captured evidence')
+    credentials = container_credentials(container, policy['credentialFiles'])
+    if credentials != after['credentials'] or not any(credentials.values()):
+        fail('credential files drifted since the captured evidence')
+    if container_ledger(container) != after['migrationLedger']:
+        fail('migration ledger drifted since the captured evidence')
+
+
+def check_activation_append(policy, before, after, migration_head):
     added_hashes = []
     before_rows = before['postgres']['rows'].get(ACTIVATIONS_TABLE, {})
     for h, n in after['postgres']['rows'].get(ACTIVATIONS_TABLE, {}).items():
@@ -234,13 +284,15 @@ def check_live_postgres(policy, before, after, migration_head):
 
 
 def verify(before_path, after_path, policy_path=POLICY_PATH):
+    controller = load_controller()
+    policy = controller.policy_load(policy_path)
     before = json.loads(Path(before_path).read_text())
     after = json.loads(Path(after_path).read_text())
-    policy = json.loads(Path(policy_path).read_text())
-    moved_before, moved_after, after_index = check_evidence(before, after, policy, policy_path)
+    moved_before, moved_after = check_evidence(before, after, policy, controller, policy_path)
     container = find_container(NEW_IMAGE)
-    migration_head = check_live_dolt(container, moved_before, moved_after, after_index)
-    check_live_postgres(policy, before, after, migration_head)
+    migration_head = check_live_dolt(container, moved_before, moved_after)
+    recapture_and_tie(container, policy, controller, after)
+    check_activation_append(policy, before, after, migration_head)
 
 
 def main():
@@ -252,7 +304,7 @@ def main():
     except Exception:
         print('Transformation verification failed or UNKNOWN. Keep maintenance armed and inspect private evidence.', file=sys.stderr)
         return 1
-    print('Migration 0002 transformation proven: declared changes only, everything else preserved and tied to live state.')
+    print('Migration 0002 transformation proven: declared changes only, everything else preserved and tied to a fresh complete capture.')
     return 0
 
 

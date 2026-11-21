@@ -1,10 +1,13 @@
-import copy, hashlib, importlib.util, json, tempfile, unittest
+import copy, hashlib, importlib.util, json, tempfile, types, unittest
 from pathlib import Path
 from unittest import mock
 
 spec = importlib.util.spec_from_file_location('verifier', Path(__file__).with_name('verify-0002-account-blocks.py'))
 v = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(v)
+cspec = importlib.util.spec_from_file_location('qualification_controller', Path(__file__).with_name('qualification.py'))
+REAL_CONTROLLER = importlib.util.module_from_spec(cspec)
+cspec.loader.exec_module(REAL_CONTROLLER)
 
 HEAD_BEFORE = 'beforehead0000000000000000000000'
 HEAD_AFTER = 'afterhead00000000000000000000000'
@@ -17,7 +20,10 @@ CONTAINER = 'candidatecid'
 
 def policy():
     return {'format': 1, 'pgContainer': 'pg', 'pgUser': 'lyam', 'pgDatabase': 'lyam', 'tenant': 'acme-demo',
-            'appendOnlyTables': ['public.activations', 'public.decision_audit']}
+            'appendOnlyTables': ['public.activations', 'public.decision_audit'],
+            'credentialFiles': ['core-state/credentials.json'], 'baoTokenFile': '/x', 'baoAddress': 'http://bao:8200',
+            'baoMetadataRoots': ['secret/metadata/iam'], 'origins': ['https://lyam.dss.name'],
+            'issuer': 'https://lyam.dss.name/core', 'network': 'lyam-net', 'authFile': '/auth'}
 
 
 def fixtures(policy_hash):
@@ -45,19 +51,24 @@ def fixtures(policy_hash):
     return before, after
 
 
-def fake_run_factory(before, after, overrides=None):
-    """A subprocess stand-in answering every docker call from the fixture state, with per-test tampering."""
+def harness(before, after, overrides=None):
+    """All external seams stubbed from the fixtures: one docker point, the fresh-capture
+    functions, and the controller module (real compare, stubbed postgres/policy_load)."""
     overrides = overrides or {}
-    diff_row = {'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
-                'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR}
     state = {
+        'roots': {HEAD_BEFORE: ROOT_BEFORE, HEAD_AFTER: ROOT_AFTER},
         'ps': CONTAINER,
         'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}],
         'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': False}],
-        'diff': [diff_row],
+        'diff': [{'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
+                  'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR}],
         'status': [],
         'activation_rows': [{'h': 'a1', 'j': {'commit': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
-                            {'h': 'a2', 'j': {'commit': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'applied'}}]}
+                            {'h': 'a2', 'j': {'commit': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'applied'}}],
+        'capture': {'dolt': after['dolt'], 'bao': after['bao']},
+        'credentials_live': after['credentials'],
+        'ledger_live': after['migrationLedger'],
+        'postgres_live': after['postgres']}
     state.update(overrides)
 
     def run(args, input_text=None):
@@ -67,39 +78,34 @@ def fake_run_factory(before, after, overrides=None):
             return json.dumps([{'Config': {'Image': v.NEW_IMAGE}, 'State': {'Running': True}}])
         if 'dolt' in args:
             sql = args[-1]
-            db = [a for a in args if a.startswith('--use-db=')][0][9:]
+            if 'DOLT_HASHOF_DB(' in sql:
+                head = sql.split("DOLT_HASHOF_DB('", 1)[1].split("'", 1)[0]
+                return json.dumps({'rows': [{'root': state['roots'].get(head)}]})
             if 'FROM dolt_log' in sql:
-                rows = state['log']
-            elif 'dolt_diff_summary' in sql:
-                rows = state['summary']
-            elif 'dolt_diff(' in sql:
-                rows = state['diff']
-            elif 'dolt_status' in sql:
-                rows = state['status']
-            elif 'FROM dolt_branches' in sql:
-                rows = [{'name': b, 'hash': h} for (d, b), h in
-                        {(x['database'], x['branch']): x['head'] for x in after['dolt']}.items() if d == db]
-            elif "DOLT_HASHOF_DB('WORKING')" in sql:
-                root = {('/'.join([x['database'], x['branch']])): x['root'] for x in after['dolt']}[db]
-                rows = [{'root': root}]
-            else:
-                raise AssertionError('unexpected dolt sql: ' + sql)
-            return json.dumps({'rows': rows})
+                return json.dumps({'rows': state['log']})
+            if 'dolt_diff_summary' in sql:
+                return json.dumps({'rows': state['summary']})
+            if 'dolt_diff(' in sql:
+                return json.dumps({'rows': state['diff']})
+            if 'dolt_status' in sql:
+                return json.dumps({'rows': state['status']})
+            raise AssertionError('unexpected dolt sql: ' + sql)
         if 'psql' in args:
             sql = args[-1]
             if 'to_jsonb(t) j FROM public.activations' in sql:
                 return json.dumps(state['activation_rows'])
-            if 'last_value, is_called FROM ' in sql:
-                name = sql.split('last_value, is_called FROM ', 1)[1].split(')')[0].strip()
-                rows = state.get('pg_sequences', {}).get(name, after['postgres']['sequences'][name])
-                return json.dumps(rows)
-            for table in ('public.activations', 'public.decision_audit'):
-                if 'FROM %s t GROUP BY 1' % table in sql:
-                    rows = state.get('pg_rows', {}).get(table, after['postgres']['rows'][table])
-                    return json.dumps([{'h': h, 'n': n} for h, n in rows.items()])
             raise AssertionError('unexpected pg sql: ' + sql)
         raise AssertionError('unexpected command: ' + ' '.join(args))
-    return run
+
+    controller = types.SimpleNamespace(
+        compare=REAL_CONTROLLER.compare,
+        postgres=lambda p: state['postgres_live'],
+        policy_load=lambda path, isolated_loopback=False: json.loads(Path(path).read_text()))
+    return [mock.patch.object(v, 'run', run),
+            mock.patch.object(v, 'load_controller', lambda: controller),
+            mock.patch.object(v, 'container_capture', lambda c, p: state['capture']),
+            mock.patch.object(v, 'container_credentials', lambda c, files: state['credentials_live']),
+            mock.patch.object(v, 'container_ledger', lambda c: state['ledger_live'])]
 
 
 class Verify(unittest.TestCase):
@@ -111,25 +117,30 @@ class Verify(unittest.TestCase):
         self.before, self.after = fixtures(self.policy_hash)
         self.before_path = Path(self.dir.name) / 'before.json'
         self.after_path = Path(self.dir.name) / 'after.json'
-        self.before_path.write_text(json.dumps(self.before))
-        self.after_path.write_text(json.dumps(self.after))
 
     def tearDown(self):
         self.dir.cleanup()
 
     def run_verifier(self, overrides=None, before=None, after=None):
-        if before is not None:
-            self.before_path.write_text(json.dumps(before))
-        if after is not None:
-            self.after_path.write_text(json.dumps(after))
-        b, a = json.loads(self.before_path.read_text()), json.loads(self.after_path.read_text())
-        with mock.patch.object(v, 'run', fake_run_factory(b, a, overrides)):
-            v.verify(str(self.before_path), str(self.after_path), str(self.policy_path))
+        before = self.before if before is None else before
+        after = self.after if after is None else after
+        self.before_path.write_text(json.dumps(before))
+        self.after_path.write_text(json.dumps(after))
+        for patcher in harness(before, after, overrides):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        v.verify(str(self.before_path), str(self.after_path), str(self.policy_path))
 
     def expect_fail(self, overrides=None, before=None, after=None):
         with self.assertRaises(ValueError):
             self.run_verifier(overrides, before, after)
 
+    def mutate_after(self, fn):
+        after = copy.deepcopy(self.after)
+        fn(after)
+        return after
+
+    # -- the one passing path ---------------------------------------------------
     def test_declared_transition_passes(self):
         self.run_verifier()
 
@@ -141,50 +152,64 @@ class Verify(unittest.TestCase):
         self.assertEqual(entry['checksum'], v.MIGRATION_CHECKSUM)
         self.assertIn(v.COMMIT_MESSAGE, (root / 'apps/api/src/migrations/v0002/run.ts').read_text())
 
+    # -- historical evidence rejections -----------------------------------------
     def test_wrong_after_image(self):
-        after = copy.deepcopy(self.after); after['image'] = 'ghcr.io/manudss/iam-platform-poc@sha256:' + '0' * 64
-        self.expect_fail(after=after)
+        self.expect_fail(after=self.mutate_after(lambda a: a.update(image='ghcr.io/manudss/iam-platform-poc@sha256:' + '0' * 64)))
+
+    def test_wrong_before_image(self):
+        before = copy.deepcopy(self.before); before['image'] = v.NEW_IMAGE
+        self.expect_fail(before=before)
 
     def test_policy_drift_since_capture(self):
         self.policy_path.write_text(json.dumps({**policy(), 'tenant': 'other'}))
         self.expect_fail()
 
     def test_ledger_checksum_mismatch(self):
-        after = copy.deepcopy(self.after); after['migrationLedger']['entries'][-1]['checksum'] = '0' * 64
-        self.expect_fail(after=after)
+        self.expect_fail(after=self.mutate_after(lambda a: a['migrationLedger']['entries'][-1].update(checksum='0' * 64)))
 
     def test_ledger_not_strictly_extended(self):
-        after = copy.deepcopy(self.after); after['migrationLedger']['entries'][0]['checksum'] = '0' * 64
-        self.expect_fail(after=after)
+        self.expect_fail(after=self.mutate_after(lambda a: a['migrationLedger']['entries'][0].update(checksum='0' * 64)))
 
     def test_ledger_pending_fails(self):
-        after = copy.deepcopy(self.after); after['migrationLedger']['pending'] = {'id': '0002'}
-        self.expect_fail(after=after)
+        self.expect_fail(after=self.mutate_after(lambda a: a['migrationLedger'].update(pending={'id': '0002'})))
+
+    def test_migration_already_present_before(self):
+        before = copy.deepcopy(self.before)
+        before['migrationLedger']['entries'].append({'id': '0002', 'checksum': v.MIGRATION_CHECKSUM, 'disposition': 'applied'})
+        self.expect_fail(before=before)
 
     def test_bao_change(self):
-        after = copy.deepcopy(self.after); after['bao'] = {}
-        self.expect_fail(after=after)
+        self.expect_fail(after=self.mutate_after(lambda a: a.update(bao={})))
 
     def test_credential_change(self):
-        after = copy.deepcopy(self.after); after['credentials']['core-state/credentials.json'] = 'new'
-        self.expect_fail(after=after)
+        self.expect_fail(after=self.mutate_after(lambda a: a['credentials'].update({'core-state/credentials.json': 'new'})))
 
     def test_other_branch_movement(self):
-        after = copy.deepcopy(self.after)
-        for item in after['dolt']:
-            if item['branch'] == 'personal/demo-alice':
-                item['root'] = 'tampered' + item['root'][8:]
-        self.expect_fail(after=after)
+        def tamper(a):
+            for item in a['dolt']:
+                if item['branch'] == 'personal/demo-alice':
+                    item['root'] = 'tampered' + item['root'][8:]
+        self.expect_fail(after=self.mutate_after(tamper))
 
     def test_transformation_absent(self):
-        after = copy.deepcopy(self.after)
-        for item in after['dolt']:
-            if (item['database'], item['branch']) == ('iam', 'main'):
-                item['head'], item['root'] = HEAD_BEFORE, ROOT_BEFORE
-        self.expect_fail(after=after)
+        def revert(a):
+            for item in a['dolt']:
+                if (item['database'], item['branch']) == ('iam', 'main'):
+                    item['head'], item['root'] = HEAD_BEFORE, ROOT_BEFORE
+        self.expect_fail(after=self.mutate_after(revert))
+
+    # -- commit content rejections ----------------------------------------------
+    def test_before_root_not_bound_to_its_commit(self):
+        self.expect_fail({'roots': {HEAD_BEFORE: 'otherroot' + ROOT_BEFORE[9:], HEAD_AFTER: ROOT_AFTER}})
+
+    def test_after_root_not_bound_to_its_commit(self):
+        self.expect_fail({'roots': {HEAD_BEFORE: ROOT_BEFORE, HEAD_AFTER: 'dirtyworking' + ROOT_AFTER[12:]}})
 
     def test_two_commits(self):
         self.expect_fail({'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': 'surprise', 'message': 'x'}]})
+
+    def test_log_shape_unknown(self):
+        self.expect_fail({'log': [{'commit_hash': HEAD_AFTER}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}]})
 
     def test_commit_message(self):
         self.expect_fail({'log': [{'commit_hash': HEAD_AFTER, 'message': 'relabelled'}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}]})
@@ -193,40 +218,67 @@ class Verify(unittest.TestCase):
         self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': False},
                                       {'table_name': 'users', 'diff_type': 'modified', 'data_change': True, 'schema_change': False}]})
 
-    def test_schema_change_in_commit(self):
+    def test_summary_flags_absent_is_unknown_not_false(self):
+        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True}]})
+
+    def test_summary_schema_change_null_is_unknown(self):
+        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': None}]})
+
+    def test_summary_schema_change_true(self):
         self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'data_change': True, 'schema_change': True}]})
 
+    def test_summary_data_change_absent(self):
+        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'modified', 'schema_change': False}]})
+
+    def test_summary_diff_type_unexpected(self):
+        self.expect_fail({'summary': [{'table_name': 'policy_rules', 'diff_type': 'added', 'data_change': True, 'schema_change': True}]})
+
     def test_rule_text_mismatch(self):
-        row = {'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
-               'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': 'permit(principal, action, resource);'}
+        self.expect_fail({'diff': [{'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
+                                    'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': 'permit(principal, action, resource);'}]})
+
+    def test_diff_column_absent_is_unknown(self):
+        row = {'diff_type': 'added', 'from_set_name': None, 'from_id': None,
+               'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR}
         self.expect_fail({'diff': [row]})
 
     def test_existing_row_modified(self):
-        row = {'diff_type': 'modified', 'from_set_name': 'default', 'from_id': 'screen-users', 'from_cedar': 'x',
-               'to_set_name': 'default', 'to_id': 'screen-users', 'to_cedar': 'y'}
-        self.expect_fail({'diff': [row]})
+        self.expect_fail({'diff': [{'diff_type': 'modified', 'from_set_name': 'default', 'from_id': 'screen-users', 'from_cedar': 'x',
+                                    'to_set_name': 'default', 'to_id': 'screen-users', 'to_cedar': 'y'}]})
+
+    def test_two_rows_changed(self):
+        self.expect_fail({'diff': [
+            {'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
+             'to_set_name': v.RULE_SET, 'to_id': v.RULE_ID, 'to_cedar': v.RULE_CEDAR},
+            {'diff_type': 'added', 'from_set_name': None, 'from_id': None, 'from_cedar': None,
+             'to_set_name': v.RULE_SET, 'to_id': 'other', 'to_cedar': 'x'}]})
 
     def test_dirty_working_set(self):
         self.expect_fail({'status': [{'table_name': 'sessions', 'status': 'modified'}]})
 
-    def test_live_root_drift(self):
-        after = copy.deepcopy(self.after)
-        for item in after['dolt']:
-            if (item['database'], item['branch']) == ('iam_meta', 'main'):
-                item['root'] = 'drifted' + item['root'][7:]
-        # evidence compare sees only ['dolt'] with iam/main; live tie must catch iam_meta drift
-        self.expect_fail(after=after)
+    # -- fresh complete recapture rejections -------------------------------------
+    def test_live_branch_created_after_capture(self):
+        capture = {'dolt': self.after['dolt'] + [{'database': 'iam', 'branch': 'personal/intruder', 'head': 'x', 'root': 'y'}],
+                   'bao': self.after['bao']}
+        self.expect_fail({'capture': capture})
 
-    def test_pg_rows_drift(self):
-        # live rows no longer match the after-capture: something wrote after the evidence
-        self.expect_fail({'pg_rows': {'public.decision_audit': {'d1': 2, 'd2': 1}}})
+    def test_live_bao_drift(self):
+        self.expect_fail({'capture': {'dolt': self.after['dolt'], 'bao': {}}})
 
-    def test_pg_row_lost_since_capture(self):
-        self.expect_fail({'pg_rows': {'public.decision_audit': {'d1': 1}}})
+    def test_live_postgres_drift(self):
+        self.expect_fail({'postgres_live': {**self.after['postgres'], 'schema': {'columns': ['new']}}})
 
+    def test_live_credential_drift(self):
+        self.expect_fail({'credentials_live': {'core-state/credentials.json': 'rotated'}})
+
+    def test_live_ledger_drift(self):
+        drifted = copy.deepcopy(self.after['migrationLedger'])
+        drifted['entries'].append({'id': '0003', 'checksum': '3' * 64})
+        self.expect_fail({'ledger_live': drifted})
+
+    # -- activation append rejections --------------------------------------------
     def test_two_activation_appends(self):
-        after = copy.deepcopy(self.after)
-        after['postgres']['rows']['public.activations'] = {'a1': 1, 'a2': 1, 'a3': 1}
+        after = self.mutate_after(lambda a: a['postgres']['rows'].update({'public.activations': {'a1': 1, 'a2': 1, 'a3': 1}}))
         self.expect_fail(after=after)
 
     def test_activation_of_wrong_commit(self):
@@ -234,12 +286,14 @@ class Verify(unittest.TestCase):
                 {'h': 'a2', 'j': {'commit': 'unrelatedcommit', 'tenant': 'acme-demo', 'state': 'applied'}}]
         self.expect_fail({'activation_rows': rows})
 
+    def test_activation_unknown_state(self):
+        rows = [{'h': 'a1', 'j': {'commit': 'oldcommit', 'tenant': 'acme-demo', 'state': 'applied'}},
+                {'h': 'a2', 'j': {'commit': HEAD_AFTER, 'tenant': 'acme-demo', 'state': 'mystery'}}]
+        self.expect_fail({'activation_rows': rows})
+
+    # -- environment rejections ---------------------------------------------------
     def test_not_exactly_one_container(self):
         self.expect_fail({'ps': CONTAINER + '\nothercid'})
-
-    def test_missing_controller_is_unknown(self):
-        with mock.patch.object(v, 'load_controller', side_effect=ValueError('x')):
-            self.expect_fail()
 
 
 if __name__ == '__main__':
