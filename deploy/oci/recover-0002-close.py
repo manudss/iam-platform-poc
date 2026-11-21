@@ -78,7 +78,7 @@ SHA_PARENT = '0744782c075b4cd2b694088d7a3ac99af7914bc2'
 NEW_DIGEST = 'sha256:7c5ce38f03b378afbb060e6092706a03503c47eac58c2cbca943d15d0d652201'
 OLD_DIGEST = 'sha256:accbd340a59db8a87762f9cdb338a6aca70f92f99a5a5c9e5ba2425f8f3eb3de'
 NEW_IMAGE = 'ghcr.io/manudss/iam-platform-poc@' + NEW_DIGEST
-REVIEWED_VERIFIER_SHA256 = 'dda55ce199c16e6c25f75eb5fc1427eb9651e7e5b9f256c70c8c37f68b60b4d4'
+REVIEWED_VERIFIER_SHA256 = '00aedbcb7721b819db1dfc8fa5b7f256074be16feceebec26c360f434a310e52'
 RUNNER_FILES = ['update.sh', 'qualification.py', 'qualification-container.mjs', 'verify-0002-account-blocks.py']
 # The queue runner is hashed at its REAL installed path, not a staging copy.
 QUEUE_RUNNER = '/usr/local/libexec/lyam-queue/ordered-queue.py'

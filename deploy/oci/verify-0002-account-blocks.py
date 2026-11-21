@@ -40,8 +40,18 @@ What is proven:
      from_commit/to_commit stay present; an empty result (clean dolt_status) renders
      as {} WITHOUT a rows key; DOLT_HASHOF_DB('<raw hash>') is REFUSED (1105 invalid
      ref spec) while the revision database '<db>/<commit>' + DOLT_HASHOF_DB('HEAD'),
-     DOLT_HASHOF_DB('<branch>') and DOLT_HASHOF_DB('WORKING') are accepted. Only
-     this exact dialect is accepted: absent flags, NULLs, booleans in place of the
+     DOLT_HASHOF_DB('<branch>') and DOLT_HASHOF_DB('WORKING') are accepted - on
+     database iam, where the host trial proved every named-ref form coherent. For
+     UNCHANGED branches the verifier proves PRESERVATION, not commit/root binding:
+     session identity (DATABASE() echo), branch head (dolt_branches, the same read
+     path the controller's capture uses) and WORKING root all equal to the capture,
+     with no working-set cleanliness requirement - a pre-existing dirty working set
+     preserved identically is accepted, any head or root drift is refused. Named
+     refs are NOT used on unchanged branches: on this host, on database iam_meta,
+     DOLT_HASHOF_DB('main'/'HEAD') and even the revision database iam_meta/<commit>
+     returned the root of dolt/main while DATABASE() kept echoing the requested
+     name (host fixtures 2026-11-21; mechanism unproven and NOT attributed to a
+     Dolt defect here). Only this exact dialect is accepted: absent flags, NULLs, booleans in place of the
      strings, omitted to_* keys, unexpected commit binding or any other shape are
      UNKNOWN, never success.
   C. Full fresh recapture, through the controller's own immutable capture machinery
@@ -192,26 +202,48 @@ def pg_query(policy, sql):
     return json.loads(out)
 
 
-def bind_live_roots(container, dolt_items):
-    """Every captured root must be the database hash of its own branch commit on the
-    LIVE deployment, with a clean working set. Only read paths proven against the
-    deployed Dolt version are used: raw commit hashes are REJECTED as DOLT_HASHOF_DB
-    refspecs (host-verified), branch refs and WORKING are accepted.
-    DOLT_HASHOF_DB('<branch>') binds the captured root to the branch's commit;
-    DOLT_HASHOF_DB('WORKING') equal to the same root proves the working set carries
-    no uncommitted change. The captured heads are tied to live by the complete
-    recapture. No ref is ever created on the live database."""
-    for item in dolt_items:
-        branch = item['branch']
-        if "'" in branch or "'" in item['database']:
-            fail('Dolt ref name unsafe')
-        ref = item['database'] + '/' + branch
-        rows = dolt_query(container, ref, "SELECT DOLT_HASHOF_DB('%s') AS root" % branch)
-        if len(rows) != 1 or rows[0].get('root') != item['root']:
-            fail('captured root is not the database hash of its branch commit')
-        rows = dolt_query(container, ref, "SELECT DOLT_HASHOF_DB('WORKING') AS root")
-        if len(rows) != 1 or rows[0].get('root') != item['root']:
-            fail('live working set carries uncommitted changes')
+def bind_moved_branch(container, moved_after):
+    """STRICT binding for the one transformed branch, iam/main: the captured after
+    root must be the database hash of the branch commit AND of the working set, so
+    no uncommitted change rides along with the migration commit. Named-ref read
+    paths host-proven coherent on database iam (fixtures 2026-11-21)."""
+    ref = DOLT_DATABASE + '/' + DOLT_BRANCH
+    rows = dolt_query(container, ref, 'SELECT DATABASE() AS db')
+    if len(rows) != 1 or rows[0].get('db') != ref:
+        fail('live session is not on the captured database and branch')
+    rows = dolt_query(container, ref, "SELECT DOLT_HASHOF_DB('%s') AS root" % DOLT_BRANCH)
+    if len(rows) != 1 or rows[0].get('root') != moved_after['root']:
+        fail('captured root is not the database hash of its branch commit')
+    rows = dolt_query(container, ref, "SELECT DOLT_HASHOF_DB('WORKING') AS root")
+    if len(rows) != 1 or rows[0].get('root') != moved_after['root']:
+        fail('live working set carries uncommitted changes')
+
+
+def bind_unchanged_branch(container, item):
+    """PRESERVATION binding for a branch this transition did not touch - NOT a
+    commit/root binding: an unchanged branch may legitimately carry a pre-existing
+    dirty working set, and requiring cleanliness would refuse a state that was
+    identically preserved. What is proven live, via read paths host-verified on
+    this deployment: the session is on the requested database and branch
+    (DATABASE() echo), the branch head IS the captured head (dolt_branches, the
+    same read path the controller's capture uses) and the working root IS the
+    captured root (DOLT_HASHOF_DB('WORKING')). Any head or root drift is refused.
+    Named refs (DOLT_HASHOF_DB('<branch>'), 'HEAD', revision databases) are NOT
+    used here: on this host they resolve to another database's root on iam_meta
+    while DATABASE() still echoes the requested name (mechanism unproven)."""
+    ref = item['database'] + '/' + item['branch']
+    if "'" in ref:
+        fail('Dolt ref name unsafe')
+    rows = dolt_query(container, ref, 'SELECT DATABASE() AS db')
+    if len(rows) != 1 or rows[0].get('db') != ref:
+        fail('live session is not on the captured database and branch')
+    rows = dolt_query(container, ref, 'SELECT name, hash FROM dolt_branches')
+    heads = [row['hash'] for row in rows if row.get('name') == item['branch'] and 'hash' in row]
+    if heads != [item['head']]:
+        fail('live branch head differs from the captured head')
+    rows = dolt_query(container, ref, "SELECT DOLT_HASHOF_DB('WORKING') AS root")
+    if len(rows) != 1 or rows[0].get('root') != item['root']:
+        fail('live working root differs from the captured root')
 
 
 def check_live_dolt(container, moved_before, moved_after, after_dolt):
@@ -262,7 +294,10 @@ def check_live_dolt(container, moved_before, moved_after, after_dolt):
     status = dolt_query(container, branch_ref, 'SELECT * FROM dolt_status')
     if status:
         fail('iam/main has uncommitted changes beyond the migration commit')
-    bind_live_roots(container, after_dolt)
+    bind_moved_branch(container, moved_after)
+    for item in after_dolt:
+        if (item['database'], item['branch']) != (DOLT_DATABASE, DOLT_BRANCH):
+            bind_unchanged_branch(container, item)
     bind_before_root(container, moved_before)
     return head_after
 

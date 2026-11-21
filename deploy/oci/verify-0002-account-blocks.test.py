@@ -79,6 +79,9 @@ def _harness(before, after, overrides=None):
         'sql_log': [],
         'committed_drift': {},  # 'db/branch' -> wrong root: captured root not its branch commit
         'working_drift': {},    # 'db/branch' -> wrong root: uncommitted changes live
+        'database_echo': {},    # 'db/branch' -> wrong DATABASE() echo: session elsewhere
+        'branches': {item['database'] + '/' + item['branch']: [{'name': item['branch'], 'hash': item['head']}]
+                     for item in after['dolt']},  # dolt_branches rows per use-db
         'before_revision_root': ROOT_BEFORE,  # what the revision database iam/<before-head> reports
         'ps': CONTAINER,
         'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': HEAD_BEFORE, 'message': 'older'}],
@@ -104,9 +107,13 @@ def _harness(before, after, overrides=None):
         if 'dolt' in args:
             sql = args[-1]
             state['sql_log'].append(sql)
+            use_db = [a[len('--use-db='):] for a in args if a.startswith('--use-db=')][0]
+            if 'DATABASE()' in sql:
+                return json.dumps({'rows': [{'db': state['database_echo'].get(use_db, use_db)}]})
+            if 'FROM dolt_branches' in sql:
+                return json.dumps({'rows': state['branches'].get(use_db, [])})
             if 'DOLT_HASHOF_DB(' in sql:
                 ref = sql.split("DOLT_HASHOF_DB('", 1)[1].split("'", 1)[0]
-                use_db = [a[len('--use-db='):] for a in args if a.startswith('--use-db=')][0]
                 if use_db == 'iam/' + HEAD_BEFORE:
                     # Host-proven revision-database syntax: HEAD at the before commit.
                     if ref != 'HEAD':
@@ -253,8 +260,32 @@ class Verify(unittest.TestCase):
     def test_moved_root_not_bound_to_its_branch_commit(self):
         self.expect_fail({'committed_drift': {'iam/main': 'otherroot' + ROOT_AFTER[9:]}})
 
-    def test_unmoved_root_not_bound_to_its_branch_commit(self):
-        self.expect_fail({'committed_drift': {'dolt/main': 'drifted00' + OTHER_ROOT[9:]}})
+    def test_moved_branch_wrong_database_session(self):
+        self.expect_fail({'database_echo': {'iam/main': 'dolt/main'}})
+
+    def test_unmoved_branch_commit_ref_never_consulted(self):
+        # Preservation, not commit/root binding: a pre-existing dirty working set on
+        # an unchanged branch (its named-ref root differing from the capture) is
+        # ACCEPTED when head and WORKING root are identically preserved - the
+        # verifier never queries named refs on unchanged branches.
+        self.run_verifier({'committed_drift': {'dolt/main': 'drifted00' + OTHER_ROOT[9:],
+                                               'iam_meta/main': 'drifted00' + OTHER_ROOT[9:]}})
+
+    def test_unmoved_branch_head_drift(self):
+        branches = {'iam_meta/main': [{'name': 'main', 'hash': 'moved00' + OTHER_HEAD[7:]}]}
+        self.expect_fail({'branches': branches})
+
+    def test_unmoved_branch_row_missing(self):
+        self.expect_fail({'branches': {'iam_meta/main': []}})
+
+    def test_unmoved_branch_head_shape_unknown(self):
+        self.expect_fail({'branches': {'iam_meta/main': [{'name': 'main'}]}})
+
+    def test_unmoved_branch_wrong_database_session(self):
+        self.expect_fail({'database_echo': {'iam_meta/main': 'dolt/main'}})
+
+    def test_unmoved_branch_working_drift(self):
+        self.expect_fail({'working_drift': {'iam_meta/main': 'drifted00' + OTHER_ROOT[9:]}})
 
     def test_live_working_set_dirty_via_root(self):
         self.expect_fail({'working_drift': {'iam/main': 'dirtyworking' + ROOT_AFTER[12:]}})
@@ -274,10 +305,16 @@ class Verify(unittest.TestCase):
                        for sql in harness_last['sql_log'] if 'DOLT_HASHOF_DB(' in sql]
         self.assertTrue(hashof_refs)
         for ref in hashof_refs:
-            self.assertIn(ref, ('WORKING', 'HEAD', 'main', 'personal/demo-alice'))
+            self.assertIn(ref, ('WORKING', 'HEAD', 'main'))
             self.assertNotIn(ref, (HEAD_BEFORE, HEAD_AFTER))
-        # The before-commit binding uses the host-proven revision-database syntax.
+        # The before-commit binding uses the host-proven revision-database syntax,
+        # and named refs are NEVER queried on unchanged branches (preservation is
+        # proven via dolt_branches head + WORKING root + session identity instead).
         self.assertTrue(any("DOLT_HASHOF_DB('HEAD')" in sql for sql in harness_last['sql_log']))
+        self.assertFalse(any('personal/demo-alice' in sql for sql in harness_last['sql_log']
+                             if 'DOLT_HASHOF_DB(' in sql))
+        self.assertTrue(any('FROM dolt_branches' in sql for sql in harness_last['sql_log']))
+        self.assertTrue(any('DATABASE()' in sql for sql in harness_last['sql_log']))
 
     def test_two_commits(self):
         self.expect_fail({'log': [{'commit_hash': HEAD_AFTER, 'message': v.COMMIT_MESSAGE}, {'commit_hash': 'surprise', 'message': 'x'}]})

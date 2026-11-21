@@ -162,12 +162,21 @@ a bare or shortened digest. The controller invokes it as `verifier <before.json>
 the private hash-only evidence, which is only read, never modified. It must prove every declared
 transformation of that exact transition and preservation of everything else, exit 0 only on complete
 proof, and treat anything unknown as failure. Hash-only evidence alone cannot prove commit content,
-so the verifier additionally performs read-only live checks: each captured AFTER Dolt root must equal
-the database hash of its own branch commit via DOLT_HASHOF_DB('<branch>') with DOLT_HASHOF_DB('WORKING')
-proving a clean working set (raw commit hashes are rejected as refspecs by the deployed Dolt 2.6.1;
-branch refs, WORKING and HEAD are host-proven), and the captured BEFORE root of the moved branch must
-equal DOLT_HASHOF_DB('HEAD') inside the host-proven revision database '<database>/<before-commit>' -
-a dirty working set at either capture time is UNKNOWN, not silently accepted. No ref is ever created.
+so the verifier additionally performs read-only live checks with a two-class guarantee. On the one
+TRANSFORMED branch (iam/main): the captured AFTER root must equal the database hash of its own branch
+commit via DOLT_HASHOF_DB('<branch>') with DOLT_HASHOF_DB('WORKING') proving a clean working set, and
+the captured BEFORE root must equal DOLT_HASHOF_DB('HEAD') inside the host-proven revision database
+'<database>/<before-commit>' - a dirty working set at either capture time is UNKNOWN, not silently
+accepted (raw commit hashes are rejected as DOLT_HASHOF_DB refspecs by the deployed Dolt 2.6.1; on
+database iam, branch refs, WORKING, HEAD and the revision database are host-proven coherent). On every
+UNCHANGED branch the guarantee is PRESERVATION, not commit/root binding: the live session identity
+(DATABASE()), the branch head (dolt_branches, the capture's own read path) and DOLT_HASHOF_DB('WORKING')
+must equal the capture exactly, before and after and at the fresh recapture; any head or root drift is
+refused, while a pre-existing dirty working set preserved identically is accepted - cleanliness is only
+required where a commit is claimed to explain the state. Named refs and revision databases are NOT used
+on unchanged branches: on this host they returned another database's root for iam_meta while DATABASE()
+kept echoing the requested name (fixtures 2026-11-21; mechanism unproven, not attributed to a defect).
+No ref is ever created.
 The migration commit chain/content is read from live Dolt with every diff flag present
 and explicitly valued (absent or NULL flags are UNKNOWN), and a COMPLETE fresh recapture through the
 controller's own immutable capture machinery (Dolt+Bao container script, controller PostgreSQL
