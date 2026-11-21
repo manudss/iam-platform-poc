@@ -31,6 +31,8 @@ export class UsersService {
     if (!workspaceMode()) return this.modules.get(PluginRegistry, { strict: false });
     return this.modules.get(BranchRegistries, { strict: false }).get(branchContext.getStore()?.branch ?? 'main');
   }
+  /** Injected clock (tests). */
+  now: () => number = () => Date.now();
   private ready?: Promise<void>;
   async onModuleInit() { if (workspaceMode()) await this.init(); }
   private get path() { return process.env.IAM_CREDENTIAL_FILE ?? '/tmp/iam-poc-credentials.json'; }
@@ -160,19 +162,19 @@ export class UsersService {
     }));
   }
   /** Is the "change at first sign-in" rule in force for this account on `ref`? It is a property of the account's CURRENT credential record (same record as the hash), so it is in force exactly when that credential is live. A read error propagates: callers refuse (fail closed). */
-  async firstAccessState(tenant: string, id: string, ref = 'main'): Promise<{ required: false } | { required: true; expired: boolean }> {
+  async firstAccessState(tenant: string, id: string, ref = 'main'): Promise<{ required: false } | { required: true; expired: boolean; revision: string }> {
     const row = (await this.list(ref)).find((x) => x.id === id); if (!row) return { required: false };
     const rec = (await this.credentials())[String(row.credential_revision)];
     if (!rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id)) return { required: false };
-    return { required: true, expired: rec.firstAccess.expiresAt <= Date.now() };
+    return { required: true, expired: rec.firstAccess.expiresAt <= this.now(), revision: String(row.credential_revision) };
   }
   /** The forced change, called only by the sign-in flow after the full chain proved the account. Single winner: the record is re-read under the writer lock and consumed by revision. The temporary password is never accepted as the new one. */
-  async completeFirstAccess(tenant: string, id: string, next: string): Promise<{ ok: true } | { ok: false; reason: 'not-required' | 'expired' | 'same-as-temporary' | 'policy'; errors?: string[] }> {
+  async completeFirstAccess(tenant: string, id: string, next: string, expectedRevision: string): Promise<{ ok: true } | { ok: false; reason: 'not-required' | 'expired' | 'same-as-temporary' | 'policy'; errors?: string[] }> {
     await this.init();
     return this.v.lock(async () => {
       const row = (await this.list('main')).find((x) => x.id === id), rec = row ? (await this.credentials())[String(row.credential_revision)] : undefined;
-      if (!row || !rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id)) return { ok: false as const, reason: 'not-required' as const };
-      if (rec.firstAccess.expiresAt <= Date.now()) return { ok: false as const, reason: 'expired' as const };
+      if (!row || !rec?.firstAccess || (rec.subject !== undefined && rec.subject !== id) || String(row.credential_revision) !== expectedRevision) return { ok: false as const, reason: 'not-required' as const };   // expectedRevision: the credential the person PROVED in this session; a reset to another revision meanwhile is never consumed
+      if (rec.firstAccess.expiresAt <= this.now()) return { ok: false as const, reason: 'expired' as const };
       if (timingSafeEqual(Buffer.from(rec.hash, 'hex'), scryptSync(next, rec.salt, 64))) return { ok: false as const, reason: 'same-as-temporary' as const };
       const check = await this.checkPasswordPolicy(tenant, id, next, row as { display_name?: unknown; email?: unknown });
       if (!check.ok) return { ok: false as const, reason: 'policy' as const, errors: check.errors };

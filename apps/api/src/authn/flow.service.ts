@@ -65,7 +65,7 @@ interface Session {
   prepared?: { prompt: Prompt; state: Record<string, any> };
   tries: number;
   /** The forced first-access password change is pending: set only after the WHOLE chain proved the account (and the block gate passed); the only step left before the allow. */
-  change?: { tries: number };
+  change?: { tries: number; revision: string };
   /** The authorize params captured by the core at the external start (returned as `resume` after the callback). */
   authorize?: Record<string, string>;
   /** The running external round-trip: state/nonce/verifier live HERE, never in the browser beyond the state itself. */
@@ -799,7 +799,7 @@ export class AuthnService implements OnApplicationBootstrap {
       this.lockFails.delete(`${tenant}/${subject}`);
       // Classic single-password mode has no chain to carry the forced change: a temporary password is refused (closed) while the rule is in force. Documented limit: use a chain to complete the change.
       let fa: Awaited<ReturnType<UsersService['firstAccessState']>> = { required: false };
-      if (this.users) { try { fa = await this.users.firstAccessState(tenant, subject, branch ?? 'main'); } catch { fa = { required: true, expired: false }; } }
+      if (this.users) { try { fa = await this.users.firstAccessState(tenant, subject, branch ?? 'main'); } catch { fa = { required: true, expired: false, revision: '' }; } }
       if (fa.required) { this.audit({ tenant, subject, outcome: 'first-access-refused-classic' }); return { outcome: 'deny', reason: 'password-change-required', message: 'Your password is temporary and must be changed. Sign in with a method that supports the change, or ask an administrator.' }; }
       return null;
     }
@@ -866,7 +866,7 @@ export class AuthnService implements OnApplicationBootstrap {
       this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: st.expired ? 'first-access-expired' : 'first-access-refused-on-branch' });
       return { outcome: 'deny', reason: 'password-change-expired', message: 'Your temporary password has expired. Ask an administrator for a new one.' };
     }
-    s.change = { tries: 0 };
+    s.change = { tries: 0, revision: st.revision };
     this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'first-access-change-required' });
     return this.changeChallenge(s);
   }
@@ -878,7 +878,7 @@ export class AuthnService implements OnApplicationBootstrap {
     const a = answers.newpw, b = answers.confirm;
     if (typeof a !== 'string' || a.length < 1 || a.length > 128 || a !== b) return fail('The two passwords must match.');
     let r: Awaited<ReturnType<UsersService['completeFirstAccess']>>;
-    try { r = await this.users!.completeFirstAccess(s.tenant, s.subject, a); } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
+    try { r = await this.users!.completeFirstAccess(s.tenant, s.subject, a, s.change!.revision); } catch { this.sessions.delete(s.id); return { outcome: 'deny', reason: 'password-change-unavailable', message: 'Sign-in is unavailable. Try again later or ask an administrator.' }; }
     if (!r.ok) {
       if (r.reason === 'policy') return fail(`The password does not respect the policy: ${(r.errors ?? []).join('; ') || 'rejected'}`);
       if (r.reason === 'same-as-temporary') return fail('Choose a password different from the temporary one.');
