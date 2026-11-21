@@ -44,7 +44,10 @@ Files:
   shares)/unseal/policies/tokens over docker exec (no host bao CLI on a fresh runner);
   TWO scoped tokens: the app token (policy api, into IAM_BAO_TOKEN) and a SEPARATE
   qualification metadata token (policy qualification-metadata, bao-policy-metadata.hcl)
-  that the capture uses as baoTokenFile; refuse production paths.
+  that the capture uses as baoTokenFile; refuse production paths. Writes ONE persistent
+  fictive sentinel key (secret/iam/qualification-sentinel, only if absent) so the
+  covered metadata inventory is never empty: LIST on an empty path answers 404 by
+  design (openbao/openbao#213), which would fail the capture UNKNOWN (stage=BAO_WALK).
 - `../../.github/workflows/isolated-nominal.yml` - the reviewable job: workflow_dispatch
   only, permissions contents:read, standard ubuntu-latest, no environment, no secrets,
   checkout without persisted credentials, hashed evidence upload.

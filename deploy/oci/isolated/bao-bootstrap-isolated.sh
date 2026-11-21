@@ -5,8 +5,8 @@
 # writes TWO scoped policies and mints TWO tokens:
 #   - app token (policy api)            -> <keys-dir>/api-token -> IAM_BAO_TOKEN
 #   - qualification metadata token       -> <keys-dir>/qualification-token (baoTokenFile)
-# The metadata token is separate on purpose: the app policy must not gain metadata
-# access. Fictive isolated stack only: refuses production paths. Never prints a secret.
+# Plus ONE persistent fictive sentinel key (below). The metadata token is separate on
+# purpose: the app policy must not gain metadata
 # Usage: bao-bootstrap-isolated.sh <keys-dir> <env-file> [policy-file] [metadata-policy-file]
 set -eu
 KEYS_DIR="${1:?keys dir}"
@@ -49,9 +49,39 @@ authed policy write qualification-metadata /tmp/bao-policy-metadata.hcl >/dev/nu
 if [ ! -s "$TOKEN_FILE" ]; then
   authed token create -policy=api -format=json | jq -r '.auth.client_token' > "$TOKEN_FILE"
 fi
+# access. Fictive isolated stack only: refuses production paths. Never prints a secret.
 if [ ! -s "$QUAL_TOKEN_FILE" ]; then
   authed token create -policy=qualification-metadata -format=json | jq -r '.auth.client_token' > "$QUAL_TOKEN_FILE"
 fi
+# Qualification inventory sentinel. The covered metadata root (secret/metadata/iam) must
+# never be EMPTY in the isolated stack: LIST on an empty path answers 404 by design
+# (openbao/openbao#213), which fails the qualification capture UNKNOWN (stage=BAO_WALK).
+# The production stack has real entries; the isolated stack writes nothing under iam/
+# (app policy: workflow-connections/plugins rw, iam/pg read-only), so this ONE persistent
+# FICTIVE key keeps the isolated inventory non-empty by construction. Written once with
+# the bootstrap ROOT token. The app token has no grant on it.
+# Absence check: ONLY an authoritative HTTP 404 from the exact metadata endpoint
+# authorizes the create. Any other status, a transport failure or an unexpected schema
+# stops WITHOUT writing: a blind create could bump current_version of an existing key
+# and break the before/after metadata hash comparison.
+SENT_BODY="$KEYS_DIR/.sentinel-check.$$"
+if ! SENT_CODE="$(curl -sS -o "$SENT_BODY" -w '%{http_code}' -H "X-Vault-Token: $root" "http://127.0.0.1:8200/v1/secret/metadata/iam/qualification-sentinel")"; then
+  rm -f "$SENT_BODY"; echo "sentinel metadata check unreachable; refusing any write" >&2; exit 1
+fi
+case "$SENT_CODE" in
+  404)
+    rm -f "$SENT_BODY"
+    authed kv put secret/iam/qualification-sentinel purpose="isolated-qualification-inventory-sentinel" note="fictive-constant-no-secret-material" >/dev/null ;;
+  200)
+    # Exactly ONE JSON document with a valid metadata schema: jq without -s accepts an
+    # empty body (exit 0, no output) and multi-document bodies document by document.
+    if ! jq -s -e 'length == 1 and (.[0].data.current_version | type == "number" and . >= 1 and . == floor)' "$SENT_BODY" >/dev/null; then
+      rm -f "$SENT_BODY"; echo "sentinel metadata schema unexpected; refusing any write" >&2; exit 1
+    fi
+    rm -f "$SENT_BODY" ;;
+  *)
+    rm -f "$SENT_BODY"; echo "sentinel metadata check status $SENT_CODE not authoritative; refusing any write" >&2; exit 1 ;;
+esac
 token="$(cat "$TOKEN_FILE")"
 # Atomic env sync (same contract as companions/bao-bootstrap.sh).
 tmp="$ENV_FILE.tmp.$$"

@@ -68,6 +68,15 @@ class ContainerStages(unittest.TestCase):
   out=json.loads(r.stdout)
   self.assertEqual(out['dolt'],[{'database':'iam','branch':'main','head':'h1','root':'r1'}])
   self.assertEqual(sorted(out['bao']),['secret/metadata/iam/pg'])
+ def test_sentinel_inventory_capture_happy_path(self):
+  # The bootstrap sentinel key (secret/iam/qualification-sentinel) keeps the isolated
+  # inventory non-empty: LIST returns it and its metadata read passes the walk.
+  bao=Bao(200,False,['qualification-sentinel'],{'qualification-sentinel':{'current_version':1}})
+  try:r=run_mjs('capture',self.payload(bao.port))
+  finally:bao.stop()
+  self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(r.stderr,'')
+  out=json.loads(r.stdout)
+  self.assertEqual(sorted(out['bao']),['secret/metadata/iam/qualification-sentinel'])
  def test_empty_bao_inventory_fails_at_bao_walk(self):
   # Local proof of the empty-isolated-Bao-inventory candidate: LIST 404 on an empty
   # metadata root deterministically fails the capture, attributed to BAO_WALK only.
