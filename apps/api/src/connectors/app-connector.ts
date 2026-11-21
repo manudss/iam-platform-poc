@@ -1,4 +1,8 @@
-import { Body, Controller, Delete, Get, Inject, Injectable, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Injectable, Param, ServiceUnavailableException, Patch, Post, Req, UseGuards } from '@nestjs/common';
+
+/** Cleanup of what the security setting stores for an application id (its level and age limit). Provided by the module; the connector never imports the sign-in service. */
+export const APP_LEVEL_CLEANUP = 'APP_LEVEL_CLEANUP';
+export interface AppLevelCleanup { clear(tenant: string, appId: string): Promise<unknown> }
 import { Optional } from '@nestjs/common';
 import type { Connection } from 'mysql2/promise';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -152,7 +156,7 @@ export class DoltAppConnectorStore implements AppConnectorStore {
 export class AppConnectorService {
   private readonly deps: Parameters<AppConnectorPluginModule['createAppRegistry']>[0];
   constructor(profile: ProfileService, @Inject(APP_CONNECTOR_STORE) private readonly store: AppConnectorStore,
-    private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() events?: ApplicationBus) {
+    private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() events?: ApplicationBus, @Optional() @Inject(APP_LEVEL_CLEANUP) private readonly levelCleanup?: AppLevelCleanup) {
     this.deps = {
       pluginActive: (t, id, ref) => profile.pluginActive(t, id, ref),
       store,
@@ -177,9 +181,24 @@ export class AppConnectorService {
     return this.liveCache.get(t, revision, () => this.engine(t).then((e) => e.liveApps(t)));
   }
   async get(t: string, id: string) { try { return await (await this.engine(t)).get(t, id); } catch (e) { engineHttpError(e); } }
-  async create(t: string, actor: string, b: Record<string, unknown>) { try { return await (await this.engine(t)).create(t, actor, b); } catch (e) { engineHttpError(e); } }
+  /** A new application never inherits a level or age limit left under its id: cleared after the creation succeeded (a refused duplicate id must not wipe the existing application's level). */
+  async create(t: string, actor: string, b: Record<string, unknown>) {
+    let made; try { made = await (await this.engine(t)).create(t, actor, b); } catch (e) { engineHttpError(e); }
+    if (this.levelCleanup && typeof b?.id === 'string') await this.cleanup(t, b.id, 'created');
+    return made;
+  }
+  /** The registry change is done and cannot be undone here: a failed cleanup is reported as such (never as a generic failure of the whole request) and can be repeated. */
+  private async cleanup(t: string, id: string, what: 'created' | 'deleted') {
+    try { await this.levelCleanup!.clear(t, id); }
+    catch { throw new ServiceUnavailableException(`The application was ${what}, but its stored minimum level could not be cleared. Repeat DELETE /security/app-level/${id} to finish.`); }
+  }
   async update(t: string, actor: string, id: string, b: Record<string, unknown>) { try { return await (await this.engine(t)).update(t, actor, id, b); } catch (e) { engineHttpError(e); } }
-  async remove(t: string, actor: string, id: string) { try { return await (await this.engine(t)).remove(t, actor, id); } catch (e) { engineHttpError(e); } }
+  /** Deleting an application removes the whole entry stored for it (level and age limit), on the server, whatever the caller's screen showed. DELETE security/app-level/:id repeats the cleanup if it failed. */
+  async remove(t: string, actor: string, id: string) {
+    let gone; try { gone = await (await this.engine(t)).remove(t, actor, id); } catch (e) { engineHttpError(e); }
+    if (this.levelCleanup) await this.cleanup(t, id, 'deleted');
+    return gone;
+  }
 }
 
 @UseGuards(AuthGuard, AdminGuard)
