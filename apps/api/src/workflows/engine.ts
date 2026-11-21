@@ -51,15 +51,15 @@ interface EngineDeps {
 /** The durable ticket > account > sheet-row correlation (meta store). Every call is scoped to the run's tenant by the engine; a block never passes a tenant. */
 export interface LinkEffects {
   put: (tenant: string, l: { connectionId: string; project: string; issueKey: string; account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string; runId: string }) => Promise<void>;
-  claim: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<{ account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string } | null>;
+  claim: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<{ account: string; phase1Run: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string } | null>;
   complete: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<boolean>;
 }
 /** What account blocks and security settings blocks may do. Operational effects apply at once (with audit and event), settings only patch a stored row the block writes on the run branch. */
 export interface AccountEffects {
   block: (tenant: string, a: { runId: string; subject: string; kind: string; message: string; untilSeconds?: number }) => Promise<{ applied: boolean; blockId: string }>;
-  unblock: (tenant: string, a: { runId: string; subject: string; kind?: string }) => Promise<{ lifted: number }>;
+  unblock: (tenant: string, a: { runId: string; subject: string; kind?: string; ownerRun?: string }) => Promise<{ lifted: number; remaining: number }>;
   /** The blocks in force on an account, read live (guard before a secret mail). */
-  activeBlocks: (tenant: string, subject: string) => Promise<{ kind: string }[]>;
+  activeBlocks: (tenant: string, subject: string) => Promise<{ kind: string; setBy: string }[]>;
   patchSecurity: (current: Record<string, unknown> | undefined, setting: string, value: string) => Record<string, unknown>;
 }
 /** Publication of a run branch to main (the lyam-publish-workspace block). Absent when the server has no publisher: the block then refuses. */
@@ -128,7 +128,7 @@ export class WorkflowEngine implements OnModuleInit {
   private linkEffects(store: WorkflowStore): LinkEffects {
     return {
       put: async (tenant, l) => { await store.putTicketLink({ tenant, ...l }); },
-      claim: async (tenant, k, runId) => { const r = await store.claimTicketLink({ tenant, ...k }, runId); return r ? { account: r.account, source: r.source, spreadsheetId: r.spreadsheet_id, sheetId: Number(r.sheet_id), keyColumn: r.key_column, keyValue: r.key_value } : null; },
+      claim: async (tenant, k, runId) => { const r = await store.claimTicketLink({ tenant, ...k }, runId); return r ? { account: r.account, phase1Run: r.phase1_run, source: r.source, spreadsheetId: r.spreadsheet_id, sheetId: Number(r.sheet_id), keyColumn: r.key_column, keyValue: r.key_value } : null; },
       complete: (tenant, k, runId) => store.completeTicketLink({ tenant, ...k }, runId),
     };
   }
@@ -161,13 +161,13 @@ export class WorkflowEngine implements OnModuleInit {
         return { applied: true, blockId: b.id };
       },
       unblock: async (tenant, a) => {
-        const blocks = (await authn.blocks.list(tenant, a.subject)).filter((b) => !a.kind || b.kind === a.kind);
+        const blocks = (await authn.blocks.list(tenant, a.subject)).filter((b) => (!a.kind || b.kind === a.kind) && (!a.ownerRun || b.setBy === `workflow:${a.ownerRun}`));
         let lifted = 0;
         // Two concurrent lifts of the same block: the loser finds it already gone, which is the wanted end state, not a failure.
         for (const b of blocks) { try { await svc.unblock({ tenant, actor: `workflow:${a.runId}`, subject: a.subject, blockId: b.id }); lifted++; } catch (e) { if ((e as { status?: number }).status !== 404) throw e; } }
-        return { lifted };
+        return { lifted, remaining: inForce(await authn.blocks.list(tenant, a.subject), Date.now()).length };
       },
-      activeBlocks: async (tenant, subject) => inForce(await authn.blocks.list(tenant, subject), Date.now()).map((b) => ({ kind: b.kind })),
+      activeBlocks: async (tenant, subject) => inForce(await authn.blocks.list(tenant, subject), Date.now()).map((b) => ({ kind: b.kind, setBy: b.setBy })),
       patchSecurity,
     };
   }

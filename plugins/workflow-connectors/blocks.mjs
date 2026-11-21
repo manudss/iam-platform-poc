@@ -502,6 +502,7 @@ const lyamBlockAccount = {
     { key: 'kind', label: 'Block type', type: 'select', options: KINDS, default: 'suspended', required: true },
     { key: 'message', label: 'Message shown at sign-in', type: 'text', required: true, help: 'up to 300 characters, shown after the first factor succeeds' },
     { key: 'durationMinutes', label: 'Lift automatically after (minutes, optional)', type: 'number' },
+    { key: 'exclusive', label: 'Refuse to reuse an existing block of this type', type: 'select', options: ['no', 'yes'], default: 'no', help: 'yes: fail when a block of this type is already in force (it belongs to someone else), so a later workflow can lift exactly the block this run set' },
   ],
   outputs: [{ key: 'subject', description: 'The blocked user id' }, { key: 'applied', description: 'true when a block was set, false when one of this type was already in force' }],
   validate(cfg) {
@@ -509,13 +510,14 @@ const lyamBlockAccount = {
     if (!KINDS.includes(kind)) bad(`lyam-block-account.kind: one of ${KINDS.join(', ')}`);
     const d = cfg.durationMinutes;
     if (d !== undefined && d !== null && d !== '' && !(Number.isInteger(Number(d)) && Number(d) >= 1 && Number(d) <= 525600)) bad('lyam-block-account.durationMinutes: a whole number of minutes (1 to 525600)');
-    return { subject: userId(cfg.subject, 'lyam-block-account.subject'), kind, message: str(cfg.message, 'lyam-block-account.message', 300), ...(d ? { durationMinutes: Number(d) } : {}) };
+    return { subject: userId(cfg.subject, 'lyam-block-account.subject'), kind, message: str(cfg.message, 'lyam-block-account.message', 300), ...(str(cfg.exclusive, 'lyam-block-account.exclusive', 3, false) === 'yes' ? { exclusive: true } : {}), ...(d ? { durationMinutes: Number(d) } : {}) };
   },
   async run(ctx) {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would block "${c.subject}" (${c.kind}) - nothing applied`); return { subject: c.subject, applied: false }; }
     if (!ctx.accounts) bad('lyam-block-account: account blocks are not available on this server');
     const r = await ctx.accounts.block(ctx.tenant, { runId: ctx.runId, subject: c.subject, kind: c.kind, message: c.message, ...(c.durationMinutes ? { untilSeconds: c.durationMinutes * 60 } : {}) });
+    if (c.exclusive && !r.applied) bad(`lyam-block-account: the account already has a ${c.kind} block that this run did not set: not taking it over`);
     ctx.log(r.applied ? `account "${c.subject}" blocked (${c.kind})` : `account "${c.subject}" already has a ${c.kind} block in force: no change`);
     return { subject: c.subject, applied: r.applied };
   },
@@ -552,20 +554,24 @@ const lyamUnblockAccount = {
   fields: [
     { key: 'subject', label: 'User id', type: 'string', required: true, help: 'placeholders allowed' },
     { key: 'kind', label: 'Only this type (optional)', type: 'select', options: ['', ...KINDS] },
+    { key: 'ownerRun', label: 'Only blocks set by this workflow run (optional)', type: 'string', help: '{{steps.<resolve-ticket>.phase1Run}}: lifts only the block the creation run set, never an administrator or another run block. Needs a type.' },
   ],
-  outputs: [{ key: 'subject', description: 'The user id' }, { key: 'lifted', description: 'How many blocks were lifted' }],
+  outputs: [{ key: 'subject', description: 'The user id' }, { key: 'lifted', description: 'How many blocks were lifted' }, { key: 'remaining', description: 'Blocks still in force after the lift' }],
   validate(cfg) {
     const kind = str(cfg.kind, 'lyam-unblock-account.kind', 30, false);
     if (kind && !KINDS.includes(kind)) bad(`lyam-unblock-account.kind: one of ${KINDS.join(', ')}`);
-    return { subject: userId(cfg.subject, 'lyam-unblock-account.subject'), ...(kind ? { kind } : {}) };
+    const ownerRun = str(cfg.ownerRun, 'lyam-unblock-account.ownerRun', 80, false);
+    if (ownerRun && !kind) bad('lyam-unblock-account.ownerRun: needs a block type');
+    return { subject: userId(cfg.subject, 'lyam-unblock-account.subject'), ...(kind ? { kind } : {}), ...(ownerRun ? { ownerRun } : {}) };
   },
   async run(ctx) {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would lift the blocks of "${c.subject}"${c.kind ? ` (${c.kind})` : ''} - nothing applied`); return { subject: c.subject, lifted: 0 }; }
     if (!ctx.accounts) bad('lyam-unblock-account: account blocks are not available on this server');
-    const r = await ctx.accounts.unblock(ctx.tenant, { runId: ctx.runId, subject: c.subject, ...(c.kind ? { kind: c.kind } : {}) });
-    ctx.log(`${r.lifted} block(s) lifted on "${c.subject}"`);
-    return { subject: c.subject, lifted: r.lifted };
+    const r = await ctx.accounts.unblock(ctx.tenant, { runId: ctx.runId, subject: c.subject, ...(c.kind ? { kind: c.kind } : {}), ...(c.ownerRun ? { ownerRun: c.ownerRun } : {}) });
+    ctx.log(`${r.lifted} block(s) lifted on "${c.subject}"${c.ownerRun ? ' (only those set by the creation run)' : ''}`);
+    if (c.ownerRun && r.remaining > 0) bad('lyam-unblock-account: another block is still in force on this account: it is not available yet');
+    return { subject: c.subject, lifted: r.lifted, remaining: r.remaining ?? 0 };
   },
 };
 
@@ -666,6 +672,7 @@ export async function verifySecretMailState(ctx, c) {
   need(fa.expiresAt > Date.now() && fa.expiresAt <= Date.now() + ms + 60_000, 'the recorded expiry does not match the validity parameter');
   need(typeof email === 'string' && email.toLowerCase() === c.to.toLowerCase(), 'the recipient is not the e-mail recorded on this identity');
   need(Array.isArray(blocks) && blocks.length > 0, 'the account is not blocked any more (the unblock step comes after the mail)');
+  need(blocks.every(b => b.setBy === `workflow:${c.ownerRun}`), 'a block that the creation run did not set is in force on this account: it would not be available');
   return { expiresAt: fa.expiresAt };
 }
 
@@ -685,6 +692,7 @@ const lyamSendSecretMail = {
     { key: 'hours', label: 'Validity (hours)', type: 'string', required: true, help: 'same value as the set-temporary step' },
     { key: 'revision', label: 'Credential revision', type: 'string', required: true, help: '{{steps.<set-temporary>.revision}}' },
     { key: 'sourceHead', label: 'Published head', type: 'string', required: true, help: '{{steps.<publish>.sourceHead}}' },
+    { key: 'ownerRun', label: 'Run that set the account block', type: 'string', required: true, help: '{{steps.<resolve-ticket>.phase1Run}}: the only block allowed to be in force when the mail leaves' },
   ],
   outputs: [{ key: 'to', description: 'The recipient' }, { key: 'accepted', description: 'true when the provider accepted the mail (not proof of delivery)' }, { key: 'messageId', description: 'The provider message id' }, { key: 'expiresAt', description: 'The expiry shown in the mail' }],
   validate(cfg) {
@@ -692,7 +700,7 @@ const lyamSendSecretMail = {
     if (!/\{\{/.test(to) && !MAIL_RE.test(to)) bad('lyam-send-secret-mail.to: one e-mail address');
     const text = str(cfg.text, 'lyam-send-secret-mail.text', 4000);
     if (!text.includes('[[password]]') || !text.includes('[[expiry]]')) bad('lyam-send-secret-mail.text: must contain [[password]] and [[expiry]]');
-    return { account: userId(cfg.account, 'lyam-send-secret-mail.account'), to, subject: str(cfg.subject, 'lyam-send-secret-mail.subject', 150), text, passwordRef: str(cfg.passwordRef, 'lyam-send-secret-mail.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-send-secret-mail.hours'), revision: str(cfg.revision, 'lyam-send-secret-mail.revision', 80), sourceHead: str(cfg.sourceHead, 'lyam-send-secret-mail.sourceHead', 80) };
+    return { account: userId(cfg.account, 'lyam-send-secret-mail.account'), to, subject: str(cfg.subject, 'lyam-send-secret-mail.subject', 150), text, passwordRef: str(cfg.passwordRef, 'lyam-send-secret-mail.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-send-secret-mail.hours'), revision: str(cfg.revision, 'lyam-send-secret-mail.revision', 80), ownerRun: str(cfg.ownerRun, 'lyam-send-secret-mail.ownerRun', 80), sourceHead: str(cfg.sourceHead, 'lyam-send-secret-mail.sourceHead', 80) };
   },
   async run(ctx) {
     const c = ctx.config;
@@ -780,7 +788,7 @@ const lyamResolveTicket = {
   category: 'real',
   description: 'Looks the ticket up in the server correlation written by the creation workflow and CLAIMS it for this run (one run per ticket). Refuses, with nothing changed, when there is no link, when it was already handled or claimed by another run, when the account does not exist on main or is no longer blocked. The Jira summary is never used to choose the account or the row.',
   fields: ticketFields,
-  outputs: [{ key: 'account', description: 'The linked user id' }, { key: 'email', description: 'The e-mail recorded on that account on main (the only address the secret mail may use)' }, { key: 'source', description: 'demo-sheet or google' }, { key: 'spreadsheetId', description: 'Spreadsheet id (google)' }, { key: 'sheetId', description: 'Sheet id (google)' }, { key: 'keyColumn', description: 'Row key column' }, { key: 'keyValue', description: 'Row key value' }],
+  outputs: [{ key: 'account', description: 'The linked user id' }, { key: 'phase1Run', description: 'The run that created the account and set its block (to lift exactly that block later)' }, { key: 'email', description: 'The e-mail recorded on that account on main (the only address the secret mail may use)' }, { key: 'source', description: 'demo-sheet or google' }, { key: 'spreadsheetId', description: 'Spreadsheet id (google)' }, { key: 'sheetId', description: 'Sheet id (google)' }, { key: 'keyColumn', description: 'Row key column' }, { key: 'keyValue', description: 'Row key value' }],
   validate(cfg) { return ticketRef(cfg, 'lyam-resolve-ticket'); },
   async run(ctx) {
     const c = ctx.config;
@@ -794,7 +802,7 @@ const lyamResolveTicket = {
     if (typeof email !== 'string' || !email) bad('lyam-resolve-ticket: the linked account does not exist on main (or has no e-mail)');
     if (!Array.isArray(blocks) || blocks.length === 0) bad('lyam-resolve-ticket: the linked account is not blocked: refusing to continue');
     ctx.log(`ticket ${ref.issueKey} resolved to account "${l.account}" (claimed by this run)`);
-    return { account: l.account, email, source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue };
+    return { account: l.account, phase1Run: l.phase1Run ?? null, email, source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue };
   },
 };
 const lyamCompleteTicket = {

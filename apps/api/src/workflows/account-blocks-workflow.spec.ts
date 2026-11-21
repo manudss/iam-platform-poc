@@ -8,7 +8,7 @@ const mk = (over: Partial<WfBlockCtx>) => { const lines: string[] = []; return {
 const calls: unknown[] = [];
 const accounts = {
   block: async (_t: string, a: unknown) => { calls.push(['block', a]); return { applied: true, blockId: 'b1' }; },
-  unblock: async (_t: string, a: unknown) => { calls.push(['unblock', a]); return { lifted: 2 }; },
+  unblock: async (_t: string, a: unknown) => { calls.push(['unblock', a]); return { lifted: 2, remaining: 0 }; },
   activeBlocks: async () => [],
   patchSecurity,
 };
@@ -36,6 +36,24 @@ describe('workflow blocks: account blocks and security settings', () => {
     assert.deepEqual(calls[0], ['block', { runId: 'run-1', subject: 'emp', kind: 'suspended', message: 'm', untilSeconds: 600 }]);
     assert.equal((await externalBlock('lyam-unblock-account')!.run({ ...c, config: { subject: 'emp', kind: 'locked' } }))!.lifted, 2);
     assert.deepEqual(calls[1], ['unblock', { runId: 'run-1', subject: 'emp', kind: 'locked' }]);
+  });
+  it('exclusive block: an existing block of the same kind fails the run instead of being reused', async () => {
+    const taken = { ...accounts, block: async () => ({ applied: false, blockId: 'b-old' }) };
+    const { c } = mk({ accounts: taken, config: { subject: 'emp', kind: 'suspended', message: 'm', exclusive: true } });
+    await assert.rejects(externalBlock('lyam-block-account')!.run(c), /did not set/);
+    const free = mk({ accounts, config: { subject: 'emp', kind: 'suspended', message: 'm', exclusive: true } }).c;
+    assert.equal((await externalBlock('lyam-block-account')!.run(free))!.applied, true, 'created by this run: fine');
+  });
+  it('unblock with an owner run: needs a type, passes the owner through, and fails closed while any block remains', async () => {
+    const b = externalBlock('lyam-unblock-account')!;
+    assert.throws(() => b.validate({ subject: 'emp', ownerRun: 'run-a1' }), /needs a block type/);
+    assert.deepEqual(b.validate({ subject: 'emp', kind: 'suspended', ownerRun: '{{steps.resolve.phase1Run}}' }), { subject: 'emp', kind: 'suspended', ownerRun: '{{steps.resolve.phase1Run}}' });
+    calls.length = 0;
+    const { c } = mk({ accounts, config: { subject: 'emp', kind: 'suspended', ownerRun: 'run-a1' } });
+    assert.equal((await b.run(c))!.lifted, 2);
+    assert.deepEqual(calls[0], ['unblock', { runId: 'run-1', subject: 'emp', kind: 'suspended', ownerRun: 'run-a1' }]);
+    const busy = mk({ accounts: { ...accounts, unblock: async () => ({ lifted: 1, remaining: 1 }) }, config: { subject: 'emp', kind: 'suspended', ownerRun: 'run-a1' } }).c;
+    await assert.rejects(b.run(busy), /not available yet/);
   });
   it('without the account service the block refuses instead of pretending', async () => {
     await assert.rejects(externalBlock('lyam-block-account')!.run(mk({ config: { subject: 'emp', kind: 'suspended', message: 'm' } }).c), /not available/);

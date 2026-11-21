@@ -20,7 +20,7 @@ function world(over: { proof?: any; fa?: any; email?: string | null; blocks?: an
     proof: { mainCommit: MAIN, activation: 'applied', activationCommit: MAIN, containsHead: true, ...(over.proof ?? {}) },
     fa: over.fa === undefined ? { required: true, expired: false, revision: 'rev-1', expiresAt: Date.now() + 24 * HOUR - 5000 } : over.fa,
     email: over.email === undefined ? 'bao@example.test' : over.email,
-    blocks: over.blocks ?? [{ kind: 'suspended' }],
+    blocks: over.blocks ?? [{ kind: 'suspended', setBy: 'workflow:run-a1' }],
   };
   const mk = (runId: string, type: string) => {
     const use = ({ 'lyam-set-temporary-password': 'set-temporary', 'lyam-send-secret-mail': 'mail' } as any)[type];
@@ -42,7 +42,7 @@ function world(over: { proof?: any; fa?: any; email?: string | null; blocks?: an
   };
   return { secrets, seen, mk };
 }
-const mailCfg = (ref: string, over: any = {}) => ({ account: 'bao', to: 'bao@example.test', subject: 'Votre acces', text: 'Mot de passe: [[password]] valable jusqu\'au [[expiry]] ([[hours]] h)', passwordRef: ref, hours: '24', revision: 'rev-1', sourceHead: HEAD, ...over });
+const mailCfg = (ref: string, over: any = {}) => ({ account: 'bao', to: 'bao@example.test', subject: 'Votre acces', text: 'Mot de passe: [[password]] valable jusqu\'au [[expiry]] ([[hours]] h)', passwordRef: ref, ownerRun: 'run-a1', hours: '24', revision: 'rev-1', sourceHead: HEAD, ...over });
 const withMail = async (fn: () => Promise<void>) => { const old = process.env.RESEND_API_KEY; process.env.RESEND_API_KEY = 'test-key-not-real'; mailApi.mailClient.Ctor = Fake; Fake.calls = []; Fake.mode = 'ok'; try { await fn(); } finally { mailApi.mailClient.Ctor = null; if (old === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = old; } };
 const gen = externalBlock('lyam-generate-password')!, setTmp = externalBlock('lyam-set-temporary-password')!, mail = externalBlock('lyam-send-secret-mail')!;
 const everything = (w: ReturnType<typeof world>, extra: unknown[] = []) => JSON.stringify([w.seen.logs, w.seen.pending, w.seen.setCalls, extra]);
@@ -99,6 +99,8 @@ describe('lyam-send-secret-mail guard and effect', () => {
     ['recipient is not the identity e-mail', { email: 'someone.else@example.test' }],
     ['identity has no e-mail', { email: null }],
     ['account already unblocked', { blocks: [] }],
+    ['a block the creation run did not set is in force', { blocks: [{ kind: 'suspended', setBy: 'workflow:run-a1' }, { kind: 'locked', setBy: 'admin:boss' }] }],
+    ['the only block in force belongs to another run', { blocks: [{ kind: 'suspended', setBy: 'workflow:run-OTHER' }] }],
     ['state cannot be read', { readFails: true }],
   ];
   for (const [name, over] of refusals) it(`refuses and sends nothing: ${name}`, async () => withMail(async () => {
