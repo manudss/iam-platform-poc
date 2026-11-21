@@ -369,6 +369,8 @@ export function createWorkflowEngine(deps) {
       const creation = node.type === 'google-sheets-add-row' || node.type === 'jira-create-issue' || (node.type === 'http-request' && !['GET', 'HEAD'].includes(resolved.config.method));
       if (creation) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
     } else if (!managed) settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
+    // A real mail is a non-repeatable external effect: if the process stops before the step is recorded done, the run stops for review (the provider idempotency key makes a deliberate new run return the same mail within 24 hours).
+    if (node.type === 'lyam-send-mail' && !run.test) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
     const sensitive = [secret];
     if (secret) {
       sensitive.push(Buffer.from(`${settings.jiraEmail ?? ''}:${secret}`).toString('base64'));
@@ -387,7 +389,6 @@ export function createWorkflowEngine(deps) {
       outputs,
       // Account effects (block, unblock, security settings patch). A test run never applies them.
       accounts: deps.accounts,
-      mail: deps.mail,
       test: !!run.test,
       runId: run.id,
       branchWrite: async (fn, message) => {

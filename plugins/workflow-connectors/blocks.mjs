@@ -5,6 +5,7 @@ import { runPieceAction } from './adapter.mjs';
 import { serviceAccountAuth, readGoogleRows, writeGoogleRow } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
+import { sendOneMail } from './mail-api.mjs';
 
 /**
  * The block catalogue this plugin exposes on the `workflows.blocks` surface (SPIKE).
@@ -456,13 +457,13 @@ const lyamSendMail = {
   label: 'Send a mail (Resend)',
   simulated: false,
   category: 'real',
-  description: 'REAL and immediate: sends one mail through the notify.send hook (Resend when RESEND_API_KEY is set on the server). The recipient must be listed in the plugin setting "Mail block: allowed recipients" (empty refuses everything). The same run never sends the same mail twice. A step ends in error when the mail was not really delivered. A test run only logs. Never put a secret in the text.',
+  description: 'REAL and immediate: sends one mail through the notify.send hook (Resend when RESEND_API_KEY is set on the server). The recipient must be listed in the plugin setting "Mail block: allowed recipients" (empty refuses everything). The provider idempotency key (run, recipient, subject) makes a repeat within 24 hours return the first mail instead of sending another. The step needs the provider message id; without it the run stops for review. The id proves acceptance, not delivery. A test run only logs. Never put a secret in the text.',
   fields: [
     { key: 'to', label: 'Recipient (one address)', type: 'string', required: true, help: 'placeholders allowed; must be in the allowed recipients setting' },
     { key: 'subject', label: 'Subject', type: 'string', required: true },
     { key: 'text', label: 'Text', type: 'text', required: true, help: 'plain text, up to 4000 characters, placeholders allowed' },
   ],
-  outputs: [{ key: 'to', description: 'The recipient' }, { key: 'delivered', description: 'true when the mail was really delivered' }, { key: 'messageId', description: 'The provider message id' }],
+  outputs: [{ key: 'to', description: 'The recipient' }, { key: 'accepted', description: 'true when the provider accepted the mail (not proof of delivery to the inbox)' }, { key: 'messageId', description: 'The provider message id' }],
   validate(cfg) {
     const to = str(cfg.to, 'lyam-send-mail.to', 200);
     if (!/\{\{/.test(to) && !MAIL_RE.test(to)) bad('lyam-send-mail.to: one e-mail address');
@@ -472,15 +473,16 @@ const lyamSendMail = {
     const c = ctx.config;
     if (!MAIL_RE.test(c.to)) bad('lyam-send-mail.to: one e-mail address');
     if (/[\r\n]/.test(c.subject)) bad('lyam-send-mail.subject: one line');
-    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send "${c.subject}" to ${c.to} - nothing sent`); return { to: c.to, delivered: false, messageId: null }; }
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send "${c.subject}" to ${c.to} - nothing sent`); return { to: c.to, accepted: false, messageId: null }; }
     const allowed = String(ctx.settings?.mailAllowedRecipients ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
     if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-mail: this recipient is not in the allowed recipients setting (the owner approves each address)');
-    if (!ctx.mail) bad('lyam-send-mail: mail delivery is not available on this server');
-    const effectKey = `wf-mail:${ctx.runId}:${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.subject])).digest('hex').slice(0, 16)}`;
-    const r = await ctx.mail.send(ctx.tenant, { effectKey, to: c.to, subject: c.subject, text: c.text });
-    if (!r.delivered || !r.real) bad(`lyam-send-mail: the mail was not really delivered${r.degraded ? ` (${r.degraded})` : ''}`);
-    ctx.log(`mail sent to ${c.to} (provider id ${r.id ?? 'unknown'})`);
-    return { to: c.to, delivered: true, messageId: r.id ?? null };
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) bad('lyam-send-mail: RESEND_API_KEY is not set on the server (nothing sent)');
+    const from = str(ctx.settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
+    const idempotencyKey = `wf-mail/${ctx.runId}/${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.subject])).digest('hex').slice(0, 16)}`;
+    const r = await sendOneMail({ apiKey, from, to: c.to, subject: c.subject, text: c.text, idempotencyKey });
+    ctx.log(`mail accepted by the provider for ${c.to} (message id ${r.id}); acceptance is not proof of delivery to the inbox`);
+    return { to: c.to, accepted: true, messageId: r.id };
   },
 };
 

@@ -28,6 +28,14 @@
       "default": "",
       "help": "Exact e-mail addresses (comma separated) the lyam-send-mail block may write to. Empty refuses every send. Set only to addresses the owner approved.",
       "group": "Mail"
+    },
+    {
+      "key": "mailFrom",
+      "type": "string",
+      "label": "Mail block: sender address",
+      "default": "lyam@dss.name",
+      "help": "Must be on a domain verified at the mail provider. The provider API key is never a setting: it is the RESEND_API_KEY environment variable of the server.",
+      "group": "Mail"
     }
   ],
   "httpRoutes": [

@@ -39,7 +39,6 @@ interface EngineDeps {
   settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
   connectionFor?: (tenant: string, ref: string, id: string, type: string) => Promise<{ settings: Record<string, unknown>; secret: string }>;
   accounts?: AccountEffects;
-  mail?: MailEffects;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 /** What account blocks and security settings blocks may do. Operational effects apply at once (with audit and event), settings only patch a stored row the block writes on the run branch. */
@@ -47,10 +46,6 @@ export interface AccountEffects {
   block: (tenant: string, a: { runId: string; subject: string; kind: string; message: string; untilSeconds?: number }) => Promise<{ applied: boolean; blockId: string }>;
   unblock: (tenant: string, a: { runId: string; subject: string; kind?: string }) => Promise<{ lifted: number }>;
   patchSecurity: (current: Record<string, unknown> | undefined, setting: string, value: string) => Record<string, unknown>;
-}
-/** What the mail block may do: one message through the notify.send hook, deduplicated by its effect key (the same key never sends twice). */
-export interface MailEffects {
-  send: (tenant: string, m: { effectKey: string; to: string; subject: string; text: string }) => Promise<{ delivered: boolean; real: boolean; id?: string | null; degraded?: string }>;
 }
 interface WorkflowEngineApi {
   resume: () => Promise<void>;
@@ -77,18 +72,7 @@ export class WorkflowEngine implements OnModuleInit {
         return this.connections.resolve(tenant, ref, id, provider);
       },
       accounts: this.accountEffects(),
-      mail: this.mailEffects(),
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
-    };
-  }
-
-  private mailEffects(): MailEffects {
-    return {
-      send: async (tenant, m) => {
-        const out = await this.reg.emit(tenant, 'notify.send', { effectKey: m.effectKey, tenant, to: m.to, template: 'workflow-mail', data: {}, subject: m.subject, text: m.text } as { effectKey: string });
-        const r = (out.find((x) => x.result && typeof x.result === 'object')?.result ?? {}) as { delivered?: boolean; real?: boolean; id?: string | null; degraded?: string };
-        return { delivered: r.delivered === true, real: r.real === true, id: r.id ?? null, ...(r.degraded ? { degraded: String(r.degraded) } : {}) };
-      },
     };
   }
 
