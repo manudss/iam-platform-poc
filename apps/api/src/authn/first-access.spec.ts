@@ -46,7 +46,7 @@ describe('first access: forced password change inside the sign-in chain', () => 
   const http = () => request(app.getHttpServer());
   const adm = { 'x-api-admin-token': ADMIN };
   const gate = (b: object) => http().post('/internal/auth/authenticate').set('x-gate-token', GATE).send(b);
-  const reset = () => { fake.revision = 'r1'; fake.flagged = true; fake.expired = false; fake.completeCalls = 0; fake.policyOk = true; fake.sameAsTemp = false; };
+  const reset = () => { fake.revision = 'r1'; fake.flagged = true; fake.expired = false; fake.completeCalls = 0; fake.stateCalls = 0; fake.policyOk = true; fake.sameAsTemp = false; };
   const put = (c: unknown) => http().put(`/tenants/${T}/auth`).set(adm).send({ config: c });
   const chain = { methods: [{ id: 'pw', type: 'password', name: 'pw', enabled: true, level: 3, config: {} }], chains: [{ id: 'pw-only', name: 'Password', steps: ['pw'], level: 3 }], defaultChain: 'pw-only' };
   const prevDir = process.env.IAM_DIRECTORY_AUTH;

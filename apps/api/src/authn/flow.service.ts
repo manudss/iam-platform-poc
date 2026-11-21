@@ -807,13 +807,14 @@ export class AuthnService implements OnApplicationBootstrap {
     return { outcome: 'deny', reason: 'account-blocked', message: refusalMessage(shown) };
   }
   private async check(s: Session, answers: Record<string, string>): Promise<GateResponse> {
-    const st = s.steps[s.index], t = methodType(st.type)!, key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
+    const key = `${s.tenant}/${s.branch ?? 'live'}/${s.subject}`;
     // An account locked by too many failures does not evaluate any answer: guessing stops while the lock is in force.
     if (s.known && inForce((await this.blocks.list(s.tenant, s.subject)).filter((b) => b.kind === 'locked'), this.now()).length) {
       this.sessions.delete(s.id); this.audit({ tenant: s.tenant, subject: s.subject, chain: s.chain.id, outcome: 'refused-while-locked' });
       return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     }
     if (s.change) return this.checkChange(s, Object.fromEntries(Object.entries(answers).filter(([k, v]) => /^[a-z0-9]{1,12}$/.test(k) && typeof v === 'string' && v.length <= 256)) as Record<string, string>);
+    const st = s.steps[s.index], t = methodType(st.type)!;   // after the forced-change branch: once the chain is complete there is no current step
     const clean: Record<string, string> = {};
     // One answer value is at most 256 chars, except the passkey ceremony answer: a signed WebAuthn JSON of a few KB.
     for (const [k, v] of Object.entries(answers)) if (typeof v === 'string' && v.length <= (k === 'webauthn' ? 16384 : 256) && /^[a-z0-9]{1,12}$/.test(k)) clean[k] = v;
