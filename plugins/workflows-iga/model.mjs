@@ -4,6 +4,21 @@ const require = createRequire(new URL('./package.json', import.meta.url));
 const { BadRequestException } = require('@nestjs/common');
 export const STEP_CATEGORIES = ['simulated', 'computed', 'real'];
 /**
+ * Thrown by a step block to PARK its run until a durable human task is decided (approval, certification,
+ * publication review...). The engine records `wait` in the step's stored input, marks the run 'waiting'
+ * and stops executing it; the task service kicks the run again when the task changes. On the resumed
+ * execution the SAME block runs again: it must be idempotent (reuse the task referenced by
+ * ctx.resumeWait.taskId instead of creating a new one) and throw WorkflowSuspend again while the task is
+ * still open. A suspend inside a loop body fails the step: per-item waits are expressed as one task per
+ * item created BEFORE an await step, never inside a loop.
+ */
+export class WorkflowSuspend extends Error {
+  constructor(wait) {
+    super(`waiting for ${wait?.kind ?? 'task'} ${wait?.taskId ?? ''}`.trim());
+    this.wait = wait ?? {};
+  }
+}
+/**
  * Display category of a step type, shown as the node/run badge:
  *   simulated  nothing really happens (a notification is only logged, never sent)
  *   computed   the step REALLY runs and computes its output, but has no external effect and writes nothing
@@ -58,6 +73,15 @@ export const WF_EVENTS = {
     'sso.login.failed': { label: 'An SSO authorization request failed', payload: ['app', 'subject', 'reason'] },
     'sso.token.issued': { label: 'Tokens were issued to an application (SSO)', payload: ['app', 'subject', 'scope'] },
     'app.removed': { label: 'An application is removed from SSO', payload: ['app', 'protocol', 'actor'] },
+    // Durable human tasks (approvals) and IGA recertification: emitted by the task service and the IGA
+    // module, consumable like any other start trigger (e.g. "when a task of kind publish is decided...").
+    'workflow.task-assigned': { label: 'A workflow created a human task', payload: ['task', 'kind', 'title', 'assignee', 'actor'] },
+    'workflow.task-decided': { label: 'A human task was decided', payload: ['task', 'kind', 'decision', 'actor'] },
+    'workflow.task-overdue': { label: 'A human task passed its deadline (reminder or escalation)', payload: ['task', 'kind', 'assignee'] },
+    'iga.campaign-launched': { label: 'A recertification campaign was launched', payload: ['campaign', 'actor'] },
+    'iga.decision-recorded': { label: 'A recertification decision was recorded', payload: ['campaign', 'subject', 'role', 'decision', 'actor'] },
+    'iga.remediation-resolved': { label: 'A recertification remediation was prepared or failed', payload: ['campaign', 'subject', 'role', 'result'] },
+    'iga.campaign-closed': { label: 'A recertification campaign was closed with its evidence file', payload: ['campaign', 'actor'] },
 };
 const PLACEHOLDER = /\{\{event\.([a-zA-Z]+)\}\}/g;
 /** Placeholder keys used in a config string, e.g. "{{event.subject}}" -> ["subject"]. */

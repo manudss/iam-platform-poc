@@ -1,7 +1,7 @@
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
 import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
-import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { validateSettings } from '../plugins/v1/settings.js';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -11,6 +11,9 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { resolveEngine } from '../plugins/v1/engines.js';
 import { RunRow, StepRow, WorkflowStore } from './store.js';
+import { WorkflowTasksService } from './tasks.js';
+import { WorkflowReads } from './reads.js';
+import { WorkflowsIgaService } from './iga.service.js';
 import type { WfGraph } from './model.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
@@ -46,6 +49,13 @@ interface EngineDeps {
   secrets?: RunSecrets;
   users?: UserEffects;
   links?: LinkEffects;
+  /** Durable human tasks, business reads and IGA campaigns (the lyam-* and iga-* blocks). Absent in minimal test harnesses: the blocks then refuse honestly. */
+  tasks?: WorkflowTasksService;
+  reads?: WorkflowReads;
+  iga?: WorkflowsIgaService;
+  runs?: unknown;
+  policies?: unknown;
+  pluginsAdmin?: unknown;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 /** The durable ticket > account > sheet-row correlation (meta store). Every call is scoped to the run's tenant by the engine; a block never passes a tenant. */
@@ -86,7 +96,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: WorkflowTasksService, @Optional() private readonly reads?: WorkflowReads, @Optional() private readonly iga?: WorkflowsIgaService) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -103,6 +113,7 @@ export class WorkflowEngine implements OnModuleInit {
       secrets: new RunSecrets(),
       users: this.userEffects(),
       links: this.linkEffects(store),
+      tasks: tasks ?? undefined, reads: reads ?? undefined, iga: iga ?? undefined,
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
   }

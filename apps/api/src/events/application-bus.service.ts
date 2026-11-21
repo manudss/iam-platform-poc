@@ -24,6 +24,8 @@ export const APP_EVENT_KINDS = [
   'organization.member-added',
   'app.registered', 'app.updated', 'app.removed',
   'sso.login.succeeded', 'sso.login.denied', 'sso.login.failed', 'sso.assertion.issued', 'sso.token.issued',
+  'workflow.task-assigned', 'workflow.task-decided', 'workflow.task-overdue',
+  'iga.campaign-launched', 'iga.decision-recorded', 'iga.remediation-resolved', 'iga.campaign-closed',
 ] as const;
 
 /** Bus shape of an emitted application event (what the core delivers to the consumers). */

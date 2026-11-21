@@ -30,7 +30,7 @@
  *  - an EXTERNAL effect (HTTP call, Jira ticket, real Google write) is NOT reverted by abandoning the branch:
  *    the block's own log line says exactly what really happened outside (dry-run or real).
  */
-import { STEP_TYPES, externalBlock, externalBlockProvider, loopBody, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
+import { STEP_TYPES, WorkflowSuspend, externalBlock, externalBlockProvider, loopBody, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
 
 const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
   from assignments a join assignments b on a.identity_id = b.identity_id
@@ -160,6 +160,7 @@ export function createWorkflowEngine(deps) {
       const arrived = edges.filter((e) => e.to === nodeId && edgeTaken(e, stepsById)).map((e) => e.from);
       const res = node.type === 'loop' ? await runLoop(run, node, step, edgeTaken) : await runStep(run, node, step, '', arrived);
       if (res.canceled) { await canceled(); return; }
+      if (res.suspended) { live.delete(runId); return; } // parked on a durable human task: the task service kicks the run back
       if (!res.ok) { if (!(await failOrBranch(node, res.error))) return; continue; }
       if (res.output?.branch) chosen.set(nodeId, res.output.branch);
       if (node.type === 'loop') chosen.set(nodeId, 'done');
@@ -203,6 +204,7 @@ export function createWorkflowEngine(deps) {
           const arrived = run.graph.edges.filter((e) => e.to === bid && edgeTaken(e, stepsById, node.id)).map((e) => e.from);
           const res = await runStep(run, run.graph.nodes.find((n) => n.id === bid), await store.step(run.id, bid), `iteration ${i + 1}: `, arrived);
           if (res.canceled) throw new Canceled();
+          if (res.suspended) throw new Error(`body step "${bs.node_id}" tried to wait for a human decision: waiting steps belong AFTER the loop, not inside its body`);
           if (!res.ok) throw new Error(`body step "${bs.node_id}" failed on iteration ${i + 1}: ${res.error}`);
         }
       }
@@ -302,6 +304,12 @@ export function createWorkflowEngine(deps) {
         await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs });
         return { canceled: true };
       }
+      if (e instanceof WorkflowSuspend) {
+        say(`WAITING for a human decision (${e.wait?.kind ?? 'task'}${e.wait?.taskId ? ' ' + e.wait.taskId : ''}): the run pauses here and resumes when the task is decided`);
+        await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs, input: { ...node.config, wait: e.wait } });
+        await store.updateRun(run.id, { status: 'waiting' });
+        return { suspended: true };
+      }
       if ((await store.step(run.id, node.id))?.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED') {
         const message = 'EXTERNAL_EFFECT_REVIEW_REQUIRED'; say('External effect uncertain. Automatic retry and error-route continuation are blocked; reconcile at the provider.');
         await store.patchStep(run.id, node.id, { status: 'failed', error: message, finished_at: now(), log: logs });
@@ -367,6 +375,7 @@ export function createWorkflowEngine(deps) {
     const provider = externalBlockProvider(node.type);
     const outputs = {};
     for (const s of await store.steps(run.id)) if (s.output) outputs[s.node_id] = s.output;
+    const priorInput = (await store.step(run.id, node.id))?.input;
     const resolved = substituteStepOutputs(node, outputs);
     const managed = /^(google-sheets-|jira-)/.test(node.type) || node.type === 'http-request';
     const simulation = managed && (run.test || resolved.config.executionMode !== 'real');
@@ -437,6 +446,18 @@ export function createWorkflowEngine(deps) {
       hasRunBranch: !!run.branch,
       test: !!run.test,
       runId: run.id,
+      // Durable-wait context: the wait payload recorded when this step last suspended (its task id), the
+      // run starter (anti-self-approval), the branch the run started from, and the shared business
+      // services (durable tasks, reads, IGA recertification, child runs). Absent when the server has none.
+      resumeWait: priorInput?.wait ?? null,
+      startedBy: run.started_by,
+      baseBranch: run.base_branch ?? deps.versioning.defaultBranch,
+      tasks: deps.tasks,
+      reads: deps.reads,
+      iga: deps.iga,
+      runs: deps.runs,
+      policies: deps.policies,
+      pluginsAdmin: deps.pluginsAdmin,
       branchWrite: async (fn, message) => {
         const branch = await ensureBranch(run, say);
         await deps.branchRun(branch, () => deps.versioning.writeOn(branch, async (c) => {

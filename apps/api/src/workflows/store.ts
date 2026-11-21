@@ -13,7 +13,8 @@ import { WfGraph, WfTrigger } from './model.js';
  * data pull request - the same circuit as roles, plugin settings and the sign-in configuration.
  */
 export interface DefinitionRow { id: string; tenant: string; name: string; description: string; graph: WfGraph; trigger: WfTrigger | null; /** false = paused: event triggers skip it (a manual Run still works). */ active: boolean; /** Free-form lowercase labels used to filter the list (max 8, 1-24 chars each). */ tags: string[]; created_by: string; created_at: string; updated_at: string }
-export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled';
+export type RunStatus = 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'canceled';
+/** waiting = parked on a durable human task (approval, certification...): the task service kicks it back. */
 export interface RunRow { id: string; tenant: string; definition_id: string; name: string; graph: WfGraph; branch: string | null; base_branch: string | null; status: RunStatus; error: string | null; started_by: string; started_at: string; finished_at: string | null; test: boolean }
 export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 export interface StepRow { run_id: string; node_id: string; status: StepStatus; simulated: boolean; attempts: number; error: string | null; log: string[]; input: Record<string, unknown> | null; output: Record<string, unknown> | null; started_at: string | null; finished_at: string | null }
@@ -21,6 +22,11 @@ export interface StepRow { run_id: string; node_id: string; status: StepStatus; 
  * (no tenant column): in this demo every account shares the same gallery. Official/community templates
  * are the static API catalog, not rows. */
 export interface TemplateRow { id: string; name: string; description: string; category: string; graph: WfGraph; trigger: WfTrigger | null; created_by: string; created_at: string }
+
+/** A durable human task (approval, certification, publication review...). Operational durable state in the
+ *  meta store: it survives restarts, is never versioned and never rolled back with a branch. A task belongs
+ *  to the run step that created it (run_id + node_id); its decision kicks the run back. */
+export interface TaskRow { id: string; tenant: string; kind: string; title: string; detail: Record<string, unknown>; assignee: string; delegated_to: string | null; status: 'open' | 'decided' | 'canceled'; decision: string | null; justification: string | null; decided_by: string | null; run_id: string | null; node_id: string | null; prevent_self: boolean; created_at: string; due_at: string | null; reminded_at: string | null; decided_at: string | null }
 
 export interface TicketKey { tenant: string; connectionId: string; project: string; issueKey: string }
 export interface TicketLink extends TicketKey { account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string; runId: string }
@@ -323,9 +329,163 @@ export class WorkflowStore {
     try { await m.query('insert into workflow_store_meta (k, v) values (?, ?) on duplicate key update v = values(v)', [k, v]); } finally { await m.end(); }
   }
 
+  /** Runs the engine must (re)kick: queued and running ones, plus waiting ones (a waiting run re-checks its
+   *  task and re-parks itself, so boot recovery never loses a wait). */
   async runningRuns(): Promise<RunRow[]> {
     const m = await this.meta();
-    try { const [r] = await m.query("select * from workflow_runs where status in ('queued','running')"); return (r as Record<string, unknown>[]).map(WorkflowStore.run); } finally { await m.end(); }
+    try { const [r] = await m.query("select * from workflow_runs where status in ('queued','running','waiting')"); return (r as Record<string, unknown>[]).map(WorkflowStore.run); } finally { await m.end(); }
+  }
+
+  private tasksReady?: Promise<void>;
+  /** The durable-task table is created on FIRST WRITE, never at boot (same deploy-qualification rule as the
+   *  ticket links: no unverified schema change on a database written by a previous release). */
+  private async ensureTasks(m: Connection): Promise<void> {
+    if (!this.tasksReady) this.tasksReady = m.query('CREATE TABLE IF NOT EXISTS workflow_tasks (id VARCHAR(48) NOT NULL PRIMARY KEY, tenant VARCHAR(32) NOT NULL, kind VARCHAR(32) NOT NULL, title VARCHAR(200) NOT NULL, detail JSON NULL, assignee VARCHAR(64) NOT NULL, delegated_to VARCHAR(64) NULL, status VARCHAR(12) NOT NULL, decision VARCHAR(40) NULL, justification VARCHAR(1000) NULL, decided_by VARCHAR(64) NULL, run_id VARCHAR(40) NULL, node_id VARCHAR(40) NULL, prevent_self BOOLEAN NOT NULL DEFAULT FALSE, created_at DATETIME(3) NOT NULL, due_at DATETIME(3) NULL, reminded_at DATETIME(3) NULL, decided_at DATETIME(3) NULL, KEY wf_tasks_inbox (tenant, assignee, status), KEY wf_tasks_run (run_id))').then(() => undefined).catch((e) => { this.tasksReady = undefined; throw e; });
+    await this.tasksReady;
+  }
+  private static task(r: Record<string, unknown>): TaskRow {
+    const detail = typeof r.detail === 'string' ? JSON.parse(r.detail) : r.detail;
+    return { id: String(r.id), tenant: String(r.tenant), kind: String(r.kind), title: String(r.title), detail: (detail ?? {}) as Record<string, unknown>, assignee: String(r.assignee), delegated_to: r.delegated_to === null ? null : String(r.delegated_to), status: r.status as TaskRow['status'], decision: r.decision === null ? null : String(r.decision), justification: r.justification === null ? null : String(r.justification), decided_by: r.decided_by === null ? null : String(r.decided_by), run_id: r.run_id === null ? null : String(r.run_id), node_id: r.node_id === null ? null : String(r.node_id), prevent_self: !!r.prevent_self, created_at: WorkflowStore.ts(r.created_at), due_at: r.due_at === null ? null : WorkflowStore.ts(r.due_at), reminded_at: r.reminded_at === null ? null : WorkflowStore.ts(r.reminded_at), decided_at: r.decided_at === null ? null : WorkflowStore.ts(r.decided_at) };
+  }
+  /** Idempotent insert: the same task id again returns the stored row (a retried step never duplicates its task). */
+  async putTask(t: TaskRow): Promise<TaskRow> {
+    const m = await this.meta();
+    try {
+      await this.ensureTasks(m);
+      await m.query('insert ignore into workflow_tasks (id, tenant, kind, title, detail, assignee, delegated_to, status, decision, justification, decided_by, run_id, node_id, prevent_self, created_at, due_at, reminded_at, decided_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [t.id, t.tenant, t.kind, t.title, JSON.stringify(t.detail ?? {}), t.assignee, t.delegated_to, t.status, t.decision, t.justification, t.decided_by, t.run_id, t.node_id, t.prevent_self ? 1 : 0, t.created_at, t.due_at, t.reminded_at, t.decided_at]);
+      const got = await this.getTask(t.id);
+      if (!got) throw new Error('task not recorded');
+      return got;
+    } finally { await m.end(); }
+  }
+  async getTask(id: string): Promise<TaskRow | null> {
+    const m = await this.meta();
+    try {
+      try { const [r] = await m.query('select * from workflow_tasks where id = ?', [id]); const row = (r as Record<string, unknown>[])[0]; return row ? WorkflowStore.task(row) : null; }
+      catch (e) { if (WorkflowStore.noTable(e)) return null; throw e; }
+    } finally { await m.end(); }
+  }
+  async listTasks(tenant: string, f: { assignee?: string; status?: string; runId?: string } = {}): Promise<TaskRow[]> {
+    const m = await this.meta();
+    try {
+      try {
+        const where = ['tenant = ?'], vals: unknown[] = [tenant];
+        if (f.assignee) { where.push('(assignee = ? or delegated_to = ?)'); vals.push(f.assignee, f.assignee); }
+        if (f.status) { where.push('status = ?'); vals.push(f.status); }
+        if (f.runId) { where.push('run_id = ?'); vals.push(f.runId); }
+        const [r] = await m.query(`select * from workflow_tasks where ${where.join(' and ')} order by created_at desc limit 200`, vals);
+        return (r as Record<string, unknown>[]).map(WorkflowStore.task);
+      } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; }
+    } finally { await m.end(); }
+  }
+  /** One atomic decide: only an OPEN task whose current decider is the actor can be decided. */
+  async decideTask(id: string, actor: string, decision: string, justification: string | null, at: string): Promise<TaskRow | null> {
+    const m = await this.meta();
+    try {
+      let res: unknown;
+      try { [res] = await m.query("update workflow_tasks set status = 'decided', decision = ?, justification = ?, decided_by = ?, decided_at = ? where id = ? and status = 'open' and (assignee = ? or delegated_to = ?)", [decision, justification, actor, at, id, actor, actor]); }
+      catch (e) { if (WorkflowStore.noTable(e)) return null; throw e; }
+      if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
+      return this.getTask(id);
+    } finally { await m.end(); }
+  }
+  /** Admin or system override (self-approval guard checked by the caller, or N/A for system decisions). */
+  async decideTaskAs(id: string, actor: string, decision: string, justification: string | null, at: string): Promise<TaskRow | null> {
+    const m = await this.meta();
+    try {
+      let res: unknown;
+      try { [res] = await m.query("update workflow_tasks set status = 'decided', decision = ?, justification = ?, decided_by = ?, decided_at = ? where id = ? and status = 'open'", [decision, justification, actor, at, id]); }
+      catch (e) { if (WorkflowStore.noTable(e)) return null; throw e; }
+      if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
+      return this.getTask(id);
+    } finally { await m.end(); }
+  }
+  async delegateTask(id: string, to: string, at: string): Promise<TaskRow | null> {
+    const m = await this.meta();
+    try {
+      let res: unknown;
+      try { [res] = await m.query("update workflow_tasks set delegated_to = ?, reminded_at = null, due_at = ? where id = ? and status = 'open'", [to, at, id]); }
+      catch (e) { if (WorkflowStore.noTable(e)) return null; throw e; }
+      if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
+      return this.getTask(id);
+    } finally { await m.end(); }
+  }
+  async markTaskReminded(id: string, at: string): Promise<void> {
+    const m = await this.meta();
+    try {
+      try { await m.query('update workflow_tasks set reminded_at = ? where id = ?', [at, id]); } catch (e) { if (!WorkflowStore.noTable(e)) throw e; }
+    } finally { await m.end(); }
+  }
+  /** Cancels every open task of a run (the run itself was canceled: its waits must not stay decidable). */
+  async cancelTasksForRun(runId: string, at: string): Promise<number> {
+    const m = await this.meta();
+    try {
+      let res: unknown;
+      try { [res] = await m.query("update workflow_tasks set status = 'canceled', decided_at = ? where run_id = ? and status = 'open'", [at, runId]); }
+      catch (e) { if (WorkflowStore.noTable(e)) return 0; throw e; }
+      return Number((res as { affectedRows?: number }).affectedRows);
+    } finally { await m.end(); }
+  }
+
+  /** IGA recertification campaigns (meta store, lazy-created on first write like workflow_tasks). */
+  private igaReady?: Promise<void>;
+  private async ensureIga(m: Connection): Promise<void> {
+    this.igaReady ??= (async () => {
+      await m.query('CREATE TABLE IF NOT EXISTS iga_campaigns (id VARCHAR(48) NOT NULL PRIMARY KEY, tenant VARCHAR(32) NOT NULL, kind VARCHAR(32) NOT NULL, name VARCHAR(120) NOT NULL, ref VARCHAR(80) NOT NULL, status VARCHAR(12) NOT NULL, scope JSON NULL, created_by VARCHAR(64) NOT NULL, created_at DATETIME(3) NOT NULL, closed_by VARCHAR(64) NULL, closed_at DATETIME(3) NULL, evidence JSON NULL, KEY iga_campaigns_tenant (tenant, status))');
+      await m.query('CREATE TABLE IF NOT EXISTS iga_items (id VARCHAR(48) NOT NULL PRIMARY KEY, tenant VARCHAR(32) NOT NULL, campaign_id VARCHAR(48) NOT NULL, identity VARCHAR(64) NOT NULL, kind VARCHAR(32) NOT NULL, action VARCHAR(32) NOT NULL, payload JSON NULL, state VARCHAR(24) NOT NULL, decided_by VARCHAR(64) NULL, decided_at DATETIME(3) NULL, decision_reason VARCHAR(1000) NULL, run_id VARCHAR(40) NULL, KEY iga_items_campaign (campaign_id, state))');
+    })().catch((e) => { this.igaReady = undefined; throw e; });
+    await this.igaReady;
+  }
+  private static igaJson(v: unknown): Record<string, unknown> { const x = typeof v === 'string' ? JSON.parse(v) : v; return (x ?? {}) as Record<string, unknown>; }
+  async igaPutCampaign(c: { id: string; tenant: string; kind: string; name: string; ref: string; status: string; scope: Record<string, unknown>; created_by: string; created_at: string }, items: { id: string; identity: string; kind: string; action: string; payload: Record<string, unknown> }[]): Promise<void> {
+    const m = await this.meta();
+    try {
+      await this.ensureIga(m);
+      await m.query('insert into iga_campaigns (id, tenant, kind, name, ref, status, scope, created_by, created_at) values (?,?,?,?,?,?,?,?,?)', [c.id, c.tenant, c.kind, c.name, c.ref, c.status, JSON.stringify(c.scope ?? {}), c.created_by, c.created_at]);
+      for (const i of items) await m.query('insert into iga_items (id, tenant, campaign_id, identity, kind, action, payload, state) values (?,?,?,?,?,?,?,?)', [i.id, c.tenant, c.id, i.identity, i.kind, i.action, JSON.stringify(i.payload ?? {}), 'pending']);
+    } finally { await m.end(); }
+  }
+  async igaGetCampaign(tenant: string, id: string): Promise<Record<string, unknown> | null> {
+    const m = await this.meta();
+    try {
+      await this.ensureIga(m);
+      const [r] = await m.query('select * from iga_campaigns where id = ? and tenant = ?', [id, tenant]);
+      const row = (r as Record<string, unknown>[])[0];
+      if (!row) return null;
+      return { ...row, scope: WorkflowStore.igaJson(row.scope), evidence: row.evidence === null ? null : WorkflowStore.igaJson(row.evidence) };
+    } finally { await m.end(); }
+  }
+  async igaListCampaigns(tenant: string): Promise<Record<string, unknown>[]> {
+    const m = await this.meta();
+    try {
+      await this.ensureIga(m);
+      const [r] = await m.query('select id, tenant, kind, name, ref, status, created_by, created_at, closed_by, closed_at from iga_campaigns where tenant = ? order by created_at desc limit 100', [tenant]);
+      return r as Record<string, unknown>[];
+    } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
+  }
+  async igaListItems(tenant: string, campaignId: string, state?: string): Promise<Record<string, unknown>[]> {
+    const m = await this.meta();
+    try {
+      await this.ensureIga(m);
+      const where = ['campaign_id = ?', 'tenant = ?'], vals: unknown[] = [campaignId, tenant];
+      if (state) { where.push('state = ?'); vals.push(state); }
+      const [r] = await m.query(`select * from iga_items where ${where.join(' and ')} order by identity limit 500`, vals);
+      return (r as Record<string, unknown>[]).map((x) => ({ ...x, payload: WorkflowStore.igaJson(x.payload) }));
+    } finally { await m.end(); }
+  }
+  async igaUpdateItem(id: string, patch: { state?: string; payload?: Record<string, unknown>; decided_by?: string | null; decided_at?: string | null; decision_reason?: string | null; run_id?: string | null }): Promise<void> {
+    const m = await this.meta();
+    try {
+      const sets: string[] = [], vals: unknown[] = [];
+      if (patch.state !== undefined) { sets.push('state = ?'); vals.push(patch.state); }
+      if (patch.payload !== undefined) { sets.push('payload = ?'); vals.push(JSON.stringify(patch.payload)); }
+      for (const k of ['decided_by', 'decided_at', 'decision_reason', 'run_id'] as const) if (k in patch) { sets.push(`${k} = ?`); vals.push(patch[k] ?? null); }
+      if (sets.length) await m.query(`update iga_items set ${sets.join(', ')} where id = ?`, [...vals, id]);
+    } finally { await m.end(); }
+  }
+  async igaCloseCampaign(id: string, actor: string, at: string, evidence: Record<string, unknown>): Promise<void> {
+    const m = await this.meta();
+    try { await m.query("update iga_campaigns set status = 'closed', closed_by = ?, closed_at = ?, evidence = ? where id = ?", [actor, at, JSON.stringify(evidence), id]); } finally { await m.end(); }
   }
 
   async steps(runId: string): Promise<StepRow[]> {

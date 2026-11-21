@@ -17,7 +17,7 @@ export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean
 /** API surface of the workflows feature. All state changes are validated here; the engine only executes. */
 @Injectable()
 export class WorkflowsService {
-  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
+  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly tasks?: import('./tasks.js').WorkflowTasksService) {}
 
   /** The registry of the current workspace branch (plugin enablement is per tenant AND branch). */
   private async registry(): Promise<PluginRegistry> {
@@ -179,7 +179,7 @@ export class WorkflowsService {
   async removeRun(tenant: string, runId: unknown) {
     const r = await this.store.getRun(tenant, this.checkId(runId, 'run id'));
     if (!r) throw new NotFoundException('unknown run');
-    if (r.status === 'queued' || r.status === 'running') throw new ConflictException('cancel the run first');
+    if (r.status === 'queued' || r.status === 'running' || r.status === 'waiting') throw new ConflictException('cancel the run first');
     await this.store.deleteRun(r.id);
     return { deleted: r.id };
   }
@@ -239,7 +239,7 @@ export class WorkflowsService {
 
   async listRuns(tenant: string, definitionId?: string, filters: { status?: string; tests?: boolean } = {}) {
     if (definitionId !== undefined) this.checkId(definitionId, 'workflow id');
-    if (filters.status !== undefined && !['queued', 'running', 'completed', 'failed', 'canceled'].includes(filters.status)) throw new BadRequestException('status: queued, running, completed, failed or canceled');
+    if (filters.status !== undefined && !['queued', 'running', 'waiting', 'completed', 'failed', 'canceled'].includes(filters.status)) throw new BadRequestException('status: queued, running, waiting, completed, failed or canceled');
     const runs = (await this.store.listRuns(tenant, definitionId, 200))
       .filter((r) => (filters.tests ? true : !r.test) && (!filters.status || r.status === filters.status))
       .slice(0, 50);
@@ -342,8 +342,9 @@ export class WorkflowsService {
 
   async cancel(tenant: string, runId: unknown) {
     const view = await this.runView(tenant, runId);
-    if (view.run.status !== 'queued' && view.run.status !== 'running') throw new ConflictException(`this run is already ${view.run.status}`);
+    if (view.run.status !== 'queued' && view.run.status !== 'running' && view.run.status !== 'waiting') throw new ConflictException(`this run is already ${view.run.status}`);
     this.engine.cancelFlag(view.run.id);
+    await this.tasks?.cancelForRun(tenant, view.run.id);
     // A run parked between steps (queued, or running without a live executor after a crash) is canceled here.
     await this.store.updateRun(view.run.id, { status: 'canceled', finished_at: now() });
     return this.runView(tenant, view.run.id);
