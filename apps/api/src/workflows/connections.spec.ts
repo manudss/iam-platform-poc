@@ -58,4 +58,18 @@ describe('managed workflow connections', () => {
     await assert.rejects(()=>h.service.testDraft('t',{name:'HTTP',provider:'http',config:{baseUrl:'https://example.com'},existingId:r.connection.id}));
   });
 
+  it('a stored credential never follows a changed destination or account: saving or testing needs the credential typed again',async()=>{
+    const h=setup(); const calls:any[]=[]; const stub=mock.method(h.service as any,'httpProbe',async(url:string,o:any)=>{calls.push({url,auth:!!o.headers?.Authorization});return {status:200};});
+    try {
+      const http=await h.service.save('t',undefined,{name:'x',provider:'http',config:{baseUrl:'https://good.example.com/'},secret:'FICTIONAL'});
+      await assert.rejects(()=>h.service.testDraft('t',{name:'x',provider:'http',config:{baseUrl:'https://other.example.net/'},existingId:http.connection.id}),/entered again/);
+      await assert.rejects(()=>h.service.save('t',http.connection.id,{name:'x',provider:'http',config:{baseUrl:'https://third.example.org/'}}),/entered again/);
+      assert.equal(calls.length,0);
+      await h.service.save('t',http.connection.id,{name:'renamed',provider:'http',config:{baseUrl:'https://good.example.com/'}});
+      const j=await h.service.save('t',undefined,{...jira,secret:'FICTIONAL'});
+      await assert.rejects(()=>h.service.save('t',j.connection.id,{...jira,config:{...jira.config,instanceUrl:'https://other.atlassian.net'}}),/entered again/);
+      await assert.rejects(()=>h.service.save('t',j.connection.id,{...jira,config:{...jira.config,email:'someone@example.invalid'}}),/entered again/);
+      await h.service.save('t',j.connection.id,{...jira,config:{...jira.config,instanceUrl:'https://other.atlassian.net'},secret:'NEW-FICTIONAL'});
+    } finally {stub.mock.restore();}
+  });
 });

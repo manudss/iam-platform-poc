@@ -15,6 +15,9 @@ const jiraGateway = (url: URL) => url.hostname === 'api.atlassian.com' && /^\/ex
 /** Read-only check: a site origin reads the current account; a gateway reads one project page (a scoped token may lack read:me). */
 const jiraProbeUrl = (instanceUrl: string) => { const u = new URL(instanceUrl); return jiraGateway(u) ? `${u.origin}${u.pathname.replace(/\/$/, '')}/rest/api/3/project/search?maxResults=1` : new URL('/rest/api/3/myself', u).toString(); };
 export const connectionProvider = (type: string): ConnectionProvider | null => type.startsWith('google-sheets-') ? 'google-sheets' : type.startsWith('jira-') ? 'jira' : type === 'http-request' ? 'http' : null;
+/** Config fields that decide WHERE the stored credential is sent or as WHOM it acts: changing one needs the credential typed again, so a stored secret never follows a new destination. */
+const BOUND = ['instanceUrl', 'baseUrl', 'siteUrl', 'email', 'userEmail'];
+export const destinationChanged = (before: Record<string, string>, after: Record<string, string>) => BOUND.some(k => (before[k] ?? '') !== (after[k] ?? ''));
 export function validateConnection(body: Record<string, unknown>) {
   if (Object.keys(body).some(k => !['name', 'provider', 'config', 'secret'].includes(k))) throw new BadRequestException('unknown connection field');
   const provider = body.provider as ConnectionProvider;
@@ -62,6 +65,7 @@ export class WorkflowConnections {
     const previous = id ? await this.store.getConnection(tenant, cid, ref) : null;
     if (id && !previous) throw new NotFoundException('unknown connection');
     if (previous && previous.provider !== clean.provider) throw new BadRequestException('connection provider cannot change');
+    if (previous?.secretRef && !clean.secret && destinationChanged(previous.config, clean.config)) throw new BadRequestException('changing the destination or the account needs the credential entered again');
     const revision = randomUUID(); let secretRef = previous?.secretRef ?? null;
     if (clean.secret) {
       if (!this.secrets.enabled) throw new ServiceUnavailableException('OpenBao is not configured; no plaintext credential fallback');
@@ -89,6 +93,7 @@ export class WorkflowConnections {
       const id = connectionId(existingId);
       const c = await this.store.getConnection(tenant, id, currentBranch());
       if (!c || c.provider !== clean.provider) throw new NotFoundException('connection missing or wrong provider');
+      if (!secret && destinationChanged(c.config, clean.config)) throw new BadRequestException('changing the destination or the account needs the credential entered again');
       if (!secret) { try { secret = (await this.resolve(tenant, currentBranch(), id, clean.provider)).secret; } catch { return this.probeFailed(); } }
     }
     if (clean.provider !== 'http' && !secret) return this.probeFailed();
