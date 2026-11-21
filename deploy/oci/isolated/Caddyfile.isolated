@@ -1,0 +1,19 @@
+# Disposable loopback front for the isolated nominal qualification cycle.
+# Runs INSIDE the caddy-iso container on lyam-iso-net, published to the host as
+# 127.0.0.1:8080 (IAM_PUBLIC_ORIGIN). The api-iso backend is published separately on
+# 127.0.0.1:8081 (LYAM_PORT=8081): front and backend NEVER share a port.
+# Gate semantics are not asserted by this file: they are PROVEN by
+# deploy/oci/front-barrier-check.sh against IAM_PUBLIC_ORIGIN=http://127.0.0.1:8080
+# with an explicit disposable LYAM_FRONT_BARRIER_FILE before the cycle starts.
+# The barrier directory is mounted at /gate and holds ONLY the marker.
+# Never reuse the production Caddy site or its config.
+:8080 {
+	@gated {
+		file {
+			root /
+			try_files /gate/MAINTENANCE
+		}
+	}
+	respond @gated "under maintenance" 503
+	reverse_proxy api-iso:8080
+}

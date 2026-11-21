@@ -1,0 +1,46 @@
+# Isolated nominal qualification cycle (deploy/oci/isolated/). MANUAL trigger only:
+# a run is the protocol's step, launched only after independent review and the owner's
+# GO. Constraints held by construction: GitHub-hosted STANDARD ubuntu-latest (free on
+# this public repository - no larger runner, no self-hosted), permissions limited to
+# contents:read, NO environment, NO secrets (the deploy secrets of oci-deploy.yml are
+# never referenced), no deploy workflow call, checkout without persisted credentials,
+# fictive credentials generated inside the run. The runner has no production access.
+name: isolated-nominal-qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-cycle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (no persisted credentials)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Harness unit suites (wrapper, isolated verifier)
+        run: |
+          python3 deploy/oci/isolated/run-qualification-isolated.test.py
+          python3 deploy/oci/isolated/verify-0002-isolated-test.test.py
+
+      - name: Pull the two verified images (public ghcr, anonymous)
+        run: |
+          docker pull ghcr.io/manudss/iam-platform-poc@sha256:accbd340a59db8a87762f9cdb338a6aca70f92f99a5a5c9e5ba2425f8f3eb3de
+          docker pull ghcr.io/manudss/iam-platform-poc@sha256:7c5ce38f03b378afbb060e6092706a03503c47eac58c2cbca943d15d0d652201
+
+      - name: Run the isolated nominal cycle (positive + negative)
+        env:
+          ISO_WORK: ${{ runner.temp }}/iso-work
+        run: bash deploy/oci/isolated/run-isolated-cycle.sh "$ISO_WORK"
+
+      - name: Upload hashed evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-cycle-evidence
+          path: ${{ runner.temp }}/iso-work/evidence/
+          if-no-files-found: warn

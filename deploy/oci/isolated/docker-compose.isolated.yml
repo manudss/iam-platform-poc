@@ -1,0 +1,50 @@
+# Isolated companions + disposable front for the isolated nominal qualification cycle.
+# FICTIVE secrets only (compose env: PG_PASSWORD), throwaway volume, dedicated network.
+# NO name, path, port or volume reuses a production resource. ISO_WORK (absolute,
+# disposable) is provided by the compose env file written by run-isolated-cycle.sh.
+name: lyam-isolated
+
+services:
+  pg-iso:
+    image: postgres:17-alpine
+    container_name: pg-iso
+    restart: unless-stopped
+    networks: [lyam-iso-net]
+    environment:
+      POSTGRES_USER: lyam
+      POSTGRES_DB: lyam
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in the compose env file (fictive)}
+    volumes:
+      - pg-iso-data:/var/lib/postgresql/data
+
+  bao-iso:
+    image: openbao/openbao:2.7.2
+    container_name: bao-iso
+    restart: unless-stopped
+    networks: [lyam-iso-net]
+    ports:
+      - '127.0.0.1:8200:8200'
+    command: server -config=/bao/config/bao.hcl
+    volumes:
+      # Host path inside ISO_WORK on purpose: update.sh archives this directory
+      # (LYAM_BACKUP_BAO_DIR) while bao-iso is stopped (LYAM_BACKUP_BAO_CONTAINER).
+      - ${ISO_WORK:?set ISO_WORK in the compose env file}/bao-storage:/bao/file
+      - ${ISO_WORK:?}/bao.hcl:/bao/config/bao.hcl:ro
+
+  caddy-iso:
+    image: caddy:2-alpine
+    container_name: caddy-iso
+    restart: unless-stopped
+    networks: [lyam-iso-net]
+    ports:
+      - '127.0.0.1:8080:8080'
+    volumes:
+      - ${ISO_WORK:?}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${ISO_WORK:?}/gate:/gate
+
+volumes:
+  pg-iso-data:
+
+networks:
+  lyam-iso-net:
+    name: lyam-iso-net

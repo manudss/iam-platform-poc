@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "isolatedLoopbackTest": true,
+  "tenant": "acme-demo",
+  "origins": [
+    "http://127.0.0.1:8080"
+  ],
+  "issuer": "http://127.0.0.1:8080/core",
+  "network": "lyam-iso-net",
+  "pgContainer": "pg-iso",
+  "pgUser": "lyam",
+  "pgDatabase": "lyam",
+  "authFile": "<workspace>/auth.json",
+  "baoAddress": "http://bao-iso:8200",
+  "baoTokenFile": "<workspace>/bao-token",
+  "baoMetadataRoots": [
+    "secret/metadata/iam"
+  ],
+  "credentialFiles": [
+    "core-state/credentials.json"
+  ],
+  "appendOnlyTables": [
+    "public.activations",
+    "public.decision_audit"
+  ],
+  "transformationVerifiers": {
+    "ghcr.io/manudss/iam-platform-poc@sha256:7c5ce38f03b378afbb060e6092706a03503c47eac58c2cbca943d15d0d652201": "<workspace>/verify-0002-isolated-test.py"
+  }
+}
