@@ -154,10 +154,10 @@ export class ApplicationsPage {
   protected toggle(a: AppConnector) { void this.run('PATCH', `/app-connectors/${encodeURIComponent(a.id)}`, { enabled: !a.enabled }, a.enabled ? 'Application disabled.' : 'Application enabled.'); }
   protected async remove(a: AppConnector) {
     if (!(await this.run('DELETE', `/app-connectors/${encodeURIComponent(a.id)}`, undefined, 'Application deleted.'))) return;
-    // A level left behind would apply silently to a new application created with the same id.
-    if (this.levelAvailable() && (this.levels[a.id]?.minLevel ?? 0) > 0) {
-      const r = await this.s.api.raw<any>('PUT', `/security/app-level/${encodeURIComponent(a.id)}`, { level: 0 }, this.h());
-      if (r.status >= 400) this.problem.set(`The application is deleted, but its minimum level could not be cleared (${r.data?.message ?? 'refused'}). Create the application again with No minimum to clear it.`);
+    // Level and age limit left behind would apply silently to a new application created with the same id.
+    if (this.levelAvailable() && a.id in this.levels) {
+      const r = await this.s.api.raw<any>('DELETE', `/security/app-level/${encodeURIComponent(a.id)}`, undefined, this.h());
+      if (r.status >= 400) this.problem.set(`The application is deleted, but its level settings could not be cleared (${r.data?.message ?? 'refused'}). Create the application again with No minimum to clear it.`);
       else await this.load();
     }
   }

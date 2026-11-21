@@ -70,4 +70,10 @@ describe('minimum sign-in level in the application edit form', () => {
     expect(page.levelAvailable()).toBe(false); page.edit(app); page.level.set(9); calls.length = 0; await page.save();
     expect(calls.some((c) => c.method !== 'GET' && c.path.startsWith('/security'))).toBe(false);
   });
+  it('deleting an application also clears every level setting stored for its id', async () => {
+    const { page, calls } = setup({ security: 'ok' }); await page.load(); calls.length = 0;
+    await page.remove(app);
+    const writes = calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`);
+    expect(writes).toEqual(['DELETE /app-connectors/finance', 'DELETE /security/app-level/finance']);
+  });
 });

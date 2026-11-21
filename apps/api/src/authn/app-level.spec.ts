@@ -33,4 +33,10 @@ describe('saveAppLevel (application edit form)', () => {
     await assert.rejects(h.save('Bad Id', 5));
     assert.equal(h.box.writes, w);
   });
+  it('clearAppLevel removes the level and the age limit; an unknown id writes nothing', async () => {
+    const h = harness(stored); const clear = (a: string) => (AuthnService.prototype.clearAppLevel as any).call({ registry: async () => ({ coreSettings: async () => h.box.value, putCoreSettings: async (_t: string, _i: string, v: any) => { h.box.value = v; h.box.writes++; } }) }, 't', a);
+    await clear('finance'); const c = parseSecurity(h.box.value);
+    assert.equal('finance' in c.appLevels, false); assert.deepEqual(c.appLevels.hr, { minLevel: 3 }); assert.equal(c.adminMinLevel, 4); assert.equal(h.box.writes, 1);
+    await clear('ghost'); assert.equal(h.box.writes, 1);
+  });
 });

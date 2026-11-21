@@ -39,5 +39,8 @@ export class AccountBlocksController {
   @Put('security') async put(@Param('tenant') t: string, @Body() b: { config?: unknown }, @Req() req: any) { assertNotBranchTest(req); return { saved: true, config: await this.authn.saveSecurity(t, b?.config, { sub: this.sub(req), level: Number(req.user?.auth_level ?? 0) }) }; }
   /** One application's minimum level, written from the application edit form (same guard and branch rules as PUT security). */
   @Put('security/app-level/:appId') async putAppLevel(@Param('tenant') t: string, @Param('appId') appId: string, @Body() b: { level?: unknown }, @Req() req: any) { assertNotBranchTest(req); return { saved: true, config: await this.authn.saveAppLevel(t, appId, b?.level) }; }
+  /** Drops everything stored for a deleted application. */
+  @Delete('security/app-level/:appId') async deleteAppLevel(@Param('tenant') t: string, @Param('appId') appId: string, @Req() req: any) { assertNotBranchTest(req); return { saved: true, config: await this.authn.clearAppLevel(t, appId) }; }
 }
+
 

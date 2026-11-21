@@ -200,6 +200,17 @@ export class AuthnService implements OnApplicationBootstrap {
     await reg.putCoreSettings(tenant, SECURITY_SETTINGS_ID, next);
     return parseSecurity(next);
   }
+  /** Removes EVERY constraint stored for an application (minimum level and age limit): used when the application is deleted, so a new application with the same id inherits nothing. */
+  async clearAppLevel(tenant: string, appId: string): Promise<SecurityConfig> {
+    const reg = await this.registry('work', true);
+    const current = await reg.coreSettings(tenant, SECURITY_SETTINGS_ID);
+    const stored = storedSecurity(parseSecurity(current)); const levels = { ...(stored.appLevels as Record<string, unknown>) };
+    if (!(appId in levels)) return parseSecurity(current);
+    delete levels[appId];
+    const next = storedSecurity(validateSecurity({ ...stored, appLevels: levels }));
+    await reg.putCoreSettings(tenant, SECURITY_SETTINGS_ID, next);
+    return parseSecurity(next);
+  }
   async liveConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('live')).coreSettings(tenant, CORE_SETTINGS_ID)); }
   async workingConfig(tenant: string): Promise<AuthnConfig> { return parseStored(await (await this.registry('work')).coreSettings(tenant, CORE_SETTINGS_ID)); }
   async saveConfig(tenant: string, input: unknown): Promise<AuthnConfig> {
