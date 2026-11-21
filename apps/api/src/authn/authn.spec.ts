@@ -226,7 +226,7 @@ describe('authentication methods and chains', () => {
       const reg = app.get(PluginRegistry);
       const sent: any[] = [];
       reg.register({ manifest: { apiVersion: 'plugin/v3', id: 'notify-fake', version: '1.0.0', name: 'Fake mailer', description: 'test notifier', publisher: 'iam-platform', kinds: ['notifier'], extends: 'notify-log', provides: ['notify.default'], hooks: [{ name: 'notify.send', mode: 'async' }, { name: 'notify.capability', mode: 'blocking' }], settings: [{ key: 'prefix', type: 'string', label: 'Prefix', default: 'fake' }], entrypoints: { handlers: 'handlers.mjs' }, security: { signed: true } } as any,
-        handlers: { 'notify.send': (pl: any) => { sent.push(pl); return { delivered: true, real: true, id: 'fake-1' }; }, 'notify.capability': () => ({ real: true, note: 'fake real delivery' }) } as any });
+        handlers: { 'notify.send': () => { return { delivered: true, real: true, id: 'fake-1' }; }, 'notify.capability': () => ({ real: true, note: 'fake real delivery' }) } as any });
       await reg.install(T, 'notify-fake', { install: true });
       await reg.enable(T, 'notify-fake', {});
       await app.get(BusHostRef).host!.sync(); // enabling only schedules the bus re-push; serve the fake now
@@ -256,6 +256,26 @@ describe('authentication methods and chains', () => {
       assert.equal(shown.simulated, true);
       assert.deepEqual(shown.steps.map((x: any) => [x.type, x.simulated]), [['password', false], ['email-otp', true]]);
       assert.ok(shown.effectiveLevel < shown.declaredLevel, 'the effective level is capped by the really verified step');
+    });
+
+    it('the notifier can change with the SAME Dolt head: the cached sign-in options follow it, in both directions, and the chain and its steps agree', async () => {
+      const { PluginRegistry } = await import('../plugins/v1/registry.js');
+      const { BusHostRef } = await import('../plugins/v1/bus-host.js');
+      const reg = app.get(PluginRegistry);
+      (svc as any).branches = { headOf: () => 'same-head' }; // makes the options cacheable (no workspace mode in this spec)
+      const view = async () => (await http().get(`/tenants/${T}/signin/options`).expect(200)).body.chains.find((c: any) => c.id === 'pw-mail-flip');
+      const agrees = (c: any) => { assert.equal(c.simulated, c.steps.some((x: any) => x.simulated)); };
+      try {
+        await put(cfg([m('pw', 'password', 3), m('mail', 'email-otp', 4, { delivery: 'smtp' })], [{ id: 'pw-mail-flip', name: 'Password then e-mail', steps: ['pw', 'mail'], level: 6 }], 'pw-mail-flip')).expect(200);
+        let c = await view(); assert.equal(c.simulated, true); agrees(c); assert.deepEqual(c.steps.map((x: any) => x.simulated), [false, true]);
+        c = await view(); assert.equal(c.simulated, true, 'second read, cached, still simulated');
+      reg.register({ manifest: { apiVersion: 'plugin/v3', id: 'notify-fake2', version: '1.0.0', name: 'Fake mailer', description: 'test notifier', publisher: 'iam-platform', kinds: ['notifier'], extends: 'notify-log', provides: ['notify.default'], hooks: [{ name: 'notify.send', mode: 'async' }, { name: 'notify.capability', mode: 'blocking' }], settings: [{ key: 'prefix', type: 'string', label: 'Prefix', default: 'fake' }], entrypoints: { handlers: 'handlers.mjs' }, security: { signed: true } } as any,
+        handlers: { 'notify.send': () => { return { delivered: true, real: true, id: 'fake-2' }; }, 'notify.capability': () => ({ real: true, note: 'fake real delivery' }) } as any });
+        await reg.install(T, 'notify-fake2', { install: true }); await reg.enable(T, 'notify-fake2', {}); await app.get(BusHostRef).host!.sync();
+        c = await view(); assert.equal(c.simulated, false, 'real notifier appeared, same head'); agrees(c); assert.deepEqual(c.steps.map((x: any) => x.simulated), [false, false]); assert.equal(c.effectiveLevel, c.declaredLevel);
+        await reg.disable(T, 'notify-fake2'); await app.get(BusHostRef).host!.sync();
+        c = await view(); assert.equal(c.simulated, true, 'real notifier gone, same head'); agrees(c); assert.ok(c.effectiveLevel < c.declaredLevel);
+      } finally { delete (svc as any).branches; try { await reg.disable(T, 'notify-fake2'); } catch { /* already disabled */ } }
     });
 
     it('a later step cannot be skipped or answered early, and a finished session cannot be reused', async () => {

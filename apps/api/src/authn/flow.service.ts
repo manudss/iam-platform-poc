@@ -429,12 +429,6 @@ export class AuthnService implements OnApplicationBootstrap {
     if (st.type === 'webauthn') { const w = await this.enroll.webauthnRecord(tenant, subject, st.id); return w ? { webauthn: w } : {}; }
     return {};
   }
-  /** Verdict of one step for the sign-in page: the method's own (config-only) verdict, made SIMULATED for an e-mail step when the notifier does not declare real delivery. */
-  private async verifiedStep(reg: PluginRegistry, tenant: string, m: { type: string; config: Record<string, unknown> }, cap: { real: boolean; note?: string } | undefined): Promise<{ real: boolean; note: string }> {
-    const v = await this.verification(reg, tenant, m);
-    if (m.type === 'email-otp' && v.real && cap?.real !== true) return { real: false, note: `SIMULATED: no mail is sent, the code goes to the demo outbox. ${cap?.note ?? 'The notifier on the notify.default slot did not declare real delivery.'}` };
-    return v;
-  }
   private async notifyCapability(reg: PluginRegistry, tenant: string) {
     // Delivery of one-time codes goes through the notify.default slot (P1-E): the plugin chosen on the slot
     // sends (durable emission); its notify.capability answer says whether delivery is real or simulated.
@@ -471,37 +465,47 @@ export class AuthnService implements OnApplicationBootstrap {
   private async offered(cfg: AuthnConfig, reg: PluginRegistry, tenant: string) {
     return cfg.chains.filter((c) => c.enabled && c.steps.every((id) => { const m = cfg.methods.find((x) => x.id === id); return !!m?.enabled && !!this.provider(reg, tenant, m.type); }));
   }
-  /** Cache of the public sign-in options, keyed by tenant, branch and Dolt head: the list only depends on the
-   *  configuration and plugin state stored in Dolt, so one head check (a small query) replaces re-reading the
-   *  configuration and re-asking every method plugin over the bus on each visit. Outside workspace mode (specs)
-   *  there is no head to key on and nothing is cached. */
-  private readonly optionsCache = new Map<string, Awaited<ReturnType<AuthnService['computeOptions']>>>();
+  /** Cached part: configuration and per-method verdicts (they only depend on what is stored in Dolt). The notifier's
+   *  capability is NOT cached: it can change with no Dolt head change (plugin enabled or disabled, key added), so it is
+   *  asked again on each request, only when an e-mail step is offered, and applied to the cached verdicts. */
+  private readonly optionsCache = new Map<string, Awaited<ReturnType<AuthnService['optionsBase']>>>();
   /** Public description of what can be chosen on the sign-in page. No enrollment, user or secret information. */
   async options(tenant: string, branch?: string) {
     const reg = await this.signinRegistry(branch);
     const head = this.branches?.headOf(branch ?? 'main');
     const key = head ? `${tenant}|${branch ?? 'main'}|${head}` : null;
-    const hit = key ? this.optionsCache.get(key) : undefined;
-    if (hit) return hit;
-    const value = await this.computeOptions(reg, tenant, branch);
-    if (key) {
-      if (this.optionsCache.size >= 100) this.optionsCache.delete(this.optionsCache.keys().next().value as string);
-      this.optionsCache.set(key, value);
+    let base = key ? this.optionsCache.get(key) : undefined;
+    if (!base) {
+      base = await this.optionsBase(reg, tenant, branch);
+      if (key) {
+        if (this.optionsCache.size >= 100) this.optionsCache.delete(this.optionsCache.keys().next().value as string);
+        this.optionsCache.set(key, base);
+      }
     }
-    return value;
+    const capability = base.hasEmail ? await this.notifyCapability(reg, tenant) : undefined;
+    return this.optionsView(base, capability, branch);
   }
-  private async computeOptions(reg: PluginRegistry, tenant: string, branch?: string) {
+  private async optionsBase(reg: PluginRegistry, tenant: string, branch?: string) {
     const cfg = await this.signinConfig(tenant, branch), list = await this.offered(cfg, reg, tenant);
-    const capability = list.some((c) => c.steps.some((id) => cfg.methods.find((x) => x.id === id)?.type === 'email-otp')) ? await this.notifyCapability(reg, tenant) : undefined;
+    const verdicts = new Map<string, { real: boolean; note: string }>();
+    for (const c of list) for (const id of c.steps) if (!verdicts.has(id)) verdicts.set(id, await this.verification(reg, tenant, cfg.methods.find((x) => x.id === id)!));
+    const hasEmail = list.some((c) => c.steps.some((id) => cfg.methods.find((x) => x.id === id)?.type === 'email-otp'));
+    return { cfg, list, verdicts, hasEmail };
+  }
+  /** One verdict feeds the chain summary and its steps: an e-mail step is only REAL when the notifier on the notify.default slot delivers. */
+  private optionsView(base: { cfg: AuthnConfig; list: AuthnConfig['chains']; verdicts: Map<string, { real: boolean; note: string }> }, cap: { real: boolean; note?: string } | undefined, branch?: string) {
+    const { cfg, list } = base;
+    const verdict = (m: { id: string; type: string }) => {
+      const v = base.verdicts.get(m.id) ?? { real: false, note: 'Method unavailable.' };
+      return m.type === 'email-otp' && v.real && cap?.real !== true ? { real: false, note: `SIMULATED: no mail is sent, the code goes to the demo outbox. ${cap?.note ?? 'The notifier on the notify.default slot did not declare real delivery.'}` } : v;
+    };
     return {
       mode: list.length ? 'choice' as const : 'legacy' as const,
-      chains: await Promise.all(list.map(async (c) => {
-        // The same verdict feeds the chain summary and its steps: an e-mail step is only REAL when the notifier on the notify.default slot delivers.
-        const steps = await Promise.all(c.steps.map(async (id) => { const m = cfg.methods.find((x) => x.id === id)!; return [m, await this.verifiedStep(reg, tenant, m, capability)] as const; }));
-        const a = analyzeChain(cfg, c, (m) => steps.find(([x]) => x.id === m.id)?.[1]);
+      chains: list.map((c) => {
+        const a = analyzeChain(cfg, c, verdict);
         return { id: c.id, name: c.name, declaredLevel: c.level, effectiveLevel: a.effectiveLevel, mfa: a.mfa, simulated: a.simulatedSteps.length > 0, recommended: cfg.defaultChain === c.id,
-          steps: steps.map(([m, v]) => ({ name: m.name, type: m.type, simulated: !v.real })), ...(c.note ? { note: c.note } : {}) };
-      })),
+          steps: c.steps.map((id) => { const m = cfg.methods.find((x) => x.id === id)!; return { name: m.name, type: m.type, simulated: !verdict(m).real }; }), ...(c.note ? { note: c.note } : {}) };
+      }),
       note: 'Levels are declared by an administrator (10 = strongest), not measured. A simulated step proves nothing.',
       ...(branch ? { branch, test: true as const } : {}),
     };
