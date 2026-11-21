@@ -5,6 +5,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { RETURN_KEY, safeReturn } from './auth';
 import { STEP_UP_SUBJECT_KEY } from './step-up';
 import { SigninChain, SigninOptions, apiUrl } from './api';
+import { SigninMethods } from './signin-methods';
 
 /** Hydration handoff: the options the server fetched to render /login, so the browser does not refetch them (and flash "Loading...") on startup. */
 const OPTIONS_KEY = makeStateKey<SigninOptions>('iam-signin-options');
@@ -33,7 +34,7 @@ export function previewMessage(d: unknown): { chains: SigninChain[]; highlight: 
   return { chains, highlight: typeof x['highlight'] === 'string' ? x['highlight'] : '', view: x['view'] === 'step' ? 'step' : 'list', step: Math.max(0, Number(x['step']) || 0), dark: x['dark'] === true };
 }
 
-@Component({ selector: 'app-login', imports: [ThemeSwitch, Brand], templateUrl: './login.html', styleUrl: './login.css' })
+@Component({ selector: 'app-login', imports: [ThemeSwitch, Brand, SigninMethods], templateUrl: './login.html', styleUrl: './login.css' })
 export class LoginPage {
   protected readonly s = inject(Session);
   protected readonly branding = inject(Branding);
@@ -120,17 +121,6 @@ export class LoginPage {
       } catch (e) { this.error.set((e as Error).message); this.state.set('error'); }
     };
     await Promise.all([signup(), options()]);
-  }
-
-  protected stepNames(c: SigninChain) { return c.steps.map((x) => x.name).join(' \u2192 '); }
-
-  /** Leading icon of a chain from its step types: authenticator app, e-mail code, PIN keypad, else a plain password key. */
-  protected icon(c: SigninChain): 'shield' | 'mail' | 'pin' | 'key' {
-    const t = c.steps.map((x) => x.type);
-    if (t.some((x) => /totp|authenticator/i.test(x))) return 'shield';
-    if (t.some((x) => /mail/i.test(x))) return 'mail';
-    if (t.some((x) => /pin/i.test(x))) return 'pin';
-    return 'key';
   }
 
   protected async signIn(chain?: string) {
