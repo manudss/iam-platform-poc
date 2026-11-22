@@ -59,3 +59,11 @@ export async function writeGoogleRowByKey(auth, source, values, keyColumn, keyVa
   const mapped = namedColumns(row.header, values);
   return run(PACKAGE, 'update_row', { auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, first_row_headers: true, as_string: true, values: mapped, row_id: row.rowNumber } });
 }
+
+/** Adds a header column. Refuses a header that already exists (one fresh read first); the piece appends after the last header. */
+export async function createGoogleColumn(auth, source, columnName, run = runPieceAction) {
+  const header = (await readGoogleRows(auth, source, false, run)).find(r => r.rowNumber === 1);
+  if (!header) throw new Error('Google Sheet requires a header row');
+  if (Object.values(header.values).some(v => String(v) === columnName)) throw new Error('Google Sheet column already exists');
+  return run(PACKAGE, 'create-column', { auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, columnName } });
+}

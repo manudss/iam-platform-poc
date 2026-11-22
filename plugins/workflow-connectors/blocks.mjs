@@ -2,7 +2,7 @@ import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { runPieceAction } from './adapter.mjs';
-import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey } from './sheets-api.mjs';
+import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, createGoogleColumn } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
@@ -323,6 +323,29 @@ const sheetsAddRow = {
   },
 };
 
+const sheetsCreateColumn = {
+  type: 'google-sheets-create-column',
+  family: 'Google Sheets',
+  label: 'Add a sheet column (Activepieces)',
+  simulated: false,
+  description: 'Adds a header column to a Google Sheet through the Activepieces google-sheets piece. Refused when a column with that header already exists (never a duplicate header). On the demo sheet nothing is changed. A real column is an external write not reverted by the run branch.',
+  fields: [
+    ...sheetSourceFields,
+    { key: 'columnName', label: 'Column header', type: 'string', required: true },
+  ],
+  outputs: [{ key: 'created', description: 'true when the column was added' }],
+  validate(cfg) { return { ...sheetSource(cfg), columnName: str(cfg.columnName, 'columnName', 60) }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.dryRun || c.source === 'demo-sheet') { ctx.log('SIMULATION: Google Sheets create column, no call or sheet mutation'); return { created: false, dryRun: true }; }
+    const auth = googleAuth(ctx.settings);
+    if (!auth) bad('google-sheets-create-column: configure a managed Google Sheets connection first');
+    await createGoogleColumn(auth, c, c.columnName);
+    ctx.log(`Google Sheets: column "${c.columnName}" added (REAL external write, not reverted by the run branch)`);
+    return { created: true };
+  },
+};
+
 // --------------------------------------------------------------------------- Jira (piece-jira-cloud) ----
 const jiraCreateIssue = {
   type: 'jira-create-issue',
@@ -462,6 +485,31 @@ const jiraAddComment = {
     const id = String(r?.id ?? '');
     ctx.log(`Jira comment ${id || '?'} added on ${c.issueKey} (REAL external write, not idempotent)`);
     return { commentId: id };
+  },
+};
+
+const jiraUpdateIssue = {
+  type: 'jira-update-issue', family: 'Jira', label: 'Update a Jira issue (Activepieces)', simulated: false,
+  description: 'Sets the summary and/or the labels of an existing issue through the Activepieces jira-cloud piece (labels REPLACE the current list). A set is repeatable, but it is a real external write not reverted by the run branch. A field the issue edit screen does not offer is ignored by Jira. dryRun on (default) = SIMULATED.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real update)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+    { key: 'summary', label: 'New summary', type: 'string' },
+    { key: 'labels', label: 'Labels, replaces the list (comma separated)', type: 'string' },
+  ],
+  outputs: [{ key: 'updated', description: 'true when Jira accepted the update' }],
+  validate(cfg) {
+    const summary = str(cfg.summary, 'summary', 200, false), labels = labelsOf(cfg.labels);
+    if (!summary && !labels.length) bad('jira-update-issue: nothing to change (give a summary or labels)');
+    return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey'), summary, labels };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would update Jira issue ${c.issueKey} (nothing changed)`); return { updated: false, dryRun: true }; }
+    await runPieceAction('@activepieces/piece-jira-cloud', 'update_issue', { auth: jiraAuth(ctx, 'jira-update-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, issueFields: { ...(c.summary ? { summary: c.summary } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } } });
+    ctx.log(`Jira issue ${c.issueKey} updated (REAL external write)`);
+    return { updated: true };
   },
 };
 
@@ -934,7 +982,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

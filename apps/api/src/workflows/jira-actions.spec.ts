@@ -13,7 +13,9 @@ async function withFakeJira(fn: (url: string, seen: { method: string; url: strin
     req.on('end', () => {
       seen.push({ method: req.method ?? '', url: req.url ?? '', body: b });
       res.setHeader('content-type', 'application/json');
-      if ((req.url ?? '').includes('/comment')) res.end(JSON.stringify({ id: '777' }));
+      if ((req.url ?? '').includes('editmeta')) res.end(JSON.stringify({ fields: { summary: { key: 'summary', name: 'Summary', required: true, schema: { type: 'string', system: 'summary' }, operations: ['set'] }, labels: { key: 'labels', name: 'Labels', required: false, schema: { type: 'array', items: 'string', system: 'labels' }, operations: ['add', 'set', 'remove'] } } }));
+      else if (req.method === 'PUT') { res.statusCode = 204; res.end(); }
+      else if ((req.url ?? '').includes('/comment')) res.end(JSON.stringify({ id: '777' }));
       else if ((req.url ?? '').includes('/transitions')) { res.statusCode = 204; res.end(); }
       else res.end(JSON.stringify({ key: 'KAN-1', fields: { status: { name: 'Done' }, summary: 's', labels: ['a', 'b'] } }));
     });
@@ -52,5 +54,17 @@ describe('jira get / comment / transition blocks', () => {
     assert.throws(() => externalBlock('jira-get-issue')!.validate({ project: 'KAN', issueKey: 'kan 1' }));
     assert.throws(() => externalBlock('jira-transition-issue')!.validate({ project: 'KAN', issueKey: 'KAN-1', transitionId: 'Done' }));
     assert.throws(() => externalBlock('jira-add-comment')!.validate({ project: 'KAN', issueKey: 'KAN-1', comment: '' }));
+  });
+  it('jira-update-issue sets summary and labels through the real piece; dry run calls nothing; empty change refused', async () => {
+    await withFakeJira(async (url, seen) => {
+      const u = externalBlock('jira-update-issue')!;
+      assert.equal(((await u.run(ctx(u.validate({ project: 'KAN', issueKey: 'KAN-1', summary: 'x' }), settings(url)))) as { dryRun?: boolean }).dryRun, true);
+      assert.equal(seen.length, 0);
+      assert.deepEqual(await u.run(ctx(u.validate({ dryRun: false, project: 'KAN', issueKey: 'KAN-1', summary: 'new', labels: 'a,b' }), settings(url))), { updated: true });
+      const put = seen.find((x) => x.method === 'PUT')!;
+      assert.equal(put.url.split('?')[0], '/rest/api/3/issue/KAN-1');
+      assert.deepEqual(JSON.parse(put.body).fields, { summary: 'new', labels: ['a', 'b'] });
+    });
+    assert.throws(() => externalBlock('jira-update-issue')!.validate({ project: 'KAN', issueKey: 'KAN-1' }), /nothing to change/);
   });
 });
