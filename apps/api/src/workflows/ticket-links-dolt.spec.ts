@@ -1,3 +1,4 @@
+import { localTestPort } from '../testing/local-test-port.js';
 import 'reflect-metadata';
 import { before, after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,14 +15,28 @@ const K = { tenant: 'tenant-a', connectionId: 'jira-demo', project: 'KAN', issue
 const L = { ...K, account: 'bao', source: 'google', spreadsheetId: 'sheet-1', sheetId: 0, keyColumn: 'email', keyValue: 'bao@example.test', runId: 'run-p1' };
 describe('ticket links on real Dolt', { skip: !have && 'DOLT_BIN missing' }, () => {
   let dir: string, proc: ChildProcess, store: WorkflowStore;
+  let port: number;
   const saved: Record<string, string | undefined> = {};
   before(async () => {
+    port = await localTestPort();
     dir = mkdtempSync(join(tmpdir(), 'wf-links-')); const home = join(dir, 'h'), data = join(dir, 'd'); mkdirSync(home); mkdirSync(data); const env = { ...process.env, HOME: home };
     for (const [k, v] of [['user.name', 'test'], ['user.email', 'test@example.invalid']]) assert.equal(spawnSync(bin, ['config', '--global', '--add', k, v], { env }).status, 0);
     assert.equal(spawnSync(bin, ['sql'], { cwd: data, env, input: readFileSync(resolve('../../data/demo/01-schema.sql')) }).status, 0);
-    proc = spawn(bin, ['sql-server', '--host', '127.0.0.1', '--port', '14378', '--data-dir', data], { env, cwd: data, stdio: 'ignore' });
-    for (let i = 0; i < 100; i++) { if (spawnSync(bin, ['--host', '127.0.0.1', '--port', '14378', '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break; await new Promise((r) => setTimeout(r, 100)); }
-    for (const k of ['DOLT_PORT', 'DOLT_DATABASE']) saved[k] = process.env[k]; Object.assign(process.env, { DOLT_PORT: '14378', DOLT_DATABASE: 'iam' });
+    proc = spawn(bin, ['sql-server', '--host', '127.0.0.1', '--port', String(port), '--data-dir', data], { env, cwd: data, stdio: ['ignore', 'pipe', 'pipe'] });
+    let diagnostic = '', lastProbe = '';
+    for (const stream of [proc.stdout, proc.stderr]) stream?.on('data', data => { diagnostic = (diagnostic + data).slice(-4000); });
+    let ready = false;
+    for (let i = 0; i < 100; i++) {
+      assert.equal(proc.exitCode, null, 'the fixture Dolt server exited before readiness');
+      try {
+        const probe = await createConnection({ host: '127.0.0.1', port, user: 'root', password: '', connectTimeout: 500 });
+        try { await probe.query('select 1'); } finally { await probe.end(); }
+        ready = true; break;
+      } catch (error) { lastProbe = String(error); }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(ready, true, 'the fixture Dolt server never became ready: ' + diagnostic + lastProbe);
+    for (const k of ['DOLT_PORT', 'DOLT_DATABASE']) saved[k] = process.env[k]; Object.assign(process.env, { DOLT_PORT: String(port), DOLT_DATABASE: 'iam' });
     store = new WorkflowStore(new VersioningService());
   });
   after(async () => { proc?.kill(); await new Promise((r) => setTimeout(r, 500)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
@@ -51,9 +66,9 @@ describe('ticket links on real Dolt', { skip: !have && 'DOLT_BIN missing' }, () 
   // The deploy qualification hashes the WORKING root of every Dolt database (iam_meta included) before and after a restart on the new image:
   // any boot-time schema change of a database written by the previous release is a "transformation" that stops the rollout without a per-digest verifier.
   it('a restart on a database written by the previous release (no ticket-link table) does not change iam_meta; the table appears only on first use', async () => {
-    const root = async () => { const c = await createConnection({ host: '127.0.0.1', port: 14378, user: 'root', password: '', database: 'iam_meta' }); try { const [r] = await c.query("SELECT DOLT_HASHOF_DB('WORKING') AS h"); return (r as { h: string }[])[0].h; } finally { await c.end(); } };
-    const hasTable = async () => { const c = await createConnection({ host: '127.0.0.1', port: 14378, user: 'root', password: '', database: 'iam_meta' }); try { const [r] = await c.query("show tables like 'workflow_ticket_links'"); return (r as unknown[]).length > 0; } finally { await c.end(); } };
-    const c0 = await createConnection({ host: '127.0.0.1', port: 14378, user: 'root', password: '', database: 'iam_meta' });
+    const root = async () => { const c = await createConnection({ host: '127.0.0.1', port, user: 'root', password: '', database: 'iam_meta' }); try { const [r] = await c.query("SELECT DOLT_HASHOF_DB('WORKING') AS h"); return (r as { h: string }[])[0].h; } finally { await c.end(); } };
+    const hasTable = async () => { const c = await createConnection({ host: '127.0.0.1', port, user: 'root', password: '', database: 'iam_meta' }); try { const [r] = await c.query("show tables like 'workflow_ticket_links'"); return (r as unknown[]).length > 0; } finally { await c.end(); } };
+    const c0 = await createConnection({ host: '127.0.0.1', port, user: 'root', password: '', database: 'iam_meta' });
     try { await c0.query('drop table if exists workflow_ticket_links'); } finally { await c0.end(); }   // the previous release never had it
     assert.equal(await hasTable(), false);
     const before = await root();

@@ -1,3 +1,5 @@
+import { createConnection } from 'mysql2/promise';
+import { localTestPort } from '../testing/local-test-port.js';
 import 'reflect-metadata';
 import { before, after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,17 +16,31 @@ import { buildAuthnEffects } from './engine.js';
 const bin = process.env.DOLT_BIN ?? '', have = existsSync(bin);
 describe('task consumption on real Dolt (concurrent connections)', { skip: !have && 'DOLT_BIN missing' }, () => {
   let dir: string, server: ChildProcess, store: WorkflowStore;
+  let port: number;
   const saved: Record<string, string | undefined> = {};
   const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
   const mk = (id: string, status: string) => ({ id, tenant: 'acme', kind: 'lyam-propose-password-reset', title: 't', detail: { subject: 'u1', hours: '24' }, assignee: 'boss', delegated_to: null, status, decision: status === 'decided' ? 'approved' : null, justification: null, decided_by: status === 'decided' ? 'boss' : null, run_id: 'run-1', node_id: 'n1', prevent_self: true, created_at: now(), due_at: null, reminded_at: null, decided_at: status === 'decided' ? now() : null });
   before(async () => {
+    port = await localTestPort();
     dir = mkdtempSync(join(tmpdir(), 'wf-consume-')); const home = join(dir, 'h'), data = join(dir, 'd'); mkdirSync(home); mkdirSync(data); const env = { ...process.env, HOME: home };
     for (const [k, v] of [['user.name', 'test'], ['user.email', 'test@example.invalid']]) assert.equal(spawnSync(bin, ['config', '--global', '--add', k, v], { env }).status, 0);
     assert.equal(spawnSync(bin, ['sql'], { cwd: data, env, input: readFileSync(resolve('../../data/demo/01-schema.sql')) }).status, 0);
-    server = spawn(bin, ['sql-server', '--host', '127.0.0.1', '--port', '14378', '--data-dir', data], { env, cwd: data, stdio: 'ignore' });
-    for (let i = 0; i < 100; i++) { if (spawnSync(bin, ['--host', '127.0.0.1', '--port', '14378', '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break; await new Promise((r) => setTimeout(r, 100)); }
+    server = spawn(bin, ['sql-server', '--host', '127.0.0.1', '--port', String(port), '--data-dir', data], { env, cwd: data, stdio: ['ignore', 'pipe', 'pipe'] });
+    let diagnostic = '', lastProbe = '';
+    for (const stream of [server.stdout, server.stderr]) stream?.on('data', data => { diagnostic = (diagnostic + data).slice(-4000); });
+    let ready = false;
+    for (let i = 0; i < 100; i++) {
+      assert.equal(server.exitCode, null, 'the fixture Dolt server exited before readiness');
+      try {
+        const probe = await createConnection({ host: '127.0.0.1', port, user: 'root', password: '', connectTimeout: 500 });
+        try { await probe.query('select 1'); } finally { await probe.end(); }
+        ready = true; break;
+      } catch (error) { lastProbe = String(error); }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(ready, true, 'the fixture Dolt server never became ready: ' + diagnostic + lastProbe);
     for (const k of ['DOLT_PORT', 'DOLT_DATABASE']) saved[k] = process.env[k];
-    Object.assign(process.env, { DOLT_PORT: '14378', DOLT_DATABASE: 'iam' });
+    Object.assign(process.env, { DOLT_PORT: String(port), DOLT_DATABASE: 'iam' });
     store = new WorkflowStore(new VersioningService());
   });
   after(async () => { server?.kill(); await new Promise((r) => setTimeout(r, 500)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
