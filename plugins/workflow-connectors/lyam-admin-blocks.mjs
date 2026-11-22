@@ -1227,7 +1227,7 @@ const lyamProposePasswordReset = {
  * proposal of THIS run, and be bound to exactly this target and this validity; and the target must not be an administrator right now.
  * Used by lyam-apply-password-reset (before the credential is written) and by lyam-send-secret-mail when it carries the approval (before the mail leaves).
  */
-export async function assertResetApproval(ctx, who, taskId, subject, hours) {
+export async function assertResetApproval(ctx, who, taskId, subject, hours, phase = 'later') {
     const tasks = need(ctx.tasks, who), authn = need(ctx.authn, who);
     const id = str(taskId, `${who}.approvalTaskId`, 80);
     const chk = await tasks.check(ctx.tenant, id);
@@ -1237,7 +1237,13 @@ export async function assertResetApproval(ctx, who, taskId, subject, hours) {
     if (t.run_id !== ctx.runId) bad(`${who}: the approval was given to another run: it cannot be used here`);
     if (String(t.detail?.subject) !== String(subject)) bad(`${who}: the approval covers another account than "${subject}"`);
     if (String(t.detail?.hours) !== String(hours)) bad(`${who}: the approval covers another validity than ${hours} h`);
+    if (!authn.adminsConfigured?.()) bad(`${who}: the administrator list is empty on this server, so the non-admin check would protect nothing: refused`);
     if (authn.targetIsAdmin(subject)) bad(`${who}: "${subject}" is an administrator now: the approval is refused, an admin credential reset is a console operation`);
+    if (phase === 'apply') {
+        // Single use, durable: the first apply consumes the approval; the same node resuming is idempotent; any other apply (another node, a loop pass of another run) is refused.
+        if (typeof tasks.consume !== 'function') bad(`${who}: this server cannot mark an approval consumed`);
+        await tasks.consume(ctx.tenant, id, `${ctx.runId}:${ctx.nodeId}`);
+    } else if (!String(t.detail?.consumedBy ?? '').startsWith(`${ctx.runId}:`)) bad(`${who}: the approval was not consumed by an apply step of this run`);
 }
 
 const lyamApplyPasswordReset = {
@@ -1259,7 +1265,7 @@ const lyamApplyPasswordReset = {
         const c = ctx.config;
         if (ctx.test || ctx.dryRun) { ctx.log(`test run: would apply an approved reset for "${c.subject}" - nothing written`); return { subject: c.subject, revision: null, expiresAt: null, hours: Number(c.hours) }; }
         if (!ctx.secrets || !ctx.setTemporaryPassword) bad('lyam-apply-password-reset: not available on this server');
-        await assertResetApproval(ctx, 'lyam-apply-password-reset', c.approvalTaskId, c.subject, c.hours);
+        await assertResetApproval(ctx, 'lyam-apply-password-reset', c.approvalTaskId, c.subject, c.hours, 'apply');
         const password = ctx.secrets.reveal(c.passwordRef);
         const r = await ctx.setTemporaryPassword({ id: c.subject, password, hours: Number(c.hours) });
         if (!r?.revision || !(r.expiresAt > 0)) bad('lyam-apply-password-reset: the credential was not confirmed with its first-access rule');

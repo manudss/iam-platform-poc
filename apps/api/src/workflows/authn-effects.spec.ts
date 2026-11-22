@@ -13,7 +13,7 @@ const fakeAuthn = (state: Record<string, Record<string, boolean>>) => ({
   outbox: { send: async () => undefined },
 });
 
-const fakeTasks = (admins: string[] = []) => ({ isAdmin: (s: string) => admins.includes(s) });
+const fakeTasks = (admins: string[] = []) => ({ isAdmin: (s: string) => admins.includes(s), poolMembers: (n: string) => (n === 'admin' ? admins : []) });
 
 describe('buildAuthnEffects: immediate unenroll guards', () => {
   it('refuses to remove the LAST enrolled factor (defense in depth, engine side)', async () => {
@@ -43,8 +43,11 @@ describe('buildAuthnEffects: immediate unenroll guards', () => {
     const fx = buildAuthnEffects(fakeAuthn({}) as never, fakeTasks(['root']) as never)!;
     assert.equal(fx.targetIsAdmin('root'), true);
     assert.equal(fx.targetIsAdmin('u1'), false);
+    assert.equal(fx.adminsConfigured(), true, 'a non-empty list');
     const fx2 = buildAuthnEffects(fakeAuthn({}) as never, undefined)!;
     assert.equal(fx2.targetIsAdmin('root'), false);
+    assert.equal(fx2.adminsConfigured(), false, 'no task service: not configured');
+    assert.equal(buildAuthnEffects(fakeAuthn({}) as never, fakeTasks([]) as never)!.adminsConfigured(), false, 'an empty list is reported, so the guard fails closed');
     assert.equal(buildAuthnEffects(undefined, fakeTasks() as never), undefined);
   });
 });

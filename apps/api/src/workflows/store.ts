@@ -421,6 +421,19 @@ export class WorkflowStore {
       return this.getTask(id);
     } finally { await m.end(); }
   }
+  /** Marks a DECIDED task as consumed by one consumer (run:node), atomically: the conditional update succeeds for the first consumer only. The same consumer asking again (a resume or retry of the same node) is idempotent; another consumer is refused. */
+  async consumeTask(id: string, consumer: string): Promise<{ ok: boolean; by: string | null }> {
+    const m = await this.meta();
+    try {
+      let res: unknown;
+      try { [res] = await m.query("update workflow_tasks set detail = JSON_SET(COALESCE(detail, JSON_OBJECT()), '$.consumedBy', ?) where id = ? and status = 'decided' and JSON_EXTRACT(COALESCE(detail, JSON_OBJECT()), '$.consumedBy') is null", [consumer, id]); }
+      catch (e) { if (WorkflowStore.noTable(e)) return { ok: false, by: null }; throw e; }
+      if (Number((res as { affectedRows?: number }).affectedRows)) return { ok: true, by: consumer };
+    } finally { await m.end(); }
+    const t = await this.getTask(id);
+    const by = typeof t?.detail?.consumedBy === 'string' ? t.detail.consumedBy : null;
+    return { ok: by === consumer, by };
+  }
   /** Merges keys into a task's detail JSON (null deletes the key). Used by delegation/escalation to carry the decider pool. */
   async patchTaskDetail(id: string, patch: Record<string, unknown>): Promise<void> {
     const t = await this.getTask(id);

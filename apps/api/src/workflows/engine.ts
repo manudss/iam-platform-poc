@@ -90,6 +90,8 @@ export interface AuthnEffects {
   enrollments: (tenant: string, user: string) => Promise<Record<string, unknown>>;
   /** True when the subject is an administrator (the same list the admin capability uses). */
   targetIsAdmin: (subject: string) => boolean;
+  /** True when the administrator list (server configuration) is not empty. With an empty list targetIsAdmin is false for everyone, so a guard that relies on it must fail closed. */
+  adminsConfigured: () => boolean;
   validatePolicy: (input: unknown) => { valid: boolean; errors: string[] };
   savePolicy: (tenant: string, a: { branch: string; input: unknown }) => Promise<unknown>;
   unenroll: (tenant: string, a: { runId: string; user: string; instance: string; reason: string }) => Promise<{ removed: boolean }>;
@@ -112,6 +114,7 @@ export function buildAuthnEffects(authn: AuthnService | undefined, tasks: Workfl
   return {
     enrollments: async (tenant, user) => (await authn.enroll.status(tenant, user)) as Record<string, unknown>,
     targetIsAdmin: (subject) => (tasks?.isAdmin(subject) ?? false),
+    adminsConfigured: () => (tasks?.poolMembers('admin').length ?? 0) > 0,
     validatePolicy: (input) => { try { validateConfig(input); return { valid: true, errors: [] }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } },
     savePolicy: async (tenant, a) => branchContext.run({ branch: a.branch }, () => authn.saveConfig(tenant, a.input)),
     unenroll: (tenant, a) => serialized(`${tenant}${a.user}`, async () => {

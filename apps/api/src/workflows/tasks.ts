@@ -108,6 +108,15 @@ export class WorkflowTasksService {
     return { state: 'open', task: t };
   }
 
+  /** Durable single use of a decided task: the first (run:node) consumer wins, the same consumer asking again is idempotent, any other is refused. */
+  async consume(tenant: string, taskId: string, consumer: string): Promise<void> {
+    const t = await this.store.getTask(taskId);
+    if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
+    if (t.status !== 'decided') throw new ConflictException(`this task is ${t.status}, not decided`);
+    const r = await this.store.consumeTask(taskId, String(consumer).slice(0, 120));
+    if (!r.ok) throw new ConflictException('this approval was already consumed by another step');
+  }
+
   /** Decision by an authenticated person. Returns the decided task and kicks the waiting run. */
   async decide(tenant: string, id: string, actor: string, decision: unknown, justification: unknown): Promise<TaskRow> {
     const t = await this.store.getTask(id);

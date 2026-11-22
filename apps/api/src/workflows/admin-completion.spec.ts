@@ -14,6 +14,7 @@ const fakeTasks = () => {
     approve: (id: string, by = 'boss') => { const t = tasks.get(id)!; t.status = 'decided'; t.decision = 'approved'; t.decided_by = by; t.justification = null; return t; },
     request: async (a: Record<string, unknown>) => { const t = { id: `task-${++n}`, status: 'open', ...a }; tasks.set(t.id, t); return t; },
     check: async (_tenant: string, id: string) => ({ state: 'decided', task: tasks.get(id) }),
+    consume: async (_tenant: string, id: string, consumer: string) => { const t = tasks.get(id)!; const d = (t.detail ?? {}) as Record<string, unknown>; if (d.consumedBy && d.consumedBy !== consumer) throw new Error('this approval was already consumed by another step'); t.detail = { ...d, consumedBy: consumer }; },
     inbox: async () => ({ tasks: [...tasks.values()] }),
     decide: async () => { throw new Error('not used'); },
   };
@@ -445,7 +446,7 @@ describe('completion: password reset approval -> effect binding', () => {
     svc.approve('task-r');
     const writes: unknown[] = [];
     let isAdmin = false;
-    const base = { tasks: svc as never, authn: { targetIsAdmin: () => isAdmin } as never, secrets: { reveal: () => 'x' } as never, setTemporaryPassword: (async (a: unknown) => { writes.push(a); return { revision: 'rev12345', expiresAt: Date.now() + 1000 }; }) as never };
+    const base = { tasks: svc as never, authn: { targetIsAdmin: () => isAdmin, adminsConfigured: () => true } as never, secrets: { reveal: () => 'x' } as never, setTemporaryPassword: (async (a: unknown) => { writes.push(a); return { revision: 'rev12345', expiresAt: Date.now() + 1000 }; }) as never };
     const cfg = (o: Record<string, string> = {}) => APPLY().validate({ approvalTaskId: 'task-r', subject: 'u1', passwordRef: 'ref', hours: '24', ...o } as never);
     return { svc, writes, base, cfg, promote: () => { isAdmin = true; } };
   };
@@ -478,6 +479,7 @@ describe('completion: password reset approval -> effect binding', () => {
     const mail = externalBlock('lyam-send-secret-mail')!;
     const vcfg = mail.validate({ account: 'u1', to: 'u1@example.test', subject: 's', text: 'p [[password]] e [[expiry]]', passwordRef: 'ref', hours: '24', revision: 'rev', ownerRun: 'r0', sourceHead: 'h', resetApprovalTaskId: 'task-r' } as never);
     assert.equal((vcfg as { resetApprovalTaskId?: string }).resetApprovalTaskId, 'task-r');
+    (s.svc.tasks.get('task-r')!.detail as Record<string, unknown>).consumedBy = 'run-1:n1';
     s.promote();
     const prev = process.env.RESEND_API_KEY; process.env.RESEND_API_KEY = 'fake-not-used';
     try {
@@ -511,5 +513,44 @@ describe('completion: the delivered reset template is wired to the bound steps',
     assert.ok(pos('propose') < pos('apply') && pos('apply') < pos('publish') && pos('publish') < pos('mail') && pos('mail') < pos('unblock'));
     // Every node config is accepted by its block validator (placeholders pass through).
     for (const x of t.nodes) { const b = externalBlock(x.type); if (b) assert.doesNotThrow(() => b.validate(x.config as never), x.id); }
+  });
+});
+
+describe('completion: the approval is consumed once, durably', () => {
+  const setup2 = () => {
+    const svc = fakeTasks();
+    svc.tasks.set('task-r', { id: 'task-r', status: 'open', kind: 'lyam-propose-password-reset', run_id: 'run-1', detail: { subject: 'u1', hours: '24' } });
+    svc.approve('task-r');
+    const writes: unknown[] = [];
+    const base = { tasks: svc as never, authn: { targetIsAdmin: () => false, adminsConfigured: () => true } as never, secrets: { reveal: () => 'x' } as never, setTemporaryPassword: (async (a: unknown) => { writes.push(a); return { revision: 'rev12345', expiresAt: Date.now() + 1000 }; }) as never };
+    const cfg = APPLY2().validate({ approvalTaskId: 'task-r', subject: 'u1', passwordRef: 'ref', hours: '24' } as never);
+    return { svc, writes, base, cfg };
+  };
+  const APPLY2 = () => externalBlock('lyam-apply-password-reset')!;
+  it('the same node resuming is idempotent; another apply node on the same approval is refused with no write', async () => {
+    const s = setup2();
+    await run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n1', config: s.cfg }).c as never);
+    await run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n1', config: s.cfg }).c as never);
+    assert.equal(s.writes.length, 2);
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n2', config: s.cfg }).c as never), /already consumed/);
+    assert.equal(s.writes.length, 2);
+  });
+  it('publish and mail refuse an approval that no apply step of this run consumed', async () => {
+    const s = setup2();
+    const pub = externalBlock('lyam-publish-workspace')!;
+    const vcfg = pub.validate({ resetApprovalTaskId: 'task-r', resetSubject: 'u1', resetHours: '24' } as never);
+    await assert.rejects(run1('lyam-publish-workspace', mk({ ...s.base, ...({ hasRunBranch: true, publishIntent: { branch: 'b', head: 'h' }, workspace: { publish: async () => ({ published: true, mainCommit: 'm' }) } } as Record<string, unknown>), config: vcfg }).c as never), /not consumed/);
+  });
+  it('an empty administrator list fails closed (the non-admin check would protect nothing)', async () => {
+    const s = setup2();
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...s.base, authn: { targetIsAdmin: () => false, adminsConfigured: () => false } as never, nodeId: 'n1', config: s.cfg }).c as never), /list is empty/);
+    assert.equal(s.writes.length, 0);
+  });
+  it('a failure after the consumption lets the SAME node retry, and nobody else', async () => {
+    const s = setup2(); let fail = true;
+    const flaky = { ...s.base, setTemporaryPassword: (async () => { if (fail) { fail = false; throw new Error('db down'); } return { revision: 'rev12345', expiresAt: Date.now() + 1000 }; }) as never };
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...flaky, nodeId: 'n1', config: s.cfg }).c as never), /db down/);
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...flaky, nodeId: 'n2', config: s.cfg }).c as never), /already consumed/);
+    assert.equal((await run1('lyam-apply-password-reset', mk({ ...flaky, nodeId: 'n1', config: s.cfg }).c as never)).subject, 'u1');
   });
 });

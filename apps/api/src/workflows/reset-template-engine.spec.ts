@@ -25,6 +25,7 @@ function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?:
   const state = { fa: null as any, blocks: [] as { kind: string; setBy: string }[], passwords: [] as string[], isAdmin: false, tasks: new Map<string, any>() };
   const tasks = {
     request: async (a: any) => { const t = { id: 'task-1', status: 'open', run_id: a.runId, node_id: a.nodeId, kind: a.kind, detail: a.detail, assignee: a.assignee, prevent_self: a.preventSelfApproval }; state.tasks.set(t.id, t); return t; },
+    consume: async (_t: string, id: string, consumer: string) => { const t = state.tasks.get(id); const d = t.detail ?? {}; if (d.consumedBy && d.consumedBy !== consumer) throw new Error('already consumed'); t.detail = { ...d, consumedBy: consumer }; },
     check: async (_t: string, id: string) => { const t = state.tasks.get(id); return t?.status === 'open' ? { state: 'open', task: t } : { state: 'decided', task: t }; },
   };
   const MAIN = 'main000111222333', HEAD = 'abcdef0123456789';
@@ -33,7 +34,7 @@ function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?:
     versioning: { createBranch: async () => ({}), writeOn: async (_b: string, fn: any) => fn({ query: async () => [[]] }), defaultBranch: 'main' },
     authorOf: (a: string) => a, branchRun: async (_b: string, fn: any) => fn(),
     settingsFor: async () => ({ mailAllowedRecipients: 'bao@example.test' }),
-    tasks, authn: { targetIsAdmin: () => state.isAdmin },
+    tasks, authn: { targetIsAdmin: () => state.isAdmin, adminsConfigured: () => true },
     reads: { readUser: async (_t: string, _r: string, id: string) => ({ id, email: 'bao@example.test', roles: [] }) },
     users: {
       setTemporary: async (_t: string, a: any) => { calls.push('setTemporary'); opts.onSet?.(); state.passwords.push(a.password); state.fa = { required: true, expired: false, revision: 'rev-1', expiresAt: Date.now() + a.hours * HOUR }; return { revision: 'rev-1', expiresAt: state.fa.expiresAt }; },
