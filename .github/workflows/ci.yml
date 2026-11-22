@@ -53,11 +53,29 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Resolve applicability using caller-owned policy, before the historical source replaces it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Validate versioned CI control policy
+        id: ci_controls
+        env:
+          TARGET_SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          node --test scripts/ci-controls.test.mjs
+          node scripts/ci-controls.mjs "$TARGET_SHA" "$RUNNER_TEMP/ci-control-plan.json" >> "$GITHUB_OUTPUT"
+      - name: Preserve control applicability evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-control-plan-${{ inputs.sha || github.sha }}
+          path: ${{ runner.temp }}/ci-control-plan.json
+          retention-days: 7
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.sha || github.sha }}
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
       - name: Data migration history guard
         run: |
           git fetch origin main
@@ -131,6 +149,7 @@ jobs:
       - name: Profile reliability regression (real bundle, light/dark desktop/mobile)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/profile-priorities-ui-e2e.cjs /tmp/profile-priorities-shots
       - name: Password eye control (real Rust sign-in, Angular bundle and plugin components)
+        if: steps.ci_controls.outputs.password_eye_required == 'true'
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/password-eye-ui-e2e.cjs /tmp/password-eye-shots
       - name: Password eye screenshots
         if: ${{ !cancelled() }}
