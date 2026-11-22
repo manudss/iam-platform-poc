@@ -564,4 +564,21 @@ describe('completion: the approval is consumed once, durably', () => {
     await assert.rejects(run1('lyam-publish-workspace', ctxWith('other-rev')), /not applied by this run with this credential revision/);
     assert.equal((await run1('lyam-publish-workspace', ctxWith('rev12345'))).published, true);
   });
+  it('adverse: the credential write succeeds but recording the effect fails: the SAME node replays and REWRITES the credential (new revision), only the recorded revision is accepted downstream, other nodes stay refused', async () => {
+    const s = setup2(); let n = 0; let failRecord = true;
+    const base = { ...s.base, setTemporaryPassword: (async (a: unknown) => { s.writes.push(a); return { revision: `rev-${++n}-12345`, expiresAt: Date.now() + 1000 }; }) as never };
+    const tasks = s.base.tasks as unknown as { markApplied: (...a: unknown[]) => Promise<void> };
+    const realMark = tasks.markApplied.bind(tasks);
+    tasks.markApplied = async (...a: unknown[]) => { if (failRecord) { failRecord = false; throw new Error('record failed'); } return realMark(...a); };
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...base, nodeId: 'n1', config: s.cfg }).c as never), /record failed/);
+    assert.equal(s.writes.length, 1);
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...base, nodeId: 'n2', config: s.cfg }).c as never), /already consumed/);
+    const out = await run1('lyam-apply-password-reset', mk({ ...base, nodeId: 'n1', config: s.cfg }).c as never);
+    assert.equal(s.writes.length, 2, 'the effect was repeated: the credential was written twice');
+    assert.equal(out.revision, 'rev-2-12345');
+    const pub = externalBlock('lyam-publish-workspace')!;
+    const ctxWith = (rev: string) => mk({ ...base, ...({ hasRunBranch: true, publishIntent: { branch: 'b', head: 'h' }, workspace: { publish: async () => ({ published: true, mainCommit: 'm', branch: 'b', sourceHead: 'h' }) } } as Record<string, unknown>), config: pub.validate({ resetApprovalTaskId: 'task-r', resetSubject: 'u1', resetHours: '24', resetRevision: rev } as never) }).c as never;
+    await assert.rejects(run1('lyam-publish-workspace', ctxWith('rev-1-12345')), /not applied by this run with this credential revision/);
+    assert.equal((await run1('lyam-publish-workspace', ctxWith('rev-2-12345'))).published, true);
+  });
 });
