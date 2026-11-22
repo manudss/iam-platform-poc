@@ -521,7 +521,7 @@ export class WorkflowStore {
     const m = await this.meta();
     try {
       await this.ensureTasks(m);
-      const [r] = await m.query("select * from workflow_tasks where status = 'open' and due_at is not null and due_at <= ? and reminded_at is null order by due_at limit 500", [at]);
+      const [r] = await m.query("select * from workflow_tasks where status = 'open' and due_at is not null and due_at <= ? and (reminded_at is null or json_extract(detail, '$.rescan') = true) order by due_at limit 500", [at]);
       return (r as Record<string, unknown>[]).map(WorkflowStore.task);
     } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
   }

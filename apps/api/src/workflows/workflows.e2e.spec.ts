@@ -61,6 +61,16 @@ const waitRun = async (id: string, want: string[], timeoutMs = 20000): Promise<R
     await new Promise((r) => setTimeout(r, 120));
   }
 };
+const waitTask = async (runId: string, kind: string, timeoutMs = 30000) => {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const inbox = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null; detail: Record<string, unknown> }[] };
+    const t = inbox.tasks.find((x) => x.run_id === runId && x.kind === kind);
+    if (t) return t;
+    if (Date.now() > until) throw new Error(`no ${kind} task for run ${runId} after ${timeoutMs}ms`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+};
 
 describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, () => {
   let dolt: ChildProcess, app: INestApplication, dir: string;
@@ -77,7 +87,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', String(PORT), '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break;
       await new Promise((r) => setTimeout(r, 150));
     }
-    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
+    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice,admin-two', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13432);
@@ -326,6 +336,53 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(typeof evidence?.digest === 'string' && (evidence.digest as string).length === 64, 'the closing evidence carries its digest');
     assert.equal((evidence?.totals as Record<string, unknown>)?.approved, 1);
     assert.equal((await ok('GET', `/workflow-tasks?scope=all`) as never as { tasks: { status: string }[] }).tasks.filter((t) => t.status === 'open').length, 0, 'no open task remains');
+  });
+
+  it('recertification with denial: revoke on branch, real publication (PR merged), remediation verified, close', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Recert denial journey', graph: { nodes: [
+      { id: 'c1', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Denial recert demo-bob', users: 'demo-bob', ref: 'main' } },
+      { id: 'c2', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.c1.id}}', assignTo: 'iga' } },
+      { id: 'c3', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.c1.id}}' } },
+      { id: 'c4', type: 'iga-prepare-remediation', name: 'prepare', config: { campaignId: '{{steps.c1.id}}' } },
+      // The campaign snapshot carries EVERY role demo-bob holds on main at start (earlier tests grant
+      // 'accountant' and merge it): the remediation must revoke each denied role, not just one.
+      { id: 'c5', type: 'lyam-revoke-assignment', name: 'revoke', config: { identity: 'demo-bob', role: 'payment-creator' } },
+      { id: 'c5b', type: 'lyam-revoke-assignment', name: 'revoke accountant', config: { identity: 'demo-bob', role: 'accountant' } },
+      { id: 'c6', type: 'lyam-request-publish', name: 'publish', config: { title: 'Revoke payment-creator from demo-bob' } },
+      { id: 'c7', type: 'iga-mark-remediated', name: 'remediated', config: { campaignId: '{{steps.c1.id}}', item: 'demo-bob', note: 'revoked and published' } },
+      { id: 'c8', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.c1.id}}' } },
+    ], edges: [{ from: 'c1', to: 'c2' }, { from: 'c2', to: 'c3' }, { from: 'c3', to: 'c4' }, { from: 'c4', to: 'c5' }, { from: 'c5', to: 'c5b' }, { from: 'c5b', to: 'c6' }, { from: 'c6', to: 'c7' }, { from: 'c7', to: 'c8' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const inbox1 = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] };
+    const review = inbox1.tasks.find((t) => t.run_id === started.run.id && t.kind === 'iga-review')!;
+    const denied = await call('POST', `/workflow-tasks/${review.id}/decision`, { decision: 'denied', justification: 'no longer needed for the job' }, { token: `${T}:iga-reviewer` });
+    assert.ok(denied.status < 300, JSON.stringify(denied.body).slice(0, 200));
+    // The resume is kicked asynchronously: wait for the publish-approval task itself (the stale
+    // 'waiting' state from the review step would otherwise win the race).
+    const approval = await waitTask(started.run.id, 'publish-approval');
+    await waitRun(started.run.id, ['waiting'], 30000); // c4 prepare > c5 revoke on branch > c6 publishes and waits
+    const prId = Number((approval.detail.pr as Record<string, unknown>).id);
+    const selfPub = await call('POST', `/workflow-tasks/${approval.id}/decision`, { decision: 'approved' });
+    assert.equal(selfPub.status, 403, 'the run starter never approves the publication');
+    const approved = await call('POST', `/workflow-tasks/${approval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    assert.ok(approved.status < 300, JSON.stringify(approved.body).slice(0, 200));
+    const watch = await waitTask(started.run.id, 'publish-merge-watch'); // created when the approved publication observes the PR still open
+    let v = await ok('GET', `/workflow-runs/${started.run.id}`) as RunView;
+    assert.equal(v.run.status, 'waiting', 'the approval alone does NOT finish the publication: the PR is still open');
+    // The actual merge is what lands the publication (a contradicted "merged" marking is covered by the unit spec).
+    const merged = await call('POST', `/versioning/pulls/${prId}/merge`, {}, { token: `${T}:demo-alice` });
+    assert.ok(merged.status < 300, JSON.stringify(merged.body).slice(0, 300));
+    const marked = await call('POST', `/workflow-tasks/${watch!.id}/decision`, { decision: 'merged', justification: 'merged after review' }, { token: `${T}:admin-two` });
+    assert.ok(marked.status < 300, JSON.stringify(marked.body).slice(0, 200));
+    await waitRun(started.run.id, ['completed'], 30000);
+    v = await ok('GET', `/workflow-runs/${started.run.id}`) as RunView;
+    const step = (id: string) => v.steps.find((st) => st.node_id === id)!;
+    assert.equal((step('c5').output as Record<string, unknown>).revoked, true, 'the revocation really ran on the branch');
+    assert.equal((step('c6').output as Record<string, unknown>).merged, true, 'publication = real merge, not the approval');
+    assert.equal((step('c7').output as Record<string, unknown>).state, 'remediated', 'remediation verified effective on main');
+    const evidence = (step('c8').output as Record<string, unknown>).evidence as Record<string, unknown>;
+    assert.equal((evidence.totals as Record<string, unknown>).remediated, 1);
   });
 
   it('tags: free-form labels are validated, saved, listed and updated', async () => {

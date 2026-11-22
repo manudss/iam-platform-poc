@@ -170,16 +170,22 @@ export class WorkflowsIgaService {
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
     const items = (await this.listItems(tenant, campaignId)).items;
-    const item = items.find((x) => x.id === itemId);
+    const item = items.find((x) => x.id === itemId || x.identity === itemId);
     if (!item) throw new NotFoundException('unknown item');
     if (item.state !== 'remediation-prepared') throw new ConflictException(`this item is ${item.state}: prepare its remediation first`);
     const runId = String(proof.runId ?? '').trim();
     if (!runId) throw new BadRequestException('remediation proof: the id of the workflow run that applied the remediation is required (a note alone never suffices)');
     const run = await this.store.getRun(tenant, runId);
     if (!run) throw new BadRequestException(`remediation proof: unknown run "${runId}" for this tenant`);
-    if (run.status !== 'completed') throw new ConflictException(`remediation proof: run ${runId} is ${run.status}, not completed`);
+    // The proof run is normally a COMPLETED remediation run. The run currently executing this block may cite
+    // itself: the effective-assignment check below is the real gate in both cases.
+    const selfProof = actor === `workflow:${runId}`;
+    if (run.status !== 'completed' && !selfProof) throw new ConflictException(`remediation proof: run ${runId} is ${run.status}, not completed`);
     const roles = (item.payload?.roles as string[] | undefined) ?? [];
-    if (roles.length) {
+    if (!roles.length) throw new BadRequestException('this item has no denied roles to verify: nothing can be marked remediated');
+    if (!Array.isArray(item.payload?.remediation) || !(item.payload.remediation as unknown[]).length) throw new ConflictException('no remediation actions prepared for this item: run iga-prepare-remediation first');
+    if (!run.branch) throw new BadRequestException(`remediation proof: run ${runId} had no data branch (simulated steps only): it cannot have applied anything`);
+    {
       if (!this.reads) throw new BadRequestException('the remediation cannot be verified on this server (reads unavailable): refusing to mark remediated on trust');
       const onRef = (await this.reads.listAssignments(campaign.ref, { identity: item.identity })).assignments.map((a) => a.role).filter((r) => roles.includes(r));
       if (onRef.length) {
@@ -189,7 +195,7 @@ export class WorkflowsIgaService {
         throw new ConflictException(`the role(s) ${onRef.join(', ')} are still assigned to ${item.identity} on ${campaign.ref}: the remediation is not effective`);
       }
     }
-    await this.store.igaUpdateItem(itemId, { state: 'remediated', payload: { ...item.payload, remediatedBy: actor, remediatedAt: now(), remediationProof: { runId, verifiedOn: campaign.ref, note: String(proof.note ?? '').slice(0, 500) } } });
+    await this.store.igaUpdateItem(item.id, { state: 'remediated', payload: { ...item.payload, remediatedBy: actor, remediatedAt: now(), remediationProof: { runId, verifiedOn: campaign.ref, note: String(proof.note ?? '').slice(0, 500) } } });
     this.emit(tenant, 'iga.remediation-resolved', { campaign: campaignId, subject: item.identity, role: (item.payload?.roles as string[] | undefined)?.join(',') ?? '*', result: 'remediated' });
     return { item: itemId, state: 'remediated' };
   }

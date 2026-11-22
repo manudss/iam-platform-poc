@@ -291,7 +291,10 @@ export function createWorkflowEngine(deps) {
       const outputs = {};
       for (const s of await store.steps(run.id)) if (s.output !== null && s.output !== undefined) outputs[s.node_id] = s.output;
       node = substituteStepOutputs(node, outputs);
-      await store.patchStep(run.id, node.id, { input: node.config });
+      // The durable-wait payload recorded at the last suspension survives in the stored input: carry it
+      // over the resolved-config rewrite so a resumed block still sees ctx.resumeWait.
+      const priorWait = (await store.step(run.id, node.id))?.input?.wait;
+      await store.patchStep(run.id, node.id, { input: priorWait ? { ...node.config, wait: priorWait } : node.config });
       let output;
       if (node.type === 'if' || node.type === 'switch' || node.type === 'merge') output = logicStep(node, arrived ?? [], say);
       else if (STEP_TYPES[node.type].simulated && !externalBlock(node.type)) await simulated(run, node, step.attempts, say);

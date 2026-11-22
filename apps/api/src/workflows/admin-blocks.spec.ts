@@ -169,21 +169,36 @@ describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', 
     const out = await run1('lyam-read-diff', mk({ publish: publish as never, runBranch: 'wf-run-1' }).c as never);
     assert.deepEqual((out.diff as Record<string, unknown>).to, 'wf-run-1');
   });
-  it('lyam-request-publish: await=no returns the PR, await=yes suspends then resolves on the human decision', async () => {
-    const publish = { request: async () => ({ pullRequest: { id: 7, source: 'wf-run-1', target: 'main' }, reused: false }), diff: async () => null };
+  it('lyam-request-publish: await=no returns the PR; the wait follows the REAL PR state, never just the task', async () => {
+    let prState = 'open';
+    const publish = { request: async () => ({ pullRequest: { id: 7, source: 'wf-run-1', target: 'main' }, reused: false }), diff: async () => null, status: async () => ({ pullRequest: { id: 7, status: prState } }) };
     const out = await run1('lyam-request-publish', mk({ publish: publish as never, runBranch: 'wf-run-1', config: { await: 'no' } }).c as never);
     assert.equal((out.pullRequest as Record<string, unknown>).id, 7);
     const requested: Record<string, unknown>[] = [];
-    let chk: Record<string, unknown> = { state: 'open', task: { id: 'task-5', status: 'open' } };
-    const tasks = { check: async () => chk, request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-5' }; } };
+    let chk: Record<string, unknown> = { state: 'open', task: { id: 'task-5', kind: 'publish-approval', status: 'open', detail: { pr: { id: 7 } } } };
+    const tasks = { check: async () => chk, request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-6' }; } };
     await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' } }).c), /waiting/);
     assert.equal(requested[0].kind, 'publish-approval');
     assert.equal(requested[0].assignee, 'admin');
-    chk = { state: 'decided', task: { id: 'task-5', status: 'decided', decision: 'approved', decided_by: 'root', detail: { pr: { id: 7 } } } };
-    const done = await run1('lyam-request-publish', mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c as never);
-    assert.equal(done.decision, 'approved');
-    assert.equal(done.decidedBy, 'root');
-    chk = { state: 'decided', task: { id: 'task-5', status: 'decided', decision: 'refused', justification: 'bad data' } };
+    assert.ok(requested[0].dueInSeconds, 'the approval wait is bounded (overdue rescan re-reads the real PR state)');
+    // Refused while open: failure.
+    chk = { state: 'decided', task: { id: 'task-5', kind: 'publish-approval', status: 'decided', decision: 'refused', justification: 'bad data', detail: { pr: { id: 7 } } } };
     await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c), /refused: bad data/);
+    // Approved but PR still open: a merge-watch starts, the run keeps waiting (no success on approval alone).
+    chk = { state: 'decided', task: { id: 'task-5', kind: 'publish-approval', status: 'decided', decision: 'approved', decided_by: 'root', detail: { pr: { id: 7 } } } };
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c), /waiting/);
+    assert.equal(requested[1].kind, 'publish-merge-watch');
+    assert.equal((requested[1].detail as Record<string, unknown>).rescan, true);
+    // Watch + PR closed without merge: failure. Watch + PR merged: success.
+    chk = { state: 'open', task: { id: 'task-6', kind: 'publish-merge-watch', status: 'open', detail: { pr: { id: 7 } } } };
+    prState = 'closed';
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-6', kind: 'lyam-request-publish' } }).c), /closed without merge/);
+    prState = 'merged';
+    const done = await run1('lyam-request-publish', mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-6', kind: 'lyam-request-publish' } }).c as never);
+    assert.equal(done.merged, true);
+    // A human "merged" marking contradicted by the real PR state fails honestly.
+    prState = 'open';
+    chk = { state: 'decided', task: { id: 'task-6', kind: 'publish-merge-watch', status: 'decided', decision: 'merged', detail: { pr: { id: 7 } } } };
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-6', kind: 'lyam-request-publish' } }).c), /still open/);
   });
 });

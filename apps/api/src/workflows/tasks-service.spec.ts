@@ -66,6 +66,23 @@ describe('WorkflowTasksService (real service, in-memory store)', () => {
     assert.equal(d.delegated_to, 'root', 'the "admin" delegation target resolves through the pool policy');
     assert.equal(tasks.get('task-1')!.detail?.pool, 'admin');
   });
+  it('a sensitive task requires a justification for EVERY decision at decide time', async () => {
+    tasks = new Map([['task-1', mkTask({ kind: 'iga-close-exception', detail: { requireJustification: true, decisions: ['approved', 'refused'] } })]]);
+    const { s } = svc();
+    await assert.rejects(s.decide('acme', 'task-1', 'boss', 'approved', ''), /justification is required for every decision/);
+    const still = await s.check('acme', 'task-1');
+    assert.equal(still.task.status, 'open', 'the task was NOT consumed by the unjustified approval');
+    const d = await s.decide('acme', 'task-1', 'boss', 'approved', 'accepted risk: contractor leaves Friday');
+    assert.equal(d.status, 'decided');
+  });
+  it('anti-self-approval covers every unresolved beneficiary of a closure exception', async () => {
+    tasks = new Map([['task-1', mkTask({ kind: 'iga-close-exception', detail: { unresolved: [{ item: 'i1', identity: 'carol', state: 'pending' }, { item: 'i2', identity: 'dave', state: 'denied' }], decisions: ['approved', 'refused'] } })]]);
+    runs = new Map([['run-1', { id: 'run-1', started_by: 'alice' }]]);
+    const { s } = svc();
+    await assert.rejects(s.decide('acme', 'task-1', 'dave', 'approved', 'x'), /beneficiary/);
+    const d = await s.decide('acme', 'task-1', 'boss', 'approved', 'x');
+    assert.equal(d.status, 'decided');
+  });
   it('tenant isolation: a task of another tenant is not found (decide, delegate)', async () => {
     tasks = new Map([['task-1', mkTask({ tenant: 'acme' })]]);
     const { s } = svc();
@@ -120,7 +137,7 @@ describe('WorkflowsIgaService review tasks carry the awaiting run id', () => {
 });
 
 describe('WorkflowsIgaService.markRemediated: effective proof, never a state flip on trust', () => {
-  const item = { id: 'item-1', tenant: 'acme', campaign_id: 'iga-1', identity: 'emp', kind: 'user-access', action: 'review', payload: { roles: ['role-a'] }, state: 'remediation-prepared', decided_by: null, decided_at: null, decision_reason: null, run_id: null };
+  const item = { id: 'item-1', tenant: 'acme', campaign_id: 'iga-1', identity: 'emp', kind: 'user-access', action: 'review', payload: { roles: ['role-a'], remediation: [{ type: 'revoke-role', identity: 'emp', role: 'role-a' }] }, state: 'remediation-prepared', decided_by: null, decided_at: null, decision_reason: null, run_id: null };
   const mkIga = (run: unknown, onRef: string[], onBranch: string[]) => {
     const updated: Record<string, unknown>[] = [];
     const store = {
@@ -137,6 +154,8 @@ describe('WorkflowsIgaService.markRemediated: effective proof, never a state fli
     await assert.rejects(x.iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' }), /unknown run/);
     x = mkIga({ id: 'run-9', status: 'running', branch: 'wf-run-9' }, [], []);
     await assert.rejects(x.iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' }), /not completed/);
+    x = mkIga({ id: 'run-9', status: 'completed', branch: null }, [], []);
+    await assert.rejects(x.iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' }), /no data branch/);
     x = mkIga({ id: 'run-9', status: 'completed', branch: 'wf-run-9' }, ['role-a'], ['role-a']);
     await assert.rejects(x.iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' }), /not effective/);
     assert.equal(x.updated.length, 0, 'no state flip while the assignment is still there');
@@ -151,8 +170,12 @@ describe('WorkflowsIgaService.markRemediated: effective proof, never a state fli
     assert.equal(proof.runId, 'run-9');
     assert.equal(proof.verifiedOn, 'main', 'the evidence records the ref the verification read');
   });
-  it('a note alone never suffices', async () => {
-    const x = mkIga({ id: 'run-9', status: 'completed', branch: null }, [], []);
+  it('a note alone never suffices, and an item without denied roles has nothing to verify', async () => {
+    const x = mkIga({ id: 'run-9', status: 'completed', branch: 'wf-run-9' }, [], []);
     await assert.rejects(x.iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { note: 'done, trust me' }), /required/);
+    const bare = { ...item, payload: { roles: [] } };
+    const store = { igaGetCampaign: async () => ({ id: 'iga-1', tenant: 'acme', status: 'open', ref: 'main' }), igaListItems: async () => [bare], getRun: async () => ({ id: 'run-9', status: 'completed', branch: 'wf-run-9' }), igaUpdateItem: async () => undefined };
+    const iga = new WorkflowsIgaService(store as never, undefined, { listAssignments: async () => ({ assignments: [] }) } as never);
+    await assert.rejects(iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' }), /no denied roles/);
   });
 });

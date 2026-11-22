@@ -118,6 +118,7 @@ export class WorkflowTasksService {
     if (!choices.includes(d)) throw new BadRequestException(`decision: one of ${choices.join(', ')}`);
     const just = String(justification ?? '').slice(0, 1000);
     if (d !== 'approved' && !just.trim()) throw new BadRequestException('a justification is required for a refusal');
+    if (t.detail?.requireJustification === true && !just.trim()) throw new BadRequestException('a justification is required for every decision on this task');
     if (t.prevent_self) {
       // Anti-self-approval follows the CHAIN of starter runs: a task created by a sub-workflow is
       // refused to the person who started its ancestor run too (bounded walk, workflow:<runId> links).
@@ -127,9 +128,11 @@ export class WorkflowTasksService {
         if (!run.started_by.startsWith('workflow:')) break;
         run = await this.store.getRunById(run.started_by.slice('workflow:'.length));
       }
-      // Nor the beneficiary of the request (a certification, an access grant...): the run starter check
-      // above covers the initiator, this one the subject.
-      if (t.detail?.identity === actor || t.detail?.subject === actor) throw new ForbiddenException('anti-self-approval: the beneficiary of a request cannot decide their own review');
+      // Nor a beneficiary of the request (a certification, an access grant, a closure exception covering
+      // their own unresolved items): the run starter check above covers the initiator, this one the subjects.
+      const beneficiaries = new Set<string>([t.detail?.identity, t.detail?.subject].filter((x) => typeof x === 'string') as string[]);
+      if (Array.isArray(t.detail?.unresolved)) for (const u of t.detail.unresolved as { identity?: unknown }[]) if (typeof u?.identity === 'string') beneficiaries.add(u.identity);
+      if (beneficiaries.has(actor)) throw new ForbiddenException('anti-self-approval: the beneficiary of a request cannot decide their own review');
     }
     const isAdmin = this.isAdmin(actor);
     const pool = typeof t.detail?.pool === 'string' ? this.poolMembers(t.detail.pool) : [];
@@ -174,16 +177,22 @@ export class WorkflowTasksService {
     const open = await this.store.listDueTasks(now());
     let n = 0;
     for (const t of open.filter((x) => x.status === 'open')) {
-      if (!t.due_at || Date.parse(t.due_at) > Date.now() || t.reminded_at) continue;
+      if (!t.due_at || Date.parse(t.due_at) > Date.now()) continue;
+      // A rescan task (publication watch) re-kicks its run on every tick while due: the block re-reads the
+      // real external state. Reminder/escalation still happen exactly once.
+      const rescan = t.detail?.rescan === true;
+      if (t.reminded_at && !rescan) continue;
       const escalateTo = typeof t.detail?.escalateTo === 'string' ? t.detail.escalateTo : null;
       let resolved: string | null = null;
-      if (escalateTo) {
+      if (escalateTo && !t.reminded_at) {
         try { resolved = this.resolveAssignee(escalateTo); if (escalateTo === 'admin' || escalateTo === 'iga') await this.store.patchTaskDetail(t.id, { pool: escalateTo }); }
         catch (e) { this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (${(e as Error).message}): the task stays with ${t.assignee}`); }
       }
       if (resolved) await this.store.delegateTask(t.id, resolved, t.due_at);
-      await this.store.markTaskReminded(t.id, now());
-      this.emit(t.tenant, 'workflow.task-overdue', { task: t.id, kind: t.kind, assignee: resolved ?? t.assignee });
+      if (!t.reminded_at) {
+        await this.store.markTaskReminded(t.id, now());
+        this.emit(t.tenant, 'workflow.task-overdue', { task: t.id, kind: t.kind, assignee: resolved ?? t.assignee });
+      }
       this.kick(t.run_id); // a waiting block re-evaluates (and keeps waiting on the escalated task)
       n++;
     }

@@ -42,7 +42,7 @@ export { hasDataSteps } from './model.js';
  * replacement plugin extending `workflows-engine-base` takes over with no core change. A run in flight
  * when the provider changes finishes on the engine instance that started it.
  */
-interface PublishEffects { diff: (from: string, to: string) => Promise<unknown>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: unknown; reused: boolean }> }
+interface PublishEffects { diff: (from: string, to: string) => Promise<unknown>; status: (tenant: string, id: number) => Promise<{ pullRequest: unknown }>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: unknown; reused: boolean }> }
 interface EngineDeps {
   store: WorkflowStore;
   versioning: { createBranch: (branch: string, base: string) => Promise<unknown>; writeOn: <T>(branch: string, fn: (c: unknown) => Promise<T>) => Promise<T>; defaultBranch: string; deleteBranch?: (branch: string) => Promise<unknown> };
@@ -220,6 +220,7 @@ export class WorkflowEngine implements OnModuleInit {
     if (!prs) return undefined;
     return {
       diff: async (from: string, to: string) => v.diffSummary(from, to, true),
+      status: async (tenant: string, id: number) => { const r = await prs.get(tenant, id); return { pullRequest: (r as { pullRequest: unknown }).pullRequest }; },
       request: async (tenant: string, runId: string, title: string) => {
         const r = await store.getRun(tenant, runId);
         if (!r) throw new BadRequestException(`lyam-request-publish: unknown run "${runId}"`);
