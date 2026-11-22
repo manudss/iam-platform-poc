@@ -4,6 +4,7 @@ import { PluginRegistry } from '../plugins/v1/registry.js';
 import { nextCronFire } from './model.js';
 import { WorkflowStore } from './store.js';
 import { WorkflowsService } from './workflows.service.js';
+import { WorkflowEngine } from './engine.js';
 import { WorkflowTasksService } from './tasks.js';
 
 /**
@@ -18,7 +19,7 @@ export class WorkflowCronService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('workflow-cron');
   private timer?: ReturnType<typeof setInterval>;
   private ticking = false;
-  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly tasks?: WorkflowTasksService) {}
+  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly tasks?: WorkflowTasksService, @Optional() private readonly engine?: WorkflowEngine) {}
 
   onModuleInit() {
     const tickMs = Number(process.env.WF_CRON_TICK_MS ?? 20000);
@@ -39,6 +40,7 @@ export class WorkflowCronService implements OnModuleInit, OnModuleDestroy {
     this.ticking = true;
     try {
       if (this.tasks) { try { await this.tasks.scanOverdue(); } catch (e) { this.log.warn(`task overdue scan: ${(e as Error).message}`); } }
+      if (this.engine) { try { await this.engine.scanChildWaits(); } catch (e) { this.log.warn(`child wait scan: ${(e as Error).message}`); } }
       const now = Date.now();
       const minute = WorkflowCronService.minuteKey(now);
       for (const d of await this.store.listAllDefinitions(this.store.liveRef)) {

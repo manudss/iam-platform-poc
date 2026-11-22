@@ -955,6 +955,38 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(saved.status < 300, JSON.stringify(saved.body));
   });
 
+  it('durable child joins reject failed and canceled children, missing or unrelated runs and persisted expired deadlines', async () => {
+    const failDef = await ok('POST', '/workflows', { name: 'Failing child fixture', graph: { nodes: [{ id: 'fail', type: 'fail', name: 'fail child', config: { mode: 'always', message: 'fictional child failure' } }], edges: [] } }) as { definition: { id: string } };
+    const waitingDef = await ok('POST', '/workflows', { name: 'Waiting child fixture', graph: { nodes: [{ id: 'approve', type: 'lyam-request-approval', name: 'child approval', config: { title: 'Child review', assignee: 'admin-two' } }], edges: [] } }) as { definition: { id: string } };
+    for (const mode of ['failed', 'canceled', 'expired']) {
+      const d = await ok('POST', '/workflows', { name: `Parent ${mode}`, graph: { nodes: [
+        { id: 'start', type: 'lyam-start-workflow', name: 'start child', config: { workflowId: mode === 'failed' ? failDef.definition.id : waitingDef.definition.id } },
+        { id: 'join', type: 'lyam-join-child-run', name: 'join child', config: { runId: '{{steps.start.runId}}', timeoutHours: 24 } },
+        { id: 'after', type: 'notify', name: 'must not run', config: { recipient: 'fictional', message: 'must not happen' } },
+      ], edges: [{ from: 'start', to: 'join' }, { from: 'join', to: 'after' }] } }) as { definition: { id: string } };
+      const parent = await ok('POST', `/workflows/${d.definition.id}/runs`) as RunView;
+      if (mode !== 'failed') {
+        const view = await waitRun(parent.run.id, ['waiting']);
+        const child = String(view.steps.find(s => s.node_id === 'start')!.output!.runId);
+        if (mode === 'canceled') await ok('POST', `/workflow-runs/${child}/cancel`);
+        else {
+          const meta = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam_meta' });
+          try { await meta.query("update workflow_steps set input=JSON_SET(input,'$.wait.deadlineAt',?) where run_id=? and node_id='join'", [Date.now() - 1000, parent.run.id]); } finally { await meta.end(); }
+        }
+      }
+      const refused = await waitRun(parent.run.id, ['failed']);
+      assert.match(refused.run.error!, mode === 'expired' ? /deadline expired/ : new RegExp(mode));
+      assert.equal(refused.steps.find(s => s.node_id === 'after')!.attempts, 0);
+    }
+    const other = await ok('POST', `/workflows/${failDef.definition.id}/runs`) as RunView;
+    await waitRun(other.run.id, ['failed']);
+    for (const childId of ['missing-child-fixture', other.run.id]) {
+      const d = await ok('POST', '/workflows', { name: 'Non-child join fixture', graph: { nodes: [{ id: 'join', type: 'lyam-join-child-run', name: 'join', config: { runId: childId } }], edges: [] } }) as { definition: { id: string } };
+      const parent = await ok('POST', `/workflows/${d.definition.id}/runs`) as RunView;
+      assert.match((await waitRun(parent.run.id, ['failed'])).run.error!, /direct child/);
+    }
+  });
+
   it('restart durability: a waiting run survives a REAL app restart, a crashed effectful step fails closed', async () => {
     const graph = { nodes: [
       { id: 'grant', type: 'lyam-grant-assignment', name: 'grant', config: { identity: 'demo-bob', role: 'branch-merger' } },
@@ -984,10 +1016,34 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const runC = await ok('POST', `/workflows/${defC.definition.id}/runs`) as RunView;
     await waitRun(runC.run.id, ['waiting']);
     const reviewC = await waitTask(runC.run.id, 'iga-review');
+    // D: a parent parks on a direct child waiting for a human, both survive the same app restart.
+    const childD = await ok('POST', '/workflows', { name: 'Restart joined child', graph: { nodes: [
+      { id: 'approve', type: 'lyam-request-approval', name: 'child approval', config: { title: 'Child review', assignee: 'admin-two' } },
+    ], edges: [] } }) as { definition: { id: string } };
+    const parentD = await ok('POST', '/workflows', { name: 'Restart durable parent', graph: { nodes: [
+      { id: 'start', type: 'lyam-start-workflow', name: 'start child', config: { workflowId: childD.definition.id } },
+      { id: 'join', type: 'lyam-join-child-run', name: 'join child', config: { runId: '{{steps.start.runId}}', timeoutHours: 24 } },
+      { id: 'after', type: 'notify', name: 'after child', config: { recipient: 'fixture', message: 'child finished' } },
+    ], edges: [{ from: 'start', to: 'join' }, { from: 'join', to: 'after' }] } }) as { definition: { id: string } };
+    const runD = await ok('POST', `/workflows/${parentD.definition.id}/runs`) as RunView;
+    const waitingD = await waitRun(runD.run.id, ['waiting']);
+    const childIdD = String(waitingD.steps.find(s => s.node_id === 'start')!.output!.runId);
+    const childTaskD = await waitTask(childIdD, 'approval');
+    const waitD = waitingD.steps.find(s => s.node_id === 'join')!.input!.wait as Record<string, unknown>;
+    assert.equal(waitD.childRunId, childIdD); assert.equal(waitingD.steps.find(s => s.node_id === 'after')!.status, 'pending');
     // REAL restart: the whole Nest application stops and boots again over the SAME Dolt base.
     await app.close();
     const m2 = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
     app = m2.createNestApplication(); await app.init(); await app.listen(13432);
+    const stillD = await waitRun(runD.run.id, ['waiting']);
+    assert.equal((stillD.steps.find(s => s.node_id === 'join')!.input!.wait as Record<string, unknown>).deadlineAt, waitD.deadlineAt, 'restart never extends the original child deadline');
+    assert.ok((await call('POST', `/workflow-tasks/${childTaskD.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
+    await waitRun(childIdD, ['completed']);
+    // The ordinary cron reconciliation tick resumes the parent, no test-side kick/scan.
+    const completedD = await waitRun(runD.run.id, ['completed']);
+    assert.equal(completedD.steps.find(s => s.node_id === 'start')!.attempts, 1, 'restart/join never starts a second child');
+    assert.equal(completedD.steps.find(s => s.node_id === 'after')!.attempts, 1);
+    assert.deepEqual(completedD.steps.find(s => s.node_id === 'join')!.output, { id: childIdD, status: 'completed', finished: true });
     const frozenAfterRestart = await waitRun('run-reset-frozen-fixture', ['failed']);
     assert.match(frozenAfterRestart.run.error!, /RESET_FROZEN/);
     assert.ok(frozenAfterRestart.steps.every(step => step.attempts === 0), 'boot recovery did not enter any frozen step');

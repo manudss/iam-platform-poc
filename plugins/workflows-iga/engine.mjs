@@ -363,7 +363,7 @@ export function createWorkflowEngine(deps) {
         return { canceled: true };
       }
       if (e instanceof WorkflowSuspend) {
-        say(`WAITING for a human decision (${e.wait?.kind ?? 'task'}${e.wait?.taskId ? ' ' + e.wait.taskId : ''}): the run pauses here and resumes when the task is decided`);
+        say(`WAITING durably (${e.wait?.kind ?? 'task'}${e.wait?.taskId ? ' ' + e.wait.taskId : ''}): the run pauses here until its recorded condition is checked`);
         await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs, input: { ...node.config, wait: e.wait } });
         await store.transitionRun(run.id, { status: 'waiting' }, RESUMABLE);
         return { suspended: true };

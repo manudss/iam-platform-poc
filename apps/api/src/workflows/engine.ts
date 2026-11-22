@@ -261,6 +261,18 @@ export class WorkflowEngine implements OnModuleInit {
   private runEffects() {
     const store = this.store;
     return {
+      joinChild: async (tenant: string, parentId: string, childId: string, timeoutHours: number, prior: Record<string, unknown> | null) => {
+        if (!Number.isFinite(timeoutHours) || timeoutHours <= 0 || timeoutHours > 720) throw new BadRequestException('child join deadline: more than 0 and at most 720 hours');
+        const child = await store.getRun(tenant, childId);
+        if (!child || child.id === parentId || child.started_by !== `workflow:${parentId}`) throw new BadRequestException('child join requires an existing direct child of this run in the same tenant');
+        if (prior && (prior.kind !== 'child-run' || prior.childRunId !== childId || !Number.isFinite(prior.deadlineAt))) throw new BadRequestException('child join wait state changed or is invalid');
+        const deadlineAt = prior ? Number(prior.deadlineAt) : Date.now() + timeoutHours * 3_600_000;
+        // Deadline wins over a completion observed only after it. No false on-time completion claim.
+        if (Date.now() >= deadlineAt) throw new BadRequestException('child join deadline expired; child outcome must be reviewed');
+        if (child.status === 'failed' || child.status === 'canceled') throw new BadRequestException(`child run ${childId} ${child.status}`);
+        if (child.status === 'completed') return { id: childId, status: child.status, finished: true };
+        return { wait: { kind: 'child-run', childRunId: childId, deadlineAt } };
+      },
       get: async (tenant: string, runId: string) => {
         const r = await store.getRun(tenant, runId);
         if (!r) throw new BadRequestException(`lyam-read-run: unknown run "${runId}"`);
@@ -396,6 +408,23 @@ export class WorkflowEngine implements OnModuleInit {
     try { runs = await this.store.runningRuns(); } catch (e) { this.log.warn(`resume scan failed: ${(e as Error).message}`); return; }
     for (const r of runs) {
       try { (await this.engineFor(r)).kick(r.id); } catch (e) { void this.resumeWithRetry(r, (e as Error).message); }
+    }
+  }
+
+  /** Periodic reconciliation of persisted child waits. Read errors leave the parent waiting, never successful.
+   * Boot already kicks every waiting run; this scan handles children finishing after boot in another engine.
+   * The run's normal CAS and step state retain the single-run execution behavior. */
+  async scanChildWaits() {
+    for (const parent of await this.store.runningRuns()) {
+      if (parent.status !== 'waiting') continue;
+      for (const step of await this.store.steps(parent.id)) {
+        const wait = step.input?.wait as Record<string, unknown> | undefined;
+        if (step.status !== 'pending' || wait?.kind !== 'child-run') continue;
+        const node = parent.graph.nodes.find(n => n.id === step.node_id);
+        if (node?.type !== 'lyam-join-child-run') continue;
+        const child = typeof wait.childRunId === 'string' ? await this.store.getRun(parent.tenant, wait.childRunId) : null;
+        if (!child || child.id === parent.id || child.started_by !== `workflow:${parent.id}` || !Number.isFinite(wait.deadlineAt) || Date.now() >= Number(wait.deadlineAt) || ['completed', 'failed', 'canceled'].includes(child.status)) this.kick(parent.id);
+      }
     }
   }
 
