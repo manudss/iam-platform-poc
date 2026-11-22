@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync, rmSync, symlinkSync, mkdirSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { controlPlan, auditReferences } from './ci-controls.mjs';
+import { readFileSync } from 'node:fs';
+import { CONTROLS, controlPlan, auditReferences } from './ci-controls.mjs';
 
 describe('versioned CI control applicability', () => {
   function fixture(run) {
@@ -69,5 +70,19 @@ describe('versioned CI control applicability', () => {
     assert.throws(()=>auditReferences(repo,legacy,plan,'      - run: docker cp fixture:/browser /tmp/gallery-browser'),/bundle copy/);
     assert.deepEqual(auditReferences(repo,legacy,plan,"      - name: bootstrap\n        if: needs.control_policy.outputs.gallery_bootstrap_required == 'true'\n        run: docker cp fixture:/browser /tmp/gallery-browser"),[]);
   }));
+
+  it('maps the Gallery acknowledgement control and audits its actual historical boundaries', () => {
+    const repo = process.cwd();
+    const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+    const c = CONTROLS.find(c => c.id === 'gallery_preferences');
+    assert.equal(c.path, 'scripts/gallery-preferences.test.mjs');
+    const workflow = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
+    for (const target of [git('rev-parse','HEAD'), 'fa0acdc00895c96acfe52fb217864de101464b37', '25a0898391422f0da8e9f88c562296ca1f867605', git('rev-parse',c.introducedBy+'^1')]) {
+      const plan = controlPlan(repo, target);
+      const entry = plan.controls.find(x => x.id === c.id);
+      assert.equal(entry.required, target === c.introducedBy || target === git('rev-parse','HEAD'));
+      auditReferences(repo, target, plan, workflow);
+    }
+  });
 
 });

@@ -28,6 +28,7 @@ jobs:
     outputs:
       password_eye_required: ${{ steps.plan.outputs.password_eye_required }}
       gallery_bootstrap_required: ${{ steps.plan.outputs.gallery_bootstrap_required }}
+      gallery_preferences_required: ${{ steps.plan.outputs.gallery_preferences_required }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -305,7 +306,10 @@ jobs:
         if: needs.control_policy.outputs.gallery_bootstrap_required == 'true'
         run: |
           docker cp iam-demo-ci:/app/web/dist/web/browser /tmp/gallery-browser
-          NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) GALLERY_WEB_ROOT=/tmp/gallery-browser GALLERY_BOOTSTRAP_SHOTS=/tmp/gallery-shots/bootstrap node --test scripts/gallery-bootstrap.test.mjs scripts/gallery-preferences.test.mjs
+          NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) GALLERY_WEB_ROOT=/tmp/gallery-browser GALLERY_BOOTSTRAP_SHOTS=/tmp/gallery-shots/bootstrap node --test scripts/gallery-bootstrap.test.mjs
+      - name: Gallery preferences persistence acknowledgement (matching image bundle)
+        if: needs.control_policy.outputs.gallery_preferences_required == 'true'
+        run: NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) GALLERY_WEB_ROOT=/tmp/gallery-browser node --test scripts/gallery-preferences.test.mjs
       - name: Gallery browser end-to-end (real seeded demo, desktop and mobile)
         run: NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
       - name: Gallery screenshots
