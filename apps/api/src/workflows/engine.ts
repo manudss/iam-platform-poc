@@ -95,6 +95,7 @@ interface WorkflowEngineApi {
   resume: () => Promise<void>;
   kick: (runId: string) => void;
   cancelFlag: (runId: string) => void;
+  clearStaleCancel: (runId: string, claimedAt: number) => void;
   forget: (runId: string) => void;
 }
 
@@ -332,6 +333,9 @@ export class WorkflowEngine implements OnModuleInit {
   /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately. */
   kick(runId: string) { void this.delegate(runId, (e) => e.kick(runId)); }
   cancelFlag(runId: string) { void this.delegate(runId, (e) => e.cancelFlag(runId)); }
+  /** Awaited by relaunches: the stale flag must be cleared before the kick is delegated, or the new pass
+   *  could start on the old flag and cancel itself. */
+  clearStaleCancel(runId: string, claimedAt: number) { return this.delegate(runId, (e) => e.clearStaleCancel(runId, claimedAt)); }
   forget(runId: string) { void this.delegate(runId, (e) => e.forget(runId)); }
 
   private async delegate(runId: string, op: (e: WorkflowEngineApi) => void) {

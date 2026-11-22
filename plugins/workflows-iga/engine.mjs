@@ -113,13 +113,23 @@ export function createWorkflowEngine(deps) {
   // survives and the next pass - or the walk - honors it, instead of crashing on a missing entry. When no
   // pass holds the flag, arm the cancel only for a run that is still resumable: a finished run gets NO
   // stale live entry (the map would otherwise keep one forever).
+  // The flag carries the cancel's timestamp: a cancel on a parked (waiting/queued) run has no live pass to
+  // consume it, so it would otherwise sit in the map and instantly re-cancel a later retry/rerun of that run.
   const cancelFlag = (runId) => {
+    const at = Date.now();
     const f = live.get(runId);
-    if (f) { f.cancel = true; return; }
+    if (f) { f.cancel = at; return; }
     void store.getRunById(runId).then((r) => {
       if (!r || ['completed', 'failed', 'canceled'].includes(r.status)) return;
-      const g = live.get(runId); if (g) g.cancel = true; else live.set(runId, { cancel: true });
+      const g = live.get(runId); if (g) g.cancel = at; else live.set(runId, { cancel: at });
     }).catch(() => { /* store gone */ });
+  };
+  // Called by a relaunch (retry/rerun) once it has claimed the run: drops a cancel flag stamped BEFORE the
+  // claim (left over from the cancellation that was just reversed). A flag stamped AFTER the claim is a
+  // fresh, concurrent cancellation and is never erased here.
+  const clearStaleCancel = (runId, claimedAt) => {
+    const f = live.get(runId);
+    if (f && f.cancel && f.cancel < claimedAt) f.cancel = false;
   };
   const forget = (runId) => { live.delete(runId); };
 
@@ -600,7 +610,7 @@ export function createWorkflowEngine(deps) {
     return output;
   }
 
-  return { resume, kick, cancelFlag, forget };
+  return { resume, kick, cancelFlag, clearStaleCancel, forget };
 }
 
 export { hasDataSteps } from './model.mjs';

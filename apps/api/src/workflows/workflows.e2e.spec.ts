@@ -403,6 +403,46 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(after.tasks.find((t) => t.id === task!.id)!.status, 'canceled', 'canceling the run canceled its task: no orphan approval');
   });
 
+  it('retry after canceling a waiting run: the stale cancel flag does not re-cancel it, a fresh approval task opens', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Approval cancel then retry', graph: { nodes: [
+      { id: 'a', type: 'lyam-request-approval', name: 'approve', config: { title: 'Go?', assignee: 'admin' } },
+    ], edges: [] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    await ok('POST', `/workflow-runs/${started.run.id}/cancel`);
+    await waitRun(started.run.id, ['canceled']);
+    await ok('POST', `/workflow-runs/${started.run.id}/retry`);
+    // With the parked flag still set, the new pass would cancel itself at its first step check; instead it
+    // re-runs the approval step and parks on a FRESH task, decidable to completion.
+    const v = await waitRun(started.run.id, ['waiting']);
+    assert.equal(v.run.status, 'waiting', 'the retried run waits on a new decision instead of being re-canceled');
+    const inbox = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; run_id: string | null }[] };
+    const fresh = inbox.tasks.find((t) => t.run_id === started.run.id);
+    assert.ok(fresh, 'a fresh approval task opened for the retried run');
+    const decided = await call('POST', `/workflow-tasks/${fresh!.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    assert.ok(decided.status < 300, JSON.stringify(decided.body).slice(0, 200));
+    await waitRun(started.run.id, ['completed']);
+  });
+
+  it('two concurrent re-runs: the exclusive claim lets exactly one through and the loser resets nothing', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Race rerun', graph: { nodes: [
+      { id: 'n', type: 'notify', name: 'hi', config: { recipient: 'x', message: 'y' } },
+    ], edges: [] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['completed']);
+    const [r1, r2] = await Promise.all([
+      call('POST', `/workflow-runs/${started.run.id}/rerun-from/n`),
+      call('POST', `/workflow-runs/${started.run.id}/rerun-from/n`),
+    ]);
+    const won = [r1.status, r2.status].filter((c) => c < 300).length;
+    const conflicted = [r1.status, r2.status].filter((c) => c === 409).length;
+    assert.equal(won, 1, `exactly one rerun wins the claim, got ${r1.status} and ${r2.status}`);
+    assert.equal(conflicted, 1, `the loser gets a 409 before touching any step, got ${r1.status} and ${r2.status}`);
+    const v = await waitRun(started.run.id, ['completed']);
+    assert.equal(v.run.status, 'completed', 'the relaunched run re-completes intact');
+    assert.equal(v.steps.find((s) => s.node_id === 'n')!.status, 'done');
+  });
+
   it('recertification journey: campaign > review task > pool decision > resume > strict close (real Dolt)', async () => {
     const def = (await ok('POST', '/workflows', { name: 'Recert journey', graph: { nodes: [
       { id: 'c1', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Q4 recert demo-bob', users: 'demo-bob', ref: 'main' } },

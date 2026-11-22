@@ -144,3 +144,27 @@ describe('run control: cancel versus concurrent kicks',()=>{
     assert.equal(st(h,'a').attempts,1,'no extra execution pass');
   });
 });
+
+describe('cancel flag lifecycle across a relaunch',()=>{
+  it('a cancel parked on a waiting run does not re-cancel its retry; a cancel stamped after the relaunch claim still wins',async()=>{
+    const h=makeHarness({nodes:[node('a','notify',{recipient:'x',message:'y'})],edges:[]},{status:'waiting'});
+    // The cancel lands while no pass holds the live entry (the run was parked on a task): the flag stays in the map.
+    h.engine.cancelFlag('run-test');
+    await new Promise((r)=>setTimeout(r,50));
+    h.row.status='canceled';
+    // The retry claims the run, then clears only flags stamped BEFORE the claim.
+    const claimedAt=Date.now();
+    h.row.status='queued';
+    h.engine.clearStaleCancel('run-test',claimedAt);
+    await settle(h);
+    assert.equal(h.row.status,'completed','the stale cancel flag must not kill the retried run');
+    assert.equal(st(h,'a').status,'done');
+    // A cancel stamped AFTER the claim is a fresh, concurrent cancellation: clearing with the old claim must keep it.
+    h.row.status='queued';st(h,'a').status='pending';st(h,'a').output=null;
+    h.engine.cancelFlag('run-test');
+    await new Promise((r)=>setTimeout(r,50));
+    h.engine.clearStaleCancel('run-test',claimedAt);
+    await settle(h);
+    assert.equal(h.row.status,'canceled','a fresh concurrent cancel still stops the run');
+  });
+});
