@@ -6,7 +6,7 @@ import {loadPluginModule} from '../plugins/v1/loader.js';
 const {createWorkflowEngine} = loadPluginModule('workflows-iga','engine.mjs') as any;
 interface Step { run_id: string; node_id: string; status: string; simulated: boolean; attempts: number; error: string | null; log: string[]; input: unknown; output: Record<string, unknown> | null; started_at: string | null; finished_at: string | null }
 
-function makeHarness(graphInput: unknown, run: Record<string, unknown> = {}) {
+function makeHarness(graphInput: unknown, run: Record<string, unknown> = {}, tweak?: (store: any, row: any) => void) {
   let hReads = 0;
   const { graph, order } = validateGraph(graphInput);
   const row = { id: 'run-test', tenant: 'acme-demo', definition_id: 'wf-def-test', name: 'test', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'tester', started_at: 'now', finished_at: null, ...run };
@@ -23,6 +23,7 @@ function makeHarness(graphInput: unknown, run: Record<string, unknown> = {}) {
     steps: async () => [...steps.values()],
     patchStep: async (_r: string, nodeId: string, patch: Record<string, unknown>) => { Object.assign(steps.get(nodeId)!, patch); },
   };
+  if (tweak) tweak(store, row);
   const deps = {
     store,
     versioning: {
@@ -110,6 +111,25 @@ describe('run control: cancel versus concurrent kicks',()=>{
     await new Promise((r)=>setTimeout(r,100));
     assert.equal(h.row.status,'canceled');
     assert.notEqual(st(h,'b').status,'done');
+  });
+  it('a crash landing after a cancel never overwrites the canceled state (cancel/commit race)',async()=>{
+    // CI race from the e2e suite: cancel commits while the pass is mid-flight; the pass's next meta write
+    // then fails with a dolt serialization conflict. The late crash handler must keep the canceled state.
+    const h=makeHarness({nodes:[node('a','wait',{seconds:0})],edges:[]},{},(store:any,row:any)=>{
+      const patch=store.patchStep.bind(store);
+      let armed=true;
+      store.patchStep=async(r:string,n:string,p:Record<string,unknown>)=>{
+        if(armed){armed=false;row.status='canceled';throw new Error('serialization failure: this transaction conflicts with a committed transaction from another client');}
+        return patch(r,n,p);
+      };
+    });
+    h.engine.kick('run-test');
+    const until=Date.now()+4000;
+    while(h.row.status!=='canceled'&&Date.now()<until) await new Promise((r)=>setTimeout(r,20));
+    assert.equal(h.row.status,'canceled','the cancel landed mid-pass');
+    await new Promise((r)=>setTimeout(r,300)); // let the crash handler settle
+    assert.equal(h.row.status,'canceled','the late crash did not overwrite the canceled run');
+    assert.equal(h.row.error,null,'no internal error recorded on a canceled run');
   });
   it('cancelFlag on a COMPLETED run arms nothing and never re-runs it',async()=>{
     const h=makeHarness({nodes:[node('a','wait',{seconds:0})],edges:[]});

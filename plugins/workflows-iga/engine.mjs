@@ -80,7 +80,14 @@ export function createWorkflowEngine(deps) {
     const pass = () => {
       void execute(runId).catch(async (e) => {
         log.error(`run ${runId} crashed: ${e.message}`);
-        try { await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }); } catch { /* store gone */ }
+        try {
+          // A crash landing AFTER a terminal state (a user cancel, or a concurrent pass that finished the
+          // run) must never rewrite it: e.g. cancel committed while this pass was mid-write on the run
+          // branch, the conflicting write threw, and the canceled run would otherwise end 'failed'.
+          const cur = await store.getRunById(runId);
+          if (cur && ['completed', 'failed', 'canceled'].includes(cur.status)) return;
+          await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() });
+        } catch { /* store gone */ }
       }).finally(() => {
         if (state.rekick) { state.rekick = false; if (!live.has(runId)) live.set(runId, { cancel: false }); pass(); return; }
         executing.delete(runId);
