@@ -34,6 +34,20 @@ function fixture(options: { existing?: boolean; marker?: string | null; legacy?:
 }
 
 describe('workflow identity creation provenance', () => {
+  it('badge request refuses missing or unreadable mail feasibility before entering any identity write', async () => {
+    for (const preflightBadgeDelivery of [async()=>({}), async()=>{throw Error('fixture preflight unavailable');}]) {
+      const f=fixture(); await assert.rejects(()=>block().run(f.context({badgeMode:'request',preflightBadgeDelivery})), /allowed recipients|fixture preflight/);
+      assert.equal(f.entered(),0);assert.deepEqual(f.writes,[]);
+    }
+  });
+  it('badge retry rechecks the stored recipient, not only a newly requested allowed address', async () => {
+    const previous=process.env.RESEND_API_KEY;process.env.RESEND_API_KEY='fictional-test-key';
+    try {
+      const f=fixture();await block().run(f.context());const writes=f.writes.length;
+      await assert.rejects(()=>block().run(f.context({badgeMode:'request',config:{...config,email:'different@example.invalid'},preflightBadgeDelivery:async()=>({mailAllowedRecipients:'different@example.invalid'})})), /allowed recipients/);
+      assert.equal(f.writes.length,writes);assert.equal(f.row()!.email,config.email);
+    }finally{if(previous===undefined)delete process.env.RESEND_API_KEY;else process.env.RESEND_API_KEY=previous;}
+  });
   it('stores a non-configurable execution marker in the very same identity INSERT', async () => {
     const f = fixture({ legacy: true }); const output = await block().run(f.context());
     assert.equal(output?.identity, config.identity);

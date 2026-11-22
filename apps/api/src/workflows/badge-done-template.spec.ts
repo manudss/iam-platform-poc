@@ -18,6 +18,7 @@ function linkStore() {
   const m = new Map<string, Link>(); const key = (t: string, k: any) => [t, k.connectionId, k.project, k.issueKey].join('|');
   return { m, key,
     put: async (t: string, l: any) => { const k = key(t, l); const o = m.get(k); const n = { account: l.account, phase1Run: l.runId ?? o?.phase1Run ?? 'run-a1', source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue }; if (o) { if (JSON.stringify({ ...o, status: undefined, claimedRun: undefined }) !== JSON.stringify({ ...n, status: undefined, claimedRun: undefined })) throw new Error('conflict'); return; } m.set(k, { ...n, status: 'open' }); },
+    peek: async (t: string, k: any, runId: string) => { const o = m.get(key(t, k)); if (!o || !(o.status === 'open' || (o.status === 'claimed' && o.claimedRun === runId))) return null; return { account: o.account, phase1Run: o.phase1Run, source: o.source, spreadsheetId: o.spreadsheetId, sheetId: o.sheetId, keyColumn: o.keyColumn, keyValue: o.keyValue }; },
     claim: async (t: string, k: any, runId: string) => { const o = m.get(key(t, k)); if (!o || !(o.status === 'open' || (o.status === 'claimed' && o.claimedRun === runId))) return null; o.status = 'claimed'; o.claimedRun = runId; return { account: o.account, phase1Run: o.phase1Run, source: o.source, spreadsheetId: o.spreadsheetId, sheetId: o.sheetId, keyColumn: o.keyColumn, keyValue: o.keyValue }; },
     complete: async (t: string, k: any, runId: string) => { const o = m.get(key(t, k)); if (!o || o.status !== 'claimed' || o.claimedRun !== runId) return false; o.status = 'done'; return true; },
   };
@@ -31,28 +32,29 @@ function phase2Graph(rows: string) {
   return { nodes, edges: t.edges };
 }
 
-function world(opts: { hang?: 'publish' | 'mail' | 'unblock'; head2?: string; rows?: string; link?: boolean; blocked?: boolean; account?: string; runId?: string; links?: ReturnType<typeof linkStore>; secrets?: RunSecrets; blocks?: { kind: string; setBy: string }[]; blockAtUnblock?: boolean } = {}) {
+function world(opts: { hang?: 'publish' | 'mail' | 'unblock'; head2?: string; rows?: string; link?: boolean; blocked?: boolean; account?: string; runId?: string; links?: ReturnType<typeof linkStore>; secrets?: RunSecrets; blocks?: { kind: string; setBy: string }[]; blockAtUnblock?: boolean; preflight?: () => Promise<void>; settingsFor?: () => Promise<any>; graph?: (g: any) => void; onClaim?: () => void; onGenerate?: () => void; onSet?: () => void; beforePublishCheck?: () => void; onPublish?: () => void; connectionFor?: () => Promise<any> } = {}) {
   const links = opts.links ?? linkStore(); const calls: string[] = []; const secrets = opts.secrets ?? new RunSecrets();
   const runId = opts.runId ?? 'run-b1';
   if (opts.link !== false && !opts.links) links.m.set(links.key('acme', { connectionId: 'jira-demo', project: 'KAN', issueKey: 'KAN-7' }), { account: opts.account ?? 'bao', phase1Run: 'run-a1', source: 'google', spreadsheetId: 'sheet-1', sheetId: 0, keyColumn: 'email', keyValue: 'bao@example.test', status: 'open' });
-  const { graph: g0 } = validateGraph(phase2Graph(opts.rows ?? '1'));
+  const input = structuredClone(phase2Graph(opts.rows ?? '1')); opts.graph?.(input);
+  const { graph: g0, order } = validateGraph(input);
   const graph = substituteEventPayload(g0, { key: 'KAN-7', summary: 'Badge someone-else', status: 'Done', updated: 'x' });
   const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-done', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'jira', started_at: 'now', finished_at: null, test: false };
-  const { order } = validateGraph(phase2Graph(opts.rows ?? '1'));
   const steps = new Map<string, any>(); for (const id of order) steps.set(id, { run_id: runId, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null });
-  const store = { getRunById: async (id: string) => (id === runId ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, transitionRun: async (_i: string, p: any, from: string[]) => { if (!from.includes(row.status as string)) return false; Object.assign(row, p); return true; }, runningRuns: async () => (row.status === 'running' ? [row] : []), step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); } };
-  const state = { fa: null as any, blocks: opts.blocks ?? (opts.blocked === false ? [] : [{ kind: 'suspended', setBy: 'workflow:run-a1' }]), passwords: [] as string[], hung: '' as string, headCalls: 0, publishHeads: [] as string[] };
+  const store = { getRunById: async (id: string) => (id === runId ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, transitionRun: async (_i: string, p: any, from: string[]) => { if (!from.includes(row.status as string)) return false; Object.assign(row, p); return true; }, runningRuns: async () => (row.status === 'running' ? [row] : []), step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); if (n === 'gen' && p.status === 'done') opts.onGenerate?.(); } };
+  const state = { email: 'bao@example.test', fa: null as any, blocks: opts.blocks ?? (opts.blocked === false ? [] : [{ kind: 'suspended', setBy: 'workflow:run-a1' }]), passwords: [] as string[], hung: '' as string, headCalls: 0, publishHeads: [] as string[] };
   const hangNow = (what: string) => { state.hung = what; return new Promise<never>(() => {}); };
   const HEAD = 'abcdef0123456789', MAIN = 'main000111222333';
   const deps = {
     store, secrets, log: { warn() {}, error() {} },
     versioning: { createBranch: async () => ({}), writeOn: async (_b: string, fn: any) => fn({ query: async () => [[]] }), defaultBranch: 'main' },
     authorOf: (a: string) => a, branchRun: async (_b: string, fn: any) => fn(),
-    settingsFor: async () => ({ mailAllowedRecipients: 'bao@example.test' }),
-    links: { put: links.put, claim: async (t: string, k: any, r: string) => { calls.push('claim'); return links.claim(t, k, r); }, complete: async (t: string, k: any, r: string) => { calls.push('complete'); return links.complete(t, k, r); } },
+    settingsFor: opts.settingsFor ?? (async () => ({ mailAllowedRecipients: 'bao@example.test' })),
+    connectionFor: opts.connectionFor,
+    links: { put: links.put, peek: links.peek, claim: async (t: string, k: any, r: string) => { calls.push('claim'); const result = await links.claim(t, k, r); opts.onClaim?.(); return result; }, complete: async (t: string, k: any, r: string) => { calls.push('complete'); return links.complete(t, k, r); } },
     users: {
-      setTemporary: async (_t: string, a: any) => { calls.push('setTemporary'); state.passwords.push(a.password); state.fa = { required: true, expired: false, revision: 'rev-1', expiresAt: Date.now() + a.hours * HOUR }; return { revision: 'rev-1', expiresAt: state.fa.expiresAt }; },
-      firstAccess: async () => state.fa, emailOf: async () => 'bao@example.test',
+      setTemporary: async (_t: string, a: any) => { calls.push('setTemporary'); state.passwords.push(a.password); state.fa = { required: true, expired: false, revision: 'rev-1', expiresAt: Date.now() + a.hours * HOUR }; opts.onSet?.(); return { revision: 'rev-1', expiresAt: state.fa.expiresAt }; },
+      firstAccess: async () => state.fa, emailOf: async () => state.email,
     },
     accounts: {
       activeBlocks: async () => state.blocks.map((b) => ({ kind: b.kind, setBy: b.setBy })),
@@ -66,7 +68,7 @@ function world(opts: { hang?: 'publish' | 'mail' | 'unblock'; head2?: string; ro
         return { lifted: lift.length, remaining: state.blocks.length };
       },
     },
-    workspace: { headOf: async () => (state.headCalls++ === 0 ? HEAD : (opts.head2 ?? HEAD)), publish: async (_t: string, a: any) => { calls.push('publish'); state.publishHeads.push(a.expectedHead); if (opts.hang === 'publish' && !state.hung) return hangNow('publish'); return { published: true, branch: a.branch, sourceHead: a.expectedHead, mainCommit: MAIN, activation: 'applied' }; }, proof: async () => ({ mainCommit: MAIN, activation: 'applied', activationCommit: MAIN, containsHead: true }) },
+    workspace: { preflight: opts.preflight ?? (async () => undefined), headOf: async () => (state.headCalls++ === 0 ? HEAD : (opts.head2 ?? HEAD)), publish: async (_t: string, a: any) => { opts.beforePublishCheck?.(); await a.precheck?.(); calls.push('publish'); opts.onPublish?.(); state.publishHeads.push(a.expectedHead); if (opts.hang === 'publish' && !state.hung) return hangNow('publish'); return { published: true, branch: a.branch, sourceHead: a.expectedHead, mainCommit: MAIN, activation: 'applied' }; }, proof: async () => ({ mainCommit: MAIN, activation: 'applied', activationCommit: MAIN, containsHead: true }) },
   };
   const build = (sec: RunSecrets) => createWorkflowEngine({ ...deps, secrets: sec });
   return { row, steps, calls, state, links, secrets, engine: build(secrets), build };
@@ -101,6 +103,68 @@ describe('badge templates: structure', () => {
   });
 });
 
+describe('badge done: early feasibility and late revocation', () => {
+  const noEffects = async (opts: Parameters<typeof world>[0]) => {
+    const w = await settle(world(opts));
+    assert.equal(w.row.status, 'failed', JSON.stringify([w.row.error, [...w.steps.values()].map(x => [x.node_id, x.error])]));
+    assert.deepEqual(w.calls, []); assert.equal(w.secrets.valuesOf(w.row.id).length, 0);
+    assert.equal(FakeMail.calls.length, 0); assert.equal([...w.links.m.values()][0].status, 'open');
+    return w;
+  };
+  it('missing API key refuses before claim or password generation', async () => withMail(async () => {
+    delete process.env.RESEND_API_KEY; await noEffects({});
+  }));
+  for (const [name, opts] of [
+    ['missing current-main allowlist', { settingsFor: async () => ({}) }],
+    ['unreadable current-main policy', { settingsFor: async () => { throw Error('fixture policy unavailable'); } }],
+    ['malformed sender', { settingsFor: async () => ({ mailAllowedRecipients: 'bao@example.test', mailFrom: 'bad\r\nfrom@example.test' }) }],
+    ['publication gate', { preflight: async () => { throw Error('fixture publication refused'); } }],
+    ['different recipient', { graph: (g: any) => { g.nodes.find((n: any) => n.id === 'mail').config.to = 'elsewhere@example.test'; } }],
+    ['different temporary target', { graph: (g: any) => { g.nodes.find((n: any) => n.id === 'set').config.subject = 'elsewhere'; } }],
+    ['different validity', { graph: (g: any) => { g.nodes.find((n: any) => n.id === 'set').config.hours = '12'; } }],
+    ['unliftable owned block', { blocks: [{ kind: 'locked', setBy: 'workflow:run-a1' }] }],
+  ] as [string, NonNullable<Parameters<typeof world>[0]>][]) it(`${name}: refuses with open correlation and no effects`, async () => withMail(async () => { await noEffects(opts); }));
+  it('an unavailable real managed connection is checked before the correlation is claimed', async () => withMail(async () => {
+    let resolved = 0;
+    await noEffects({ graph: g => { const n = g.nodes.find((x: any) => x.id === 'find'); Object.assign(n, structuredClone(tpl('badge-done-temporary-password').nodes.find((x: any) => x.id === 'find'))); Object.assign(n.config, { executionMode: 'real', realConfirmed: true, connectionId: 'sheets-demo' }); }, connectionFor: async () => { resolved++; throw Error('fixture connection unavailable'); } });
+    assert.equal(resolved, 1);
+  }));
+  it('a changed block between peek and claim is re-read before any secret is generated', async () => withMail(async () => {
+    const w = world({ onClaim: () => w.state.blocks.push({ kind: 'locked', setBy: 'admin:other' }) }); await settle(w);
+    assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim']); assert.equal(w.secrets.valuesOf(w.row.id).length, 0); assert.equal(FakeMail.calls.length, 0);
+  }));
+  it('revocation immediately after resolution refuses before the temporary credential write', async () => withMail(async () => {
+    let allowed = true;
+    const w = world({ settingsFor: async () => ({ mailAllowedRecipients: allowed ? 'bao@example.test' : '' }), onGenerate: () => { allowed = false; } });
+    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim']); assert.equal(w.state.passwords.length, 0); assert.equal(FakeMail.calls.length, 0);
+  }));
+  it('a resumed run with resolution already stored rechecks authority before the temporary write', async () => withMail(async () => {
+    const w = world({ settingsFor: async () => ({}) });
+    const link = [...w.links.m.values()][0]; link.status = 'claimed'; link.claimedRun = w.row.id;
+    Object.assign(w.steps.get('resolve'), { status: 'done', output: { account: link.account, email: 'bao@example.test', phase1Run: link.phase1Run, source: link.source, spreadsheetId: link.spreadsheetId, sheetId: link.sheetId, keyColumn: link.keyColumn, keyValue: link.keyValue } });
+    w.engine = w.build(new RunSecrets()); await settle(w);
+    assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, []); assert.equal(w.state.passwords.length, 0); assert.equal(FakeMail.calls.length, 0); assert.equal(link.status, 'claimed');
+  }));
+  it('email or owned-block state changing after resolution is re-read before the temporary write', async () => withMail(async () => {
+    for (const change of ['email','block']) {
+      const w = world({ onGenerate: () => { if (change === 'email') w.state.email = 'changed@example.test'; else w.state.blocks = []; } });
+      await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim']); assert.equal(w.state.passwords.length, 0); assert.equal(FakeMail.calls.length, 0);
+    }
+  }));
+  it('revocation after temporary write refuses publication, retaining the block and claimed link', async () => withMail(async () => {
+    let allowed = true; const w = world({ settingsFor: async () => ({ mailAllowedRecipients: allowed ? 'bao@example.test' : '' }), onSet: () => { allowed = false; } });
+    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary']); assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1); assert.equal([...w.links.m.values()][0].status, 'claimed');
+  }));
+  it('revocation while waiting for the publication queue is rechecked before the merge', async () => withMail(async () => {
+    let allowed = true; const w = world({ settingsFor: async () => ({ mailAllowedRecipients: allowed ? 'bao@example.test' : '' }), beforePublishCheck: () => { allowed = false; } });
+    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary']); assert.equal(FakeMail.calls.length, 0);
+  }));
+  it('revocation after publication is still refused at final mail, with no unblock or completion', async () => withMail(async () => {
+    let allowed = true; const w = world({ settingsFor: async () => ({ mailAllowedRecipients: allowed ? 'bao@example.test' : '' }), onPublish: () => { allowed = false; } });
+    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary', 'publish']); assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1);
+  }));
+});
+
 describe('badge done on the real engine', () => {
   it('nominal: claim, set, publish, mail, unblock, mark, complete in that order; the password reaches only the user service and the mail; the link ends done', async () => withMail(async () => {
     const w = await settle(world());
@@ -119,21 +183,21 @@ describe('badge done on the real engine', () => {
   it('replay: a second run for the same ticket is refused at resolve; nothing generated, set, mailed or unblocked', async () => withMail(async () => {
     const first = await settle(world()); assert.equal(first.row.status, 'completed');
     const second = await settle(world({ links: first.links, runId: 'run-b2' }));
-    assert.equal(second.row.status, 'failed'); assert.deepEqual(second.calls, ['claim']); assert.equal(second.secrets.valuesOf('run-b2').length, 0); assert.equal(FakeMail.calls.length, 1);
+    assert.equal(second.row.status, 'failed'); assert.deepEqual(second.calls, []); assert.equal(second.secrets.valuesOf('run-b2').length, 0); assert.equal(FakeMail.calls.length, 1);
   }));
   it('no link for the ticket: refused, nothing happens', async () => withMail(async () => {
-    const w = await settle(world({ link: false })); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim']); assert.equal(FakeMail.calls.length, 0);
+    const w = await settle(world({ link: false })); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, []); assert.equal(FakeMail.calls.length, 0);
   }));
   it('account no longer blocked: refused before any secret', async () => withMail(async () => {
-    const w = await settle(world({ blocked: false })); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim']); assert.equal(w.secrets.valuesOf('run-b1').length, 0); assert.equal(FakeMail.calls.length, 0);
+    const w = await settle(world({ blocked: false })); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, []); assert.equal(w.secrets.valuesOf('run-b1').length, 0); assert.equal(FakeMail.calls.length, 0);
   }));
   it('a third-party block is in force: no mail, no unblock, nothing announced, every block stays', async () => withMail(async () => {
     const w = await settle(world({ blocks: [{ kind: 'suspended', setBy: 'workflow:run-a1' }, { kind: 'locked', setBy: 'admin:boss' }] }));
     assert.equal(w.row.status, 'failed', JSON.stringify([...w.steps.values()].map((x: any) => [x.node_id, x.status, x.error])));
-    assert.deepEqual(w.calls, ['claim', 'setTemporary', 'publish']);
+    assert.deepEqual(w.calls, []);
     assert.equal(FakeMail.calls.length, 0, 'no mail while a block the run does not own is in force');
     assert.equal(w.state.blocks.length, 2, 'nothing was lifted');
-    assert.equal([...w.links.m.values()][0].status, 'claimed', 'the claim stays with this run for reconciliation');
+    assert.equal([...w.links.m.values()][0].status, 'open', 'early refusal does not consume the claim');
   }));
   it('the only block in force is a pre-existing admin suspension: the mail is refused, the suspension stays', async () => withMail(async () => {
     const w = await settle(world({ blocks: [{ kind: 'suspended', setBy: 'admin:boss' }] }));

@@ -74,6 +74,7 @@ interface EngineDeps {
 /** The durable ticket > account > sheet-row correlation (meta store). Every call is scoped to the run's tenant by the engine; a block never passes a tenant. */
 export interface LinkEffects {
   put: (tenant: string, l: { connectionId: string; project: string; issueKey: string; account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string; runId: string }) => Promise<void>;
+  peek?: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<{ account: string; phase1Run: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string } | null>;
   claim: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<{ account: string; phase1Run: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string } | null>;
   complete: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<boolean>;
 }
@@ -141,6 +142,7 @@ export function buildAuthnEffects(authn: AuthnService | undefined, tasks: Workfl
 
 /** Publication of a run branch to main (the lyam-publish-workspace block). Absent when the server has no publisher: the block then refuses. */
 export interface WorkspaceEffects {
+  preflight?: (tenant: string, a: { workflowId: string }) => Promise<void>;
   headOf: (branch: string) => Promise<string | null>;
   proof: (tenant: string, sourceHead: string) => Promise<{ mainCommit: string; activation: string; activationCommit: string; containsHead: boolean }>;
   publish: (tenant: string, a: { runId: string; workflowId: string; branch: string; expectedHead: string; precheck?: () => Promise<void> }) => Promise<{ published: boolean; branch: string; sourceHead: string; mainCommit: string; activation: string }>;
@@ -207,13 +209,21 @@ export class WorkflowEngine implements OnModuleInit {
    */
   private workspaceEffects(v: VersioningService): WorkspaceEffects | undefined {
     const publisher = this.publisher; if (!publisher) return undefined;
+    const authorize = async (tenant: string, workflowId: string) => {
+      let allowed: string[] = [];
+      try {
+        const value = (await this.settingsFor(tenant, v.defaultBranch, 'workflow-connectors')).publishAllowedWorkflows;
+        if (typeof value !== 'string') throw new Error('invalid authorization setting');
+        allowed = value.split(',').map(x => x.trim()).filter(Boolean);
+      } catch { throw new Error('lyam-publish-workspace: the authorization setting cannot be read (nothing published)'); }
+      if (!workflowId || !allowed.includes(workflowId)) throw new Error('lyam-publish-workspace: this workflow is not authorized to publish (an administrator lists its id in the publishAllowedWorkflows setting)');
+    };
     return {
+      preflight: async (tenant, a) => { await authorize(tenant, a.workflowId); publisher.preflightForRun(); },
       proof: (tenant, sourceHead) => publisher.liveProof(tenant, sourceHead),
       headOf: async (branch) => (await v.branches()).branches.find((b) => b.name === branch)?.commit ?? null,
       publish: async (tenant, a) => {
-        let allowed: string[] = [];
-        try { allowed = String((await this.settingsFor(tenant, v.defaultBranch, 'workflow-connectors')).publishAllowedWorkflows ?? '').split(',').map((x) => x.trim()).filter(Boolean); } catch { throw new Error('lyam-publish-workspace: the authorization setting cannot be read (nothing published)'); }
-        if (!a.workflowId || !allowed.includes(a.workflowId)) throw new Error('lyam-publish-workspace: this workflow is not authorized to publish (an administrator lists its id in the publishAllowedWorkflows setting)');
+        await authorize(tenant, a.workflowId);
         return publisher.publishForRun({ tenant, ...a });
       },
     };
@@ -222,6 +232,11 @@ export class WorkflowEngine implements OnModuleInit {
   private linkEffects(store: WorkflowStore): LinkEffects {
     return {
       put: async (tenant, l) => { await store.putTicketLink({ tenant, ...l }); },
+      peek: async (tenant, k, runId) => {
+        const r = await store.getTicketLink({ tenant, ...k });
+        if (!r || !(r.status === 'open' || (r.status === 'claimed' && r.claimed_run === runId))) return null;
+        return { account: r.account, phase1Run: r.phase1_run, source: r.source, spreadsheetId: r.spreadsheet_id, sheetId: Number(r.sheet_id), keyColumn: r.key_column, keyValue: r.key_value };
+      },
       claim: async (tenant, k, runId) => { const r = await store.claimTicketLink({ tenant, ...k }, runId); return r ? { account: r.account, phase1Run: r.phase1_run, source: r.source, spreadsheetId: r.spreadsheet_id, sheetId: Number(r.sheet_id), keyColumn: r.key_column, keyValue: r.key_value } : null; },
       complete: (tenant, k, runId) => store.completeTicketLink({ tenant, ...k }, runId),
     };

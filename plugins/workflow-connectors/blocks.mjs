@@ -589,6 +589,7 @@ const lyamCreateUser = {
     // rows without it are deliberately ambiguous and must not be adopted automatically.
     const execution = ['tenant', 'runId', 'nodeId'].map(k => str(ctx[k], `lyam-create-user: server ${k}`, 80));
     const creationRef = createHash('sha256').update(JSON.stringify(['workflow-create-user:v1', ...execution, c.identity])).digest('hex');
+    if (ctx.badgeMode === 'request') await checkBadgeDelivery(ctx, { identity: c.identity, email: c.email });
     let recordedEmail = c.email || null;
     await ctx.branchWrite(async (db) => {
       const [cols] = await db.query('show columns from identities');
@@ -611,6 +612,7 @@ const lyamCreateUser = {
       await db.query('insert into identities (id, display_name, manager_id, department, email, login_enabled, credential_revision, workflow_creation_ref) values (?,?,null,?,?,false,null,?)', [c.identity, c.displayName, c.department || null, c.email || null, creationRef]);
       ctx.log(`user "${c.identity}" (${c.displayName}) created on the run branch, login disabled until review`);
     }, `workflow: create user ${c.identity} (lyam connector)`);
+    if (ctx.badgeMode === 'request' && recordedEmail !== (c.email || null)) await checkBadgeDelivery(ctx, { identity: c.identity, email: recordedEmail });
     return { identity: c.identity, email: recordedEmail, dataRow: { table: 'identities', pk: { id: c.identity } } };
   },
 };
@@ -621,6 +623,34 @@ const lyamCreateUser = {
 /** Optional Jira labels: comma separated, each one letters, digits, dot, dash or underscore (a label cannot hold a space in Jira). */
 const labelsOf = (v) => { const raw = String(v ?? '').trim(); if (!raw) return []; const l = raw.split(',').map((x) => x.trim()).filter(Boolean); if (l.length > 10 || l.some((x) => !/^[A-Za-z0-9_.-]{1,60}$/.test(x))) bad('labels: up to 10, comma separated, letters, digits, dot, dash, underscore'); return [...new Set(l)]; };
 const MAIL_RE = /^[^\s@,;<>]{1,64}@[^\s@,;<>]{1,190}\.[A-Za-z]{2,}$/;
+function checkedMailPolicy(settings, to, label) {
+  if (typeof to !== 'string' || !MAIL_RE.test(to)) bad(`${label}: one e-mail address`);
+  const allowed = typeof settings?.mailAllowedRecipients === 'string' ? settings.mailAllowedRecipients.split(',').map(x => x.trim().toLowerCase()).filter(Boolean) : [];
+  if (!allowed.includes(to.toLowerCase())) bad(`${label}: this recipient is not in the allowed recipients setting`);
+  const apiKey = process.env.RESEND_API_KEY;
+  if (typeof apiKey !== 'string' || !apiKey.trim()) bad(`${label}: RESEND_API_KEY is not set on the server (nothing sent)`);
+  const from = str(settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
+  const named = from.match(/^[^<>\r\n]{1,120}<([^<>\r\n]+)>$/);
+  if (/[\r\n]/.test(from) || !(MAIL_RE.test(from) || (named && MAIL_RE.test(named[1])))) bad(`${label}: mail sender is not one valid address`);
+  return { apiKey, from };
+}
+async function currentMailPolicy(ctx, to, label) {
+  if (!ctx.liveMailSettings) bad(`${label}: live mail policy is not available on this server`);
+  let settings;
+  try { settings = await ctx.liveMailSettings(); } catch { bad(`${label}: live mail policy cannot be read`); }
+  return checkedMailPolicy(settings, to, label);
+}
+async function checkBadgeDelivery(ctx, candidate) {
+  if (!ctx.preflightBadgeDelivery) bad('badge delivery preflight is not available on this server');
+  if (ctx.badgeMode === 'done' && (typeof candidate.phase1Run !== 'string' || !candidate.phase1Run || !Array.isArray(candidate.blocks) || !candidate.blocks.length || candidate.blocks.some(b => b.setBy !== `workflow:${candidate.phase1Run}`)))
+    bad('badge delivery preflight: only the correlated creation-run blocks may be in force');
+  const settings = await ctx.preflightBadgeDelivery(candidate);
+  checkedMailPolicy(settings, candidate.email, 'badge delivery preflight');
+}
+async function checkFreshBadgeDelivery(ctx) {
+  if (!ctx.badgeCandidate) bad('badge delivery preflight: fresh account context is not available');
+  await checkBadgeDelivery(ctx, await ctx.badgeCandidate());
+}
 const lyamSendMail = {
   type: 'lyam-send-mail',
   family: 'lyam',
@@ -644,11 +674,7 @@ const lyamSendMail = {
     if (!MAIL_RE.test(c.to)) bad('lyam-send-mail.to: one e-mail address');
     if (/[\r\n]/.test(c.subject)) bad('lyam-send-mail.subject: one line');
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send "${c.subject}" to ${c.to} - nothing sent`); return { to: c.to, accepted: false, messageId: null }; }
-    const allowed = String(ctx.settings?.mailAllowedRecipients ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-    if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-mail: this recipient is not in the allowed recipients setting (the owner approves each address)');
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey) bad('lyam-send-mail: RESEND_API_KEY is not set on the server (nothing sent)');
-    const from = str(ctx.settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
+    const { apiKey, from } = await currentMailPolicy(ctx, c.to, 'lyam-send-mail');
     const idempotencyKey = `wf-mail/${ctx.runId}/${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.subject])).digest('hex').slice(0, 16)}`;
     const r = await sendOneMail({ apiKey, from, to: c.to, subject: c.subject, text: c.text, idempotencyKey });
     ctx.log(`mail accepted by the provider for ${c.to} (message id ${r.id}); acceptance is not proof of delivery to the inbox`);
@@ -720,9 +746,13 @@ const lyamPublishWorkspace = {
     if (ctx.config?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', ctx.config.resetApprovalTaskId, ctx.config.resetSubject, ctx.config.resetHours, 'later', ctx.config.resetRevision);
     if (!ctx.workspace) bad('lyam-publish-workspace: publication is not available on this server');
     if (!ctx.hasRunBranch || !ctx.publishIntent) bad('lyam-publish-workspace: this run has no working branch to publish (an earlier step must write data)');
+    if (ctx.badgeMode) await checkFreshBadgeDelivery(ctx);
     // The same reset guard is re-run INSIDE the publication queue, right before the merge (a long queue wait must not leave a gap between the check above and the merge).
     const g = ctx.config;
-    const precheck = g?.resetApprovalTaskId ? () => assertResetApproval(ctx, 'lyam-publish-workspace', g.resetApprovalTaskId, g.resetSubject, g.resetHours, 'later', g.resetRevision) : undefined;
+    const precheck = g?.resetApprovalTaskId || ctx.badgeMode ? async () => {
+      if (g?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', g.resetApprovalTaskId, g.resetSubject, g.resetHours, 'later', g.resetRevision);
+      if (ctx.badgeMode) await checkFreshBadgeDelivery(ctx);
+    } : undefined;
     const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head, ...(precheck ? { precheck } : {}) });
     if (!r || r.published !== true || !r.mainCommit) bad('lyam-publish-workspace: publication not confirmed by the real state');
     ctx.log(`published ${r.branch} at ${String(r.sourceHead).slice(0, 12)}: main is now ${String(r.mainCommit).slice(0, 12)}, activation ${r.activation}`);
@@ -832,6 +862,7 @@ const lyamSetTemporaryPassword = {
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would set a temporary password for "${c.subject}" - nothing written`); return { subject: c.subject, revision: null, expiresAt: null, hours: Number(c.hours) }; }
     if (!ctx.secrets || !ctx.setTemporaryPassword) bad('lyam-set-temporary-password: not available on this server');
     if (!HOURS_RE.test(c.hours)) bad('lyam-set-temporary-password.hours: a number of hours');
+    if (ctx.badgeMode === 'done') await checkFreshBadgeDelivery(ctx);
     const password = ctx.secrets.reveal(c.passwordRef);
     const r = await ctx.setTemporaryPassword({ id: c.subject, password, hours: Number(c.hours) });
     if (!r?.revision || !(r.expiresAt > 0)) bad('lyam-set-temporary-password: the credential was not confirmed with its first-access rule');
@@ -895,16 +926,12 @@ const lyamSendSecretMail = {
     if (/[\r\n]/.test(c.subject)) bad('lyam-send-secret-mail.subject: one line');
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send the temporary password mail to ${c.to} - nothing sent`); return { to: c.to, accepted: false, messageId: null, expiresAt: null }; }
     if (!ctx.secrets || !ctx.markEffectPending) bad('lyam-send-secret-mail: not available on this server');
-    const allowed = String(ctx.settings?.mailAllowedRecipients ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-    if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-secret-mail: this recipient is not in the allowed recipients setting');
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey) bad('lyam-send-secret-mail: RESEND_API_KEY is not set on the server (nothing sent)');
+    const { apiKey, from } = await currentMailPolicy(ctx, c.to, 'lyam-send-secret-mail');
     // Reset path only: the approval and the target's non-admin status are re-checked right before the mail leaves.
     if (c.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-send-secret-mail', c.resetApprovalTaskId, c.account, c.hours, 'later', c.revision);
     const { expiresAt } = await verifySecretMailState(ctx, c);
     const password = ctx.secrets.reveal(c.passwordRef);
     const body = c.text.split('[[password]]').join(password).split('[[expiry]]').join(new Date(expiresAt).toISOString().replace('T', ' ').slice(0, 16) + ' UTC').split('[[hours]]').join(String(Number(c.hours)));
-    const from = str(ctx.settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
     const idempotencyKey = `wf-secretmail/${ctx.runId}/${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.account, c.revision])).digest('hex').slice(0, 16)}`;
     // Durable intent first: from here a crash leaves the step in review and the run never sends a second time by itself.
     await ctx.markEffectPending({ to: createHash('sha256').update(c.to.toLowerCase()).digest('hex').slice(0, 12), account: c.account, revision: c.revision, idempotencyKey });
@@ -982,16 +1009,28 @@ const lyamResolveTicket = {
   async run(ctx) {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log('test run: would resolve the ticket link - nothing claimed'); return { account: null, email: null, source: null, spreadsheetId: null, sheetId: null, keyColumn: null, keyValue: null }; }
-    if (!ctx.links || !ctx.accounts?.activeBlocks || !ctx.users?.emailOf) bad('lyam-resolve-ticket: not available on this server');
+    if (!ctx.links?.peek || !ctx.links?.claim || !ctx.accounts?.activeBlocks || !ctx.users?.emailOf) bad('lyam-resolve-ticket: read-only preflight is not available on this server');
     const ref = ticketRefNow(c, 'lyam-resolve-ticket');
+    const before = await ctx.links.peek(ref);
+    if (!before) bad('lyam-resolve-ticket: no open link for this ticket (absent, already handled, or claimed by another run)');
+    const readAccount = async l => {
+      let email, blocks;
+      try { [email, blocks] = await Promise.all([ctx.users.emailOf(l.account, 'main'), ctx.accounts.activeBlocks(ctx.tenant, l.account)]); } catch { bad('lyam-resolve-ticket: the account state could not be read'); }
+      if (typeof email !== 'string' || !MAIL_RE.test(email)) bad('lyam-resolve-ticket: the linked account does not exist on main (or has no valid e-mail)');
+      if (typeof l.phase1Run !== 'string' || !l.phase1Run || !Array.isArray(blocks) || !blocks.length || blocks.some(b => b.setBy !== `workflow:${l.phase1Run}`))
+        bad('lyam-resolve-ticket: the account must be blocked only by its correlated creation run');
+      return { email, blocks };
+    };
+    const initial = await readAccount(before);
+    if (ctx.badgeMode === 'done') await checkBadgeDelivery(ctx, { ...before, ...initial });
+    // Every check above is read-only. The store still arbitrates competing claimants atomically.
     const l = await ctx.links.claim(ref);
-    if (!l) { ctx.log('ticket link refused: none, already handled, or claimed by another run. Nothing changed.'); bad('lyam-resolve-ticket: no open link for this ticket (absent, already handled, or claimed by another run)'); }
-    let email, blocks;
-    try { [email, blocks] = await Promise.all([ctx.users.emailOf(l.account, 'main'), ctx.accounts.activeBlocks(ctx.tenant, l.account)]); } catch { bad('lyam-resolve-ticket: the account state could not be read'); }
-    if (typeof email !== 'string' || !email) bad('lyam-resolve-ticket: the linked account does not exist on main (or has no e-mail)');
-    if (!Array.isArray(blocks) || blocks.length === 0) bad('lyam-resolve-ticket: the linked account is not blocked: refusing to continue');
+    if (!l) bad('lyam-resolve-ticket: no open link for this ticket (absent, already handled, or claimed by another run)');
+    if (['account','phase1Run','source','spreadsheetId','sheetId','keyColumn','keyValue'].some(k => l[k] !== before[k])) bad('lyam-resolve-ticket: correlation changed during preflight; reconcile this run claim before continuing');
+    const current = await readAccount(l);
+    if (current.email !== initial.email) bad('lyam-resolve-ticket: account email changed during preflight; reconcile this run claim before continuing');
     ctx.log(`ticket ${ref.issueKey} resolved to account "${l.account}" (claimed by this run)`);
-    return { account: l.account, phase1Run: l.phase1Run ?? null, email, source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue };
+    return { account: l.account, phase1Run: l.phase1Run, email: current.email, source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue };
   },
 };
 const lyamCompleteTicket = {

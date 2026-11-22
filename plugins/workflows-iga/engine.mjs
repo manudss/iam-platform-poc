@@ -435,6 +435,60 @@ export function createWorkflowEngine(deps) {
     for (const s of await store.steps(run.id)) if (s.output) outputs[s.node_id] = s.output;
     const priorInput = (await store.step(run.id, node.id))?.input;
     const resolved = substituteStepOutputs(node, outputs);
+    // Derived from the stored graph, never a user-editable bypass flag. A generic create/temporary
+    // workflow without the badge correlation is not made dependent on mail configuration.
+    const graphNodes = run.graph?.nodes ?? [];
+    const badgeMode = graphNodes.some(n => n.type === 'lyam-link-ticket') && graphNodes.some(n => n.type === 'lyam-create-user') ? 'request'
+      : graphNodes.some(n => n.type === 'lyam-resolve-ticket') && graphNodes.some(n => n.type === 'lyam-send-secret-mail') ? 'done' : undefined;
+    const liveMailSettings = async () => {
+      if (!deps.settingsFor) throw new Error('Mail policy cannot be read from main');
+      return deps.settingsFor(run.tenant, deps.versioning.defaultBranch, 'workflow-connectors');
+    };
+    const preflightBadgeDelivery = async candidate => {
+      if (!badgeMode || !deps.workspace?.preflight) throw new Error('Badge delivery preflight is not available on this server');
+      // The workflow id and tenant come from the run, not from the block or its candidate.
+      await deps.workspace.preflight(run.tenant, { workflowId: run.definition_id });
+      const projected = { ...outputs, [node.id]: candidate };
+      const projectConfig = (n, keys) => substituteStepOutputs({ ...n, config: Object.fromEntries(Object.entries(n.config).filter(([k]) => keys.includes(k))) }, projected).config;
+      for (const n of graphNodes.filter(n => /^(google-sheets-|jira-)/.test(n.type) || n.type === 'http-request')) {
+        const cfg = projectConfig(n, ['executionMode', 'realConfirmed', 'connectionId']);
+        if (cfg.executionMode !== 'real' || cfg.realConfirmed !== true || typeof cfg.connectionId !== 'string' || !cfg.connectionId || cfg.connectionId.includes('{{') || !deps.connectionFor)
+          throw new Error('Badge delivery requires confirmed real managed connections before account creation or ticket claim');
+        // resolve() checks enablement, provider, scope, configuration and credential binding only.
+        // It performs no provider probe or effect and no secret is kept in the preflight result.
+        await deps.connectionFor(run.tenant, deps.versioning.defaultBranch, cfg.connectionId, n.type);
+      }
+      if (badgeMode === 'done') {
+        const mails = graphNodes.filter(n => n.type === 'lyam-send-secret-mail').map(n => projectConfig(n, ['account','to','ownerRun','subject','text','hours']));
+        const setters = graphNodes.filter(n => n.type === 'lyam-set-temporary-password').map(n => projectConfig(n, ['subject','hours']));
+        const unblocks = graphNodes.filter(n => n.type === 'lyam-unblock-account').map(n => projectConfig(n, ['subject','ownerRun','kind']));
+        if (!setters.length || !unblocks.length) throw new Error('Badge delivery requires its temporary-password and owned-unblock path');
+        for (const m of mails) {
+          if (m.account !== candidate.account || String(m.to).toLowerCase() !== String(candidate.email).toLowerCase() || m.ownerRun !== candidate.phase1Run)
+            throw new Error('Badge delivery mail must target the correlated identity, its recorded email and creation-run block');
+          if (typeof m.subject !== 'string' || !m.subject || /[\r\n]|\{\{/.test(m.subject) || typeof m.text !== 'string' || !m.text.includes('[[password]]') || !m.text.includes('[[expiry]]'))
+            throw new Error('Badge delivery mail content is not ready before ticket claim');
+          if (!(Number(m.hours) > 0) || setters.some(s => s.subject !== candidate.account || Number(s.hours) !== Number(m.hours)))
+            throw new Error('Badge delivery temporary-password target or validity does not match its mail');
+        }
+        if (unblocks.some(u => u.subject !== candidate.account || u.ownerRun !== candidate.phase1Run)
+          || (candidate.blocks ?? []).some(b => !unblocks.some(u => !u.kind || u.kind === b.kind)))
+          throw new Error('Badge delivery cannot lift exactly the correlated creation-run blocks');
+      }
+      return liveMailSettings();
+    };
+    const badgeCandidate = async () => {
+      const source = graphNodes.filter(n => n.type === (badgeMode === 'request' ? 'lyam-create-user' : 'lyam-resolve-ticket'));
+      if (source.length !== 1 || !outputs[source[0].id]) throw new Error('Badge delivery has no unambiguous completed identity source');
+      const candidate = { ...outputs[source[0].id] };
+      if (badgeMode === 'done') {
+        if (!deps.users?.emailOf || !deps.accounts?.activeBlocks) throw new Error('Badge account state cannot be read');
+        const [email, blocks] = await Promise.all([deps.users.emailOf(run.tenant, candidate.account, deps.versioning.defaultBranch), deps.accounts.activeBlocks(run.tenant, candidate.account)]);
+        if (email !== candidate.email) throw new Error('Badge account email changed since ticket resolution');
+        return { ...candidate, email, blocks };
+      }
+      return candidate;
+    };
     const managed = /^(google-sheets-|jira-)/.test(node.type) || node.type === 'http-request';
     const simulation = managed && (run.test || resolved.config.executionMode !== 'real');
     let settings = {}, secret = '';
@@ -489,12 +543,17 @@ export function createWorkflowEngine(deps) {
       // Ticket links: the engine binds tenant and run; a block gives only the ticket and the target it links.
       links: deps.links ? {
         put: l => deps.links.put(run.tenant, { ...l, runId: run.id }),
+        peek: deps.links.peek ? k => deps.links.peek(run.tenant, k, run.id) : undefined,
         claim: k => deps.links.claim(run.tenant, k, run.id),
         complete: k => deps.links.complete(run.tenant, k, run.id),
       } : undefined,
       runBranch: run.branch ?? null,
       config: managed ? { ...resolved.config, dryRun: simulation, ...(node.type.startsWith('google-sheets-') && !simulation ? { source: 'google' } : {}) } : resolved.config,
       settings,
+      badgeMode,
+      preflightBadgeDelivery: badgeMode ? preflightBadgeDelivery : undefined,
+      badgeCandidate: badgeMode ? badgeCandidate : undefined,
+      liveMailSettings,
       dryRun: simulation,
       log: line => say(safe(line)),
       outputs,

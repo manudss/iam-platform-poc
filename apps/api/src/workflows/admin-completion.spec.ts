@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { externalBlock, type WfBlockCtx } from './model.js';
 
-const mk = (over: Partial<WfBlockCtx>) => { const lines: string[] = []; return { c: { tenant: 'acme', config: {}, settings: {}, dryRun: false, log: (l: string) => lines.push(l), outputs: {}, branchWrite: async () => undefined, runId: 'run-1', baseBranch: 'main', ...over } as WfBlockCtx, lines }; };
+const mk = (over: Partial<WfBlockCtx>) => { const lines: string[] = []; return { c: { tenant: 'acme', config: {}, settings: {}, liveMailSettings: async () => over.settings ?? {}, dryRun: false, log: (l: string) => lines.push(l), outputs: {}, branchWrite: async () => undefined, runId: 'run-1', baseBranch: 'main', ...over } as WfBlockCtx, lines }; };
 
 /** In-memory durable-task service shaped like WorkflowTasksService (request/check/inbox/decide). */
 const fakeTasks = () => {

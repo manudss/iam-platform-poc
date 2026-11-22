@@ -32,6 +32,12 @@ export interface WfBlockCtx {
   log: (line: string) => void; outputs: Record<string, Record<string, unknown>>;
   /** Test run: blocks with an immediate effect only log what they would do. */
   test?: boolean; runId?: string; nodeId?: string; accounts?: import('./engine.js').AccountEffects;
+  /** Server-derived badge context; never configurable by the graph. Generic temporary workflows do not use it. */
+  badgeMode?: 'request' | 'done';
+  preflightBadgeDelivery?: (candidate: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  badgeCandidate?: () => Promise<Record<string, unknown>>;
+  /** Current main policy for real mail, read again immediately before the final state guards/send. */
+  liveMailSettings?: () => Promise<Record<string, unknown>>;
   /** Authentication effects (immediate, unversioned for unenroll/notify; versioned for the policy save). */
   authn?: import('./engine.js').AuthnEffects;
   /** Records the durable intent of an immediate external effect right before it fires (a crash leaves the step in review, never a blind retry). */
