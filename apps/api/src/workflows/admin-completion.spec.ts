@@ -492,3 +492,24 @@ describe('completion: password reset approval -> effect binding', () => {
     assert.equal(out.revision, null); assert.equal(s.writes.length, 0);
   });
 });
+
+describe('completion: the delivered reset template is wired to the bound steps', () => {
+  it('validates, and uses apply (not the generic set), the approval task on apply and mail, and the block owner run', async () => {
+    const { OFFICIAL_TEMPLATES } = await import('./templates-catalog.js');
+    const { validateGraph } = await import('./model.js');
+    const t = OFFICIAL_TEMPLATES.find((x) => x.id === 'password-reset-approved')!;
+    assert.ok(t);
+    const { order } = validateGraph({ nodes: t.nodes, edges: t.edges } as never);
+    const n = (id: string) => t.nodes.find((x) => x.id === id) as { type: string; config: Record<string, string> };
+    assert.equal(t.nodes.some((x) => x.type === 'lyam-set-temporary-password'), false);
+    assert.equal(n('apply').type, 'lyam-apply-password-reset');
+    assert.equal(n('apply').config.approvalTaskId, '{{steps.propose.taskId}}');
+    assert.equal(n('mail').config.resetApprovalTaskId, '{{steps.propose.taskId}}');
+    assert.equal(n('mail').config.revision, '{{steps.apply.revision}}');
+    assert.equal(n('mail').config.ownerRun, '{{steps.block.ownerRun}}');
+    const pos = (id: string) => order.indexOf(id);
+    assert.ok(pos('propose') < pos('apply') && pos('apply') < pos('publish') && pos('publish') < pos('mail') && pos('mail') < pos('unblock'));
+    // Every node config is accepted by its block validator (placeholders pass through).
+    for (const x of t.nodes) { const b = externalBlock(x.type); if (b) assert.doesNotThrow(() => b.validate(x.config as never), x.id); }
+  });
+});

@@ -505,7 +505,7 @@ const lyamBlockAccount = {
     { key: 'durationMinutes', label: 'Lift automatically after (minutes, optional)', type: 'number' },
     { key: 'exclusive', label: 'Refuse to reuse an existing block of this type', type: 'select', options: ['no', 'yes'], default: 'no', help: 'yes: fail when a block of this type is already in force (it belongs to someone else), so a later workflow can lift exactly the block this run set' },
   ],
-  outputs: [{ key: 'subject', description: 'The blocked user id' }, { key: 'applied', description: 'true when a block was set, false when one of this type was already in force' }],
+  outputs: [{ key: 'subject', description: 'The blocked user id' }, { key: 'applied', description: 'true when a block was set, false when one of this type was already in force' }, { key: 'ownerRun', description: 'This run id (the owner recorded on the block), for a later step that must only lift or rely on THIS run block' }],
   validate(cfg) {
     const kind = str(cfg.kind, 'lyam-block-account.kind', 30);
     if (!KINDS.includes(kind)) bad(`lyam-block-account.kind: one of ${KINDS.join(', ')}`);
@@ -515,12 +515,12 @@ const lyamBlockAccount = {
   },
   async run(ctx) {
     const c = ctx.config;
-    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would block "${c.subject}" (${c.kind}) - nothing applied`); return { subject: c.subject, applied: false }; }
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would block "${c.subject}" (${c.kind}) - nothing applied`); return { subject: c.subject, applied: false, ownerRun: null }; }
     if (!ctx.accounts) bad('lyam-block-account: account blocks are not available on this server');
     const r = await ctx.accounts.block(ctx.tenant, { runId: ctx.runId, subject: c.subject, kind: c.kind, message: c.message, ...(c.durationMinutes ? { untilSeconds: c.durationMinutes * 60 } : {}) });
     if (c.exclusive && !r.applied) bad(`lyam-block-account: the account already has a ${c.kind} block that this run did not set: not taking it over`);
     ctx.log(r.applied ? `account "${c.subject}" blocked (${c.kind})` : `account "${c.subject}" already has a ${c.kind} block in force: no change`);
-    return { subject: c.subject, applied: r.applied };
+    return { subject: c.subject, applied: r.applied, ownerRun: ctx.runId };
   },
 };
 
