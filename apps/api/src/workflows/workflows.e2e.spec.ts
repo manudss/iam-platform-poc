@@ -769,6 +769,51 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(!all2.templates.some((t) => t.id === t1.template.id), 'the deleted template leaves the gallery');
     await ok('DELETE', `/workflows/${def.definition.id}`);
   });
+  it('restart durability: a waiting run survives a REAL app restart, a crashed effectful step fails closed', async () => {
+    const graph = { nodes: [
+      { id: 'grant', type: 'lyam-grant-assignment', name: 'grant', config: { identity: 'demo-bob', role: 'branch-merger' } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Restart durability' } },
+    ], edges: [{ from: 'grant', to: 'publish' }] };
+    // Run A: left WAITING on its publication approval when the process dies.
+    const defA = (await ok('POST', '/workflows', { name: 'Restart waiting', graph })) as { definition: { id: string } };
+    const runA = (await ok('POST', `/workflows/${defA.definition.id}/runs`)) as RunView;
+    const approvalA = await waitTask(runA.run.id, 'publish-approval');
+    // Run B: same, but the crash is simulated MID-EFFECT: its data step is forced back to 'running'.
+    const defB = (await ok('POST', '/workflows', { name: 'Restart crashed', graph })) as { definition: { id: string } };
+    const runB = (await ok('POST', `/workflows/${defB.definition.id}/runs`)) as RunView;
+    await waitTask(runB.run.id, 'publish-approval');
+    const meta = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam_meta', dateStrings: true });
+    try {
+      await meta.query("update workflow_runs set status='running', finished_at=null where id=?", [runB.run.id]);
+      await meta.query("update workflow_steps set status='running', finished_at=null, output=null where run_id=? and node_id='grant'", [runB.run.id]);
+    } finally { await meta.end(); }
+    // REAL restart: the whole Nest application stops and boots again over the SAME Dolt base.
+    await app.close();
+    const m2 = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
+    app = m2.createNestApplication(); await app.init(); await app.listen(13432);
+    if ((await call('GET', '/workflows')).status === 403) { await ok('POST', '/plugins/workflows-iga/install', {}); await ok('POST', '/plugins/workflows-iga/enable', {}); await ok('POST', '/plugins/workflow-connectors/install', {}); await ok('POST', '/plugins/workflow-connectors/enable', {}); }
+    // The boot-time resume scan ran before the plugins were re-enabled (its kicks could not resolve the
+    // engine): trigger the same resume again, exactly what a boot with the plugin already enabled does.
+    const { WorkflowEngine } = await import('./engine.js');
+    await app.get(WorkflowEngine).onModuleInit();
+    // B: the resume scan refuses to guess the effect of the cut step: failed closed, marked for reconciliation.
+    const vB = await waitRun(runB.run.id, ['failed'], 30000);
+    assert.match(String(vB.run.error), /interrupted by a restart/, 'the crashed run fails closed');
+    const grantB = vB.steps.find((x) => x.node_id === 'grant')!;
+    assert.equal(grantB.status, 'failed');
+    assert.equal((grantB as unknown as Record<string, unknown>).error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED');
+    // A: the durable task and the run survived; deciding after the restart resumes and finishes the run.
+    const prA = Number((approvalA.detail.pr as Record<string, unknown>).id);
+    assert.ok((await call('POST', `/workflow-tasks/${approvalA.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
+    const watchA = await waitTask(runA.run.id, 'publish-merge-watch');
+    assert.ok((await call('POST', `/versioning/pulls/${prA}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
+    assert.ok((await call('POST', `/workflow-tasks/${watchA.id}/decision`, { decision: 'merged', justification: 'merged after a full restart' }, { token: `${T}:admin-two` })).status < 300);
+    await waitRun(runA.run.id, ['completed'], 30000);
+    const vA = (await ok('GET', `/workflow-runs/${runA.run.id}`)) as RunView;
+    assert.equal(vA.run.status, 'completed', 'the waiting run resumed and completed after the restart');
+    assert.ok(((vA.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).merged) === true);
+  });
+
   it('connection CRUD and draft probes stay behind tenant/auth/admin and never reveal credentials', async()=>{
     for(const [method,path,body] of [['GET','/workflow-connections',undefined],['POST','/workflow-connections/probe',{name:'API',provider:'http',config:{baseUrl:'https://127.0.0.1'}}]] as const) {
       assert.equal((await call(method,path,body,{token:null})).status,401);
