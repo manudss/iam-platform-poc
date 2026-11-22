@@ -566,7 +566,10 @@ const lyamPublishWorkspace = {
     if (ctx.config?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', ctx.config.resetApprovalTaskId, ctx.config.resetSubject, ctx.config.resetHours, 'later', ctx.config.resetRevision);
     if (!ctx.workspace) bad('lyam-publish-workspace: publication is not available on this server');
     if (!ctx.hasRunBranch || !ctx.publishIntent) bad('lyam-publish-workspace: this run has no working branch to publish (an earlier step must write data)');
-    const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head });
+    // The same reset guard is re-run INSIDE the publication queue, right before the merge (a long queue wait must not leave a gap between the check above and the merge).
+    const g = ctx.config;
+    const precheck = g?.resetApprovalTaskId ? () => assertResetApproval(ctx, 'lyam-publish-workspace', g.resetApprovalTaskId, g.resetSubject, g.resetHours, 'later', g.resetRevision) : undefined;
+    const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head, ...(precheck ? { precheck } : {}) });
     if (!r || r.published !== true || !r.mainCommit) bad('lyam-publish-workspace: publication not confirmed by the real state');
     ctx.log(`published ${r.branch} at ${String(r.sourceHead).slice(0, 12)}: main is now ${String(r.mainCommit).slice(0, 12)}, activation ${r.activation}`);
     return { published: true, mainCommit: r.mainCommit, sourceHead: r.sourceHead };

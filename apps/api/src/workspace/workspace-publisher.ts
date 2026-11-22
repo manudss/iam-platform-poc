@@ -43,7 +43,7 @@ export class WorkspacePublisher {
   * the real state: main moved to the commit that was activated and the activation is `applied`. Anything else throws: never a degraded success. A repeat after a crash is safe:
   * when the branch has nothing left to merge the existing path only completes a missing activation, and an already applied one is returned as done.
   */
- publishForRun(a:{tenant:string;runId:string;workflowId:string;branch:string;expectedHead:string}){
+ publishForRun(a:{tenant:string;runId:string;workflowId:string;branch:string;expectedHead:string;/** Run INSIDE the publication queue, after the branch/head/table checks and right before the merge. A rejection refuses the publication with nothing merged. Lets a caller re-check its own precondition without the queue wait leaving a gap. */precheck?:()=>Promise<void>}){
   const branch=String(a.branch??''),head=String(a.expectedHead??'');
   if(!branch||branch==='main'||branch===this.v.defaultBranch)throw new BadRequestException('Nothing to publish: a workflow publishes a working branch, never main');
   if(!/^[0-9a-z]{8,64}$/i.test(head))throw new BadRequestException('expectedHead is required: the head the run recorded');
@@ -59,6 +59,7 @@ export class WorkspacePublisher {
    try{tables=((await this.v.diffSummary(this.v.defaultBranch,branch,false)).tables??[]).map((t:any)=>String(t?.name??t));}catch{throw new ConflictException('Publication by a workflow refused: the difference between main and the branch could not be read');}
    const forbidden=tables.filter(t=>FORBIDDEN_WORKFLOW_TABLES.includes(t));
    if(forbidden.length)throw new ConflictException(`Publication by a workflow refused: the branch changes ${forbidden.join(', ')}, which only a person may apply`);
+   if(a.precheck)await a.precheck();
    const r:any=await this.publishOnce(branch,{confirm:true,expectedHead:head},workflowActor(a.workflowId),a.tenant,`Publish workflow run ${a.runId} (workflow ${a.workflowId}) from ${branch}@${head.slice(0,12)} tables: ${tables.join(',')}`.slice(0,300));
    const main=(await this.v.branches()).branches.find(x=>x.name===this.v.defaultBranch);
    const cur=await this.activation.current(a.tenant);

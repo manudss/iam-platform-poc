@@ -139,7 +139,7 @@ export function buildAuthnEffects(authn: AuthnService | undefined, tasks: Workfl
 export interface WorkspaceEffects {
   headOf: (branch: string) => Promise<string | null>;
   proof: (tenant: string, sourceHead: string) => Promise<{ mainCommit: string; activation: string; activationCommit: string; containsHead: boolean }>;
-  publish: (tenant: string, a: { runId: string; workflowId: string; branch: string; expectedHead: string }) => Promise<{ published: boolean; branch: string; sourceHead: string; mainCommit: string; activation: string }>;
+  publish: (tenant: string, a: { runId: string; workflowId: string; branch: string; expectedHead: string; precheck?: () => Promise<void> }) => Promise<{ published: boolean; branch: string; sourceHead: string; mainCommit: string; activation: string }>;
 }
 /** Temporary password on the run branch, and the real first-access state of an account on a ref (the credential revision and its server-side expiry; never the password). */
 export interface UserEffects {

@@ -564,6 +564,22 @@ describe('completion: the approval is consumed once, durably', () => {
     await assert.rejects(run1('lyam-publish-workspace', ctxWith('other-rev')), /not applied by this run with this credential revision/);
     assert.equal((await run1('lyam-publish-workspace', ctxWith('rev12345'))).published, true);
   });
+  it('the publish block hands the reset guard to the publisher as a precheck that re-runs INSIDE its queue: a promotion while queued refuses at that point, before any merge', async () => {
+    const s = setup2(); const flag = { admin: false };
+    const base = { ...s.base, authn: { targetIsAdmin: () => flag.admin, adminsConfigured: () => true } as never };
+    const applied = await run1('lyam-apply-password-reset', mk({ ...base, nodeId: 'n1', config: s.cfg }).c as never);
+    const pub = externalBlock('lyam-publish-workspace')!;
+    let captured: (() => Promise<void>) | undefined; let merged = 0;
+    const ctx = mk({ ...base, ...({ hasRunBranch: true, publishIntent: { branch: 'b', head: 'h' }, workspace: { publish: async (_t: string, a: { precheck?: () => Promise<void> }) => { captured = a.precheck; await a.precheck?.(); merged++; return { published: true, mainCommit: 'm', branch: 'b', sourceHead: 'h' }; } } } as Record<string, unknown>), config: pub.validate({ resetApprovalTaskId: 'task-r', resetSubject: 'u1', resetHours: '24', resetRevision: applied.revision } as never) }).c as never;
+    assert.equal((await run1('lyam-publish-workspace', ctx)).published, true);
+    assert.equal(typeof captured, 'function', 'the publisher received a precheck'); assert.equal(merged, 1);
+    flag.admin = true; // promoted while the publication waited in the queue
+    await assert.rejects(captured!(), /administrator/i);
+    // a publish without the reset guard hands no precheck (generic flow unchanged)
+    let plain: unknown = 'unset';
+    const ctx2 = mk({ ...base, ...({ hasRunBranch: true, publishIntent: { branch: 'b', head: 'h' }, workspace: { publish: async (_t: string, a: { precheck?: unknown }) => { plain = a.precheck; return { published: true, mainCommit: 'm', branch: 'b', sourceHead: 'h' }; } } } as Record<string, unknown>), config: pub.validate({} as never) }).c as never;
+    assert.equal((await run1('lyam-publish-workspace', ctx2)).published, true); assert.equal(plain, undefined);
+  });
   it('adverse: the credential write succeeds but recording the effect fails: the SAME node replays and REWRITES the credential (new revision), only the recorded revision is accepted downstream, other nodes stay refused', async () => {
     const s = setup2(); let n = 0; let failRecord = true;
     const base = { ...s.base, setTemporaryPassword: (async (a: unknown) => { s.writes.push(a); return { revision: `rev-${++n}-12345`, expiresAt: Date.now() + 1000 }; }) as never };

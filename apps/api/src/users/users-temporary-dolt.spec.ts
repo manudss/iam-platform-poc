@@ -203,6 +203,27 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
         assert.equal(r2.published, true); assert.equal(await mainHead(), mergedMain);
       } finally { delete process.env.IAM_WORKSPACE_MODE; }
     });
+    it('precheck: a rejection inside the queue refuses the publication with nothing merged and nothing activated; a queued publication is re-checked AFTER the one ahead of it merged', async () => {
+      activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
+      const headA = await runBranch('run-pre-a', 'fict-pa'), headB = await runBranch('run-pre-b', 'fict-pb');
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const pub = mkPub(); const before = await mainHead();
+        // 1) rejected precheck: nothing merged, nothing activated, the credential is not live
+        await assert.rejects(() => pub.publishForRun({ tenant: 'acme-demo', runId: 'run-pa', workflowId: 'wf-fict', branch: 'run-pre-a', expectedHead: headA, precheck: async () => { throw new Error('guard flipped'); } }), /guard flipped/);
+        assert.equal(await mainHead(), before); assert.equal(activations.length, 0);
+        assert.equal(await svc.authenticate('acme-demo', 'fict-pa', TEMP + 'P'), false);
+        // 2) two publications queued on one publisher: the second precheck runs after the first has merged, and its refusal leaves only the first on main
+        let sawMainMoved = false; const afterFirst: string[] = [];
+        const first = pub.publishForRun({ tenant: 'acme-demo', runId: 'run-pa', workflowId: 'wf-fict', branch: 'run-pre-a', expectedHead: headA });
+        const second = pub.publishForRun({ tenant: 'acme-demo', runId: 'run-pb', workflowId: 'wf-fict', branch: 'run-pre-b', expectedHead: headB, precheck: async () => { afterFirst.push(await mainHead()); sawMainMoved = afterFirst[0] !== before; throw new Error('state changed while queued'); } });
+        const [r1, r2] = await Promise.allSettled([first, second]);
+        assert.equal(r1.status, 'fulfilled'); assert.equal(r2.status, 'rejected');
+        assert.equal(sawMainMoved, true, 'the precheck of the queued publication ran after the first merge');
+        assert.equal(await svc.authenticate('acme-demo', 'fict-pa', TEMP + 'P'), true);
+        assert.equal(await svc.authenticate('acme-demo', 'fict-pb', TEMP + 'P'), false, 'the refused publication left its credential off main');
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+    });
     it('a block written while the publication runs is neither lost nor undone, and the workflow unblock then lifts the block its own run set', async () => {
       activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
       const head = await runBranch('run-pub-3', 'fict-p3');
