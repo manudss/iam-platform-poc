@@ -48,6 +48,10 @@ describe('badge templates: validated texts and ticket label', () => {
     assert.equal(pre.requiredColumns, 'email,ticket,badge,cree');
     for (const id of ['trace', 'mark']) { const c = node('badge-request-from-sheet', id).config; assert.equal(c.keyColumn, 'email'); assert.equal(c.rowNumber, undefined); }
     const final = node('badge-done-temporary-password', 'mark').config; assert.equal(final.keyColumn, '{{steps.resolve.keyColumn}}'); assert.equal(final.rowNumber, undefined);
+    const find = node('badge-done-temporary-password', 'find').config;
+    assert.ok(find.requiredColumns.split(',').includes(final.column), 'phase 2 output header is checked before gen/set/mail');
+    assert.equal(find.columnName, final.keyColumn); assert.equal(find.searchValue, final.keyValue);
+    for (const id of ['trace', 'mark']) assert.ok(pre.requiredColumns.split(',').includes(node('badge-request-from-sheet', id).config.column), 'phase 1 preflight and configured writes stay in sync');
     const edges = tpl('badge-request-from-sheet').edges as any[]; assert.ok(edges.some(e => e.from === 'preflight' && e.to === 'join'));
   });
   it('phase 1 writes the ticket key to a configurable column, before cree=ok', () => {
