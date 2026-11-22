@@ -35,15 +35,19 @@ accepted guarantee.
   never overwrites a terminal run or a more useful error, and it is cleared when a later retry
   succeeds. Pending retry timers are cancelled on shutdown.
 - **Run control is race-safe**: every run status change (cancel, retry, rerun-from, completion,
-  failure, the crash handler) is an atomic guarded SQL transition (`UPDATE ... WHERE status IN (...)`),
-  so a cancellation that lands mid-pass always wins over a late engine write, never the reverse.
+  failure, the crash handler) is an atomic guarded SQL transition (`UPDATE ... WHERE status IN (...)`).
+  The first terminal state recorded wins: a cancellation recorded before a late engine write is never
+  overwritten by it, and a cancel arriving after a completion or failure is refused (409) instead of
+  replacing it. Canceling does not interrupt an effect or step already launched; it is honored at the
+  next step boundary.
   Retrying a **canceled** run reopens its parked steps fresh (their durable tasks were canceled with
   the run): a step already done keeps its recorded decision, only the parked step opens a new task.
   The relaunch claims the run through the guarded transition BEFORE resetting any step, so two
   concurrent retries/reruns let exactly one through (the loser gets a 409 without having touched
   anything); a cancel flag left over from the previous cancellation is cleared only if it predates
-  the claim, so a fresh concurrent cancel still stops the run. A failure after the claim restores
-  the pre-claim state (guarded), leaving the run retryable instead of stuck.
+  the claim, so a fresh concurrent cancel still stops the run. A failure after the claim attempts a
+  guarded restore of the pre-claim run state: when the restore succeeds the run is retryable again;
+  steps already reset are not rolled back (they are re-derived on the next relaunch).
 - **Minimized review outputs**: recertification review items expose only what the reviewer needs.
   **Minimized does not mean anonymous**: outputs still carry the identity id, displayName,
   department, manager and roles.
@@ -68,13 +72,19 @@ that is the documented, expected difference, not a bug.
   kill; the real-crash proof is the restart test on the durable store.
 - The visual proof journey (below) runs against a **local fictional demo instance**; it
   demonstrates the implementation, not any hosted or production deployment.
-- "Race-safe" covers the **run status transitions and the relaunch claim** only. Known residual
-  windows, kept as limits rather than silently closed: a Dolt commit conflict on a transition can
-  leave a run `running` without a live pass until the next boot resume; `cancel` cancels the run's
-  durable tasks just before its own guarded transition, so a cancel that loses that race has still
-  canceled the tasks; and between a relaunch's claim and its step resets, a waiting task firing its
-  kick can start a pass on the pre-reset steps. None of these rewrites a terminal state or replays
-  an external effect.
+- "Race-safe" covers the **run status transitions and the relaunch claim**. What is proven where:
+  the atomic SQL transition primitive and the double concurrent rerun are proven on real Dolt; the
+  cancel/pass interleavings are proven on the engine test double. No load testing was done. Known
+  residual windows, kept as limits rather than silently closed: a Dolt commit conflict on a
+  transition surfaces as a 500 with the state left non-finalized (verified fail-closed: no silent
+  wrong state); `cancel` cancels the run's durable tasks just before its own guarded transition, so
+  a cancel that loses that race has still canceled the tasks; a kick is fire-and-forget, so an
+  engine unavailable right after a won claim leaves the run queued until the next boot resume scan
+  (which covers queued, running and waiting runs); and between a relaunch's claim and its step
+  resets, a waiting task firing its kick can start a pass on the pre-reset steps. This last window
+  is documented, not demonstrated; no guarantee is claimed for it beyond the standing verified rule
+  that an interrupted effectful step fails closed (`EXTERNAL_EFFECT_REVIEW_REQUIRED` blocks retry
+  and error routes).
 
 ## Visual proof (local demo)
 
