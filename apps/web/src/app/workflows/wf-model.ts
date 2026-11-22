@@ -211,8 +211,12 @@ export class WorkflowClient {
   /** Saves a template from an explicit graph (editor canvas) or from a saved definition (fromDefinition). */
   saveTemplate(body: { name: string; description: string; category: string; graph?: { nodes: WfNode[]; edges: WfEdge[] }; trigger?: WfTrigger | null; fromDefinition?: string }) { return this.req<{ template: WfTemplate }>('POST', '/workflow-templates', body); }
   deleteTemplate(id: string) { return this.req<{ deleted: string }>('DELETE', `/workflow-templates/${id}`); }
-  /** The durable-task inbox: my own tasks by default, everything for an admin with scope=all. */
-  tasks(scope: 'mine' | 'all' = 'mine') { return this.req<{ tasks: WfTask[] }>('GET', `/workflow-tasks${scope === 'all' ? '?scope=all' : ''}`); }
+  /** The durable-task inbox: my own OPEN tasks by default (pool members included), everything for an admin
+   * with scope=all; status=all includes decided and canceled tasks. truncated: the 200-row cap was hit. */
+  tasks(scope: 'mine' | 'all' = 'mine', status: 'open' | 'all' = 'open') {
+    const q = [scope === 'all' ? 'scope=all' : '', status === 'all' ? 'status=all' : ''].filter(Boolean).join('&');
+    return this.req<{ tasks: WfTask[]; truncated: boolean }>('GET', `/workflow-tasks${q ? `?${q}` : ''}`);
+  }
   decideTask(id: string, decision: string, justification: string) { return this.req<WfTask>('POST', `/workflow-tasks/${encodeURIComponent(id)}/decision`, { decision, justification }); }
   delegateTask(id: string, to: string) { return this.req<WfTask>('POST', `/workflow-tasks/${encodeURIComponent(id)}/delegate`, { to }); }
 }

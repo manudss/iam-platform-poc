@@ -66,14 +66,30 @@ describe('WorkflowTasksService (real service, in-memory store)', () => {
     const calls: unknown[] = [];
     const store = fakeStore({ listTasks: async (_t: string, filter: unknown) => { calls.push(filter); return [...tasks.values()].filter((x) => !(filter as { assignee?: string }).assignee || x.assignee === (filter as { assignee?: string }).assignee); } });
     const s = new WorkflowTasksService(store as never, undefined, { get: () => ({ kick: () => undefined }) } as never);
-    const mine = await s.inbox('acme', 'boss', 'all');
-    assert.deepEqual(calls[0], { assignee: 'boss' }, 'a non-admin asking scope=all is silently scoped to their own tasks');
+    const mine = await s.inbox('acme', 'boss', 'all', undefined);
+    assert.deepEqual(calls[0], { assignee: 'boss', status: 'open' }, 'a non-admin asking scope=all is silently scoped to their own OPEN tasks');
     assert.deepEqual(mine.tasks.map((t) => t.id), ['task-1']);
-    const all = await s.inbox('acme', 'root', 'all');
-    assert.deepEqual(calls[1], {}, 'an admin with scope=all lists everything');
+    const all = await s.inbox('acme', 'root', 'all', 'all');
+    assert.deepEqual(calls[1], {}, 'an admin with scope=all and status=all lists everything');
     assert.equal(all.tasks.length, 2);
-    const def = await s.inbox('acme', 'root', undefined);
+    const def = await s.inbox('acme', 'root', undefined, undefined);
     assert.deepEqual(def.tasks.map((t) => t.id), ['task-2'], 'without scope=all even an admin sees their own tasks');
+  });
+
+  it('inbox: a non-admin pool member SEES their pool tasks (assigned to someone else) and can decide them', async () => {
+    // Recertifier persona: iga-two belongs to the iga pool, is nobody's admin and is not the assignee.
+    tasks = new Map([
+      ['task-pool', mkTask({ id: 'task-pool', assignee: 'iga-lead', detail: { pool: 'iga' } })],
+      ['task-other', mkTask({ id: 'task-other', assignee: 'boss' })],
+    ]);
+    const store = fakeStore({ listTasks: async (_t: string, filter: { assignee?: string } = {}) => [...tasks.values()].filter((x) => !filter.assignee || x.assignee === filter.assignee) });
+    const s = new WorkflowTasksService(store as never, undefined, { get: () => ({ kick: () => undefined }) } as never);
+    const seen = await s.inbox('acme', 'iga-two', undefined, undefined);
+    assert.deepEqual(seen.tasks.map((t) => t.id), ['task-pool'], 'the pool task is visible to every pool member, not only its assignee');
+    const decided = await s.decide('acme', 'task-pool', 'iga-two', 'approved', 'reviewed');
+    assert.equal(decided.decision, 'approved', 'the pool member who sees the task can decide it');
+    const other = await s.inbox('acme', 'boss', undefined, undefined);
+    assert.deepEqual(other.tasks.map((t) => t.id), ['task-other'], 'no pool, no extra visibility');
   });
 
   it('a decision resumes the awaiting run (kick on the task run id, IGA reviews included)', async () => {

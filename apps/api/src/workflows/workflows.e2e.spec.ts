@@ -399,7 +399,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(task!.status, 'open');
     await ok('POST', `/workflow-runs/${started.run.id}/cancel`);
     await waitRun(started.run.id, ['canceled']);
-    const after = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; status: string }[] };
+    const after = (await ok('GET', '/workflow-tasks?scope=all&status=all')) as { tasks: { id: string; status: string }[] };
     assert.equal(after.tasks.find((t) => t.id === task!.id)!.status, 'canceled', 'canceling the run canceled its task: no orphan approval');
   });
 

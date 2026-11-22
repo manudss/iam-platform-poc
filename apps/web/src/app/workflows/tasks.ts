@@ -26,10 +26,14 @@ import { WbTabsBar } from './workbench-tabs';
 <span class="wlc-chips" style="display:inline-flex;gap:.3rem">
   @for (f of scopes; track f.value) {<button class="secondary" [style.background]="scope() === f.value ? 'var(--accent-soft)' : null" [style.color]="scope() === f.value ? 'var(--accent)' : null" [style.border-color]="scope() === f.value ? 'var(--accent)' : null" (click)="scope.set(f.value); load()">{{f.label}}</button>}
 </span>
+<span class="wlc-chips" style="display:inline-flex;gap:.3rem">
+  @for (f of statusFilters; track f.value) {<button class="secondary" [style.background]="statusFilter() === f.value ? 'var(--accent-soft)' : null" [style.color]="statusFilter() === f.value ? 'var(--accent)' : null" [style.border-color]="statusFilter() === f.value ? 'var(--accent)' : null" (click)="statusFilter.set(f.value); load()">{{f.label}}</button>}
+</span>
 <span class="spacer"></span>
 <label title="Reload the list every 5 seconds"><input type="checkbox" name="wtAuto" [ngModel]="autoRefresh()" (ngModelChange)="setAutoRefresh($event)" /> Auto-refresh 5 s</label>
 <button class="secondary" (click)="load()">Refresh</button>
 </div>
+@if (truncated()) {<p class="hint" role="status">Showing the 200 most recent tasks only: older ones stay in the audit trail. Narrow with the status filter to see what matters.</p>}
 <div class="scroll"><table><thead><tr><th>Task</th><th>Kind</th><th>Assigned to</th><th>Status</th><th>Created</th><th>Due</th></tr></thead><tbody>
 @for (t of tasks(); track t.id) {<tr class="wt-row" [class.on]="selected() === t.id" (click)="toggle(t)"><td><b>{{t.title}}</b>@if (summary(t)) {<br /><small class="hint">{{summary(t)}}</small>}</td><td><span class="chip wt-kind">{{t.kind}}</span></td><td>{{t.assignee}}@if (t.delegated_to) {<br /><small class="hint">delegated to {{t.delegated_to}}</small>}</td><td><span class="chip" [attr.data-status]="t.status">{{t.status}}</span>@if (t.decision) {<br /><small>{{t.decision}} by {{t.decided_by}}</small>}</td><td>{{t.created_at}}</td><td>{{t.due_at || '-'}}@if (overdue(t)) {<br /><small class="req">overdue</small>}</td></tr>}
 @empty {<tr><td colspan="6">No task here. Approvals and reviews created by running workflows will appear.</td></tr>}
@@ -52,7 +56,9 @@ import { WbTabsBar } from './workbench-tabs';
       <input type="text" name="wtDelegate" [(ngModel)]="delegateTo" placeholder="subject id" />
     </label>
     <button class="secondary" [disabled]="busy() || !delegateTo.trim()" (click)="delegate(t)">Delegate</button>
+    <small class="hint">Delegation names any user id; the server does not verify the person exists.</small>
   </div>
+  @if (t.detail?.['rescan'] === true) {<p class="hint">This decision <b>declares</b> the external state you observed (for example the pull request was merged or closed): the workflow re-reads the real state on its next check. The decision itself merges or closes nothing.</p>}
 } @else {
   <p class="hint">Decided as <b>{{t.decision}}</b> by {{t.decided_by}} on {{t.decided_at}}.@if (t.justification) { Justification: {{t.justification}} }</p>
 }
@@ -65,6 +71,8 @@ export class WorkflowTasksPage implements OnInit, OnDestroy {
   protected note = signal('');
   protected busy = signal(false);
   protected scope = signal<'mine' | 'all'>('mine');
+  protected statusFilter = signal<'open' | 'all'>('open');
+  protected truncated = signal(false);
   protected selected = signal<string | null>(null);
   protected current = signal<WfTask | null>(null);
   protected justification = '';
@@ -74,6 +82,10 @@ export class WorkflowTasksPage implements OnInit, OnDestroy {
   protected readonly scopes = [
     { value: 'mine' as const, label: 'My tasks' },
     { value: 'all' as const, label: 'All (admin)' },
+  ];
+  protected readonly statusFilters = [
+    { value: 'open' as const, label: 'Open' },
+    { value: 'all' as const, label: 'All statuses' },
   ];
 
   ngOnInit() { void this.load(); }
@@ -86,8 +98,9 @@ export class WorkflowTasksPage implements OnInit, OnDestroy {
 
   protected async load(quiet = false) {
     try {
-      const r = await clientOf(this.s).tasks(this.scope());
+      const r = await clientOf(this.s).tasks(this.scope(), this.statusFilter());
       this.tasks.set(r.tasks);
+      this.truncated.set(r.truncated === true);
       const cur = this.current();
       if (cur) this.current.set(r.tasks.find((t) => t.id === cur.id) ?? null);
       if (!quiet) this.note.set('');

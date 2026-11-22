@@ -165,11 +165,26 @@ export class WorkflowTasksService {
     return saved;
   }
 
-  /** The visible inbox: own tasks for everyone, everything for an admin with scope=all. */
-  async inbox(tenant: string, actor: string, scope: unknown): Promise<{ tasks: TaskRow[] }> {
+  /** The visible inbox: OPEN tasks first (status=all widens). Own tasks for everyone, everything for an
+   * admin with scope=all. "Own" includes the tasks decidable through a pool the actor belongs to: pool
+   * members CAN decide them (decide() checks membership), so they must see them. truncated reports the
+   * store's 200-row cap instead of silently hiding older tasks. */
+  async inbox(tenant: string, actor: string, scope: unknown, status: unknown): Promise<{ tasks: TaskRow[]; truncated: boolean }> {
     const all = scope === 'all' && this.isAdmin(actor);
-    const tasks = await this.store.listTasks(tenant, all ? {} : { assignee: actor });
-    return { tasks };
+    const st = ['open', 'decided', 'canceled'].includes(String(status)) ? String(status) : String(status) === 'all' ? undefined : 'open';
+    const filter = st ? { status: st } : {};
+    const tasks = await this.store.listTasks(tenant, all ? filter : { ...filter, assignee: actor });
+    let truncated = tasks.length >= 200;
+    if (!all) {
+      const mine = new Set(tasks.map((t) => t.id));
+      const pools = ['admin', 'iga'].filter((p) => this.poolMembers(p).includes(actor));
+      if (pools.length) {
+        const rest = await this.store.listTasks(tenant, filter);
+        truncated = truncated || rest.length >= 200;
+        for (const t of rest) if (!mine.has(t.id) && typeof t.detail?.pool === 'string' && pools.includes(t.detail.pool)) { tasks.push(t); mine.add(t.id); }
+      }
+    }
+    return { tasks, truncated };
   }
 
   /** Deadline scan (called by the cron tick and on resume checks): overdue tasks escalate once. */
