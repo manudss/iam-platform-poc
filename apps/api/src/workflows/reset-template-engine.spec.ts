@@ -15,12 +15,12 @@ const loadBlocks = () => ({ externalBlock: _eb });
 const HOUR = 3_600_000;
 const tpl = () => OFFICIAL_TEMPLATES.find((t) => t.id === 'password-reset-approved')!;
 
-function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean; stripPublishGuard?: boolean; errorLinkToPublish?: boolean; failMark?: boolean } = {}) {
+function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean; stripPublishGuard?: boolean; errorLinkToPublish?: boolean; failMark?: boolean; test?: boolean } = {}) {
   const runId = 'run-r1', calls: string[] = [], secrets = new RunSecrets();
   const nodes = tpl().nodes.map((n: any) => (n.type === 'lyam-propose-password-reset' ? { ...n, config: { ...n.config, subject: 'bao' } } : opts.stripPublishGuard && n.type === 'lyam-publish-workspace' ? { ...n, config: {} } : n));
   const edges = opts.errorLinkToPublish ? [...tpl().edges.filter((e: any) => !(e.from === 'apply' && e.to === 'publish')), { from: 'apply', to: 'publish', label: 'error' }] : tpl().edges;
   const { graph, order } = validateGraph({ nodes, edges } as never);
-  const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-reset', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'root', started_at: 'now', finished_at: null, test: false };
+  const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-reset', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'root', started_at: 'now', finished_at: null, test: !!opts.test };
   const steps = new Map<string, any>(); for (const id of order) steps.set(id, { run_id: runId, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null });
   const store = { getRunById: async (id: string) => (id === runId ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, transitionRun: async (_i: string, p: any, from: string[]) => { if (!from.includes(row.status)) return false; Object.assign(row, p); return true; }, runningRuns: async () => (row.status === 'running' ? [row] : []), step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); } };
   const state = { fa: null as any, blocks: [] as { kind: string; setBy: string }[], passwords: [] as string[], isAdmin: false, tasks: new Map<string, any>() };
@@ -34,7 +34,7 @@ function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?:
   const MAIN = 'main000111222333', HEAD = 'abcdef0123456789';
   const deps: any = {
     store, secrets, log: { warn() {}, error() {} },
-    versioning: { createBranch: async () => ({}), writeOn: async (_b: string, fn: any) => fn({ query: async () => [[]] }), defaultBranch: 'main' },
+    versioning: { createBranch: async () => { if (opts.test) calls.push('createBranch'); return {}; }, writeOn: async (_b: string, fn: any) => { if (opts.test) calls.push('writeOn'); return fn({ query: async () => [[]] }); }, defaultBranch: 'main' },
     authorOf: (a: string) => a, branchRun: async (_b: string, fn: any) => fn(),
     settingsFor: async () => ({ mailAllowedRecipients: 'bao@example.test' }),
     tasks, authn: { targetIsAdmin: () => state.isAdmin, adminsConfigured: () => true },
@@ -59,6 +59,36 @@ const withMail = async (fn: () => Promise<void>) => { const old = process.env.RE
 const dump = (w: W) => JSON.stringify([w.row.error, [...w.steps.values()].map((s: any) => [s.node_id, s.status, s.error])]);
 
 describe('password reset template on the real engine (doubles)', () => {
+  it('whole-template editor simulation fails safely on its incomplete proposal projection, without any account/task/branch/mail effect', async () => withMail(async () => {
+    const w = await settle(world({ test: true }));
+    assert.equal(w.row.status, 'failed', dump(w));
+    assert.match(w.row.error, /no key.*subject/, 'simulation output-shape gap remains explicit, not reported as completion');
+    assert.deepEqual(w.calls, []); assert.equal(w.row.branch, null);
+    assert.equal(w.state.tasks.size, 0); assert.deepEqual(w.state.blocks, []);
+    assert.deepEqual(w.state.passwords, []); assert.equal(w.state.fa, null);
+    assert.equal(FakeMail.calls.length, 0);
+  }));
+  it('each reset-path effect block independently refuses real effects under test:true, even if runtime config says Real', async () => withMail(async () => {
+    const effects: string[] = [];
+    const deny = new Proxy({}, { get: (_t, key) => () => { effects.push(String(key)); throw new Error('unexpected real effect'); } });
+    const configs: Record<string, any> = {
+      'lyam-propose-password-reset': { subject: 'bao', hours: '24', title: 'Fictional' },
+      'lyam-block-account': { subject: 'bao', kind: 'suspended' },
+      'lyam-generate-password': {},
+      'lyam-apply-password-reset': { subject: 'bao', hours: '24', approvalTaskId: 'fictional', passwordRef: 'fictional' },
+      'lyam-publish-workspace': { resetApprovalTaskId: 'fictional', resetSubject: 'bao', resetHours: '24', resetRevision: 'fictional' },
+      'lyam-send-secret-mail': { to: 'bao@example.test', subject: 'Fictional', account: 'bao' },
+      'lyam-unblock-account': { subject: 'bao', kind: 'suspended' },
+    };
+    for (const [type, config] of Object.entries(configs)) {
+      await _eb(type)!.run({ config: { ...config, executionMode: 'real', realConfirmed: true }, test: true, dryRun: false, log() {}, tasks: deny, accounts: deny, authn: deny, workspace: deny, secrets: deny, setTemporaryPassword: deny, branchWrite: deny, markEffectPending: deny } as any);
+    }
+    assert.deepEqual(effects, []); assert.equal(FakeMail.calls.length, 0);
+  }));
+  it('reset blocks do not admit client execution-mode override fields', () => {
+    const nodes = tpl().nodes.map((n: any) => n.type === 'lyam-propose-password-reset' ? { ...n, config: { ...n.config, subject: 'bao', executionMode: 'real', realConfirmed: true } } : n);
+    assert.throws(() => validateGraph({ nodes, edges: tpl().edges }), /unknown config key/);
+  });
   it('nominal: waits for the approval, resumes on a RESTARTED engine, then block > set > publish > mail > unblock; the password reaches only the user service and the mail', async () => withMail(async () => {
     const w = await settle(world());
     assert.equal(w.row.status, 'waiting', dump(w)); assert.deepEqual(w.calls, []);

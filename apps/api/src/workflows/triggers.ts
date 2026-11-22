@@ -1,9 +1,10 @@
-import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { AppEvent, ApplicationBus, APP_EVENT_KINDS } from '../events/application-bus.service.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { workspaceMode } from '../workspace/context.js';
 import { WorkflowStore } from './store.js';
+import { RESET_FROZEN } from './reset-freeze.js';
 import { WorkflowsService } from './workflows.service.js';
 
 /**
@@ -47,7 +48,9 @@ export class WorkflowTriggersService implements OnModuleInit {
         this.log.log(`${e.type} (${e.payload.subject ?? '-'}) started run ${view.run.id} of "${d.name}"`);
       } catch (err) {
         this.log.warn(`${e.type} could not start "${d.name}": ${(err as Error).message}`);
-        throw err; // keep the delivery unacked; stable run IDs make redelivery safe
+        // A permanent server freeze must not poison the delivery or starve later definitions.
+        if (err instanceof ForbiddenException && err.message === RESET_FROZEN) continue;
+        throw err; // transient/unrelated errors stay unacked; stable run IDs make redelivery safe
       }
     }
   }
