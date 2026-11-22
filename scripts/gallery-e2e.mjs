@@ -20,7 +20,8 @@ const errors=[];page.on('pageerror',e=>errors.push(e.message));
 try {
   await page.goto(base+'/login',{waitUntil:'domcontentloaded'}); await page.locator('#signin-browser, [data-chain=password-only]').first().click();
   await page.fill('[name=username]','demo-alice'); await page.fill('[name=password]','demo-only-not-a-secret');
-  await page.click('button[type=submit]'); await page.waitForSelector('[name=globalBranch]'); await page.locator('nav a[data-nav="/my-applications"]').click(); await page.waitForSelector('.lp-card');
+  await page.click('button[type=submit]'); await page.waitForSelector('.lp-card');
+  assert.equal(await page.locator('#branch-picker-button').count(),0,'personal landing does not initialize administration');
   // The first visible card is not the complete seeded gallery render. Wait for the same
   // minimum the assertion requires; do not inspect a transient first paint synchronously.
   // The launchpad re-renders on background refresh (execution badges), so a count read right
@@ -60,7 +61,7 @@ try {
   await page.evaluate(()=>{document.documentElement.dataset.theme='light';});
   await page.screenshot({path:out+'/mobile-light.png',fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-  await page.waitForFunction(()=>document.querySelector('.pillbtn')?.textContent.includes('personal/')); await page.click('#lp-organise'); await page.waitForSelector('#lp-save'); await page.screenshot({path:out+'/mobile-edit.png',fullPage:true});
+  assert.equal(await page.locator('#branch-picker-button').count(),0); await page.click('#lp-organise'); await page.waitForSelector('#lp-save'); await page.screenshot({path:out+'/mobile-edit.png',fullPage:true});
   assert.equal(await page.locator('.lp-move button').first().evaluate(x=>x.getBoundingClientRect().height>=44),true);
   const mobileOther=page.locator('[aria-label="Other applications"] .lp-card');
   const mobileIds=await mobileOther.evaluateAll(xs=>xs.map(x=>x.dataset.app));
@@ -83,6 +84,9 @@ try {
   await page.screenshot({path:out+'/mobile-320.png',fullPage:true});
   // Admin artwork is staged on the selected branch, versioned in Dolt, and only live after Apply.
   await page.setViewportSize({width:1440,height:1050}); await page.reload(); await page.waitForSelector('.lp-card');
+  // Enter administration before asking for its dynamic plugin navigation.
+  await page.locator('nav a[data-nav="/overview"]').click();
+  await page.waitForSelector('[name=globalBranch]');
   await page.locator('nav a[data-nav="/applications"]').click(); await page.waitForSelector('#app-table');
   await page.locator('#app-table tr').filter({hasText:'PeopleHub'}).getByRole('button',{name:'Edit',exact:true}).click();
   await page.waitForSelector('.app-logo-preview');

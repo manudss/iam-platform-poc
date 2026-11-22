@@ -10,6 +10,7 @@ await page.addInitScript(theme=>{localStorage.setItem('iam.session','x.'+btoa(JS
 await page.route('**/api/**',async route=>{const p=new URL(route.request().url()).pathname;let j={};
 if(p.endsWith('/workflows/wf-test')&&route.request().method()==='PUT')saved=route.request().postDataJSON();
 if(p.endsWith('/me/access'))j={admin:true,restricted:false,plugins:{},screenAccess:false};
+else if(p.endsWith('/auth/me/admin-assurance'))j={ok:true,requiredLevel:0,currentLevel:0};
 else if(p.endsWith('/workspace/personal'))j={branch:'demo-alice',status:'reused'};
 else if(p.endsWith('/workspace'))j={diff:{rows:{total:0},tables:[]}};
 else if(p.endsWith('/versioning/branches'))j={branches:[{name:'main'},{name:'demo-alice'}]};

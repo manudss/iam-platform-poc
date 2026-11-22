@@ -64,7 +64,7 @@ describe('color theme', () => {
     const { Session } = await import('./session');
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
-    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: {} } : [] })) as never;
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/auth/me/admin-assurance' ? { ok: true } : path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: {} } : path === '/me/profile' ? { fields: [], values: {}, sections: {} } : [] })) as never;
     const h = await RouterTestingHarness.create();
     await h.navigateByUrl('/my-profile');
     await new Promise((r) => setTimeout(r, 0)); h.detectChanges();

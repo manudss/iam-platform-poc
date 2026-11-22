@@ -32,7 +32,7 @@ import { SigninChain } from './api';
   </ul>`,
   /* Moved verbatim from login.css: one card row per chain, name + recommended tag, steps line and the level gauge. */
   styles: [`
-    .methods { list-style: none; margin: .8rem 0 0; padding: 0; display: grid; gap: .6rem; }
+    .methods { list-style: none; margin: .8rem 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: .6rem; }
     .methods li { display: block; }
     .m { display: flex; align-items: center; gap: .8rem; width: 100%; margin: 0; text-align: left; background: var(--auth-field); border: 1px solid var(--line); border-radius: .8rem; padding: .7rem .85rem; color: var(--ink); transition: border-color .15s; }
     .m:hover:not(:disabled) { background: var(--auth-field); border-color: var(--accent); }
@@ -65,7 +65,7 @@ export class SigninMethods {
     const t = c.steps.map((x) => x.type);
     if (t.some((x) => /totp|authenticator/i.test(x))) return 'shield';
     if (t.some((x) => /mail/i.test(x))) return 'mail';
-    if (t.some((x) => /pin/i.test(x))) return 'pin';
+    if (t.some((x) => /pin|digit-code/i.test(x))) return 'pin';
     return 'key';
   }
 }

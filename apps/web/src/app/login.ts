@@ -151,7 +151,7 @@ export class CallbackPage {
           this.s.say(`Testing data branch ${t.branch}: sign-in and the app use it until you exit the test.`);
         }
       } catch { /* a broken stash never blocks the sign-in */ }
-      await this.s.refresh().catch(() => undefined);
+      // Personal landing and same-account checks must not trigger administration reads.
       let back = safeReturn(sessionStorage.getItem(RETURN_KEY)); sessionStorage.removeItem(RETURN_KEY);
       // A re-sign-in for a stronger level must end on the same account: another account is not carried into the request that asked for it.
       const before = sessionStorage.getItem(STEP_UP_SUBJECT_KEY); sessionStorage.removeItem(STEP_UP_SUBJECT_KEY);

@@ -13,6 +13,7 @@ if(p.endsWith('/workflow-blocks'))j={blocks:[{type:'jira-create-issue',label:'Cr
 else if(p.endsWith('/workflows-events'))j={events:[]};
 else if(p.endsWith('/workflows/wf-test'))j={definition:{id:'wf-test',name:'HR onboarding',description:'',active:false,trigger:null,tags:[],graph:{nodes:[{id:'jira',type:'jira-create-issue',name:'Create Jira issue',config:{project:'HR',issueTypeId:'10001',summary:'Onboard new colleague',executionMode:'simulation',connectionId:'conn-jira'}}],edges:[]}}};
 else if(p.endsWith('/me/access'))j={admin:true,restricted:false,plugins:{},screenAccess:false};
+else if(p.endsWith('/auth/me/admin-assurance'))j={ok:true,requiredLevel:0,currentLevel:0};
 else if(p.endsWith('/workspace/personal'))j={branch:'demo-alice',status:'reused'};
 else if(p.endsWith('/workspace'))j={diff:{rows:{total:0},tables:[]}};
 else if(p.endsWith('/versioning/branches'))j={branches:[{name:'main'},{name:'demo-alice'}]};

@@ -13,7 +13,7 @@ const shots = process.env.GALLERY_BOOTSTRAP_SHOTS;
 const app = { id: 'fixture', name: 'Fixture application', description: 'Local fictional application', protocol: 'oidc', url: 'https://example.invalid' };
 const mime = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
-test('a delayed workspace bootstrap keeps the real shell gallery mounted; a true branch switch still cancels edits', async () => {
+test('late authorized admin bootstrap keeps the personal gallery editor mounted without new admin reads', async () => {
   const server = createServer(async (req, res) => {
     try {
       const name = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
@@ -34,6 +34,7 @@ test('a delayed workspace bootstrap keeps the real shell gallery mounted; a true
       const context = await browser.newContext({ viewport });
       const token = 'fixture.' + Buffer.from(JSON.stringify({ sub: 'demo-alice', exp: Math.floor(Date.now() / 1000) + 1800 })).toString('base64url') + '.fixture';
       await context.addInitScript(t => localStorage.setItem('iam.session', t), token);
+      const adminRequests = [];
       let release; const personal = new Promise(r => { release = r; });
       await context.route('**/*', async route => {
         const u = new URL(route.request().url());
@@ -44,8 +45,10 @@ test('a delayed workspace bootstrap keeps the real shell gallery mounted; a true
           const variant = u.pathname.includes('-dark') ? 'dark' : 'light';
           return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: await readFile(resolve('apps/web/public/lyam-logo-horizontal-' + variant + '.svg')) });
         }
+        if (/\/(workspace|versioning|plugins)(\/|$)/.test(u.pathname) || u.pathname.endsWith('/branding/draft')) adminRequests.push(u.pathname);
         let data = {};
         if (u.pathname.endsWith('/workspace/personal')) { await personal; data = { branch: 'personal/demo-alice', status: 'created' }; }
+        else if (u.pathname.endsWith('/auth/me/admin-assurance')) data = { ok: true, requiredLevel: 0, currentLevel: 0 };
         else if (u.pathname.endsWith('/me/access')) data = { subject: 'demo-alice', admin: true, restricted: false, plugins: {} };
         else if (u.pathname.endsWith('/launchpad')) data = { apps: [app], preferences: { favourites: [], order: [] } };
         else if (u.pathname.endsWith('/branches')) data = { branches: [{ name: 'main', default: true }, { name: 'personal/demo-alice' }] };
@@ -56,19 +59,26 @@ test('a delayed workspace bootstrap keeps the real shell gallery mounted; a true
       });
       const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
       try {
-        await page.goto(origin + '/my-applications'); await page.locator('.lp-card').first().waitFor();
+        const requested = page.waitForRequest(r => new URL(r.url()).pathname.endsWith('/workspace/personal'));
+        await page.goto(origin + '/overview'); await requested;
+        if (label === 'mobile') await page.locator('button.burger').click();
+        await page.locator('[data-nav="/my-applications"]').click();
+        await page.locator('.lp-card').first().waitFor();
+        assert.equal(await page.locator('#branch-picker-button').count(), 0, 'personal space has no admin controls');
+        const requestsBefore = [...adminRequests];
+
         await page.locator('#lp-organise').click(); await page.locator('#lp-save').waitFor();
         const save = await page.locator('#lp-save').elementHandle();
         await page.locator('.lp-star').click();
-        release();
-        await page.waitForFunction(() => document.querySelector('#branch-picker-button')?.textContent.includes('personal/demo-alice'));
+        const reloaded = page.waitForRequest(r => new URL(r.url()).pathname.endsWith('/launchpad') && r.headers()['x-iam-branch'] === 'personal/demo-alice');
+        release(); await reloaded;
         assert.equal(await save.evaluate(x => x.isConnected), true, 'same editor survives shell branch epoch');
         await page.locator('#lp-save').waitFor();
         await page.locator('[aria-label="Favourites"] [data-app="fixture"]').waitFor();
         assert.equal(await page.locator('.lp-launch').count(), 0);
         if (shots) { await mkdir(shots, { recursive: true }); await page.screenshot({ path: resolve(shots, label + '.png'), fullPage: true }); }
-        await page.locator('select[name=globalBranch]').selectOption('main', { force: true });
-        await page.locator('#lp-organise').waitFor(); assert.equal(await page.locator('#lp-save').count(), 0, 'real branch switch still cancels editing');
+        assert.deepEqual(adminRequests, requestsBefore, 'late bootstrap starts no further admin work after leaving administration');
+        assert.equal(await page.locator('#branch-picker-button').count(), 0);
         assert.deepEqual(errors, []);
       } finally { release(); await context.close(); }
     }
@@ -111,6 +121,7 @@ test('an in-flight gallery response cannot replace edits made after its request 
         }
         let data = {};
         if (u.pathname.endsWith('/workspace/personal')) { await personal; data = { branch: 'personal/demo-alice', status: 'created' }; }
+        else if (u.pathname.endsWith('/auth/me/admin-assurance')) data = { ok: true, requiredLevel: 0, currentLevel: 0 };
         else if (u.pathname.endsWith('/me/access')) data = { subject: 'demo-alice', admin: true, restricted: false, plugins: {} };
         else if (u.pathname.endsWith('/launchpad/preferences')) { written = route.request().postDataJSON(); }
         else if (u.pathname.endsWith('/launchpad')) {
@@ -126,7 +137,11 @@ test('an in-flight gallery response cannot replace edits made after its request 
       });
       const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
       try {
-        await page.goto(origin + '/my-applications'); await page.locator('.lp-card').first().waitFor();
+        const requested = page.waitForRequest(r => new URL(r.url()).pathname.endsWith('/workspace/personal'));
+        await page.goto(origin + '/overview'); await requested;
+        if (label === 'mobile') await page.locator('button.burger').click();
+        await page.locator('[data-nav="/my-applications"]').click();
+        await page.locator('.lp-card').first().waitFor();
         release(); await loadStarted;
         // This response is already in flight before the user changes preferences.
         const first = () => page.locator('[aria-label="Other applications"] .lp-card').first().getAttribute('data-app');

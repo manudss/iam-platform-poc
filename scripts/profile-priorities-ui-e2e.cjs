@@ -13,6 +13,7 @@ const catalogue=[{fullKey:PHONE,plugin:'hr-attributes',label:'Phone',type:'phone
 await page.route('**/api/**',async route=>{const req=route.request(),u=new URL(req.url()),p=u.pathname;let j={};
 if(p.includes('/branding/')&&p.endsWith('.svg')){await route.fulfill({contentType:'image/svg+xml',body:fs.readFileSync(path.resolve(__dirname,'../apps/web/public/lyam-logo-horizontal-'+(p.includes('dark')?'dark':'light')+'.svg'),'utf8')});return;}
 if(p.endsWith('/me/access'))j={admin:true,restricted:false,plugins:{},screenAccess:false};
+else if(p.endsWith('/auth/me/admin-assurance'))j={ok:true,requiredLevel:0,currentLevel:0};
 else if(p.endsWith('/workspace/personal'))j={branch:'demo-alice',status:'reused'};
 else if(p.endsWith('/workspace'))j={diff:{rows:{total:0},tables:[]}};
 else if(p.endsWith('/versioning/branches'))j={branches:[{name:'main'},{name:'demo-alice'}]};

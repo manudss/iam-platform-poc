@@ -1,5 +1,5 @@
 import { Component, inject, signal } from '@angular/core';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Session } from './session';
 import { RETURN_KEY, safeReturn } from './auth';
 import { Brand, Branding } from './branding';
@@ -17,7 +17,7 @@ export function stepUpView(a: { kind: string; app: string; required: number; cur
     ? `Your sign-in is at level ${a.current}. Sign in again with a stronger method to open the admin pages. The rest of your session stays valid.`
     : `You are signed in at level ${a.current}. This application needs level ${a.required} or more.`;
   // Only methods that reach the level and that the person has set up. Nothing weaker is ever listed.
-  const chains = a.chains.filter((c) => c.effectiveLevel >= a.required).sort((x, y) => x.effectiveLevel - y.effectiveLevel);
+  const chains = a.chains.filter((c) => !c.simulated && c.effectiveLevel >= a.required).sort((x, y) => x.effectiveLevel - y.effectiveLevel);
   return { title, detail, chains, none: chains.length === 0 };
 }
 
@@ -28,7 +28,7 @@ export function stepUpView(a: { kind: string; app: string; required: number; cur
  */
 @Component({
   selector: 'app-step-up',
-  imports: [ThemeSwitch, Brand, SigninMethods],
+  imports: [ThemeSwitch, Brand, SigninMethods, RouterLink],
   styleUrl: './login.css',
   template: `
   <div class="auth-bg" aria-hidden="true"><img src="https://picsum.photos/1920/1080" alt="" loading="eager"></div>
@@ -42,17 +42,17 @@ export function stepUpView(a: { kind: string; app: string; required: number; cur
     @else {
       @if (view().none) {
         <div class="alert-err" role="alert" id="su-none"><div><b>No eligible sign-in method</b><br>{{required()}} or more is needed (level), and you have not set up a method that reaches it yet. Add an authenticator app or a passkey in your profile, then try again.</div></div>
-        <button type="button" class="primary" id="su-profile" (click)="profile()">Open my security settings</button>
       } @else {
         <p class="msg" id="su-reason" role="status"><b>{{view().title}}</b><br>{{view().detail}}</p>
         <app-signin-methods [chains]="view().chains" [busy]="busy()" (pick)="go($event)" />
       }
       <button type="button" class="secondary wide" id="su-cancel" (click)="cancel()">Cancel and go back</button>
     }
+    <nav class="foot" aria-label="Personal space"><a routerLink="/my-applications" id="su-applications">My applications</a> · <a routerLink="/my-profile" id="su-profile">My profile and security settings</a></nav>
     <p class="foot">{{branding.profile().footer}} <a href="/privacy">Politique de confidentialité / Privacy</a> · <a href="/about">About this demo</a></p>
   </section>
   </main>`,
-  styles: ['.wide { width: 100%; margin-top: .8rem; }'],
+  styles: ['.hero { min-width: 0; } .foot { overflow-wrap: anywhere; } .wide { width: 100%; margin-top: .8rem; }'],
 })
 export class StepUpPage {
   private readonly s = inject(Session);
@@ -76,10 +76,12 @@ export class StepUpPage {
     this.busy.set(true);
     try {
       sessionStorage.setItem(RETURN_KEY, this.back);
-      sessionStorage.setItem(STEP_UP_SUBJECT_KEY, (await this.s.loadAccess().catch(() => null))?.subject ?? '');
-    } catch { /* storage blocked: the launchpad is the landing page after sign-in */ }
-    await this.s.api.startBrowserLogin(sessionStorage, (u) => location.assign(u), chain);
+      const subject = (await this.s.loadAccess()).subject;
+      if (!subject) throw new Error('Your account could not be checked. Reload and try again.');
+      sessionStorage.setItem(STEP_UP_SUBJECT_KEY, subject);
+    } catch { this.error.set('Your account could not be saved for re-sign-in. Check browser storage and try again.'); this.busy.set(false); return; }
+    try { await this.s.api.startBrowserLogin(sessionStorage, (u) => location.assign(u), chain); }
+    catch (e) { this.error.set((e as Error).message); this.busy.set(false); }
   }
-  protected cancel() { void this.router.navigateByUrl('/my-applications'); }
-  protected profile() { void this.router.navigateByUrl('/my-profile'); }
+  protected cancel() { try { sessionStorage.removeItem(RETURN_KEY); sessionStorage.removeItem(STEP_UP_SUBJECT_KEY); } catch { /* no saved re-sign-in */ } void this.router.navigateByUrl('/my-applications'); }
 }
