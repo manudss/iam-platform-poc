@@ -14,7 +14,8 @@ const fakeTasks = () => {
     approve: (id: string, by = 'boss') => { const t = tasks.get(id)!; t.status = 'decided'; t.decision = 'approved'; t.decided_by = by; t.justification = null; return t; },
     request: async (a: Record<string, unknown>) => { const t = { id: `task-${++n}`, status: 'open', ...a }; tasks.set(t.id, t); return t; },
     check: async (_tenant: string, id: string) => ({ state: 'decided', task: tasks.get(id) }),
-    consume: async (_tenant: string, id: string, consumer: string) => { const t = tasks.get(id)!; const d = (t.detail ?? {}) as Record<string, unknown>; if (d.consumedBy && d.consumedBy !== consumer) throw new Error('this approval was already consumed by another step'); t.detail = { ...d, consumedBy: consumer }; },
+    consume: async (_tenant: string, id: string, consumer: string) => { const t = tasks.get(id)!; const d = (t.detail ?? {}) as Record<string, unknown>; if (d.appliedBy) throw new Error('this approval already produced its effect: it is burned'); if (d.consumedBy && d.consumedBy !== consumer) throw new Error('this approval was already consumed by another step'); t.detail = { ...d, consumedBy: consumer }; },
+    markApplied: async (_tenant: string, id: string, consumer: string, revision: string) => { const t = tasks.get(id)!; const d = (t.detail ?? {}) as Record<string, unknown>; if (d.consumedBy !== consumer || d.appliedBy) throw new Error('the effect of this approval could not be recorded for this consumer'); t.detail = { ...d, appliedBy: consumer, appliedRevision: revision }; },
     inbox: async () => ({ tasks: [...tasks.values()] }),
     decide: async () => { throw new Error('not used'); },
   };
@@ -479,7 +480,7 @@ describe('completion: password reset approval -> effect binding', () => {
     const mail = externalBlock('lyam-send-secret-mail')!;
     const vcfg = mail.validate({ account: 'u1', to: 'u1@example.test', subject: 's', text: 'p [[password]] e [[expiry]]', passwordRef: 'ref', hours: '24', revision: 'rev', ownerRun: 'r0', sourceHead: 'h', resetApprovalTaskId: 'task-r' } as never);
     assert.equal((vcfg as { resetApprovalTaskId?: string }).resetApprovalTaskId, 'task-r');
-    (s.svc.tasks.get('task-r')!.detail as Record<string, unknown>).consumedBy = 'run-1:n1';
+    Object.assign(s.svc.tasks.get('task-r')!.detail as Record<string, unknown>, { consumedBy: 'run-1:n1', appliedBy: 'run-1:n1', appliedRevision: 'rev' });
     s.promote();
     const prev = process.env.RESEND_API_KEY; process.env.RESEND_API_KEY = 'fake-not-used';
     try {
@@ -527,19 +528,18 @@ describe('completion: the approval is consumed once, durably', () => {
     return { svc, writes, base, cfg };
   };
   const APPLY2 = () => externalBlock('lyam-apply-password-reset')!;
-  it('the same node resuming is idempotent; another apply node on the same approval is refused with no write', async () => {
+  it('another apply node on the same approval is refused with no write', async () => {
     const s = setup2();
     await run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n1', config: s.cfg }).c as never);
-    await run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n1', config: s.cfg }).c as never);
-    assert.equal(s.writes.length, 2);
-    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n2', config: s.cfg }).c as never), /already consumed/);
-    assert.equal(s.writes.length, 2);
+    assert.equal(s.writes.length, 1);
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n2', config: s.cfg }).c as never), /already consumed|burned/);
+    assert.equal(s.writes.length, 1);
   });
   it('publish and mail refuse an approval that no apply step of this run consumed', async () => {
     const s = setup2();
     const pub = externalBlock('lyam-publish-workspace')!;
-    const vcfg = pub.validate({ resetApprovalTaskId: 'task-r', resetSubject: 'u1', resetHours: '24' } as never);
-    await assert.rejects(run1('lyam-publish-workspace', mk({ ...s.base, ...({ hasRunBranch: true, publishIntent: { branch: 'b', head: 'h' }, workspace: { publish: async () => ({ published: true, mainCommit: 'm' }) } } as Record<string, unknown>), config: vcfg }).c as never), /not consumed/);
+    const vcfg = pub.validate({ resetApprovalTaskId: 'task-r', resetSubject: 'u1', resetHours: '24', resetRevision: 'rev12345' } as never);
+    await assert.rejects(run1('lyam-publish-workspace', mk({ ...s.base, ...({ hasRunBranch: true, publishIntent: { branch: 'b', head: 'h' }, workspace: { publish: async () => ({ published: true, mainCommit: 'm' }) } } as Record<string, unknown>), config: vcfg }).c as never), /not applied by this run/);
   });
   it('an empty administrator list fails closed (the non-admin check would protect nothing)', async () => {
     const s = setup2();
@@ -552,5 +552,16 @@ describe('completion: the approval is consumed once, durably', () => {
     await assert.rejects(run1('lyam-apply-password-reset', mk({ ...flaky, nodeId: 'n1', config: s.cfg }).c as never), /db down/);
     await assert.rejects(run1('lyam-apply-password-reset', mk({ ...flaky, nodeId: 'n2', config: s.cfg }).c as never), /already consumed/);
     assert.equal((await run1('lyam-apply-password-reset', mk({ ...flaky, nodeId: 'n1', config: s.cfg }).c as never)).subject, 'u1');
+  });
+  it('burned approval: after the effect is recorded a second pass through the SAME node is refused with no write; publish/mail need the exact revision', async () => {
+    const s = setup2();
+    await run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n1', config: s.cfg }).c as never);
+    assert.equal(s.writes.length, 1);
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...s.base, nodeId: 'n1', config: s.cfg }).c as never), /burned/);
+    assert.equal(s.writes.length, 1);
+    const pub = externalBlock('lyam-publish-workspace')!;
+    const ctxWith = (rev: string) => mk({ ...s.base, ...({ hasRunBranch: true, publishIntent: { branch: 'b', head: 'h' }, workspace: { publish: async () => ({ published: true, mainCommit: 'm', branch: 'b', sourceHead: 'h' }) } } as Record<string, unknown>), config: pub.validate({ resetApprovalTaskId: 'task-r', resetSubject: 'u1', resetHours: '24', resetRevision: rev } as never) }).c as never;
+    await assert.rejects(run1('lyam-publish-workspace', ctxWith('other-rev')), /not applied by this run with this credential revision/);
+    assert.equal((await run1('lyam-publish-workspace', ctxWith('rev12345'))).published, true);
   });
 });

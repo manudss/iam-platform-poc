@@ -25,7 +25,8 @@ function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?:
   const state = { fa: null as any, blocks: [] as { kind: string; setBy: string }[], passwords: [] as string[], isAdmin: false, tasks: new Map<string, any>() };
   const tasks = {
     request: async (a: any) => { const t = { id: 'task-1', status: 'open', run_id: a.runId, node_id: a.nodeId, kind: a.kind, detail: a.detail, assignee: a.assignee, prevent_self: a.preventSelfApproval }; state.tasks.set(t.id, t); return t; },
-    consume: async (_t: string, id: string, consumer: string) => { const t = state.tasks.get(id); const d = t.detail ?? {}; if (d.consumedBy && d.consumedBy !== consumer) throw new Error('already consumed'); t.detail = { ...d, consumedBy: consumer }; },
+    consume: async (_t: string, id: string, consumer: string) => { const t = state.tasks.get(id); const d = t.detail ?? {}; if (d.appliedBy) throw new Error('burned'); if (d.consumedBy && d.consumedBy !== consumer) throw new Error('already consumed'); t.detail = { ...d, consumedBy: consumer }; },
+    markApplied: async (_t: string, id: string, consumer: string, revision: string) => { const t = state.tasks.get(id); const d = t.detail ?? {}; if (d.consumedBy !== consumer || d.appliedBy) throw new Error('not recorded'); t.detail = { ...d, appliedBy: consumer, appliedRevision: revision }; },
     check: async (_t: string, id: string) => { const t = state.tasks.get(id); return t?.status === 'open' ? { state: 'open', task: t } : { state: 'decided', task: t }; },
   };
   const MAIN = 'main000111222333', HEAD = 'abcdef0123456789';

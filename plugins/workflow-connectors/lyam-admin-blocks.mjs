@@ -1227,7 +1227,7 @@ const lyamProposePasswordReset = {
  * proposal of THIS run, and be bound to exactly this target and this validity; and the target must not be an administrator right now.
  * Used by lyam-apply-password-reset (before the credential is written) and by lyam-send-secret-mail when it carries the approval (before the mail leaves).
  */
-export async function assertResetApproval(ctx, who, taskId, subject, hours, phase = 'later') {
+export async function assertResetApproval(ctx, who, taskId, subject, hours, phase = 'later', revision = '') {
     const tasks = need(ctx.tasks, who), authn = need(ctx.authn, who);
     const id = str(taskId, `${who}.approvalTaskId`, 80);
     const chk = await tasks.check(ctx.tenant, id);
@@ -1243,7 +1243,10 @@ export async function assertResetApproval(ctx, who, taskId, subject, hours, phas
         // Single use, durable: the first apply consumes the approval; the same node resuming is idempotent; any other apply (another node, a loop pass of another run) is refused.
         if (typeof tasks.consume !== 'function') bad(`${who}: this server cannot mark an approval consumed`);
         await tasks.consume(ctx.tenant, id, `${ctx.runId}:${ctx.nodeId}`);
-    } else if (!String(t.detail?.consumedBy ?? '').startsWith(`${ctx.runId}:`)) bad(`${who}: the approval was not consumed by an apply step of this run`);
+    } else {
+        // Bound to the exact credential revision this run wrote: an approval that produced another effect, or none, is refused.
+        if (!String(t.detail?.appliedBy ?? '').startsWith(`${ctx.runId}:`) || !revision || String(t.detail?.appliedRevision) !== String(revision)) bad(`${who}: the approval was not applied by this run with this credential revision`);
+    }
 }
 
 const lyamApplyPasswordReset = {
@@ -1269,6 +1272,8 @@ const lyamApplyPasswordReset = {
         const password = ctx.secrets.reveal(c.passwordRef);
         const r = await ctx.setTemporaryPassword({ id: c.subject, password, hours: Number(c.hours) });
         if (!r?.revision || !(r.expiresAt > 0)) bad('lyam-apply-password-reset: the credential was not confirmed with its first-access rule');
+        // The approval is burned once its effect is recorded: a second pass (a loop through this same node) is refused. A crash between the write and this record leaves it consumed but not applied: only this node may retry; any other step or run needs a NEW approval.
+        await ctx.tasks.markApplied(ctx.tenant, c.approvalTaskId, `${ctx.runId}:${ctx.nodeId}`, String(r.revision));
         ctx.log(`approved reset applied on the run branch for "${c.subject}" (revision ${String(r.revision).slice(0, 8)}, ${c.hours} h); not active until published`);
         return { subject: c.subject, revision: String(r.revision), expiresAt: r.expiresAt, hours: Number(c.hours) };
     },

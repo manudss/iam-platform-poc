@@ -535,18 +535,19 @@ const lyamPublishWorkspace = {
     { key: 'resetApprovalTaskId', label: 'Reset approval task (reset path only)', type: 'string', required: false, help: '{{steps.<propose-reset>.taskId}}: when set, the approval binding and the non-admin status of the account are re-checked immediately before the merge. Needs the account and the validity too.' },
     { key: 'resetSubject', label: 'Reset account (reset path only)', type: 'string', required: false },
     { key: 'resetHours', label: 'Reset validity in hours (reset path only)', type: 'string', required: false },
+    { key: 'resetRevision', label: 'Credential revision written by the apply step (reset path only)', type: 'string', required: false, help: '{{steps.<apply-reset>.revision}}' },
   ],
   outputs: [{ key: 'published', description: 'true only when main holds the branch and the activation is applied' }, { key: 'mainCommit', description: 'The commit of main that was activated' }, { key: 'sourceHead', description: 'The branch head that was published' }],
   validate(cfg) {
-    const t = String(cfg?.resetApprovalTaskId ?? '').trim(), a = String(cfg?.resetSubject ?? '').trim(), h = String(cfg?.resetHours ?? '').trim();
-    if (!t && !a && !h) return {};
-    if (!t || !a || !h) bad('lyam-publish-workspace: the reset guard needs the approval task, the account and the validity together');
-    return { resetApprovalTaskId: str(t, 'lyam-publish-workspace.resetApprovalTaskId', 80), resetSubject: userId(a, 'lyam-publish-workspace.resetSubject'), resetHours: hoursOf(h, 'lyam-publish-workspace.resetHours') };
+    const t = String(cfg?.resetApprovalTaskId ?? '').trim(), a = String(cfg?.resetSubject ?? '').trim(), h = String(cfg?.resetHours ?? '').trim(), rv = String(cfg?.resetRevision ?? '').trim();
+    if (!t && !a && !h && !rv) return {};
+    if (!t || !a || !h || !rv) bad('lyam-publish-workspace: the reset guard needs the approval task, the account, the validity and the revision together');
+    return { resetApprovalTaskId: str(t, 'lyam-publish-workspace.resetApprovalTaskId', 80), resetSubject: userId(a, 'lyam-publish-workspace.resetSubject'), resetHours: hoursOf(h, 'lyam-publish-workspace.resetHours'), resetRevision: str(rv, 'lyam-publish-workspace.resetRevision', 80) };
   },
   async run(ctx) {
     if (ctx.test || ctx.dryRun) { ctx.log('test run: nothing published'); return { published: false }; }
     // Reset path only: the approval binding and the account's non-admin status are re-read right before the merge. The administrator list is server configuration (restart-time), so within one process it cannot change between this check and the merge.
-    if (ctx.config?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', ctx.config.resetApprovalTaskId, ctx.config.resetSubject, ctx.config.resetHours);
+    if (ctx.config?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', ctx.config.resetApprovalTaskId, ctx.config.resetSubject, ctx.config.resetHours, 'later', ctx.config.resetRevision);
     if (!ctx.workspace) bad('lyam-publish-workspace: publication is not available on this server');
     if (!ctx.hasRunBranch || !ctx.publishIntent) bad('lyam-publish-workspace: this run has no working branch to publish (an earlier step must write data)');
     const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head });
@@ -726,7 +727,7 @@ const lyamSendSecretMail = {
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) bad('lyam-send-secret-mail: RESEND_API_KEY is not set on the server (nothing sent)');
     // Reset path only: the approval and the target's non-admin status are re-checked right before the mail leaves.
-    if (c.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-send-secret-mail', c.resetApprovalTaskId, c.account, c.hours);
+    if (c.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-send-secret-mail', c.resetApprovalTaskId, c.account, c.hours, 'later', c.revision);
     const { expiresAt } = await verifySecretMailState(ctx, c);
     const password = ctx.secrets.reveal(c.passwordRef);
     const body = c.text.split('[[password]]').join(password).split('[[expiry]]').join(new Date(expiresAt).toISOString().replace('T', ' ').slice(0, 16) + ' UTC').split('[[hours]]').join(String(Number(c.hours)));

@@ -421,19 +421,31 @@ export class WorkflowStore {
       return this.getTask(id);
     } finally { await m.end(); }
   }
-  /** Marks a DECIDED task as consumed by one consumer (run:node), atomically: the conditional update succeeds for the first consumer only. The same consumer asking again (a resume or retry of the same node) is idempotent; another consumer is refused. */
-  async consumeTask(id: string, consumer: string): Promise<{ ok: boolean; by: string | null }> {
+  /** Claims a DECIDED task for one consumer (run:node), atomically at the SQL level: the conditional update succeeds for the first consumer only (proved on real Dolt with concurrent connections, see task-consume-dolt.spec). The same consumer asking again BEFORE the effect was recorded is idempotent (crash retry); once markTaskApplied ran, nobody can claim again, the same consumer included. */
+  async consumeTask(id: string, consumer: string): Promise<{ ok: boolean; by: string | null; applied: boolean }> {
     const m = await this.meta();
     try {
       let res: unknown;
       try { [res] = await m.query("update workflow_tasks set detail = JSON_SET(COALESCE(detail, JSON_OBJECT()), '$.consumedBy', ?) where id = ? and status = 'decided' and JSON_EXTRACT(COALESCE(detail, JSON_OBJECT()), '$.consumedBy') is null", [consumer, id]); }
-      catch (e) { if (WorkflowStore.noTable(e)) return { ok: false, by: null }; throw e; }
-      if (Number((res as { affectedRows?: number }).affectedRows)) return { ok: true, by: consumer };
+      catch (e) { if (WorkflowStore.noTable(e)) return { ok: false, by: null, applied: false }; if (!WorkflowStore.writeConflict(e)) throw e; res = { affectedRows: 0 }; } // a conflicting committed write by another client: this claim did NOT happen, the re-read below decides
+      if (Number((res as { affectedRows?: number }).affectedRows)) return { ok: true, by: consumer, applied: false };
     } finally { await m.end(); }
     const t = await this.getTask(id);
     const by = typeof t?.detail?.consumedBy === 'string' ? t.detail.consumedBy : null;
-    return { ok: by === consumer, by };
+    const applied = typeof t?.detail?.appliedBy === 'string';
+    return { ok: by === consumer && !applied, by, applied };
   }
+  /** Records that the effect of the consumer was written (with its revision). Only the consumer that claimed the task can, and only once. */
+  async markTaskApplied(id: string, consumer: string, revision: string): Promise<boolean> {
+    const m = await this.meta();
+    try {
+      const [res] = await m.query("update workflow_tasks set detail = JSON_SET(detail, '$.appliedBy', ?, '$.appliedRevision', ?) where id = ? and JSON_UNQUOTE(JSON_EXTRACT(detail, '$.consumedBy')) = ? and JSON_EXTRACT(detail, '$.appliedBy') is null", [consumer, revision, id, consumer]);
+      return Number((res as { affectedRows?: number }).affectedRows) > 0;
+    } catch (e) { if (WorkflowStore.noTable(e) || WorkflowStore.writeConflict(e)) return false; throw e; }
+    finally { await m.end(); }
+  }
+  /** Dolt reports two clients updating the same row as a serialization failure (errno 1213) instead of a 0-row update: the other write won, ours did not happen. */
+  private static writeConflict(e: unknown): boolean { const x = e as { code?: string; errno?: number; message?: string }; return x?.code === 'ER_LOCK_DEADLOCK' || x?.errno === 1213 || /serialization failure/i.test(String(x?.message ?? '')); }
   /** Merges keys into a task's detail JSON (null deletes the key). Used by delegation/escalation to carry the decider pool. */
   async patchTaskDetail(id: string, patch: Record<string, unknown>): Promise<void> {
     const t = await this.getTask(id);

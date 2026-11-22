@@ -114,7 +114,14 @@ export class WorkflowTasksService {
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'decided') throw new ConflictException(`this task is ${t.status}, not decided`);
     const r = await this.store.consumeTask(taskId, String(consumer).slice(0, 120));
+    if (r.applied) throw new ConflictException('this approval already produced its effect: it is burned, a new approval is required');
     if (!r.ok) throw new ConflictException('this approval was already consumed by another step');
+  }
+  /** Records the effect of the consumer (revision written). Refused for any other consumer or a second time. */
+  async markApplied(tenant: string, taskId: string, consumer: string, revision: string): Promise<void> {
+    const t = await this.store.getTask(taskId);
+    if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
+    if (!(await this.store.markTaskApplied(taskId, String(consumer).slice(0, 120), String(revision).slice(0, 80)))) throw new ConflictException('the effect of this approval could not be recorded for this consumer');
   }
 
   /** Decision by an authenticated person. Returns the decided task and kicks the waiting run. */

@@ -21,7 +21,8 @@ const fakeStore = (over: Record<string, unknown> = {}) => ({
   decideTask: async (id: string, actor: string, decision: string, just: string | null, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open' || (t.assignee !== actor && t.delegated_to !== actor)) return null; Object.assign(t, { status: 'decided', decision, justification: just, decided_by: actor, decided_at: at }); return t; },
   decideTaskAs: async (id: string, actor: string, decision: string, just: string | null, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open') return null; Object.assign(t, { status: 'decided', decision, justification: just, decided_by: actor, decided_at: at }); return t; },
   delegateTask: async (id: string, to: string, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open') return null; Object.assign(t, { delegated_to: to, due_at: at, reminded_at: null }); return t; },
-  consumeTask: async (id: string, consumer: string) => { const t = tasks.get(id); if (!t || t.status !== 'decided') return { ok: false, by: null }; const d = (t.detail ?? {}) as Record<string, unknown>; if (!d.consumedBy) { t.detail = { ...d, consumedBy: consumer }; return { ok: true, by: consumer }; } return { ok: d.consumedBy === consumer, by: String(d.consumedBy) }; },
+  consumeTask: async (id: string, consumer: string) => { const t = tasks.get(id); if (!t || t.status !== 'decided') return { ok: false, by: null, applied: false }; const d = (t.detail ?? {}) as Record<string, unknown>; if (!d.consumedBy) { t.detail = { ...d, consumedBy: consumer }; return { ok: true, by: consumer, applied: false }; } const applied = !!d.appliedBy; return { ok: d.consumedBy === consumer && !applied, by: String(d.consumedBy), applied }; },
+  markTaskApplied: async (id: string, consumer: string, revision: string) => { const t = tasks.get(id); const d = (t?.detail ?? {}) as Record<string, unknown>; if (!t || d.consumedBy !== consumer || d.appliedBy) return false; t.detail = { ...d, appliedBy: consumer, appliedRevision: revision }; return true; },
   markTaskReminded: async (id: string, at: string) => { const t = tasks.get(id); if (t) t.reminded_at = at; },
   patchTaskDetail: async (id: string, patch: Record<string, unknown>) => { const t = tasks.get(id); if (!t) return; const d = { ...(t.detail ?? {}) } as Record<string, unknown>; for (const [k, v] of Object.entries(patch)) { if (v === null) delete d[k]; else d[k] = v; } t.detail = d; },
   countRunsStartedBy: async () => 0,
@@ -270,6 +271,10 @@ describe('WorkflowTasksService.consume (durable single use)', () => {
     await s.consume('acme', 'task-c', 'run-1:n1');
     await assert.rejects(s.consume('acme', 'task-c', 'run-1:n2'), /already consumed/);
     await assert.rejects(s.consume('acme', 'task-o', 'run-1:n1'), /not decided/);
+    await s.markApplied('acme', 'task-c', 'run-1:n1', 'rev1');
+    await assert.rejects(s.consume('acme', 'task-c', 'run-1:n1'), /burned/);
+    await assert.rejects(s.markApplied('acme', 'task-c', 'run-1:n1', 'rev2'), /could not be recorded/);
+    await assert.rejects(s.markApplied('acme', 'task-c', 'run-1:n2', 'rev2'), /could not be recorded/);
     await assert.rejects(s.consume('other', 'task-c', 'run-1:n1'), /unknown task/);
   });
 });
