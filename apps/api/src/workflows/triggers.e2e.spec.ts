@@ -197,7 +197,7 @@ describe('workflow start triggers + real Dolt', { skip: !have && 'dolt binary mi
     // Real SignupService with stubbed profile/outbox dependencies; the pending entry is what submit()+confirm() would have stored.
     const profileStub = { putWorking: async () => {} };
     const svc = new SignupService(profileStub as never, users, undefined, events);
-    (svc as unknown as { pending: Map<string, unknown> }).pending.set('ida-hope', { id: 'ida-hope', display_name: 'Ida Hope', email: 'ida@example.invalid', values: {}, salt: 's', hash: 'h', tokenHash: 't', confirmed: true, at: Date.now() });
+    (svc as unknown as { pending: Map<string, unknown> }).pending.set('ida-hope', { tenant: T, id: 'ida-hope', display_name: 'Ida Hope', email: 'ida@example.invalid', values: {}, salt: 's', hash: 'h', tokenHash: 't', confirmed: true, at: Date.now() });
     await svc.approve(T, 'ida-hope', 'demo-alice');
     const run = await waitForRun(signup, 1);
     assert.equal(run.status, 'completed', JSON.stringify(run));
