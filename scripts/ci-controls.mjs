@@ -13,6 +13,10 @@ export const CONTROLS = Object.freeze([Object.freeze({
   id: 'gallery_bootstrap',
   path: 'scripts/gallery-bootstrap.test.mjs',
   introducedBy: '25a0898391422f0da8e9f88c562296ca1f867605',
+}), Object.freeze({
+  id: 'gallery_preferences',
+  path: 'scripts/gallery-preferences.test.mjs',
+  introducedBy: 'aa999916b8e01450bda05a0a7b33261fe79929f6',
 })]);
 const SHA = /^[a-f0-9]{40}$/;
 function git(repo, args) {

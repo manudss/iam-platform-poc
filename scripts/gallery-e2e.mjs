@@ -3,6 +3,7 @@
 import { createRequire } from 'node:module';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import { confirmGalleryPreferencesWrite } from './lib/gallery-preferences.mjs';
 import { assertGalleryLaunchPopup } from './lib/gallery-launch-popup.mjs';
 import { dragGalleryCard, installGalleryPointerTrace } from './lib/gallery-pointer.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core');
@@ -37,7 +38,8 @@ try {
   await page.waitForSelector('.lp-card');
   await page.waitForFunction(()=>[...document.querySelectorAll('.lp-logo')].filter(x=>x.tagName==='IMG').every(x=>x.complete&&x.naturalWidth>0));
   const favourite=page.locator('[data-app=peoplehub] .lp-star');
-  await favourite.click(); await page.waitForFunction(()=>document.querySelector('[aria-label=Favourites] [data-app=peoplehub]'));
+  await confirmGalleryPreferencesWrite(page, () => favourite.click());
+  await page.waitForFunction(()=>document.querySelector('[aria-label=Favourites] [data-app=peoplehub]'));
   await page.reload(); await page.waitForSelector('[aria-label=Favourites] [data-app=peoplehub]');
   await page.fill('[name=applicationSearch]','no-such-application'); await page.getByText('No applications match your search.').waitFor();
   await page.fill('[name=applicationSearch]','');
