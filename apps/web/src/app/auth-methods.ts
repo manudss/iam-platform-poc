@@ -1,11 +1,11 @@
 import { RevealPassword } from './reveal-password';
-import { Component, effect, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal } from '@angular/core';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
 import { Session } from './session';
 import { SessionSettings } from './session-settings';
 import { Availability, Dropped, Entry, addInstance, deleteChain, deleteMethod, entries, instanceCount, minChainLevel, moveInUse, reconcile, removeFromList, syncSolo, useEntry } from './auth-model';
-import { LevelGauge, LevelSelect } from './level-select';
+import { LevelChain, LevelGauge, LevelSelect, levelChains as buildLevelChains } from './level-select';
 
 export interface MethodInstance { id: string; type: string; name: string; enabled: boolean; level: number; config: Record<string, any> }
 export interface Chain { id: string; name: string; enabled: boolean; steps: string[]; level: number; note?: string }
@@ -86,6 +86,7 @@ export class AuthMethodsPage {
   protected locked(t: CatalogueEntry) { return t.instances === 'single' && this.count(t.id) >= 1; }
   protected sim(m: MethodInstance | undefined) { return !!m && m.type === 'email-otp' && (m.config['delivery'] ?? 'demo-outbox') === 'demo-outbox'; }
   protected simEntry(e: Entry) { return e.stepIds.some((id) => this.sim(this.method(id))); }
+  protected levelChains = computed<LevelChain[]>(() => buildLevelChains(this.cfg(), this.analyses()));
   protected analysis(id: string | undefined) { return this.analyses().find((a) => a.id === id); }
   protected sub(e: Entry) { return e.kind === 'chain' ? e.stepIds.map((id) => this.methodName(id)).join(' \u2192 ') : this.typeName(this.method(e.methodId)?.type ?? ''); }
   protected steps(e: Entry) { return e.stepIds.length; }
