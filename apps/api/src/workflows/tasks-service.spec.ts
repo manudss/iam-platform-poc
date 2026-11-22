@@ -112,6 +112,18 @@ describe('WorkflowTasksService (real service, in-memory store)', () => {
     assert.equal(decided.decided_by, 'iga-two', 'the second pool member decided, not only the first');
     await assert.rejects(s.decide('acme', 'task-1', 'iga-lead', 'approved', ''), /already decided/);
   });
+  it('a re-enrollment task: only the admin pool decides, never a non-admin non-assignee', async () => {
+    // The block forces assignee 'admin', resolved to the pool: an arbitrary user id chosen by the
+    // workflow author can never be the decider of this immediate, non-reverted effect.
+    tasks = new Map([['task-re', mkTask({ id: 'task-re', kind: 'reenrollment-request', assignee: 'root', detail: { pool: 'admin', user: 'u1', instance: 'm1:i1', decisions: ['approved', 'refused'] } })]]);
+    runs = new Map([['run-1', { id: 'run-1', started_by: 'alice' }]]);
+    const { s } = svc();
+    await assert.rejects(s.decide('acme', 'task-re', 'mallory', 'approved', ''), /pool|assigned decider/);
+    await assert.rejects(s.decide('acme', 'task-re', 'alice', 'approved', ''), /anti-self-approval/);
+    const decided = await s.decide('acme', 'task-re', 'root', 'approved', 'verified with the user');
+    assert.equal(decided.status, 'decided');
+  });
+
   it('a pool member delegates, the pool policy follows a pool target', async () => {
     tasks = new Map([['task-1', mkTask({ assignee: 'iga-lead', detail: { pool: 'iga' } })]]);
     const { s } = svc();

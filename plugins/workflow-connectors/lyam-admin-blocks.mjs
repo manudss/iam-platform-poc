@@ -16,6 +16,7 @@
  *    set-temporary-password / send-secret-mail trio).
  */
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { WorkflowSuspend } from '../workflows-iga/model.mjs';
 import { APP_CONNECTOR_DDL, build as buildAppConfig, appConnectorConfig } from '../app-connector/handlers.mjs';
 import { csvToRows } from '../csv-connector/handlers.mjs';
@@ -906,6 +907,16 @@ const lyamProposeApplicationRemoval = {
     },
 };
 
+/** Keys whose VALUE must never transit a workflow definition or a task detail: secrets stay in the
+ *  server-side secret store and are referenced by name. */
+const SECRET_KEY_RE = /secret|password|token|private.?key|credential/i;
+/** True when an object carries a non-empty secret-looking value. */
+const hasSecretValue = (o) => {
+    if (Array.isArray(o)) return o.some(hasSecretValue);
+    if (o && typeof o === 'object') return Object.entries(o).some(([k, v]) => SECRET_KEY_RE.test(k) ? (v !== null && v !== undefined && v !== '') : hasSecretValue(v));
+    return false;
+};
+
 // ---- P1 #11: validated CSV and SCIM-like imports ------------------------------------------------------------
 
 // The SoD check, textually identical to the core import flow (apps/api/src/dolt/dolt.service.ts SOD_SQL).
@@ -924,11 +935,19 @@ const importBlock = (type, label, source, parse) => writeBlock(type, label, `REA
     if (!rows.length || rows.length > 500) bad(`${type}: 1 to 500 rows expected (${rows.length} given)`);
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would import ${rows.length} row(s) on the run branch`); return { rows: rows.length, staged: false }; }
     let violations = [];
+    let overwrites = [];
     await ctx.branchWrite(async (db) => {
-        const [rr] = await db.query('select id from roles');
+        const [rr] = await db.query('select id, is_sensitive from roles');
         const roles = new Set((rr ?? []).map((x) => x.id));
         const unknown = rows.filter((x) => !roles.has(x.role));
         if (unknown.length) bad(`${type}: unknown role(s) in the import: ${[...new Set(unknown.map((x) => x.role))].join(', ')}`);
+        // A sensitive role is never granted by a bulk import: it goes through its dedicated guarded path.
+        const sensitive = new Set((rr ?? []).filter((x) => x.is_sensitive).map((x) => x.id));
+        const hit = rows.filter((x) => sensitive.has(x.role));
+        if (hit.length) bad(`${type}: sensitive role(s) refused in a bulk import: ${[...new Set(hit.map((x) => x.role))].join(', ')} (grant them with the dedicated guarded blocks)`);
+        const ids = rows.map((x) => x.identity);
+        const [ex] = await db.query(`select id from identities where id in (${ids.map(() => '?').join(',')})`, ids);
+        overwrites = (ex ?? []).map((x) => x.id);
         for (const r of rows) {
             await db.query('insert into identities (id,display_name,manager_id,department) values (?,?,?,?) on duplicate key update display_name=values(display_name),manager_id=values(manager_id),department=values(department)', [r.identity, r.displayName, r.manager, r.department]);
             await db.query('insert ignore into assignments values (?,?)', [r.identity, r.role]);
@@ -936,8 +955,8 @@ const importBlock = (type, label, source, parse) => writeBlock(type, label, `REA
         const [v] = await db.query(IMPORT_SOD_SQL);
         violations = (v ?? []).map((x) => ({ identity: x.identity, roleA: x.roleA, roleB: x.roleB }));
     }, `workflow: ${source} import ${rows.length} rows`);
-    ctx.log(`${rows.length} row(s) staged on the run branch, ${violations.length} SoD violation(s)`);
-    return { rows: rows.length, ...(skipped !== undefined ? { skipped } : {}), violations, mergeable: violations.length === 0, staged: true };
+    ctx.log(`${rows.length} row(s) staged on the run branch, ${violations.length} SoD violation(s), ${overwrites.length} existing identit(y/ies) overwritten (visible in the publication diff)`);
+    return { rows: rows.length, ...(skipped !== undefined ? { skipped } : {}), overwrites, violations, mergeable: violations.length === 0, staged: true };
 });
 
 const lyamImportCsv = importBlock('lyam-import-csv', 'Import a CSV file (validated)', 'CSV', (payload) => ({ rows: csvToRows(payload) }));
@@ -981,6 +1000,8 @@ const lyamProposeMailTemplate = writeBlock('lyam-propose-mail-template', 'Propos
     const key = str(cfg.key, 'lyam-propose-mail-template.key', 64);
     const subject = str(cfg.subject, 'subject', 200, false), text = str(cfg.text, 'text', 20000, false), html = str(cfg.html, 'html', 50000, false);
     if (!subject && !text && !html) bad('lyam-propose-mail-template: at least one of subject, text or html');
+    // Backstop, not a sanitizer: an override reaches every future mail, so active content is refused outright.
+    if (html && /<\s*script|\bon[a-z]+\s*=|javascript\s*:/i.test(html)) bad('lyam-propose-mail-template.html: active content (script, event handler, javascript:) is refused');
     return { key, subject, text, html };
 }, async (ctx) => {
     const c = ctx.config;
@@ -1051,7 +1072,7 @@ const lyamReadEnrollments = readBlock('lyam-read-enrollments', 'Read the enrollm
 /** A deep redaction for a candidate authn configuration shown in a task: secret-looking values never reach the task detail. */
 const redactSecrets = (o) => {
     if (Array.isArray(o)) return o.map(redactSecrets);
-    if (o && typeof o === 'object') return Object.fromEntries(Object.entries(o).map(([k, v]) => [/secret|password|token|private.?key|credential/i.test(k) ? k : k, /secret|password|token|private.?key|credential/i.test(k) && v !== null && v !== undefined && v !== '' ? '<server-side>' : redactSecrets(v)]));
+    if (o && typeof o === 'object') return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, SECRET_KEY_RE.test(k) && v !== null && v !== undefined && v !== '' ? '<server-side>' : redactSecrets(v)]));
     return o;
 };
 
@@ -1070,7 +1091,12 @@ const lyamProposeAuthnPolicy = {
         const c = ctx.config;
         const tasks = need(ctx.tasks, 'lyam-propose-authn-policy');
         const authn = need(ctx.authn, 'lyam-propose-authn-policy');
+        // No workflow placeholders: the approved object must be exactly the applied object.
+        if (/\{\{|\}\}/.test(c.config)) bad('lyam-propose-authn-policy.config: no workflow placeholders: the policy is applied exactly as approved');
         let input; try { input = JSON.parse(c.config); } catch { bad('lyam-propose-authn-policy.config: not valid JSON'); }
+        // A secret value is never persisted in a definition or a task: it stays in the server-side store, referenced by name.
+        if (hasSecretValue(input)) bad('lyam-propose-authn-policy.config: a secret-looking value was given inline: secrets stay in the server-side store, give a reference, never a value');
+        const configHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
         if (ctx.resumeWait?.taskId) {
             const chk = await tasks.check(ctx.tenant, ctx.resumeWait.taskId);
             const t = chk.task;
@@ -1080,6 +1106,8 @@ const lyamProposeAuthnPolicy = {
             }
             if (t.decision !== 'approved') return { taskId: t.id, decision: t.decision, decidedBy: t.decided_by, applied: false };
             if (ctx.test || ctx.dryRun) return { taskId: t.id, decision: 'approved', decidedBy: t.decided_by, applied: false };
+            // Bind the applied object to the approved one: the hash recorded in the task must match the candidate.
+            if (t.detail?.configHash !== configHash) bad('lyam-propose-authn-policy: the candidate configuration no longer matches the approved one: propose the change again');
             const branch = ctx.runBranch;
             if (!branch) bad('lyam-propose-authn-policy: this run has no data branch');
             await authn.savePolicy(ctx.tenant, { branch, input }); // validates again inside the configuration service
@@ -1089,7 +1117,7 @@ const lyamProposeAuthnPolicy = {
         if (ctx.test || ctx.dryRun) { ctx.log('test run: would propose an authentication policy change to the admin pool'); return { taskId: 'test', decision: 'approved', decidedBy: 'admin', applied: false }; }
         const v = authn.validatePolicy(input);
         if (!v.valid) bad(`lyam-propose-authn-policy: invalid configuration (${(v.errors ?? []).join('; ')})`);
-        const t = await tasks.request({ tenant: ctx.tenant, kind: 'authn-policy-change', title: 'Change the authentication policy', detail: { reason: c.reason, config: redactSecrets(input), decisions: ['approved', 'refused'] }, assignee: 'admin', preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
+        const t = await tasks.request({ tenant: ctx.tenant, kind: 'authn-policy-change', title: 'Change the authentication policy', detail: { reason: c.reason, config: redactSecrets(input), configHash, decisions: ['approved', 'refused'] }, assignee: 'admin', preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
         ctx.log('authentication policy change proposed to the admin pool (reinforced)');
         throw new WorkflowSuspend({ taskId: t.id, kind: 'authn-policy-change' });
     },
@@ -1102,11 +1130,12 @@ const lyamRequestReenrollment = {
         { key: 'user', label: 'User id', type: 'string', required: true },
         { key: 'instance', label: 'Method instance id', type: 'string', required: true },
         { key: 'reason', label: 'Reason', type: 'text', required: true },
-        { key: 'assignee', label: 'Decider', type: 'string', default: 'admin' },
     ],
     outputs: [{ key: 'taskId', description: 'The durable task id' }, { key: 'decision', description: 'approved or refused' }, { key: 'removed', description: 'Whether the enrollment was removed (immediate)' }, { key: 'notified', description: 'Whether the notification was recorded (demo outbox)' }],
     validate(cfg) {
-        return { user: userId(cfg.user, 'lyam-request-reenrollment.user'), instance: idf(cfg.instance, 'lyam-request-reenrollment.instance'), reason: str(cfg.reason, 'lyam-request-reenrollment.reason', 500), assignee: str(cfg.assignee, 'lyam-request-reenrollment.assignee', 64, false) || 'admin' };
+        // The decider is ALWAYS the whole admin pool: the effect is immediate and never reverted, so the
+        // workflow author never routes it to a chosen person.
+        return { user: userId(cfg.user, 'lyam-request-reenrollment.user'), instance: idf(cfg.instance, 'lyam-request-reenrollment.instance'), reason: str(cfg.reason, 'lyam-request-reenrollment.reason', 500), assignee: 'admin' };
     },
     async run(ctx) {
         const c = ctx.config;
@@ -1122,6 +1151,12 @@ const lyamRequestReenrollment = {
             if (t.decision !== 'approved') return { taskId: t.id, decision: t.decision, decidedBy: t.decided_by, removed: false, notified: false };
             if (ctx.test || ctx.dryRun) return { taskId: t.id, decision: 'approved', decidedBy: t.decided_by, removed: false, notified: false };
             if (!ctx.markEffectPending) bad('lyam-request-reenrollment: the durable intent mechanism is not available on this server');
+            // The guards are re-evaluated at APPLY time: the target may have become an administrator or
+            // lost their other factors since the approval.
+            if (need(authn.targetIsAdmin, 'lyam-request-reenrollment')(c.user)) bad(`lyam-request-reenrollment: "${c.user}" is an administrator: an immediate re-enrollment of an administrator is refused`);
+            const live = await authn.enrollments(ctx.tenant, c.user);
+            const others = Object.entries(live ?? {}).filter(([i, st2]) => i !== c.instance && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!st2[k]));
+            if (!others.length && (live ?? {})[c.instance] && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!(live ?? {})[c.instance]?.[k])) bad(`lyam-request-reenrollment: "${c.instance}" is the last enrolled factor of "${c.user}": removing it would lock the user out (they must sign in to re-enroll)`);
             // The state at APPLY time, never the state at proposal time: the factor may already be gone.
             await ctx.markEffectPending({ action: 'reenrollment-request', user: c.user, instance: c.instance });
             const r = await authn.unenroll(ctx.tenant, { runId: ctx.runId, user: c.user, instance: c.instance, reason: c.reason });
@@ -1131,11 +1166,16 @@ const lyamRequestReenrollment = {
             return { taskId: t.id, decision: 'approved', decidedBy: t.decided_by, removed: true, notified: true };
         }
         if (ctx.test || ctx.dryRun) { ctx.log(`test run: would request the re-enrollment of "${c.instance}" for "${c.user}"`); return { taskId: 'test', decision: 'approved', decidedBy: c.assignee, removed: false, notified: false }; }
-        // Proposal-time state, shown to the decider: which factors the instance currently holds.
+        // Proposal-time guards: never an administrator (an immediate, non-reverted effect on an admin
+        // account is refused), never the last enrolled factor (the user must sign in to re-enroll:
+        // removing the only factor would lock them out).
+        if (need(authn.targetIsAdmin, 'lyam-request-reenrollment')(c.user)) bad(`lyam-request-reenrollment: "${c.user}" is an administrator: an immediate re-enrollment of an administrator is refused`);
         const st = await authn.enrollments(ctx.tenant, c.user);
         const cur = (st ?? {})[c.instance];
         const kinds = cur ? ['totp', 'pin', 'email', 'external', 'webauthn'].filter((k) => !!cur[k]) : [];
         if (!kinds.length) bad(`lyam-request-reenrollment: "${c.user}" has no enrollment on "${c.instance}" (nothing to request)`);
+        const others = Object.entries(st ?? {}).filter(([i, s2]) => i !== c.instance && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!s2[k]));
+        if (!others.length) bad(`lyam-request-reenrollment: "${c.instance}" is the last enrolled factor of "${c.user}": removing it would lock the user out`);
         const t = await tasks.request({ tenant: ctx.tenant, kind: 'reenrollment-request', title: `Re-enrollment of "${c.instance}" for "${c.user}"`, detail: { user: c.user, instance: c.instance, reason: c.reason, currentEnrollments: kinds, decisions: ['approved', 'refused'] }, assignee: c.assignee, preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
         ctx.log(`re-enrollment of "${c.instance}" for "${c.user}" proposed to ${c.assignee} (currently: ${kinds.join(', ')})`);
         throw new WorkflowSuspend({ taskId: t.id, kind: 'reenrollment-request' });
@@ -1143,11 +1183,12 @@ const lyamRequestReenrollment = {
 };
 
 const lyamProposePasswordReset = proposeBlock('lyam-propose-password-reset', 'Propose a password reset', 'Opens an approval task for a password reset (anti-self-approval). The block never touches the credential itself: after approval, the following steps do it with the existing guarded trio (lyam-generate-password, lyam-set-temporary-password, lyam-send-secret-mail). What is VERSIONED: the temporary credential, on the run branch until publication. What is IMMEDIATE once published: the forced first-access change (the user chooses their own password at the next sign-in), not reverted by a later publication. The secret mail stays guarded by its real-state check and goes to the demonstration outbox: no real e-mail.',
-    [{ key: 'subject', label: 'User id', type: 'string', required: true }, { key: 'hours', label: 'Temporary validity (hours)', type: 'string', default: '24' }, { key: 'reason', label: 'Reason', type: 'text', required: true }, { key: 'assignee', label: 'Decider', type: 'string', default: 'admin' }],
+    [{ key: 'subject', label: 'User id', type: 'string', required: true }, { key: 'hours', label: 'Temporary validity (hours)', type: 'string', default: '24' }, { key: 'reason', label: 'Reason', type: 'text', required: true }],
     (cfg) => {
         const hours = str(cfg.hours, 'hours', 8, false) || '24';
         if (!/^\d{1,4}(\.\d{1,2})?$/.test(hours) || !(Number(hours) > 0 && Number(hours) <= 720)) bad('hours: more than 0 and at most 720');
-        return { title: `Password reset for ${userId(cfg.subject, 'subject')}`, detail: { subject: userId(cfg.subject, 'subject'), hours, reason: str(cfg.reason, 'reason', 500) }, assignee: str(cfg.assignee, 'assignee', 64, false) || 'admin' };
+        // The decider is ALWAYS the whole admin pool: a credential operation is never routed to a chosen person by the workflow author.
+        return { title: `Password reset for ${userId(cfg.subject, 'subject')}`, detail: { subject: userId(cfg.subject, 'subject'), hours, reason: str(cfg.reason, 'reason', 500) }, assignee: 'admin' };
     });
 
 export const LYAM_ADMIN_BLOCKS = [

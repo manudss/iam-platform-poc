@@ -142,7 +142,7 @@ describe('completion: applications (module validators, disable-before-delete)', 
 
 describe('completion: validated CSV / SCIM-like imports', () => {
   const CSV = 'identity_id,display_name,manager_id,department,role_id\nu1,Alice,,Eng,admin\nu2,Bob,u1,Eng,staff';
-  const csvDb = () => fakeDb([{ match: 'select id from roles', result: [[{ id: 'admin' }, { id: 'staff' }]] }, { match: 'from assignments', result: [[]] }]);
+  const csvDb = () => fakeDb([{ match: 'select id, is_sensitive from roles', result: [[{ id: 'admin', is_sensitive: 0 }, { id: 'staff', is_sensitive: 0 }]] }, { match: 'select id from identities', result: [[]] }, { match: 'from assignments', result: [[]] }]);
   it('lyam-import-csv stages the rows on the run branch and runs the SoD simulation', async () => {
     const f = csvDb();
     const out = await run1('lyam-import-csv', mk({ branchWrite: f.branchWrite as never, config: { payload: CSV } }).c as never);
@@ -155,9 +155,18 @@ describe('completion: validated CSV / SCIM-like imports', () => {
     assert.throws(() => externalBlock('lyam-import-csv')!.validate({ payload: 'a,b\n1,2' } as never), /header must be/);
     const big = 'identity_id,display_name,manager_id,department,role_id\n' + Array.from({ length: 501 }, (_, i) => `u${i},N${i},,D,admin`).join('\n');
     await assert.rejects(run1('lyam-import-csv', mk({ branchWrite: csvDb().branchWrite as never, config: { payload: big } }).c as never), /1 to 500 rows/);
-    const f = fakeDb([{ match: 'select id from roles', result: [[{ id: 'staff' }]] }]);
+    const f = fakeDb([{ match: 'select id, is_sensitive from roles', result: [[{ id: 'staff', is_sensitive: 0 }]] }]);
     await assert.rejects(run1('lyam-import-csv', mk({ branchWrite: f.branchWrite as never, config: { payload: CSV } }).c as never), /unknown role/);
     assert.equal(f.queries.some((q) => q.startsWith('insert into identities')), false);
+  });
+
+  it('lyam-import-csv refuses a sensitive role and reports the identities it would overwrite', async () => {
+    const sensitive = fakeDb([{ match: 'select id, is_sensitive from roles', result: [[{ id: 'admin', is_sensitive: 1 }, { id: 'staff', is_sensitive: 0 }]] }]);
+    await assert.rejects(run1('lyam-import-csv', mk({ branchWrite: sensitive.branchWrite as never, config: { payload: CSV } }).c as never), /sensitive role/);
+    assert.equal(sensitive.queries.some((q) => q.startsWith('insert into identities')), false);
+    const dup = fakeDb([{ match: 'select id, is_sensitive from roles', result: [[{ id: 'admin', is_sensitive: 0 }, { id: 'staff', is_sensitive: 0 }]] }, { match: 'select id from identities', result: [[{ id: 'u1' }]] }, { match: 'from assignments', result: [[]] }]);
+    const out = await run1('lyam-import-csv', mk({ branchWrite: dup.branchWrite as never, config: { payload: CSV } }).c as never);
+    assert.deepEqual(out.overwrites, ['u1']);
   });
 
   it('lyam-import-scim stages one row per (user, role) and reports the skipped ones', async () => {
@@ -202,6 +211,8 @@ describe('completion: mail templates and theme (render/validate before any write
     await assert.rejects(run1('lyam-propose-mail-template', mk({ reads: broken as never, branchWrite: f2.branchWrite as never, config: { key: 'p.welcome', subject: 'x {{oops}}' } }).c as never), /unknown variable/);
     assert.equal(f2.queries.length, 0);
     assert.throws(() => externalBlock('lyam-propose-mail-template')!.validate({ key: 'p.welcome' } as never), /at least one of subject, text or html/);
+    assert.throws(() => externalBlock('lyam-propose-mail-template')!.validate({ key: 'p.welcome', html: '<p onclick="x()">hi</p>' } as never), /active content/);
+    assert.throws(() => externalBlock('lyam-propose-mail-template')!.validate({ key: 'p.welcome', html: '<script>alert(1)</script>' } as never), /active content/);
   });
 
   it('lyam-preview-theme validates a candidate without storing anything', async () => {
@@ -245,13 +256,19 @@ describe('completion: authentication (reads, reinforced policy, immediate re-enr
     const svc = fakeTasks();
     const saved: unknown[] = [];
     const authn = { validatePolicy: () => ({ valid: true, errors: [] }), savePolicy: async (...a: unknown[]) => { saved.push(a); } };
-    const policy = JSON.stringify({ methods: [{ id: 'm1', type: 'totp', secret: 'TOPSECRET' }], chains: [] });
+    const policy = JSON.stringify({ methods: [{ id: 'm1', type: 'totp' }], chains: [] });
     await assert.rejects(run1('lyam-propose-authn-policy', mk({ tasks: svc as never, authn: authn as never, config: { config: policy, reason: 'align' } }).c as never), /waiting for authn-policy-change/);
     const t = [...svc.tasks.values()][0];
     assert.equal(t.kind, 'authn-policy-change');
     assert.equal(t.assignee, 'admin');
     assert.equal(t.preventSelfApproval, true);
-    assert.equal((t.detail as { config: { methods: Array<{ secret: string }> } }).config.methods[0].secret, '<server-side>');
+    assert.equal(typeof (t.detail as { configHash?: string }).configHash, 'string');
+    // An inline secret value is refused outright: secrets stay in the server-side store, referenced by name.
+    const svcSec = fakeTasks();
+    await assert.rejects(run1('lyam-propose-authn-policy', mk({ tasks: svcSec as never, authn: authn as never, config: { config: JSON.stringify({ methods: [{ id: 'm1', type: 'totp', secret: 'TOPSECRET' }] }), reason: 'align' } }).c as never), /server-side store/);
+    assert.equal(svcSec.tasks.size, 0);
+    // No workflow placeholders: the approved object is exactly the applied object.
+    await assert.rejects(run1('lyam-propose-authn-policy', mk({ tasks: svcSec as never, authn: authn as never, config: { config: JSON.stringify({ methods: "{{steps.prev.outputs.methods}}" }), reason: 'align' } }).c as never), /placeholders/);
     // An invalid candidate never opens a task.
     const svc2 = fakeTasks();
     const badAuthn = { validatePolicy: () => ({ valid: false, errors: ['chain references a disabled method'] }) };
@@ -261,17 +278,25 @@ describe('completion: authentication (reads, reinforced policy, immediate re-enr
     svc.approve(t.id as string);
     const out = await run1('lyam-propose-authn-policy', mk({ tasks: svc as never, authn: authn as never, runBranch: 'run-1-branch' as never, config: { config: policy, reason: 'align' }, resumeWait: { taskId: t.id } as never }).c as never);
     assert.equal(out.applied, true);
-    assert.deepEqual(saved[0], ['acme', { branch: 'run-1-branch', input: { methods: [{ id: 'm1', type: 'totp', secret: 'TOPSECRET' }], chains: [] } }]);
+    assert.deepEqual(saved[0], ['acme', { branch: 'run-1-branch', input: { methods: [{ id: 'm1', type: 'totp' }], chains: [] } }]);
+    // A candidate changed after the approval no longer matches the recorded hash: refused.
+    const svc4 = fakeTasks();
+    await assert.rejects(run1('lyam-propose-authn-policy', mk({ tasks: svc4 as never, authn: authn as never, config: { config: policy, reason: 'align' } }).c as never), /waiting/);
+    const t4 = svc4.approve([...svc4.tasks.keys()][0]);
+    const other = JSON.stringify({ methods: [{ id: 'm1', type: 'totp' }, { id: 'm2', type: 'pin' }], chains: [] });
+    await assert.rejects(run1('lyam-propose-authn-policy', mk({ tasks: svc4 as never, authn: authn as never, runBranch: 'run-1-branch' as never, config: { config: other, reason: 'align' }, resumeWait: { taskId: t4.id } as never }).c as never), /no longer matches the approved one/);
+    assert.equal(saved.length, 1);
   });
 
   it('lyam-request-reenrollment proposes only for an enrolled factor; applies immediately with a durable intent; never enrolls for the holder', async () => {
     const svc = fakeTasks();
-    const none = { enrollments: async () => ({}) };
+    const none = { targetIsAdmin: () => false, enrollments: async () => ({}) };
     await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: none as never, config: { user: 'u1', instance: 'm1:i1', reason: 'lost phone' } }).c as never), /no enrollment/);
     assert.equal(svc.tasks.size, 0);
     const effects: string[] = [];
     const authn = {
-      enrollments: async () => ({ 'm1:i1': { totp: true } }),
+      targetIsAdmin: () => false,
+      enrollments: async () => ({ 'm1:i1': { totp: true }, 'm2:i1': { pin: true } }),
       unenroll: async () => { effects.push('unenroll'); return { removed: true }; },
       notify: async (_t: string, m: Record<string, unknown>) => { effects.push(`notify:${m.to}:${m.subjectUser}`); },
     };
@@ -289,10 +314,29 @@ describe('completion: authentication (reads, reinforced policy, immediate re-enr
     await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc3 as never, authn: authn as never, config: { user: 'u1', instance: 'm1:i1', reason: 'lost phone' }, resumeWait: { taskId: t3.id } as never }).c as never), /durable intent mechanism/);
   });
 
+  it('lyam-request-reenrollment refuses an administrator and a last enrolled factor, at proposal and apply time', async () => {
+    const svc = fakeTasks();
+    const adminTarget = { targetIsAdmin: () => true, enrollments: async () => ({ 'm1:i1': { totp: true }, 'm2:i1': { pin: true } }) };
+    await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: adminTarget as never, config: { user: 'root', instance: 'm1:i1', reason: 'r' } }).c as never), /administrator/);
+    assert.equal(svc.tasks.size, 0);
+    const lastFactor = { targetIsAdmin: () => false, enrollments: async () => ({ 'm1:i1': { totp: true } }) };
+    await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: lastFactor as never, config: { user: 'u1', instance: 'm1:i1', reason: 'r' } }).c as never), /last enrolled factor/);
+    assert.equal(svc.tasks.size, 0);
+    // At apply time the target became the last-factor case: refused before the durable intent is recorded.
+    const svc2 = fakeTasks();
+    const twoFactors = { targetIsAdmin: () => false, enrollments: async () => ({ 'm1:i1': { totp: true }, 'm2:i1': { pin: true } }), unenroll: async () => ({ removed: true }), notify: async () => undefined };
+    await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc2 as never, authn: twoFactors as never, config: { user: 'u1', instance: 'm1:i1', reason: 'r' } }).c as never), /waiting/);
+    const t2 = svc2.approve([...svc2.tasks.keys()][0]);
+    let intent = 0;
+    const shrunk = { ...twoFactors, enrollments: async () => ({ 'm1:i1': { totp: true } }) };
+    await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc2 as never, authn: shrunk as never, markEffectPending: (async () => { intent++; }) as never, config: { user: 'u1', instance: 'm1:i1', reason: 'r' }, resumeWait: { taskId: t2.id } as never }).c as never), /last enrolled factor/);
+    assert.equal(intent, 0);
+  });
+
   it('lyam-request-reenrollment does not notify when the factor is already gone at apply time', async () => {
     const svc = fakeTasks();
     let notified = 0;
-    const authn = { enrollments: async () => ({ 'm1:i1': { totp: true } }), unenroll: async () => ({ removed: false }), notify: async () => { notified++; } };
+    const authn = { targetIsAdmin: () => false, enrollments: async () => ({ 'm1:i1': { totp: true }, 'm2:i1': { pin: true } }), unenroll: async () => ({ removed: false }), notify: async () => { notified++; } };
     await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: authn as never, config: { user: 'u1', instance: 'm1:i1', reason: 'lost phone' } }).c as never), /waiting/);
     const t = svc.approve([...svc.tasks.keys()][0]);
     const out = await run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: authn as never, markEffectPending: (async () => undefined) as never, config: { user: 'u1', instance: 'm1:i1', reason: 'lost phone' }, resumeWait: { taskId: t.id } as never }).c as never);
@@ -308,6 +352,7 @@ describe('completion: authentication (reads, reinforced policy, immediate re-enr
     await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svc as never, config: vcfg }).c as never), /waiting for lyam-propose-password-reset/);
     const t = [...svc.tasks.values()][0];
     assert.equal(t.preventSelfApproval, true);
+    assert.equal(t.assignee, 'admin');
     assert.equal((t.detail as { hours: string }).hours, '24');
   });
 });

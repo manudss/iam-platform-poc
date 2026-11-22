@@ -88,6 +88,8 @@ export interface AccountEffects {
  * validated authentication configuration ON THE RUN BRANCH (versioned, reviewed like every other change). */
 export interface AuthnEffects {
   enrollments: (tenant: string, user: string) => Promise<Record<string, unknown>>;
+  /** True when the subject is an administrator (the same list the admin capability uses). */
+  targetIsAdmin: (subject: string) => boolean;
   validatePolicy: (input: unknown) => { valid: boolean; errors: string[] };
   savePolicy: (tenant: string, a: { branch: string; input: unknown }) => Promise<unknown>;
   unenroll: (tenant: string, a: { runId: string; user: string; instance: string; reason: string }) => Promise<{ removed: boolean }>;
@@ -259,8 +261,10 @@ export class WorkflowEngine implements OnModuleInit {
 
   private authnEffects(): AuthnEffects | undefined {
     const authn = this.authn; if (!authn) return undefined;
+    const tasks = this.tasks as WorkflowTasksService | undefined;
     return {
       enrollments: async (tenant, user) => (await authn.enroll.status(tenant, user)) as Record<string, unknown>,
+      targetIsAdmin: (subject) => (tasks?.isAdmin(subject) ?? false),
       validatePolicy: (input) => { try { validateConfig(input); return { valid: true, errors: [] }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } },
       savePolicy: async (tenant, a) => branchContext.run({ branch: a.branch }, () => authn.saveConfig(tenant, a.input)),
       unenroll: async (tenant, a) => {
@@ -269,6 +273,10 @@ export class WorkflowEngine implements OnModuleInit {
         const cur = st[a.instance];
         const enrolled = !!cur && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!cur[k]);
         if (!enrolled) return { removed: false };
+        // Defense in depth (the block guards it too): never remove the LAST enrolled factor — the user
+        // must sign in to re-enroll, so that would lock them out with no self-service way back.
+        const others = Object.entries(st).filter(([i, x]) => i !== a.instance && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!x[k]));
+        if (!others.length) throw new BadRequestException(`unenroll: "${a.instance}" is the last enrolled factor of "${a.user}": removing it would lock the user out`);
         await authn.enroll.remove(tenant, a.user, a.instance);
         this.events?.emit({ type: 'authn.reenrollment-requested', tenant, actor: `workflow:${a.runId}`, subject: a.user, instance: a.instance, reason: a.reason } as never);
         return { removed: true };
