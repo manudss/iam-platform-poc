@@ -585,25 +585,33 @@ const lyamCreateUser = {
   async run(ctx) {
     const c = ctx.config;
     if (!/^[a-z0-9][a-z0-9.-]{0,31}$/.test(c.identity)) bad(`lyam-create-user.identity: "${c.identity}" is not a valid user id (lowercase, digits, dots, hyphens)`);
+    // Execution provenance is server context, never a configurable identity attribute. Historical
+    // rows without it are deliberately ambiguous and must not be adopted automatically.
+    const execution = ['tenant', 'runId', 'nodeId'].map(k => str(ctx[k], `lyam-create-user: server ${k}`, 80));
+    const creationRef = createHash('sha256').update(JSON.stringify(['workflow-create-user:v1', ...execution, c.identity])).digest('hex');
+    let recordedEmail = c.email || null;
     await ctx.branchWrite(async (db) => {
-      // A fresh database may lack the profile columns the users module adds lazily at boot (the
-      // connectors e2e boots only the workflows module). Ensure them here with the same DDL so the
-      // block does not depend on boot order; branch semantics are unchanged (committed with the run branch).
       const [cols] = await db.query('show columns from identities');
       const have = new Set(cols.map((x) => x.Field));
+      const [existing] = await db.query(`select count(*) n, ${have.has('email') ? 'max(email)' : 'null'} email, ${have.has('workflow_creation_ref') ? 'max(workflow_creation_ref)' : 'null'} workflow_creation_ref from identities where id = ?`, [c.identity]);
+      if (Number(existing[0].n)) {
+        if (existing[0].workflow_creation_ref !== creationRef) bad('lyam-create-user: identity already exists without this execution provenance; refusing to adopt or modify it');
+        recordedEmail = existing[0].email || null;
+        ctx.log(`user "${c.identity}" was created by this run and node: no change (idempotent retry)`);
+        return;
+      }
+      // Lazy schema changes happen only on the explicit run-branch write, never on boot or a read.
+      // A foreign existing row is refused above without even adding these columns.
       if (!have.has('email')) await db.query('alter table identities add column email varchar(254) null');
       if (!have.has('login_enabled')) await db.query('alter table identities add column login_enabled boolean not null default true');
       if (!have.has('credential_revision')) await db.query('alter table identities add column credential_revision varchar(40)');
-      const [existing] = await db.query('select count(*) n from identities where id = ?', [c.identity]);
-      if (Number(existing[0].n)) {
-        // Idempotence: a retried step does not fail on an existing user, it adopts the branch state.
-        ctx.log(`user "${c.identity}" already exists on this branch: no change (idempotent retry)`);
-        return;
-      }
-      await db.query('insert into identities (id, display_name, manager_id, department, email, login_enabled, credential_revision) values (?,?,null,?,?,false,null)', [c.identity, c.displayName, c.department || null, c.email || null]);
+      if (!have.has('workflow_creation_ref')) await db.query('alter table identities add column workflow_creation_ref varchar(64) null');
+      // Identity and provenance are one INSERT. A failed/conflicting INSERT cannot leave a separate
+      // ownership claim that a retry could mistake for an identity this run actually created.
+      await db.query('insert into identities (id, display_name, manager_id, department, email, login_enabled, credential_revision, workflow_creation_ref) values (?,?,null,?,?,false,null,?)', [c.identity, c.displayName, c.department || null, c.email || null, creationRef]);
       ctx.log(`user "${c.identity}" (${c.displayName}) created on the run branch, login disabled until review`);
     }, `workflow: create user ${c.identity} (lyam connector)`);
-    return { identity: c.identity, email: c.email || null, dataRow: { table: 'identities', pk: { id: c.identity } } };
+    return { identity: c.identity, email: recordedEmail, dataRow: { table: 'identities', pk: { id: c.identity } } };
   },
 };
 

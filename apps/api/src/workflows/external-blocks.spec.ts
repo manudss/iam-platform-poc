@@ -12,7 +12,7 @@ const node = (id: string, type: string, config: Record<string, unknown> = {}, na
 const ctx = (over: Partial<WfBlockCtx> = {}): WfBlockCtx & { lines: string[] } => {
   const lines: string[] = [];
   return {
-    tenant: 'acme', config: {}, settings: {}, dryRun: false,
+    tenant: 'acme', runId: 'fixture-run', nodeId: 'fixture-node', config: {}, settings: {}, dryRun: false,
     log: (l) => lines.push(l), outputs: {},
     branchWrite: async (fn) => { await fn({ query: async (sql: string) => sql.startsWith('show columns') ? [[{ Field: 'id' }, { Field: 'email' }, { Field: 'login_enabled' }, { Field: 'credential_revision' }], undefined] as [unknown, unknown] : [[{ n: 0 }], undefined] as [unknown, unknown] }); },
     lines,
@@ -159,7 +159,14 @@ describe('contributed block runs (simulated contexts)', () => {
     const cfg = l.validate({ identity: 'martin.camille', displayName: 'Camille Martin', email: 'martin.camille@lyam.demo', department: 'finance' });
     const inserted: unknown[][] = [];
     let exists = 0;
-    const db = { query: async (sql: string, params?: unknown[]) => { if (sql.startsWith('show columns')) return [[{ Field: 'id' }], undefined] as [unknown, unknown]; if (sql.startsWith('select')) return [[{ n: exists }], undefined] as [unknown, unknown]; if (sql.startsWith('insert')) inserted.push(params ?? []); return [{}, undefined] as [unknown, unknown] } };
+    const columns = new Set(['id']);
+    const db = { query: async (sql: string, params?: unknown[]) => {
+      if (sql.startsWith('show columns')) return [[...columns].map(Field => ({ Field })), undefined] as [unknown, unknown];
+      if (sql.startsWith('alter table')) { const field = sql.match(/add column (\w+)/)?.[1]; if (field) columns.add(field); }
+      if (sql.startsWith('select')) return [[{ n: exists, email: inserted[0]?.[3], workflow_creation_ref: columns.has('workflow_creation_ref') ? inserted[0]?.[4] : null }], undefined] as [unknown, unknown];
+      if (sql.startsWith('insert')) inserted.push(params ?? []);
+      return [{}, undefined] as [unknown, unknown];
+    } };
     const c = ctx({ config: cfg, branchWrite: async (fn) => { await fn(db); } });
     const out = await l.run(c);
     assert.equal(out!.identity, 'martin.camille');
