@@ -29,8 +29,8 @@ export class WorkflowReads {
   /** Optional identity columns differ per schema (the demo has neither email nor login_enabled): probe once
    *  per call, never assume. */
   private async identityColumns(c: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }): Promise<Set<string>> {
-    const [r] = await c.query("select column_name from information_schema.columns where table_schema = database() and table_name = 'identities'");
-    return new Set((r as { column_name: string }[]).map((x) => x.column_name));
+    const [r] = await c.query('show columns from identities');
+    return new Set((r as { Field: string }[]).map((x) => x.Field));
   }
 
   async readUser(tenant: string, ref: string, id: string) {

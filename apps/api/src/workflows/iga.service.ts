@@ -90,13 +90,14 @@ export class WorkflowsIgaService {
     const items = (await this.listItems(tenant, campaignId, 'pending')).items.filter((i) => !wanted || wanted.has(i.id));
     // Deadline and escalation: optional. A late review stays visible and escalates ONCE to the named decider; nothing is ever revoked or kept automatically because of lateness.
     const days = input.dueInDays === undefined || input.dueInDays === null || input.dueInDays === '' ? 0 : Number(input.dueInDays);
-    if (!Number.isFinite(days) || days < 0 || days > 90) throw new BadRequestException('dueInDays: a number of days between 1 and 90');
+    if (!Number.isInteger(days) || days < 0 || days > 90) throw new BadRequestException('dueInDays: a number of days between 1 and 90');
     const dueInSeconds = days >= 1 ? Math.floor(days) * 86400 : undefined;
     const escalateTo = input.escalateTo === undefined || input.escalateTo === null || String(input.escalateTo).trim() === '' ? undefined : String(input.escalateTo).trim();
     if (escalateTo && !dueInSeconds) throw new BadRequestException('escalateTo needs dueInDays');
     if (escalateTo) {
       const target = this.tasks.resolveAssignee(escalateTo); // refused now rather than silently ignored at the deadline
       if (!this.tasks.isDeciderAdmin(target)) throw new BadRequestException('escalateTo: "iga", "admin" or a member of the admin or IGA pool');
+      await this.tasks.requireActiveReviewTarget(tenant, target);
     }
     const out: { item: string; task: string | null; assignee: string; managerAbsent?: boolean }[] = [];
     for (const i of items) {
@@ -138,6 +139,7 @@ export class WorkflowsIgaService {
     // Authority is checked BEFORE any task is touched: a refusal here changes nothing.
     if (!this.tasks.isDeciderAdmin(input.startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
     if (!this.tasks.isDeciderAdmin(this.tasks.resolveAssignee(to))) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
+    await this.tasks.requireActiveReviewTarget(tenant, this.tasks.resolveAssignee(to));
     const mine = (await this.store.listTasksByCampaign(tenant, campaignId)).filter((t) => t.kind === 'iga-review' && t.status === 'open' && (t.delegated_to ?? t.assignee) === from);
     const reassigned: string[] = [], refused: { task: string; reason: string }[] = [];
     for (const t of mine) {

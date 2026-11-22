@@ -261,3 +261,15 @@ describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', 
   });
 
 });
+
+describe('lyam-await-run bounded read-only wait', () => {
+  it('test run does not read; complete child succeeds; failed child and timeout never claim completion', async () => {
+    const b = externalBlock('lyam-await-run')!; let calls = 0;
+    const runs = { get: async () => { calls++; return { id: 'child', status: 'completed' }; } };
+    const cfg = { runId: 'child', timeoutSeconds: 1, pollSeconds: 1 };
+    assert.equal((await b.run(mk({ test: true, runs: runs as never, config: cfg }).c))!.finished, false);
+    assert.equal(calls, 0);
+    assert.equal((await b.run(mk({ runs: runs as never, config: cfg }).c))!.finished, true);
+    for (const status of ['failed', 'canceled', 'waiting']) await assert.rejects(b.run(mk({ runs: { get: async () => ({ id: 'child', status }) } as never, config: cfg }).c));
+  });
+});

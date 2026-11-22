@@ -1,10 +1,11 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { ApplicationBus } from '../events/application-bus.service.js';
 // Value import used only inside the lazy getter below (never at module scope): no load-order cycle.
 import { WorkflowEngine } from './engine.js';
+import { WorkflowReads } from './reads.js';
 import { TaskRow, WorkflowStore } from './store.js';
 
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
@@ -28,7 +29,7 @@ export interface TaskCheck { state: 'open' | 'decided'; task: TaskRow }
  */
 @Injectable()
 export class WorkflowTasksService {
-  constructor(private readonly store: WorkflowStore, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly modules?: ModuleRef) {}
+  constructor(private readonly store: WorkflowStore, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly modules?: ModuleRef, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly readsRef?: unknown) {}
 
   private readonly log = new Logger('workflow-tasks');
   private engineWarned = false;
@@ -183,6 +184,14 @@ export class WorkflowTasksService {
     return saved;
   }
 
+  /** Current live existence and login status, never the frozen campaign snapshot. Unavailable reads fail closed. */
+  async requireActiveReviewTarget(tenant: string, target: string): Promise<void> {
+    const reads = this.readsRef as WorkflowReads | undefined;
+    if (!reads) throw new ConflictException('review decider validation unavailable');
+    const user = await reads.readUser(tenant, 'main', target);
+    if (!user || user.loginEnabled !== true) throw new ConflictException('the review decider must exist and have login enabled on main');
+  }
+
   /** True for a subject allowed to administer review deciders: the admin list or the IGA pool. */
   isDeciderAdmin(sub: unknown): boolean { return typeof sub === 'string' && (this.admins().includes(sub) || this.poolMembers('iga').includes(sub)); }
 
@@ -196,6 +205,7 @@ export class WorkflowTasksService {
     const target = this.resolveAssignee(rawTo);
     if (!this.isDeciderAdmin(target)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
     if (target === t.detail?.identity || target === t.detail?.subject) throw new ConflictException('the new decider is the person this task is about: refused');
+    await this.requireActiveReviewTarget(tenant, target);
     const from = t.delegated_to ?? t.assignee;
     await this.store.patchTaskDetail(id, { pool: rawTo === 'admin' || rawTo === 'iga' ? rawTo : null, reassignedFrom: from, reassignedBy: by, reassignedStartedBy: startedBy ?? null, reassignReason: String(reason ?? '').slice(0, 200) });
     const saved = await this.store.delegateTask(id, target, t.due_at ?? now());
@@ -247,9 +257,13 @@ export class WorkflowTasksService {
             const alt = this.poolMembers(escalateTo === 'admin' ? 'admin' : 'iga').find((m) => !about.includes(m));
             if (alt) resolved = alt; else { this.log.warn(`task ${t.id}: the escalation target is the person under review: the task stays with ${t.assignee}`); resolved = null; }
           }
+          if (resolved && t.kind === 'iga-review') {
+            if (!this.isDeciderAdmin(resolved)) throw new ForbiddenException('IGA escalation target is no longer in the admin or IGA pool');
+            await this.requireActiveReviewTarget(t.tenant, resolved);
+          }
           if (resolved && (escalateTo === 'admin' || escalateTo === 'iga')) await this.store.patchTaskDetail(t.id, { pool: escalateTo });
         }
-        catch (e) { this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (${(e as Error).message}): the task stays with ${t.assignee}`); }
+        catch (e) { resolved = null; await this.store.patchTaskDetail(t.id, { escalationError: 'target rejected; task retained with current decider' }); this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (${(e as Error).message}): the task stays with ${t.assignee}`); }
       }
       if (resolved) await this.store.delegateTask(t.id, resolved, t.due_at);
       if (!t.reminded_at) {

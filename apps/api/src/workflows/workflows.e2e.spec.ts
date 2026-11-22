@@ -17,6 +17,7 @@ import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { WorkflowStore } from './store.js';
+import { WorkflowTasksService } from './tasks.js';
 import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
 import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
@@ -505,6 +506,44 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(typeof evidence?.digest === 'string' && (evidence.digest as string).length === 64, 'the closing evidence carries its digest');
     assert.equal((evidence?.totals as Record<string, unknown>)?.approved, 1);
     assert.equal((await ok('GET', `/workflow-tasks?scope=all`) as never as { tasks: { status: string }[] }).tasks.filter((t) => t.status === 'open').length, 0, 'no open task remains');
+  });
+
+  it('late campaign review: real task storage, escalation once, new decider resumes the real engine and closes', async () => {
+    // The minimal SQL fixture predates directory migrations: explicitly provide the active-account
+    // column required by the live escalation check (no stub of the check or reads service).
+    await app.get(VersioningService).at('main', async c => {
+      const [cols] = await c.query('show columns from identities');
+      if (!(cols as { Field: string }[]).some(x => x.Field === 'login_enabled')) await c.query('alter table identities add column login_enabled boolean not null default true');
+      await c.query('update identities set login_enabled = true where id = ?', ['demo-alice']);
+      await c.query("call dolt_add('.')"); await c.query("call dolt_commit('-m','active review target fixture')");
+    });
+
+    const def = (await ok('POST', '/workflows', { name: 'Late recert journey', graph: { nodes: [
+      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Late review', users: 'demo-bob', ref: 'main' } },
+      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga', dueInDays: '1', escalateTo: 'admin' } },
+      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
+    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'close' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const task = await waitTask(started.run.id, 'iga-review');
+    const meta = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam_meta', dateStrings: true });
+    try { await meta.query("update workflow_tasks set due_at = '2020-01-01 00:00:00.000' where id = ?", [task.id]); } finally { await meta.end(); }
+    const tasks = app.get(WorkflowTasksService);
+    await tasks.scanOverdue();
+    const stored = await app.get(WorkflowStore).getTask(task.id);
+    assert.ok(stored?.reminded_at);
+    assert.equal(stored?.status, 'open', 'lateness never decides');
+    assert.equal(stored?.detail?.pool, 'admin');
+    const reminder = stored?.reminded_at;
+    await tasks.scanOverdue();
+    assert.equal((await app.get(WorkflowStore).getTask(task.id))?.reminded_at, reminder);
+    assert.equal((await waitRun(started.run.id, ['waiting'])).run.status, 'waiting');
+    const decided = await call('POST', `/workflow-tasks/${task.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    assert.ok(decided.status < 300, JSON.stringify(decided.body));
+    const done = await waitRun(started.run.id, ['completed']);
+    assert.equal(done.steps.find(s => s.node_id === 'close')?.status, 'done');
+    assert.equal(done.run.branch, null, 'approval-only campaign never modifies access');
   });
 
   it('recertification with denial: revoke on branch, real publication (PR merged), remediation verified, close', async () => {

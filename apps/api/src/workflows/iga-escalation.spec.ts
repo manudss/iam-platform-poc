@@ -28,7 +28,7 @@ function setup(opts: { managerLogin?: boolean | 'unknown' } = {}) {
     delegateTask: async (id: string, to: string, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open') return null; t.delegated_to = to; t.due_at = at; return t; },
   };
   const bus: any = { emit: (e: { type: string; payload: any }) => events.push({ name: e.type, p: e.payload }) };
-  const taskSvc = new WorkflowTasksService(store, bus);
+  const taskSvc = new WorkflowTasksService(store, bus, undefined, { readUser: async (_t: string, ref: string, id: string) => { assert.equal(ref, 'main'); return { id, loginEnabled: true }; } } as never);
   const kicks: string[] = [];
   (taskSvc as any).kick = (id: string) => kicks.push(id);
   const reads: any = { readUser: async (_t: string, _r: string, id: string) => { if (opts.managerLogin === 'unknown' && id === 'boss') throw new Error('unknown identity'); return { id, loginEnabled: opts.managerLogin === false && id === 'boss' ? false : true }; } };
@@ -209,6 +209,29 @@ describe('iga: access changed after the campaign launched (acceptance criterion)
       assert.match(String(r.remediation[0].conflict), /roles changed since the snapshot/);
       assert.equal(r.remediation[0].actions, undefined);
       assert.equal(updates.length, 0);
+    }
+  });
+});
+
+describe('active live review target checks', () => {
+  it('a configured pool member who is missing, disabled or unreadable is refused before reassignment', async () => {
+    for (const state of ['missing', 'disabled', 'unavailable']) {
+      const { iga, taskSvc, tasks } = setup();
+      await iga.openReviewTasks('acme', 'workflow:r', 'iga-1', { assignTo: 'manager' });
+      (taskSvc as any).readsRef = { readUser: async () => { if (state !== 'disabled') throw new Error(state); return { loginEnabled: false }; } };
+      await assert.rejects(iga.reassignReviewTasks('acme', 'workflow:r', 'iga-1', { from: 'boss', to: 'iga', startedBy: 'adm1' }));
+      assert.ok([...tasks.values()].every(t => !t.delegated_to));
+    }
+  });
+  it('at the deadline a disabled or removed pool member is rejected, task remains open and the rejection is visible', async () => {
+    for (const state of ['disabled', 'removed']) {
+      const { iga, taskSvc, tasks } = setup();
+      await iga.openReviewTasks('acme', 'workflow:r', 'iga-1', { assignTo: 'manager', dueInDays: 1, escalateTo: 'igaowner' });
+      for (const t of tasks.values()) t.due_at = '2020-01-01 00:00:00.000';
+      if (state === 'disabled') (taskSvc as any).readsRef = { readUser: async () => ({ loginEnabled: false }) };
+      else process.env.IAM_API_IGA_SUBJECTS = 'another';
+      await taskSvc.scanOverdue();
+      assert.ok([...tasks.values()].every(t => t.status === 'open' && !t.delegated_to && t.detail.escalationError));
     }
   });
 });
