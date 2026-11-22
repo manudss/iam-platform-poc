@@ -20,6 +20,11 @@ import { WorkflowStore } from './store.js';
 import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
 import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
+import { PluginRegistry } from '../plugins/v1/registry.js';
+import { DoltPluginStore } from '../plugins/v1/dolt-stores.js';
+import { authPassword, shippedPlugins } from '../plugins/v1/builtin/index.js';
+import { BusHost, BusHostRef } from '../plugins/v1/bus-host.js';
+import { ApplicationBus } from '../events/application-bus.service.js';
 process.env.IAM_WORKFLOW_REAL_CONNECTIONS = '1';   // real connections are off by default on a server; these specs exercise them with fictional values
 
 process.env.WF_CRON_TICK_MS = '2000'; // cron e2e: detect a matching minute within seconds, not 20 s
@@ -44,6 +49,23 @@ class FakeAuth implements CanActivate {
 }
 
 interface RunView { run: { id: string; status: string; branch: string | null; error: string | null; simulatedOnly: boolean; test?: boolean }; steps: { node_id: string; status: string; simulated: boolean; attempts: number; log: string[]; input?: Record<string, unknown> | null; output?: Record<string, unknown> | null }[] }
+
+// The harness registry is backed by the DOLT runtime store (like a deployment with a durable store): enablement,
+// grants and faults are committed to the base (plugin_runtime_state on main), so an app restart over the same
+// base boots with the plugins already enabled and the boot-time resume scan is the normal path - no manual
+// re-enable. A memory store (the previous harness) lost the enablement at restart, which forced the old restart
+// test to re-enable by hand and re-trigger the scan: an assisted proof, not the production path.
+const durablePlugins = async (v: VersioningService, events: ApplicationBus, busRef: BusHostRef): Promise<PluginRegistry> => {
+  const ds = new DoltPluginStore(v);
+  const r = new PluginRegistry(ds, ds, (e) => console.log(`[plugins] ${JSON.stringify(e)}`), ds);
+  for (const p of [authPassword, ...shippedPlugins().slice(1)]) r.register(p);
+  await r.load();
+  const host = await BusHost.startIfConfigured(async () => r);
+  if (!host) throw new Error('event bus required (test bus)');
+  r.setBus(host.bridge()); host.attachEvents(events); busRef.host = host;
+  return r;
+};
+const durablePluginsFactory = { factory: durablePlugins, inject: [VersioningService, ApplicationBus, BusHostRef] };
 
 const call = async (method: string, path: string, body?: object, o: { token?: string | null; admin?: string | null } = {}) => {
   const token = o.token === undefined ? `${T}:demo-alice` : o.token;
@@ -90,7 +112,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     }
     Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice,admin-two', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
     delete process.env.IAM_WORKSPACE_MODE;
-    const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
+    const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13432);
     // The feature is gated by the workflows-iga plugin: disabled by default, every route 403 until an admin enables it.
     assert.equal((await call('GET', '/workflows')).status, 403, 'workflows must be refused while the plugin is disabled');
@@ -789,13 +811,12 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     } finally { await meta.end(); }
     // REAL restart: the whole Nest application stops and boots again over the SAME Dolt base.
     await app.close();
-    const m2 = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).compile();
+    const m2 = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
     app = m2.createNestApplication(); await app.init(); await app.listen(13432);
-    if ((await call('GET', '/workflows')).status === 403) { await ok('POST', '/plugins/workflows-iga/install', {}); await ok('POST', '/plugins/workflows-iga/enable', {}); await ok('POST', '/plugins/workflow-connectors/install', {}); await ok('POST', '/plugins/workflow-connectors/enable', {}); }
-    // The boot-time resume scan ran before the plugins were re-enabled (its kicks could not resolve the
-    // engine): trigger the same resume again, exactly what a boot with the plugin already enabled does.
-    const { WorkflowEngine } = await import('./engine.js');
-    await app.get(WorkflowEngine).onModuleInit();
+    // The durable state store kept the enablement: the routes answer right after the boot, and the boot-time
+    // resume scan (onModuleInit, run during app.init) recovers the interrupted runs on the NORMAL path - no
+    // manual re-enable, no re-triggered scan.
+    assert.equal((await call('GET', '/workflows')).status, 200, 'the plugin enablement survived the restart (durable store)');
     // B: the resume scan refuses to guess the effect of the cut step: failed closed, marked for reconciliation.
     const vB = await waitRun(runB.run.id, ['failed'], 30000);
     assert.match(String(vB.run.error), /interrupted by a restart/, 'the crashed run fails closed');

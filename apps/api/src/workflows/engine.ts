@@ -286,14 +286,32 @@ export class WorkflowEngine implements OnModuleInit {
     return resolveEngine(() => this.registryFor(run.branch), run.tenant, 'workflows.engine', 'engine.mjs', (mod: { createWorkflowEngine: (deps: EngineDeps) => WorkflowEngineApi }) => mod.createWorkflowEngine(this.deps), this);
   }
 
-  /** Resumes interrupted runs: grouped by the registry that must resolve the provider, kicked individually. */
+  /** Resumes interrupted runs: grouped by the registry that must resolve the provider, kicked individually. A
+   * run whose provider cannot be resolved at boot is retried with backoff, then left with an explicit
+   * reconciliable error: never silently stuck in 'running', never blindly replayed. */
   async onModuleInit() {
     if (!dataReady()) { void awaitDataReady().then(() => this.onModuleInit()).catch(() => this.log.error('resume refused after data migrations')); return; }
     let runs: RunRow[] = [];
     try { runs = await this.store.runningRuns(); } catch (e) { this.log.warn(`resume scan failed: ${(e as Error).message}`); return; }
     for (const r of runs) {
-      try { (await this.engineFor(r)).kick(r.id); } catch (e) { this.log.warn(`run ${r.id} not resumed: ${(e as Error).message}`); }
+      try { (await this.engineFor(r)).kick(r.id); } catch (e) { void this.resumeWithRetry(r, (e as Error).message); }
     }
+  }
+
+  /** Bounded retry of a boot resume that could not resolve the run's engine (provider plugin still loading or
+   * faulted). After the last attempt the run keeps its status but carries an explicit RESUME_FAILED error, so a
+   * stuck run is visible and reconciliable instead of silently 'running' forever. Every attempt only ever calls
+   * kick: execution re-derives from the persisted steps, so no effect is blindly replayed. */
+  private async resumeWithRetry(run: RunRow, firstError: string) {
+    const delays = (process.env.WF_RESUME_RETRY_DELAYS_MS ?? '5000,30000,120000').split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n) && n > 0);
+    let last = firstError;
+    for (const d of delays) {
+      await new Promise((r) => setTimeout(r, d));
+      try { (await this.engineFor(run)).kick(run.id); this.log.log(`run ${run.id} resumed after a retry`); return; } catch (e) { last = (e as Error).message; }
+    }
+    const message = `RESUME_FAILED: engine unavailable after ${delays.length + 1} attempts: ${last}`;
+    this.log.error(`run ${run.id}: ${message}`);
+    try { await this.store.updateRun(run.id, { error: message }); } catch (e) { this.log.error(`run ${run.id}: the resume failure could not be recorded: ${(e as Error).message}`); }
   }
 
   /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately. */
