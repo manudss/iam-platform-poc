@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assertGalleryLaunchPopup } from './lib/gallery-launch-popup.mjs';
-import { dragGalleryCard } from './lib/gallery-pointer.mjs';
+import { dragGalleryCard, installGalleryPointerTrace } from './lib/gallery-pointer.mjs';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 const { chromium } = createRequire(import.meta.url)('playwright-core');
@@ -44,7 +44,7 @@ const pointerFixture = `<!doctype html><title>Fictional Gallery pointer fixture<
 test('real pointer drag scrolls an offscreen handle and still requires a real drop', async () => {
   const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
   try {
-    const page=await browser.newPage({viewport:{width:900,height:600}});await page.setContent(pointerFixture);
+    const page=await browser.newPage({viewport:{width:900,height:600}});await page.setContent(pointerFixture.replace('id=handle','class=lp-handle id=handle'));const trace=await installGalleryPointerTrace(page);
     const handle=page.locator('#handle'),target=page.locator('#target');const from=await handle.boundingBox(),to=await target.boundingBox();
     assert.ok(from.y>600,'fixture deliberately starts with the drag handle below viewport');
     // Original coordinate-only sequence: no auto-scroll, therefore no real pointerdown on the handle.
@@ -52,13 +52,18 @@ test('real pointer drag scrolls an offscreen handle and still requires a real dr
     assert.equal(await page.locator('#result').textContent(),'0');
     await dragGalleryCard(page,handle,target);
     assert.equal(await page.locator('#result').textContent(),'1','a real pointer capture/drop occurred');
+    const captured=await trace.capture(),events=captured.documents.flatMap(x=>x.events);
+    assert.ok(events.some(e=>e.type==='pointerdown'&&e.target.handle&&e.trusted));
+    assert.ok(events.some(e=>e.type==='gotpointercapture'));
+    assert.ok(events.some(e=>e.type==='pointerup'&&e.phase==='bubble'));
+    assert.equal(JSON.stringify(captured).includes('auth'),false,'trace contains no auth values');
     if(process.env.GALLERY_POINTER_SHOTS){await mkdir(process.env.GALLERY_POINTER_SHOTS,{recursive:true});await page.screenshot({path:resolve(process.env.GALLERY_POINTER_SHOTS,'pointer-fixture.png')});}
   } finally {await browser.close();}
 });
 test('an obscured drag target fails rather than clicking through an overlay', async () => {
   const browser=await chromium.launch({executablePath:process.env.CHROME_BIN,args:['--no-sandbox']});
   try {
-    const page=await browser.newPage({viewport:{width:900,height:600}});await page.setContent(pointerFixture);
+    const page=await browser.newPage({viewport:{width:900,height:600}});await page.setContent(pointerFixture.replace('id=handle','class=lp-handle id=handle'));const trace=await installGalleryPointerTrace(page);
     await page.evaluate(()=>{const cover=document.createElement('div');cover.style.cssText='position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.1)';document.body.append(cover)});
     await assert.rejects(dragGalleryCard(page,page.locator('#handle'),page.locator('#target')),/obscured or stale/);
     assert.equal(await page.locator('#result').textContent(),'0');
