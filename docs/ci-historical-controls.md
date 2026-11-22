@@ -1,20 +1,28 @@
 # Historical-source CI controls
 
-The reusable CI workflow receives a target source SHA. Its workflow steps come from the calling revision, which may be newer than that source. A newly added feature-specific test must not be silently absent or incorrectly demanded before its feature existed.
+The reusable CI workflow receives a target source SHA, but its workflow steps come from the calling revision. Newly introduced feature tests must not be silently absent or incorrectly demanded before their feature existed.
 
-The API job now checks out the caller revision with full history first. It runs the current control-policy regression tests and resolves a control plan before checking out the exact target source. The plan is saved as a CI artifact with the target and policy revision.
+A shared `control_policy` job checks out the caller revision with full history, runs the current policy tests, and resolves one control plan. All five existing jobs depend on this job. Its outputs reach both API and demo-image checks. The plan is saved as an artifact with target and policy revision.
 
-## Password-eye control
+## Versioned feature controls
 
-The policy pins the first main release containing the password-eye regression to `fa0acdc00895c96acfe52fb217864de101464b37`.
+The policy pins the first main releases containing these controls:
 
-- A regular, nonempty control script in the target source makes the control mandatory, including earlier backports.
-- An absent script is exempt only when the target is a proven **strict ancestor** of that release. The evidence records this reason explicitly.
-- An absent script at the release or later, an empty file, a symlink, unknown ancestry, unavailable objects or a divergent target fails the policy.
-- Both target and introduction must be in the caller-policy history. Arbitrary unmerged branch qualification is intentionally outside this historical-release path.
+- Password eye: `fa0acdc00895c96acfe52fb217864de101464b37`.
+- Gallery bootstrap: `25a0898391422f0da8e9f88c562296ca1f867605`, whose source addition is commit `e2cab654752620db05681214cf652e4dd50c6903`.
 
-This is not a file-existence skip. New policy tests run even when a historical source legitimately predates the feature. The existing migration, event inventory, API, core, web, compose, browser and security checks remain unchanged. Future feature-specific controls need their own reviewed applicability entry; this change does not infer policy for them automatically.
+A regular, nonempty script in the target makes its control mandatory, including earlier backports. An absent script is exempt only when the target is a proven **strict ancestor** of that release, recorded explicitly in the evidence. A missing script at or after introduction, an empty file, a symlink, unknown ancestry or a divergent target fails closed. Both target and introduction must belong to the caller-policy history.
+
+The Gallery bootstrap script and its matching `docker cp` image-bundle extraction share one guarded step. The seeded Gallery browser end-to-end and popup checks remain mandatory; they are not the bootstrap control and are not removed for historical releases.
+
+## Reference audit
+
+Every referenced `scripts/`, `demo/` and `deploy/` JavaScript or Python source file is checked against the target tree. Only explicit caller-policy tools, the caller-owned automation checkout, and declared legacy-feature exemptions use another source. A new missing reference without a policy entry is an error. A legacy exemption without its matching workflow-step guard is also an error. The Gallery bundle copy must remain under its bootstrap guard.
+
+The audit runs for the requested target and the first-parent boundary before each feature's introduction. This checks legacy wiring even when an ordinary PR run targets a current source with all scripts present. Future feature controls need their own reviewed applicability entry.
 
 ## Limits
 
-A local control-plan test is not a successful remote reusable-workflow execution. The full workflow and historical qualification-only mode still need CI evidence. This policy does not repair Gallery behavior, deployment queue state or a host database difference. It cannot unpause, drain, retry, resolve a failed entry or authorize deployment.
+Local policy and workflow-structure checks do not prove a remote reusable-workflow run with historical input. Full CI and an explicitly authorized qualification-only run remain necessary. Arbitrary unmerged source branches are outside this historical-release path.
+
+This does not repair Gallery behavior, change host scripts/data, resolve a failed queue entry, unpause, drain, retry or authorize deployment. All existing non-feature-specific checks remain in place.
