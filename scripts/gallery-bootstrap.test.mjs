@@ -92,14 +92,14 @@ test('an in-flight gallery response cannot replace edits made after its request 
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, args: ['--no-sandbox'] });
   try {
-    for (const [label, viewport] of [['desktop', { width: 1440, height: 1050 }], ['mobile', { width: 390, height: 844 }]]) {
+    for (const mode of ['editing', 'saved', 'star']) for (const [label, viewport] of [['desktop', { width: 1440, height: 1050 }], ['mobile', { width: 390, height: 844 }]]) {
       const context = await browser.newContext({ viewport });
       const token = 'fixture.' + Buffer.from(JSON.stringify({ sub: 'demo-alice', exp: Math.floor(Date.now() / 1000) + 1800 })).toString('base64url') + '.fixture';
       await context.addInitScript(t => localStorage.setItem('iam.session', t), token);
       let release, releaseLoad, observedLoad; const personal = new Promise(r => { release = r; });
       const delayedLoad = new Promise(r => { releaseLoad = r; });
       const loadStarted = new Promise(r => { observedLoad = r; });
-      let loads = 0;
+      let loads = 0, written;
       await context.route('**/*', async route => {
         const u = new URL(route.request().url());
         if (u.origin !== origin) return route.abort();
@@ -112,6 +112,7 @@ test('an in-flight gallery response cannot replace edits made after its request 
         let data = {};
         if (u.pathname.endsWith('/workspace/personal')) { await personal; data = { branch: 'personal/demo-alice', status: 'created' }; }
         else if (u.pathname.endsWith('/me/access')) data = { subject: 'demo-alice', admin: true, restricted: false, plugins: {} };
+        else if (u.pathname.endsWith('/launchpad/preferences')) { written = route.request().postDataJSON(); }
         else if (u.pathname.endsWith('/launchpad')) {
           const delayed = ++loads > 1;
           if (delayed) { observedLoad(); await delayedLoad; }
@@ -127,20 +128,34 @@ test('an in-flight gallery response cannot replace edits made after its request 
       try {
         await page.goto(origin + '/my-applications'); await page.locator('.lp-card').first().waitFor();
         release(); await loadStarted;
-        // This response is already in flight before the user starts editing.
-        await page.locator('#lp-organise').click();
-        await page.locator('[data-move="second-up"]').click();
-        await page.waitForFunction(() => document.querySelector('[aria-label="Other applications"] .lp-card')?.getAttribute('data-app') === 'second');
+        // This response is already in flight before the user changes preferences.
         const first = () => page.locator('[aria-label="Other applications"] .lp-card').first().getAttribute('data-app');
-        assert.equal(await first(), 'second');
+        if (mode === 'star') {
+          await page.locator('[data-app="second"] .lp-star').click();
+          await page.waitForFunction(() => document.querySelector('[data-app="second"] .lp-star')?.getAttribute('aria-pressed') === 'true' && !document.querySelector('[data-app="second"] .lp-star')?.disabled);
+          assert.deepEqual(written.favourites, ['second']);
+        } else {
+          await page.locator('#lp-organise').click();
+          await page.locator('[data-move="second-up"]').click();
+          await page.waitForFunction(() => document.querySelector('[aria-label="Other applications"] .lp-card')?.getAttribute('data-app') === 'second');
+          if (mode === 'saved') {
+            await page.locator('#lp-save').click(); await page.locator('#lp-organise').waitFor();
+            assert.deepEqual(written.order, ['second', 'fixture']);
+          }
+        }
         releaseLoad();
         await page.getByRole('heading', { name: 'Z refreshed fixture', exact: true }).waitFor();
-        assert.equal(await first(), 'second', 'late pre-edit GET must not overwrite the working order');
-        await page.locator('#lp-save').waitFor();
-        if (shots) { await mkdir(shots, { recursive: true }); await page.screenshot({ path: resolve(shots, label + '-inflight.png'), fullPage: true }); }
-        await page.locator('#lp-cancel').click();
-        await page.locator('#lp-organise').waitFor();
-        assert.equal(await first(), 'fixture', 'Cancel restores the pre-edit order');
+        if (mode === 'star') {
+          await page.locator('[aria-label="Favourites"] [data-app="second"]').waitFor();
+        } else {
+          assert.equal(await first(), 'second', 'late pre-edit GET must not overwrite the working or saved order');
+        }
+        if (shots) { await mkdir(shots, { recursive: true }); await page.screenshot({ path: resolve(shots, label + '-inflight-' + mode + '.png'), fullPage: true }); }
+        if (mode === 'editing') {
+          await page.locator('#lp-save').waitFor(); await page.locator('#lp-cancel').click();
+          await page.locator('#lp-organise').waitFor();
+          assert.equal(await first(), 'fixture', 'Cancel restores the pre-edit order');
+        }
         assert.deepEqual(errors, []);
       } finally { release(); releaseLoad(); await context.close(); }
     }
