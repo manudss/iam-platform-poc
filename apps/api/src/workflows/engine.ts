@@ -3,6 +3,7 @@ import { WorkflowConnections, connectionProvider } from './connections.js';
 import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
 import { forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
+import { validateConfig } from '../authn/config.js';
 import { validateSettings } from '../plugins/v1/settings.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
@@ -51,6 +52,7 @@ interface EngineDeps {
   settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
   connectionFor?: (tenant: string, ref: string, id: string, type: string) => Promise<{ settings: Record<string, unknown>; secret: string }>;
   accounts?: AccountEffects;
+  authn?: AuthnEffects;
   workspace?: WorkspaceEffects;
   secrets?: RunSecrets;
   users?: UserEffects;
@@ -78,6 +80,18 @@ export interface AccountEffects {
   /** The blocks in force on an account, read live (guard before a secret mail). */
   activeBlocks: (tenant: string, subject: string) => Promise<{ kind: string; setBy: string }[]>;
   patchSecurity: (current: Record<string, unknown> | undefined, setting: string, value: string) => Record<string, unknown>;
+}
+/** Authentication effects a block may use. enrollments() is a live READ of the enrollment status (never a
+ * secret). unenroll() and notify() are IMMEDIATE, UNVERSIONED effects: enrollments are shared, unversioned
+ * secrets, so a removal applies at once and is never reverted by a later merge or publication; the
+ * notification goes to the demo outbox (real=false): no real e-mail is sent. savePolicy() writes the
+ * validated authentication configuration ON THE RUN BRANCH (versioned, reviewed like every other change). */
+export interface AuthnEffects {
+  enrollments: (tenant: string, user: string) => Promise<Record<string, unknown>>;
+  validatePolicy: (input: unknown) => { valid: boolean; errors: string[] };
+  savePolicy: (tenant: string, a: { branch: string; input: unknown }) => Promise<unknown>;
+  unenroll: (tenant: string, a: { runId: string; user: string; instance: string; reason: string }) => Promise<{ removed: boolean }>;
+  notify: (tenant: string, m: { to: string; subject: string; text: string; subjectUser: string }) => Promise<void>;
 }
 /** Publication of a run branch to main (the lyam-publish-workspace block). Absent when the server has no publisher: the block then refuses. */
 export interface WorkspaceEffects {
@@ -117,6 +131,7 @@ export class WorkflowEngine implements OnModuleInit {
         return this.connections.resolve(tenant, ref, id, provider);
       },
       accounts: this.accountEffects(),
+      authn: this.authnEffects(),
       workspace: this.workspaceEffects(v),
       secrets: new RunSecrets(),
       users: this.userEffects(),
@@ -239,6 +254,26 @@ export class WorkflowEngine implements OnModuleInit {
           throw e;
         }
       },
+    };
+  }
+
+  private authnEffects(): AuthnEffects | undefined {
+    const authn = this.authn; if (!authn) return undefined;
+    return {
+      enrollments: async (tenant, user) => (await authn.enroll.status(tenant, user)) as Record<string, unknown>,
+      validatePolicy: (input) => { try { validateConfig(input); return { valid: true, errors: [] }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } },
+      savePolicy: async (tenant, a) => branchContext.run({ branch: a.branch }, () => authn.saveConfig(tenant, a.input)),
+      unenroll: async (tenant, a) => {
+        // The state NOW, never a stale proposal: a factor already gone is the wanted end state, not an error.
+        const st = (await authn.enroll.status(tenant, a.user)) as Record<string, Record<string, unknown>>;
+        const cur = st[a.instance];
+        const enrolled = !!cur && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!cur[k]);
+        if (!enrolled) return { removed: false };
+        await authn.enroll.remove(tenant, a.user, a.instance);
+        this.events?.emit({ type: 'authn.reenrollment-requested', tenant, actor: `workflow:${a.runId}`, subject: a.user, instance: a.instance, reason: a.reason } as never);
+        return { removed: true };
+      },
+      notify: async (tenant, m) => { await authn.outbox.send({ tenant, to: m.to, subject: m.subject, text: m.text, subjectUser: m.subjectUser }); },
     };
   }
 

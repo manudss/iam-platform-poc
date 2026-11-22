@@ -498,6 +498,8 @@ export function createWorkflowEngine(deps) {
       outputs,
       // Account effects (block, unblock, security settings patch). A test run never applies them.
       accounts: deps.accounts,
+      // Authentication effects (enrollment reads, immediate unenroll + demo-outbox notify, policy save on the run branch).
+      authn: deps.authn,
       workspace: deps.workspace,
       workflowId: run.definition_id,
       publishIntent,

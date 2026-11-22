@@ -104,6 +104,6 @@ import { AccountBlocksController } from '../../accounts/blocks.controller.js';
       return r;
     },
   }],
-  exports: [AppConnectorService, OidcProviderService, SamlIdpService, PluginRegistry, BranchRegistries, BusHostRef, AuthnService, ProfileService, OrgService, RolesService],
+  exports: [AppConnectorService, OidcProviderService, SamlIdpService, PluginRegistry, BranchRegistries, BusHostRef, AuthnService, ProfileService, OrgService, RolesService, BrandingService, MailTemplatesService],
 })
 export class PluginsV1Module {}

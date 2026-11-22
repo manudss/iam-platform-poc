@@ -32,6 +32,10 @@ export interface WfBlockCtx {
   log: (line: string) => void; outputs: Record<string, Record<string, unknown>>;
   /** Test run: blocks with an immediate effect only log what they would do. */
   test?: boolean; runId?: string; nodeId?: string; accounts?: import('./engine.js').AccountEffects;
+  /** Authentication effects (immediate, unversioned for unenroll/notify; versioned for the policy save). */
+  authn?: import('./engine.js').AuthnEffects;
+  /** Records the durable intent of an immediate external effect right before it fires (a crash leaves the step in review, never a blind retry). */
+  markEffectPending?: (intent: Record<string, unknown>) => Promise<unknown>;
   /** Durable-wait context (the recorded task id), the run starter (anti-self-approval) and the run's base branch. */
   resumeWait?: { taskId?: string; kind?: string; campaignId?: string } | null;
   startedBy?: string; baseBranch?: string; runBranch?: string | null;
