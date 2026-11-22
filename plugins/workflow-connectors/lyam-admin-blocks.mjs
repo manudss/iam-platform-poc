@@ -115,12 +115,17 @@ const lyamRequestApproval = {
 
 const readBlock = (type, label, description, fields, run) => ({ type, family: 'lyam', label, simulated: false, category: 'computed', description, fields, validate: (cfg) => cfg, run });
 
-const lyamReadUser = readBlock('lyam-read-user', 'Read a user', 'Reads one user on a ref: identity, manager, department, email, login state, roles and profile field values.', [
+const lyamReadUser = readBlock('lyam-read-user', 'Read a user', 'Reads one user on a ref: identity, manager, department, login state and roles. PII is opt-in: the email and the profile field values join the output ONLY when explicitly requested (they are persisted in the run history like every output).', [
     { key: 'id', label: 'User id', type: 'string', required: true },
     { key: 'ref', label: 'Ref (base or run)', type: 'select', options: ['base', 'run'], default: 'base' },
+    { key: 'includeEmail', label: 'Also return the email (PII, persisted in the run history)', type: 'select', options: ['no', 'yes'], default: 'no' },
+    { key: 'includeProfile', label: 'Also return the profile field values (PII, persisted)', type: 'select', options: ['no', 'yes'], default: 'no' },
 ], async (ctx) => {
     const u = await need(ctx.reads, 'lyam-read-user').readUser(ctx.tenant, readRef(ctx, ctx.config), userId(ctx.config.id, 'lyam-read-user.id'));
-    ctx.log(`user ${u.id} (${u.displayName}): ${u.roles.length} role(s)`);
+    ctx.log(`user ${u.id}: ${u.roles.length} role(s)`); // no displayName in the logs: not needed, and persisted
+    // Minimal projection by default: the step output is persisted; email/profile values are opt-in.
+    if (String(ctx.config.includeEmail ?? 'no') !== 'yes') delete u.email;
+    if (String(ctx.config.includeProfile ?? 'no') !== 'yes') delete u.profileFields;
     return u;
 });
 
@@ -131,9 +136,12 @@ const lyamSearchUsers = readBlock('lyam-search-users', 'Search users', 'Searches
     { key: 'limit', label: 'Limit (max 200)', type: 'number' },
     { key: 'offset', label: 'Offset', type: 'number' },
     { key: 'ref', label: 'Ref', type: 'select', options: ['base', 'run'], default: 'base' },
+    { key: 'includeEmail', label: 'Also return emails (PII, persisted in the run history)', type: 'select', options: ['no', 'yes'], default: 'no' },
 ], async (ctx) => {
     const r = await need(ctx.reads, 'lyam-search-users').listUsers(ctx.tenant, readRef(ctx, ctx.config), { query: str(ctx.config.query, 'query', 120, false) || undefined, department: str(ctx.config.department, 'department', 80, false) || undefined, manager: str(ctx.config.manager, 'manager', 64, false) || undefined, limit: ctx.config.limit ? num(ctx.config.limit, 'limit', 1, 200) : undefined, offset: ctx.config.offset ? num(ctx.config.offset, 'offset', 0, 100000) : undefined });
     ctx.log(`${r.count} user(s) match`);
+    // Minimal projection by default (the step output is persisted): emails are opt-in.
+    if (String(ctx.config.includeEmail ?? 'no') !== 'yes') for (const u of r.users) delete u.email;
     return r;
 });
 

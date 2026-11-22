@@ -135,6 +135,29 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(!JSON.stringify(view).includes('display_name') && !JSON.stringify(view).includes('email'), 'no identity profile field leaks into a run view');
   });
 
+  it('read steps PERSIST minimal projections: the step store holds no email/profile by default, logs carry no display name', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Read persistence probe', graph: { nodes: [
+      { id: 'r', type: 'lyam-read-user', name: 'read', config: { id: 'demo-bob' } },
+      { id: 's', type: 'lyam-search-users', name: 'search', config: { query: 'demo' } },
+    ], edges: [{ from: 'r', to: 's' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['completed']);
+    // Inspect the PERSISTED rows, not the API view: what stays in the store is what a later reader sees.
+    const meta = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam_meta', dateStrings: true });
+    try {
+      const [rows] = await meta.query('select node_id, output, log from workflow_steps where run_id = ?', [started.run.id]);
+      const byNode = new Map((rows as { node_id: string; output: unknown; log: unknown }[]).map((r) => [r.node_id, r]));
+      const parse = (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v) as Record<string, unknown>;
+      const readOut = parse(byNode.get('r')!.output);
+      assert.ok(!('email' in readOut) && !('profileFields' in readOut), 'read-user persisted output: no email, no profile values');
+      assert.deepEqual(Object.keys(readOut).sort(), ['department', 'displayName', 'id', 'loginEnabled', 'manager', 'roles'].sort());
+      const searchOut = parse(byNode.get('s')!.output);
+      for (const u of searchOut.users as Record<string, unknown>[]) assert.ok(!('email' in u), 'search persisted output: no emails');
+      const logs = JSON.stringify(parse(byNode.get('r')!.log) as unknown);
+      assert.ok(!logs.includes('Bob Demo') && !logs.includes('demo-bob ('), 'the persisted log carries no display name');
+    } finally { await meta.end(); }
+  });
+
   it('refuses an invalid graph (cycle, unknown type) and an unknown field', async () => {
     const bad = (g: object) => call('POST', '/workflows', { name: 'x', graph: g });
     assert.equal((await bad({ nodes: [{ id: 'a', type: 'wait', name: 'a', config: {} }, { id: 'b', type: 'wait', name: 'b', config: {} }], edges: [{ from: 'a', to: 'b' }, { from: 'b', to: 'a' }] })).status, 400);

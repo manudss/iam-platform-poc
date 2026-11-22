@@ -77,6 +77,20 @@ describe('workflow blocks: reads and simulation', () => {
     assert.equal((await externalBlock('lyam-simulate-assignment')!.run(c))!.conflictsCount, 1);
     await assert.rejects(externalBlock('lyam-simulate-assignment')!.run(mk({ reads: reads as never, config: { grant: [{ identity: 'BAD ID!', role: 'a' }], revoke: [] } }).c), /identity/);
   });
+  it('lyam-read-user / lyam-search-users: email and profile values are OPT-IN (minimal projection persisted by default)', async () => {
+    const full = { id: 'emp', displayName: 'E', department: 'finance', manager: null, email: 'e@x.invalid', loginEnabled: true, roles: ['a'], profileFields: { badge: 'blue' } };
+    const reads = { readUser: async () => ({ ...full, profileFields: { ...full.profileFields } }), listUsers: async () => ({ count: 1, users: [{ id: 'emp', displayName: 'E', department: 'finance', manager: null, email: 'e@x.invalid', loginEnabled: true }] }) };
+    const bare = (await externalBlock('lyam-read-user')!.run(mk({ reads: reads as never, config: { id: 'emp' } }).c))!;
+    assert.ok(!('email' in bare) && !('profileFields' in bare), 'default: no email, no profile values in the persisted step output');
+    assert.deepEqual(Object.keys(bare).sort(), ['department', 'displayName', 'id', 'loginEnabled', 'manager', 'roles'].sort());
+    const withPii = (await externalBlock('lyam-read-user')!.run(mk({ reads: reads as never, config: { id: 'emp', includeEmail: 'yes', includeProfile: 'yes' } }).c))!;
+    assert.equal(withPii.email, 'e@x.invalid');
+    assert.deepEqual(withPii.profileFields, { badge: 'blue' });
+    const found = (await externalBlock('lyam-search-users')!.run(mk({ reads: reads as never, config: {} }).c))! as { users: Record<string, unknown>[] };
+    assert.ok(!('email' in found.users[0]), 'search: no email by default');
+    const foundPii = (await externalBlock('lyam-search-users')!.run(mk({ reads: reads as never, config: { includeEmail: 'yes' } }).c))! as { users: Record<string, unknown>[] };
+    assert.equal(foundPii.users[0].email, 'e@x.invalid', 'search: email on explicit request only');
+  });
   it('a read without the reads service refuses instead of pretending', async () => {
     await assert.rejects(externalBlock('lyam-list-roles')!.run(mk({ config: {} }).c), /not available/);
   });
