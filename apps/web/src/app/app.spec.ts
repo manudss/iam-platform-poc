@@ -250,6 +250,33 @@ describe('routing and sign-in guard', () => {
     });
   });
 
+  it('shell does not remount the launchpad when bootstrap selects a personal branch during organisation', async () => {
+    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('demo-alice');
+    let release!: (value: unknown) => void;
+    const personal = new Promise(r => { release = r; });
+    s.api.raw = (async (_m: string, path: string) => {
+      const data = path === '/workspace/personal' ? await personal
+        : path === '@/sso/{t}/launchpad' ? { apps: [{ id: 'demo', name: 'Demo', description: 'Fictional', protocol: 'oidc', url: 'https://example.invalid' }], preferences: { favourites: [], order: [] } }
+        : path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: {} } : [];
+      return { status: 200, data };
+    }) as never;
+    const h = await RouterTestingHarness.create(); await h.navigateByUrl('/my-applications');
+    await new Promise(r => setTimeout(r, 0)); h.detectChanges();
+    const el = h.routeNativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('#lp-organise')!.click(); h.detectChanges();
+    const save = el.querySelector('#lp-save'); expect(save).not.toBeNull();
+    el.querySelector<HTMLButtonElement>('.lp-star')!.click(); h.detectChanges();
+    release({ branch: 'personal/demo-alice', status: 'created' });
+    for (let i = 0; i < 3; i++) { await new Promise(r => setTimeout(r, 0)); h.detectChanges(); }
+    // Component-only tests miss the shell's branchEpoch-keyed router outlet recreation.
+    expect(el.querySelector('#lp-save')).toBe(save);
+    expect(el.querySelector('[aria-label="Favourites"] [data-app="demo"]')).not.toBeNull();
+    s.selectBranch('main'); h.detectChanges();
+    await new Promise(r => setTimeout(r, 0)); h.detectChanges();
+    expect(el.querySelector('#lp-save')).toBeNull();
+    expect(el.querySelector('#lp-organise')).not.toBeNull();
+  });
+
   it('workflows-iga plugin disabled: the Workflows menu entry is hidden and its routes fall back to /plugins', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');

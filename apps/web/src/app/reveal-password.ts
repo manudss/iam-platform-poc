@@ -44,7 +44,7 @@ export class RevealPassword implements OnInit, OnDestroy {
     this.r.setAttribute(this.btn, 'aria-pressed', String(show));
     this.r.setAttribute(this.btn, 'aria-label', show ? 'Hide what you typed' : 'Show what you typed');
     this.r.setAttribute(this.btn, 'title', show ? 'Hide what you typed' : 'Show what you typed');
-    this.btn.textContent = show ? 'Hide' : 'Show';
+    this.btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>' + (show ? '<path d="m3 3 18 18"/>' : '') + '</svg>';
   }
 
   ngOnDestroy() { for (const f of this.off) f(); this.off = []; if (this.el.type !== 'password') this.el.type = 'password'; void this.wrap; }
