@@ -51,9 +51,19 @@ export class WorkflowsIgaService {
     const ref = String(input.ref ?? 'main');
     const scope = (input.scope ?? {}) as { department?: string; role?: string; users?: string[] };
     const listed = Array.isArray(scope.users) && scope.users.length ? scope.users.map(String) : null;
-    const users = listed
-      ? await Promise.all(listed.map((u) => this.reads!.readUser(tenant, ref, u)))
-      : (await this.reads.listUsers(tenant, ref, { department: scope.department, limit: 200 })).users;
+    // The frozen scope must be the COMPLETE population: listUsers caps at 200 rows and reports the real
+    // total in count — a population beyond the cap refuses the campaign, never a silently truncated one.
+    let population: number;
+    let users: { id: string; displayName?: string; roles?: string[] }[];
+    if (listed) {
+      users = await Promise.all(listed.map((u) => this.reads!.readUser(tenant, ref, u)));
+      population = listed.length;
+    } else {
+      const page = await this.reads.listUsers(tenant, ref, { department: scope.department, limit: 200 });
+      if (page.count > page.users.length) throw new BadRequestException(`the scope selects ${page.count} people on this ref, beyond the 200-item campaign cap: narrow the scope (a frozen campaign never starts from a truncated population)`);
+      population = page.count;
+      users = page.users;
+    }
     const scoped: { id: string; displayName: string; roles: string[] }[] = [];
     for (const u of users) {
       const roles = 'roles' in u && Array.isArray((u as { roles?: unknown }).roles) ? (u as { roles: string[] }).roles : (await this.reads.listAssignments(ref, { identity: u.id })).assignments.map((a) => a.role);
@@ -64,7 +74,7 @@ export class WorkflowsIgaService {
     if (scoped.length > 200) throw new BadRequestException('a campaign is capped at 200 items in this poc (narrow the scope)');
     const id = `iga-${randomBytes(6).toString('hex')}`;
     await this.store.igaPutCampaign(
-      { id, tenant, kind, name, ref, status: 'open', scope: scope as Record<string, unknown>, created_by: actor, created_at: now() },
+      { id, tenant, kind, name, ref, status: 'open', scope: { ...scope, population } as Record<string, unknown>, created_by: actor, created_at: now() },
       scoped.map((u) => ({ id: `item-${randomBytes(6).toString('hex')}`, identity: u.id, kind, action: 'review', payload: { roles: u.roles, displayName: u.displayName } })),
     );
     this.emit(tenant, 'iga.campaign-launched', { campaign: id, actor });
