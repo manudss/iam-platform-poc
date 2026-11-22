@@ -140,6 +140,28 @@ try {
   await page.keyboard.press('Escape');
   await shot('2-signed-in-deep-link');
 
+  // ---- fresh personal page with NO working branch (regression: every security component failed with HTTP 400) ----
+  // Right after sign-in the session has no selected branch (the capability gate refused the workspace open).
+  // A fresh full load of My profile must still mount the plugin security components, and a reload must keep
+  // them: the sign-in-only assets route resolves the LIVE configuration when no x-iam-branch is present.
+  const profileAssets = [];
+  page.on('response', (r) => { if (r.url().includes('/assets/')) profileAssets.push(r.url().split('?')[0].split('/').pop() + ':' + r.status()); });
+  for (const round of ['fresh', 'reload']) {
+    if (round === 'fresh') await page.goto(`${BASE}/my-profile`); else await page.reload();
+    await page.waitForSelector('header #user-menu-button');
+    try {
+      await page.waitForFunction(() => { const ms = [...document.querySelectorAll('[data-mount]')]; return ms.length > 0 && ms.every((m) => m.children.length > 0); }, undefined, { timeout: 30000 });
+    } catch (e) {
+      console.log('DIAG profile-' + round + ' url', page.url(), '\nDIAG assets', JSON.stringify(profileAssets), '\nDIAG body', ((await page.textContent('body')) ?? '').slice(0, 800));
+      await shot('diag-profile-' + round).catch(() => undefined); throw e;
+    }
+    const failed = await page.locator('[data-component] p.msg.bad').allTextContents();
+    assert.deepEqual(failed, [], round + ' My profile without a working branch: no component may fail to load; assets=' + JSON.stringify(profileAssets));
+    assert.ok(profileAssets.length > 0 && profileAssets.every((x) => x.endsWith(':200')), round + ': every component asset answered 200: ' + JSON.stringify(profileAssets));
+    await shot('2a-profile-' + round + '-no-branch');
+  }
+  await page.goto(`${BASE}/database/pulls`); await page.waitForSelector('nav a.active[data-nav="/database/pulls"]');
+
   // Workspace administration is fail-closed: without the admin capability token the console asks for it and opens no data branch.
   // (the bar may show the mapped sentence or the raw "admin capability required" of the next guarded call, so match the stable part)
   try { await page.waitForFunction(() => document.body.innerText.includes('admin capability') && document.body.innerText.includes('Choose your working branch')); }
