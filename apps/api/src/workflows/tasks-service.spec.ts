@@ -38,6 +38,21 @@ const svc = (over: Record<string, unknown> = {}) => {
 };
 
 describe('WorkflowTasksService (real service, in-memory store)', () => {
+  it('inbox: scope=all is honored for an admin only - anyone else sees strictly their own tasks', async () => {
+    tasks = new Map([['task-1', mkTask({ assignee: 'boss' })], ['task-2', mkTask({ id: 'task-2', assignee: 'root' })]]);
+    const calls: unknown[] = [];
+    const store = fakeStore({ listTasks: async (_t: string, filter: unknown) => { calls.push(filter); return [...tasks.values()].filter((x) => !(filter as { assignee?: string }).assignee || x.assignee === (filter as { assignee?: string }).assignee); } });
+    const s = new WorkflowTasksService(store as never, undefined, { get: () => ({ kick: () => undefined }) } as never);
+    const mine = await s.inbox('acme', 'boss', 'all');
+    assert.deepEqual(calls[0], { assignee: 'boss' }, 'a non-admin asking scope=all is silently scoped to their own tasks');
+    assert.deepEqual(mine.tasks.map((t) => t.id), ['task-1']);
+    const all = await s.inbox('acme', 'root', 'all');
+    assert.deepEqual(calls[1], {}, 'an admin with scope=all lists everything');
+    assert.equal(all.tasks.length, 2);
+    const def = await s.inbox('acme', 'root', undefined);
+    assert.deepEqual(def.tasks.map((t) => t.id), ['task-2'], 'without scope=all even an admin sees their own tasks');
+  });
+
   it('a decision resumes the awaiting run (kick on the task run id, IGA reviews included)', async () => {
     tasks = new Map([['task-1', mkTask({ run_id: 'run-42' })]]);
     runs = new Map([['run-42', { id: 'run-42', started_by: 'alice' }]]);
