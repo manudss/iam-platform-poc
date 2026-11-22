@@ -414,6 +414,81 @@ const jiraSearchIssues = {
   },
 };
 
+const jiraAuth = (ctx, type) => {
+  const instanceUrl = str(ctx.settings?.jiraInstanceUrl, 'jira instance URL', 200, false);
+  const email = str(ctx.settings?.jiraEmail, 'jira email', 200, false);
+  const apiToken = str(ctx.settings?.jiraApiToken, 'jira api token', 500, false);
+  if (!instanceUrl || !email || !apiToken) bad(`${type}: configure a managed Jira connection first, or keep dryRun on`);
+  return { props: { instanceUrl, email, apiToken } };
+};
+const issueKey = (v, what) => { const x = str(v, what, 40); if (!/\{\{/.test(x) && !/^[A-Z][A-Z0-9_]{1,19}-[0-9]{1,9}$/.test(x)) bad(`${what}: an issue key like KAN-12`); return x; };
+const projectOf = (v) => str(v, 'jira project', 20);
+
+const jiraGetIssue = {
+  type: 'jira-get-issue', family: 'Jira', label: 'Read a Jira issue (Activepieces)', simulated: false,
+  description: 'Reads one issue (status, summary, labels) through the Activepieces jira-cloud piece. Read-only and idempotent. dryRun on (default) = SIMULATED, nothing called.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real call)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+  ],
+  outputs: [{ key: 'key', description: 'Issue key' }, { key: 'status', description: 'Current status name' }, { key: 'summary', description: 'Summary' }, { key: 'labels', description: 'Labels, comma separated' }],
+  validate(cfg) { return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey') }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would read Jira issue ${c.issueKey} (nothing called)`); return { key: null, status: null, summary: null, labels: '', dryRun: true }; }
+    const r = await runPieceAction('@activepieces/piece-jira-cloud', 'get_issue', { auth: jiraAuth(ctx, 'jira-get-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, mapNames: true } });
+    const f = r?.fields ?? {};
+    ctx.log(`Jira issue ${c.issueKey} read (real API call, read-only)`);
+    return { key: String(r?.key ?? ''), status: String(f.status?.name ?? ''), summary: String(f.summary ?? '').slice(0, 200), labels: Array.isArray(f.labels) ? f.labels.join(',') : '' };
+  },
+};
+
+const jiraAddComment = {
+  type: 'jira-add-comment', family: 'Jira', label: 'Comment on a Jira issue (Activepieces)', simulated: false,
+  description: 'Adds a comment to an issue through the Activepieces jira-cloud piece. A real comment is an external effect: it is NOT idempotent (a retry adds another comment) and is not reverted by the run branch, so an interrupted step stops the run for review. dryRun on (default) = SIMULATED.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real comment)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+    { key: 'comment', label: 'Comment', type: 'text', required: true, help: 'Plain text. Never put a password or secret in it.' },
+  ],
+  outputs: [{ key: 'commentId', description: 'Id of the created comment (null in dry-run)' }],
+  validate(cfg) { return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey'), comment: str(cfg.comment, 'comment', 2000) }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would comment on Jira issue ${c.issueKey} (nothing posted)`); return { commentId: null, dryRun: true }; }
+    const r = await runPieceAction('@activepieces/piece-jira-cloud', 'add_issue_comment', { auth: jiraAuth(ctx, 'jira-add-comment'), propsValue: { projectId: c.project, issueId: c.issueKey, comment: c.comment, isADF: false } });
+    const id = String(r?.id ?? '');
+    ctx.log(`Jira comment ${id || '?'} added on ${c.issueKey} (REAL external write, not idempotent)`);
+    return { commentId: id };
+  },
+};
+
+const jiraTransitionIssue = {
+  type: 'jira-transition-issue', family: 'Jira', label: 'Move a Jira issue to another status (Activepieces)', simulated: false,
+  description: 'Applies one workflow transition (numeric transition id from the project workflow) through the Activepieces jira-cloud piece. A real transition is an external effect not reverted by the run branch; an interrupted step stops the run for review. dryRun on (default) = SIMULATED.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real transition)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+    { key: 'transitionId', label: 'Transition ID (numeric)', type: 'string', required: true, help: 'From the issue transitions of the target project. Ids vary by site: never infer one from a status name.' },
+  ],
+  outputs: [{ key: 'transitioned', description: 'true when Jira accepted the transition' }],
+  validate(cfg) {
+    const t = str(cfg.transitionId, 'transitionId', 10);
+    if (!/\{\{/.test(t) && !/^[0-9]{1,10}$/.test(t)) bad('transitionId: the numeric Jira transition id');
+    return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey'), transitionId: t };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would apply transition ${c.transitionId} to ${c.issueKey} (nothing changed)`); return { transitioned: false, dryRun: true }; }
+    await runPieceAction('@activepieces/piece-jira-cloud', 'transition_issue', { auth: jiraAuth(ctx, 'jira-transition-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, transitionId: c.transitionId } });
+    ctx.log(`Jira transition ${c.transitionId} applied to ${c.issueKey} (REAL external write)`);
+    return { transitioned: true };
+  },
+};
+
 // ------------------------------------------------------------------- lyam connector: create a user ----
 const lyamCreateUser = {
   type: 'lyam-create-user',
@@ -859,7 +934,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

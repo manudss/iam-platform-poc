@@ -443,7 +443,7 @@ export function createWorkflowEngine(deps) {
       // The base ref is the approved configuration context, not the lazily created business-write branch.
       const connected = await deps.connectionFor(run.tenant, run.base_branch ?? deps.versioning.defaultBranch, resolved.config.connectionId, node.type);
       settings = connected.settings; secret = connected.secret;
-      const creation = node.type === 'google-sheets-add-row' || node.type === 'jira-create-issue' || (node.type === 'http-request' && !['GET', 'HEAD'].includes(resolved.config.method));
+      const creation = node.type === 'google-sheets-add-row' || node.type === 'jira-create-issue' || node.type === 'jira-add-comment' || node.type === 'jira-transition-issue' || (node.type === 'http-request' && !['GET', 'HEAD'].includes(resolved.config.method));
       if (creation) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
     } else if (!managed) settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
     // A real mail is a non-repeatable external effect: if the process stops before the step is recorded done, the run stops for review (the provider idempotency key makes a deliberate new run return the same mail within 24 hours).
@@ -546,7 +546,7 @@ export function createWorkflowEngine(deps) {
     }
     // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
     if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
-    if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
+    if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'jira-add-comment' && !output?.commentId) || (node.type === 'jira-transition-issue' && output?.transitioned !== true) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
     if (managed && !simulation) { try { output = JSON.parse(safe(JSON.stringify(output ?? {}))); } catch { output = {}; } }
 
     if (output !== undefined && output !== null && typeof output !== 'object') return { value: String(output) };
