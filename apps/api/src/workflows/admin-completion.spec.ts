@@ -347,6 +347,26 @@ describe('completion: authentication (reads, reinforced policy, immediate re-enr
     assert.equal(removed, 0, 'the factor was never touched');
   });
 
+  it('lyam-request-reenrollment task carries detail.subject so the beneficiary is barred from deciding', async () => {
+    const svc = fakeTasks();
+    const authn = { targetIsAdmin: () => false, enrollments: async () => ({ 'm1:i1': { totp: true }, 'm2:i1': { pin: true } }) };
+    await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: authn as never, config: { user: 'u1', instance: 'm1:i1', reason: 'r' } }).c as never), /waiting/);
+    assert.equal(([...svc.tasks.values()][0].detail as { subject: string }).subject, 'u1');
+  });
+
+  it('lyam-propose-password-reset refuses to consume an approval when the target became an administrator', async () => {
+    const vcfg = externalBlock('lyam-propose-password-reset')!.validate({ subject: 'u1', hours: '24', reason: 'r' } as never);
+    const svc = fakeTasks();
+    let isAdmin = false;
+    const authn = { targetIsAdmin: () => isAdmin };
+    await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svc as never, authn: authn as never, reads: { readUser: async () => ({}) } as never, config: vcfg }).c as never), /waiting/);
+    const t = svc.approve([...svc.tasks.keys()][0]);
+    const resume = () => run1('lyam-propose-password-reset', mk({ tasks: svc as never, authn: authn as never, config: vcfg, resumeWait: { taskId: t.id } as never }).c as never);
+    assert.equal((await resume()).decision, 'approved');
+    isAdmin = true;
+    await assert.rejects(resume(), /became an administrator/);
+  });
+
   it('lyam-request-reenrollment does not notify when the factor is already gone at apply time', async () => {
     const svc = fakeTasks();
     let notified = 0;

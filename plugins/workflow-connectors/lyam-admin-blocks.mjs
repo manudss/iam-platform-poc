@@ -1125,7 +1125,7 @@ const lyamProposeAuthnPolicy = {
 
 const lyamRequestReenrollment = {
     type: 'lyam-request-reenrollment', family: 'lyam', label: 'Request a re-enrollment', simulated: false, category: 'real',
-    description: 'After a human approval, asks for a factor to be enrolled again: removes the current enrollment and notifies the user, who re-enrolls themself in self-service. The block NEVER enrolls a factor in the holder\'s place. IMMEDIATE, UNVERSIONED effects: the removal and the notification apply at once and are NOT reverted by a later merge or publication; a durable intent is recorded right before them, so a crash leaves the step in review (EXTERNAL_EFFECT_REVIEW_REQUIRED) rather than retrying blindly. The notification goes to the demonstration outbox (real=false): no real e-mail is sent. Session revocation is deliberately absent: the brief makes it conditional on a safe business service, which does not exist yet. Scope of the lockout guard: \'enrolled\' means a recorded enrollment of one of the five factor kinds — a recorded-but-unusable factor is not distinguished, and removals are serialized per user inside one API process only.',
+    description: 'After a human approval, asks for a factor to be enrolled again: removes the current enrollment and notifies the user, who re-enrolls themself in self-service. The block NEVER enrolls a factor in the holder\'s place. IMMEDIATE, UNVERSIONED effects: the removal and the notification apply at once and are NOT reverted by a later merge or publication; a durable intent is recorded right before them, so a crash leaves the step in review (EXTERNAL_EFFECT_REVIEW_REQUIRED) rather than retrying blindly. The notification goes to the demonstration outbox (real=false): no real e-mail is sent. Session revocation is deliberately absent: the brief makes it conditional on a safe business service, which does not exist yet. Scope of the lockout guard: \'enrolled\' means a recorded enrollment of one of the five factor kinds — a recorded-but-unusable factor is not distinguished, and removals made through THIS workflow are serialized per user inside one API process only: a self-unenrollment by the user or a console removal does not pass through that lock, so there is no global protection against every concurrent removal.',
     fields: [
         { key: 'user', label: 'User id', type: 'string', required: true },
         { key: 'instance', label: 'Method instance id', type: 'string', required: true },
@@ -1176,7 +1176,7 @@ const lyamRequestReenrollment = {
         if (!kinds.length) bad(`lyam-request-reenrollment: "${c.user}" has no enrollment on "${c.instance}" (nothing to request)`);
         const others = Object.entries(st ?? {}).filter(([i, s2]) => i !== c.instance && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!s2[k]));
         if (!others.length) bad(`lyam-request-reenrollment: "${c.instance}" is the last enrolled factor of "${c.user}": removing it would lock the user out`);
-        const t = await tasks.request({ tenant: ctx.tenant, kind: 'reenrollment-request', title: `Re-enrollment of "${c.instance}" for "${c.user}"`, detail: { user: c.user, instance: c.instance, reason: c.reason, currentEnrollments: kinds, decisions: ['approved', 'refused'] }, assignee: c.assignee, preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
+        const t = await tasks.request({ tenant: ctx.tenant, kind: 'reenrollment-request', title: `Re-enrollment of "${c.instance}" for "${c.user}"`, detail: { user: c.user, subject: c.user, instance: c.instance, reason: c.reason, currentEnrollments: kinds, decisions: ['approved', 'refused'] }, assignee: c.assignee, preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
         ctx.log(`re-enrollment of "${c.instance}" for "${c.user}" proposed to ${c.assignee} (currently: ${kinds.join(', ')})`);
         throw new WorkflowSuspend({ taskId: t.id, kind: 'reenrollment-request' });
     },
@@ -1203,7 +1203,12 @@ const lyamProposePasswordReset = {
         if (ctx.resumeWait?.taskId) {
             const chk = await tasks.check(ctx.tenant, ctx.resumeWait.taskId);
             const t = chk.task;
-            if (chk.state === 'decided' && t?.decision) return { taskId: t.id, decision: t.decision, decidedBy: t.decided_by, justification: t.justification ?? '' };
+            if (chk.state === 'decided' && t?.decision) {
+                // Re-checked when the approval is consumed (the following steps do the credential work): a target
+                // promoted to administrator since the proposal is refused, so the approval cannot be used for it.
+                if (t.decision === 'approved' && !(ctx.test || ctx.dryRun) && need(ctx.authn, 'lyam-propose-password-reset').targetIsAdmin(c.subject)) bad(`lyam-propose-password-reset: "${c.subject}" became an administrator since the proposal: the approval is refused, propose again through the console`);
+                return { taskId: t.id, decision: t.decision, decidedBy: t.decided_by, justification: t.justification ?? '' };
+            }
             if (t?.status === 'canceled') bad('lyam-propose-password-reset: the task was canceled');
             throw new WorkflowSuspend({ taskId: ctx.resumeWait.taskId, kind: 'lyam-propose-password-reset' });
         }
