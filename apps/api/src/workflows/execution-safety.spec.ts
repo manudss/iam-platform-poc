@@ -91,3 +91,24 @@ describe('external execution safety boundary',()=>{
   });
 
 });
+
+
+describe('badge ticket then sheet trace recovery', () => {
+  it('a failed trace cannot recreate the already persisted ticket on restart', async () => {
+    let tickets = 0, writes = 0;
+    const jira = mock.method(externalBlock('jira-create-issue')!, 'run', async () => { tickets++; return { key: 'KAN-99' }; });
+    const sheet = mock.method(externalBlock('google-sheets-update')!, 'run', async () => { writes++; throw Error('sheet response lost'); });
+    const real = { executionMode: 'real', connectionId: 'conn-test', realConfirmed: true };
+    try {
+      const h = await settle(makeHarness({ nodes: [node('ticket', 'jira-create-issue', { ...config, ...real }), node('trace', 'google-sheets-update', { source: 'google', spreadsheetId: 'fictional-sheet', sheetId: 7, keyColumn: 'email', keyValue: 'fiction@example.test', column: 'ticket', value: '{{steps.ticket.key}}', ...real })], edges: [{ from: 'ticket', to: 'trace' }] }));
+      assert.equal(h.row.status, 'failed'); assert.equal(st(h, 'ticket').status, 'done');
+      assert.equal(st(h, 'trace').error, 'External action failed; check connection and provider status.');
+      // A cell set is repeatable. Requeue the failed step in the SAME run, not a new run.
+      assert.equal(tickets, 1); assert.equal(writes, 1);
+      sheet.mock.restore();
+      const recovered = mock.method(externalBlock('google-sheets-update')!, 'run', async () => { writes++; return { updated: true }; });
+      try { Object.assign(st(h, 'trace'), { status: 'pending', error: null }); h.row.status = 'queued'; await settle(h); assert.equal(h.row.status, 'completed'); assert.equal(tickets, 1); assert.equal(writes, 2); }
+      finally { recovered.mock.restore(); }
+    } finally { jira.mock.restore(); sheet.mock.restore(); }
+  });
+});

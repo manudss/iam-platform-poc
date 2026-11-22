@@ -38,3 +38,24 @@ export async function writeGoogleRow(auth, source, values, rowNumber, run = runP
     auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, first_row_headers: true, as_string: true, values: mapped, ...(rowNumber === undefined ? {} : { row_id: rowNumber }) },
   });
 }
+
+/** Resolve a unique stable row key and every required header from one fresh raw snapshot.
+ * Google update_row is positional: concurrent edits between this read and the write still require an operator freeze.
+ */
+export function keyedRow(snapshot, keyColumn, keyValue, requiredColumns = []) {
+  const header = snapshot.find(r => r.rowNumber === 1);
+  const wanted = [...new Set([keyColumn, ...requiredColumns])];
+  const letters = namedColumns(header, Object.fromEntries(wanted.map(k => [k, 'check'])));
+  const keyLetter = Object.keys(namedColumns(header, { [keyColumn]: 'check' }))[0];
+  const matches = snapshot.filter(r => r.rowNumber > 1 && String(r.values[keyLetter] ?? '') === String(keyValue));
+  if (!keyValue || matches.length !== 1) throw new Error('Google Sheet key must match exactly one row');
+  return { rowNumber: matches[0].rowNumber, header, letters };
+}
+export async function preflightGoogleRow(auth, source, keyColumn, keyValue, requiredColumns, run = runPieceAction) {
+  return keyedRow(await readGoogleRows(auth, source, false, run), keyColumn, keyValue, requiredColumns).rowNumber;
+}
+export async function writeGoogleRowByKey(auth, source, values, keyColumn, keyValue, run = runPieceAction) {
+  const row = keyedRow(await readGoogleRows(auth, source, false, run), keyColumn, keyValue, Object.keys(values));
+  const mapped = namedColumns(row.header, values);
+  return run(PACKAGE, 'update_row', { auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, first_row_headers: true, as_string: true, values: mapped, row_id: row.rowNumber } });
+}

@@ -5,7 +5,7 @@ import { externalBlock, validateGraph } from './model.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
 
-// The two official badge templates carry the texts Emmanuel validated (WhatsApp 21 Nov 14:36, plan page revision of 13:41).
+// French preparation based on the demo plan. Runtime substitutions and wording adaptations still need rendered-message review before sending.
 // Nothing here sends or creates anything: validation only.
 const tpl = (id: string) => OFFICIAL_TEMPLATES.find((t) => t.id === id)!;
 const node = (t: string, id: string) => (tpl(t).nodes as any[]).find((n) => n.id === id);
@@ -42,6 +42,13 @@ describe('badge templates: validated texts and ticket label', () => {
     assert.deepEqual(j.validate({ ...base, labels: 'a, b ,a' }).labels, ['a', 'b']);
     assert.throws(() => j.validate({ ...base, labels: 'two words' }), /labels/);
     assert.throws(() => j.validate({ ...base, labels: Array.from({ length: 11 }, (_, i) => `l${i}`).join(',') }), /labels/);
+  });
+  it('preflights required headers and uses stable keys instead of trigger row numbers', () => {
+    const pre = node('badge-request-from-sheet', 'preflight').config;
+    assert.equal(pre.requiredColumns, 'email,ticket,badge,cree');
+    for (const id of ['trace', 'mark']) { const c = node('badge-request-from-sheet', id).config; assert.equal(c.keyColumn, 'email'); assert.equal(c.rowNumber, undefined); }
+    const final = node('badge-done-temporary-password', 'mark').config; assert.equal(final.keyColumn, '{{steps.resolve.keyColumn}}'); assert.equal(final.rowNumber, undefined);
+    const edges = tpl('badge-request-from-sheet').edges as any[]; assert.ok(edges.some(e => e.from === 'preflight' && e.to === 'join'));
   });
   it('phase 1 writes the ticket key to a configurable column, before cree=ok', () => {
     const tr = node('badge-request-from-sheet', 'trace');

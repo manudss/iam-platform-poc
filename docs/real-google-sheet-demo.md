@@ -97,3 +97,19 @@ These changes update the template catalogue, not workflow definitions already in
 ### Target Jira issue type
 
 For the configured demo site, a read-only check of KAN creation metadata on 22 November 2026 found Task = `10003` and the `labels` field available. The badge template uses this site-specific example. The generic Jira create block has no guessed issue-type default. Check the target project metadata and set `issueTypeId` before any real run, especially when reusing the template on another site. This metadata check is not a ticket creation test.
+
+### Stable-key writes, preflight and recovery
+
+The badge templates no longer write using the row number saved by the trigger or an earlier lookup. Both phase 1 writes (`trace`, `mark`) and the final phase 2 marker resolve the unique row key immediately before writing. Missing/duplicate keys or headers stop the write, without positional fallback. Phase 1 begins with a read-only `preflight` node that requires exactly one row and the configured `email`, `ticket`, final-marker and `cree` headers before any account or ticket effect. If you change the key or final marker header in a copied workflow, change the preflight configuration too. A header removed later still fails at write time.
+
+This is NOT an atomic compare-and-set. The installed Google action ultimately writes by row number. Re-resolving the key handles a sort between the trigger and the write, and between failed attempts, but cannot protect against a concurrent sort in the last read/write gap. Keep sorting/row insertion/deletion and manual edits paused during the demo run. Without that operational freeze this integration is not qualified for concurrent editing. Do not describe the flow as fully protected from concurrent Google edits.
+
+After a failed trace, retry the failed step in the SAME persisted run. The successful ticket step and its key remain persisted and are not re-run. Starting a new run is not a safe retry and can create another ticket. An uncertain Jira creation remains held for provider reconciliation by the existing engine guard. A Sheets cell set is repeatable, resolving the key afresh on each attempt.
+
+During first real qualification, inspect the created ticket and confirm `badge-demo` is actually present before expecting the Done watcher. The metadata check and no-network argument test do not prove a provider accepted the label. Do not create a second ticket merely to retry a failed trace.
+
+### Wording and approval boundary
+
+The template is preparation, not evidence of an approved send. Before the first real ticket/mail, review the complete rendered content and approved recipient with the owner. Compared with the plan's example for Camille Martin, the template substitutes the actual first/last name and actual department/role in the ticket, uses a generic mail greeting, inserts the linked account identifier, and displays recorded hours plus exact expiry. The subject remains French. The expiry addition, greeting change and actual column-value substitutions are adaptations, not verbatim approved text. Comments or tests saying the wording follows the plan do not authorize external communication.
+
+Changing these plugin blocks also requires the normal plugin signature generation and deployment checks. No signature, simulation, connection, recipient or publication guard is bypassed by the catalogue changes.
