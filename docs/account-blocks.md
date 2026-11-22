@@ -33,8 +33,8 @@ On by default with the owner's starting values: 5 failures in 15 minutes lock th
 
 ## Levels
 
-- Administration pages: `adminMinLevel` (and optional `adminMaxAgeSeconds`). Below it, a 403 `{code: 'step-up-required', requiredLevel, currentLevel}`. 0 turns the rule off. Demo target: 5.
-- Applications: `appLevels.<app id>.minLevel` (demo target: finance 8), checked before consent and when the request is completed. The interaction details carry `assurance`, with the chains the person can use.
+- Administration pages: `adminMinLevel` (and optional `adminMaxAgeSeconds`). Below it, a 403 `{code: 'step-up-required', requiredLevel, currentLevel}`. 0 turns the rule off (the level selector offers "No minimum"). `adminMaxAgeSeconds` is shown as "Ask the administrator to sign in again after (minutes)": how recent the sign-in must be, not a second level; 0 means no age limit for administrator sign-in only. Demo target: 5.
+- Applications: `appLevels.<app id>.minLevel` (demo target: finance 8), set in the application's edit form (Applications) with the same level selector as the sign-in methods, and shown read-only in Account protection with a link to the application. The edit form writes only that application's `minLevel` (`PUT tenants/:t/security/app-level/:appId`, one write on the working branch; its `maxAgeSeconds`, the other applications and the other settings are untouched; level 0 removes the minimum). Checked before consent and when the request is completed. The interaction details carry `assurance`, with the chains the person can use.
 - `GET tenants/:t/me/step-up?level=N` lists only chains that reach the level, have no simulated step and that the person has set up. Never a weaker one.
 - The level of a federated provider is a value an administrator declares. Lyam cannot measure a provider's safety.
 - Raising `adminMinLevel` is refused unless the person saving holds that level in their current session, and a chain reaches it, so the change cannot lock them out.
@@ -77,7 +77,7 @@ If a failure comes after the journal started (a write error, a crash), the journ
 
 No seed change and no secret in the repository. The shipped chains already contain `password-then-authenticator` (level 8) and the passkey chains (level 9); every other chain stays below 8 or has a simulated step. The demo goes like this:
 1. Before the demo, the demo account signs in and enrols an authenticator app from its profile (live, the secret never leaves the person's device).
-2. An administrator sets `appLevels.finance = 8` on a working branch (Account protection, Settings) and applies it. Apply refuses it if no chain could reach 8.
+2. An administrator sets `appLevels.finance = 8` on a working branch (Applications, edit the application, minimum sign-in level) and applies it. Apply refuses it if no chain could reach 8.
 3. Opening the finance tile (marked "Level 8" on the launchpad) from a level 5 session leads to the re-sign-in page, which offers only the chains that reach 8 and that this person has set up. After the authenticator step the person lands back in the application.
 `authn.spec.ts` pins the chain facts above, `step-up.spec.ts` the page behaviour, `app-assurance.spec.ts` the checks.
 

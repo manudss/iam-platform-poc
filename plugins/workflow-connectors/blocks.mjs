@@ -2,7 +2,7 @@ import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { runPieceAction } from './adapter.mjs';
-import { serviceAccountAuth, readGoogleRows, writeGoogleRow } from './sheets-api.mjs';
+import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
@@ -207,6 +207,7 @@ const sheetsRead = {
     { key: 'mode', label: 'Mode', type: 'select', options: ['all-rows', 'find-row'], default: 'all-rows', required: true },
     { key: 'columnName', label: 'Column to search (find-row)', type: 'string' },
     { key: 'searchValue', label: 'Value to find (find-row)', type: 'string' },
+    { key: 'requiredColumns', label: 'Required unique headers (comma separated)', type: 'string', help: 'Preflight before effects: fail if a required header is absent or duplicated. With find-row also requires one matching row.' },
   ],
   outputs: [
     { key: 'rows', description: 'Matching rows as JSON (values keyed by column)' },
@@ -219,6 +220,8 @@ const sheetsRead = {
     if (out.mode !== 'all-rows' && out.mode !== 'find-row') bad('mode: all-rows or find-row');
     out.columnName = str(cfg.columnName, 'columnName', 60, out.mode === 'find-row');
     out.searchValue = str(cfg.searchValue, 'searchValue', 200, out.mode === 'find-row');
+    out.requiredColumns = str(cfg.requiredColumns, 'requiredColumns', 1000, false);
+    if (out.requiredColumns && out.mode !== 'find-row') bad('requiredColumns needs find-row mode');
     return out;
   },
   async run(ctx) {
@@ -233,6 +236,7 @@ const sheetsRead = {
     }
     const auth = googleAuth(ctx.settings);
     if (!auth) bad('google-sheets-read: configure a managed Google Sheets connection first');
+    if (c.requiredColumns) await preflightGoogleRow(auth, c, c.columnName, c.searchValue, c.requiredColumns.split(',').map(s => s.trim()).filter(Boolean));
     let rows = await readGoogleRows(auth, c);
     if (c.mode === 'find-row') rows = rows.filter(r => String(r.values[c.columnName] ?? '') === c.searchValue);
     ctx.log(`Google Sheets: ${rows.length} row(s) (real API call)`);
@@ -248,19 +252,25 @@ const sheetsUpdate = {
   description: 'Writes one cell of one row. On the demo sheet the write updates the SIMULATED sheet; with source google it is a REAL Google Sheets write. NOT reverted by abandoning the run branch: this is an external effect.',
   fields: [
     ...sheetSourceFields,
-    { key: 'rowNumber', label: 'Row number (header = row 1)', type: 'string', required: true, help: 'placeholders allowed, e.g. {{steps.read.rowNumber}} or {{event.rownumber}}' },
+    { key: 'rowNumber', label: 'Row number (legacy positional mode)', type: 'string', help: 'Use keyColumn + keyValue instead for rows that may have moved since the trigger.' },
+    { key: 'keyColumn', label: 'Stable unique key column', type: 'string' },
+    { key: 'keyValue', label: 'Stable unique key value', type: 'string', help: 'Re-resolved immediately before each write; never falls back to row number when absent or ambiguous.' },
     { key: 'column', label: 'Column', type: 'string', required: true },
     { key: 'value', label: 'Value', type: 'string', required: true },
   ],
   outputs: [{ key: 'updated', description: 'true when the cell was written' }],
   validate(cfg) {
-    return { ...sheetSource(cfg, false), rowNumber: str(cfg.rowNumber, 'rowNumber', 40), column: str(cfg.column, 'column', 60), value: str(cfg.value, 'value', 200) };
+    const keyColumn = str(cfg.keyColumn, 'keyColumn', 60, false), keyValue = str(cfg.keyValue, 'keyValue', 200, !!keyColumn);
+    if (!keyColumn && keyValue) bad('keyColumn is required with keyValue');
+    return { ...sheetSource(cfg, false), rowNumber: str(cfg.rowNumber, 'rowNumber', 40, !keyColumn), keyColumn, keyValue, column: str(cfg.column, 'column', 60), value: str(cfg.value, 'value', 200) };
   },
   async run(ctx) {
     const c = ctx.config;
     if (ctx.dryRun) { ctx.log('SIMULATION: Google Sheets update, no call or sheet mutation'); return { updated: false, dryRun: true }; }
-    const rowNumber = Number(c.rowNumber);
-    if (!Number.isInteger(rowNumber) || rowNumber < 2) bad(`google-sheets-update.rowNumber: an integer >= 2 (got "${c.rowNumber}")`);
+    const demoMatches = c.source === 'demo-sheet' && c.keyColumn ? demoSheet.rows().filter(r => String(r.values[c.keyColumn] ?? '') === c.keyValue) : [];
+    if (c.source === 'demo-sheet' && c.keyColumn && demoMatches.length !== 1) bad('sheet key must match exactly one row');
+    const rowNumber = c.source === 'demo-sheet' && c.keyColumn ? demoMatches[0].rowNumber : Number(c.rowNumber);
+    if (!c.keyColumn && (!Number.isInteger(rowNumber) || rowNumber < 2)) bad(`google-sheets-update.rowNumber: an integer >= 2 (got "${c.rowNumber}")`);
     if (c.source === 'demo-sheet') {
       demoSheet.updateCell(rowNumber, c.column, c.value);
       ctx.log(`DEMO sheet: row ${rowNumber}, column "${c.column}" <- "${c.value}" (simulated sheet, no Google call)`);
@@ -268,8 +278,9 @@ const sheetsUpdate = {
     }
     const auth = googleAuth(ctx.settings);
     if (!auth) bad('google-sheets-update: configure a managed Google Sheets connection first');
-    await writeGoogleRow(auth, c, { [c.column]: c.value }, rowNumber);
-    ctx.log(`Google Sheets: row ${rowNumber}, column "${c.column}" <- "${c.value}" (REAL external write, not reverted by the run branch)`);
+    if (c.keyColumn) await writeGoogleRowByKey(auth, c, { [c.column]: c.value }, c.keyColumn, c.keyValue);
+    else await writeGoogleRow(auth, c, { [c.column]: c.value }, rowNumber);
+    ctx.log(`Google Sheets: ${c.keyColumn ? 'keyed row' : 'row ' + rowNumber}, column "${c.column}" updated (REAL external write, not reverted by the run branch)`);
     return { updated: true };
   },
 };
@@ -322,9 +333,10 @@ const jiraCreateIssue = {
   fields: [
     { key: 'dryRun', label: 'Dry run (no real creation)', type: 'boolean', default: true },
     { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
-    { key: 'issueTypeId', label: 'Issue type ID (numeric)', type: 'string', required: true, default: '10001', help: 'Jira numeric id of the issue type (Task is often 10001 on a fresh site)' },
+    { key: 'issueTypeId', label: 'Issue type ID (numeric)', type: 'string', required: true, help: 'Jira numeric id from the target project create metadata. Names and ids vary by site: never infer an id from the name Task.' },
     { key: 'summary', label: 'Summary', type: 'string', required: true },
     { key: 'description', label: 'Description', type: 'text' },
+    { key: 'labels', label: 'Labels (comma separated)', type: 'string', help: 'e.g. badge-demo. The Jira Done trigger of the badge workflow only sees tickets carrying its label. Jira ignores a label when the field is not on the create screen of the project.' },
   ],
   outputs: [
     { key: 'key', description: 'The created issue key (null in dry-run)' },
@@ -337,6 +349,7 @@ const jiraCreateIssue = {
       issueTypeId: str(cfg.issueTypeId, 'issueTypeId', 10),
       summary: str(cfg.summary, 'summary', 200),
       description: str(cfg.description, 'description', 2000, false),
+      labels: labelsOf(cfg.labels),
     };
   },
   async run(ctx) {
@@ -351,7 +364,7 @@ const jiraCreateIssue = {
     if (!instanceUrl || !email || !apiToken) bad('jira-create-issue: fill the Jira settings of the workflow-connectors plugin first (console), or keep dryRun on');
     const result = await runPieceAction('@activepieces/piece-jira-cloud', 'create_issue', {
       auth: { props: { instanceUrl, email, apiToken } },
-      propsValue: { projectId: c.project, issueTypeId: c.issueTypeId, issueFields: { summary: c.summary, ...(c.description ? { description: c.description } : {}) } },
+      propsValue: { projectId: c.project, issueTypeId: c.issueTypeId, issueFields: { summary: c.summary, ...(c.description ? { description: c.description } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } },
     });
     const key = String(result?.key ?? '');
     ctx.log(`Jira issue ${key} created (REAL, on ${instanceUrl})`);
@@ -451,6 +464,8 @@ const lyamCreateUser = {
 
 
 // ------------------------------------------------------------------- lyam connector: send a mail ----
+/** Optional Jira labels: comma separated, each one letters, digits, dot, dash or underscore (a label cannot hold a space in Jira). */
+const labelsOf = (v) => { const raw = String(v ?? '').trim(); if (!raw) return []; const l = raw.split(',').map((x) => x.trim()).filter(Boolean); if (l.length > 10 || l.some((x) => !/^[A-Za-z0-9_.-]{1,60}$/.test(x))) bad('labels: up to 10, comma separated, letters, digits, dot, dash, underscore'); return [...new Set(l)]; };
 const MAIL_RE = /^[^\s@,;<>]{1,64}@[^\s@,;<>]{1,190}\.[A-Za-z]{2,}$/;
 const lyamSendMail = {
   type: 'lyam-send-mail',
