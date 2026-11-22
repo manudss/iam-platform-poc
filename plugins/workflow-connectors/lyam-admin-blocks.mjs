@@ -215,6 +215,27 @@ const lyamReadRun = readBlock('lyam-read-run', 'Read a workflow run', 'Reads the
     return r;
 });
 
+const lyamAwaitRun = readBlock('lyam-await-run', 'Wait for a sub-workflow run', 'Waits, by polling the run state (read only), until the child run started by lyam-start-workflow completes, for at most timeoutSeconds (1 to 120). It FAILS the step when the child failed, was canceled, is parked on a human task, or did not finish in time: the step never reports a child as done that is not. The wait is inside one step, not a durable suspension: a restart simply polls again (nothing is written). For a longer wait, use a human task or read the run later.', [
+    { key: 'runId', label: 'Child run id', type: 'string', required: true },
+    { key: 'timeoutSeconds', label: 'Maximum wait in seconds (1 to 120)', type: 'number', default: 30 },
+    { key: 'pollSeconds', label: 'Poll every N seconds (1 to 10)', type: 'number', default: 2 },
+], async (ctx) => {
+    const runId = str(ctx.config.runId, 'lyam-await-run.runId', 48);
+    const timeout = Number(ctx.config.timeoutSeconds ?? 30), poll = Number(ctx.config.pollSeconds ?? 2);
+    if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120) bad('lyam-await-run.timeoutSeconds: 1 to 120');
+    if (!Number.isFinite(poll) || poll < 1 || poll > 10) bad('lyam-await-run.pollSeconds: 1 to 10');
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would wait for run ${runId}`); return { id: runId, status: 'test', finished: false }; }
+    const runs = need(ctx.runs, 'lyam-await-run');
+    const until = Date.now() + timeout * 1000;
+    for (;;) {
+        const r = await runs.get(ctx.tenant, runId);
+        if (r.status === 'completed') { ctx.log(`run ${r.id}: completed`); return { ...r, finished: true }; }
+        if (r.status === 'failed' || r.status === 'canceled') bad(`lyam-await-run: the child run ${r.id} ${r.status}`);
+        if (Date.now() + poll * 1000 > until) bad(`lyam-await-run: the child run ${r.id} is still ${r.status} after ${timeout}s (a run parked on a human task needs that decision first)`);
+        await new Promise((res) => setTimeout(res, poll * 1000));
+    }
+});
+
 // ---- P0: lifecycle and role writes (run branch, reviewed like every other change) -----------------------
 
 const writeBlock = (type, label, description, fields, validate, run) => ({ type, family: 'lyam', label, simulated: false, category: 'real', description, fields, validate, run });
@@ -537,7 +558,7 @@ const igaReadOverdue = readBlock('iga-read-overdue', 'IGA: read the late reviews
     return r;
 });
 
-const igaReassignReviews = writeBlock('iga-reassign-review', 'IGA: replace an absent validator', 'REAL: moves the OPEN review tasks of a campaign from one decider to another (an absent validator). Decided tasks and closed campaigns are untouched; a task about the new decider is refused and reported, never silently skipped. The deadline is kept. A test run only logs it.', [
+const igaReassignReviews = writeBlock('iga-reassign-review', 'IGA: replace an absent validator', 'REAL: moves the OPEN review tasks of a campaign from one decider to another (an absent validator). Only a run started by an admin or an IGA pool member may do it, and the replacement must be a member of the admin or IGA pool ("iga", "admin" or a pool id). Decided tasks and closed campaigns are untouched; a task about the new decider is refused and reported, never silently skipped. The deadline is kept. A test run only logs it.', [
     { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
     { key: 'from', label: 'Absent validator (user id)', type: 'string', required: true },
     { key: 'to', label: 'Replacement (user id, "iga" or "admin")', type: 'string', required: true },
@@ -545,7 +566,7 @@ const igaReassignReviews = writeBlock('iga-reassign-review', 'IGA: replace an ab
 ], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-reassign-review.campaignId', 48), from: userId(cfg.from, 'iga-reassign-review.from'), to: str(cfg.to, 'iga-reassign-review.to', 64), reason: str(cfg.reason, 'iga-reassign-review.reason', 200, false) || 'validator absent' }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would move the open review tasks of campaign ${c.campaignId} from "${c.from}" to "${c.to}"`); return { campaign: c.campaignId, from: c.from, to: c.to, reassigned: [], refused: [] }; }
-    const r = await need(ctx.iga, 'iga-reassign-review').reassignReviewTasks(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { from: c.from, to: c.to, reason: c.reason });
+    const r = await need(ctx.iga, 'iga-reassign-review').reassignReviewTasks(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { from: c.from, to: c.to, reason: c.reason, startedBy: ctx.startedBy });
     ctx.log(`${r.reassigned.length} review task(s) moved, ${r.refused.length} refused`);
     return r;
 });
@@ -1346,7 +1367,7 @@ export const LYAM_ADMIN_BLOCKS = [
     lyamGrantAssignment, lyamRevokeAssignment,
     lyamReadDiff, lyamRequestPublish,
     // P1
-    lyamCreateOrganization, lyamAssignOrganization, lyamCreateApplication, lyamCheckAccountBlocks, lyamStartWorkflow, lyamReadRun,
+    lyamCreateOrganization, lyamAssignOrganization, lyamCreateApplication, lyamCheckAccountBlocks, lyamStartWorkflow, lyamReadRun, lyamAwaitRun,
     // P2
     lyamValidatePolicy, lyamProposePolicyChange, lyamReadPluginStates, lyamProposePluginChange, lyamListDelegations, lyamRevokeDelegationRequest,
     // Completion of the brief's partial families

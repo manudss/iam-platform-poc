@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, forwardRef, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, forwardRef, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { ApplicationBus } from '../events/application-bus.service.js';
 import { WorkflowStore } from './store.js';
@@ -94,14 +94,19 @@ export class WorkflowsIgaService {
     const dueInSeconds = days >= 1 ? Math.floor(days) * 86400 : undefined;
     const escalateTo = input.escalateTo === undefined || input.escalateTo === null || String(input.escalateTo).trim() === '' ? undefined : String(input.escalateTo).trim();
     if (escalateTo && !dueInSeconds) throw new BadRequestException('escalateTo needs dueInDays');
-    if (escalateTo) this.tasks.resolveAssignee(escalateTo); // refused now rather than silently ignored at the deadline
+    if (escalateTo) {
+      const target = this.tasks.resolveAssignee(escalateTo); // refused now rather than silently ignored at the deadline
+      if (!this.tasks.isDeciderAdmin(target)) throw new BadRequestException('escalateTo: "iga", "admin" or a member of the admin or IGA pool');
+    }
     const out: { item: string; task: string | null; assignee: string; managerAbsent?: boolean }[] = [];
     for (const i of items) {
       const manager = typeof i.payload?.manager === 'string' ? i.payload.manager : null;
       // An absent validator (unknown or login-disabled manager, or no manager) never receives a task nobody will read: the iga pool takes it, and the item says why.
       let managerAbsent = false;
       if (assignTo === 'manager' && manager) {
-        try { const u = await this.reads?.readUser(tenant, campaign.ref, manager); managerAbsent = !u || u.loginEnabled === false; } catch { managerAbsent = true; }
+        // Absence (unknown identity, login disabled) is not a read failure: a failed read stops the step (it can be retried, tasks are idempotent per step) instead of being filed as an absent manager.
+        try { const u = await this.reads?.readUser(tenant, campaign.ref, manager); managerAbsent = !u || u.loginEnabled === false; }
+        catch (e) { if (/unknown identity/i.test((e as Error).message)) managerAbsent = true; else throw new ConflictException(`cannot tell whether the manager "${manager}" is available (read failed: ${(e as Error).message}): no task opened for this item, retry`); }
       }
       const assignee = assignTo === 'manager' ? (manager && !managerAbsent ? manager : 'iga') : assignTo;
       const t = await this.tasks.request({
@@ -123,18 +128,20 @@ export class WorkflowsIgaService {
   }
 
   /** Replaces an absent validator on the OPEN review tasks of a campaign. Per task: refused (never silently skipped) when the new decider is the person under review. Closed campaigns and decided tasks are untouched. */
-  async reassignReviewTasks(tenant: string, actor: string, campaignId: string, input: { from?: unknown; to?: unknown; reason?: unknown }) {
+  async reassignReviewTasks(tenant: string, actor: string, campaignId: string, input: { from?: unknown; to?: unknown; reason?: unknown; startedBy?: string }) {
     if (!this.tasks) throw new BadRequestException('review tasks need the tasks service (server)');
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
     const from = String(input.from ?? '').trim(), to = String(input.to ?? '').trim();
     if (!from || !to) throw new BadRequestException('from and to are required');
     if (from === to) throw new BadRequestException('from and to are the same decider');
-    this.tasks.resolveAssignee(to);
+    // Authority is checked BEFORE any task is touched: a refusal here changes nothing.
+    if (!this.tasks.isDeciderAdmin(input.startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
+    if (!this.tasks.isDeciderAdmin(this.tasks.resolveAssignee(to))) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
     const mine = (await this.store.listTasksByCampaign(tenant, campaignId)).filter((t) => t.kind === 'iga-review' && t.status === 'open' && (t.delegated_to ?? t.assignee) === from);
     const reassigned: string[] = [], refused: { task: string; reason: string }[] = [];
     for (const t of mine) {
-      try { await this.tasks.reassignOpen(tenant, t.id, to, actor, String(input.reason ?? 'validator absent')); reassigned.push(t.id); }
+      try { await this.tasks.reassignOpen(tenant, t.id, to, actor, String(input.reason ?? 'validator absent'), input.startedBy); reassigned.push(t.id); }
       catch (e) { refused.push({ task: t.id, reason: (e as Error).message }); }
     }
     return { campaign: campaignId, from, to, reassigned, refused };

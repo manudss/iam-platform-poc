@@ -8,6 +8,8 @@ import { WorkflowEngine } from './engine.js';
 import { TaskRow, WorkflowStore } from './store.js';
 
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
+/** Task timestamps are stored as UTC text without a zone suffix: parse them as UTC whatever the server zone. */
+export const utcMs = (v: string) => { const x = String(v).replace(' ', 'T'); return Date.parse(/(Z|[+-]\d\d:?\d\d)$/i.test(x) ? x : x + 'Z'); };
 const ts = (ms: number) => new Date(ms).toISOString().slice(0, 23).replace('T', ' ');
 
 export interface TaskRequest {
@@ -181,16 +183,21 @@ export class WorkflowTasksService {
     return saved;
   }
 
-  /** Replaces the decider of an OPEN task from a workflow/IGA step (an absent validator). The caller is not the current decider, so the delegate() permission rule does not apply: the caller is the reviewed workflow definition. The task stays open, keeps its deadline, and records who it was taken from. Refused when the new decider is the person the task is about. */
-  async reassignOpen(tenant: string, id: string, to: unknown, by: string, reason: string): Promise<TaskRow> {
+  /** True for a subject allowed to administer review deciders: the admin list or the IGA pool. */
+  isDeciderAdmin(sub: unknown): boolean { return typeof sub === 'string' && (this.admins().includes(sub) || this.poolMembers('iga').includes(sub)); }
+
+  /** Replaces the decider of an OPEN task from a workflow/IGA step (an absent validator). AUTHORITY: the person who started the workflow must be an admin or an IGA pool member (the right to run a workflow is not the right to move reviews), and the new decider must be a member of the admin/IGA pool: a free choice of any id would let a starter pick an accomplice. The task stays open, keeps its deadline and records who it was taken from. Refused when the new decider is the person the task is about. */
+  async reassignOpen(tenant: string, id: string, to: unknown, by: string, reason: string, startedBy?: string): Promise<TaskRow> {
     const t = await this.store.getTask(id);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
+    if (!this.isDeciderAdmin(startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
     const rawTo = String(to ?? '').trim();
     const target = this.resolveAssignee(rawTo);
+    if (!this.isDeciderAdmin(target)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
     if (target === t.detail?.identity || target === t.detail?.subject) throw new ConflictException('the new decider is the person this task is about: refused');
     const from = t.delegated_to ?? t.assignee;
-    await this.store.patchTaskDetail(id, { pool: rawTo === 'admin' || rawTo === 'iga' ? rawTo : null, reassignedFrom: from, reassignedBy: by, reassignReason: String(reason ?? '').slice(0, 200) });
+    await this.store.patchTaskDetail(id, { pool: rawTo === 'admin' || rawTo === 'iga' ? rawTo : null, reassignedFrom: from, reassignedBy: by, reassignedStartedBy: startedBy ?? null, reassignReason: String(reason ?? '').slice(0, 200) });
     const saved = await this.store.delegateTask(id, target, t.due_at ?? now());
     if (!saved) throw new ConflictException('this task is no longer open');
     this.emit(tenant, 'workflow.task-assigned', { task: id, kind: t.kind, title: t.title, assignee: target, actor: by });
@@ -224,7 +231,7 @@ export class WorkflowTasksService {
     const open = await this.store.listDueTasks(now());
     let n = 0;
     for (const t of open.filter((x) => x.status === 'open')) {
-      if (!t.due_at || Date.parse(t.due_at) > Date.now()) continue;
+      if (!t.due_at || utcMs(t.due_at) > Date.now()) continue;
       // A rescan task (publication watch) re-kicks its run on every tick while due: the block re-reads the
       // real external state. Reminder/escalation still happen exactly once.
       const rescan = t.detail?.rescan === true;
@@ -232,7 +239,16 @@ export class WorkflowTasksService {
       const escalateTo = typeof t.detail?.escalateTo === 'string' ? t.detail.escalateTo : null;
       let resolved: string | null = null;
       if (escalateTo && !t.reminded_at) {
-        try { resolved = this.resolveAssignee(escalateTo); if (escalateTo === 'admin' || escalateTo === 'iga') await this.store.patchTaskDetail(t.id, { pool: escalateTo }); }
+        try {
+          resolved = this.resolveAssignee(escalateTo);
+          // The escalation never lands on the person the task is about (they could never decide it): the pool member who is not that person takes it, else the task stays where it is.
+          const about = [t.detail?.identity, t.detail?.subject].filter((x) => typeof x === 'string');
+          if (resolved && about.includes(resolved)) {
+            const alt = this.poolMembers(escalateTo === 'admin' ? 'admin' : 'iga').find((m) => !about.includes(m));
+            if (alt) resolved = alt; else { this.log.warn(`task ${t.id}: the escalation target is the person under review: the task stays with ${t.assignee}`); resolved = null; }
+          }
+          if (resolved && (escalateTo === 'admin' || escalateTo === 'iga')) await this.store.patchTaskDetail(t.id, { pool: escalateTo });
+        }
         catch (e) { this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (${(e as Error).message}): the task stays with ${t.assignee}`); }
       }
       if (resolved) await this.store.delegateTask(t.id, resolved, t.due_at);
