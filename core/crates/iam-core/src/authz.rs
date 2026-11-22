@@ -16,7 +16,7 @@ fn pct(s: &str) -> String { s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"
 /// Shared frame of every browser sign-in page: the random photo background, the lyam brand, the theme
 /// selector and the footer are identical to the console's auth pages (apps/web login.css / styles.css).
 /// A method (password, code, keypad, ...) only contributes the inner HTML of the central card.
-/// No JavaScript by design (the CSP below forbids scripts): the theme selector is three plain links to
+/// Only the hash-pinned password reveal script is permitted by the CSP. The theme selector uses plain links to
 /// /authorize/theme, which remembers the choice in the `iam_theme` cookie shared with the console.
 const CSS: &str = r#".brand-title .brand-baseline,.foot .brand-footer{font-size:0}.brand-baseline::after{content:var(--brand-baseline,"IAM next generation");font-size:.9rem}.brand-footer::after{content:var(--brand-footer,"Fictional demo data only. Do not enter real data.");font-size:.78rem}
 *{box-sizing:border-box}
@@ -69,10 +69,15 @@ button{margin-top:1.1rem;width:100%;padding:.7rem;font:inherit;font-weight:600;c
 .demo.tag{display:inline-block;padding:.1rem .55rem;border-radius:999px;font-size:.78rem;line-height:1.5;vertical-align:middle}
 .foot{margin:1.2rem 0 0;font-size:.78rem;color:var(--muted)}
 @media (max-width:480px){.login{padding:1rem}.card{padding:1.4rem}}
-.reveal-wrap>input{flex:1 1 auto;min-width:0}
-.reveal-btn{flex:none;min-width:3.6rem;padding:0 .6rem;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:.85rem;cursor:pointer;opacity:.85}
-.reveal-btn:hover{opacity:1}
-.reveal-btn:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.reveal-wrap { display: grid; grid-template-columns: minmax(0, 1fr); position: relative; vertical-align: middle; min-width: 0; max-width: 100%; }
+.reveal-wrap > input[type] { width: 100%; min-width: 0; box-sizing: border-box; padding-inline-end: 3rem; }
+.reveal-wrap > .reveal-btn { position: absolute; inset-inline-end: 2px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 40px; height: 40px; max-height: calc(100% - 4px); min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: .4rem; background: transparent; color: var(--ink, currentColor); font: inherit; cursor: pointer; }
+.reveal-wrap > .reveal-btn svg { display: block; width: 20px; height: 20px; pointer-events: none; }
+.reveal-wrap > .reveal-btn:hover { background: var(--row-hover, #7772); }
+.reveal-wrap > .reveal-btn:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; }
+
+.reveal-wrap { margin-top: .25rem; }
+.reveal-wrap > input[type] { margin-top: 0; }
 "#;
 
 const ICON_AUTO: &str = r#"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>"#;
@@ -306,7 +311,7 @@ pub const REVEAL_JS: &str = r#"(function(){var ins=document.querySelectorAll('in
 Array.prototype.forEach.call(ins,function(input){if(input.parentNode&&input.parentNode.className==='reveal-wrap')return;
 var wrap=document.createElement('span');wrap.className='reveal-wrap';input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);
 var btn=document.createElement('button');btn.type='button';btn.className='reveal-btn';wrap.appendChild(btn);
-function paint(show){input.type=show?'text':'password';btn.textContent=show?'Hide':'Show';btn.setAttribute('aria-pressed',String(show));var l=show?'Hide what you typed':'Show what you typed';btn.setAttribute('aria-label',l);btn.title=l}
+function paint(show){input.type=show?'text':'password';btn.innerHTML='<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>'+(show?'<path d="m3 3 18 18"/>':'')+'</svg>';btn.setAttribute('aria-pressed',String(show));var l=show?'Hide what you typed':'Show what you typed';btn.setAttribute('aria-label',l);btn.title=l}
 paint(false);
 btn.addEventListener('mousedown',function(e){e.preventDefault()});
 btn.addEventListener('click',function(){paint(input.type==='password')});

@@ -130,6 +130,16 @@ jobs:
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/branding-e2e.mjs /tmp/branding-shots
       - name: Profile reliability regression (real bundle, light/dark desktop/mobile)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/profile-priorities-ui-e2e.cjs /tmp/profile-priorities-shots
+      - name: Password eye control (real Rust sign-in, Angular bundle and plugin components)
+        run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/password-eye-ui-e2e.cjs /tmp/password-eye-shots
+      - name: Password eye screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: password-eye-screenshots
+          path: /tmp/password-eye-shots
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Photos and read-only user sheet (real bundle, isolated API fixtures, desktop/mobile)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/photos-readonly-ui-e2e.cjs /tmp/photos-readonly-shots
       - name: Connections UI safety (real bundle, isolated API fixtures, light/dark desktop/mobile)

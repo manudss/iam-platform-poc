@@ -13,7 +13,7 @@ function withReveal(root) {
     const wrap = document.createElement('span'); wrap.className = 'reveal-wrap';
     input.parentNode.insertBefore(wrap, input); wrap.appendChild(input);
     const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'reveal-btn'; wrap.appendChild(btn);
-    const paint = (show) => { input.type = show ? 'text' : 'password'; btn.textContent = show ? 'Hide' : 'Show'; btn.setAttribute('aria-pressed', String(show)); const l = show ? 'Hide what you typed' : 'Show what you typed'; btn.setAttribute('aria-label', l); btn.title = l; };
+    const paint = (show) => { input.type = show ? 'text' : 'password'; btn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>' + (show ? '<path d="m3 3 18 18"/>' : '') + '</svg>'; btn.setAttribute('aria-pressed', String(show)); const l = show ? 'Hide what you typed' : 'Show what you typed'; btn.setAttribute('aria-label', l); btn.title = l; };
     paint(false);
     btn.addEventListener('mousedown', (e) => e.preventDefault());   // a click keeps focus in the field: no blur before the toggle
     btn.addEventListener('click', () => paint(input.type === 'password'));
@@ -22,10 +22,13 @@ function withReveal(root) {
 }
 
 const css = `
-  .reveal-wrap { display: inline-flex; align-items: stretch; gap: .35rem; max-width: 100%; }
-  .reveal-wrap > input { flex: 1 1 auto; min-width: 0; }
-  .reveal-btn { flex: none; min-width: 3.6rem; padding: 0 .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--field-bg); color: inherit; font: inherit; font-size: .85rem; cursor: pointer; }
-  .reveal-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reveal-wrap { display: inline-grid; grid-template-columns: minmax(0, 1fr); position: relative; vertical-align: middle; min-width: 0; max-width: 100%; }
+.reveal-wrap > input[type] { width: 100%; min-width: 0; box-sizing: border-box; padding-inline-end: 3rem; }
+.reveal-wrap > .reveal-btn { position: absolute; inset-inline-end: 2px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 40px; height: 40px; max-height: calc(100% - 4px); min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: .4rem; background: transparent; color: var(--ink, currentColor); font: inherit; cursor: pointer; }
+.reveal-wrap > .reveal-btn svg { display: block; width: 20px; height: 20px; pointer-events: none; }
+.reveal-wrap > .reveal-btn:hover { background: var(--row-hover, #7772); }
+.reveal-wrap > .reveal-btn:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; }
+
 
 :host{color:var(--ink)}
 .ppf{font:inherit}.ppf .row{display:flex;gap:.5em;align-items:center;flex-wrap:wrap;margin:.4em 0}
