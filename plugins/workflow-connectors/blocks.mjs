@@ -562,6 +562,7 @@ const lyamPublishWorkspace = {
   async run(ctx) {
     if (ctx.test || ctx.dryRun) { ctx.log('test run: nothing published'); return { published: false }; }
     // Reset path only: the approval binding and the account's non-admin status are re-read right before the merge. The administrator list is server configuration (restart-time), so within one process it cannot change between this check and the merge.
+    if (ctx.resetApplied === true && !ctx.config?.resetApprovalTaskId) bad('lyam-publish-workspace: this run applied an approved password reset, so the publication must carry the reset guard (approval task, account, validity and revision)');
     if (ctx.config?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', ctx.config.resetApprovalTaskId, ctx.config.resetSubject, ctx.config.resetHours, 'later', ctx.config.resetRevision);
     if (!ctx.workspace) bad('lyam-publish-workspace: publication is not available on this server');
     if (!ctx.hasRunBranch || !ctx.publishIntent) bad('lyam-publish-workspace: this run has no working branch to publish (an earlier step must write data)');

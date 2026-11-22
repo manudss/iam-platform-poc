@@ -15,9 +15,9 @@ const loadBlocks = () => ({ externalBlock: _eb });
 const HOUR = 3_600_000;
 const tpl = () => OFFICIAL_TEMPLATES.find((t) => t.id === 'password-reset-approved')!;
 
-function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean } = {}) {
+function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean; stripPublishGuard?: boolean } = {}) {
   const runId = 'run-r1', calls: string[] = [], secrets = new RunSecrets();
-  const nodes = tpl().nodes.map((n: any) => (n.type === 'lyam-propose-password-reset' ? { ...n, config: { ...n.config, subject: 'bao' } } : n));
+  const nodes = tpl().nodes.map((n: any) => (n.type === 'lyam-propose-password-reset' ? { ...n, config: { ...n.config, subject: 'bao' } } : opts.stripPublishGuard && n.type === 'lyam-publish-workspace' ? { ...n, config: {} } : n));
   const { graph, order } = validateGraph({ nodes, edges: tpl().edges } as never);
   const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-reset', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'root', started_at: 'now', finished_at: null, test: false };
   const steps = new Map<string, any>(); for (const id of order) steps.set(id, { run_id: runId, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null });
@@ -90,6 +90,13 @@ describe('password reset template on the real engine (doubles)', () => {
     assert.throws(() => externalBlock('lyam-publish-workspace')!.validate({ resetApprovalTaskId: 't' } as never), /together/);
     assert.deepEqual(externalBlock('lyam-publish-workspace')!.validate({} as never), {});
   });
+  it('a publish WITHOUT the reset guard after an approved-reset apply in the same run is refused before the merge (fail-closed); the credential stays only on the run branch, the account stays blocked, no mail', async () => withMail(async () => {
+    const w = await settle(world({ stripPublishGuard: true })); w.approve(); await settle(w, w.build());
+    assert.equal(w.row.status, 'failed', dump(w));
+    assert.deepEqual(w.calls, ['block', 'setTemporary'], 'no publish call, no unblock');
+    assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1);
+    assert.match(String(w.row.error ?? JSON.stringify([...w.steps.values()].map((x: any) => x.error))), /reset guard/);
+  }));
   it('target promoted during publication: NO mail leaves; but the credential is already published and the account stays blocked (availability gap, not closed)', async () => withMail(async () => {
     const w2 = world({ onPublish: () => { w2.state.isAdmin = true; } });
     await settle(w2); w2.approve(); await settle(w2, w2.build());
