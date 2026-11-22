@@ -417,7 +417,8 @@ const igaPrepareRemediation = writeBlock('iga-prepare-remediation', 'IGA: prepar
     const actions = prepared.flatMap((x) => (x.actions ?? []).filter((a) => a.type === 'revoke-role').map((a) => ({ item: x.item, identity: a.identity ?? x.identity, role: a.role })));
     const deniedItems = prepared.map((x) => x.identity);
     ctx.log(`${prepared.length} item(s) prepared (${actions.length} revoke action(s)), ${r.remediation.filter((x) => x.conflict).length} conflict(s)`);
-    return { ...r, actions, deniedItems, conflicts: r.remediation.filter((x) => x.conflict).length };
+    const conflictItems = r.remediation.filter((x) => x.conflict);
+    return { ...r, actions, actionCount: actions.length, deniedItems, conflicts: conflictItems.length, conflictItems };
 });
 
 const igaCloseCampaign = {
@@ -677,6 +678,10 @@ const lyamRequestPublish = {
             throw new WorkflowSuspend({ taskId: t.id, kind: 'lyam-request-publish' });
         }
         if (ctx.test || ctx.dryRun) { ctx.log('test run: would request the publication of the run branch'); return { pullRequest: { id: 0 }, reused: false, decision: awaitPub ? 'approved' : null, decidedBy: awaitPub ? 'test' : null }; }
+        // No run branch = no data step ever wrote on this run (e.g. a remediation loop over ZERO
+        // actions): opening a pull request would be a useless review, so the step ends as an explicit
+        // skip, never as an empty PR and never as a silent success.
+        if (!ctx.runBranch) { ctx.log('no data branch on this run (no step wrote anything): nothing to publish, no pull request opened'); return { skipped: true, reason: 'no data change on this run: nothing to publish', pullRequest: null, reused: false, decision: 'not-needed', decidedBy: null, merged: false }; }
         const { pullRequest: pr, reused } = await publish.request(ctx.tenant, ctx.runId, c.title || `Workflow run ${ctx.runId}`);
         ctx.log(`pull request #${pr.id} ${reused ? 'reused' : 'opened'} (${pr.source} -> ${pr.target})`);
         if (!awaitPub) return { pullRequest: pr, reused, decision: null, decidedBy: null };

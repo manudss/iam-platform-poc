@@ -144,7 +144,12 @@ export class WorkflowsIgaService {
     const denied = (await this.listItems(tenant, campaignId, 'denied')).items.filter((i) => !wanted || wanted.has(i.id));
     const out: { item: string; identity: string; actions?: { type: string; identity: string; role: string }[]; conflict?: string }[] = [];
     for (const i of denied) {
-      const snapshotRoles = (i.payload?.roles as string[] | undefined) ?? [];
+      if (!Array.isArray(i.payload?.roles)) {
+        out.push({ item: i.id, identity: i.identity, conflict: 'no valid role snapshot (payload.roles missing or malformed): review again before remediating' });
+        this.emit(tenant, 'iga.remediation-resolved', { campaign: campaignId, subject: i.identity, role: '*', result: 'conflict' });
+        continue;
+      }
+      const snapshotRoles = i.payload.roles as string[];
       const current = await this.reads.listAssignments(campaign.ref, { identity: i.identity });
       const currentRoles = current.assignments.map((a) => a.role);
       const changed = snapshotRoles.some((r) => !currentRoles.includes(r)) || currentRoles.some((r) => !snapshotRoles.includes(r));
@@ -181,10 +186,13 @@ export class WorkflowsIgaService {
     // itself: the effective-assignment check below is the real gate in both cases.
     const selfProof = actor === `workflow:${runId}`;
     if (run.status !== 'completed' && !selfProof) throw new ConflictException(`remediation proof: run ${runId} is ${run.status}, not completed`);
-    const roles = (item.payload?.roles as string[] | undefined) ?? [];
-    // A denied item whose snapshot held NO role has nothing to revoke: the remediation is vacuously
-    // effective (the denial and its reason stay on the evidence file). Refusing it would strand the
-    // item in remediation-prepared forever and make the campaign impossible to close.
+    // The snapshot roles MUST be a real array recorded by a validated snapshot: a missing or malformed
+    // payload means the item is corrupt (or hand-written), never "nothing to verify" - that would fail open.
+    if (!Array.isArray(item.payload?.roles)) throw new ConflictException('this item has no valid role snapshot (payload.roles missing or malformed): review it again before marking anything remediated');
+    const roles = item.payload.roles as string[];
+    // A denied item whose snapshot held NO role (an explicitly empty array) has nothing to revoke: the
+    // remediation is vacuously effective (the denial and its reason stay on the evidence file). Refusing
+    // it would strand the item in remediation-prepared forever and make the campaign impossible to close.
     if (roles.length) {
     if (!Array.isArray(item.payload?.remediation) || !(item.payload.remediation as unknown[]).length) throw new ConflictException('no remediation actions prepared for this item: run iga-prepare-remediation first');
     if (!run.branch) throw new BadRequestException(`remediation proof: run ${runId} had no data branch (simulated steps only): it cannot have applied anything`);

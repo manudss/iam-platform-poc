@@ -215,4 +215,13 @@ describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', 
     chk = { state: 'decided', task: { id: 'task-6', kind: 'publish-merge-watch', status: 'decided', decision: 'merged', detail: { pr: { id: 7 } } } };
     await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-6', kind: 'lyam-request-publish' } }).c), /still open/);
   });
+  it('lyam-request-publish: a run that wrote NOTHING opens no pull request (explicit skip, no useless review)', async () => {
+    let requested = 0;
+    const publish = { request: async () => { requested++; return { pullRequest: { id: 7 }, reused: false }; }, status: async () => ({ pullRequest: { id: 7, status: 'open' } }) };
+    const out = (await run1('lyam-request-publish', mk({ publish: publish as never, config: { title: 'x' } }).c as never)) as Record<string, unknown>;
+    assert.equal(out.skipped, true);
+    assert.equal(out.pullRequest, null);
+    assert.equal(requested, 0, 'no PR is opened without a run branch');
+  });
+
 });

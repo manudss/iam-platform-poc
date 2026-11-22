@@ -70,9 +70,11 @@ export function createWorkflowEngine(deps) {
    *  and fails the run closed while the other pass completes the walk - a corrupt half-skipped run. */
   const executing = new Map();
   function kick(runId) {
-    live.set(runId, { cancel: false });
+    // A kick landing mid-pass only asks for one more pass: it must NEVER rewrite the live flag, or a
+    // cancellation recorded during the current pass would be silently erased.
     const cur = executing.get(runId);
     if (cur) { cur.rekick = true; return; }
+    if (!live.has(runId)) live.set(runId, { cancel: false });
     const state = { rekick: false };
     executing.set(runId, state);
     const pass = () => {
@@ -80,7 +82,7 @@ export function createWorkflowEngine(deps) {
         log.error(`run ${runId} crashed: ${e.message}`);
         try { await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }); } catch { /* store gone */ }
       }).finally(() => {
-        if (state.rekick) { state.rekick = false; pass(); return; }
+        if (state.rekick) { state.rekick = false; if (!live.has(runId)) live.set(runId, { cancel: false }); pass(); return; }
         executing.delete(runId);
         void disposeTestBranch(runId);
       });
@@ -99,7 +101,9 @@ export function createWorkflowEngine(deps) {
       await store.updateRun(runId, { branch: `${run.branch} (dropped: disposable test branch)` });
     } catch (e) { log.warn(`test branch cleanup for run ${runId}: ${e.message}`); }
   }
-  const cancelFlag = (runId) => { live.get(runId).cancel = true; };
+  // Robust whether or not a pass currently holds the live flag (a suspended run dropped it): the cancel
+  // survives and the next pass - or the walk - honors it, instead of crashing on a missing entry.
+  const cancelFlag = (runId) => { const f = live.get(runId); if (f) f.cancel = true; else live.set(runId, { cancel: true }); };
   const forget = (runId) => { live.delete(runId); };
 
   /** Steps whose type branches: after they succeed, only their outgoing link carrying the chosen label is taken. */

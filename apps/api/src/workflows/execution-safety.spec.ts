@@ -91,3 +91,20 @@ describe('external execution safety boundary',()=>{
   });
 
 });
+describe('run control: cancel versus concurrent kicks',()=>{
+  it('a cancel recorded mid-pass survives a concurrent kick and ends the run; a late cancelFlag never crashes',async()=>{
+    const h=makeHarness({nodes:[node('a','wait',{seconds:1}),node('b','wait',{seconds:0})],edges:[{from:'a',to:'b'}]});
+    h.engine.kick('run-test');
+    // wait for the pass to be truly in flight (step a running), then cancel AND kick concurrently
+    for(let i=0;i<2000&&st(h,'a').status!=='running';i++) await new Promise((r)=>setImmediate(r));
+    assert.equal(st(h,'a').status,'running','the pass is mid-flight');
+    h.engine.cancelFlag('run-test');
+    h.engine.kick('run-test'); // concurrent kick: must NOT erase the pending cancel (rekick only)
+    const until=Date.now()+8000;
+    for(;;){ if(['completed','failed','canceled'].includes(h.row.status as string)) break; if(Date.now()>until) throw new Error('did not settle'); await new Promise((r)=>setTimeout(r,20)); }
+    assert.equal(h.row.status,'canceled','the cancel survives the concurrent kick');
+    assert.notEqual(st(h,'b').status,'done','the walk stopped before the next step');
+    h.engine.cancelFlag('run-test'); // no live entry held after the run ended: robust, no crash
+    assert.equal(h.row.status,'canceled');
+  });
+});

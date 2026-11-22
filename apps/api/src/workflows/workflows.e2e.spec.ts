@@ -19,6 +19,7 @@ import { VersioningService } from '../versioning/versioning.service.js';
 import { WorkflowStore } from './store.js';
 import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
+import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
 process.env.IAM_WORKFLOW_REAL_CONNECTIONS = '1';   // real connections are off by default on a server; these specs exercise them with fictional values
 
 process.env.WF_CRON_TICK_MS = '2000'; // cron e2e: detect a matching minute within seconds, not 20 s
@@ -403,23 +404,64 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal((evidence.totals as Record<string, unknown>).remediated, 1);
   });
 
+  // The journeys below run the REAL catalog template graph (never a hand-copied lookalike): only the
+  // campaign scope placeholder is parameterized with the fictional identities, so a template drift breaks them.
+  const templateGraph = (users: string) => {
+    const t = OFFICIAL_TEMPLATES.find((x) => x.id === 'recertification-denial-remediation')!;
+    return JSON.parse(JSON.stringify({ nodes: t.nodes, edges: t.edges }).replaceAll('replace-with-user-id', users)) as { nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string; label?: string }[] };
+  };
+
+  it('recertification mixed: the APPROVED identity keeps every right, only the denied one is remediated', async () => {
+    const before = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
+    const aliceRoles = before.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort();
+    assert.ok(aliceRoles.length >= 3, 'alice still holds her seeded roles at this point of the suite');
+    const def = (await ok('POST', '/workflows', { name: 'Recert mixed', graph: templateGraph('demo-bob,demo-alice') })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const inbox = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null; detail: Record<string, unknown> }[] };
+    const reviews = inbox.tasks.filter((t) => t.run_id === started.run.id && t.kind === 'iga-review');
+    assert.equal(reviews.length, 2);
+    for (const r of reviews) {
+      const approvedOne = r.detail.identity === 'demo-alice';
+      const d = await call('POST', `/workflow-tasks/${r.id}/decision`, { decision: approvedOne ? 'approved' : 'denied', justification: approvedOne ? 'still needed' : 'no longer needed' }, { token: `${T}:iga-reviewer` });
+      assert.ok(d.status < 300, JSON.stringify(d.body).slice(0, 200));
+    }
+    // If the denied identity holds no role (suite-order dependent), there is nothing to publish:
+    // the publish step must SKIP explicitly; otherwise a real approval + merge drives the publication.
+    const deadline = Date.now() + 30000;
+    let published = false;
+    for (;;) {
+      const inboxNow = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] };
+      const approval = inboxNow.tasks.find((t) => t.run_id === started.run.id && t.kind === 'publish-approval' && true);
+      if (approval) {
+        const full = (await ok('GET', `/workflow-tasks/${approval.id}`)) as { detail: Record<string, unknown> };
+        const prId = Number((full.detail.pr as Record<string, unknown>).id);
+        assert.ok((await call('POST', `/workflow-tasks/${approval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
+        const watch = await waitTask(started.run.id, 'publish-merge-watch');
+        assert.ok((await call('POST', `/versioning/pulls/${prId}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
+        assert.ok((await call('POST', `/workflow-tasks/${watch.id}/decision`, { decision: 'merged', justification: 'merged after review' }, { token: `${T}:admin-two` })).status < 300);
+        published = true;
+        break;
+      }
+      const cur = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+      const pub = cur.steps.find((x) => x.node_id === 'publish');
+      if (pub?.status === 'done' && (pub.output as Record<string, unknown>).skipped) break; // nothing to publish: legitimate
+      if (Date.now() > deadline) throw new Error('neither a publish-approval task nor a skipped publish step');
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    await waitRun(started.run.id, ['completed'], 30000);
+    const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    assert.equal(((v.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).skipped ?? false), !published, 'publish happened exactly when there was something to publish');
+    const evidence = (v.steps.find((x) => x.node_id === 'close')!.output as Record<string, unknown>).evidence as Record<string, unknown>;
+    assert.equal((evidence.totals as Record<string, unknown>).remediated, 1, 'only the denied identity was remediated');
+    const after = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
+    assert.deepEqual(after.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort(), aliceRoles, 'APPROVED: demo-alice keeps every role, exactly as before');
+  });
+
   it('recertification template shape: conditional denial branch, remediation LOOPS over several identities and roles', async () => {
     // Same graph as the catalog template, parameterized for two identities. demo-alice holds 3 roles,
     // demo-bob 1-2 (earlier tests may have merged 'accountant'): the loops must cover them ALL.
-    const def = (await ok('POST', '/workflows', { name: 'Recert loop journey', graph: { nodes: [
-      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Loop recert', users: 'demo-bob,demo-alice', ref: 'main' } },
-      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga' } },
-      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
-      { id: 'any', type: 'if', name: 'any denial', config: { left: '{{steps.await.denied}}', op: 'gt', right: '0' } },
-      { id: 'prepare', type: 'iga-prepare-remediation', name: 'prepare', config: { campaignId: '{{steps.campaign.id}}' } },
-      { id: 'revloop', type: 'loop', name: 'each denied role', config: { items: '{{steps.prepare.actions}}', maxItems: 50 } },
-      { id: 'revoke', type: 'lyam-revoke-assignment', name: 'revoke', config: { action: '{{steps.revloop.item}}' } },
-      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Loop remediation' } },
-      { id: 'fixloop', type: 'loop', name: 'each denied identity', config: { items: '{{steps.prepare.deniedItems}}', maxItems: 50 } },
-      { id: 'mark', type: 'iga-mark-remediated', name: 'mark', config: { campaignId: '{{steps.campaign.id}}', item: '{{steps.fixloop.item}}', note: 'revoked and published' } },
-      { id: 'join', type: 'merge', name: 'join', config: {} },
-      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
-    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'any' }, { from: 'any', to: 'prepare', label: 'true' }, { from: 'any', to: 'join', label: 'false' }, { from: 'prepare', to: 'revloop' }, { from: 'revloop', to: 'revoke', label: 'each' }, { from: 'revloop', to: 'publish', label: 'done' }, { from: 'publish', to: 'fixloop' }, { from: 'fixloop', to: 'mark', label: 'each' }, { from: 'fixloop', to: 'join', label: 'done' }, { from: 'join', to: 'close' }] } })) as { definition: { id: string } };
+    const def = (await ok('POST', '/workflows', { name: 'Recert loop journey', graph: templateGraph('demo-bob,demo-alice') })) as { definition: { id: string } };
     const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
     await waitRun(started.run.id, ['waiting']);
     const inbox1 = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] };
@@ -464,20 +506,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
   });
 
   it('recertification approved everywhere: no branch, no pull request, straight to the close', async () => {
-    const def = (await ok('POST', '/workflows', { name: 'Recert all approved', graph: { nodes: [
-      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Approved recert', users: 'demo-bob', ref: 'main' } },
-      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga' } },
-      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
-      { id: 'any', type: 'if', name: 'any denial', config: { left: '{{steps.await.denied}}', op: 'gt', right: '0' } },
-      { id: 'prepare', type: 'iga-prepare-remediation', name: 'prepare', config: { campaignId: '{{steps.campaign.id}}' } },
-      { id: 'revloop', type: 'loop', name: 'each denied role', config: { items: '{{steps.prepare.actions}}', maxItems: 50 } },
-      { id: 'revoke', type: 'lyam-revoke-assignment', name: 'revoke', config: { action: '{{steps.revloop.item}}' } },
-      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'unused' } },
-      { id: 'fixloop', type: 'loop', name: 'each denied identity', config: { items: '{{steps.prepare.deniedItems}}', maxItems: 50 } },
-      { id: 'mark', type: 'iga-mark-remediated', name: 'mark', config: { campaignId: '{{steps.campaign.id}}', item: '{{steps.fixloop.item}}' } },
-      { id: 'join', type: 'merge', name: 'join', config: {} },
-      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
-    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'any' }, { from: 'any', to: 'prepare', label: 'true' }, { from: 'any', to: 'join', label: 'false' }, { from: 'prepare', to: 'revloop' }, { from: 'revloop', to: 'revoke', label: 'each' }, { from: 'revloop', to: 'publish', label: 'done' }, { from: 'publish', to: 'fixloop' }, { from: 'fixloop', to: 'mark', label: 'each' }, { from: 'fixloop', to: 'join', label: 'done' }, { from: 'join', to: 'close' }] } })) as { definition: { id: string } };
+    const def = (await ok('POST', '/workflows', { name: 'Recert all approved', graph: templateGraph('demo-bob') })) as { definition: { id: string } };
     const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
     await waitRun(started.run.id, ['waiting']);
     const review = ((await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] }).tasks.find((t) => t.run_id === started.run.id && t.kind === 'iga-review')!;
@@ -491,6 +520,45 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(step('publish').status, 'skipped', 'approval preserves the rights: no useless pull request');
     assert.equal(v.run.branch, null, 'no data branch at all');
     assert.equal(step('close').status, 'done');
+  });
+
+  it('recertification snapshot conflict: no useless pull request, the close stays blocked and the conflict visible', async () => {
+    // The template over demo-bob alone. While the run WAITS on the review, bob's roles change on main
+    // (a real granted+merged publication): the snapshot is stale, the prepare must flag a conflict.
+    const def = (await ok('POST', '/workflows', { name: 'Recert conflict', graph: templateGraph('demo-bob') })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    // Change bob's roles on main through the NORMAL path: a grant run, human publication approval, real merge.
+    const grantDef = (await ok('POST', '/workflows', { name: 'Grant bob payment-approver', graph: { nodes: [
+      { id: 'grant', type: 'lyam-grant-assignment', name: 'grant', config: { identity: 'demo-bob', role: 'payment-approver' } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Grant for conflict journey' } },
+    ], edges: [{ from: 'grant', to: 'publish' }] } })) as { definition: { id: string } };
+    const grantRun = (await ok('POST', `/workflows/${grantDef.definition.id}/runs`)) as RunView;
+    const gApproval = await waitTask(grantRun.run.id, 'publish-approval');
+    const gPr = Number((gApproval.detail.pr as Record<string, unknown>).id);
+    assert.ok((await call('POST', `/workflow-tasks/${gApproval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
+    const gWatch = await waitTask(grantRun.run.id, 'publish-merge-watch');
+    assert.ok((await call('POST', `/versioning/pulls/${gPr}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
+    assert.ok((await call('POST', `/workflow-tasks/${gWatch.id}/decision`, { decision: 'merged', justification: 'merged' }, { token: `${T}:admin-two` })).status < 300);
+    await waitRun(grantRun.run.id, ['completed'], 30000);
+    // Now deny bob's access: the snapshot (taken before the grant) no longer matches main.
+    const review = ((await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] }).tasks.find((t) => t.run_id === started.run.id && t.kind === 'iga-review')!;
+    assert.ok((await call('POST', `/workflow-tasks/${review.id}/decision`, { decision: 'denied', justification: 'role changed mid-review' }, { token: `${T}:iga-reviewer` })).status < 300);
+    // The run resumes, prepares, finds the conflict: no revoke action, NO pull request, then the strict close refuses.
+    const exception = await waitTask(started.run.id, 'iga-close-exception');
+    const unresolved = (exception.detail.unresolved as { identity: string; state: string }[]);
+    assert.ok(unresolved.some((u) => u.identity === 'demo-bob' && u.state === 'denied'), 'the conflicted item stays visible and unresolved');
+    const mid = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    const step = (id: string) => mid.steps.find((x) => x.node_id === id)!;
+    const prep = step('prepare').output as Record<string, unknown>;
+    assert.equal(prep.conflicts, 1, 'the snapshot drift is a conflict');
+    assert.equal(prep.actionCount, 0, 'no remediation action for a conflicted item');
+    assert.equal((step('publish').output as Record<string, unknown>).skipped, true, 'nothing written on the run branch: no useless pull request opened');
+    const refused = await call('POST', `/workflow-tasks/${exception.id}/decision`, { decision: 'refused', justification: 'conflict must be re-reviewed' }, { token: `${T}:iga-reviewer` });
+    assert.ok(refused.status < 300, JSON.stringify(refused.body).slice(0, 200));
+    await waitRun(started.run.id, ['failed'], 30000);
+    const end = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    assert.equal(end.steps.find((x) => x.node_id === 'close')!.status, 'failed', 'no lying close over a conflicted campaign');
   });
 
   it('tags: free-form labels are validated, saved, listed and updated', async () => {

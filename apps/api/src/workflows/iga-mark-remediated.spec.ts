@@ -25,6 +25,16 @@ describe('iga markRemediated (service gate)', () => {
     assert.equal(out.state, 'remediated');
     assert.equal(updates[0].patch.state, 'remediated');
   });
+  it('a missing or malformed roles snapshot is NOT vacuous: 409, never a fail-open', async () => {
+    for (const bad of [undefined, 'a', 5, { 0: 'a' }]) {
+      const { service } = svc({ roles: ['x'], onRef: [] });
+      const store = (service as never as { store: { igaListItems: (x: unknown) => unknown } });
+      void store;
+      const orig = await (service as never as { store: { igaListItems: (t: string, c: string) => Promise<unknown[]> } }).store.igaListItems('acme', 'iga-1');
+      (service as never as { store: { igaListItems: (t: string, c: string) => Promise<unknown[]> } }).store.igaListItems = async () => [{ ...(orig as Record<string, unknown>[])[0], payload: { roles: bad, remediation: [] } }];
+      await assert.rejects(service.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-1' }), /no valid role snapshot/);
+    }
+  });
   it('revoked and published roles pass; roles still on the ref refuse; an unmerged branch is reported', async () => {
     const okCase = svc({ roles: ['a'], onRef: [] });
     assert.equal((await okCase.service.markRemediated('acme', 'workflow:run-1', 'iga-1', 'emp', { runId: 'run-1' })).state, 'remediated');
