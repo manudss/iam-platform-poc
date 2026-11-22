@@ -312,6 +312,7 @@ export class VersioningService {
   /** Row edits on a branch, committed together in ONE commit (author = the signed-in user). */
   editRows(branch: string, table: string, ops: EditOp[], message: string | undefined, sub: unknown) {
     if (workspaceMode() && branch !== currentBranch(true)) throw new ForbiddenException('Edit must use the selected working branch');
+    if (ops?.some(o=>'values' in o && Object.keys(o.values).some(k=>k.toLowerCase()==='workflow_creation_ref'))) throw new ForbiddenException('Workflow creation provenance is managed by workflow creation only');
     if (ops?.some(o=>'values' in o && Object.keys(o.values).some(k=>k.toLowerCase()==='credential_revision'))) throw new ForbiddenException('Credential revisions are managed by Users only');
     if (table.toLowerCase().startsWith('plugin_runtime_')) throw new ForbiddenException('Use Plugins to change runtime settings, grants and state');
     tableName(table);
@@ -417,7 +418,7 @@ export class VersioningService {
   }
   private static val(v: unknown) { return v !== null && typeof v === 'object' && !(v instanceof Date) && !Buffer.isBuffer(v) ? JSON.stringify(v) : v; }
   /** Credential references and plugin runtime state: never typed in by hand, never put back to an old value. */
-  private static sensitiveCol(table: string, n: string) { return n.toLowerCase() === 'credential_revision' || table.toLowerCase().startsWith('plugin_runtime_'); }
+  private static sensitiveCol(table: string, n: string) { return ['credential_revision', 'workflow_creation_ref'].includes(n.toLowerCase()) || table.toLowerCase().startsWith('plugin_runtime_'); }
 
   /**
    * Abandons ONE change of a working branch (a pull request source), keeping every other change: the row (or only the named columns of a
@@ -495,6 +496,7 @@ export class VersioningService {
     tableName(table);
     if (table.toLowerCase().startsWith('plugin_runtime_')) throw new ForbiddenException('Use Plugins to change runtime settings, grants and state');
     if (!values || typeof values !== 'object' || Array.isArray(values) || !Object.keys(values).length || Object.keys(values).length > 50) throw new BadRequestException('values must be a non-empty object');
+    if (Object.keys(values).some((k) => k.toLowerCase() === 'workflow_creation_ref')) throw new ForbiddenException('Workflow creation provenance is managed by workflow creation only');
     if (Object.keys(values).some((k) => k.toLowerCase() === 'credential_revision')) throw new ForbiddenException('Credential revisions are managed by Users only');
     return this.branchTx(branch, expectedHead, async (c) => {
       const cols = await this.columns(c, table);
