@@ -29,6 +29,20 @@ done
 [ -f .env ] || { cp .env.example .env; echo 'Created .env from .env.example (local placeholder passwords, documented, protect nothing).'; }
 
 compose=(docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml)
+
+# Fail fast with a clear message when a port the stack publishes is already taken
+# (otherwise compose fails later with a cryptic bind error).
+ports=(4200 3000 8081 3307 5433 7233 4222 8200)
+busy=()
+for port in "${ports[@]}"; do
+  if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then busy+=("$port"); fi
+done
+if [ "${#busy[@]}" -gt 0 ]; then
+  echo "These local ports are already in use: ${busy[*]}" >&2
+  echo 'Free them (or, if a previous dev stack is running: scripts/dev.sh --down), then re-run.' >&2
+  exit 1
+fi
+
 case "${1:-}" in
   --down)
     shift
