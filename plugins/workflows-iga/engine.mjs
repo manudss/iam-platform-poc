@@ -62,13 +62,30 @@ export function createWorkflowEngine(deps) {
     try { for (const r of await store.runningRuns()) kick(r.id); } catch (e) { log.warn(`resume scan failed: ${e.message}`); }
   }
 
-  /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately. */
+  /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately.
+   *  Executions of the SAME run are serialized: a kick landing while an execution is in flight (a
+   *  second decision arriving mid-resume, a task rescan, a manual retry) only asks for one more pass
+   *  once the current one settles. Without this, two concurrent passes both scan and patch the same
+   *  step rows: one pass sees the other's in-flight 'running' step, mistakes it for a crash leftover
+   *  and fails the run closed while the other pass completes the walk - a corrupt half-skipped run. */
+  const executing = new Map();
   function kick(runId) {
     live.set(runId, { cancel: false });
-    void execute(runId).catch(async (e) => {
-      log.error(`run ${runId} crashed: ${e.message}`);
-      try { await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }); } catch { /* store gone */ }
-    }).finally(() => void disposeTestBranch(runId));
+    const cur = executing.get(runId);
+    if (cur) { cur.rekick = true; return; }
+    const state = { rekick: false };
+    executing.set(runId, state);
+    const pass = () => {
+      void execute(runId).catch(async (e) => {
+        log.error(`run ${runId} crashed: ${e.message}`);
+        try { await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }); } catch { /* store gone */ }
+      }).finally(() => {
+        if (state.rekick) { state.rekick = false; pass(); return; }
+        executing.delete(runId);
+        void disposeTestBranch(runId);
+      });
+    };
+    pass();
   }
 
   /** A test run's branch is DISPOSABLE: once the run is terminal, the branch is dropped so a test
@@ -215,8 +232,8 @@ export function createWorkflowEngine(deps) {
           if (!res.ok) throw new Error(`body step "${bs.node_id}" failed on iteration ${i + 1}: ${res.error}`);
         }
       }
-      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: { count: capped.length } });
-      return { ok: true, output: { count: capped.length } };
+      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: { count: capped.length, branch: 'done' } });
+      return { ok: true, output: { count: capped.length, branch: 'done' } };
     } catch (e) {
       if (e instanceof Canceled) { await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs }); return { canceled: true }; }
       if ((await store.steps(run.id)).some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) {

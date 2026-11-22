@@ -208,12 +208,15 @@ describe('WorkflowsIgaService.markRemediated: effective proof, never a state fli
     assert.equal(proof.runId, 'run-9');
     assert.equal(proof.verifiedOn, 'main', 'the evidence records the ref the verification read');
   });
-  it('a note alone never suffices, and an item without denied roles has nothing to verify', async () => {
+  it('a note alone never suffices; a denied item with NO role at snapshot is vacuously remediated (nothing to revoke, never stranded)', async () => {
     const x = mkIga({ id: 'run-9', status: 'completed', branch: 'wf-run-9' }, [], []);
     await assert.rejects(x.iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { note: 'done, trust me' }), /required/);
     const bare = { ...item, payload: { roles: [] } };
-    const store = { igaGetCampaign: async () => ({ id: 'iga-1', tenant: 'acme', status: 'open', ref: 'main' }), igaListItems: async () => [bare], getRun: async () => ({ id: 'run-9', status: 'completed', branch: 'wf-run-9' }), igaUpdateItem: async () => undefined };
+    const updates: Record<string, unknown>[] = [];
+    const store = { igaGetCampaign: async () => ({ id: 'iga-1', tenant: 'acme', status: 'open', ref: 'main' }), igaListItems: async () => [bare], getRun: async () => ({ id: 'run-9', status: 'completed', branch: 'wf-run-9' }), igaUpdateItem: async (_id: string, patch: Record<string, unknown>) => { updates.push(patch); return true; } };
     const iga = new WorkflowsIgaService(store as never, undefined, { listAssignments: async () => ({ assignments: [] }) } as never);
-    await assert.rejects(iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' }), /no denied roles/);
+    const r = await iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' });
+    assert.equal(r.state, 'remediated', 'nothing held at snapshot: the denial is recorded, there is nothing to verify');
+    assert.equal(updates[0].state, 'remediated');
   });
 });

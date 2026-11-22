@@ -182,7 +182,10 @@ export class WorkflowsIgaService {
     const selfProof = actor === `workflow:${runId}`;
     if (run.status !== 'completed' && !selfProof) throw new ConflictException(`remediation proof: run ${runId} is ${run.status}, not completed`);
     const roles = (item.payload?.roles as string[] | undefined) ?? [];
-    if (!roles.length) throw new BadRequestException('this item has no denied roles to verify: nothing can be marked remediated');
+    // A denied item whose snapshot held NO role has nothing to revoke: the remediation is vacuously
+    // effective (the denial and its reason stay on the evidence file). Refusing it would strand the
+    // item in remediation-prepared forever and make the campaign impossible to close.
+    if (roles.length) {
     if (!Array.isArray(item.payload?.remediation) || !(item.payload.remediation as unknown[]).length) throw new ConflictException('no remediation actions prepared for this item: run iga-prepare-remediation first');
     if (!run.branch) throw new BadRequestException(`remediation proof: run ${runId} had no data branch (simulated steps only): it cannot have applied anything`);
     {
@@ -194,6 +197,7 @@ export class WorkflowsIgaService {
         if (!onBranch.length) throw new ConflictException(`the role(s) ${onRef.join(', ')} are revoked on run branch ${run.branch} but that branch is not published to ${campaign.ref}: publish it, then mark remediated`);
         throw new ConflictException(`the role(s) ${onRef.join(', ')} are still assigned to ${item.identity} on ${campaign.ref}: the remediation is not effective`);
       }
+    }
     }
     await this.store.igaUpdateItem(item.id, { state: 'remediated', payload: { ...item.payload, remediatedBy: actor, remediatedAt: now(), remediationProof: { runId, verifiedOn: campaign.ref, note: String(proof.note ?? '').slice(0, 500) } } });
     this.emit(tenant, 'iga.remediation-resolved', { campaign: campaignId, subject: item.identity, role: (item.payload?.roles as string[] | undefined)?.join(',') ?? '*', result: 'remediated' });

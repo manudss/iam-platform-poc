@@ -321,11 +321,24 @@ const lyamGrantAssignment = writeBlock('lyam-grant-assignment', 'Grant a role as
     return { identity: c.identity, role: c.role, granted, sensitive, diff: { before, after: granted ? [...before, c.role].sort() : before } };
 });
 
-const lyamRevokeAssignment = writeBlock('lyam-revoke-assignment', 'Revoke a role assignment', 'REAL write ON THE RUN BRANCH: removes a role from an identity (idempotent: an absent assignment is reported, not an error). The identity must exist. The revocation is reviewed and published like every other data change.', [
-    { key: 'identity', label: 'Identity id', type: 'string', required: true },
-    { key: 'role', label: 'Role id', type: 'string', required: true },
-], (cfg) => ({ identity: userId(cfg.identity, 'lyam-revoke-assignment.identity'), role: idf(cfg.role, 'lyam-revoke-assignment.role') }), async (ctx) => {
-    const c = ctx.config;
+const lyamRevokeAssignment = writeBlock('lyam-revoke-assignment', 'Revoke a role assignment', 'REAL write ON THE RUN BRANCH: removes a role from an identity (idempotent: an absent assignment is reported, not an error). The identity must exist. The revocation is reviewed and published like every other data change. Give identity + role, OR a remediation action JSON (the loop item of a remediation loop).', [
+    { key: 'identity', label: 'Identity id', type: 'string' },
+    { key: 'role', label: 'Role id', type: 'string' },
+    { key: 'action', label: 'OR a remediation action JSON (a loop item)', type: 'string' },
+], (cfg) => {
+    if (cfg.action !== undefined && String(cfg.action).trim()) {
+        const raw = String(cfg.action).trim();
+        if (/^\{\{.+\}\}$/.test(raw)) return { action: raw }; // a loop placeholder resolves at runtime
+        let a; try { a = JSON.parse(raw); } catch { bad('lyam-revoke-assignment.action: not valid JSON'); }
+        return { identity: userId(a?.identity, 'lyam-revoke-assignment.action.identity'), role: idf(a?.role, 'lyam-revoke-assignment.action.role') };
+    }
+    return { identity: userId(cfg.identity, 'lyam-revoke-assignment.identity'), role: idf(cfg.role, 'lyam-revoke-assignment.role') };
+}, async (ctx) => {
+    let c = ctx.config;
+    if (c.action && !c.identity) {
+        let a; try { a = JSON.parse(String(c.action)); } catch { bad('lyam-revoke-assignment.action: the loop item is not a remediation action JSON'); }
+        c = { identity: userId(a?.identity, 'lyam-revoke-assignment.action.identity'), role: idf(a?.role, 'lyam-revoke-assignment.action.role') };
+    }
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would revoke "${c.role}" from "${c.identity}" on the run branch`); return { identity: c.identity, role: c.role, revoked: false }; }
     let revoked = false;
     await ctx.branchWrite(async (db) => {
@@ -377,7 +390,7 @@ const igaAwaitDecisions = {
     type: 'iga-await-decisions', family: 'lyam', label: 'IGA: await the review decisions', simulated: false, category: 'real',
     description: 'SUSPENDS the run until every review task of the campaign is decided, then records the decisions on the items (a self-review re-queues the item to the iga pool). Idempotent: a re-kick only records what is new.',
     fields: [{ key: 'campaignId', label: 'Campaign id', type: 'string', required: true }],
-    outputs: [{ key: 'decisions', description: 'The recorded decisions per item' }, { key: 'open', description: 'Tasks still open (while waiting)' }],
+    outputs: [{ key: 'decisions', description: 'The recorded decisions per item' }, { key: 'open', description: 'Tasks still open (while waiting)' }, { key: 'denied', description: 'How many items were denied (drives the remediation branch)' }],
     validate(cfg) { return { campaignId: str(cfg.campaignId, 'iga-await-decisions.campaignId', 48) }; },
     async run(ctx) {
         const c = ctx.config;
@@ -389,7 +402,7 @@ const igaAwaitDecisions = {
         if (open.length) { ctx.log(`${open.length} review task(s) still open: the run waits`); throw new WorkflowSuspend({ kind: 'iga-review', campaignId: c.campaignId, taskIds: open.map((t) => t.id).join(',') }); }
         const rec = await iga.recordTaskDecisions(ctx.tenant, campaignTasks.map((t) => t.id));
         ctx.log(`${rec.recorded.filter((r) => r.recorded).length} decision(s) recorded for campaign ${c.campaignId}`);
-        return { decisions: rec.recorded, open: 0 };
+        return { decisions: rec.recorded, open: 0, denied: rec.recorded.filter((r) => r.recorded === 'denied').length };
     },
 };
 
@@ -399,8 +412,12 @@ const igaPrepareRemediation = writeBlock('iga-prepare-remediation', 'IGA: prepar
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would prepare the remediation of campaign ${c.campaignId}`); return { campaign: c.campaignId, remediation: [] }; }
     const r = await need(ctx.iga, 'iga-prepare-remediation').prepareRemediation(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, {});
-    ctx.log(`${r.remediation.filter((x) => x.actions).length} item(s) prepared, ${r.remediation.filter((x) => x.conflict).length} conflict(s)`);
-    return r;
+    const prepared = r.remediation.filter((x) => x.actions && !x.conflict);
+    // Loop-ready flat forms: one entry per revoke action, one per denied identity (mark-remediated loops over it).
+    const actions = prepared.flatMap((x) => (x.actions ?? []).filter((a) => a.type === 'revoke-role').map((a) => ({ item: x.item, identity: a.identity ?? x.identity, role: a.role })));
+    const deniedItems = prepared.map((x) => x.identity);
+    ctx.log(`${prepared.length} item(s) prepared (${actions.length} revoke action(s)), ${r.remediation.filter((x) => x.conflict).length} conflict(s)`);
+    return { ...r, actions, deniedItems, conflicts: r.remediation.filter((x) => x.conflict).length };
 });
 
 const igaCloseCampaign = {

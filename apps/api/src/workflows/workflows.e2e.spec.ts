@@ -403,6 +403,96 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal((evidence.totals as Record<string, unknown>).remediated, 1);
   });
 
+  it('recertification template shape: conditional denial branch, remediation LOOPS over several identities and roles', async () => {
+    // Same graph as the catalog template, parameterized for two identities. demo-alice holds 3 roles,
+    // demo-bob 1-2 (earlier tests may have merged 'accountant'): the loops must cover them ALL.
+    const def = (await ok('POST', '/workflows', { name: 'Recert loop journey', graph: { nodes: [
+      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Loop recert', users: 'demo-bob,demo-alice', ref: 'main' } },
+      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga' } },
+      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'any', type: 'if', name: 'any denial', config: { left: '{{steps.await.denied}}', op: 'gt', right: '0' } },
+      { id: 'prepare', type: 'iga-prepare-remediation', name: 'prepare', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'revloop', type: 'loop', name: 'each denied role', config: { items: '{{steps.prepare.actions}}', maxItems: 50 } },
+      { id: 'revoke', type: 'lyam-revoke-assignment', name: 'revoke', config: { action: '{{steps.revloop.item}}' } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Loop remediation' } },
+      { id: 'fixloop', type: 'loop', name: 'each denied identity', config: { items: '{{steps.prepare.deniedItems}}', maxItems: 50 } },
+      { id: 'mark', type: 'iga-mark-remediated', name: 'mark', config: { campaignId: '{{steps.campaign.id}}', item: '{{steps.fixloop.item}}', note: 'revoked and published' } },
+      { id: 'join', type: 'merge', name: 'join', config: {} },
+      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
+    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'any' }, { from: 'any', to: 'prepare', label: 'true' }, { from: 'any', to: 'join', label: 'false' }, { from: 'prepare', to: 'revloop' }, { from: 'revloop', to: 'revoke', label: 'each' }, { from: 'revloop', to: 'publish', label: 'done' }, { from: 'publish', to: 'fixloop' }, { from: 'fixloop', to: 'mark', label: 'each' }, { from: 'fixloop', to: 'join', label: 'done' }, { from: 'join', to: 'close' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const inbox1 = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] };
+    const reviews = inbox1.tasks.filter((t) => t.run_id === started.run.id && t.kind === 'iga-review');
+    assert.equal(reviews.length, 2, 'one review task per identity');
+    for (const r of reviews) {
+      const d = await call('POST', `/workflow-tasks/${r.id}/decision`, { decision: 'denied', justification: 'no longer needed' }, { token: `${T}:iga-reviewer` });
+      assert.ok(d.status < 300, JSON.stringify(d.body).slice(0, 200));
+    }
+    const approval = await waitTask(started.run.id, 'publish-approval');
+    const prId = Number((approval.detail.pr as Record<string, unknown>).id);
+    // All prepared actions really ran on the branch, for BOTH identities.
+    const mid = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    const prep = (mid.steps.find((x) => x.node_id === 'prepare')!.output as Record<string, unknown>);
+    const actions = prep.actions as { identity: string; role: string }[];
+    // Earlier journeys may already have revoked/merged some of bob's roles: expect exactly the roles
+    // each identity still holds on main right now (alice's seeded 3 at minimum).
+    const current = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows
+      .filter((r) => r.identity_id === 'demo-bob' || r.identity_id === 'demo-alice');
+    assert.ok(current.length >= 3, 'alice keeps her 3 seeded roles in every suite order');
+    const pairs = (l: { identity: string; role: string }[]) => l.map((a) => ({ identity: a.identity, role: a.role })).sort((a, b) => (a.identity + a.role).localeCompare(b.identity + b.role));
+    assert.deepEqual(pairs(actions), pairs(current.map((r) => ({ identity: r.identity_id, role: r.role_id }))), 'every role still held by a denied identity is prepared, nothing more');
+    assert.ok((prep.conflicts as number) === 0, 'no snapshot conflict in this journey');
+    const approved = await call('POST', `/workflow-tasks/${approval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    assert.ok(approved.status < 300, JSON.stringify(approved.body).slice(0, 200));
+    const watch = await waitTask(started.run.id, 'publish-merge-watch');
+    const merged = await call('POST', `/versioning/pulls/${prId}/merge`, {}, { token: `${T}:demo-alice` });
+    assert.ok(merged.status < 300, JSON.stringify(merged.body).slice(0, 300));
+    const marked = await call('POST', `/workflow-tasks/${watch.id}/decision`, { decision: 'merged', justification: 'merged after review' }, { token: `${T}:admin-two` });
+    assert.ok(marked.status < 300, JSON.stringify(marked.body).slice(0, 200));
+    await waitRun(started.run.id, ['completed'], 30000);
+    const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    const step = (id: string) => v.steps.find((st) => st.node_id === id)!;
+    assert.equal((step('any').output as Record<string, unknown>).branch, 'true', 'the denial branch was taken');
+    assert.equal((step('revloop').status), 'done');
+    assert.equal(((step('revoke').output as Record<string, unknown>)!).revoked, true);
+    const evidence = (step('close').output as Record<string, unknown>).evidence as Record<string, unknown>;
+    assert.equal((evidence.totals as Record<string, unknown>).remediated, 2, 'both denied identities remediated');
+    // Effective on main: none of the denied roles remains assigned.
+    const rows = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
+    for (const a of actions) assert.ok(!rows.some((r) => r.identity_id === a.identity && r.role_id === a.role), `${a.identity} still holds ${a.role} on main`);
+  });
+
+  it('recertification approved everywhere: no branch, no pull request, straight to the close', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Recert all approved', graph: { nodes: [
+      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Approved recert', users: 'demo-bob', ref: 'main' } },
+      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga' } },
+      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'any', type: 'if', name: 'any denial', config: { left: '{{steps.await.denied}}', op: 'gt', right: '0' } },
+      { id: 'prepare', type: 'iga-prepare-remediation', name: 'prepare', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'revloop', type: 'loop', name: 'each denied role', config: { items: '{{steps.prepare.actions}}', maxItems: 50 } },
+      { id: 'revoke', type: 'lyam-revoke-assignment', name: 'revoke', config: { action: '{{steps.revloop.item}}' } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'unused' } },
+      { id: 'fixloop', type: 'loop', name: 'each denied identity', config: { items: '{{steps.prepare.deniedItems}}', maxItems: 50 } },
+      { id: 'mark', type: 'iga-mark-remediated', name: 'mark', config: { campaignId: '{{steps.campaign.id}}', item: '{{steps.fixloop.item}}' } },
+      { id: 'join', type: 'merge', name: 'join', config: {} },
+      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
+    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'any' }, { from: 'any', to: 'prepare', label: 'true' }, { from: 'any', to: 'join', label: 'false' }, { from: 'prepare', to: 'revloop' }, { from: 'revloop', to: 'revoke', label: 'each' }, { from: 'revloop', to: 'publish', label: 'done' }, { from: 'publish', to: 'fixloop' }, { from: 'fixloop', to: 'mark', label: 'each' }, { from: 'fixloop', to: 'join', label: 'done' }, { from: 'join', to: 'close' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const review = ((await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] }).tasks.find((t) => t.run_id === started.run.id && t.kind === 'iga-review')!;
+    const d = await call('POST', `/workflow-tasks/${review.id}/decision`, { decision: 'approved' }, { token: `${T}:iga-reviewer` });
+    assert.ok(d.status < 300, JSON.stringify(d.body).slice(0, 200));
+    await waitRun(started.run.id, ['completed'], 30000);
+    const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    const step = (id: string) => v.steps.find((st) => st.node_id === id)!;
+    assert.equal((step('any').output as Record<string, unknown>).branch, 'false', 'no denial: the remediation branch was NOT taken');
+    assert.equal(step('prepare').status, 'skipped');
+    assert.equal(step('publish').status, 'skipped', 'approval preserves the rights: no useless pull request');
+    assert.equal(v.run.branch, null, 'no data branch at all');
+    assert.equal(step('close').status, 'done');
+  });
+
   it('tags: free-form labels are validated, saved, listed and updated', async () => {
     const g = { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] };
     const created = (await ok('POST', '/workflows', { name: 'Tagged', graph: g, tags: ['HR', 'joiner', 'hr'] })) as { definition: { id: string } };
