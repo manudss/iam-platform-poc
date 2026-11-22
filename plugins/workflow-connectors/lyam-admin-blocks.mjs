@@ -389,10 +389,19 @@ const igaListItems = readBlock('iga-list-items', 'IGA: list campaign items', 'Li
 const igaOpenReviewTasks = writeBlock('iga-open-review-tasks', 'IGA: open the review tasks', 'REAL: opens one durable review task per pending campaign item (idempotent per item) for the item manager, the iga pool or a named reviewer. A test run only logs it.', [
     { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
     { key: 'assignTo', label: 'Decider (user id, "manager" or "iga")', type: 'string', default: 'manager' },
-], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-open-review-tasks.campaignId', 48), assignTo: str(cfg.assignTo, 'assignTo', 64, false) || 'manager' }), async (ctx) => {
+    { key: 'dueInDays', label: 'Deadline in days (optional, 1 to 90)', type: 'string', help: 'A late review stays visible (see "IGA: read the late reviews") and is escalated once. Lateness never revokes or keeps an access by itself.' },
+    { key: 'escalateTo', label: 'Escalate once to (optional: user id, "iga" or "admin")', type: 'string', help: 'Needs a deadline.' },
+], (cfg) => {
+    const d = str(cfg.dueInDays, 'iga-open-review-tasks.dueInDays', 3, false);
+    if (d && !/^[0-9]{1,2}$/.test(d)) bad('iga-open-review-tasks.dueInDays: a whole number of days (1 to 90)');
+    if (d && (Number(d) < 1 || Number(d) > 90)) bad('iga-open-review-tasks.dueInDays: a whole number of days (1 to 90)');
+    const e = str(cfg.escalateTo, 'iga-open-review-tasks.escalateTo', 64, false);
+    if (e && !d) bad('iga-open-review-tasks.escalateTo: needs dueInDays');
+    return { campaignId: str(cfg.campaignId, 'iga-open-review-tasks.campaignId', 48), assignTo: str(cfg.assignTo, 'assignTo', 64, false) || 'manager', ...(d ? { dueInDays: d } : {}), ...(e ? { escalateTo: e } : {}) };
+}, async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would open the review tasks of campaign ${c.campaignId}`); return { campaign: c.campaignId, opened: 0, tasks: [] }; }
-    const r = await need(ctx.iga, 'iga-open-review-tasks').openReviewTasks(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { assignTo: c.assignTo, runId: ctx.runId });
+    const r = await need(ctx.iga, 'iga-open-review-tasks').openReviewTasks(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { assignTo: c.assignTo, runId: ctx.runId, ...(c.dueInDays ? { dueInDays: c.dueInDays } : {}), ...(c.escalateTo ? { escalateTo: c.escalateTo } : {}) });
     ctx.log(`${r.opened} review task(s) open for campaign ${c.campaignId}`);
     return r;
 });
@@ -489,6 +498,27 @@ const igaReadCampaign = readBlock('iga-read-campaign', 'IGA: read a campaign', '
 ], async (ctx) => {
     const r = await need(ctx.iga, 'iga-read-campaign').getCampaign(ctx.tenant, str(ctx.config.campaignId, 'iga-read-campaign.campaignId', 48));
     ctx.log(`campaign ${r.id}: ${r.status}`);
+    return r;
+});
+
+const igaReadOverdue = readBlock('iga-read-overdue', 'IGA: read the late reviews', 'Lists the open review tasks of a campaign whose deadline has passed (task, item, identity, current decider, whether it was escalated). Read only: lateness is made visible, nothing is revoked, kept or closed because of it.', [
+    { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
+], async (ctx) => {
+    const r = await need(ctx.iga, 'iga-read-overdue').overdueReviews(ctx.tenant, str(ctx.config.campaignId, 'iga-read-overdue.campaignId', 48));
+    ctx.log(`campaign ${r.campaign}: ${r.overdue} late review(s)`);
+    return r;
+});
+
+const igaReassignReviews = writeBlock('iga-reassign-review', 'IGA: replace an absent validator', 'REAL: moves the OPEN review tasks of a campaign from one decider to another (an absent validator). Decided tasks and closed campaigns are untouched; a task about the new decider is refused and reported, never silently skipped. The deadline is kept. A test run only logs it.', [
+    { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
+    { key: 'from', label: 'Absent validator (user id)', type: 'string', required: true },
+    { key: 'to', label: 'Replacement (user id, "iga" or "admin")', type: 'string', required: true },
+    { key: 'reason', label: 'Reason (kept on the task)', type: 'string' },
+], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-reassign-review.campaignId', 48), from: userId(cfg.from, 'iga-reassign-review.from'), to: str(cfg.to, 'iga-reassign-review.to', 64), reason: str(cfg.reason, 'iga-reassign-review.reason', 200, false) || 'validator absent' }), async (ctx) => {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would move the open review tasks of campaign ${c.campaignId} from "${c.from}" to "${c.to}"`); return { campaign: c.campaignId, from: c.from, to: c.to, reassigned: [], refused: [] }; }
+    const r = await need(ctx.iga, 'iga-reassign-review').reassignReviewTasks(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { from: c.from, to: c.to, reason: c.reason });
+    ctx.log(`${r.reassigned.length} review task(s) moved, ${r.refused.length} refused`);
     return r;
 });
 
@@ -1284,7 +1314,7 @@ export const LYAM_ADMIN_BLOCKS = [
     lyamRequestApproval,
     lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
     lyamUpdateUser, lyamSetLoginEnabled, lyamCreateRole, lyamProposeRoleRemoval,
-    igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaMarkRemediated, igaCloseCampaign, igaReadCampaign,
+    igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaMarkRemediated, igaCloseCampaign, igaReadCampaign, igaReadOverdue, igaReassignReviews,
     lyamGrantAssignment, lyamRevokeAssignment,
     lyamReadDiff, lyamRequestPublish,
     // P1

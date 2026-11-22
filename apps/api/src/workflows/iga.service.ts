@@ -6,6 +6,8 @@ import { WorkflowTasksService } from './tasks.js';
 import { WorkflowReads } from './reads.js';
 
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
+/** Task timestamps are stored as UTC text without a zone suffix. */
+const utcMs = (v: string) => { const x = v.replace(' ', 'T'); return Date.parse(/(Z|[+-]\d\d:?\d\d)$/i.test(x) ? x : x + 'Z'); };
 
 export interface IgaItem {
   id: string; tenant: string; campaign_id: string; identity: string; kind: string; action: string;
@@ -79,25 +81,63 @@ export class WorkflowsIgaService {
   }
 
   /** Step 2: one review task per selected item. Idempotent per item. assignTo: a user id, 'manager' (the item's manager) or 'iga' (the campaign team pool). */
-  async openReviewTasks(tenant: string, actor: string, campaignId: string, input: { items?: unknown; assignTo?: unknown; runId?: string }) {
+  async openReviewTasks(tenant: string, actor: string, campaignId: string, input: { items?: unknown; assignTo?: unknown; runId?: string; dueInDays?: unknown; escalateTo?: unknown }) {
     if (!this.tasks) throw new BadRequestException('review tasks need the tasks service (server)');
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
     const wanted = Array.isArray(input.items) && input.items.length ? new Set(input.items.map(String)) : null;
     const assignTo = String(input.assignTo ?? 'manager');
     const items = (await this.listItems(tenant, campaignId, 'pending')).items.filter((i) => !wanted || wanted.has(i.id));
-    const out: { item: string; task: string | null; assignee: string }[] = [];
+    // Deadline and escalation: optional. A late review stays visible and escalates ONCE to the named decider; nothing is ever revoked or kept automatically because of lateness.
+    const days = input.dueInDays === undefined || input.dueInDays === null || input.dueInDays === '' ? 0 : Number(input.dueInDays);
+    if (!Number.isFinite(days) || days < 0 || days > 90) throw new BadRequestException('dueInDays: a number of days between 1 and 90');
+    const dueInSeconds = days >= 1 ? Math.floor(days) * 86400 : undefined;
+    const escalateTo = input.escalateTo === undefined || input.escalateTo === null || String(input.escalateTo).trim() === '' ? undefined : String(input.escalateTo).trim();
+    if (escalateTo && !dueInSeconds) throw new BadRequestException('escalateTo needs dueInDays');
+    if (escalateTo) this.tasks.resolveAssignee(escalateTo); // refused now rather than silently ignored at the deadline
+    const out: { item: string; task: string | null; assignee: string; managerAbsent?: boolean }[] = [];
     for (const i of items) {
       const manager = typeof i.payload?.manager === 'string' ? i.payload.manager : null;
-      const assignee = assignTo === 'manager' ? (manager ?? 'iga') : assignTo;
+      // An absent validator (unknown or login-disabled manager, or no manager) never receives a task nobody will read: the iga pool takes it, and the item says why.
+      let managerAbsent = false;
+      if (assignTo === 'manager' && manager) {
+        try { const u = await this.reads?.readUser(tenant, campaign.ref, manager); managerAbsent = !u || u.loginEnabled === false; } catch { managerAbsent = true; }
+      }
+      const assignee = assignTo === 'manager' ? (manager && !managerAbsent ? manager : 'iga') : assignTo;
       const t = await this.tasks.request({
         tenant, kind: 'iga-review', title: `Recertify ${i.identity} (${campaign.name})`,
-        detail: { campaignId, itemId: i.id, identity: i.identity, roles: i.payload?.roles ?? [], decisions: ['approved', 'denied'] },
-        assignee, preventSelfApproval: true, runId: input.runId ?? campaignId, nodeId: i.id,
+        detail: { campaignId, itemId: i.id, identity: i.identity, roles: i.payload?.roles ?? [], decisions: ['approved', 'denied'], ...(managerAbsent ? { managerAbsent: manager } : {}) },
+        assignee, preventSelfApproval: true, runId: input.runId ?? campaignId, nodeId: i.id, ...(dueInSeconds ? { dueInSeconds } : {}), ...(escalateTo ? { escalateTo } : {}),
       });
-      out.push({ item: i.id, task: t.id, assignee: t.assignee });
+      out.push({ item: i.id, task: t.id, assignee: t.assignee, ...(managerAbsent ? { managerAbsent: true } : {}) });
     }
     return { campaign: campaignId, opened: out.length, tasks: out, actor };
+  }
+
+  /** Review tasks past their deadline (open and due_at reached). Read only: lateness is made visible, never acted on. */
+  async overdueReviews(tenant: string, campaignId: string) {
+    await this.get(tenant, campaignId);
+    const at = Date.now();
+    const late = (await this.store.listTasksByCampaign(tenant, campaignId)).filter((t) => t.kind === 'iga-review' && t.status === 'open' && t.due_at && utcMs(String(t.due_at)) <= at);
+    return { campaign: campaignId, overdue: late.length, tasks: late.map((t) => ({ task: t.id, item: String(t.detail?.itemId ?? ''), identity: String(t.detail?.identity ?? ''), assignee: t.delegated_to ?? t.assignee, dueAt: t.due_at, escalated: !!t.reminded_at })) };
+  }
+
+  /** Replaces an absent validator on the OPEN review tasks of a campaign. Per task: refused (never silently skipped) when the new decider is the person under review. Closed campaigns and decided tasks are untouched. */
+  async reassignReviewTasks(tenant: string, actor: string, campaignId: string, input: { from?: unknown; to?: unknown; reason?: unknown }) {
+    if (!this.tasks) throw new BadRequestException('review tasks need the tasks service (server)');
+    const campaign = await this.get(tenant, campaignId);
+    if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
+    const from = String(input.from ?? '').trim(), to = String(input.to ?? '').trim();
+    if (!from || !to) throw new BadRequestException('from and to are required');
+    if (from === to) throw new BadRequestException('from and to are the same decider');
+    this.tasks.resolveAssignee(to);
+    const mine = (await this.store.listTasksByCampaign(tenant, campaignId)).filter((t) => t.kind === 'iga-review' && t.status === 'open' && (t.delegated_to ?? t.assignee) === from);
+    const reassigned: string[] = [], refused: { task: string; reason: string }[] = [];
+    for (const t of mine) {
+      try { await this.tasks.reassignOpen(tenant, t.id, to, actor, String(input.reason ?? 'validator absent')); reassigned.push(t.id); }
+      catch (e) { refused.push({ task: t.id, reason: (e as Error).message }); }
+    }
+    return { campaign: campaignId, from, to, reassigned, refused };
   }
 
   /** The review tasks of a campaign (dedicated query, no inbox cap). */

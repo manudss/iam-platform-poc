@@ -181,6 +181,22 @@ export class WorkflowTasksService {
     return saved;
   }
 
+  /** Replaces the decider of an OPEN task from a workflow/IGA step (an absent validator). The caller is not the current decider, so the delegate() permission rule does not apply: the caller is the reviewed workflow definition. The task stays open, keeps its deadline, and records who it was taken from. Refused when the new decider is the person the task is about. */
+  async reassignOpen(tenant: string, id: string, to: unknown, by: string, reason: string): Promise<TaskRow> {
+    const t = await this.store.getTask(id);
+    if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
+    if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
+    const rawTo = String(to ?? '').trim();
+    const target = this.resolveAssignee(rawTo);
+    if (target === t.detail?.identity || target === t.detail?.subject) throw new ConflictException('the new decider is the person this task is about: refused');
+    const from = t.delegated_to ?? t.assignee;
+    await this.store.patchTaskDetail(id, { pool: rawTo === 'admin' || rawTo === 'iga' ? rawTo : null, reassignedFrom: from, reassignedBy: by, reassignReason: String(reason ?? '').slice(0, 200) });
+    const saved = await this.store.delegateTask(id, target, t.due_at ?? now());
+    if (!saved) throw new ConflictException('this task is no longer open');
+    this.emit(tenant, 'workflow.task-assigned', { task: id, kind: t.kind, title: t.title, assignee: target, actor: by });
+    return saved;
+  }
+
   /** The visible inbox: OPEN tasks first (status=all widens). Own tasks for everyone, everything for an
    * admin with scope=all. "Own" includes the tasks decidable through a pool the actor belongs to: pool
    * members CAN decide them (decide() checks membership), so they must see them. truncated reports the
