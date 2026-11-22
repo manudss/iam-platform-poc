@@ -68,6 +68,13 @@ that is the documented, expected difference, not a bug.
   kill; the real-crash proof is the restart test on the durable store.
 - The visual proof journey (below) runs against a **local fictional demo instance**; it
   demonstrates the implementation, not any hosted or production deployment.
+- "Race-safe" covers the **run status transitions and the relaunch claim** only. Known residual
+  windows, kept as limits rather than silently closed: a Dolt commit conflict on a transition can
+  leave a run `running` without a live pass until the next boot resume; `cancel` cancels the run's
+  durable tasks just before its own guarded transition, so a cancel that loses that race has still
+  canceled the tasks; and between a relaunch's claim and its step resets, a waiting task firing its
+  kick can start a pass on the pre-reset steps. None of these rewrites a terminal state or replays
+  an external effect.
 
 ## Visual proof (local demo)
 
