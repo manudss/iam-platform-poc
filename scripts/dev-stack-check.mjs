@@ -39,7 +39,7 @@ await waitFor('api through the console proxy', async () => {
   const r = await fetch(`${BASE}/api/health`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return true;
-}, 5 * 60_000);
+}, WAIT_MINUTES * 60_000); // the API only starts once the core is compiled and healthy (cold Rust build)
 ok('api through the console proxy', `${BASE}/api/health`);
 
 await waitFor('core login form through the console proxy', async () => {

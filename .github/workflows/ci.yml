@@ -29,6 +29,7 @@ jobs:
       password_eye_required: ${{ steps.plan.outputs.password_eye_required }}
       gallery_bootstrap_required: ${{ steps.plan.outputs.gallery_bootstrap_required }}
       gallery_preferences_required: ${{ steps.plan.outputs.gallery_preferences_required }}
+      dev_stack_check_required: ${{ steps.plan.outputs.dev_stack_check_required }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -227,9 +228,11 @@ jobs:
   dev-stack:
     # The one-command local development stack (scripts/dev.ps1 / scripts/dev.sh,
     # infra/docker-compose.dev.yml): builds the three application containers, boots the whole stack
-    # and checks it end to end with scripts/dev-stack-check.mjs (console, API through the console
-    # proxy, real PKCE sign-in as demo-alice, seeded Dolt data read with the token). Keeps the
+    # and checks it end to end with its check script (console, API through the console proxy,
+    # real PKCE sign-in as demo-alice, seeded Dolt data read with the token). Keeps the
     # documented developer path honest. First-run Rust build happens inside the core container.
+    needs: control_policy
+    if: needs.control_policy.outputs.dev_stack_check_required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -242,6 +245,7 @@ jobs:
       - name: Build and start the dev stack
         run: docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
       - name: Verify the dev stack end to end
+        if: needs.control_policy.outputs.dev_stack_check_required == 'true'
         run: node scripts/dev-stack-check.mjs
       - name: Dev stack logs on failure
         if: ${{ failure() }}
