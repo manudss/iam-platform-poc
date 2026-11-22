@@ -1,10 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, symlinkSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { controlPlan } from './ci-controls.mjs';
+import { controlPlan, auditReferences } from './ci-controls.mjs';
 
 describe('versioned CI control applicability', () => {
   function fixture(run) {
@@ -14,9 +14,10 @@ describe('versioned CI control applicability', () => {
     try {
       git('init', '-q'); git('config', 'user.name', 'test'); git('config', 'user.email', 'test@example.invalid');
       writeFileSync(join(repo, 'README'), 'fictional source\n'); const legacy = commit('before control');
-      writeFileSync(join(repo, 'control.mjs'), 'export const control = true;\n'); const introducedBy = commit('introduce control');
+      mkdirSync(join(repo,'scripts'));
+      writeFileSync(join(repo, 'scripts/control.mjs'), 'export const control = true;\n'); const introducedBy = commit('introduce control');
       writeFileSync(join(repo, 'README'), 'newer fictional source\n'); const current = commit('after control');
-      const controls = [{ id: 'fixture', path: 'control.mjs', introducedBy }];
+      const controls = [{ id: 'fixture', path: 'scripts/control.mjs', introducedBy }];
       run({ repo, git, commit, legacy, introducedBy, current, controls });
     } finally { rmSync(repo, { recursive: true, force: true }); }
   }
@@ -30,7 +31,7 @@ describe('versioned CI control applicability', () => {
     for (const target of [introducedBy,current]) assert.equal(controlPlan(repo,target,controls).controls[0].required,true);
   }));
   it('refuses a control deleted after its introduction', () => fixture(({repo,commit,controls}) => {
-    rmSync(join(repo,'control.mjs')); const removed=commit('remove required control');
+    rmSync(join(repo,'scripts/control.mjs')); const removed=commit('remove required control');
     assert.throws(()=>controlPlan(repo,removed,controls),/required control missing/);
   }));
   it('refuses a divergent missing-control revision instead of inferring legacy from absence', () => fixture(({repo,git,commit,legacy,controls}) => {
@@ -45,15 +46,28 @@ describe('versioned CI control applicability', () => {
     assert.throws(()=>controlPlan(repo,'0'.repeat(40),controls),/Git read failed/);
   }));
   it('refuses empty controls and non-SHA input', () => fixture(({repo,commit,current,controls}) => {
-    writeFileSync(join(repo,'control.mjs'),''); const empty=commit('empty required control');
+    writeFileSync(join(repo,'scripts/control.mjs'),''); const empty=commit('empty required control');
     assert.throws(()=>controlPlan(repo,empty,controls),/empty/);
     for(const input of ['main','HEAD',current.slice(0,7),current.toUpperCase()]) assert.throws(()=>controlPlan(repo,input,controls),/full lowercase SHA/);
   }));
   it('refuses symlink controls and an introduction outside policy history', () => fixture(({repo,git,commit,legacy,controls}) => {
-    rmSync(join(repo,'control.mjs')); symlinkSync('README',join(repo,'control.mjs')); const target=commit('symlink control');
+    rmSync(join(repo,'scripts/control.mjs')); symlinkSync('README',join(repo,'scripts/control.mjs')); const target=commit('symlink control');
     assert.throws(()=>controlPlan(repo,target,controls),/not a regular source file/);
     git('checkout','-q',legacy);
     assert.throws(()=>controlPlan(repo,legacy,controls),/introduction is outside/);
+  }));
+
+  it('audits every script reference and requires the guard for legacy feature exemptions', () => fixture(({repo,legacy,controls}) => {
+    const plan=controlPlan(repo,legacy,controls);
+    const guarded="      - name: feature\n        if: needs.control_policy.outputs.fixture_required == 'true'\n        run: node scripts/control.mjs\n";
+    assert.equal(auditReferences(repo,legacy,plan,guarded)[0].source,'explicit-legacy-feature-exemption');
+    assert.throws(()=>auditReferences(repo,legacy,plan,'      - run: node scripts/control.mjs'),/not protected/);
+    assert.throws(()=>auditReferences(repo,legacy,plan,'      - run: node scripts/new-check.mjs'),/unmapped or required/);
+  }));
+  it('refuses a Gallery bundle copy outside the bootstrap guard', () => fixture(({repo,legacy,controls}) => {
+    const plan=controlPlan(repo,legacy,controls);
+    assert.throws(()=>auditReferences(repo,legacy,plan,'      - run: docker cp fixture:/browser /tmp/gallery-browser'),/bundle copy/);
+    assert.deepEqual(auditReferences(repo,legacy,plan,"      - name: bootstrap\n        if: needs.control_policy.outputs.gallery_bootstrap_required == 'true'\n        run: docker cp fixture:/browser /tmp/gallery-browser"),[]);
   }));
 
 });
