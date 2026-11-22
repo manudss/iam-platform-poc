@@ -18,7 +18,7 @@ const tpl = () => OFFICIAL_TEMPLATES.find((t) => t.id === 'password-reset-approv
 function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean; stripPublishGuard?: boolean; errorLinkToPublish?: boolean; failMark?: boolean } = {}) {
   const runId = 'run-r1', calls: string[] = [], secrets = new RunSecrets();
   const nodes = tpl().nodes.map((n: any) => (n.type === 'lyam-propose-password-reset' ? { ...n, config: { ...n.config, subject: 'bao' } } : opts.stripPublishGuard && n.type === 'lyam-publish-workspace' ? { ...n, config: {} } : n));
-  const edges = opts.errorLinkToPublish ? [...tpl().edges, { from: 'apply', to: 'publish', label: 'error' }] : tpl().edges;
+  const edges = opts.errorLinkToPublish ? [...tpl().edges.filter((e: any) => !(e.from === 'apply' && e.to === 'publish')), { from: 'apply', to: 'publish', label: 'error' }] : tpl().edges;
   const { graph, order } = validateGraph({ nodes, edges } as never);
   const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-reset', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'root', started_at: 'now', finished_at: null, test: false };
   const steps = new Map<string, any>(); for (const id of order) steps.set(id, { run_id: runId, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null });
