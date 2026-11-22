@@ -104,6 +104,17 @@ describe('badge templates: structure', () => {
 });
 
 describe('badge done: early feasibility and late revocation', () => {
+  it('a graph truncated to omit secret-mail is a generic path, not a badge delivery guarantee', async () => withMail(async () => {
+    let preflights = 0;
+    const w = world({ settingsFor: async () => ({}), preflight: async () => { preflights++; throw Error('fixture refusal'); }, graph: (g: any) => {
+      g.nodes = g.nodes.filter((n: any) => n.id !== 'mail');
+      g.edges = g.edges.filter((e: any) => e.from !== 'mail' && e.to !== 'mail');
+      g.edges.push({ from: 'publish', to: 'unblock' });
+    } });
+    await settle(w);
+    assert.equal(w.row.status, 'completed'); assert.equal(preflights, 0);
+    assert.equal(w.state.passwords.length, 1); assert.ok(w.calls.includes('publish')); assert.ok(w.calls.includes('unblock')); assert.equal(FakeMail.calls.length, 0);
+  }));
   const noEffects = async (opts: Parameters<typeof world>[0]) => {
     const w = await settle(world(opts));
     assert.equal(w.row.status, 'failed', JSON.stringify([w.row.error, [...w.steps.values()].map(x => [x.node_id, x.error])]));
