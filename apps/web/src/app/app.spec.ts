@@ -88,7 +88,7 @@ describe('browser sign-in flow (client side)', () => {
 
 describe('personal space and plugin visibility', () => {
   beforeEach(async () => { sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents(); });
-  const as = (access: object) => { const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('x'); s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? access : { fields: [], values: {}, sections: {} } })) as never; return s; };
+  const as = (access: object) => { const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('x'); s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/auth/me/admin-assurance' ? { ok: true } : path === '/me/access' ? access : { fields: [], values: {}, sections: {} } })) as never; return s; };
   it('an ordinary account lands on its applications: no administration menu, admin URLs lead back to the launchpad', async () => {
     as({ subject: 'demo-bob', admin: false, restricted: true, plugins: { organizations: true } });
     const h = await RouterTestingHarness.create(); await h.navigateByUrl('/');
@@ -171,7 +171,7 @@ describe('routing and sign-in guard', () => {
   it('sends an already signed-in visitor from /login to the launchpad route', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-bob');
-    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-bob', admin: false, restricted: true, plugins: {} } : { apps: [] } })) as never;
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/auth/me/admin-assurance' ? { ok: true } : path === '/me/access' ? { subject: 'demo-bob', admin: false, restricted: true, plugins: {} } : { apps: [] } })) as never;
     const h = await RouterTestingHarness.create();
     await h.navigateByUrl('/login'); await new Promise((r) => setTimeout(r, 0));
     expect(TestBed.inject(Router).url).toBe('/my-applications');
@@ -191,7 +191,7 @@ describe('routing and sign-in guard', () => {
   it('once signed in, shows the administration layout with the whole navigation and the requested page', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
-    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: { organizations: true } } : path === '/plugins/menu' ? { entries: [{ plugin: 'organizations', id: 'organizations', title: 'Organizations', area: 'admin', group: 'Access (IAM)', icon: '⌂', order: 30, path: '/screens/organizations/orgs' }, { plugin: 'workflows-iga', id: 'workflows', title: 'Workflows', area: 'admin', group: 'Automation (IGA)', icon: '⟳', order: 10, path: '/workflows' }] } : [] })) as never;    s.workflowsEnabled.set(true); // plugin gate: the Automation menu only exists while the workflows-iga plugin is enabled
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/auth/me/admin-assurance' ? { ok: true } : path === '/me/access' ? { subject: 'demo-alice', admin: true, restricted: true, plugins: { organizations: true } } : path === '/plugins/menu' ? { entries: [{ plugin: 'organizations', id: 'organizations', title: 'Organizations', area: 'admin', group: 'Access (IAM)', icon: '⌂', order: 30, path: '/screens/organizations/orgs' }, { plugin: 'workflows-iga', id: 'workflows', title: 'Workflows', area: 'admin', group: 'Automation (IGA)', icon: '⟳', order: 10, path: '/workflows' }] } : [] })) as never;    s.workflowsEnabled.set(true); // plugin gate: the Automation menu only exists while the workflows-iga plugin is enabled
     const h = await RouterTestingHarness.create();
     await h.navigateByUrl('/activation');
     await new Promise((r) => setTimeout(r, 0)); h.detectChanges(); // the plugin menu loads asynchronously (GET /plugins/menu)
@@ -207,7 +207,7 @@ describe('routing and sign-in guard', () => {
     const open = async (personal: () => unknown) => {
       const s = TestBed.inject(Session);
       s.loggedIn.set(true); s.user.set('demo-alice');
-      s.api.raw = (async (_m: string, path: string) => path === '/me/access' ? { status: 200, data: access } : path === '/workspace/personal' ? { status: 200, data: await personal() } : { status: 200, data: [] }) as never;
+      s.api.raw = (async (_m: string, path: string) => path === '/auth/me/admin-assurance' ? { status: 200, data: { ok: true } } : path === '/me/access' ? { status: 200, data: access } : path === '/workspace/personal' ? { status: 200, data: await personal() } : { status: 200, data: [] }) as never;
       const h = await RouterTestingHarness.create();
       await h.navigateByUrl('/activation');
       await new Promise((r) => setTimeout(r, 0)); h.detectChanges();
@@ -267,6 +267,7 @@ describe('routing and sign-in guard', () => {
     const save = el.querySelector('#lp-save'); expect(save).not.toBeNull();
     el.querySelector<HTMLButtonElement>('.lp-star')!.click(); h.detectChanges();
     release({ branch: 'personal/demo-alice', status: 'created' });
+    s.selectBranch('personal/demo-alice'); // an explicit later selection, no admin bootstrap on the launchpad
     for (let i = 0; i < 3; i++) { await new Promise(r => setTimeout(r, 0)); h.detectChanges(); }
     // Component-only tests miss the shell's branchEpoch-keyed router outlet recreation.
     expect(el.querySelector('#lp-save')).toBe(save);
@@ -280,7 +281,7 @@ describe('routing and sign-in guard', () => {
   it('workflows-iga plugin disabled: the Workflows menu entry is hidden and its routes fall back to /plugins', async () => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
-    s.api.raw = (async (m: string, path: string) => path === '/plugins'
+    s.api.raw = (async (m: string, path: string) => path === '/auth/me/admin-assurance' ? { status: 200, data: { ok: true } } : path === '/plugins'
       ? { status: 200, data: { plugins: [{ id: 'workflows-iga', enabled: false }] } }
       : { status: 200, data: [] }) as never;
     s.workflowsEnabled.set(false); s.selectBranch('personal/demo-alice');
@@ -331,7 +332,7 @@ describe('session expiry handling', () => {
   });
   it('returns to login, retains only the page, clears privileged state and ignores duplicate expiry', async () => {
     sessionStorage.clear(); await TestBed.configureTestingModule({ providers: [provideRouter(routes)] }).compileComponents();
-    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('alice'); s.adminToken.set('local-test'); s.api.raw = (async () => ({ status: 200, data: { subject: 'alice', admin: true, restricted: true, plugins: {} } })) as never; s.api.activations = async () => []; s.api.assignments = async () => [];
+    const s = TestBed.inject(Session); s.loggedIn.set(true); s.user.set('alice'); s.adminToken.set('local-test'); s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/auth/me/admin-assurance' ? { ok: true } : { subject: 'alice', admin: true, restricted: true, plugins: {} } })) as never; s.api.activations = async () => []; s.api.assignments = async () => [];
     const h = await RouterTestingHarness.create(); await h.navigateByUrl('/activation');
     s.expire(); await TestBed.inject(Router).navigateByUrl('/login');
     expect(sessionStorage.getItem(RETURN_KEY)).toBe('/activation'); expect(s.adminToken()).toBe('');

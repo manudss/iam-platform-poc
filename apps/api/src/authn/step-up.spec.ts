@@ -37,7 +37,7 @@ describe('same account and admin reachability', () => {
 });
 
 describe('options for a re-sign-in', () => {
-  const cfg = { methods: [{ id: 'pw', type: 'password', enabled: true, name: 'Password' }, { id: 'tp', type: 'totp', enabled: true, name: 'Authenticator app' }, { id: 'pk', type: 'passkey', enabled: true, name: 'Passkey' }],
+  const cfg = { methods: [{ id: 'pw', type: 'password', enabled: true, name: 'Password' }, { id: 'tp', type: 'totp', enabled: true, name: 'Authenticator app' }, { id: 'pk', type: 'webauthn', enabled: true, name: 'Passkey' }],
     chains: [{ id: 'basic', name: 'Password', level: 3, steps: ['pw'] }, { id: 'mfa', name: 'Password then authenticator', level: 8, steps: ['pw', 'tp'] }, { id: 'key', name: 'Passkey', level: 9, steps: ['pk'] }] };
   const an = { basic: { effectiveLevel: 3, simulatedSteps: [] as string[], mfa: false }, mfa: { effectiveLevel: 8, simulatedSteps: [] as string[], mfa: true }, key: { effectiveLevel: 9, simulatedSteps: [] as string[], mfa: false } };
   it('offers only chains the person has set up, that reach the level, never a weaker one', () => {

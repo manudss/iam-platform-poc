@@ -41,22 +41,23 @@ export function adminReachability(admins: Readonly<Record<string, readonly Chain
 
 /** What a person has set up, per method instance (the shape of EnrollmentStore.status). */
 export interface EnrollmentView { totp?: boolean; pin?: unknown; email?: string | null; external?: unknown; webauthn?: unknown }
-/** Whether this person can really complete one method. Password and e-mail code need nothing set up here; the others need their own enrolment. */
+/** Whether this person can really complete one method. Password needs no separate enrollment; e-mail needs a profile address, other factors need their own enrollment. */
 export function methodEnrolled(type: string, rec: EnrollmentView | undefined): boolean {
-  if (type === 'password' || type === 'email') return true;
+  if (type === 'password') return true;
+  if (type === 'email-otp') return typeof rec?.email === 'string' && !!rec.email.trim();
   if (type === 'totp') return !!rec?.totp;
-  if (type === 'pin') return !!rec?.pin;
+  if (type === 'digit-code') return !!rec?.pin;
   if (type === 'passkey' || type === 'webauthn') return !!rec?.webauthn;
   if (type.startsWith('sso-')) return !!rec?.external;
   return false;
 }
 /** The chains of a configuration as options for a re-sign-in: effective level, simulated, and whether this person can complete every step. */
-export function chainOptions(cfg: { methods: { id: string; type: string; enabled: boolean; name?: string }[]; chains: { id: string; name: string; level?: number; steps: string[] }[]; defaultChain?: string | null }, analysis: Record<string, { effectiveLevel: number; simulatedSteps: string[]; mfa?: boolean }>, status: Record<string, EnrollmentView>): ChainOption[] {
+export function chainOptions(cfg: { methods: { id: string; type: string; enabled: boolean; name?: string }[]; chains: { id: string; name: string; level?: number; steps: string[]; enabled?: boolean }[]; defaultChain?: string | null }, analysis: Record<string, { effectiveLevel: number; simulatedSteps: string[]; mfa?: boolean }>, status: Record<string, EnrollmentView>): ChainOption[] {
   return cfg.chains.map((c) => {
     const methods = c.steps.map((s) => cfg.methods.find((m) => m.id === s));
     const a = analysis[c.id];
     return {
-      id: c.id, name: c.name, enabled: methods.every((m) => !!m?.enabled), effectiveLevel: a?.effectiveLevel ?? 0, simulated: (a?.simulatedSteps.length ?? 0) > 0, enrolled: methods.every((m) => !!m && methodEnrolled(m.type, status[m.id])),
+      id: c.id, name: c.name, enabled: c.enabled !== false && methods.length > 0 && methods.every((m) => !!m?.enabled), effectiveLevel: a?.effectiveLevel ?? 0, simulated: (a?.simulatedSteps.length ?? 0) > 0, enrolled: methods.every((m) => !!m && methodEnrolled(m.type, status[m.id])),
       declaredLevel: c.level ?? a?.effectiveLevel ?? 0, mfa: a?.mfa ?? c.steps.length > 1, recommended: cfg.defaultChain === c.id,
       steps: c.steps.map((s, i) => ({ name: methods[i]?.name ?? s, type: methods[i]?.type ?? '', simulated: a?.simulatedSteps.includes(s) ?? false })),
     };

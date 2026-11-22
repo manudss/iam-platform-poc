@@ -1,6 +1,7 @@
 import { RevealPassword } from './reveal-password';
 import { ApplyDialog } from './apply-dialog';
 import { Brand, Branding } from './branding';
+import { isPersonalArea } from './route-scope';
 import { canOpen, screenOf } from './access';
 import { Component, computed, effect, ElementRef, HostListener, inject, signal, untracked, ViewChild } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
@@ -23,6 +24,7 @@ export class Shell {
   private brandingRequest = 0;
   private async loadBranding(){
     const request=++this.brandingRequest;
+    if (!this.adminArea()) { this.branding.clearDraft(); return; }
     try{const r=await this.s.api.raw<any>('GET','/branding/draft',undefined,this.headers());
       if(request===this.brandingRequest&&r.status<400)this.branding.applyBundle(r.data);
     }catch{/* keep last readable palette while a branch is loading */}
@@ -31,6 +33,23 @@ export class Shell {
 
   protected readonly s = inject(Session);
   private readonly router = inject(Router);
+  private readonly route = signal(this.router.url);
+  protected personalArea() { return isPersonalArea(this.route()); }
+  protected adminArea() { return !this.personalArea() && !!this.s.access() && this.isAdmin() && !this.s.testBranch(); }
+  private adminInit?: Promise<void>;
+  private adminReady = false;
+  private async startAdminArea() {
+    if (!this.adminArea()) return;
+    if (this.adminReady) { void this.loadChanges(); return; }
+    if (this.adminInit) return this.adminInit;
+    this.adminInit = (async () => {
+      await this.ensurePersonal(); if (!this.adminArea()) return;
+      await this.loadBranches(); if (!this.adminArea()) return;
+      void this.loadChanges(); await this.s.refreshWorkflowsEnabled();
+      if (this.adminArea()) { this.adminReady = true; void this.loadPluginMenu(); }
+    })().finally(() => { this.adminInit = undefined; });
+    return this.adminInit;
+  }
   protected workflowEditor() { return this.router.url.startsWith('/workflows/edit/'); }
   protected branches=signal<BranchInfo[]>([]);protected newBranch='';protected working='';protected review=signal<any>(null);protected workingBusy=signal(false);
   /** Compact bar state: the ⋯ menu, the "Manage branches" panel, and the number of changed ROWS on the working branch (the badge). */
@@ -95,10 +114,10 @@ export class Shell {
   /** Coming back to the tab re-reads the counter: changes made in another tab or by someone else show up too. */
   @HostListener('window:focus') onFocus(){void this.loadChanges();}
   protected dot(){if(this.branchState()==='error')return 'red';const b=this.s.branch();return !b||b==='main'?'grey':b===this.personal()?'green':'orange';}
-  protected async loadChanges(){const b=this.s.branch();if(!b||b==='main'||!this.isAdmin()){this.changes.set(null);return;}try{const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());if(r.status<400)this.changes.set(r.data?.diff?.rows?.total??r.data?.diff?.tables?.length??0);}catch{/* the badge is a hint; Review & Apply still reads the diff itself */}}
+  protected async loadChanges(){const b=this.s.branch();if(!b||b==='main'||!this.adminArea()){this.changes.set(null);return;}try{const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());if(r.status<400)this.changes.set(r.data?.diff?.rows?.total??r.data?.diff?.tables?.length??0);}catch{/* the badge is a hint; Review & Apply still reads the diff itself */}}
   /** Menu entries declared by the tenant's active plugins (GET /plugins/menu): a screen joins the sidebar with its plugin and leaves with it. */
   protected readonly pluginMenu=signal<{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]>([]);
-  protected async loadPluginMenu(){try{const r=await this.s.api.raw<{entries:{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]}>('GET','/plugins/menu',undefined,this.headers());if(r.status<400&&Array.isArray(r.data?.entries))this.pluginMenu.set(r.data.entries);}catch{/* the static console still works without it */}}
+  protected async loadPluginMenu(){if(!this.adminArea()){this.pluginMenu.set([]);return;}try{const r=await this.s.api.raw<{entries:{plugin:string;id:string;title:string;area:string;group:string;icon?:string;order?:number;path:string}[]}>('GET','/plugins/menu',undefined,this.headers());if(r.status<400&&Array.isArray(r.data?.entries))this.pluginMenu.set(r.data.entries);}catch{/* the static console still works without it */}}
   protected openManage(){this.manage.set(!this.manage());}
   protected personal=signal('');protected renameTo='';
   /** Opens (or reuses) the signed-in user's own working branch so the console is ready to use on arrival. */
@@ -128,8 +147,7 @@ export class Shell {
     await this.s.loadAccess();
     // Branch test: no personal branch, no workspace bar, no admin init; the app simply runs on the tested branch.
     if(this.s.testBranch()){if(!this.router.url.startsWith('/my-profile')&&!this.router.url.startsWith('/overview'))void this.router.navigateByUrl('/my-profile');return;}
-    if(this.isAdmin()){await this.ensurePersonal();await this.loadBranches();void this.loadChanges();await this.s.refreshWorkflowsEnabled();}else if(!this.router.url.startsWith('/my-profile')&&this.router.url!=='/my-applications')void this.router.navigateByUrl('/my-applications');
-    void this.loadPluginMenu();
+    if(this.isAdmin()) await this.startAdminArea(); else if(!this.personalArea()) void this.router.navigateByUrl('/my-applications');
   }
   /** Opens a sign-in test of the selected data branch in a new tab (docs/branch-test.md). The API issues the short-lived ticket. */
   protected testing=signal(false);
@@ -141,7 +159,7 @@ export class Shell {
   protected async testSignIn(){if(!this.working||this.working==='main')return;this.picker.set(false);this.testing.set(true);try{const r=await this.s.api.raw<{ticket:string;branch:string}>('POST','/workspace/branch-test',{branch:this.working},this.headers());const u=`${location.origin}/login?branch=${encodeURIComponent(r.data.branch)}&ticket=${encodeURIComponent(r.data.ticket)}`;if(!globalThis.open(u,'_blank','noopener'))this.s.say('Allow pop-ups or open this test link: '+u,'error');else this.s.say('Sign-in test of '+r.data.branch+' opened in a new tab. It stays valid for a few minutes.');}catch(e){this.s.say((e as Error).message,'error');}finally{this.testing.set(false);}}
   protected exitTest(){this.s.signOut();void this.router.navigateByUrl('/login');}
   private headers():Record<string,string>{return this.s.adminToken()?{'x-api-admin-token':this.s.adminToken()}:{};}
-  protected async loadBranches(){void this.loadStableLinks();try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);this.branchesAt.set(Date.now());if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
+  protected async loadBranches(){if(!this.adminArea())return;void this.loadStableLinks();try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();this.branches.set((await v.branches()).branches);this.branchesAt.set(Date.now());if(this.s.branch()&&this.s.branch()===this.personal()&&!this.branches().some(b=>b.name===this.personal())){await this.ensurePersonal();this.branches.set((await v.branches()).branches);}}catch(e){this.s.say((e as Error).message,'error');}}
   protected async select(){this.s.selectBranch(this.working);this.review.set(null);void this.loadChanges();this.s.say(this.working==='main'?'Viewing main (read only).':'Working on '+this.working+'. Changes stay here until Apply.');}
   protected async create(){try{const v=new VersioningClient(this.s.api);v.adminToken=this.s.adminToken();await v.createBranch(this.newBranch,'main');this.working=this.newBranch;this.newBranch='';await this.loadBranches();await this.select();this.manage.set(false);}catch(e){this.s.say((e as Error).message,'error');}}
   protected async prepareApply(){this.workingBusy.set(true);try{await this.loadBranches();const r=await this.s.api.raw<any>('GET','/workspace',undefined,this.headers());this.review.set({...r.data,expectedHead:this.branches().find(b=>b.name===r.data.branch)?.commit});}catch(e){this.s.say((e as Error).message,'error');}finally{this.workingBusy.set(false);}}
@@ -239,7 +257,7 @@ export class Shell {
 
 
   constructor() {
-    this.router.events.pipe(filter((e) => e instanceof NavigationEnd),takeUntilDestroyed()).subscribe(() => { this.menu.set(false); this.closeUserMenu(); this.title.set(this.leafTitle()); void this.loadChanges(); void this.loadBranding();
+    this.router.events.pipe(filter((e) => e instanceof NavigationEnd),takeUntilDestroyed()).subscribe(() => { this.route.set(this.router.url); void this.startAdminArea(); this.menu.set(false); this.closeUserMenu(); this.title.set(this.leafTitle()); void this.loadChanges(); void this.loadBranding();
       if (this.router.url.startsWith('/my-profile')) this.meDirty = true; else if (this.meDirty) { this.meDirty = false; void this.loadMe(); } });
     // A plugin enable/disable/install anywhere bumps pluginsVersion: the sidebar follows the registry without a reload.
     effect(() => { this.s.pluginsVersion(); this.s.branch(); this.s.branchEpoch(); void this.loadPluginMenu(); });

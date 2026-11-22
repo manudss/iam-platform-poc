@@ -222,6 +222,9 @@ describe('external provider sign-in (federation)', () => {
       const done = (await gate({ tenant: T, session: entry.session, externalCallback: { state: signinState, code: 'fictional-signin-code' } }).expect(200)).body;
       assert.equal(done.outcome, 'allow');
       assert.equal(done.subject, 'demo-bob');
+      assert.equal(done.claims.auth_level, 6, 'plugin-scoped real GitHub must not be downgraded from its empty instance settings');
+      assert.deepEqual(done.claims.auth_simulated, []);
+      assert.deepEqual(done.claims.amr, ['fed']);
       assert.equal(tokenCalls, 2);
       assert.equal(observedVerifiers.size, 2, 'one fresh verifier per flow');
     } finally {

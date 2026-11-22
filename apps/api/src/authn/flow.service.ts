@@ -139,9 +139,17 @@ export class AuthnService implements OnApplicationBootstrap {
   async workingSecurity(tenant: string): Promise<SecurityConfig> { return parseSecurity(await (await this.registry('work')).coreSettings(tenant, SECURITY_SETTINGS_ID)); }
   /** Chains the person can complete to reach `minLevel` (never a weaker one, never simulated, only what they have set up). */
   async stepUpOptions(tenant: string, subject: string, minLevel: number): Promise<ChainOption[]> {
-    const cfg = await this.liveConfig(tenant);
-    const analysis = Object.fromEntries(cfg.chains.map((c) => { const a = analyzeChain(cfg, c); return [c.id, { effectiveLevel: a.effectiveLevel, simulatedSteps: a.simulatedSteps, mfa: a.mfa }]; }));
-    return eligibleChains(chainOptions(cfg, analysis, await this.enroll.status(tenant, subject) as never), minLevel);
+    const reg = await this.signinRegistry();
+    // Use the same offered chains, serving-plugin verdicts and live transport as public sign-in.
+    // No options cache here: a newly disabled plugin must disappear immediately.
+    const base = await this.optionsBase(reg, tenant);
+    const view = this.optionsView(base, base.hasEmail ? await this.notifyCapability(reg, tenant) : undefined);
+    const cfg = { ...base.cfg, chains: base.list };
+    const analysis = Object.fromEntries(view.chains.map((c) => [c.id, { effectiveLevel: c.effectiveLevel, simulatedSteps: c.steps.flatMap((s, i) => s.simulated ? [cfg.chains.find((x) => x.id === c.id)!.steps[i]] : []), mfa: c.mfa }]));
+    const status = await this.enroll.status(tenant, subject);
+    const email = await this.profileEmail(subject);
+    for (const m of cfg.methods) if (m.type === 'email-otp' && email) status[m.id] = { ...status[m.id], email };
+    return eligibleChains(chainOptions(cfg, analysis, status), minLevel);
   }
   /** The rule for administration pages: the level (and optional freshness) of the sign-in behind the session. Off at 0. */
   async adminAssurance(tenant: string, claims: { auth_level?: unknown; auth_time?: unknown } | undefined): Promise<StepUpVerdict> {
@@ -541,6 +549,17 @@ export class AuthnService implements OnApplicationBootstrap {
       ...(branch ? { branch, test: true as const } : {}),
     };
   }
+  /** Immutable attempt snapshot. Runtime evidence may only reduce it, never inherit a static guess. */
+  private async assuranceSnapshot(reg: PluginRegistry, tenant: string, cfg: AuthnConfig, chain: AuthnConfig['chains'][number]) {
+    const cap = chain.steps.some((id) => cfg.methods.find((m) => m.id === id)?.type === 'email-otp') ? await this.notifyCapability(reg, tenant) : undefined;
+    const steps = await Promise.all(chain.steps.map(async (id) => {
+      const m = cfg.methods.find((x) => x.id === id)!;
+      const v = await this.verification(reg, tenant, m);
+      return { id: m.id, type: m.type, name: m.name, level: m.level, config: structuredClone(m.config), real: v?.real === true && (m.type !== 'email-otp' || cap?.real === true) };
+    }));
+    const analysis = analyzeChain(cfg, chain, (m) => ({ real: steps.find((s) => s.id === m.id)?.real === true, note: '' }));
+    return { analysis, steps };
+  }
   /** Which chain a sign-in uses: the one the person picked, else the administrator's default, else the plain single-password chain (JSON /authorize, scripts). None = refuse. */
   private async resolve(cfg: AuthnConfig, reg: PluginRegistry, tenant: string, requested?: string) {
     const list = await this.offered(cfg, reg, tenant);
@@ -564,8 +583,7 @@ export class AuthnService implements OnApplicationBootstrap {
     if (t.factor === 'other') {
       const key = `${tenant}/${branch ?? 'live'}//external-entry`;
       if (this.tooManyStarts(key)) { this.audit({ tenant, outcome: 'throttled' }); return { mode: 'error', message: 'Too many attempts. Try again later.' }; }
-      const a = analyzeChain(cfg, chain);
-      const steps = await Promise.all(chain.steps.map(async (id) => { const sm = cfg.methods.find((x) => x.id === id)!; return { id: sm.id, type: sm.type, name: sm.name, level: sm.level, config: sm.config, real: (await this.verification(reg, tenant, sm)).real }; }));
+      const { analysis: a, steps } = await this.assuranceSnapshot(reg, tenant, cfg, chain);
       const s: Session = { id: randomBytes(24).toString('base64url'), tenant, subject: '', branch, known: false, exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
       this.sessions.set(s.id, s);
       await this.prepare(s);
@@ -593,8 +611,7 @@ export class AuthnService implements OnApplicationBootstrap {
     if (!/^[A-Za-z0-9._@-]{1,64}$/.test(subject)) return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' };
     const key = `${b.tenant}/${b.branch ?? 'live'}/${subject}`;
     if (this.throttled(key) || this.tooManyStarts(key)) { this.audit({ tenant: b.tenant, subject, outcome: 'throttled' }); return { outcome: 'deny', reason: 'bad-credentials', message: 'Sign-in failed. Check your details and try again.' }; }
-    const a = analyzeChain(cfg, chain);
-    const steps = await Promise.all(chain.steps.map(async (id) => { const m = cfg.methods.find((x) => x.id === id)!; return { id: m.id, type: m.type, name: m.name, level: m.level, config: m.config, real: (await this.verification(reg, b.tenant, m)).real }; }));
+    const { analysis: a, steps } = await this.assuranceSnapshot(reg, b.tenant, cfg, chain);
     const s: Session = { id: randomBytes(24).toString('base64url'), tenant: b.tenant, subject, branch: b.branch, origin: typeof b.origin === 'string' ? b.origin.slice(0, 200) : undefined, known: await this.known(b.tenant, subject, b.branch), exp: this.now() + SESSION_MS, index: 0, chain: { id: chain.id, name: chain.name, level: a.effectiveLevel }, steps, declared: a.declaredLevel, done: [], tries: 0 };
     this.sessions.set(s.id, s);
     await this.prepare(s);
@@ -700,6 +717,7 @@ export class AuthnService implements OnApplicationBootstrap {
       return deny(message);
     }
     if (!s.subject) { s.subject = linked.user; s.known = await this.known(s.tenant, linked.user, s.branch); }
+    st.real = st.real && p.mode !== 'simulated';
     s.pendingExternal = undefined;
     const r = await this.advance(s);
     return { ...r, ...(s.authorize ? { resume: s.authorize } : {}) };
@@ -793,6 +811,9 @@ export class AuthnService implements OnApplicationBootstrap {
     // failure: the gate answers 503 and the core refuses the sign-in (fail closed).
     const r = await reg.callSlot<{ prompt: Prompt; state: Record<string, any>; notify?: Record<string, unknown>; mail?: { tenant: string; to: string; subject: string; text: string; subjectUser: string } }>(s.tenant, `auth.${st.type}`, 'auth.prepare', await this.methodPayload(reg, s, st, {}));
     s.prepared = { prompt: r.result.prompt, state: r.result.state ?? {} }; s.tries = 0;
+    // A real-looking SMTP config is not a mailbox proof when the handler took the demo path.
+    // Pin this to the prepared challenge, so later capability changes cannot upgrade a demo code.
+    if (st.type === 'email-otp') st.real = st.real && !!r.result.notify && !r.result.mail;
     // Effects the pure handler asked for: the core applies them (durable notify emission, demo outbox). The
     // mail content is rendered first through the notify.templates slot (mail-templates, docs/mail-templates.md):
     // a renderer problem degrades to the legacy raw payload, explicitly logged (never blocks a sign-in).
@@ -956,9 +977,16 @@ export class AuthnService implements OnApplicationBootstrap {
     // Factor 'other' (federation) never counts toward MFA by itself: a federated step asserts a sign-in happened
     // at the provider, not an independent factor of THIS service (docs/sso-federation.md).
     const real = s.done.filter((d) => d.real), factors = new Set(real.map((d) => methodType(d.type)!.factor).filter((f) => f !== 'other'));
+    // Issue only from the exact completed steps of this attempt. Partial/mismatched evidence fails closed.
+    if (s.done.length !== s.steps.length || !s.steps.length || s.steps.some((st, i) => s.done[i]?.id !== st.id || s.done[i]?.type !== st.type)) {
+      return { outcome: 'deny', reason: 'incomplete-chain', message: 'Sign-in failed. Start again.' };
+    }
+    const issued = analyzeChain({ methods: s.steps.map((st) => ({ ...st, enabled: true })), chains: [], defaultChain: null },
+      { id: s.chain.id, name: s.chain.name, level: s.declared, enabled: true, steps: s.steps.map((st) => st.id) },
+      (m) => ({ real: s.done.find((d) => d.id === m.id)?.real === true, note: '' }));
     const claims = {
       amr: [...new Set(real.map((d) => methodType(d.type)!.amr))],
-      auth_time: Math.floor(this.now() / 1000), auth_level: s.chain.level, auth_level_declared: s.declared, auth_level_basis: 'configured',
+      auth_time: Math.floor(this.now() / 1000), auth_level: issued.effectiveLevel, auth_level_declared: s.declared, auth_level_basis: 'configured',
       auth_mfa: factors.size >= 2, auth_chain: s.chain.id, auth_methods: s.done.map((d) => d.id),
       auth_simulated: s.done.filter((d) => !d.real).map((d) => d.id),
       ...sessionClaims(await this.signinSession(s.tenant, s.branch)),
