@@ -456,14 +456,18 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
   });
 
   it('two concurrent re-runs: the exclusive claim lets exactly one through and the loser resets nothing', async () => {
+    // The wait step makes the race deterministic: after the winner's claim the run cannot slip back to
+    // 'completed' for 2s (a rerun OF a completed run is legitimate by design, so a fast run would let a
+    // sequential - not racing - second request claim it again, which is correct but not what is tested here).
     const def = (await ok('POST', '/workflows', { name: 'Race rerun', graph: { nodes: [
+      { id: 'w', type: 'wait', name: 'slow', config: { seconds: 2 } },
       { id: 'n', type: 'notify', name: 'hi', config: { recipient: 'x', message: 'y' } },
-    ], edges: [] } })) as { definition: { id: string } };
+    ], edges: [{ from: 'w', to: 'n' }] } })) as { definition: { id: string } };
     const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
     await waitRun(started.run.id, ['completed']);
     const [r1, r2] = await Promise.all([
-      call('POST', `/workflow-runs/${started.run.id}/rerun-from/n`),
-      call('POST', `/workflow-runs/${started.run.id}/rerun-from/n`),
+      call('POST', `/workflow-runs/${started.run.id}/rerun-from/w`),
+      call('POST', `/workflow-runs/${started.run.id}/rerun-from/w`),
     ]);
     const won = [r1.status, r2.status].filter((c) => c < 300).length;
     const conflicted = [r1.status, r2.status].filter((c) => c === 409).length;
@@ -472,6 +476,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const v = await waitRun(started.run.id, ['completed']);
     assert.equal(v.run.status, 'completed', 'the relaunched run re-completes intact');
     assert.equal(v.steps.find((s) => s.node_id === 'n')!.status, 'done');
+    assert.equal(v.steps.find((s) => s.node_id === 'w')!.attempts, 2, 'the reset step re-ran exactly once: the loser wiped nothing and replayed nothing');
   });
 
   it('recertification journey: campaign > review task > pool decision > resume > strict close (real Dolt)', async () => {

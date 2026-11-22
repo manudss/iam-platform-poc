@@ -250,6 +250,16 @@ export class WorkflowStore {
    * so a terminal state (cancel/completed/failed) recorded by another writer between a caller's read
    * and this write always wins. Returns true when the transition was applied. */
   async transitionRun(id: string, patch: Partial<Pick<RunRow, 'status' | 'error' | 'branch' | 'finished_at'>>, from: string[]): Promise<boolean> {
+    // Serialized per process: every call gets its own connection, and Dolt's snapshot model lets two
+    // SIMULTANEOUS statements both match the guarded status (last-writer-wins at commit) - observed as a
+    // double-won relaunch claim. Chaining them makes the second read the first's committed state. This
+    // matches the deployment model: the engine is in-process, so run control is already per-process.
+    const p = this.transitionChain.then(() => this.transitionRunExclusive(id, patch, from));
+    this.transitionChain = p.catch(() => undefined);
+    return p;
+  }
+  private transitionChain: Promise<unknown> = Promise.resolve();
+  private async transitionRunExclusive(id: string, patch: Partial<Pick<RunRow, 'status' | 'error' | 'branch' | 'finished_at'>>, from: string[]): Promise<boolean> {
     const sets: string[] = [], vals: unknown[] = [];
     for (const k of ['status', 'error', 'branch', 'finished_at'] as const) if (k in patch) { sets.push(`${k} = ?`); vals.push(patch[k] ?? null); }
     if (!sets.length || !from.length) return false;

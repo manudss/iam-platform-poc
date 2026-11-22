@@ -74,7 +74,11 @@ that is the documented, expected difference, not a bug.
   demonstrates the implementation, not any hosted or production deployment.
 - "Race-safe" covers the **run status transitions and the relaunch claim**. What is proven where:
   the atomic SQL transition primitive and the double concurrent rerun are proven on real Dolt; the
-  cancel/pass interleavings are proven on the engine test double. No load testing was done. Known
+  cancel/pass interleavings are proven on the engine test double. No load testing was done. The
+  relaunch claim's exclusivity is enforced per API process (status transitions are serialized in the
+  store, because Dolt's snapshot model otherwise lets two simultaneous statements both match the
+  guarded status); this matches the in-process engine, and several API instances sharing one
+  meta-store are out of scope. Known
   residual windows, kept as limits rather than silently closed: a Dolt commit conflict on a
   transition surfaces as a 500 with the state left non-finalized (verified fail-closed: no silent
   wrong state); `cancel` cancels the run's durable tasks just before its own guarded transition, so
