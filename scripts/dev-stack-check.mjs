@@ -49,6 +49,15 @@ await waitFor('core login form through the console proxy', async () => {
 }, WAIT_MINUTES * 60_000);
 ok('core through the console proxy', `${BASE}/core/health`);
 
+// The gate chain (core -> API gate -> auth plugins over the bus) can answer 503 while the API finishes
+// its plugin boot: wait for the public sign-in options endpoint like the demo warm-up does.
+await waitFor('sign-in gate warm', async () => {
+  const r = await fetch(`${BASE}/api/tenants/acme-demo/signin/options`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return true;
+}, 3 * 60_000);
+ok('sign-in gate warm', `${BASE}/api/tenants/acme-demo/signin/options`);
+
 // 4. PKCE sign-in through the real form endpoints (no browser needed; the flow carries no cookies)
 const state = b64url(randomBytes(24));
 const verifier = b64url(randomBytes(48));
@@ -85,7 +94,8 @@ if (!token.ok || typeof access !== 'string') fail('token exchange', `HTTP ${toke
 ok('token exchange');
 
 // 5. the token reads the seeded fictional data through the API
-const res = await fetch(`${BASE}/api/tenants/acme-demo/assignments`, { headers: { authorization: `Bearer ${access}` } });
+// Workspace mode requires an explicit working data branch, like the console sends after sign-in.
+const res = await fetch(`${BASE}/api/tenants/acme-demo/assignments`, { headers: { authorization: `Bearer ${access}`, 'x-iam-branch': 'main' } });
 const body = await res.text();
 if (!res.ok) fail('seeded data with the signed-in token', `HTTP ${res.status}: ${body.slice(0, 200)}`);
 if (!body.includes('demo-bob')) fail('seeded data with the signed-in token', 'demo-bob missing from the assignments');
