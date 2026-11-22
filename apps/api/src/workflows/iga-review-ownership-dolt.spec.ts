@@ -185,4 +185,39 @@ describe('IGA live deciders and durable review ownership (real Dolt)', { skip: !
     assert.equal((await fresh.decide('acme', task.id, 'boss-b', 'approved', 'reviewed')).decided_by, 'boss-b');
   });
 
+  it('a self-manager routes to an eligible pool without letting the reviewed person decide', async () => {
+    await sql("update identities set manager_id = 'employee' where id = 'employee'");
+    const iga = new WorkflowsIgaService(store, service, reads);
+    const campaign = await iga.createCampaign('acme', 'admin', { name: 'Self manager', scope: { users: ['employee'] } });
+    const opened = await iga.openReviewTasks('acme', 'workflow:r', campaign.id, { assignTo: 'manager' });
+    const task = (await store.getTask(opened.tasks[0].task!))!;
+    assert.equal(task.assignee, 'active'); assert.equal(task.detail.pool, 'iga'); assert.equal(task.detail.reviewManager, undefined);
+    await assert.rejects(service.decide('acme', task.id, 'employee', 'approved', 'own review'), /beneficiary/);
+    assert.equal((await store.getTask(task.id))!.status, 'open');
+  });
+  it('a two-person manager cycle does not recurse, auto-decide or waive subject exclusion on either review', async () => {
+    await sql("update identities set manager_id = 'boss-b' where id = 'boss-a'");
+    await sql("update identities set manager_id = 'boss-a' where id = 'boss-b'");
+    try {
+      const iga = new WorkflowsIgaService(store, service, reads);
+      const campaign = await iga.createCampaign('acme', 'admin', { name: 'Cycle characterization', scope: { users: ['boss-a', 'boss-b'] } });
+      const opened = await iga.openReviewTasks('acme', 'workflow:r', campaign.id, { assignTo: 'manager' });
+      assert.equal(opened.opened, 2);
+      for (const t of opened.tasks) {
+        const task = (await store.getTask(t.task!))!;
+        assert.notEqual(task.assignee, task.detail.identity);
+        await assert.rejects(service.decide('acme', task.id, String(task.detail.identity), 'approved', 'own review'), /beneficiary/);
+        assert.equal((await store.getTask(task.id))!.status, 'open');
+      }
+      // This characterizes one-level assignment only; no reciprocal-review conflict policy is invented.
+    } finally { await sql("update identities set manager_id = null where id in ('boss-a', 'boss-b')"); }
+  });
+  it('the manager who started an ancestor workflow cannot self-approve through an IGA child run', async () => {
+    const now = new Date().toISOString().slice(0, 23).replace('T', ' ');
+    for (const [id, started_by] of [['iga-parent-run', 'boss-a'], ['iga-child-run', 'workflow:iga-parent-run']]) await store.createRun({ id, tenant: 'acme', definition_id: 'fixture', name: 'Starter chain', graph: { nodes: [], edges: [] }, branch: null, base_branch: null, status: 'waiting', error: null, started_by, started_at: now, finished_at: null, test: false } as never, []);
+    const task = await service.request({ ...input('starter-chain', 'boss-a'), runId: 'iga-child-run' });
+    await assert.rejects(service.decide('acme', task.id, 'boss-a', 'approved', 'manager also initiated ancestor'), /anti-self-approval/);
+    assert.equal((await store.getTask(task.id))!.status, 'open');
+  });
+
 });
