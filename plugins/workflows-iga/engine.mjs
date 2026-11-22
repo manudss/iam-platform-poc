@@ -460,8 +460,8 @@ export function createWorkflowEngine(deps) {
         await store.patchStep(run.id, node.id, { input: { publishIntent } });
       }
     }
-    // Reset path fail-closed: a publish that follows an approved-reset apply step IN THIS RUN must carry the reset guard (the block refuses otherwise). Only the approved-reset block counts: the badge flow (generic set-temporary-password) is unchanged.
-    const resetApplied = node.type === 'lyam-publish-workspace' && (await store.steps(run.id)).some(s => s.status === 'done' && run.graph?.nodes?.find(n => n.id === s.node_id)?.type === 'lyam-apply-password-reset');
+    // Reset path fail-closed, decided on the GRAPH not on step status: any publish node of a run whose graph holds an approved-reset apply node must carry the reset guard. This also covers an apply that wrote the credential then failed (error branch, continue-on-error) and a publish that could run in parallel while apply is still running. Only the approved-reset block counts: the badge flow (generic set-temporary-password) is unchanged.
+    const resetApplied = node.type === 'lyam-publish-workspace' && !!run.graph?.nodes?.some(n => n.type === 'lyam-apply-password-reset');
     const sensitive = [secret];
     if (secret) {
       sensitive.push(Buffer.from(`${settings.jiraEmail ?? ''}:${secret}`).toString('base64'));

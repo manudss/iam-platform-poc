@@ -15,10 +15,11 @@ const loadBlocks = () => ({ externalBlock: _eb });
 const HOUR = 3_600_000;
 const tpl = () => OFFICIAL_TEMPLATES.find((t) => t.id === 'password-reset-approved')!;
 
-function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean; stripPublishGuard?: boolean } = {}) {
+function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean; stripPublishGuard?: boolean; errorLinkToPublish?: boolean; failMark?: boolean } = {}) {
   const runId = 'run-r1', calls: string[] = [], secrets = new RunSecrets();
   const nodes = tpl().nodes.map((n: any) => (n.type === 'lyam-propose-password-reset' ? { ...n, config: { ...n.config, subject: 'bao' } } : opts.stripPublishGuard && n.type === 'lyam-publish-workspace' ? { ...n, config: {} } : n));
-  const { graph, order } = validateGraph({ nodes, edges: tpl().edges } as never);
+  const edges = opts.errorLinkToPublish ? [...tpl().edges, { from: 'apply', to: 'publish', label: 'error' }] : tpl().edges;
+  const { graph, order } = validateGraph({ nodes, edges } as never);
   const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-reset', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'root', started_at: 'now', finished_at: null, test: false };
   const steps = new Map<string, any>(); for (const id of order) steps.set(id, { run_id: runId, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null });
   const store = { getRunById: async (id: string) => (id === runId ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, transitionRun: async (_i: string, p: any, from: string[]) => { if (!from.includes(row.status)) return false; Object.assign(row, p); return true; }, runningRuns: async () => (row.status === 'running' ? [row] : []), step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); } };
@@ -29,6 +30,7 @@ function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?:
     markApplied: async (_t: string, id: string, consumer: string, revision: string) => { const t = state.tasks.get(id); const d = t.detail ?? {}; if (d.consumedBy !== consumer || d.appliedBy) throw new Error('not recorded'); t.detail = { ...d, appliedBy: consumer, appliedRevision: revision }; },
     check: async (_t: string, id: string) => { const t = state.tasks.get(id); return t?.status === 'open' ? { state: 'open', task: t } : { state: 'decided', task: t }; },
   };
+  if (opts.failMark) { const m = tasks.markApplied; tasks.markApplied = async (...a: [string, string, string, string]) => { void m; throw new Error('recording failed'); }; }
   const MAIN = 'main000111222333', HEAD = 'abcdef0123456789';
   const deps: any = {
     store, secrets, log: { warn() {}, error() {} },
@@ -96,6 +98,13 @@ describe('password reset template on the real engine (doubles)', () => {
     assert.deepEqual(w.calls, ['block', 'setTemporary'], 'no publish call, no unblock');
     assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1);
     assert.match(String(w.row.error ?? JSON.stringify([...w.steps.values()].map((x: any) => x.error))), /reset guard/);
+  }));
+  it('apply writes the credential, then FAILS (recording error), an error link leads to a publish without guard: refused, nothing published, no mail (the rule follows the graph, not the apply status)', async () => withMail(async () => {
+    const w = await settle(world({ stripPublishGuard: true, errorLinkToPublish: true, failMark: true })); w.approve(); await settle(w, w.build());
+    assert.equal(w.steps.get('apply')!.status, 'failed', dump(w));
+    assert.ok(w.calls.includes('setTemporary'), 'the credential was written before the failure');
+    assert.equal(w.calls.includes('publish'), false, 'no merge'); assert.equal(FakeMail.calls.length, 0);
+    assert.equal(w.steps.get('publish')!.status, 'failed', 'the publish step itself refused: ' + dump(w));
   }));
   it('target promoted during publication: NO mail leaves; but the credential is already published and the account stays blocked (availability gap, not closed)', async () => withMail(async () => {
     const w2 = world({ onPublish: () => { w2.state.isAdmin = true; } });
