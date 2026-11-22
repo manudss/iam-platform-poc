@@ -10,10 +10,12 @@ import { RunSecrets } from './run-secrets.js';
 const { createWorkflowEngine } = loadPluginModule('workflows-iga', 'engine.mjs') as any;
 const mailApi = loadPluginModule('workflow-connectors', 'mail-api.mjs') as any;
 class FakeMail { static calls: any[] = []; emails = { send: async (payload: any, opts: any) => { FakeMail.calls.push({ payload, opts }); return { data: { id: 'msg-1' } }; } }; }
+import { externalBlock as _eb } from './model.js';
+const loadBlocks = () => ({ externalBlock: _eb });
 const HOUR = 3_600_000;
 const tpl = () => OFFICIAL_TEMPLATES.find((t) => t.id === 'password-reset-approved')!;
 
-function world(opts: { onPublish?: () => void } = {}) {
+function world(opts: { onPublish?: () => void; onSet?: () => void; hangPublish?: boolean } = {}) {
   const runId = 'run-r1', calls: string[] = [], secrets = new RunSecrets();
   const nodes = tpl().nodes.map((n: any) => (n.type === 'lyam-propose-password-reset' ? { ...n, config: { ...n.config, subject: 'bao' } } : n));
   const { graph, order } = validateGraph({ nodes, edges: tpl().edges } as never);
@@ -34,7 +36,7 @@ function world(opts: { onPublish?: () => void } = {}) {
     tasks, authn: { targetIsAdmin: () => state.isAdmin },
     reads: { readUser: async (_t: string, _r: string, id: string) => ({ id, email: 'bao@example.test', roles: [] }) },
     users: {
-      setTemporary: async (_t: string, a: any) => { calls.push('setTemporary'); state.passwords.push(a.password); state.fa = { required: true, expired: false, revision: 'rev-1', expiresAt: Date.now() + a.hours * HOUR }; return { revision: 'rev-1', expiresAt: state.fa.expiresAt }; },
+      setTemporary: async (_t: string, a: any) => { calls.push('setTemporary'); opts.onSet?.(); state.passwords.push(a.password); state.fa = { required: true, expired: false, revision: 'rev-1', expiresAt: Date.now() + a.hours * HOUR }; return { revision: 'rev-1', expiresAt: state.fa.expiresAt }; },
       firstAccess: async () => state.fa, emailOf: async () => 'bao@example.test',
     },
     accounts: {
@@ -42,9 +44,9 @@ function world(opts: { onPublish?: () => void } = {}) {
       activeBlocks: async () => state.blocks.map((b) => ({ ...b })),
       unblock: async (_t: string, a: any) => { calls.push('unblock'); const own = a.ownerRun ? `workflow:${a.ownerRun}` : null; const lift = state.blocks.filter((b) => (!a.kind || b.kind === a.kind) && (!own || b.setBy === own)); state.blocks = state.blocks.filter((b) => !lift.includes(b)); return { lifted: lift.length, remaining: state.blocks.length }; },
     },
-    workspace: { headOf: async () => HEAD, publish: async (_t: string, a: any) => { calls.push('publish'); opts.onPublish?.(); return { published: true, branch: a.branch, sourceHead: a.expectedHead, mainCommit: MAIN, activation: 'applied' }; }, proof: async () => ({ mainCommit: MAIN, activation: 'applied', activationCommit: MAIN, containsHead: true }) },
+    workspace: { headOf: async () => HEAD, publish: async (_t: string, a: any) => { calls.push('publish'); opts.onPublish?.(); if (opts.hangPublish) return new Promise<never>(() => {}); return { published: true, branch: a.branch, sourceHead: a.expectedHead, mainCommit: MAIN, activation: 'applied' }; }, proof: async () => ({ mainCommit: MAIN, activation: 'applied', activationCommit: MAIN, containsHead: true }) },
   };
-  const build = () => createWorkflowEngine(deps);
+  const build = (sec?: any) => createWorkflowEngine(sec ? { ...deps, secrets: sec } : deps);
   return { row, steps, calls, state, secrets, build, engine: build(), approve: (decision = 'approved') => { const t = state.tasks.get('task-1'); t.status = 'decided'; t.decision = decision; t.decided_by = 'boss'; t.justification = decision === 'approved' ? null : 'no'; } };
 }
 type W = ReturnType<typeof world>;
@@ -73,6 +75,19 @@ describe('password reset template on the real engine (doubles)', () => {
     const w = await settle(world()); w.approve(); w.state.isAdmin = true; await settle(w, w.build());
     assert.equal(w.row.status, 'failed', dump(w)); assert.deepEqual(w.calls, []); assert.equal(FakeMail.calls.length, 0);
   }));
+  it('target promoted between apply and publication: the publication is refused BEFORE the merge, nothing published, no mail (the account stays blocked until an administrator acts)', async () => withMail(async () => {
+    const w = world({ onSet: () => { w.state.isAdmin = true; } });
+    await settle(w); w.approve(); await settle(w, w.build());
+    assert.equal(w.row.status, 'failed', dump(w));
+    assert.deepEqual(w.calls, ['block', 'setTemporary']);
+    assert.equal(FakeMail.calls.length, 0);
+    assert.equal(w.state.blocks.length, 1);
+  }));
+  it('the publication guard needs approval, account and validity together, and the generic publish is unchanged', () => {
+    const { externalBlock } = loadBlocks();
+    assert.throws(() => externalBlock('lyam-publish-workspace')!.validate({ resetApprovalTaskId: 't' } as never), /together/);
+    assert.deepEqual(externalBlock('lyam-publish-workspace')!.validate({} as never), {});
+  });
   it('target promoted during publication: NO mail leaves; but the credential is already published and the account stays blocked (availability gap, not closed)', async () => withMail(async () => {
     const w2 = world({ onPublish: () => { w2.state.isAdmin = true; } });
     await settle(w2); w2.approve(); await settle(w2, w2.build());
@@ -80,5 +95,22 @@ describe('password reset template on the real engine (doubles)', () => {
     assert.deepEqual(w2.calls, ['block', 'setTemporary', 'publish']);
     assert.equal(FakeMail.calls.length, 0);
     assert.equal(w2.state.blocks.length, 1, 'the block is still in force: the account stays unavailable until an administrator acts');
+  }));
+  it('crash while publishing (process killed): the restarted engine has lost the in-memory password, so the run fails closed: NO mail, and the password is in no persisted step', async () => withMail(async () => {
+    const w = world({ hangPublish: true });
+    await settle(w); w.approve();
+    w.engine.kick(w.row.id);
+    for (const until = Date.now() + 5000; !w.calls.includes('publish') && Date.now() < until; ) await new Promise((r) => setTimeout(r, 30));
+    assert.ok(w.calls.includes('publish'));
+    // The process dies here: a new engine instance, a NEW (empty) secret store, same durable state.
+    const fresh = new RunSecrets();
+    const pw = w.state.passwords[0];
+    const restarted = w.build(fresh);
+    restarted.kick(w.row.id);
+    for (const until = Date.now() + 5000; !['completed', 'failed'].includes(w.row.status) && Date.now() < until; ) await new Promise((r) => setTimeout(r, 30));
+    assert.equal(FakeMail.calls.length, 0, 'no mail after the restart: ' + dump(w));
+    assert.equal(JSON.stringify([...w.steps.values()]).includes(pw), false);
+    assert.equal(w.row.status, 'failed', dump(w));
+    assert.equal(w.state.passwords.length, 1, 'the credential was not set a second time');
   }));
 });

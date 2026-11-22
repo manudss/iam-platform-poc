@@ -531,11 +531,22 @@ const lyamPublishWorkspace = {
   simulated: false,
   category: 'real',
   description: 'REAL: merges this run\'s working branch into main and activates it, with the same checks as a human Apply (separation of duties, unreachable level, activation). Only workflows an administrator listed in the publishAllowedWorkflows setting may do it. The result is read back from the real state: it fails unless main moved to the activated commit. A test run publishes nothing. It is not a GitHub merge.',
-  fields: [],
+  fields: [
+    { key: 'resetApprovalTaskId', label: 'Reset approval task (reset path only)', type: 'string', required: false, help: '{{steps.<propose-reset>.taskId}}: when set, the approval binding and the non-admin status of the account are re-checked immediately before the merge. Needs the account and the validity too.' },
+    { key: 'resetSubject', label: 'Reset account (reset path only)', type: 'string', required: false },
+    { key: 'resetHours', label: 'Reset validity in hours (reset path only)', type: 'string', required: false },
+  ],
   outputs: [{ key: 'published', description: 'true only when main holds the branch and the activation is applied' }, { key: 'mainCommit', description: 'The commit of main that was activated' }, { key: 'sourceHead', description: 'The branch head that was published' }],
-  validate() { return {}; },
+  validate(cfg) {
+    const t = String(cfg?.resetApprovalTaskId ?? '').trim(), a = String(cfg?.resetSubject ?? '').trim(), h = String(cfg?.resetHours ?? '').trim();
+    if (!t && !a && !h) return {};
+    if (!t || !a || !h) bad('lyam-publish-workspace: the reset guard needs the approval task, the account and the validity together');
+    return { resetApprovalTaskId: str(t, 'lyam-publish-workspace.resetApprovalTaskId', 80), resetSubject: userId(a, 'lyam-publish-workspace.resetSubject'), resetHours: hoursOf(h, 'lyam-publish-workspace.resetHours') };
+  },
   async run(ctx) {
     if (ctx.test || ctx.dryRun) { ctx.log('test run: nothing published'); return { published: false }; }
+    // Reset path only: the approval binding and the account's non-admin status are re-read right before the merge. The administrator list is server configuration (restart-time), so within one process it cannot change between this check and the merge.
+    if (ctx.config?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', ctx.config.resetApprovalTaskId, ctx.config.resetSubject, ctx.config.resetHours);
     if (!ctx.workspace) bad('lyam-publish-workspace: publication is not available on this server');
     if (!ctx.hasRunBranch || !ctx.publishIntent) bad('lyam-publish-workspace: this run has no working branch to publish (an earlier step must write data)');
     const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head });
