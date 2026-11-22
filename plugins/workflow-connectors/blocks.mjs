@@ -324,6 +324,7 @@ const jiraCreateIssue = {
     { key: 'issueTypeId', label: 'Issue type ID (numeric)', type: 'string', required: true, default: '10001', help: 'Jira numeric id of the issue type (Task is often 10001 on a fresh site)' },
     { key: 'summary', label: 'Summary', type: 'string', required: true },
     { key: 'description', label: 'Description', type: 'text' },
+    { key: 'labels', label: 'Labels (comma separated)', type: 'string', help: 'e.g. badge-demo. The Jira Done trigger of the badge workflow only sees tickets carrying its label. Jira ignores a label when the field is not on the create screen of the project.' },
   ],
   outputs: [
     { key: 'key', description: 'The created issue key (null in dry-run)' },
@@ -336,6 +337,7 @@ const jiraCreateIssue = {
       issueTypeId: str(cfg.issueTypeId, 'issueTypeId', 10),
       summary: str(cfg.summary, 'summary', 200),
       description: str(cfg.description, 'description', 2000, false),
+      labels: labelsOf(cfg.labels),
     };
   },
   async run(ctx) {
@@ -350,7 +352,7 @@ const jiraCreateIssue = {
     if (!instanceUrl || !email || !apiToken) bad('jira-create-issue: fill the Jira settings of the workflow-connectors plugin first (console), or keep dryRun on');
     const result = await runPieceAction('@activepieces/piece-jira-cloud', 'create_issue', {
       auth: { props: { instanceUrl, email, apiToken } },
-      propsValue: { projectId: c.project, issueTypeId: c.issueTypeId, issueFields: { summary: c.summary, ...(c.description ? { description: c.description } : {}) } },
+      propsValue: { projectId: c.project, issueTypeId: c.issueTypeId, issueFields: { summary: c.summary, ...(c.description ? { description: c.description } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } },
     });
     const key = String(result?.key ?? '');
     ctx.log(`Jira issue ${key} created (REAL, on ${instanceUrl})`);
@@ -450,6 +452,8 @@ const lyamCreateUser = {
 
 
 // ------------------------------------------------------------------- lyam connector: send a mail ----
+/** Optional Jira labels: comma separated, each one letters, digits, dot, dash or underscore (a label cannot hold a space in Jira). */
+const labelsOf = (v) => { const raw = String(v ?? '').trim(); if (!raw) return []; const l = raw.split(',').map((x) => x.trim()).filter(Boolean); if (l.length > 10 || l.some((x) => !/^[A-Za-z0-9_.-]{1,60}$/.test(x))) bad('labels: up to 10, comma separated, letters, digits, dot, dash, underscore'); return [...new Set(l)]; };
 const MAIL_RE = /^[^\s@,;<>]{1,64}@[^\s@,;<>]{1,190}\.[A-Za-z]{2,}$/;
 const lyamSendMail = {
   type: 'lyam-send-mail',

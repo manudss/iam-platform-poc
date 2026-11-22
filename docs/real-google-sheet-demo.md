@@ -79,3 +79,17 @@ An unresolved Google login/key, a missing secret store, an unmerged code fix or 
 - Google credential types and direct per-document service-account sharing: https://developers.google.com/workspace/guides/create-credentials
 - Google Sheets quotas/pricing: https://developers.google.com/workspace/sheets/api/limits . Standard usage is currently at no additional cost; stay within the published quotas and do not enable paid quota increases.
 - Pinned OpenBao image and binary location: https://github.com/openbao/openbao/blob/v2.7.2/Dockerfile . Its dev mode is explicitly not for production.
+
+
+## Badge templates: preparation checklist
+
+The official badge templates are paused and simulated when instantiated. They do not authorize a real run. Configure and review both graphs before activation:
+
+- Phase 1 ticket uses a configurable `labels` field (comma separated), set to `badge-demo`. Phase 2 filters on the same label. Verify that the Jira create metadata includes the labels field; the installed Activepieces action only sends fields present in that metadata.
+- Phase 1 records the durable ticket/account/row correlation, then writes the ticket key to the sheet with the `trace` node, before marking `cree=ok`. The trace column defaults to `ticket` and is editable in that node. It must exist before a real run.
+- The final marker column remains configurable on phase 2's `mark` node. Its existing default `badge` is not a decision about a live sheet header. Set it to the header approved for that sheet (for example `badge-fait` when that is what was approved). Do not create or rename other columns by inference.
+- The row key defaults to a unique `email` column. Adding that column, selecting an actual recipient and allowing that recipient for secret mail are separate live setup steps requiring approval. The template never hardcodes a real address.
+- French ticket/mail text follows the demo plan. The generic mail greeting is `Bonjour` rather than `Bonjour Camille`; the account identifier, validity duration and recorded expiry are substituted at runtime. These adaptations must be included in the exact rendered message shown for approval before sending. The 24-hour default is not an unchanging claim about the expiry.
+- No password is stored in a ticket, spreadsheet, graph or output. `[[password]]` and `[[expiry]]` are mail-only markers. The recipient must match the linked account and be explicitly allowed.
+
+These changes update the template catalogue, not workflow definitions already instantiated on a deployment. No spreadsheet write, Jira issue or e-mail is performed by loading the catalogue or running validation tests.
