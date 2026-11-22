@@ -109,12 +109,11 @@ export class LaunchpadPage {
     const br = untracked(() => this.s.branch()) || null;
     if (this.loadedBranch && br !== this.loadedBranch) { this.editing.set(false); this.beforeEdit = null; this.stopDrag(); }
     this.loadedBranch = br;
-    const keepWorkingCopy = untracked(() => this.editing());
     // Hydration: reuse what the server fetched to render this very page instead of refetching it.
     if (this.isBrowser && this.transfer.hasKey(LAUNCHPAD_KEY)) {
       const d = this.transfer.get(LAUNCHPAD_KEY, {});
       this.apps.set(Array.isArray(d.apps) ? d.apps : []);
-      if (!keepWorkingCopy) this.preferences.set(d.preferences ?? { favourites: [], order: [] });
+      if (!untracked(() => this.editing())) this.preferences.set(d.preferences ?? { favourites: [], order: [] });
       this.problem.set(''); this.failedImages.set([]);
       this.transfer.remove(LAUNCHPAD_KEY);
       this.loaded.set(true);
@@ -130,7 +129,8 @@ export class LaunchpadPage {
       if (epoch !== this.loadEpoch) return;
       if (r.status >= 400) throw Error(r.data?.message || 'Could not load applications');
       this.apps.set(Array.isArray(r.data?.apps) ? r.data.apps : []);
-      if (!keepWorkingCopy) this.preferences.set(r.data?.preferences ?? { favourites: [], order: [] });
+      // A request may have started before organise(). Check when applying its response, not before await.
+      if (!untracked(() => this.editing())) this.preferences.set(r.data?.preferences ?? { favourites: [], order: [] });
       this.problem.set(''); this.failedImages.set([]);
       if (!this.isBrowser) this.transfer.set(LAUNCHPAD_KEY, r.data ?? {});
     } catch (e) { if (epoch === this.loadEpoch) this.problem.set((e as Error).message); }

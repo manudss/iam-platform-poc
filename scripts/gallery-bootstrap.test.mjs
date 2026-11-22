@@ -56,7 +56,7 @@ test('a delayed workspace bootstrap keeps the real shell gallery mounted; a true
       });
       const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
       try {
-        await page.goto(origin + '/my-applications'); await page.locator('.lp-card').waitFor();
+        await page.goto(origin + '/my-applications'); await page.locator('.lp-card').first().waitFor();
         await page.locator('#lp-organise').click(); await page.locator('#lp-save').waitFor();
         const save = await page.locator('#lp-save').elementHandle();
         await page.locator('.lp-star').click();
@@ -71,6 +71,78 @@ test('a delayed workspace bootstrap keeps the real shell gallery mounted; a true
         await page.locator('#lp-organise').waitFor(); assert.equal(await page.locator('#lp-save').count(), 0, 'real branch switch still cancels editing');
         assert.deepEqual(errors, []);
       } finally { release(); await context.close(); }
+    }
+  } finally { await browser.close(); server.closeAllConnections(); await new Promise(r => server.close(r)); }
+});
+
+test('an in-flight gallery response cannot replace edits made after its request started', async () => {
+  const server = createServer(async (req, res) => {
+    try {
+      const name = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+      let file = resolve(root, '.' + name); assert.ok(file.startsWith(root + '/') || file === root);
+      let content;
+      try { content = await readFile(file); } catch {
+        file = resolve(root, 'index.csr.html');
+        try { content = await readFile(file); } catch { file = resolve(root, 'index.html'); content = await readFile(file); }
+      }
+      res.setHeader('content-type', mime[extname(file)] ?? 'application/octet-stream'); res.end(content);
+    } catch { res.writeHead(404); res.end(); }
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, args: ['--no-sandbox'] });
+  try {
+    for (const [label, viewport] of [['desktop', { width: 1440, height: 1050 }], ['mobile', { width: 390, height: 844 }]]) {
+      const context = await browser.newContext({ viewport });
+      const token = 'fixture.' + Buffer.from(JSON.stringify({ sub: 'demo-alice', exp: Math.floor(Date.now() / 1000) + 1800 })).toString('base64url') + '.fixture';
+      await context.addInitScript(t => localStorage.setItem('iam.session', t), token);
+      let release, releaseLoad, observedLoad; const personal = new Promise(r => { release = r; });
+      const delayedLoad = new Promise(r => { releaseLoad = r; });
+      const loadStarted = new Promise(r => { observedLoad = r; });
+      let loads = 0;
+      await context.route('**/*', async route => {
+        const u = new URL(route.request().url());
+        if (u.origin !== origin) return route.abort();
+        if (u.pathname === '/session/bootstrap') return route.fulfill({ status: 404, contentType: 'text/plain', body: 'No session edge in fixture' });
+        if (!u.pathname.startsWith('/api/')) return route.continue();
+        if (/\/branding\/logo-horizontal-(light|dark)\.svg$/.test(u.pathname)) {
+          const variant = u.pathname.includes('-dark') ? 'dark' : 'light';
+          return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: await readFile(resolve('apps/web/public/lyam-logo-horizontal-' + variant + '.svg')) });
+        }
+        let data = {};
+        if (u.pathname.endsWith('/workspace/personal')) { await personal; data = { branch: 'personal/demo-alice', status: 'created' }; }
+        else if (u.pathname.endsWith('/me/access')) data = { subject: 'demo-alice', admin: true, restricted: false, plugins: {} };
+        else if (u.pathname.endsWith('/launchpad')) {
+          const delayed = ++loads > 1;
+          if (delayed) { observedLoad(); await delayedLoad; }
+          data = { apps: [app, { ...app, id: 'second', name: delayed ? 'Z refreshed fixture' : 'Z second fixture' }], preferences: { favourites: [], order: [] } };
+        }
+        else if (u.pathname.endsWith('/branches')) data = { branches: [{ name: 'main', default: true }, { name: 'personal/demo-alice' }] };
+        else if (u.pathname.endsWith('/plugins')) data = { plugins: [] };
+        else if (u.pathname.endsWith('/plugins/menu')) data = { entries: [] };
+        else if (u.pathname.endsWith('/profile/self')) data = { values: {} };
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) });
+      });
+      const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
+      try {
+        await page.goto(origin + '/my-applications'); await page.locator('.lp-card').first().waitFor();
+        release(); await loadStarted;
+        // This response is already in flight before the user starts editing.
+        await page.locator('#lp-organise').click();
+        await page.locator('[data-move="second-up"]').click();
+        await page.waitForFunction(() => document.querySelector('[aria-label="Other applications"] .lp-card')?.getAttribute('data-app') === 'second');
+        const first = () => page.locator('[aria-label="Other applications"] .lp-card').first().getAttribute('data-app');
+        assert.equal(await first(), 'second');
+        releaseLoad();
+        await page.getByRole('heading', { name: 'Z refreshed fixture', exact: true }).waitFor();
+        assert.equal(await first(), 'second', 'late pre-edit GET must not overwrite the working order');
+        await page.locator('#lp-save').waitFor();
+        if (shots) { await mkdir(shots, { recursive: true }); await page.screenshot({ path: resolve(shots, label + '-inflight.png'), fullPage: true }); }
+        await page.locator('#lp-cancel').click();
+        await page.locator('#lp-organise').waitFor();
+        assert.equal(await first(), 'fixture', 'Cancel restores the pre-edit order');
+        assert.deepEqual(errors, []);
+      } finally { release(); releaseLoad(); await context.close(); }
     }
   } finally { await browser.close(); server.closeAllConnections(); await new Promise(r => server.close(r)); }
 });
