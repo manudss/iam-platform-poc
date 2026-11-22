@@ -16,6 +16,7 @@ await page.route('**/api/**',async route=>{const req=route.request(),p=new URL(r
 if(req.method()!=='GET'&&!p.endsWith('/workspace/personal'))writes.push(req.method()+' '+p);
 if(p.includes('/branding/')&&p.endsWith('.svg')){await route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg"/>'});return;}
 if(p.endsWith('/me/access'))j={admin:true,restricted:false,plugins:{},screenAccess:false};
+else if(p.endsWith('/auth/me/admin-assurance'))j={ok:true,requiredLevel:0,currentLevel:0};
 else if(p.endsWith('/workspace/personal'))j={branch:'demo-alice',status:'reused'};
 else if(p.endsWith('/workspace'))j={diff:{rows:{total:0},tables:[]}};
 else if(p.endsWith('/versioning/branches'))j={branches:[{name:'main',commit:'a',protected:true,default:true,aheadOfDefault:0,behindDefault:0},{name:'demo-alice',commit:'b',protected:false,default:false,aheadOfDefault:1,behindDefault:0}]};

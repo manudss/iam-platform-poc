@@ -3,6 +3,7 @@ import { ApiClient, Change, sessionCookieToken } from './api';
 import { computed } from '@angular/core';
 import type { Access } from './access';
 import { Router } from '@angular/router';
+import { isPersonalArea } from './route-scope';
 import { preloadLaunchpadChunk, prefetchLaunchpad } from './launchpad-preload';
 
 export type Tone = 'info' | 'error';
@@ -58,7 +59,7 @@ export class Session implements OnDestroy {
     if (req) { const t = sessionCookieToken(req.headers.get('cookie') ?? ''); if (t && this.api.adoptServer(t)) this.signedIn(); }
     // The shell bar listens to accepted data writes to refresh its pending-changes counter and flash the pending-merge hint.
     // A level rule on the administration pages: remember where the person was and offer the stronger sign-in, never a dead end.
-    this.api.onStepUp = (b) => { const url = this.router.url; if (url.startsWith('/step-up')) return; void this.router.navigate(['/step-up'], { queryParams: { kind: 'admin', level: b.requiredLevel, current: b.currentLevel, return: url.split('#')[0] } }); };
+    this.api.onStepUp = (b) => { const url = this.router.url; if (isPersonalArea(url)) return; void this.router.navigate(['/step-up'], { queryParams: { kind: 'admin', level: b.requiredLevel, current: b.currentLevel, return: url.split('#')[0] } }); };
     this.api.onDataMutation = (m) => { this.lastWritePath.set(m.path); this.branchWrites.update((x) => x + 1); };
   }
   /** Heartbeat of accepted data writes (never failures); `lastWritePath` distinguishes branch data from branch bookkeeping. */
@@ -117,17 +118,20 @@ export class Session implements OnDestroy {
   }
   readonly access = signal<Access | null>(null);
   private accessLoad?: Promise<Access>;
+  private accessEpoch = 0;
   /** Loaded once per sign-in. If it cannot be read the person is treated as ordinary (nothing is revealed that the API would refuse). */
   loadAccess(): Promise<Access> {
-    return this.accessLoad ??= this.api.raw<Access>('GET', '/me/access', undefined, this.adminToken() ? { 'x-api-admin-token': this.adminToken() } : {}).then((r) => (r.status < 400 ? r.data : { subject: '', admin: false, restricted: true, plugins: {} })).catch(() => ({ subject: '', admin: false, restricted: true, plugins: {} } as Access)).then((a) => { const n = { ...a, plugins: a.plugins ?? {} }; this.access.set(n); return n; });
+    const epoch = this.accessEpoch;
+    return this.accessLoad ??= this.api.raw<Access>('GET', '/me/access', undefined, this.adminToken() ? { 'x-api-admin-token': this.adminToken() } : {}).then((r) => (r.status < 400 ? r.data : { subject: '', admin: false, restricted: true, plugins: {} })).catch(() => ({ subject: '', admin: false, restricted: true, plugins: {} } as Access)).then((a) => { if (epoch !== this.accessEpoch) return { subject: '', admin: false, restricted: true, plugins: {} }; const n = { ...a, plugins: a.plugins ?? {} }; this.access.set(n); return n; });
   }
-  refreshAccess() { this.accessLoad = undefined; return this.loadAccess(); }
+  refreshAccess() { this.accessEpoch++; this.accessLoad = undefined; return this.loadAccess(); }
   ngOnDestroy() { clearTimeout(this.expiryTimer); clearInterval(this.tick); }
 
   say(text: string, tone: Tone = 'info') { this.message.set(text); this.tone.set(tone); }
 
   /** Marks the session signed in after a successful token exchange (browser or legacy flow). */
   signedIn(fallbackName = '') {
+    this.accessEpoch++; this.accessLoad = undefined; this.access.set(null); // never carry the previous account rights through a new sign-in
     // My applications is the landing page: its chunk and its data load while the rest of the console starts.
     void preloadLaunchpadChunk(); prefetchLaunchpad(this.api);
     this.expired.set(false); this.loggedIn.set(true); this.user.set(this.api.identity || fallbackName);
@@ -148,7 +152,7 @@ export class Session implements OnDestroy {
 
   signOut() {
     this.expired.set(false); clearTimeout(this.expiryTimer); clearInterval(this.tick); this.timing.set(null); this.dismissed.set(false);
-    this.api.endEdgeSession(); this.api.logout();this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.testBranch.set(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
+    this.api.endEdgeSession(); this.api.logout();this.accessEpoch++;this.accessLoad = undefined; this.access.set(null);this.selectBranch(''); this.testBranch.set(''); this.loggedIn.set(false); this.user.set(''); this.change.set(null);
     this.assignments.set([]); this.activations.set([]); this.adminToken.set(''); this.say('Signed out.');
   }
 

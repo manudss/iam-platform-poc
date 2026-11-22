@@ -11,7 +11,7 @@ describe('PluginScreenPage (packaged plugin screens)', () => {
   const inventory = (screens: object[]) => {
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('x'); s.selectBranch('b1');
-    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/me/access' ? { subject: 'x', admin: true, plugins: {} } : path === '/plugins/screens' ? { screens } : path === '/workspace/personal' ? { branch: 'b1', status: 'reused' } : { entries: [] } })) as never;
+    s.api.raw = (async (_m: string, path: string) => ({ status: 200, data: path === '/auth/me/admin-assurance' ? { ok: true } : path === '/me/access' ? { subject: 'x', admin: true, plugins: {} } : path === '/plugins/screens' ? { screens } : path === '/workspace/personal' ? { branch: 'b1', status: 'reused' } : { entries: [] } })) as never;
     return s;
   };
   const fakeLoader = () => {

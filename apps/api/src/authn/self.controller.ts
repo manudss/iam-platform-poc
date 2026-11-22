@@ -37,6 +37,10 @@ export class AuthnSelfController {
     const level = Math.min(10, Math.max(0, Number(req.query?.level ?? 0) || 0));
     return { level, chains: await this.authn.stepUpOptions(t, req.user.sub, level) };
   }
+  /** Read-only navigation preflight, using the same published rule as AdminGuard. It grants no admin right. */
+  @Get('me/admin-assurance') adminAssurance(@Param('tenant') t: string, @Req() req: { user: { auth_level?: unknown; auth_time?: unknown } }) {
+    return this.authn.adminAssurance(t, req.user);
+  }
   /** What the person has, per method instance (never the secrets themselves). */
   @Get('me/enrollments') async enrollments(@Param('tenant') t: string, @Req() req: { user: { sub: string } }) {
     const live = await this.authn.liveConfig(t);

@@ -71,7 +71,7 @@ try {
   const path = () => new URL(page.url()).pathname;
   const status = (txt) => page.waitForFunction((t) => [...document.querySelectorAll('[role=status]')].some((e) => e.textContent?.includes(t)), txt);
   const noBanner = async (label) => { const alerts = await page.locator('[role=alert]').allTextContents(); assert.equal(alerts.length, 0, label + ': no alert (got: ' + JSON.stringify(alerts) + ')'); const t = (await page.textContent('body')) ?? ''; assert.ok(!/Cannot GET|Internal server error|HTTP 5\d\d|Failed to fetch|admin capability required/.test(t), label + ': no error banner'); };
-  const nav = (p) => page.click(`nav a[data-nav="${p}"]`);
+  const nav = async (p) => { await page.click(`nav a[data-nav="${p}"]`); await page.waitForURL(u => u.pathname === p); };
   // the core login form: wrong password first when asked, then the right one; returns to the console
   await page.goto(`${BASE}/login`, {waitUntil:'commit'});
 
@@ -79,6 +79,8 @@ try {
   await page.fill('input[name=username]', 'demo-alice');await page.fill('input[name=password]', 'demo-only-not-a-secret');
   await page.click('button[type=submit]');
   await page.waitForSelector('header #user-menu-button');
+  // Personal landing does not open admin branches or load plugin menus. Enter administration explicitly.
+  await nav('/overview');
   await status('personal branch');
   await page.waitForSelector('nav a[data-nav="/screens/branding-base/customisation"]');
   await nav('/screens/branding-base/customisation');

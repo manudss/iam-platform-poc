@@ -31,6 +31,7 @@ describe('branch bar: changes chip, branch picker and pending-merge flash', () =
     const s = TestBed.inject(Session);
     s.loggedIn.set(true); s.user.set('demo-alice');
     s.api.raw = (async (_m: string, path: string) => {
+      if (path === '/auth/me/admin-assurance') return { status: 200, data: { ok: true } };
       if (path === '/me/access') return { status: 200, data: access };
       if (path === '/workspace/personal') return { status: 200, data: { branch: 'personal/demo-alice', status: 'reused' } };
       if (path === '/versioning/branches') return { status: 200, data: branchList };

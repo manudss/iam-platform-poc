@@ -30,6 +30,28 @@ describe('session token persistence (docs/session.md)', () => {
     expect(session.api.loggedIn).toBe(false);
   });
 
+  it('a new sign-in discards cached rights from the previous account', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter([])] });
+    const s = TestBed.inject(Session);
+    let subject = 'first-user';
+    const raw = vi.spyOn(s.api, 'raw').mockImplementation(async (_m, path) => ({ status: 200, data: path === '/me/access' ? { subject, admin: true, restricted: true, plugins: {} } : {} }) as never);
+    expect((await s.loadAccess()).subject).toBe('first-user');
+    subject = 'second-user'; s.signedIn();
+    expect(s.access()).toBeNull();
+    expect((await s.loadAccess()).subject).toBe('second-user');
+    expect(raw.mock.calls.filter(c => c[1] === '/me/access')).toHaveLength(2);
+  });
+
+  it('a late previous-account access response cannot restore old rights', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter([])] });
+    const s = TestBed.inject(Session);
+    let complete!: (value: { status: number; data: unknown }) => void;
+    vi.spyOn(s.api, 'raw').mockImplementation(async (_m, path) => path === '/me/access' ? new Promise(r => { complete = r; }) : { status: 200, data: {} } as never);
+    const old = s.loadAccess(); s.signedIn();
+    complete({ status: 200, data: { subject: 'previous-user', admin: true, restricted: true, plugins: {} } });
+    expect((await old).admin).toBe(false); expect(s.access()).toBeNull();
+  });
+
   it('behind the hosted edge the session comes from the cookie bootstrap, never from localStorage', async () => {
     const valid = jwt(Math.floor(Date.now() / 1000) + 600);
     const f = (async () => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () => ({ id_token: valid }) })) as unknown as typeof fetch;

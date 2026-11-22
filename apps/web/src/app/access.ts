@@ -1,5 +1,5 @@
 import { inject } from '@angular/core';
-import { CanActivateFn, Router } from '@angular/router';
+import { CanActivateFn, Router, UrlTree } from '@angular/router';
 import { Session } from './session';
 
 /** What the console may show this person. Display only: the API checks the verified identity again on every call. */
@@ -29,12 +29,20 @@ export function firstAllowedPath(a: Access | null): string {
 }
 
 /** Administration pages: an ordinary account is sent to its own profile (the API refuses its admin calls anyway). */
-export const accessGuard: CanActivateFn = async (_r, state) => {
-  const s = inject(Session), router = inject(Router); const a = await s.loadAccess();
-  if (a.screenAccess && a.screens) { const sc = screenOf(state.url); if (sc === 'dashboard' && !a.screens.includes(sc)) return router.createUrlTree([firstAllowedPath(a)]); // the default landing page: go to the first screen the person opens
-    return !sc || a.screens.includes(sc) ? true : router.createUrlTree(['/access-denied'], { queryParams: { screen: sc } }); }
-  return a.admin || !a.restricted ? true : router.createUrlTree(['/my-applications']);
-};
+export const accessGuard: CanActivateFn = async (_r, state) => adminRouteAccess(inject(Session), inject(Router), state.url);
+
+/** Rights first, then current published assurance, before any administration component or workspace opens. */
+export async function adminRouteAccess(s: Session, router: Router, url: string): Promise<true | UrlTree> {
+  const a = await s.loadAccess();
+  if (a.screenAccess && a.screens) { const sc = screenOf(url); if (sc === 'dashboard' && !a.screens.includes(sc)) return router.createUrlTree([firstAllowedPath(a)]); // the default landing page: go to the first screen the person opens
+    if (sc && !a.screens.includes(sc)) return router.createUrlTree(['/access-denied'], { queryParams: { screen: sc } });
+  } else if (!a.admin && a.restricted) return router.createUrlTree(['/my-applications']);
+  try {
+    const r = await s.api.raw<{ ok: boolean; requiredLevel?: number; currentLevel?: number }>('GET', '/auth/me/admin-assurance');
+    if (r.status >= 400) return router.createUrlTree(['/my-applications']);
+    return r.data.ok ? true : router.createUrlTree(['/step-up'], { queryParams: { kind: 'admin', level: r.data.requiredLevel, current: r.data.currentLevel, return: url.split('#')[0] } });
+  } catch { return router.createUrlTree(['/my-applications']); }
+}
 /** A plugin page that is not enabled does not exist in the console: back to the overview. */
 export const pluginGuard = (id: string): CanActivateFn => async () => {
   const s = inject(Session), router = inject(Router); const a = await s.loadAccess();
