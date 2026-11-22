@@ -32,9 +32,9 @@ Production code: 44 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:77 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:119 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
-| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:371 |
-| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:375 |
-| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:379 |
+| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:372 |
+| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:376 |
+| core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:380 |
 | plugin deps.emit (durable app event) | emitter | app.registered | plugins/app-connector/handlers.mjs:114 |
 | plugin deps.emit (durable app event) | emitter | app.updated | plugins/app-connector/handlers.mjs:120 |
 | plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:126 |
