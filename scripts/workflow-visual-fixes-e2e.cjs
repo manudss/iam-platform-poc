@@ -11,6 +11,7 @@ const page=await browser.newPage({viewport:{width:mobile?390:1440,height:mobile?
 await page.addInitScript(theme=>{localStorage.setItem('iam.session','x.'+btoa(JSON.stringify({sub:'demo-alice',tenant:'acme-demo',iat:Date.now()/1000,exp:Date.now()/1000+3600}))+'.x');localStorage.setItem('iam.theme',theme);},theme);
 await page.route('**/api/**',async route=>{const p=new URL(route.request().url()).pathname;let j={};
 if(p.endsWith('/me/access'))j={admin:true,restricted:false,plugins:{},screenAccess:false};
+else if(p.endsWith('/auth/me/admin-assurance'))j={ok:true,requiredLevel:0,currentLevel:0};
 else if(p.endsWith('/workspace/personal'))j={branch:'demo-alice',status:'reused'};
 else if(p.endsWith('/workspace'))j={diff:{rows:{total:0},tables:[]}};
 else if(p.endsWith('/versioning/branches'))j={branches:[{name:'main'},{name:'demo-alice'}]};

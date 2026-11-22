@@ -80,6 +80,9 @@ try {
   await page.screenshot({path:out+'/mobile-320.png',fullPage:true});
   // Admin artwork is staged on the selected branch, versioned in Dolt, and only live after Apply.
   await page.setViewportSize({width:1440,height:1050}); await page.reload(); await page.waitForSelector('.lp-card');
+  // Enter administration before asking for its dynamic plugin navigation.
+  await page.locator('nav a[data-nav="/overview"]').click();
+  await page.waitForSelector('[name=globalBranch]');
   await page.locator('nav a[data-nav="/applications"]').click(); await page.waitForSelector('#app-table');
   await page.locator('#app-table tr').filter({hasText:'PeopleHub'}).getByRole('button',{name:'Edit',exact:true}).click();
   await page.waitForSelector('.app-logo-preview');
