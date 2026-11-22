@@ -1190,7 +1190,7 @@ const lyamProposePasswordReset = {
         { key: 'hours', label: 'Temporary validity (hours)', type: 'string', default: '24' },
         { key: 'reason', label: 'Reason', type: 'text', required: true },
     ],
-    outputs: [{ key: 'taskId', description: 'The durable task id' }, { key: 'decision', description: 'approved or refused' }, { key: 'decidedBy', description: 'Who decided' }],
+    outputs: [{ key: 'taskId', description: 'The durable task id' }, { key: 'decision', description: 'approved or refused' }, { key: 'decidedBy', description: 'Who decided' }, { key: 'subject', description: 'The account of the proposal (the approval is bound to it)' }, { key: 'hours', description: 'The approved validity in hours' }],
     validate(cfg) {
         const hours = str(cfg.hours, 'hours', 8, false) || '24';
         if (!/^\d{1,4}(\.\d{1,2})?$/.test(hours) || !(Number(hours) > 0 && Number(hours) <= 720)) bad('hours: more than 0 and at most 720');
@@ -1207,7 +1207,7 @@ const lyamProposePasswordReset = {
                 // Re-checked when the approval is consumed (the following steps do the credential work): a target
                 // promoted to administrator since the proposal is refused, so the approval cannot be used for it.
                 if (t.decision === 'approved' && !(ctx.test || ctx.dryRun) && need(ctx.authn, 'lyam-propose-password-reset').targetIsAdmin(c.subject)) bad(`lyam-propose-password-reset: "${c.subject}" became an administrator since the proposal: the approval is refused, propose again through the console`);
-                return { taskId: t.id, decision: t.decision, decidedBy: t.decided_by, justification: t.justification ?? '' };
+                return { taskId: t.id, decision: t.decision, decidedBy: t.decided_by, justification: t.justification ?? '', subject: c.subject, hours: c.hours };
             }
             if (t?.status === 'canceled') bad('lyam-propose-password-reset: the task was canceled');
             throw new WorkflowSuspend({ taskId: ctx.resumeWait.taskId, kind: 'lyam-propose-password-reset' });

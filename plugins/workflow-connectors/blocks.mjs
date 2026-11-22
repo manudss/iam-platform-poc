@@ -511,7 +511,7 @@ const lyamBlockAccount = {
     if (!KINDS.includes(kind)) bad(`lyam-block-account.kind: one of ${KINDS.join(', ')}`);
     const d = cfg.durationMinutes;
     if (d !== undefined && d !== null && d !== '' && !(Number.isInteger(Number(d)) && Number(d) >= 1 && Number(d) <= 525600)) bad('lyam-block-account.durationMinutes: a whole number of minutes (1 to 525600)');
-    return { subject: userId(cfg.subject, 'lyam-block-account.subject'), kind, message: str(cfg.message, 'lyam-block-account.message', 300), ...(str(cfg.exclusive, 'lyam-block-account.exclusive', 3, false) === 'yes' ? { exclusive: true } : {}), ...(d ? { durationMinutes: Number(d) } : {}) };
+    return { subject: userId(cfg.subject, 'lyam-block-account.subject'), kind, message: str(cfg.message, 'lyam-block-account.message', 300), ...(['yes', 'true'].includes(String(cfg.exclusive ?? '').trim()) ? { exclusive: true } : {}), ...(d ? { durationMinutes: Number(d) } : {}) };
   },
   async run(ctx) {
     const c = ctx.config;
