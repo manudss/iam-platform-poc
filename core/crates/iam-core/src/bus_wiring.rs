@@ -298,15 +298,15 @@ pub async fn register(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Jso
             return (StatusCode::CONFLICT, Json(json!({"error": e})));
         }
     }
-    // Replace the delivery set: drop this plugin's old subscriptions only, then add the new ones.
-    b.dispatcher.unsubscribe(&r.plugin);
-    for s in &r.subscriptions {
-        if let Err(e) = b.dispatcher.subscribe(Subscription { subscriber: r.plugin.clone(), kind: s.kind.clone(), mandatory: s.mandatory, group: s.group.clone() }) {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})));
-        }
+    // Serialize the subscriptions/grants pair across register AND unregister, including concurrent HTTP callers.
+    let mut hosts = b.hosts.write().unwrap();
+    let subscriptions = r.subscriptions.iter().map(|s| Subscription { subscriber: r.plugin.clone(), kind: s.kind.clone(), mandatory: s.mandatory, group: s.group.clone() }).collect();
+    // One registry write: a dispatcher cannot observe an empty/partial replacement between remove and add.
+    if let Err(e) = b.dispatcher.replace_subscriptions(&r.plugin, subscriptions) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})));
     }
     let grants = HostGrants { subscriptions: r.subscriptions.clone(), emits: r.emits.clone() };
-    b.hosts.write().unwrap().insert(r.plugin.clone(), grants.clone());
+    hosts.insert(r.plugin.clone(), grants.clone());
     (StatusCode::OK, Json(json!({ "plugin": r.plugin, "subscriptions": grants.subscriptions, "emits": grants.emits })))
 }
 
@@ -317,8 +317,9 @@ pub struct UnregisterReq { plugin: String }
 pub async fn unregister(State(c): State<Arc<crate::Core>>, headers: HeaderMap, Json(r): Json<UnregisterReq>) -> (StatusCode, Json<Value>) {
     if !is_admin(&c, &headers) { return (StatusCode::UNAUTHORIZED, Json(json!({"error": "admin token required"}))); }
     let Some(b) = &c.bus else { return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "bus disabled"}))); };
+    let mut hosts = b.hosts.write().unwrap();
     b.dispatcher.unsubscribe(&r.plugin);
-    b.hosts.write().unwrap().remove(&r.plugin);
+    hosts.remove(&r.plugin);
     (StatusCode::OK, Json(json!({ "plugin": r.plugin, "removed": true })))
 }
 

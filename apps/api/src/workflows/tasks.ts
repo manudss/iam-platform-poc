@@ -1,13 +1,16 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { ApplicationBus } from '../events/application-bus.service.js';
 // Value import used only inside the lazy getter below (never at module scope): no load-order cycle.
 import { WorkflowEngine } from './engine.js';
+import { WorkflowReads } from './reads.js';
 import { TaskRow, WorkflowStore } from './store.js';
 
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
+/** Task timestamps are stored as UTC text without a zone suffix: parse them as UTC whatever the server zone. */
+export const utcMs = (v: string) => { const x = String(v).replace(' ', 'T'); return Date.parse(/(Z|[+-]\d\d:?\d\d)$/i.test(x) ? x : x + 'Z'); };
 const ts = (ms: number) => new Date(ms).toISOString().slice(0, 23).replace('T', ' ');
 
 export interface TaskRequest {
@@ -26,7 +29,7 @@ export interface TaskCheck { state: 'open' | 'decided'; task: TaskRow }
  */
 @Injectable()
 export class WorkflowTasksService {
-  constructor(private readonly store: WorkflowStore, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly modules?: ModuleRef) {}
+  constructor(private readonly store: WorkflowStore, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly modules?: ModuleRef, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly readsRef?: unknown) {}
 
   private readonly log = new Logger('workflow-tasks');
   private engineWarned = false;
@@ -108,6 +111,22 @@ export class WorkflowTasksService {
     return { state: 'open', task: t };
   }
 
+  /** Durable single use of a decided task: the first (run:node) consumer wins, the same consumer asking again is idempotent, any other is refused. */
+  async consume(tenant: string, taskId: string, consumer: string): Promise<void> {
+    const t = await this.store.getTask(taskId);
+    if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
+    if (t.status !== 'decided') throw new ConflictException(`this task is ${t.status}, not decided`);
+    const r = await this.store.consumeTask(taskId, String(consumer).slice(0, 120));
+    if (r.applied) throw new ConflictException('this approval already produced its effect: it is burned, a new approval is required');
+    if (!r.ok) throw new ConflictException('this approval was already consumed by another step');
+  }
+  /** Records the effect of the consumer (revision written). Refused for any other consumer or a second time. */
+  async markApplied(tenant: string, taskId: string, consumer: string, revision: string): Promise<void> {
+    const t = await this.store.getTask(taskId);
+    if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
+    if (!(await this.store.markTaskApplied(taskId, String(consumer).slice(0, 120), String(revision).slice(0, 80)))) throw new ConflictException('the effect of this approval could not be recorded for this consumer');
+  }
+
   /** Decision by an authenticated person. Returns the decided task and kicks the waiting run. */
   async decide(tenant: string, id: string, actor: string, decision: unknown, justification: unknown): Promise<TaskRow> {
     const t = await this.store.getTask(id);
@@ -165,6 +184,36 @@ export class WorkflowTasksService {
     return saved;
   }
 
+  /** Current live existence and login status, never the frozen campaign snapshot. Unavailable reads fail closed. */
+  async requireActiveReviewTarget(tenant: string, target: string): Promise<void> {
+    const reads = this.readsRef as WorkflowReads | undefined;
+    if (!reads) throw new ConflictException('review decider validation unavailable');
+    const user = await reads.readUser(tenant, 'main', target);
+    if (!user || user.loginEnabled !== true) throw new ConflictException('the review decider must exist and have login enabled on main');
+  }
+
+  /** True for a subject allowed to administer review deciders: the admin list or the IGA pool. */
+  isDeciderAdmin(sub: unknown): boolean { return typeof sub === 'string' && (this.admins().includes(sub) || this.poolMembers('iga').includes(sub)); }
+
+  /** Replaces the decider of an OPEN task from a workflow/IGA step (an absent validator). AUTHORITY: the person who started the workflow must be an admin or an IGA pool member (the right to run a workflow is not the right to move reviews), and the new decider must be a member of the admin/IGA pool: a free choice of any id would let a starter pick an accomplice. The task stays open, keeps its deadline and records who it was taken from. Refused when the new decider is the person the task is about. */
+  async reassignOpen(tenant: string, id: string, to: unknown, by: string, reason: string, startedBy?: string): Promise<TaskRow> {
+    const t = await this.store.getTask(id);
+    if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
+    if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
+    if (!this.isDeciderAdmin(startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
+    const rawTo = String(to ?? '').trim();
+    const target = this.resolveAssignee(rawTo);
+    if (!this.isDeciderAdmin(target)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
+    if (target === t.detail?.identity || target === t.detail?.subject) throw new ConflictException('the new decider is the person this task is about: refused');
+    await this.requireActiveReviewTarget(tenant, target);
+    const from = t.delegated_to ?? t.assignee;
+    await this.store.patchTaskDetail(id, { pool: rawTo === 'admin' || rawTo === 'iga' ? rawTo : null, reassignedFrom: from, reassignedBy: by, reassignedStartedBy: startedBy ?? null, reassignReason: String(reason ?? '').slice(0, 200) });
+    const saved = await this.store.delegateTask(id, target, t.due_at ?? now());
+    if (!saved) throw new ConflictException('this task is no longer open');
+    this.emit(tenant, 'workflow.task-assigned', { task: id, kind: t.kind, title: t.title, assignee: target, actor: by });
+    return saved;
+  }
+
   /** The visible inbox: OPEN tasks first (status=all widens). Own tasks for everyone, everything for an
    * admin with scope=all. "Own" includes the tasks decidable through a pool the actor belongs to: pool
    * members CAN decide them (decide() checks membership), so they must see them. truncated reports the
@@ -192,7 +241,7 @@ export class WorkflowTasksService {
     const open = await this.store.listDueTasks(now());
     let n = 0;
     for (const t of open.filter((x) => x.status === 'open')) {
-      if (!t.due_at || Date.parse(t.due_at) > Date.now()) continue;
+      if (!t.due_at || utcMs(t.due_at) > Date.now()) continue;
       // A rescan task (publication watch) re-kicks its run on every tick while due: the block re-reads the
       // real external state. Reminder/escalation still happen exactly once.
       const rescan = t.detail?.rescan === true;
@@ -200,8 +249,21 @@ export class WorkflowTasksService {
       const escalateTo = typeof t.detail?.escalateTo === 'string' ? t.detail.escalateTo : null;
       let resolved: string | null = null;
       if (escalateTo && !t.reminded_at) {
-        try { resolved = this.resolveAssignee(escalateTo); if (escalateTo === 'admin' || escalateTo === 'iga') await this.store.patchTaskDetail(t.id, { pool: escalateTo }); }
-        catch (e) { this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (${(e as Error).message}): the task stays with ${t.assignee}`); }
+        try {
+          resolved = this.resolveAssignee(escalateTo);
+          // The escalation never lands on the person the task is about (they could never decide it): the pool member who is not that person takes it, else the task stays where it is.
+          const about = [t.detail?.identity, t.detail?.subject].filter((x) => typeof x === 'string');
+          if (resolved && about.includes(resolved)) {
+            const alt = this.poolMembers(escalateTo === 'admin' ? 'admin' : 'iga').find((m) => !about.includes(m));
+            if (alt) resolved = alt; else { this.log.warn(`task ${t.id}: the escalation target is the person under review: the task stays with ${t.assignee}`); resolved = null; }
+          }
+          if (resolved && t.kind === 'iga-review') {
+            if (!this.isDeciderAdmin(resolved)) throw new ForbiddenException('IGA escalation target is no longer in the admin or IGA pool');
+            await this.requireActiveReviewTarget(t.tenant, resolved);
+          }
+          if (resolved && (escalateTo === 'admin' || escalateTo === 'iga')) await this.store.patchTaskDetail(t.id, { pool: escalateTo });
+        }
+        catch (e) { resolved = null; await this.store.patchTaskDetail(t.id, { escalationError: 'target rejected; task retained with current decider' }); this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (validation failed): the task stays with ${t.assignee}`); }
       }
       if (resolved) await this.store.delegateTask(t.id, resolved, t.due_at);
       if (!t.reminded_at) {

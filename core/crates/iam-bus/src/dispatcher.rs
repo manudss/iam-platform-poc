@@ -70,6 +70,7 @@ impl Dispatcher {
         Dispatcher { observers: Default::default(), catalogue, registry: Registry::new(), transport, default_timeout }
     }
     pub fn subscribe(&self, s: Subscription) -> Result<(), BusError> { self.registry.add(&self.catalogue, s) }
+    pub fn replace_subscriptions(&self, subscriber: &str, subscriptions: Vec<Subscription>) -> Result<(), BusError> { self.registry.replace(&self.catalogue, subscriber, subscriptions) }
     pub fn catalogue(&self) -> &Catalogue { &self.catalogue }
     /// Observers see every exchange, including refused ones and silent subscribers. Registering one changes no delivery behaviour.
     pub fn observe(&self, o: Arc<dyn Observer>) { self.observers.write().unwrap().push(o) }

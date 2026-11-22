@@ -190,3 +190,38 @@ describe('badge ticket then sheet trace recovery', () => {
     } finally { jira.mock.restore(); sheet.mock.restore(); }
   });
 });
+
+describe('Jira writes and Sheets column creation stop on uncertain external effects', () => {
+  const real = { executionMode: 'real', connectionId: 'conn-test', realConfirmed: true };
+  const cfgs: Record<string, object> = {
+    'jira-update-issue': { project: 'KAN', issueKey: 'KAN-1', summary: 'Fictional update', ...real },
+    'google-sheets-create-column': { source: 'google', spreadsheetId: 'fictional-sheet', sheetId: 1, columnName: 'receipt', ...real },
+    'jira-add-comment': { project: 'KAN', issueKey: 'KAN-1', comment: 'hello', ...real },
+    'jira-transition-issue': { project: 'KAN', issueKey: 'KAN-1', transitionId: '31', ...real },
+  };
+  for (const type of Object.keys(cfgs)) {
+    it(`${type}: marker before the call, never re-run after an interruption`, async () => {
+      let calls = 0;
+      const stub = mock.method(externalBlock(type)!, 'run', async () => { calls++; throw Error('lost response'); });
+      try {
+        const h = await settle(makeHarness({ nodes: [node('a', type, cfgs[type])], edges: [] }));
+        assert.equal(h.row.status, 'failed'); assert.equal(st(h, 'a').error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED');
+        h.row.status = 'queued'; await settle(h); assert.equal(calls, 1);
+      } finally { stub.mock.restore(); }
+    });
+    it(`${type}: a result without provider receipt stays uncertain`, async () => {
+      const stub = mock.method(externalBlock(type)!, 'run', async () => ({}));
+      try {
+        const h = await settle(makeHarness({ nodes: [node('a', type, cfgs[type])], edges: [] }));
+        assert.equal(h.row.status, 'failed'); assert.equal(st(h, 'a').error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED');
+      } finally { stub.mock.restore(); }
+    });
+  }
+  it('jira-get-issue is a read: no marker, completes', async () => {
+    const stub = mock.method(externalBlock('jira-get-issue')!, 'run', async () => ({ key: 'KAN-1', status: 'Done' }));
+    try {
+      const h = await settle(makeHarness({ nodes: [node('a', 'jira-get-issue', { project: 'KAN', issueKey: 'KAN-1', ...real })], edges: [] }));
+      assert.equal(h.row.status, 'completed'); assert.equal(st(h, 'a').error, null);
+    } finally { stub.mock.restore(); }
+  });
+});

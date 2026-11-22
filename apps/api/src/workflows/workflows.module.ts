@@ -1,6 +1,7 @@
 import { IntegrationsModule } from '../integrations/integrations.module.js';
 import { WorkflowConnections } from './connections.js';
 import { WorkflowConnectionsController } from './connections.controller.js';
+import { WorkflowIntake } from './intake.js';
 import { Module } from '@nestjs/common';
 import { EventsModule } from '../events/events.module.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
@@ -23,5 +24,5 @@ import { WorkspacePublisherModule } from '../workspace/workspace-publisher.modul
 import { UsersModule } from '../users/users.module.js';
 import { WorkflowDemoSeed } from './demo-seed.js';
 
-@Module({ imports: [IntegrationsModule, EventsModule, VersioningModule, PluginsV1Module, WorkspacePublisherModule, UsersModule], controllers: [WorkflowConnectionsController, WorkflowsController, WorkflowHooksController, WorkflowTasksController], providers: [WorkflowConnections, WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowTasksService, WorkflowReads, WorkflowsIgaService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService, WorkflowJiraDonePollerService, WorkflowCronService], exports: [WorkflowsService] })
+@Module({ imports: [IntegrationsModule, EventsModule, VersioningModule, PluginsV1Module, WorkspacePublisherModule, UsersModule], controllers: [WorkflowConnectionsController, WorkflowsController, WorkflowHooksController, WorkflowTasksController], providers: [WorkflowIntake, { provide: 'WORKFLOW_INTAKE', useExisting: WorkflowIntake }, WorkflowConnections, WorkflowStore, WorkflowEngine, WorkflowsService, WorkflowTasksService, WorkflowReads, WorkflowsIgaService, WorkflowsEnabledGuard, WorkflowTriggersService, WorkflowDemoSeed, WorkflowSheetPollerService, WorkflowJiraDonePollerService, WorkflowCronService], exports: [WorkflowsService] })
 export class WorkflowsModule {}

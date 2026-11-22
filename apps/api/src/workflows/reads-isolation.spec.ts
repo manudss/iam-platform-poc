@@ -18,6 +18,7 @@ const fakeConn = (captured: Captured[], identityCols: string[] = IDENTITY_BASE_C
   query: async (sql: string, params: unknown[] = []): Promise<[unknown, unknown]> => {
     captured.push({ sql, params });
     const q = sql.toLowerCase();
+    if (q.startsWith('show columns from identities')) return [identityCols.map((Field) => ({ Field })), []];
     if (q.includes('information_schema.columns')) return [identityCols.map((column_name) => ({ column_name })), []];
     if (q.includes('information_schema.tables')) return [[{ n: 1 }], []];
     if (q.startsWith('select count(*)')) return [[{ n: 1 }], []];
@@ -67,7 +68,7 @@ describe('WorkflowReads: explicit projections and tenant isolation (query-shape 
     const captured: Captured[] = [];
     const s = svcWith(captured); // schema WITHOUT email/login_enabled (the demo shape)
     const u = await s.readUser('acme', 'main', 'demo-bob');
-    const identitySelects = captured.filter((c) => c.sql.includes('from identities')).map((c) => c.sql);
+    const identitySelects = captured.filter((c) => /^select /i.test(c.sql) && c.sql.includes('from identities')).map((c) => c.sql);
     for (const sql of identitySelects) {
       assert.ok(!sql.includes('email'), `email selected though the schema probe did not report it: ${sql}`);
       assert.ok(!sql.includes('login_enabled'), `login_enabled selected though unreported: ${sql}`);
@@ -79,7 +80,7 @@ describe('WorkflowReads: explicit projections and tenant isolation (query-shape 
     const s2 = svcWith(captured2, [...IDENTITY_BASE_COLS, 'email', 'login_enabled']);
     const u2 = await s2.readUser('acme', 'main', 'demo-bob');
     assert.equal(u2.email, 'bob@example.invalid', 'a schema that HAS the column exposes it through the explicit projection');
-    const sel2 = captured2.filter((c) => c.sql.includes('from identities')).map((c) => c.sql);
+    const sel2 = captured2.filter((c) => /^select /i.test(c.sql) && c.sql.includes('from identities')).map((c) => c.sql);
     assert.ok(sel2.every((sql) => sql.includes(', email, login_enabled')), 'optional columns selected explicitly when present');
   });
 

@@ -21,6 +21,8 @@ const fakeStore = (over: Record<string, unknown> = {}) => ({
   decideTask: async (id: string, actor: string, decision: string, just: string | null, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open' || (t.assignee !== actor && t.delegated_to !== actor)) return null; Object.assign(t, { status: 'decided', decision, justification: just, decided_by: actor, decided_at: at }); return t; },
   decideTaskAs: async (id: string, actor: string, decision: string, just: string | null, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open') return null; Object.assign(t, { status: 'decided', decision, justification: just, decided_by: actor, decided_at: at }); return t; },
   delegateTask: async (id: string, to: string, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open') return null; Object.assign(t, { delegated_to: to, due_at: at, reminded_at: null }); return t; },
+  consumeTask: async (id: string, consumer: string) => { const t = tasks.get(id); if (!t || t.status !== 'decided') return { ok: false, by: null, applied: false }; const d = (t.detail ?? {}) as Record<string, unknown>; if (!d.consumedBy) { t.detail = { ...d, consumedBy: consumer }; return { ok: true, by: consumer, applied: false }; } const applied = !!d.appliedBy; return { ok: d.consumedBy === consumer && !applied, by: String(d.consumedBy), applied }; },
+  markTaskApplied: async (id: string, consumer: string, revision: string) => { const t = tasks.get(id); const d = (t?.detail ?? {}) as Record<string, unknown>; if (!t || d.consumedBy !== consumer || d.appliedBy) return false; t.detail = { ...d, appliedBy: consumer, appliedRevision: revision }; return true; },
   markTaskReminded: async (id: string, at: string) => { const t = tasks.get(id); if (t) t.reminded_at = at; },
   patchTaskDetail: async (id: string, patch: Record<string, unknown>) => { const t = tasks.get(id); if (!t) return; const d = { ...(t.detail ?? {}) } as Record<string, unknown>; for (const [k, v] of Object.entries(patch)) { if (v === null) delete d[k]; else d[k] = v; } t.detail = d; },
   countRunsStartedBy: async () => 0,
@@ -112,6 +114,30 @@ describe('WorkflowTasksService (real service, in-memory store)', () => {
     assert.equal(decided.decided_by, 'iga-two', 'the second pool member decided, not only the first');
     await assert.rejects(s.decide('acme', 'task-1', 'iga-lead', 'approved', ''), /already decided/);
   });
+  it('a password-reset task: the beneficiary can never decide their own reset, even in the admin pool', async () => {
+    // The block forces assignee 'admin' and carries detail.subject: the anti-self rule bars the beneficiary.
+    tasks = new Map([['task-pr', mkTask({ id: 'task-pr', kind: 'lyam-propose-password-reset', assignee: 'root', prevent_self: true, detail: { pool: 'admin', subject: 'root', hours: '24', decisions: ['approved', 'refused'] } })]]);
+    runs = new Map([['run-1', { id: 'run-1', started_by: 'alice' }]]);
+    const { s } = svc();
+    await assert.rejects(s.decide('acme', 'task-pr', 'root', 'approved', ''), /beneficiary/);
+    const other = mkTask({ id: 'task-pr2', kind: 'lyam-propose-password-reset', assignee: 'root', prevent_self: true, detail: { pool: 'admin', subject: 'u1', hours: '24', decisions: ['approved', 'refused'] } });
+    tasks.set('task-pr2', other);
+    const decided = await s.decide('acme', 'task-pr2', 'root', 'approved', 'verified by phone');
+    assert.equal(decided.status, 'decided', 'another admin decides a reset targeting someone else');
+  });
+
+  it('a re-enrollment task: only the admin pool decides, never a non-admin non-assignee', async () => {
+    // The block forces assignee 'admin', resolved to the pool: an arbitrary user id chosen by the
+    // workflow author can never be the decider of this immediate, non-reverted effect.
+    tasks = new Map([['task-re', mkTask({ id: 'task-re', kind: 'reenrollment-request', assignee: 'root', detail: { pool: 'admin', user: 'u1', instance: 'm1:i1', decisions: ['approved', 'refused'] } })]]);
+    runs = new Map([['run-1', { id: 'run-1', started_by: 'alice' }]]);
+    const { s } = svc();
+    await assert.rejects(s.decide('acme', 'task-re', 'mallory', 'approved', ''), /pool|assigned decider/);
+    await assert.rejects(s.decide('acme', 'task-re', 'alice', 'approved', ''), /anti-self-approval/);
+    const decided = await s.decide('acme', 'task-re', 'root', 'approved', 'verified with the user');
+    assert.equal(decided.status, 'decided');
+  });
+
   it('a pool member delegates, the pool policy follows a pool target', async () => {
     tasks = new Map([['task-1', mkTask({ assignee: 'iga-lead', detail: { pool: 'iga' } })]]);
     const { s } = svc();
@@ -234,5 +260,21 @@ describe('WorkflowsIgaService.markRemediated: effective proof, never a state fli
     const r = await iga.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-9' });
     assert.equal(r.state, 'remediated', 'nothing held at snapshot: the denial is recorded, there is nothing to verify');
     assert.equal(updates[0].state, 'remediated');
+  });
+});
+
+describe('WorkflowTasksService.consume (durable single use)', () => {
+  it('first consumer wins, the same consumer is idempotent, another is refused, an open task cannot be consumed', async () => {
+    tasks = new Map([['task-c', mkTask({ id: 'task-c', status: 'decided', decision: 'approved' } as never)], ['task-o', mkTask({ id: 'task-o' })]]);
+    const s = new WorkflowTasksService(fakeStore() as never, undefined, undefined as never);
+    await s.consume('acme', 'task-c', 'run-1:n1');
+    await s.consume('acme', 'task-c', 'run-1:n1');
+    await assert.rejects(s.consume('acme', 'task-c', 'run-1:n2'), /already consumed/);
+    await assert.rejects(s.consume('acme', 'task-o', 'run-1:n1'), /not decided/);
+    await s.markApplied('acme', 'task-c', 'run-1:n1', 'rev1');
+    await assert.rejects(s.consume('acme', 'task-c', 'run-1:n1'), /burned/);
+    await assert.rejects(s.markApplied('acme', 'task-c', 'run-1:n1', 'rev2'), /could not be recorded/);
+    await assert.rejects(s.markApplied('acme', 'task-c', 'run-1:n2', 'rev2'), /could not be recorded/);
+    await assert.rejects(s.consume('other', 'task-c', 'run-1:n1'), /unknown task/);
   });
 });

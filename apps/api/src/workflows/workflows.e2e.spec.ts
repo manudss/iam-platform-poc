@@ -3,7 +3,7 @@ import { startTestBus, TestBus } from '../testing/test-bus.js';
 // Auth is replaced by a fake that mirrors the real guard's contract (bearer token, tenant claim must equal :tenant),
 // because the real one needs the Rust core; the real AdminGuard is used. Skipped if the dolt binary is missing (DOLT_BIN).
 import 'reflect-metadata';
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -12,11 +12,18 @@ import { join, resolve } from 'node:path';
 import { CanActivate, ExecutionContext, ForbiddenException, INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { WorkflowsModule } from './workflows.module.js';
+import { branchContext } from '../workspace/context.js';
+import { WorkflowEngine } from './engine.js';
+import { validateGraph } from './model.js';
+import { WorkflowConnections } from './connections.js';
+import { SignupService } from '../profile/signup.service.js';
+import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsController } from './workflows.controller.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { WorkflowStore } from './store.js';
+import { WorkflowTasksService } from './tasks.js';
 import { createConnection } from 'mysql2/promise';
 import { VersioningController } from '../versioning/versioning.controller.js';
 import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
@@ -74,7 +81,7 @@ const durablePluginsFactory = { factory: durablePlugins, inject: [VersioningServ
 const call = async (method: string, path: string, body?: object, o: { token?: string | null; admin?: string | null } = {}) => {
   const token = o.token === undefined ? `${T}:demo-alice` : o.token;
   const admin = o.admin === undefined ? ADMIN : o.admin;
-  const r = await fetch(`${API}/tenants/${T}${path}`, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(admin ? { 'x-api-admin-token': admin } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(`${API}/tenants/${T}${path}`, { method, headers: { 'content-type': 'application/json', ...(process.env.IAM_WORKSPACE_MODE === '1' ? { 'x-iam-branch': 'main' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}), ...(admin ? { 'x-api-admin-token': admin } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const text = await r.text(); let json: unknown; try { json = JSON.parse(text); } catch { json = text; }
   return { status: r.status, body: json as never };
 };
@@ -114,7 +121,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', String(PORT), '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break;
       await new Promise((r) => setTimeout(r, 150));
     }
-    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice,admin-two', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
+    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice,admin-two', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13432);
@@ -507,6 +514,54 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal((await ok('GET', `/workflow-tasks?scope=all`) as never as { tasks: { status: string }[] }).tasks.filter((t) => t.status === 'open').length, 0, 'no open task remains');
   });
 
+  it('late campaign review: real task storage, escalation once, new decider resumes the real engine and closes', async () => {
+    // The minimal SQL fixture predates directory migrations: explicitly provide the active-account
+    // column required by the live escalation check (no stub of the check or reads service).
+    await app.get(VersioningService).at('main', async c => {
+      const [cols] = await c.query('show columns from identities');
+      if (!(cols as { Field: string }[]).some(x => x.Field === 'login_enabled')) await c.query('alter table identities add column login_enabled boolean not null default true');
+      await c.query('update identities set login_enabled = true where id = ?', ['demo-alice']);
+      await c.query("call dolt_add('.')"); await c.query("call dolt_commit('-m','active review target fixture')");
+    });
+
+    const def = (await ok('POST', '/workflows', { name: 'Late recert journey', graph: { nodes: [
+      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Late review', users: 'demo-bob', ref: 'main' } },
+      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga', dueInDays: '1', escalateTo: 'admin' } },
+      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
+    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'close' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const task = await waitTask(started.run.id, 'iga-review');
+    const unauthorizedDef = await ok('POST', '/workflows', { name: 'Unauthorized replacement', graph: { nodes: [
+      { id: 'move', type: 'iga-reassign-review', name: 'move', config: { campaignId: task.detail.campaignId, from: 'demo-alice', to: 'admin' } },
+    ], edges: [] } }) as { definition: { id: string } };
+    const unauthorized = await call('POST', `/workflows/${unauthorizedDef.definition.id}/runs`, {}, { token: `${T}:not-an-iga-admin` });
+    assert.equal(unauthorized.status, 403, 'the legacy route guard also refuses this starter');
+    // Trigger/internal launch bypasses route guards: the operation itself must still refuse.
+    const internal = await app.get(WorkflowsService).start(T, unauthorizedDef.definition.id, 'not-an-iga-admin');
+    const rejectedMove = await waitRun(internal.run.id, ['failed']);
+    assert.match(String(rejectedMove.run.error), /admin or an IGA pool member/);
+    assert.equal((await app.get(WorkflowStore).getTask(task.id))?.delegated_to, null, 'opening Workflows does not authorize moving a review');
+    const meta = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam_meta', dateStrings: true });
+    try { await meta.query("update workflow_tasks set due_at = '2020-01-01 00:00:00.000' where id = ?", [task.id]); } finally { await meta.end(); }
+    const tasks = app.get(WorkflowTasksService);
+    await tasks.scanOverdue();
+    const stored = await app.get(WorkflowStore).getTask(task.id);
+    assert.ok(stored?.reminded_at);
+    assert.equal(stored?.status, 'open', 'lateness never decides');
+    assert.equal(stored?.detail?.pool, 'admin');
+    const reminder = stored?.reminded_at;
+    await tasks.scanOverdue();
+    assert.equal((await app.get(WorkflowStore).getTask(task.id))?.reminded_at, reminder);
+    assert.equal((await waitRun(started.run.id, ['waiting'])).run.status, 'waiting');
+    const decided = await call('POST', `/workflow-tasks/${task.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    assert.ok(decided.status < 300, JSON.stringify(decided.body));
+    const done = await waitRun(started.run.id, ['completed']);
+    assert.equal(done.steps.find(s => s.node_id === 'close')?.status, 'done');
+    assert.equal(done.run.branch, null, 'approval-only campaign never modifies access');
+  });
+
   it('recertification with denial: revoke on branch, real publication (PR merged), remediation verified, close', async () => {
     const def = (await ok('POST', '/workflows', { name: 'Recert denial journey', graph: { nodes: [
       { id: 'c1', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Denial recert demo-bob', users: 'demo-bob', ref: 'main' } },
@@ -871,6 +926,35 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(!all2.templates.some((t) => t.id === t1.template.id), 'the deleted template leaves the gallery');
     await ok('DELETE', `/workflows/${def.definition.id}`);
   });
+  it('reset freeze refuses activation/start and an old queued run before any first-step effect; generic password remains available', async () => {
+    const graph = { nodes: [
+      { id: 'block', type: 'lyam-block-account', name: 'would block first', config: { subject: 'demo-bob', kind: 'suspended', message: 'Fictional freeze test' } },
+      { id: 'apply', type: 'lyam-apply-password-reset', name: 'reset', config: { approvalTaskId: 'task-fixture', subject: 'demo-bob', passwordRef: 'fixture-ref', hours: '24' } },
+    ], edges: [{ from: 'block', to: 'apply' }] };
+    const def = await ok('POST', '/workflows', { name: 'Frozen reset fixture', active: false, graph }) as { definition: { id: string } };
+    assert.equal((await call('POST', `/workflows/${def.definition.id}/active`, { active: true })).status, 403);
+    assert.equal((await call('POST', `/workflows/${def.definition.id}/runs`)).status, 403);
+    assert.equal((await call('POST', '/workflows', { name: 'Cannot activate reset', active: true, graph })).status, 403);
+    const store = app.get(WorkflowStore); const checked = validateGraph(graph);
+    const run: any = { id: 'run-reset-frozen-fixture', tenant: T, definition_id: def.definition.id, name: 'old queued reset', graph: checked.graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'demo-alice', started_at: new Date().toISOString().slice(0, 23).replace('T', ' '), finished_at: null, test: false };
+    await store.createRun(run, checked.order.map(id => ({ run_id: run.id, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null })) as never);
+    const engine = app.get(WorkflowEngine) as any;
+    const originalRegistry = engine.registryFor;
+    let providerReads = 0;
+    engine.registryFor = () => { providerReads++; throw new Error('must not resolve a provider for a frozen reset'); };
+    let failed: RunView;
+    try { engine.kick(run.id); failed = await waitRun(run.id, ['failed']); }
+    finally { engine.registryFor = originalRegistry; }
+    assert.equal(providerReads, 0, 'freeze is before any plugin provider lookup');
+    assert.match(failed.run.error!, /RESET_FROZEN/); assert.equal(failed.run.branch, null);
+    assert.ok(failed.steps.every(s => s.attempts === 0 && s.status === 'pending'), 'even the first generic block did not execute');
+    const dry = await ok('POST', '/workflows/test-run', { graph }) as RunView;
+    assert.equal((await waitRun(dry.run.id, ['completed', 'failed'])).run.status, 'completed');
+    const generic = { nodes: [{ id: 'pw', type: 'lyam-set-temporary-password', name: 'Generic badge password', config: { subject: 'demo-bob', passwordRef: 'fixture-ref', hours: '24' } }], edges: [] };
+    const saved = await call('POST', '/workflows', { name: 'Generic remains activatable', active: true, graph: generic });
+    assert.ok(saved.status < 300, JSON.stringify(saved.body));
+  });
+
   it('restart durability: a waiting run survives a REAL app restart, a crashed effectful step fails closed', async () => {
     const graph = { nodes: [
       { id: 'grant', type: 'lyam-grant-assignment', name: 'grant', config: { identity: 'demo-bob', role: 'branch-merger' } },
@@ -888,15 +972,38 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     try {
       await meta.query("update workflow_runs set status='running', finished_at=null where id=?", [runB.run.id]);
       await meta.query("update workflow_steps set status='running', finished_at=null, output=null where run_id=? and node_id='grant'", [runB.run.id]);
+      await meta.query("update workflow_runs set status='queued', finished_at=null where id='run-reset-frozen-fixture'");
     } finally { await meta.end(); }
+    // C: a whole IGA campaign waits across the same real application restart.
+    const defC = (await ok('POST', '/workflows', { name: 'Restart recertification', graph: { nodes: [
+      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Restart review', users: 'demo-bob', ref: 'main' } },
+      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga' } },
+      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
+    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'close' }] } })) as { definition: { id: string } };
+    const runC = await ok('POST', `/workflows/${defC.definition.id}/runs`) as RunView;
+    await waitRun(runC.run.id, ['waiting']);
+    const reviewC = await waitTask(runC.run.id, 'iga-review');
     // REAL restart: the whole Nest application stops and boots again over the SAME Dolt base.
     await app.close();
     const m2 = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
     app = m2.createNestApplication(); await app.init(); await app.listen(13432);
+    const frozenAfterRestart = await waitRun('run-reset-frozen-fixture', ['failed']);
+    assert.match(frozenAfterRestart.run.error!, /RESET_FROZEN/);
+    assert.ok(frozenAfterRestart.steps.every(step => step.attempts === 0), 'boot recovery did not enter any frozen step');
+    assert.equal((await call('POST', '/workflow-runs/run-reset-frozen-fixture/retry')).status, 403, 'retry cannot unfreeze the stored reset');
     // The durable state store kept the enablement: the routes answer right after the boot, and the boot-time
     // resume scan (onModuleInit, run during app.init) recovers the interrupted runs on the NORMAL path - no
     // manual re-enable, no re-triggered scan.
     assert.equal((await call('GET', '/workflows')).status, 200, 'the plugin enablement survived the restart (durable store)');
+    const persistedC = await app.get(WorkflowStore).getTask(reviewC.id);
+    assert.equal(persistedC?.status, 'open', 'IGA review task survives application restart');
+    const cTasks = (await app.get(WorkflowStore).listTasks(T, { runId: runC.run.id })).filter(t => t.kind === 'iga-review');
+    assert.equal(cTasks.length, 1, 'restart did not duplicate the review task');
+    assert.ok((await call('POST', `/workflow-tasks/${reviewC.id}/decision`, { decision: 'approved' }, { token: `${T}:iga-reviewer` })).status < 300);
+    const completedC = await waitRun(runC.run.id, ['completed']);
+    const evidenceC = completedC.steps.find(st => st.node_id === 'close')!.output as { evidence: { totals: { approved: number } } };
+    assert.equal(evidenceC.evidence.totals.approved, 1, 'the same durable campaign closes with its evidence after restart');
     // B: the resume scan refuses to guess the effect of the cut step: failed closed, marked for reconciliation.
     const vB = await waitRun(runB.run.id, ['failed'], 30000);
     assert.match(String(vB.run.error), /interrupted by a restart/, 'the crashed run fails closed');
@@ -913,6 +1020,50 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const vA = (await ok('GET', `/workflow-runs/${runA.run.id}`)) as RunView;
     assert.equal(vA.run.status, 'completed', 'the waiting run resumed and completed after the restart');
     assert.ok(((vA.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).merged) === true);
+  });
+
+  it('connection probe engine hook rejects an unauthorized starter before any probe, while admin can test a bounded list', async () => {
+    const probes = mock.method(app.get(WorkflowConnections), 'test', async (_t: string, id: string) => ({ id, status: 'Success', readOnly: true }) as never);
+    try {
+      const def = await ok('POST', '/workflows', { name: 'Fictional connection probes', graph: { nodes: [
+        { id: 'probe', type: 'lyam-test-connections', name: 'probe', config: { ids: 'one,two' } },
+      ], edges: [] } }) as { definition: { id: string } };
+      const unauthorized = await app.get(WorkflowsService).start(T, def.definition.id, 'not-an-admin') as RunView;
+      assert.equal((await waitRun(unauthorized.run.id, ['failed'])).run.status, 'failed');
+      assert.equal(probes.mock.calls.length, 0);
+      const started = await ok('POST', `/workflows/${def.definition.id}/runs`) as RunView;
+      const completed = await waitRun(started.run.id, ['completed', 'failed']);
+      assert.equal(completed.run.status, 'completed', completed.run.error ?? '');
+      assert.equal(probes.mock.calls.length, 2);
+    } finally { probes.mock.restore(); }
+  });
+
+  it('signup approval fails before branch creation, pending removal, directory calls or account events', async () => {
+    const signup = app.get(SignupService);
+    const approve = mock.method(signup, 'approve'); const events = mock.method(app.get(ApplicationBus), 'emit');
+    // Fictional preconfirmed request. No real mailbox, password or external service.
+    signup.pending.set('intake-demo', { tenant: T, id: 'intake-demo', display_name: 'Intake Demo', email: 'intake@example.invalid', values: {}, confirmed: true, salt: 'fictional-salt', hash: 'fictional-hash', at: Date.now() });
+    const def = await ok('POST', '/workflows', { name: 'Signup intake', graph: { nodes: [
+      { id: 'read', type: 'lyam-read-intake-request', name: 'read', config: { kind: 'signup', subject: 'intake-demo' } },
+      { id: 'resolve', type: 'lyam-resolve-intake-request', name: 'resolve', config: { kind: 'signup', subject: 'intake-demo', snapshot: '{{steps.read.snapshot}}', decision: 'approve' } },
+    ], edges: [{ from: 'read', to: 'resolve' }] } }) as { definition: { id: string } };
+    const oldWorkspace = process.env.IAM_WORKSPACE_MODE; process.env.IAM_WORKSPACE_MODE = '1';
+    try {
+    const start = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).start(T, def.definition.id, 'demo-alice')) as RunView;
+    let done: RunView = start; const until = Date.now() + 20000;
+    while (!['completed', 'failed'].includes(done.run.status) && Date.now() < until) {
+      await new Promise(r => setTimeout(r, 100));
+      done = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).runView(T, start.run.id)) as RunView;
+    }
+    assert.equal(done.run.status, 'failed'); assert.match(done.run.error!, /publication-aware/);
+    assert.equal(done.run.branch, null); assert.equal(approve.mock.calls.length, 0);
+    assert.equal(signup.pending.has('intake-demo'), true, 'the request survives the refusal');
+    assert.ok(!events.mock.calls.some(c => ['user.created', 'user.blocked', 'signup.approved'].includes(c.arguments[0].type) && c.arguments[0].payload.subject === 'intake-demo'));
+    const live = (await app.get(VersioningService).tableRows('main', 'identities', 100, 0)) as unknown as { rows: { id: string }[] };
+    assert.ok(!live.rows.some(x => x.id === 'intake-demo'), 'approval does not publish the new account');
+    assert.ok(!JSON.stringify(done).includes('fictional-hash') && !JSON.stringify(done).includes('fictional-salt'));
+    assert.notEqual(done.run.error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED', 'known pre-effect refusal is not an uncertain write');
+    } finally { approve.mock.restore(); events.mock.restore(); if (oldWorkspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = oldWorkspace; }
   });
 
   it('connection CRUD and draft probes stay behind tenant/auth/admin and never reveal credentials', async()=>{

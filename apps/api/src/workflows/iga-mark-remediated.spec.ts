@@ -46,3 +46,13 @@ describe('iga markRemediated (service gate)', () => {
     await assert.rejects(noBranch.service.markRemediated('acme', 'workflow:run-1', 'iga-1', 'emp', { runId: 'run-1' }), /no data branch/);
   });
 });
+
+describe('IGA final effective-state check detects newly added rights', () => {
+  it('new access after preparation is not silently accepted, including an initially empty snapshot', async () => {
+    for (const roles of [[], ['a']]) {
+      const { service, updates } = svc({ roles, onRef: ['new-access'] });
+      await assert.rejects(service.markRemediated('acme', 'workflow:run-1', 'iga-1', 'item-1', { runId: 'run-1' }), /new access/);
+      assert.equal(updates.length, 0);
+    }
+  });
+});

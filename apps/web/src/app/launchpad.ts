@@ -81,6 +81,7 @@ export class LaunchpadPage {
   protected query = signal('');
   private beforeEdit: LaunchpadPreferences | null = null;
   private loadEpoch = 0;
+  private preferencesRevision = 0;
   private pointer?: { id: number; x: number; y: number; moved: boolean };
   protected hasApps = (s: { apps: LaunchpadApp[] }) => s.apps.length > 0;
   /** SSR: the launchpad renders on the server (docs/session.md, the session cookie). The tracked load lets the
@@ -101,7 +102,7 @@ export class LaunchpadPage {
   /** The branch the current view state belongs to; undefined until the first load runs. */
   private loadedBranch: string | null | undefined;
   private async load() {
-    const epoch = ++this.loadEpoch;
+    const epoch = ++this.loadEpoch, preferencesRevision = this.preferencesRevision;
     // Only a real switch between two branches discards an organisation in progress. The bootstrap's late
     // personal-workspace selection (branch going from unset to set) must not cancel it, and a reload must
     // never overwrite the working copy, which is the user's unsaved arrangement. Untracked: load() runs
@@ -109,12 +110,11 @@ export class LaunchpadPage {
     const br = untracked(() => this.s.branch()) || null;
     if (this.loadedBranch && br !== this.loadedBranch) { this.editing.set(false); this.beforeEdit = null; this.stopDrag(); }
     this.loadedBranch = br;
-    const keepWorkingCopy = untracked(() => this.editing());
     // Hydration: reuse what the server fetched to render this very page instead of refetching it.
     if (this.isBrowser && this.transfer.hasKey(LAUNCHPAD_KEY)) {
       const d = this.transfer.get(LAUNCHPAD_KEY, {});
       this.apps.set(Array.isArray(d.apps) ? d.apps : []);
-      if (!keepWorkingCopy) this.preferences.set(d.preferences ?? { favourites: [], order: [] });
+      if (preferencesRevision === this.preferencesRevision && !untracked(() => this.editing())) this.preferences.set(d.preferences ?? { favourites: [], order: [] });
       this.problem.set(''); this.failedImages.set([]);
       this.transfer.remove(LAUNCHPAD_KEY);
       this.loaded.set(true);
@@ -130,19 +130,22 @@ export class LaunchpadPage {
       if (epoch !== this.loadEpoch) return;
       if (r.status >= 400) throw Error(r.data?.message || 'Could not load applications');
       this.apps.set(Array.isArray(r.data?.apps) ? r.data.apps : []);
-      if (!keepWorkingCopy) this.preferences.set(r.data?.preferences ?? { favourites: [], order: [] });
+      // Do not apply a preference snapshot older than a local edit/save, even after editing has ended.
+      if (preferencesRevision === this.preferencesRevision && !untracked(() => this.editing())) this.preferences.set(r.data?.preferences ?? { favourites: [], order: [] });
       this.problem.set(''); this.failedImages.set([]);
       if (!this.isBrowser) this.transfer.set(LAUNCHPAD_KEY, r.data ?? {});
     } catch (e) { if (epoch === this.loadEpoch) this.problem.set((e as Error).message); }
     finally { if (epoch === this.loadEpoch) this.loaded.set(true); }
   }
   protected organise() {
+    this.preferencesRevision++;
     this.beforeEdit = structuredClone(this.preferences()); this.query.set('');
     this.preferences.update(p => ({ ...p, order: orderedApps(this.apps(),p.order).map(a => a.id) }));
     this.editing.set(true); this.announcement.set('Organisation mode. Use drag handles or move buttons.');
   }
-  protected cancel() { if (this.beforeEdit) this.preferences.set(this.beforeEdit); this.beforeEdit = null; this.editing.set(false); this.stopDrag(); this.problem.set(''); this.announcement.set('Changes cancelled.'); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#lp-organise')?.focus()); }
+  protected cancel() { this.preferencesRevision++; if (this.beforeEdit) this.preferences.set(this.beforeEdit); this.beforeEdit = null; this.editing.set(false); this.stopDrag(); this.problem.set(''); this.announcement.set('Changes cancelled.'); requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('#lp-organise')?.focus()); }
   protected async toggle(a: LaunchpadApp) {
+    this.preferencesRevision++;
     const before = this.preferences(), added = !this.favourite(a.id);
     this.preferences.set({ ...before, favourites: added ? [...before.favourites,a.id] : before.favourites.filter(id => id !== a.id) });
     if (!this.editing() && !(await this.persist())) { this.preferences.set(before); return; }
@@ -150,6 +153,7 @@ export class LaunchpadPage {
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-app="'+a.id+'"] .lp-star')?.focus());
   }
   private async persist(): Promise<boolean> {
+    this.preferencesRevision++;
     this.busy.set(true); this.problem.set('');
     try {
       const r = await this.s.api.raw<{ message?: string }>('PUT','@/sso/{t}/launchpad/preferences',this.preferences());
@@ -165,6 +169,7 @@ export class LaunchpadPage {
     requestAnimationFrame(() => { const direction = delta < 0 ? 'up' : 'down'; const button = document.querySelector<HTMLButtonElement>('[data-move="'+id+'-'+direction+'"]'); if (button && !button.disabled) button.focus(); else document.querySelector<HTMLButtonElement>('[data-move="'+id+'-'+(direction==='up'?'down':'up')+'"]')?.focus(); });
   }
   private reorder(id: string, target: string, apps: LaunchpadApp[]) {
+    this.preferencesRevision++;
     this.preferences.update(p => ({ ...p, order: moveApplication(p.order,apps.map(a=>a.id),id,target) }));
     const ordered = orderedApps(apps,this.preferences().order);
     this.announcement.set((apps.find(a=>a.id===id)?.name ?? id)+' moved to position '+(ordered.findIndex(a=>a.id===id)+1)+' of '+apps.length+'.');

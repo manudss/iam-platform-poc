@@ -22,7 +22,34 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  control_policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      password_eye_required: ${{ steps.plan.outputs.password_eye_required }}
+      gallery_bootstrap_required: ${{ steps.plan.outputs.gallery_bootstrap_required }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Validate versioned controls and all script references
+        id: plan
+        env:
+          TARGET_SHA: ${{ inputs.sha || github.sha }}
+        run: |
+          node --test scripts/ci-controls.test.mjs
+          node scripts/ci-controls.mjs "$TARGET_SHA" "$RUNNER_TEMP/ci-control-plan.json" >> "$GITHUB_OUTPUT"
+      - name: Preserve applicability and historical-boundary evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-control-plan-${{ inputs.sha || github.sha }}
+          path: ${{ runner.temp }}/ci-control-plan.json
+          retention-days: 7
   core:
+    needs: control_policy
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -45,6 +72,7 @@ jobs:
         run: cargo test --locked -p iam-decision -p iam-core schema
         working-directory: core
   api:
+    needs: control_policy
     # Integration job: installs the real service binaries from their GitHub releases (free, no Docker) so the real-service suites RUN
     # instead of skipping: Dolt, PostgreSQL (embedded-postgres npm package), NATS JetStream, OpenBao, Temporal dev server, plus the
     # Rust core and a headless-Chrome UI run. If a download fails the step prints the release assets and fails the job.
@@ -131,6 +159,7 @@ jobs:
       - name: Profile reliability regression (real bundle, light/dark desktop/mobile)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/profile-priorities-ui-e2e.cjs /tmp/profile-priorities-shots
       - name: Password eye control (real Rust sign-in, Angular bundle and plugin components)
+        if: needs.control_policy.outputs.password_eye_required == 'true'
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/password-eye-ui-e2e.cjs /tmp/password-eye-shots
       - name: Password eye screenshots
         if: ${{ !cancelled() }}
@@ -163,6 +192,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
   web:
+    needs: control_policy
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -194,6 +224,7 @@ jobs:
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
         run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
   compose:
+    needs: control_policy
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -235,6 +266,7 @@ jobs:
         if: always()
         run: docker compose -f infra/docker-compose.yml down -v
   demo-docker:
+    needs: control_policy
     # Step 7: every PR proves the all-in-one demo image still builds and boots (docs/demo.md).
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -263,15 +295,19 @@ jobs:
           echo "login answer: $body"
           [ "$(echo "$body" | tail -1)" = 200 ] || { docker logs iam-demo-ci --tail=150; exit 1; }
           echo "$body" | head -n -1 | grep -q '"code"' || { docker logs iam-demo-ci --tail=150; exit 1; }
-      - name: Gallery browser end-to-end (real seeded demo, desktop and mobile)
+      - name: Gallery browser dependencies and popup regression
         run: |
           mkdir -p /tmp/gallery-pw
           npm install --prefix /tmp/gallery-pw playwright-core
           export NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome)
           node --test scripts/gallery-launch-popup.test.mjs
+      - name: Gallery bootstrap regression and matching image bundle
+        if: needs.control_policy.outputs.gallery_bootstrap_required == 'true'
+        run: |
           docker cp iam-demo-ci:/app/web/dist/web/browser /tmp/gallery-browser
-          GALLERY_WEB_ROOT=/tmp/gallery-browser GALLERY_BOOTSTRAP_SHOTS=/tmp/gallery-shots/bootstrap node --test scripts/gallery-bootstrap.test.mjs
-          node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
+          NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) GALLERY_WEB_ROOT=/tmp/gallery-browser GALLERY_BOOTSTRAP_SHOTS=/tmp/gallery-shots/bootstrap node --test scripts/gallery-bootstrap.test.mjs
+      - name: Gallery browser end-to-end (real seeded demo, desktop and mobile)
+        run: NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome) node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
       - name: Gallery screenshots
         if: always()
         uses: actions/upload-artifact@v4

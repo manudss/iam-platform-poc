@@ -203,6 +203,65 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
         assert.equal(r2.published, true); assert.equal(await mainHead(), mergedMain);
       } finally { delete process.env.IAM_WORKSPACE_MODE; }
     });
+    it('precheck: a rejection inside the queue refuses the publication with nothing merged and nothing activated; a queued publication is re-checked AFTER the one ahead of it merged', async () => {
+      activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
+      const headA = await runBranch('run-pre-a', 'fict-pa'), headB = await runBranch('run-pre-b', 'fict-pb');
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const pub = mkPub(); const before = await mainHead();
+        // 1) rejected precheck: nothing merged, nothing activated, the credential is not live
+        await assert.rejects(() => pub.publishForRun({ tenant: 'acme-demo', runId: 'run-pa', workflowId: 'wf-fict', branch: 'run-pre-a', expectedHead: headA, precheck: async () => { throw new Error('guard flipped'); } }), /guard flipped/);
+        assert.equal(await mainHead(), before); assert.equal(activations.length, 0);
+        assert.equal(await svc.authenticate('acme-demo', 'fict-pa', TEMP + 'P'), false);
+        // 2) two publications queued on one publisher: the second precheck runs after the first has merged, and its refusal leaves only the first on main
+        let sawMainMoved = false; const afterFirst: string[] = [];
+        const first = pub.publishForRun({ tenant: 'acme-demo', runId: 'run-pa', workflowId: 'wf-fict', branch: 'run-pre-a', expectedHead: headA });
+        const second = pub.publishForRun({ tenant: 'acme-demo', runId: 'run-pb', workflowId: 'wf-fict', branch: 'run-pre-b', expectedHead: headB, precheck: async () => { afterFirst.push(await mainHead()); sawMainMoved = afterFirst[0] !== before; throw new Error('state changed while queued'); } });
+        const [r1, r2] = await Promise.allSettled([first, second]);
+        assert.equal(r1.status, 'fulfilled'); assert.equal(r2.status, 'rejected');
+        assert.equal(sawMainMoved, true, 'the precheck of the queued publication ran after the first merge');
+        assert.equal(await svc.authenticate('acme-demo', 'fict-pa', TEMP + 'P'), true);
+        assert.equal(await svc.authenticate('acme-demo', 'fict-pb', TEMP + 'P'), false, 'the refused publication left its credential off main');
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+    });
+    it('through the REAL engine publish wrapper (allow-list gate included): the precheck reaches the real publisher inside its queue, a rejection merges nothing', async () => {
+      activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
+      const head = await runBranch('run-pre-w', 'fict-pw');
+      const ws = (WorkflowEngine.prototype as any).workspaceEffects.call({ publisher: mkPub(), settingsFor: async () => ({ publishAllowedWorkflows: 'wf-fict' }) }, v);
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const before = await mainHead(); let ran = 0;
+        await assert.rejects(() => ws.publish('acme-demo', { runId: 'run-w', workflowId: 'wf-fict', branch: 'run-pre-w', expectedHead: head, precheck: async () => { ran++; throw new Error('guard flipped'); } }), /guard flipped/);
+        assert.equal(ran, 1); assert.equal(await mainHead(), before); assert.equal(activations.length, 0);
+        const ok = await ws.publish('acme-demo', { runId: 'run-w', workflowId: 'wf-fict', branch: 'run-pre-w', expectedHead: head, precheck: async () => { ran++; } });
+        assert.equal(ok.published, true); assert.equal(ran, 2);
+        await assert.rejects(() => ws.publish('acme-demo', { runId: 'run-w', workflowId: 'wf-other', branch: 'run-pre-w', expectedHead: head, precheck: async () => {} }), /not authorized/);
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+    });
+    /** Publication in a CHILD process that is killed (exit 137, no cleanup) at the chosen point: 'precheck' (before the merge) or 'activate' (after the merge, before the activation is recorded). */
+    const killedPublication = (branch: string, head: string, at: 'precheck' | 'activate') => {
+      const u = (f: string) => new URL(f, import.meta.url).href;
+      const code = `(async()=>{const {VersioningService}=await import('${u('../versioning/versioning.service.js')}');const {WorkspacePublisher}=await import('${u('../workspace/workspace-publisher.js')}');
+const v=new VersioningService();const act={applyEnabled:true,current:async()=>({state:'applied',commit:'old'}),activate:async()=>{${at === 'activate' ? 'process.exit(137)' : "throw new Error('unexpected activation')"}}};
+const pub=new WorkspacePublisher(v,{drop(){},get:async()=>({})},act);
+await pub.publishForRun({tenant:'acme-demo',runId:'run-kill',workflowId:'wf-fict',branch:'${branch}',expectedHead:'${head}',${at === 'precheck' ? 'precheck:async()=>{process.exit(137)}' : ''}});process.exit(0);})().catch(e=>{console.error(String(e&&e.message));process.exit(1)})`;
+      return spawnSync(process.execPath, ['-e', code], { env: { ...process.env, IAM_WORKSPACE_MODE: '1' }, encoding: 'utf8', timeout: 90000 });
+    };
+    it('REAL process death before the merge, then after the merge before the activation is recorded: nothing half-merged; a new process resumes the same head, never merges twice, and activates once', async () => {
+      activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
+      const head = await runBranch('run-kill-1', 'fict-k1'), main0 = await mainHead();
+      let k = killedPublication('run-kill-1', head, 'precheck'); assert.equal(k.status, 137, k.stderr);
+      assert.equal(await mainHead(), main0, 'killed before the merge: main untouched'); assert.equal(await svc.authenticate('acme-demo', 'fict-k1', TEMP + 'P'), false);
+      k = killedPublication('run-kill-1', head, 'activate'); assert.equal(k.status, 137, k.stderr);
+      const merged = await mainHead(); assert.notEqual(merged, main0, 'killed after the merge: the data is already on main');
+      assert.equal(await svc.authenticate('acme-demo', 'fict-k1', TEMP + 'P'), true, 'credential live on main although no activation was recorded (the documented window)');
+      assert.equal(activations.length, 0, 'the killed process recorded no activation');
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const r: any = await mkPub().publishForRun({ tenant: 'acme-demo', runId: 'run-kill', workflowId: 'wf-fict', branch: 'run-kill-1', expectedHead: head });
+        assert.equal(r.published, true); assert.equal(await mainHead(), merged, 'no second merge commit'); assert.equal(activations.length, 1);
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+    });
     it('a block written while the publication runs is neither lost nor undone, and the workflow unblock then lifts the block its own run set', async () => {
       activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
       const head = await runBranch('run-pub-3', 'fict-p3');

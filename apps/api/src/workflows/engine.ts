@@ -1,8 +1,10 @@
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
+import type { WorkflowIntake } from './intake.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
 import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
-import { forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { ForbiddenException, forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
+import { validateConfig } from '../authn/config.js';
 import { validateSettings } from '../plugins/v1/settings.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
@@ -22,6 +24,7 @@ import { BlocksService } from '../accounts/blocks.service.js';
 import { inForce } from '../accounts/blocks.js';
 import { patchSecurity } from '../accounts/security-config.js';
 import { UsersService } from '../users/users.service.js';
+import { isFrozenApprovedReset, RESET_FROZEN } from './reset-freeze.js';
 import { RunSecrets } from './run-secrets.js';
 import { CorePolicySource } from '../policies/policy-studio.js';
 import { STEP_TYPES, substituteEventPayload, validateGraph } from './model.js';
@@ -51,6 +54,7 @@ interface EngineDeps {
   settingsFor: (tenant: string, branch: string | null, pluginId: string) => Promise<Record<string, unknown>>;
   connectionFor?: (tenant: string, ref: string, id: string, type: string) => Promise<{ settings: Record<string, unknown>; secret: string }>;
   accounts?: AccountEffects;
+  authn?: AuthnEffects;
   workspace?: WorkspaceEffects;
   secrets?: RunSecrets;
   users?: UserEffects;
@@ -62,12 +66,15 @@ interface EngineDeps {
   publish?: PublishEffects;
   runs?: unknown;
   policies?: unknown;
+  connectionTests?: unknown;
+  intake?: WorkflowIntake;
   pluginsAdmin?: unknown;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 /** The durable ticket > account > sheet-row correlation (meta store). Every call is scoped to the run's tenant by the engine; a block never passes a tenant. */
 export interface LinkEffects {
   put: (tenant: string, l: { connectionId: string; project: string; issueKey: string; account: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string; runId: string }) => Promise<void>;
+  peek?: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<{ account: string; phase1Run: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string } | null>;
   claim: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<{ account: string; phase1Run: string; source: string; spreadsheetId: string; sheetId: number; keyColumn: string; keyValue: string } | null>;
   complete: (tenant: string, k: { connectionId: string; project: string; issueKey: string }, runId: string) => Promise<boolean>;
 }
@@ -79,11 +86,66 @@ export interface AccountEffects {
   activeBlocks: (tenant: string, subject: string) => Promise<{ kind: string; setBy: string }[]>;
   patchSecurity: (current: Record<string, unknown> | undefined, setting: string, value: string) => Record<string, unknown>;
 }
+/** Authentication effects a block may use. enrollments() is a live READ of the enrollment status (never a
+ * secret). unenroll() and notify() are IMMEDIATE, UNVERSIONED effects: enrollments are shared, unversioned
+ * secrets, so a removal applies at once and is never reverted by a later merge or publication; the
+ * notification goes to the demo outbox (real=false): no real e-mail is sent. savePolicy() writes the
+ * validated authentication configuration ON THE RUN BRANCH (versioned, reviewed like every other change). */
+export interface AuthnEffects {
+  enrollments: (tenant: string, user: string) => Promise<Record<string, unknown>>;
+  /** True when the subject is an administrator (the same list the admin capability uses). */
+  targetIsAdmin: (subject: string) => boolean;
+  /** True when the administrator list (server configuration) is not empty. With an empty list targetIsAdmin is false for everyone, so a guard that relies on it must fail closed. */
+  adminsConfigured: () => boolean;
+  validatePolicy: (input: unknown) => { valid: boolean; errors: string[] };
+  savePolicy: (tenant: string, a: { branch: string; input: unknown }) => Promise<unknown>;
+  unenroll: (tenant: string, a: { runId: string; user: string; instance: string; reason: string }) => Promise<{ removed: boolean }>;
+  notify: (tenant: string, m: { to: string; subject: string; text: string; subjectUser: string }) => Promise<void>;
+}
+const FACTOR_KEYS = ['totp', 'pin', 'email', 'external', 'webauthn'] as const;
+
+/** Builds the authentication effects handed to the workflow blocks. unenroll() is SERIALIZED per
+ * (tenant, user) inside this process: two concurrent re-enrollments of a person's two last factors
+ * can never both pass the last-factor check — the second reads the state the first left and refuses.
+ * Scope: one API process; a multi-process deployment would need a shared lock (none exists yet). */
+export function buildAuthnEffects(authn: AuthnService | undefined, tasks: WorkflowTasksService | undefined, events?: ApplicationBus): AuthnEffects | undefined {
+  if (!authn) return undefined;
+  const locks = new Map<string, Promise<unknown>>();
+  const serialized = <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+    const run = (locks.get(key) ?? Promise.resolve()).then(fn, fn);
+    locks.set(key, run.catch(() => undefined));
+    return run;
+  };
+  return {
+    enrollments: async (tenant, user) => (await authn.enroll.status(tenant, user)) as Record<string, unknown>,
+    targetIsAdmin: (subject) => (tasks?.isAdmin(subject) ?? false),
+    adminsConfigured: () => (tasks?.poolMembers('admin').length ?? 0) > 0,
+    validatePolicy: (input) => { try { validateConfig(input); return { valid: true, errors: [] }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } },
+    savePolicy: async (tenant, a) => branchContext.run({ branch: a.branch }, () => authn.saveConfig(tenant, a.input)),
+    unenroll: (tenant, a) => serialized(`${tenant}${a.user}`, async () => {
+      // The state NOW, never a stale proposal: a factor already gone is the wanted end state, not an error.
+      const st = (await authn.enroll.status(tenant, a.user)) as Record<string, Record<string, unknown>>;
+      const cur = st[a.instance];
+      const enrolled = !!cur && FACTOR_KEYS.some((k) => !!cur[k]);
+      if (!enrolled) return { removed: false };
+      // Defense in depth (the block guards it too): never remove the LAST enrolled factor — the user
+      // must sign in to re-enroll, so that would lock them out with no self-service way back.
+      const others = Object.entries(st).filter(([i, x]) => i !== a.instance && FACTOR_KEYS.some((k) => !!x[k]));
+      if (!others.length) throw new BadRequestException(`unenroll: "${a.instance}" is the last enrolled factor of "${a.user}": removing it would lock the user out`);
+      await authn.enroll.remove(tenant, a.user, a.instance);
+      events?.emit({ type: 'authn.reenrollment-requested', tenant, actor: `workflow:${a.runId}`, subject: a.user, instance: a.instance, reason: a.reason } as never);
+      return { removed: true };
+    }),
+    notify: async (tenant, m) => { await authn.outbox.send({ tenant, to: m.to, subject: m.subject, text: m.text, subjectUser: m.subjectUser }); },
+  };
+}
+
 /** Publication of a run branch to main (the lyam-publish-workspace block). Absent when the server has no publisher: the block then refuses. */
 export interface WorkspaceEffects {
+  preflight?: (tenant: string, a: { workflowId: string }) => Promise<void>;
   headOf: (branch: string) => Promise<string | null>;
   proof: (tenant: string, sourceHead: string) => Promise<{ mainCommit: string; activation: string; activationCommit: string; containsHead: boolean }>;
-  publish: (tenant: string, a: { runId: string; workflowId: string; branch: string; expectedHead: string }) => Promise<{ published: boolean; branch: string; sourceHead: string; mainCommit: string; activation: string }>;
+  publish: (tenant: string, a: { runId: string; workflowId: string; branch: string; expectedHead: string; precheck?: () => Promise<void> }) => Promise<{ published: boolean; branch: string; sourceHead: string; mainCommit: string; activation: string }>;
 }
 /** Temporary password on the run branch, and the real first-access state of an account on a ref (the credential revision and its server-side expiry; never the password). */
 export interface UserEffects {
@@ -104,7 +166,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown, @Optional() @Inject(forwardRef(() => PullRequestService)) private readonly prs?: unknown) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown, @Optional() @Inject(forwardRef(() => PullRequestService)) private readonly prs?: unknown, @Optional() @Inject('WORKFLOW_INTAKE') private readonly intake?: WorkflowIntake) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -117,12 +179,24 @@ export class WorkflowEngine implements OnModuleInit {
         return this.connections.resolve(tenant, ref, id, provider);
       },
       accounts: this.accountEffects(),
+      authn: this.authnEffects(),
       workspace: this.workspaceEffects(v),
       secrets: new RunSecrets(),
       users: this.userEffects(),
       links: this.linkEffects(store),
       tasks: (tasks ?? undefined) as WorkflowTasksService | undefined, reads: (reads ?? undefined) as WorkflowReads | undefined, iga: (iga ?? undefined) as WorkflowsIgaService | undefined,
+      intake: this.intake,
       runs: this.runEffects(),
+      connectionTests: { test: async (tenant: string, ref: string, ids: string[], startedBy: string) => {
+        if (!(tasks as WorkflowTasksService | undefined)?.isAdmin(startedBy)) throw new BadRequestException('connection probes require a run started by an administrator');
+        if (!this.connections) throw new BadRequestException('managed connections unavailable');
+        const results: Record<string, unknown>[] = [];
+        for (const id of ids) {
+          try { results.push(await branchContext.run({ branch: ref }, () => this.connections!.test(tenant, id))); }
+          catch { results.push({ id, status: 'Failed', message: 'Connection unavailable or test refused.' }); }
+        }
+        return { results };
+      } },
       publish: this.publishEffects(v),
       policies: { validate: async (_tenant: string, candidate: unknown) => { try { const r = await new CorePolicySource().validate(candidate as never); return { valid: true, ...(r && typeof r === 'object' ? r as unknown as Record<string, unknown> : {}) }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } } },
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
@@ -135,13 +209,21 @@ export class WorkflowEngine implements OnModuleInit {
    */
   private workspaceEffects(v: VersioningService): WorkspaceEffects | undefined {
     const publisher = this.publisher; if (!publisher) return undefined;
+    const authorize = async (tenant: string, workflowId: string) => {
+      let allowed: string[] = [];
+      try {
+        const value = (await this.settingsFor(tenant, v.defaultBranch, 'workflow-connectors')).publishAllowedWorkflows;
+        if (typeof value !== 'string') throw new Error('invalid authorization setting');
+        allowed = value.split(',').map(x => x.trim()).filter(Boolean);
+      } catch { throw new Error('lyam-publish-workspace: the authorization setting cannot be read (nothing published)'); }
+      if (!workflowId || !allowed.includes(workflowId)) throw new Error('lyam-publish-workspace: this workflow is not authorized to publish (an administrator lists its id in the publishAllowedWorkflows setting)');
+    };
     return {
+      preflight: async (tenant, a) => { await authorize(tenant, a.workflowId); publisher.preflightForRun(); },
       proof: (tenant, sourceHead) => publisher.liveProof(tenant, sourceHead),
       headOf: async (branch) => (await v.branches()).branches.find((b) => b.name === branch)?.commit ?? null,
       publish: async (tenant, a) => {
-        let allowed: string[] = [];
-        try { allowed = String((await this.settingsFor(tenant, v.defaultBranch, 'workflow-connectors')).publishAllowedWorkflows ?? '').split(',').map((x) => x.trim()).filter(Boolean); } catch { throw new Error('lyam-publish-workspace: the authorization setting cannot be read (nothing published)'); }
-        if (!a.workflowId || !allowed.includes(a.workflowId)) throw new Error('lyam-publish-workspace: this workflow is not authorized to publish (an administrator lists its id in the publishAllowedWorkflows setting)');
+        await authorize(tenant, a.workflowId);
         return publisher.publishForRun({ tenant, ...a });
       },
     };
@@ -150,6 +232,11 @@ export class WorkflowEngine implements OnModuleInit {
   private linkEffects(store: WorkflowStore): LinkEffects {
     return {
       put: async (tenant, l) => { await store.putTicketLink({ tenant, ...l }); },
+      peek: async (tenant, k, runId) => {
+        const r = await store.getTicketLink({ tenant, ...k });
+        if (!r || !(r.status === 'open' || (r.status === 'claimed' && r.claimed_run === runId))) return null;
+        return { account: r.account, phase1Run: r.phase1_run, source: r.source, spreadsheetId: r.spreadsheet_id, sheetId: Number(r.sheet_id), keyColumn: r.key_column, keyValue: r.key_value };
+      },
       claim: async (tenant, k, runId) => { const r = await store.claimTicketLink({ tenant, ...k }, runId); return r ? { account: r.account, phase1Run: r.phase1_run, source: r.source, spreadsheetId: r.spreadsheet_id, sheetId: Number(r.sheet_id), keyColumn: r.key_column, keyValue: r.key_value } : null; },
       complete: (tenant, k, runId) => store.completeTicketLink({ tenant, ...k }, runId),
     };
@@ -242,6 +329,10 @@ export class WorkflowEngine implements OnModuleInit {
     };
   }
 
+  private authnEffects(): AuthnEffects | undefined {
+    return buildAuthnEffects(this.authn, this.tasks as WorkflowTasksService | undefined, this.events);
+  }
+
   private accountEffects(): AccountEffects | undefined {
     const authn = this.authn; if (!authn) return undefined;
     const svc = new BlocksService(authn.blocks, (e) => this.events?.emit({ ...e, branch: 'main' } as never));
@@ -284,6 +375,15 @@ export class WorkflowEngine implements OnModuleInit {
 
   /** The engine of the plugin serving the workflows.engine slot for this run. */
   private async engineFor(run: RunRow): Promise<WorkflowEngineApi> {
+    // This core-owned barrier applies BEFORE provider resolution, including a replacement engine,
+    // boot recovery and retries of old queued runs. It cannot be overridden by plugin grants/settings.
+    if (!run.test && isFrozenApprovedReset(run.graph)) return {
+      resume: async () => {},
+      kick: () => { void this.store.transitionRun(run.id, { status: 'failed', error: RESET_FROZEN, finished_at: new Date().toISOString().slice(0, 23).replace('T', ' ') }, ['queued', 'running', 'waiting']).catch(() => this.log.error(`run ${run.id}: could not record frozen reset refusal; no provider was called`)); },
+      cancelFlag: () => {},
+      clearStaleCancel: () => { throw new ForbiddenException(RESET_FROZEN); },
+      forget: () => {},
+    };
     return resolveEngine(() => this.registryFor(run.branch), run.tenant, 'workflows.engine', 'engine.mjs', (mod: { createWorkflowEngine: (deps: EngineDeps) => WorkflowEngineApi }) => mod.createWorkflowEngine(this.deps), this);
   }
 

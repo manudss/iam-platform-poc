@@ -109,6 +109,28 @@ describe('workflow blocks: lifecycle and roles writes (run branch)', () => {
   });
 });
 
+describe('workflow blocks: lyam-update-role', () => {
+  const dbFor = (row: Record<string, unknown> | null, queries: { q: string; v?: unknown[] }[]) => (async (fn: (db: { query: (q: string, v?: unknown[]) => Promise<unknown> }) => Promise<void>) => fn({ query: async (q: string, v?: unknown[]) => { queries.push({ q, v }); return q.startsWith('select') ? [row ? [row] : []] : [{ affectedRows: 1 }]; } })) as never;
+  it('validates: nothing to change, bad sensitivity', () => {
+    const b = externalBlock('lyam-update-role')!;
+    assert.throws(() => b.validate({ id: 'auditor' }), /nothing to change/);
+    assert.throws(() => b.validate({ id: 'auditor', sensitive: 'maybe' }), /sensitive/);
+  });
+  it('test run writes nothing; real run updates label and sensitivity on the run branch', async () => {
+    const b = externalBlock('lyam-update-role')!; const queries: { q: string; v?: unknown[] }[] = [];
+    assert.equal((await b.run(mk({ test: true, branchWrite: dbFor({ id: 'auditor', is_sensitive: 0 }, queries), config: { id: 'auditor', label: 'Auditor', sensitive: 'yes' } }).c))!.updated, false);
+    assert.equal(queries.length, 0);
+    assert.equal((await b.run(mk({ branchWrite: dbFor({ id: 'auditor', is_sensitive: 0 }, queries), config: { id: 'auditor', label: 'Auditor', sensitive: 'yes' } }).c))!.updated, true);
+    assert.match(queries[1].q, /update roles set label = \?, is_sensitive = 1 where id = \?/);
+  });
+  it('an unknown role is refused (never created) and a sensitive role is never downgraded', async () => {
+    const b = externalBlock('lyam-update-role')!; const queries: { q: string; v?: unknown[] }[] = [];
+    await assert.rejects(b.run(mk({ branchWrite: dbFor(null, queries), config: { id: 'ghost', label: 'X', sensitive: 'unchanged' } }).c), /unknown role/);
+    await assert.rejects(b.run(mk({ branchWrite: dbFor({ id: 'admin', is_sensitive: 1 }, queries), config: { id: 'admin', sensitive: 'no' } }).c), /reviewed change/);
+    assert.ok(queries.every((x) => x.q.startsWith('select')), 'no write was attempted');
+  });
+});
+
 describe('workflow blocks: IGA recertification socle', () => {
   const fakeIga = () => {
     const calls: string[] = [];
@@ -238,4 +260,52 @@ describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', 
     assert.equal(requested, 0, 'no PR is opened without a run branch');
   });
 
+});
+
+describe('lyam-await-run bounded read-only wait', () => {
+  it('test run does not read; complete child succeeds; failed child and timeout never claim completion', async () => {
+    const b = externalBlock('lyam-await-run')!; let calls = 0;
+    const runs = { get: async () => { calls++; return { id: 'child', status: 'completed' }; } };
+    const cfg = { runId: 'child', timeoutSeconds: 1, pollSeconds: 1 };
+    assert.equal((await b.run(mk({ test: true, runs: runs as never, config: cfg }).c))!.finished, false);
+    assert.equal(calls, 0);
+    assert.equal((await b.run(mk({ runs: runs as never, config: cfg }).c))!.finished, true);
+    for (const status of ['failed', 'canceled', 'waiting']) await assert.rejects(b.run(mk({ runs: { get: async () => ({ id: 'child', status }) } as never, config: cfg }).c));
+  });
+});
+
+describe('bounded child wait timeout', () => {
+  it('polls a human-waiting child until the actual deadline, even when poll interval exceeds timeout', async () => {
+    let reads = 0; const began = Date.now();
+    const c = mk({ config: { runId: 'run-child', timeoutSeconds: 1, pollSeconds: 10 }, runs: { get: async () => { reads++; return { id: 'run-child', status: 'waiting' }; } } } as never).c;
+    await assert.rejects(externalBlock('lyam-await-run')!.run(c), /still waiting/);
+    assert.ok(Date.now() - began >= 900); assert.ok(reads >= 2);
+  });
+});
+
+describe('SoD read, bounded agent proposal and connection probes', () => {
+  it('SoD read computes with no hypothetical grants or revocations', async () => {
+    const b = externalBlock('lyam-read-sod-conflicts')!;
+    const out = await b.run(mk({ reads: { simulateAssignments: async (_r: string, g: unknown[], r: unknown[]) => { assert.deepEqual(g, []); assert.deepEqual(r, []); return { conflicts: [], conflictsCount: 0 }; } } as never }).c);
+    assert.equal(out!.conflictsCount, 0);
+  });
+  it('bounded access is a proposal only, admin pool, no wildcard or unbounded expiry', async () => {
+    const b = externalBlock('lyam-propose-agent-access')!;
+    const cfg = { identity: 'bot', upstream: 'jira', tool: 'getIssue', expiresAt: new Date(Date.now() + 3600000).toISOString(), reason: 'read one issue' };
+    const clean = b.validate(cfg); assert.equal(clean.assignee, 'admin');
+    assert.equal((clean.detail as any).proposalOnly, true);
+    assert.throws(() => b.validate({ ...cfg, tool: '*' }));
+    assert.throws(() => b.validate({ ...cfg, expiresAt: '2020-01-01' }));
+    const tasks = fakeTasks();
+    await assert.rejects(b.run(mk({ config: clean, tasks: tasks as never }).c), /waiting/);
+    assert.equal(tasks.tasks.size, 1);
+  });
+  it('connection bulk test is a no-op in tests, caps the list and forwards the trusted run starter', async () => {
+    const b = externalBlock('lyam-test-connections')!; let calls = 0;
+    const connectionTests = { test: async (_t: string, _r: string, ids: string[], starter: string) => { calls++; assert.deepEqual(ids, ['one', 'two']); assert.equal(starter, 'boss'); return { results: [] }; } };
+    const c = mk({ config: { ids: 'one,two,one' }, startedBy: 'boss', connectionTests } as never).c;
+    await b.run({ ...c, test: true }); assert.equal(calls, 0);
+    await b.run(c); assert.equal(calls, 1);
+    await assert.rejects(b.run({ ...c, config: { ids: '../bad' } }));
+  });
 });

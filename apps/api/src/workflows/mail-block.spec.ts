@@ -6,7 +6,7 @@ import { loadPluginModule } from '../plugins/v1/loader.js';
 import { validateConnection } from './connections.js';
 // Stubs only: no mail is sent. Shows the recipient rule, the idempotent effect key and the refusal of a mail that was not really delivered.
 const block = () => externalBlock('lyam-send-mail')!;
-const base = (over: any = {}) => ({ tenant: 'acme', config: { to: 'owner@example.test', subject: 'Votre acces', text: 'Bonjour' }, settings: { mailAllowedRecipients: 'owner@example.test' }, dryRun: false, log: () => {}, outputs: {}, runId: 'run-1', ...over });
+const base = (over: any = {}) => ({ tenant: 'acme', config: { to: 'owner@example.test', subject: 'Votre acces', text: 'Bonjour' }, settings: { mailAllowedRecipients: 'owner@example.test' }, liveMailSettings: async () => over.settings ?? ({ mailAllowedRecipients: 'owner@example.test' }), dryRun: false, log: () => {}, outputs: {}, runId: 'run-1', ...over });
 const mailApi = loadPluginModule('workflow-connectors', 'mail-api.mjs') as any;
 class Fake { static calls: any[] = []; static mode: 'ok' | 'error' | 'throw' | 'noid' = 'ok';
   constructor(public key: string) {}
@@ -19,6 +19,14 @@ describe('lyam-send-mail block', () => {
     await assert.rejects(() => block().run(base({ config: { to: 'other@example.test', subject: 's', text: 't' } }) as any), /not in the allowed recipients/);
     await assert.rejects(() => block().run(base({ settings: {} }) as any), /not in the allowed recipients/);
     assert.equal(Fake.calls.length, 0);
+  }));
+  it('real mail uses current-main policy, never a stale branch allowlist, and refuses an unavailable live reader', async () => withKey(async () => {
+    await assert.rejects(()=>block().run(base({liveMailSettings:async()=>({})}) as any), /allowed recipients/);
+    await assert.rejects(()=>block().run(base({liveMailSettings:undefined}) as any), /live mail policy is not available/);
+    await assert.rejects(()=>block().run(base({liveMailSettings:async()=>{throw Error('fixture read failed');}}) as any), /live mail policy cannot be read/);
+    assert.equal(Fake.calls.length,0);
+    await block().run(base({settings:{},liveMailSettings:async()=>({mailAllowedRecipients:'owner@example.test'})}) as any);
+    assert.equal(Fake.calls.length,1);
   }));
   it('a test run only logs and calls nothing, even with a key', async () => withKey(async () => {
     const lines: string[] = [];

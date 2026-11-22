@@ -2,11 +2,11 @@ import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { runPieceAction } from './adapter.mjs';
-import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey } from './sheets-api.mjs';
+import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, createGoogleColumn, findGoogleRows } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
-import { LYAM_ADMIN_BLOCKS } from './lyam-admin-blocks.mjs';
+import { LYAM_ADMIN_BLOCKS, assertResetApproval } from './lyam-admin-blocks.mjs';
 
 /**
  * The block catalogue this plugin exposes on the `workflows.blocks` surface (SPIKE).
@@ -323,6 +323,51 @@ const sheetsAddRow = {
   },
 };
 
+const sheetsFindRows = {
+  type: 'google-sheets-find-rows', family: 'Google Sheets', label: 'Find sheet rows (Activepieces)', simulated: false,
+  description: 'Finds exact, case-sensitive matches in a named header through the Activepieces Find Rows action, capped at 200. Refuses missing or duplicate headers. Read only. The demo sheet is local simulated data.',
+  fields: [...sheetSourceFields, { key: 'columnName', label: 'Header to search', type: 'string', required: true }, { key: 'searchValue', label: 'Exact value', type: 'string', required: true }, { key: 'limit', label: 'Maximum matches (1 to 200)', type: 'number', default: 100 }],
+  outputs: [{ key: 'rows', description: 'Matching rows with rowNumber and values' }, { key: 'count', description: 'Number of returned matches (capped)' }],
+  validate(cfg) {
+    const limit = Number(cfg.limit ?? 100);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) bad('limit: an integer from 1 to 200');
+    return { ...sheetSource(cfg), columnName: str(cfg.columnName, 'columnName', 60), searchValue: str(cfg.searchValue, 'searchValue', 200), limit };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.dryRun) return { rows: [], count: 0, dryRun: true };
+    if (c.source === 'demo-sheet') { const rows = demoSheet.rows().filter(r => String(r.values[c.columnName] ?? '') === c.searchValue).slice(0, c.limit); return { rows, count: rows.length }; }
+    const auth = googleAuth(ctx.settings);
+    if (!auth) bad('google-sheets-find-rows: configure a managed Google Sheets connection first');
+    const rows = await findGoogleRows(auth, c, c.columnName, c.searchValue, c.limit);
+    ctx.log(`Google Sheets: ${rows.length} matching row(s), capped at ${c.limit} (read only)`);
+    return { rows, count: rows.length };
+  },
+};
+
+const sheetsCreateColumn = {
+  type: 'google-sheets-create-column',
+  family: 'Google Sheets',
+  label: 'Add a sheet column (Activepieces)',
+  simulated: false,
+  description: 'Adds a header column to a Google Sheet through the Activepieces google-sheets piece. Refused when the precheck finds an existing header. Concurrent header edits between the precheck and insertion are not locked. On the demo sheet nothing is changed. A real column is an external write not reverted by the run branch.',
+  fields: [
+    ...sheetSourceFields,
+    { key: 'columnName', label: 'Column header', type: 'string', required: true },
+  ],
+  outputs: [{ key: 'created', description: 'true when the column was added' }],
+  validate(cfg) { return { ...sheetSource(cfg), columnName: str(cfg.columnName, 'columnName', 60) }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.dryRun || c.source === 'demo-sheet') { ctx.log('SIMULATION: Google Sheets create column, no call or sheet mutation'); return { created: false, dryRun: true }; }
+    const auth = googleAuth(ctx.settings);
+    if (!auth) bad('google-sheets-create-column: configure a managed Google Sheets connection first');
+    await createGoogleColumn(auth, c, c.columnName);
+    ctx.log(`Google Sheets: column "${c.columnName}" added (REAL external write, not reverted by the run branch)`);
+    return { created: true };
+  },
+};
+
 // --------------------------------------------------------------------------- Jira (piece-jira-cloud) ----
 const jiraCreateIssue = {
   type: 'jira-create-issue',
@@ -414,6 +459,107 @@ const jiraSearchIssues = {
   },
 };
 
+const jiraAuth = (ctx, type) => {
+  const instanceUrl = str(ctx.settings?.jiraInstanceUrl, 'jira instance URL', 200, false);
+  const email = str(ctx.settings?.jiraEmail, 'jira email', 200, false);
+  const apiToken = str(ctx.settings?.jiraApiToken, 'jira api token', 500, false);
+  if (!instanceUrl || !email || !apiToken) bad(`${type}: configure a managed Jira connection first, or keep dryRun on`);
+  return { props: { instanceUrl, email, apiToken } };
+};
+const issueKey = (v, what) => { const x = str(v, what, 40); if (!/\{\{/.test(x) && !/^[A-Z][A-Z0-9_]{1,19}-[0-9]{1,9}$/.test(x)) bad(`${what}: an issue key like KAN-12`); return x; };
+const projectOf = (v) => str(v, 'jira project', 20);
+
+const jiraGetIssue = {
+  type: 'jira-get-issue', family: 'Jira', label: 'Read a Jira issue (Activepieces)', simulated: false,
+  description: 'Reads one issue (status, summary, labels) through the Activepieces jira-cloud piece. Read-only and idempotent. dryRun on (default) = SIMULATED, nothing called.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real call)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+  ],
+  outputs: [{ key: 'key', description: 'Issue key' }, { key: 'status', description: 'Current status name' }, { key: 'summary', description: 'Summary' }, { key: 'labels', description: 'Labels, comma separated' }],
+  validate(cfg) { return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey') }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would read Jira issue ${c.issueKey} (nothing called)`); return { key: null, status: null, summary: null, labels: '', dryRun: true }; }
+    const r = await runPieceAction('@activepieces/piece-jira-cloud', 'get_issue', { auth: jiraAuth(ctx, 'jira-get-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, mapNames: true } });
+    const f = r?.fields ?? {};
+    ctx.log(`Jira issue ${c.issueKey} read (real API call, read-only)`);
+    return { key: String(r?.key ?? ''), status: String(f.status?.name ?? ''), summary: String(f.summary ?? '').slice(0, 200), labels: Array.isArray(f.labels) ? f.labels.join(',') : '' };
+  },
+};
+
+const jiraAddComment = {
+  type: 'jira-add-comment', family: 'Jira', label: 'Comment on a Jira issue (Activepieces)', simulated: false,
+  description: 'Adds a comment to an issue through the Activepieces jira-cloud piece. A real comment is an external effect: it is NOT idempotent (a retry adds another comment) and is not reverted by the run branch, so an interrupted step stops the run for review. dryRun on (default) = SIMULATED.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real comment)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+    { key: 'comment', label: 'Comment', type: 'text', required: true, help: 'Plain text. Never put a password or secret in it.' },
+  ],
+  outputs: [{ key: 'commentId', description: 'Id of the created comment (null in dry-run)' }],
+  validate(cfg) { return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey'), comment: str(cfg.comment, 'comment', 2000) }; },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would comment on Jira issue ${c.issueKey} (nothing posted)`); return { commentId: null, dryRun: true }; }
+    const r = await runPieceAction('@activepieces/piece-jira-cloud', 'add_issue_comment', { auth: jiraAuth(ctx, 'jira-add-comment'), propsValue: { projectId: c.project, issueId: c.issueKey, comment: c.comment, isADF: false } });
+    const id = String(r?.id ?? '');
+    ctx.log(`Jira comment ${id || '?'} added on ${c.issueKey} (REAL external write, not idempotent)`);
+    return { commentId: id };
+  },
+};
+
+const jiraUpdateIssue = {
+  type: 'jira-update-issue', family: 'Jira', label: 'Update a Jira issue (Activepieces)', simulated: false,
+  description: 'Sets the summary and/or the labels of an existing issue through the Activepieces jira-cloud piece (labels REPLACE the current list). Notifications or automation may run on every write; an uncertain effect is not automatically replayed. This immediate write is not reverted by the run branch. A field the issue edit screen does not offer is ignored by Jira. dryRun on (default) = SIMULATED.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real update)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+    { key: 'summary', label: 'New summary', type: 'string' },
+    { key: 'labels', label: 'Labels, replaces the list (comma separated)', type: 'string', help: 'Include any existing watcher label you want to keep. Omitting it removes it and can stop the Jira Done watcher from matching this issue.' },
+  ],
+  outputs: [{ key: 'updated', description: 'true when Jira accepted the update' }],
+  validate(cfg) {
+    const summary = str(cfg.summary, 'summary', 200, false), labels = labelsOf(cfg.labels);
+    if (!summary && !labels.length) bad('jira-update-issue: nothing to change (give a summary or labels)');
+    return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey'), summary, labels };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would update Jira issue ${c.issueKey} (nothing changed)`); return { updated: false, dryRun: true }; }
+    const result = await runPieceAction('@activepieces/piece-jira-cloud', 'update_issue', { auth: jiraAuth(ctx, 'jira-update-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, issueFields: { ...(c.summary ? { summary: c.summary } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } } });
+    if ((c.summary && result?.fields?.summary !== c.summary) || (c.labels.length && JSON.stringify([...(result?.fields?.labels ?? [])].sort()) !== JSON.stringify([...c.labels].sort()))) throw new Error('Jira did not confirm the requested field values; inspect the issue before retrying');
+    ctx.log(`Jira issue ${c.issueKey} updated and values confirmed (REAL external write)`);
+    return { updated: true };
+  },
+};
+
+const jiraTransitionIssue = {
+  type: 'jira-transition-issue', family: 'Jira', label: 'Move a Jira issue to another status (Activepieces)', simulated: false,
+  description: 'Applies one workflow transition (numeric transition id from the project workflow) through the Activepieces jira-cloud piece. A real transition is an external effect not reverted by the run branch; an interrupted step stops the run for review. dryRun on (default) = SIMULATED.',
+  fields: [
+    { key: 'dryRun', label: 'Dry run (no real transition)', type: 'boolean', default: true },
+    { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
+    { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
+    { key: 'transitionId', label: 'Transition ID (numeric)', type: 'string', required: true, help: 'From the issue transitions of the target project. Ids vary by site: never infer one from a status name.' },
+  ],
+  outputs: [{ key: 'transitioned', description: 'true when Jira accepted the transition' }],
+  validate(cfg) {
+    const t = str(cfg.transitionId, 'transitionId', 10);
+    if (!/\{\{/.test(t) && !/^[0-9]{1,10}$/.test(t)) bad('transitionId: the numeric Jira transition id');
+    return { dryRun: bool(cfg.dryRun, true), project: projectOf(cfg.project), issueKey: issueKey(cfg.issueKey, 'issueKey'), transitionId: t };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would apply transition ${c.transitionId} to ${c.issueKey} (nothing changed)`); return { transitioned: false, dryRun: true }; }
+    await runPieceAction('@activepieces/piece-jira-cloud', 'transition_issue', { auth: jiraAuth(ctx, 'jira-transition-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, transitionId: c.transitionId } });
+    ctx.log(`Jira transition ${c.transitionId} applied to ${c.issueKey} (REAL external write)`);
+    return { transitioned: true };
+  },
+};
+
 // ------------------------------------------------------------------- lyam connector: create a user ----
 const lyamCreateUser = {
   type: 'lyam-create-user',
@@ -439,25 +585,35 @@ const lyamCreateUser = {
   async run(ctx) {
     const c = ctx.config;
     if (!/^[a-z0-9][a-z0-9.-]{0,31}$/.test(c.identity)) bad(`lyam-create-user.identity: "${c.identity}" is not a valid user id (lowercase, digits, dots, hyphens)`);
+    // Execution provenance is server context, never a configurable identity attribute. Historical
+    // rows without it are deliberately ambiguous and must not be adopted automatically.
+    const execution = ['tenant', 'runId', 'nodeId'].map(k => str(ctx[k], `lyam-create-user: server ${k}`, 80));
+    const creationRef = createHash('sha256').update(JSON.stringify(['workflow-create-user:v1', ...execution, c.identity])).digest('hex');
+    if (ctx.badgeMode === 'request') await checkBadgeDelivery(ctx, { identity: c.identity, email: c.email });
+    let recordedEmail = c.email || null;
     await ctx.branchWrite(async (db) => {
-      // A fresh database may lack the profile columns the users module adds lazily at boot (the
-      // connectors e2e boots only the workflows module). Ensure them here with the same DDL so the
-      // block does not depend on boot order; branch semantics are unchanged (committed with the run branch).
       const [cols] = await db.query('show columns from identities');
       const have = new Set(cols.map((x) => x.Field));
+      const [existing] = await db.query(`select count(*) n, ${have.has('email') ? 'max(email)' : 'null'} email, ${have.has('workflow_creation_ref') ? 'max(workflow_creation_ref)' : 'null'} workflow_creation_ref from identities where id = ?`, [c.identity]);
+      if (Number(existing[0].n)) {
+        if (existing[0].workflow_creation_ref !== creationRef) bad('lyam-create-user: identity already exists without this execution provenance; refusing to adopt or modify it');
+        recordedEmail = existing[0].email || null;
+        ctx.log(`user "${c.identity}" was created by this run and node: no change (idempotent retry)`);
+        return;
+      }
+      // Lazy schema changes happen only on the explicit run-branch write, never on boot or a read.
+      // A foreign existing row is refused above without even adding these columns.
       if (!have.has('email')) await db.query('alter table identities add column email varchar(254) null');
       if (!have.has('login_enabled')) await db.query('alter table identities add column login_enabled boolean not null default true');
       if (!have.has('credential_revision')) await db.query('alter table identities add column credential_revision varchar(40)');
-      const [existing] = await db.query('select count(*) n from identities where id = ?', [c.identity]);
-      if (Number(existing[0].n)) {
-        // Idempotence: a retried step does not fail on an existing user, it adopts the branch state.
-        ctx.log(`user "${c.identity}" already exists on this branch: no change (idempotent retry)`);
-        return;
-      }
-      await db.query('insert into identities (id, display_name, manager_id, department, email, login_enabled, credential_revision) values (?,?,null,?,?,false,null)', [c.identity, c.displayName, c.department || null, c.email || null]);
+      if (!have.has('workflow_creation_ref')) await db.query('alter table identities add column workflow_creation_ref varchar(64) null');
+      // Identity and provenance are one INSERT. A failed/conflicting INSERT cannot leave a separate
+      // ownership claim that a retry could mistake for an identity this run actually created.
+      await db.query('insert into identities (id, display_name, manager_id, department, email, login_enabled, credential_revision, workflow_creation_ref) values (?,?,null,?,?,false,null,?)', [c.identity, c.displayName, c.department || null, c.email || null, creationRef]);
       ctx.log(`user "${c.identity}" (${c.displayName}) created on the run branch, login disabled until review`);
     }, `workflow: create user ${c.identity} (lyam connector)`);
-    return { identity: c.identity, email: c.email || null, dataRow: { table: 'identities', pk: { id: c.identity } } };
+    if (ctx.badgeMode === 'request' && recordedEmail !== (c.email || null)) await checkBadgeDelivery(ctx, { identity: c.identity, email: recordedEmail });
+    return { identity: c.identity, email: recordedEmail, dataRow: { table: 'identities', pk: { id: c.identity } } };
   },
 };
 
@@ -467,6 +623,34 @@ const lyamCreateUser = {
 /** Optional Jira labels: comma separated, each one letters, digits, dot, dash or underscore (a label cannot hold a space in Jira). */
 const labelsOf = (v) => { const raw = String(v ?? '').trim(); if (!raw) return []; const l = raw.split(',').map((x) => x.trim()).filter(Boolean); if (l.length > 10 || l.some((x) => !/^[A-Za-z0-9_.-]{1,60}$/.test(x))) bad('labels: up to 10, comma separated, letters, digits, dot, dash, underscore'); return [...new Set(l)]; };
 const MAIL_RE = /^[^\s@,;<>]{1,64}@[^\s@,;<>]{1,190}\.[A-Za-z]{2,}$/;
+function checkedMailPolicy(settings, to, label) {
+  if (typeof to !== 'string' || !MAIL_RE.test(to)) bad(`${label}: one e-mail address`);
+  const allowed = typeof settings?.mailAllowedRecipients === 'string' ? settings.mailAllowedRecipients.split(',').map(x => x.trim().toLowerCase()).filter(Boolean) : [];
+  if (!allowed.includes(to.toLowerCase())) bad(`${label}: this recipient is not in the allowed recipients setting`);
+  const apiKey = process.env.RESEND_API_KEY;
+  if (typeof apiKey !== 'string' || !apiKey.trim()) bad(`${label}: RESEND_API_KEY is not set on the server (nothing sent)`);
+  const from = str(settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
+  const named = from.match(/^[^<>\r\n]{1,120}<([^<>\r\n]+)>$/);
+  if (/[\r\n]/.test(from) || !(MAIL_RE.test(from) || (named && MAIL_RE.test(named[1])))) bad(`${label}: mail sender is not one valid address`);
+  return { apiKey, from };
+}
+async function currentMailPolicy(ctx, to, label) {
+  if (!ctx.liveMailSettings) bad(`${label}: live mail policy is not available on this server`);
+  let settings;
+  try { settings = await ctx.liveMailSettings(); } catch { bad(`${label}: live mail policy cannot be read`); }
+  return checkedMailPolicy(settings, to, label);
+}
+async function checkBadgeDelivery(ctx, candidate) {
+  if (!ctx.preflightBadgeDelivery) bad('badge delivery preflight is not available on this server');
+  if (ctx.badgeMode === 'done' && (typeof candidate.phase1Run !== 'string' || !candidate.phase1Run || !Array.isArray(candidate.blocks) || !candidate.blocks.length || candidate.blocks.some(b => b.setBy !== `workflow:${candidate.phase1Run}`)))
+    bad('badge delivery preflight: only the correlated creation-run blocks may be in force');
+  const settings = await ctx.preflightBadgeDelivery(candidate);
+  checkedMailPolicy(settings, candidate.email, 'badge delivery preflight');
+}
+async function checkFreshBadgeDelivery(ctx) {
+  if (!ctx.badgeCandidate) bad('badge delivery preflight: fresh account context is not available');
+  await checkBadgeDelivery(ctx, await ctx.badgeCandidate());
+}
 const lyamSendMail = {
   type: 'lyam-send-mail',
   family: 'lyam',
@@ -490,11 +674,7 @@ const lyamSendMail = {
     if (!MAIL_RE.test(c.to)) bad('lyam-send-mail.to: one e-mail address');
     if (/[\r\n]/.test(c.subject)) bad('lyam-send-mail.subject: one line');
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send "${c.subject}" to ${c.to} - nothing sent`); return { to: c.to, accepted: false, messageId: null }; }
-    const allowed = String(ctx.settings?.mailAllowedRecipients ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-    if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-mail: this recipient is not in the allowed recipients setting (the owner approves each address)');
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey) bad('lyam-send-mail: RESEND_API_KEY is not set on the server (nothing sent)');
-    const from = str(ctx.settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
+    const { apiKey, from } = await currentMailPolicy(ctx, c.to, 'lyam-send-mail');
     const idempotencyKey = `wf-mail/${ctx.runId}/${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.subject])).digest('hex').slice(0, 16)}`;
     const r = await sendOneMail({ apiKey, from, to: c.to, subject: c.subject, text: c.text, idempotencyKey });
     ctx.log(`mail accepted by the provider for ${c.to} (message id ${r.id}); acceptance is not proof of delivery to the inbox`);
@@ -520,22 +700,22 @@ const lyamBlockAccount = {
     { key: 'durationMinutes', label: 'Lift automatically after (minutes, optional)', type: 'number' },
     { key: 'exclusive', label: 'Refuse to reuse an existing block of this type', type: 'select', options: ['no', 'yes'], default: 'no', help: 'yes: fail when a block of this type is already in force (it belongs to someone else), so a later workflow can lift exactly the block this run set' },
   ],
-  outputs: [{ key: 'subject', description: 'The blocked user id' }, { key: 'applied', description: 'true when a block was set, false when one of this type was already in force' }],
+  outputs: [{ key: 'subject', description: 'The blocked user id' }, { key: 'applied', description: 'true when a block was set, false when one of this type was already in force' }, { key: 'ownerRun', description: 'This run id (the owner recorded on the block), for a later step that must only lift or rely on THIS run block' }],
   validate(cfg) {
     const kind = str(cfg.kind, 'lyam-block-account.kind', 30);
     if (!KINDS.includes(kind)) bad(`lyam-block-account.kind: one of ${KINDS.join(', ')}`);
     const d = cfg.durationMinutes;
     if (d !== undefined && d !== null && d !== '' && !(Number.isInteger(Number(d)) && Number(d) >= 1 && Number(d) <= 525600)) bad('lyam-block-account.durationMinutes: a whole number of minutes (1 to 525600)');
-    return { subject: userId(cfg.subject, 'lyam-block-account.subject'), kind, message: str(cfg.message, 'lyam-block-account.message', 300), ...(str(cfg.exclusive, 'lyam-block-account.exclusive', 3, false) === 'yes' ? { exclusive: true } : {}), ...(d ? { durationMinutes: Number(d) } : {}) };
+    return { subject: userId(cfg.subject, 'lyam-block-account.subject'), kind, message: str(cfg.message, 'lyam-block-account.message', 300), ...(['yes', 'true'].includes(String(cfg.exclusive ?? '').trim()) ? { exclusive: true } : {}), ...(d ? { durationMinutes: Number(d) } : {}) };
   },
   async run(ctx) {
     const c = ctx.config;
-    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would block "${c.subject}" (${c.kind}) - nothing applied`); return { subject: c.subject, applied: false }; }
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would block "${c.subject}" (${c.kind}) - nothing applied`); return { subject: c.subject, applied: false, ownerRun: null }; }
     if (!ctx.accounts) bad('lyam-block-account: account blocks are not available on this server');
     const r = await ctx.accounts.block(ctx.tenant, { runId: ctx.runId, subject: c.subject, kind: c.kind, message: c.message, ...(c.durationMinutes ? { untilSeconds: c.durationMinutes * 60 } : {}) });
     if (c.exclusive && !r.applied) bad(`lyam-block-account: the account already has a ${c.kind} block that this run did not set: not taking it over`);
     ctx.log(r.applied ? `account "${c.subject}" blocked (${c.kind})` : `account "${c.subject}" already has a ${c.kind} block in force: no change`);
-    return { subject: c.subject, applied: r.applied };
+    return { subject: c.subject, applied: r.applied, ownerRun: ctx.runId };
   },
 };
 
@@ -546,14 +726,34 @@ const lyamPublishWorkspace = {
   simulated: false,
   category: 'real',
   description: 'REAL: merges this run\'s working branch into main and activates it, with the same checks as a human Apply (separation of duties, unreachable level, activation). Only workflows an administrator listed in the publishAllowedWorkflows setting may do it. The result is read back from the real state: it fails unless main moved to the activated commit. A test run publishes nothing. It is not a GitHub merge.',
-  fields: [],
+  fields: [
+    { key: 'resetApprovalTaskId', label: 'Reset approval task (reset path only)', type: 'string', required: false, help: '{{steps.<propose-reset>.taskId}}: when set, the approval binding and the non-admin status of the account are re-checked immediately before the merge. Needs the account and the validity too.' },
+    { key: 'resetSubject', label: 'Reset account (reset path only)', type: 'string', required: false },
+    { key: 'resetHours', label: 'Reset validity in hours (reset path only)', type: 'string', required: false },
+    { key: 'resetRevision', label: 'Credential revision written by the apply step (reset path only)', type: 'string', required: false, help: '{{steps.<apply-reset>.revision}}' },
+  ],
   outputs: [{ key: 'published', description: 'true only when main holds the branch and the activation is applied' }, { key: 'mainCommit', description: 'The commit of main that was activated' }, { key: 'sourceHead', description: 'The branch head that was published' }],
-  validate() { return {}; },
+  validate(cfg) {
+    const t = String(cfg?.resetApprovalTaskId ?? '').trim(), a = String(cfg?.resetSubject ?? '').trim(), h = String(cfg?.resetHours ?? '').trim(), rv = String(cfg?.resetRevision ?? '').trim();
+    if (!t && !a && !h && !rv) return {};
+    if (!t || !a || !h || !rv) bad('lyam-publish-workspace: the reset guard needs the approval task, the account, the validity and the revision together');
+    return { resetApprovalTaskId: str(t, 'lyam-publish-workspace.resetApprovalTaskId', 80), resetSubject: userId(a, 'lyam-publish-workspace.resetSubject'), resetHours: hoursOf(h, 'lyam-publish-workspace.resetHours'), resetRevision: str(rv, 'lyam-publish-workspace.resetRevision', 80) };
+  },
   async run(ctx) {
     if (ctx.test || ctx.dryRun) { ctx.log('test run: nothing published'); return { published: false }; }
+    // Reset path only: the approval binding and the account's non-admin status are re-read right before the merge. The administrator list is server configuration (restart-time), so within one process it cannot change between this check and the merge.
+    if (ctx.resetApplied === true && !ctx.config?.resetApprovalTaskId) bad('lyam-publish-workspace: this run applied an approved password reset, so the publication must carry the reset guard (approval task, account, validity and revision)');
+    if (ctx.config?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', ctx.config.resetApprovalTaskId, ctx.config.resetSubject, ctx.config.resetHours, 'later', ctx.config.resetRevision);
     if (!ctx.workspace) bad('lyam-publish-workspace: publication is not available on this server');
     if (!ctx.hasRunBranch || !ctx.publishIntent) bad('lyam-publish-workspace: this run has no working branch to publish (an earlier step must write data)');
-    const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head });
+    if (ctx.badgeMode) await checkFreshBadgeDelivery(ctx);
+    // The same reset guard is re-run INSIDE the publication queue, right before the merge (a long queue wait must not leave a gap between the check above and the merge).
+    const g = ctx.config;
+    const precheck = g?.resetApprovalTaskId || ctx.badgeMode ? async () => {
+      if (g?.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-publish-workspace', g.resetApprovalTaskId, g.resetSubject, g.resetHours, 'later', g.resetRevision);
+      if (ctx.badgeMode) await checkFreshBadgeDelivery(ctx);
+    } : undefined;
+    const r = await ctx.workspace.publish(ctx.tenant, { runId: ctx.runId, workflowId: ctx.workflowId, branch: ctx.publishIntent.branch, expectedHead: ctx.publishIntent.head, ...(precheck ? { precheck } : {}) });
     if (!r || r.published !== true || !r.mainCommit) bad('lyam-publish-workspace: publication not confirmed by the real state');
     ctx.log(`published ${r.branch} at ${String(r.sourceHead).slice(0, 12)}: main is now ${String(r.mainCommit).slice(0, 12)}, activation ${r.activation}`);
     return { published: true, mainCommit: r.mainCommit, sourceHead: r.sourceHead };
@@ -662,6 +862,7 @@ const lyamSetTemporaryPassword = {
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would set a temporary password for "${c.subject}" - nothing written`); return { subject: c.subject, revision: null, expiresAt: null, hours: Number(c.hours) }; }
     if (!ctx.secrets || !ctx.setTemporaryPassword) bad('lyam-set-temporary-password: not available on this server');
     if (!HOURS_RE.test(c.hours)) bad('lyam-set-temporary-password.hours: a number of hours');
+    if (ctx.badgeMode === 'done') await checkFreshBadgeDelivery(ctx);
     const password = ctx.secrets.reveal(c.passwordRef);
     const r = await ctx.setTemporaryPassword({ id: c.subject, password, hours: Number(c.hours) });
     if (!r?.revision || !(r.expiresAt > 0)) bad('lyam-set-temporary-password: the credential was not confirmed with its first-access rule');
@@ -708,6 +909,7 @@ const lyamSendSecretMail = {
     { key: 'hours', label: 'Validity (hours)', type: 'string', required: true, help: 'same value as the set-temporary step' },
     { key: 'revision', label: 'Credential revision', type: 'string', required: true, help: '{{steps.<set-temporary>.revision}}' },
     { key: 'sourceHead', label: 'Published head', type: 'string', required: true, help: '{{steps.<publish>.sourceHead}}' },
+    { key: 'resetApprovalTaskId', label: 'Reset approval task (reset path only)', type: 'string', required: false, help: '{{steps.<propose-reset>.taskId}}: when set, the approval and the non-admin status of the account are re-checked right before the mail leaves' },
     { key: 'ownerRun', label: 'Run that set the account block', type: 'string', required: true, help: '{{steps.<resolve-ticket>.phase1Run}}: the only block allowed to be in force when the mail leaves' },
   ],
   outputs: [{ key: 'to', description: 'The recipient' }, { key: 'accepted', description: 'true when the provider accepted the mail (not proof of delivery)' }, { key: 'messageId', description: 'The provider message id' }, { key: 'expiresAt', description: 'The expiry shown in the mail' }],
@@ -716,7 +918,7 @@ const lyamSendSecretMail = {
     if (!/\{\{/.test(to) && !MAIL_RE.test(to)) bad('lyam-send-secret-mail.to: one e-mail address');
     const text = str(cfg.text, 'lyam-send-secret-mail.text', 4000);
     if (!text.includes('[[password]]') || !text.includes('[[expiry]]')) bad('lyam-send-secret-mail.text: must contain [[password]] and [[expiry]]');
-    return { account: userId(cfg.account, 'lyam-send-secret-mail.account'), to, subject: str(cfg.subject, 'lyam-send-secret-mail.subject', 150), text, passwordRef: str(cfg.passwordRef, 'lyam-send-secret-mail.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-send-secret-mail.hours'), revision: str(cfg.revision, 'lyam-send-secret-mail.revision', 80), ownerRun: str(cfg.ownerRun, 'lyam-send-secret-mail.ownerRun', 80), sourceHead: str(cfg.sourceHead, 'lyam-send-secret-mail.sourceHead', 80) };
+    return { account: userId(cfg.account, 'lyam-send-secret-mail.account'), to, subject: str(cfg.subject, 'lyam-send-secret-mail.subject', 150), text, passwordRef: str(cfg.passwordRef, 'lyam-send-secret-mail.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-send-secret-mail.hours'), revision: str(cfg.revision, 'lyam-send-secret-mail.revision', 80), ownerRun: str(cfg.ownerRun, 'lyam-send-secret-mail.ownerRun', 80), sourceHead: str(cfg.sourceHead, 'lyam-send-secret-mail.sourceHead', 80), ...(String(cfg.resetApprovalTaskId ?? '').trim() ? { resetApprovalTaskId: str(cfg.resetApprovalTaskId, 'lyam-send-secret-mail.resetApprovalTaskId', 80) } : {}) };
   },
   async run(ctx) {
     const c = ctx.config;
@@ -724,14 +926,12 @@ const lyamSendSecretMail = {
     if (/[\r\n]/.test(c.subject)) bad('lyam-send-secret-mail.subject: one line');
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would send the temporary password mail to ${c.to} - nothing sent`); return { to: c.to, accepted: false, messageId: null, expiresAt: null }; }
     if (!ctx.secrets || !ctx.markEffectPending) bad('lyam-send-secret-mail: not available on this server');
-    const allowed = String(ctx.settings?.mailAllowedRecipients ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-    if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-secret-mail: this recipient is not in the allowed recipients setting');
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey) bad('lyam-send-secret-mail: RESEND_API_KEY is not set on the server (nothing sent)');
+    const { apiKey, from } = await currentMailPolicy(ctx, c.to, 'lyam-send-secret-mail');
+    // Reset path only: the approval and the target's non-admin status are re-checked right before the mail leaves.
+    if (c.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-send-secret-mail', c.resetApprovalTaskId, c.account, c.hours, 'later', c.revision);
     const { expiresAt } = await verifySecretMailState(ctx, c);
     const password = ctx.secrets.reveal(c.passwordRef);
     const body = c.text.split('[[password]]').join(password).split('[[expiry]]').join(new Date(expiresAt).toISOString().replace('T', ' ').slice(0, 16) + ' UTC').split('[[hours]]').join(String(Number(c.hours)));
-    const from = str(ctx.settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
     const idempotencyKey = `wf-secretmail/${ctx.runId}/${createHash('sha256').update(JSON.stringify([c.to.toLowerCase(), c.account, c.revision])).digest('hex').slice(0, 16)}`;
     // Durable intent first: from here a crash leaves the step in review and the run never sends a second time by itself.
     await ctx.markEffectPending({ to: createHash('sha256').update(c.to.toLowerCase()).digest('hex').slice(0, 12), account: c.account, revision: c.revision, idempotencyKey });
@@ -809,16 +1009,28 @@ const lyamResolveTicket = {
   async run(ctx) {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log('test run: would resolve the ticket link - nothing claimed'); return { account: null, email: null, source: null, spreadsheetId: null, sheetId: null, keyColumn: null, keyValue: null }; }
-    if (!ctx.links || !ctx.accounts?.activeBlocks || !ctx.users?.emailOf) bad('lyam-resolve-ticket: not available on this server');
+    if (!ctx.links?.peek || !ctx.links?.claim || !ctx.accounts?.activeBlocks || !ctx.users?.emailOf) bad('lyam-resolve-ticket: read-only preflight is not available on this server');
     const ref = ticketRefNow(c, 'lyam-resolve-ticket');
+    const before = await ctx.links.peek(ref);
+    if (!before) bad('lyam-resolve-ticket: no open link for this ticket (absent, already handled, or claimed by another run)');
+    const readAccount = async l => {
+      let email, blocks;
+      try { [email, blocks] = await Promise.all([ctx.users.emailOf(l.account, 'main'), ctx.accounts.activeBlocks(ctx.tenant, l.account)]); } catch { bad('lyam-resolve-ticket: the account state could not be read'); }
+      if (typeof email !== 'string' || !MAIL_RE.test(email)) bad('lyam-resolve-ticket: the linked account does not exist on main (or has no valid e-mail)');
+      if (typeof l.phase1Run !== 'string' || !l.phase1Run || !Array.isArray(blocks) || !blocks.length || blocks.some(b => b.setBy !== `workflow:${l.phase1Run}`))
+        bad('lyam-resolve-ticket: the account must be blocked only by its correlated creation run');
+      return { email, blocks };
+    };
+    const initial = await readAccount(before);
+    if (ctx.badgeMode === 'done') await checkBadgeDelivery(ctx, { ...before, ...initial });
+    // Every check above is read-only. The store still arbitrates competing claimants atomically.
     const l = await ctx.links.claim(ref);
-    if (!l) { ctx.log('ticket link refused: none, already handled, or claimed by another run. Nothing changed.'); bad('lyam-resolve-ticket: no open link for this ticket (absent, already handled, or claimed by another run)'); }
-    let email, blocks;
-    try { [email, blocks] = await Promise.all([ctx.users.emailOf(l.account, 'main'), ctx.accounts.activeBlocks(ctx.tenant, l.account)]); } catch { bad('lyam-resolve-ticket: the account state could not be read'); }
-    if (typeof email !== 'string' || !email) bad('lyam-resolve-ticket: the linked account does not exist on main (or has no e-mail)');
-    if (!Array.isArray(blocks) || blocks.length === 0) bad('lyam-resolve-ticket: the linked account is not blocked: refusing to continue');
+    if (!l) bad('lyam-resolve-ticket: no open link for this ticket (absent, already handled, or claimed by another run)');
+    if (['account','phase1Run','source','spreadsheetId','sheetId','keyColumn','keyValue'].some(k => l[k] !== before[k])) bad('lyam-resolve-ticket: correlation changed during preflight; reconcile this run claim before continuing');
+    const current = await readAccount(l);
+    if (current.email !== initial.email) bad('lyam-resolve-ticket: account email changed during preflight; reconcile this run claim before continuing');
     ctx.log(`ticket ${ref.issueKey} resolved to account "${l.account}" (claimed by this run)`);
-    return { account: l.account, phase1Run: l.phase1Run ?? null, email, source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue };
+    return { account: l.account, phase1Run: l.phase1Run, email: current.email, source: l.source, spreadsheetId: l.spreadsheetId, sheetId: l.sheetId, keyColumn: l.keyColumn, keyValue: l.keyValue };
   },
 };
 const lyamCompleteTicket = {
@@ -840,7 +1052,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

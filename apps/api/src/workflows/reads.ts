@@ -2,7 +2,10 @@ import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
-import { workspaceMode } from '../workspace/context.js';
+import { branchContext, workspaceMode } from '../workspace/context.js';
+import { MailTemplatesService } from '../mail/mail-templates.js';
+import { BrandingService } from '../branding/branding.service.js';
+import { CORE_SETTINGS_ID, parseStored } from '../authn/config.js';
 
 const clamp = (v: unknown, dflt: number, max: number) => Math.min(max, Math.max(1, Number.isFinite(Number(v)) ? Math.floor(Number(v)) : dflt));
 const LIKE = (q: string) => `%${q.replace(/[%_]/g, (c) => `\\${c}`)}%`;
@@ -15,7 +18,7 @@ const LIKE = (q: string) => `%${q.replace(/[%_]/g, (c) => `\\${c}`)}%`;
  */
 @Injectable()
 export class WorkflowReads {
-  constructor(@Optional() private readonly v?: VersioningService, @Optional() private readonly reg?: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
+  constructor(@Optional() private readonly v?: VersioningService, @Optional() private readonly reg?: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly mail?: MailTemplatesService, @Optional() private readonly branding?: BrandingService) {}
 
   private db<T>(ref: string, fn: (c: { query: (sql: string, p?: unknown[]) => Promise<[unknown, unknown]> }) => Promise<T>): Promise<T> {
     if (!this.v) throw new BadRequestException('no database');
@@ -26,8 +29,8 @@ export class WorkflowReads {
   /** Optional identity columns differ per schema (the demo has neither email nor login_enabled): probe once
    *  per call, never assume. */
   private async identityColumns(c: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }): Promise<Set<string>> {
-    const [r] = await c.query("select column_name from information_schema.columns where table_schema = database() and table_name = 'identities'");
-    return new Set((r as { column_name: string }[]).map((x) => x.column_name));
+    const [r] = await c.query('show columns from identities');
+    return new Set((r as { Field: string }[]).map((x) => x.Field));
   }
 
   async readUser(tenant: string, ref: string, id: string) {
@@ -150,5 +153,58 @@ export class WorkflowReads {
       out.push({ id: p.id, name: p.name || p.id, active: p.enabled, settingsKeys: keys });
     }
     return { plugins: out };
+  }
+
+  /** The registry serving a ref (the branch registries in workspace mode, the live one otherwise). */
+  private async branchRegistry(ref: string) {
+    if (workspaceMode() && this.branches) return this.branches.get(ref);
+    if (!this.reg) throw new BadRequestException('no plugin registry');
+    return this.reg;
+  }
+
+  /** The authentication configuration on a ref, projected for a workflow: the structure of methods and
+   *  chains with their levels, never a setting value (even masked secrets stay server-side). */
+  async authnConfig(tenant: string, ref: string) {
+    const reg = await this.branchRegistry(ref);
+    const cfg = parseStored(await reg.coreSettings(tenant, CORE_SETTINGS_ID));
+    return {
+      methods: cfg.methods.map((m) => ({ id: m.id, type: m.type, name: m.name, enabled: m.enabled, level: m.level })),
+      chains: cfg.chains.map((c) => ({ id: c.id, name: c.name, enabled: c.enabled, level: c.level, steps: c.steps })),
+      defaultChain: cfg.defaultChain,
+    };
+  }
+
+  /** The mail template catalogue with this tenant's customization state, read on a ref (never the bodies). */
+  async listMailTemplates(tenant: string, ref: string) {
+    if (!this.mail) throw new BadRequestException('mail templates unavailable on this server');
+    const list = await branchContext.run({ branch: ref }, () => this.mail!.list(tenant));
+    return { templates: list.map((t) => ({ key: t.key, plugin: t.plugin, name: t.name, layout: t.layout, customized: t.customized, variables: t.variables })) };
+  }
+
+  /** Renders a mail template WITHOUT saving (the editor's live preview), on a ref. Never sends a mail. */
+  async previewMailTemplate(tenant: string, ref: string, key: string, data?: unknown, override?: unknown) {
+    if (!this.mail) throw new BadRequestException('mail templates unavailable on this server');
+    return branchContext.run({ branch: ref }, () => this.mail!.preview(tenant, { key, data, override }));
+  }
+
+  /** The branding provider id and its current settings on a ref. */
+  async themeSettings(tenant: string, ref: string) {
+    const reg = await this.branchRegistry(ref);
+    const provider = reg.resolve(tenant, 'branding');
+    return { provider: provider.manifest.id, settings: (await reg.settingsFor(tenant, provider.manifest.id)) ?? {} };
+  }
+
+  /** Validates a theme candidate against the branding module on a ref (contrast, SVG sanitization). Returns
+   *  the validated values for a later write plus a display summary; never throws on an invalid candidate. */
+  async validateTheme(tenant: string, ref: string, input: unknown) {
+    if (!this.branding) throw new BadRequestException('branding unavailable on this server');
+    const { provider } = await this.themeSettings(tenant, ref);
+    try {
+      const bundle = await this.branding.preview(tenant, (input ?? {}) as Record<string, unknown>, ref);
+      const c = bundle.config as unknown as Record<string, unknown>;
+      return { valid: true as const, provider, values: bundle.config as unknown as Record<string, unknown>, summary: { primaryColor: c.primaryColor ?? null, accentColor: c.accentColor ?? null, logoMode: c.logoMode ?? null }, version: bundle.version };
+    } catch (e) {
+      return { valid: false as const, provider, errors: [(e as Error).message] };
+    }
   }
 }

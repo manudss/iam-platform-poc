@@ -32,6 +32,16 @@ export interface WfBlockCtx {
   log: (line: string) => void; outputs: Record<string, Record<string, unknown>>;
   /** Test run: blocks with an immediate effect only log what they would do. */
   test?: boolean; runId?: string; nodeId?: string; accounts?: import('./engine.js').AccountEffects;
+  /** Server-derived badge context; never configurable by the graph. Generic temporary workflows do not use it. */
+  badgeMode?: 'request' | 'done';
+  preflightBadgeDelivery?: (candidate: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  badgeCandidate?: () => Promise<Record<string, unknown>>;
+  /** Current main policy for real mail, read again immediately before the final state guards/send. */
+  liveMailSettings?: () => Promise<Record<string, unknown>>;
+  /** Authentication effects (immediate, unversioned for unenroll/notify; versioned for the policy save). */
+  authn?: import('./engine.js').AuthnEffects;
+  /** Records the durable intent of an immediate external effect right before it fires (a crash leaves the step in review, never a blind retry). */
+  markEffectPending?: (intent: Record<string, unknown>) => Promise<unknown>;
   /** Durable-wait context (the recorded task id), the run starter (anti-self-approval) and the run's base branch. */
   resumeWait?: { taskId?: string; kind?: string; campaignId?: string } | null;
   startedBy?: string; baseBranch?: string; runBranch?: string | null;
@@ -41,6 +51,8 @@ export interface WfBlockCtx {
   iga?: import('./iga.service.js').WorkflowsIgaService;
   runs?: { get: (tenant: string, runId: string) => Promise<Record<string, unknown>>; start: (tenant: string, workflowId: string, input: Record<string, unknown>, startedBy: string) => Promise<Record<string, unknown>> };
   publish?: { diff: (from: string, to: string) => Promise<unknown>; status: (tenant: string, id: number) => Promise<{ pullRequest: unknown }>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: Record<string, unknown>; reused: boolean }> };
+  intake?: { read: (kind: string, subject: string) => Promise<Record<string, unknown>>; resolve: (kind: string, subject: string, snapshot: string, decision: string) => Promise<Record<string, unknown>> };
+  connectionTests?: { test: (tenant: string, ref: string, ids: string[], startedBy: string) => Promise<Record<string, unknown>> };
   policies?: { validate: (tenant: string, candidate: unknown) => Promise<Record<string, unknown>> };
   branchWrite: (fn: (db: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }) => Promise<void>, message?: string) => Promise<void>;
 }

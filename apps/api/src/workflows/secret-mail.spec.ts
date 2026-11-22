@@ -32,6 +32,7 @@ function world(over: { proof?: any; fa?: any; email?: string | null; blocks?: an
     return {
       tenant: 'acme', runId, secrets: scoped, dryRun: false, test: false, outputs: {},
       settings: { mailAllowedRecipients: 'bao@example.test' },
+      liveMailSettings: async () => ({ mailAllowedRecipients: 'bao@example.test' }),
       log: (l: string) => seen.logs.push(l),
       workspace: { proof: async () => { if (over.readFails) throw new Error('db down'); return state.proof; } },
       users: { firstAccess: async () => state.fa, emailOf: async () => state.email },
@@ -115,7 +116,7 @@ describe('lyam-send-secret-mail guard and effect', () => {
   }));
   it('recipient not allowed, no API key: nothing sent', async () => withMail(async () => {
     const w = world(); const { ref } = await prepare(w);
-    await assert.rejects(() => mail.run({ ...w.mk('run-1', 'lyam-send-secret-mail'), settings: {}, config: mailCfg(ref) }), /allowed recipients/);
+    await assert.rejects(() => mail.run({ ...w.mk('run-1', 'lyam-send-secret-mail'), liveMailSettings: async () => ({}), config: mailCfg(ref) }), /allowed recipients/);
     delete process.env.RESEND_API_KEY; await assert.rejects(() => mail.run({ ...w.mk('run-1', 'lyam-send-secret-mail'), config: mailCfg(ref) }), /RESEND_API_KEY/); assert.equal(Fake.calls.length, 0);
   }));
   it('unknown provider outcome: intent was recorded BEFORE the call, one attempt only, the secret is kept, no password in the error', async () => withMail(async () => {

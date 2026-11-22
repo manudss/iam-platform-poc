@@ -36,6 +36,14 @@ export class WorkspacePublisher {
   const missing=await this.v.at(this.v.defaultBranch,async(c:any)=>Number(((await c.query('select count(*) n from dolt_log(?)',[`${main.commit}..${sourceHead}`]))[0] as any[])[0].n));
   return {mainCommit:main.commit,activation:String(cur?.state??''),activationCommit:String(cur?.commit??''),containsHead:missing===0};
  }
+ /** Read-only feasibility gates known before a run creates data or claims a ticket. These do not
+  * promise that a future branch diff, activation or provider delivery will succeed. Final checks stay. */
+ preflightForRun(){
+  if(!workspaceMode())throw new BadRequestException('Workflow publication requires workspace mode');
+  if(!this.activation.applyEnabled)throw new BadRequestException('Apply requires a configured live permission engine');
+  const prot=this.protection?.effective(this.v.defaultBranch);
+  if(prot&&prot.protected&&prot.selfMerge===false)throw new ConflictException('Publication by a workflow refused: main does not allow self-merge and a workflow has no separate reviewer');
+ }
  /**
   * Publication by a workflow run (the only non-human caller). Stricter than the human Apply, never looser: the branch AND its head are explicit and frozen by the run
   * (a branch that moved since is refused, never "the current head"), the actor is a short reserved identity (no ':' and under every truncation limit, so two workflows never share an author),
@@ -43,22 +51,34 @@ export class WorkspacePublisher {
   * the real state: main moved to the commit that was activated and the activation is `applied`. Anything else throws: never a degraded success. A repeat after a crash is safe:
   * when the branch has nothing left to merge the existing path only completes a missing activation, and an already applied one is returned as done.
   */
- publishForRun(a:{tenant:string;runId:string;workflowId:string;branch:string;expectedHead:string}){
+ publishForRun(a:{tenant:string;runId:string;workflowId:string;branch:string;expectedHead:string;/** Run INSIDE the publication queue, after the branch/head/table checks and right before the merge. A rejection refuses the publication with nothing merged. Lets a caller re-check its own precondition without the queue wait leaving a gap. */precheck?:()=>Promise<void>}){
   const branch=String(a.branch??''),head=String(a.expectedHead??'');
   if(!branch||branch==='main'||branch===this.v.defaultBranch)throw new BadRequestException('Nothing to publish: a workflow publishes a working branch, never main');
   if(!/^[0-9a-z]{8,64}$/i.test(head))throw new BadRequestException('expectedHead is required: the head the run recorded');
   if(!a.workflowId||typeof a.workflowId!=='string')throw new BadRequestException('workflow identity is required');
   return this.serialize(async()=>{
-   const prot=this.protection?.effective(this.v.defaultBranch);
-   if(prot&&prot.protected&&prot.selfMerge===false)throw new ConflictException('Publication by a workflow refused: main does not allow self-merge and a workflow has no separate reviewer');
+   this.preflightForRun();
    const info=(await this.v.branches()).branches.find(x=>x.name===branch);
    if(!info)throw new BadRequestException('unknown branch');
    if(info.commit!==head)throw new ConflictException('The working branch moved since the run recorded its head: nothing published');
    // A workflow publishes a whole branch, so it must not carry configuration that widens what workflows may do (the publication whitelist lives in plugin_runtime_settings), and an unreadable diff is a refusal.
    let tables:string[];
-   try{tables=((await this.v.diffSummary(this.v.defaultBranch,branch,false)).tables??[]).map((t:any)=>String(t?.name??t));}catch{throw new ConflictException('Publication by a workflow refused: the difference between main and the branch could not be read');}
-   const forbidden=tables.filter(t=>FORBIDDEN_WORKFLOW_TABLES.includes(t));
+   try{
+    const summary=await this.v.diffSummary(this.v.defaultBranch,branch,false);
+    if(!Array.isArray(summary?.tables))throw new Error('invalid table summary');
+    tables=[...new Set(summary.tables.flatMap((row:any)=>{
+     if(!row||typeof row!=='object'||Array.isArray(row))throw new Error('invalid table summary row');
+     // table is the destination name (or the removed table); from is the source name.
+     // Both matter when a forbidden table is renamed away. Empty names on a deletion are ignored
+     // only when the other side still supplies a valid name. Unknown/malformed rows fail closed.
+     const names=[row.table,row.from].filter(n=>n!==null&&n!==undefined&&n!=='');
+     if(!names.length||names.some(n=>typeof n!=='string'||!/^[A-Za-z0-9_]{1,64}$/.test(n)))throw new Error('invalid table names');
+     return names as string[];
+    }))];
+   }catch{throw new ConflictException('Publication by a workflow refused: the difference between main and the branch could not be read');}
+   const forbidden=tables.filter(t=>FORBIDDEN_WORKFLOW_TABLES.includes(t.toLowerCase()));
    if(forbidden.length)throw new ConflictException(`Publication by a workflow refused: the branch changes ${forbidden.join(', ')}, which only a person may apply`);
+   if(a.precheck)await a.precheck();
    const r:any=await this.publishOnce(branch,{confirm:true,expectedHead:head},workflowActor(a.workflowId),a.tenant,`Publish workflow run ${a.runId} (workflow ${a.workflowId}) from ${branch}@${head.slice(0,12)} tables: ${tables.join(',')}`.slice(0,300));
    const main=(await this.v.branches()).branches.find(x=>x.name===this.v.defaultBranch);
    const cur=await this.activation.current(a.tenant);
