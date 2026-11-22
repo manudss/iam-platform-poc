@@ -334,16 +334,17 @@ export class WorkflowEngine implements OnModuleInit {
   kick(runId: string) { void this.delegate(runId, (e) => e.kick(runId)); }
   cancelFlag(runId: string) { void this.delegate(runId, (e) => e.cancelFlag(runId)); }
   /** Awaited by relaunches: the stale flag must be cleared before the kick is delegated, or the new pass
-   *  could start on the old flag and cancel itself. */
-  clearStaleCancel(runId: string, claimedAt: number) { return this.delegate(runId, (e) => e.clearStaleCancel(runId, claimedAt)); }
+   *  could start on the old flag and cancel itself. Fail-safe: unlike the fire-and-forget delegations, a
+   *  failure REJECTS (the caller then restores the run and skips the kick) instead of kicking on the old flag. */
+  clearStaleCancel(runId: string, claimedAt: number) { return this.delegate(runId, (e) => e.clearStaleCancel(runId, claimedAt), true); }
   forget(runId: string) { void this.delegate(runId, (e) => e.forget(runId)); }
 
-  private async delegate(runId: string, op: (e: WorkflowEngineApi) => void) {
+  private async delegate(runId: string, op: (e: WorkflowEngineApi) => void, strict = false) {
     try {
       const run = await this.store.getRunById(runId);
-      if (!run) { this.log.warn(`run ${runId} not found`); return; }
+      if (!run) throw new Error(`run ${runId} not found`);
       op(await this.engineFor(run));
-    } catch (e) { this.log.warn(`run ${runId}: ${(e as Error).message}`); }
+    } catch (e) { this.log.warn(`run ${runId}: ${(e as Error).message}`); if (strict) throw e; }
   }
 }
 

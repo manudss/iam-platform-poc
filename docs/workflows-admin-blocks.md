@@ -34,6 +34,16 @@ accepted guarantee.
   The marker is only written while the run is still resumable and
   never overwrites a terminal run or a more useful error, and it is cleared when a later retry
   succeeds. Pending retry timers are cancelled on shutdown.
+- **Run control is race-safe**: every run status change (cancel, retry, rerun-from, completion,
+  failure, the crash handler) is an atomic guarded SQL transition (`UPDATE ... WHERE status IN (...)`),
+  so a cancellation that lands mid-pass always wins over a late engine write, never the reverse.
+  Retrying a **canceled** run reopens its parked steps fresh (their durable tasks were canceled with
+  the run): a step already done keeps its recorded decision, only the parked step opens a new task.
+  The relaunch claims the run through the guarded transition BEFORE resetting any step, so two
+  concurrent retries/reruns let exactly one through (the loser gets a 409 without having touched
+  anything); a cancel flag left over from the previous cancellation is cleared only if it predates
+  the claim, so a fresh concurrent cancel still stops the run. A failure after the claim restores
+  the pre-claim state (guarded), leaving the run retryable instead of stuck.
 - **Minimized review outputs**: recertification review items expose only what the reviewer needs.
   **Minimized does not mean anonymous**: outputs still carry the identity id, displayName,
   department, manager and roles.

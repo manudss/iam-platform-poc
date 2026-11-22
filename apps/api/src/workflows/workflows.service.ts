@@ -311,8 +311,14 @@ export class WorkflowsService {
     if (!await this.store.transitionRun(r.id, { status: 'queued', error: null, finished_at: null }, ['completed', 'failed', 'canceled']))
       throw new ConflictException('this run changed state while being re-run: rerun did not land');
     const claimedAt = Date.now();
-    for (const s of view.steps) if (down.has(s.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, output: null, finished_at: null });
-    await this.engine.clearStaleCancel(r.id, claimedAt); // only flags stamped BEFORE the claim; a fresh concurrent cancel survives
+    try {
+      for (const s of view.steps) if (down.has(s.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, output: null, finished_at: null });
+      await this.engine.clearStaleCancel(r.id, claimedAt); // only flags stamped BEFORE the claim; a fresh concurrent cancel survives
+    } catch (e) {
+      // Same safe exit as retry: restore the pre-claim state, guarded, so the run stays re-runnable.
+      await this.store.transitionRun(r.id, { status: r.status, error: r.error, finished_at: r.finished_at }, ['queued']).catch(() => undefined);
+      throw e;
+    }
     this.engine.kick(r.id);
     return this.runView(tenant, r.id);
   }
@@ -352,16 +358,25 @@ export class WorkflowsService {
     if (!await this.store.transitionRun(r.id, { status: 'queued', error: null, finished_at: null }, ['failed', 'canceled']))
       throw new ConflictException('this run changed state while being retried: retry did not land');
     const claimedAt = Date.now();
-    const failed = view.steps.find((s) => s.status === 'failed');
-    const wasCanceled = r.status === 'canceled';
-    for (const s of view.steps) {
-      if (s.status === 'skipped' || (failed && s.node_id === failed.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, finished_at: null });
-      // A canceled run had every durable task canceled with it: a parked step still referencing its old task
-      // would fail closed on a decision that will never come. Reset it fresh so the step re-opens a NEW task.
-      // (A FAILED run's other waiting tasks are still open: their steps keep the reference and resume on it.)
-      else if (wasCanceled && s.input?.wait) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, finished_at: null });
+    try {
+      const failed = view.steps.find((s) => s.status === 'failed');
+      const wasCanceled = r.status === 'canceled';
+      for (const s of view.steps) {
+        if (s.status === 'skipped' || (failed && s.node_id === failed.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, finished_at: null });
+        // A canceled run had every durable task canceled with it: a step PARKED on its old task (pending with a
+        // recorded wait) would fail closed on a decision that will never come: reset it fresh so it re-opens a
+        // NEW task. A step already DONE keeps its result (its wait reference is history, not a resume handle);
+        // a FAILED run's other waiting tasks are still open and keep their reference (idempotent resume).
+        else if (wasCanceled && s.status === 'pending' && s.input?.wait) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, finished_at: null });
+      }
+      await this.engine.clearStaleCancel(r.id, claimedAt);
+    } catch (e) {
+      // Safe exit: the claim is won but the relaunch could not be prepared. Put the run back in its pre-claim
+      // state so it stays retryable; the guard from 'queued' never erases a concurrent transition that landed
+      // meanwhile (a fresh cancel, or a pass started by a waiting task's kick).
+      await this.store.transitionRun(r.id, { status: r.status, error: r.error, finished_at: r.finished_at }, ['queued']).catch(() => undefined);
+      throw e;
     }
-    await this.engine.clearStaleCancel(r.id, claimedAt);
     this.engine.kick(r.id);
     return this.runView(tenant, r.id);
   }

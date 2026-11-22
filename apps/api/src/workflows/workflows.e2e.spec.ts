@@ -424,6 +424,37 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     await waitRun(started.run.id, ['completed']);
   });
 
+  it('retry after cancel preserves a DONE approval step (no fresh task for it) and reopens only the parked one', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Two approvals cancel retry', graph: { nodes: [
+      { id: 'a1', type: 'lyam-request-approval', name: 'first', config: { title: 'One?', assignee: 'admin' } },
+      { id: 'a2', type: 'lyam-request-approval', name: 'second', config: { title: 'Two?', assignee: 'admin' } },
+    ], edges: [{ from: 'a1', to: 'a2' }] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['waiting']);
+    const openTasks = async () => ((await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; run_id: string | null }[] }).tasks.filter((t) => t.run_id === started.run.id);
+    const task1 = (await openTasks())[0];
+    assert.ok(task1, 'first approval task opened');
+    const d1 = await call('POST', `/workflow-tasks/${task1.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    assert.ok(d1.status < 300, JSON.stringify(d1.body).slice(0, 200));
+    // The run resumes, a1 completes, and it parks on a2's own task.
+    let task2: { id: string } | undefined;
+    { const until = Date.now() + 20000; for (;;) { const t = (await openTasks()).find((x) => x.id !== task1.id); if (t) { task2 = t; break; } if (Date.now() > until) throw new Error('no second approval task'); await new Promise((r) => setTimeout(r, 150)); } }
+    await waitRun(started.run.id, ['waiting']);
+    await ok('POST', `/workflow-runs/${started.run.id}/cancel`);
+    await waitRun(started.run.id, ['canceled']);
+    await ok('POST', `/workflow-runs/${started.run.id}/retry`);
+    const v = await waitRun(started.run.id, ['waiting']);
+    const s1 = v.steps.find((s) => s.node_id === 'a1')!;
+    assert.equal(s1.status, 'done', 'the FIRST approval, decided before the cancel, stays done');
+    assert.equal((s1.output as { taskId?: string } | null)?.taskId, task1.id, 'its recorded decision is untouched: no fresh task for a done step');
+    assert.notEqual(v.steps.find((s) => s.node_id === 'a2')!.status, 'done', 'the parked step is the one re-armed');
+    const task3 = (await openTasks()).find((x) => x.id !== task1.id && x.id !== task2!.id);
+    assert.ok(task3, 'exactly the parked step re-opened a fresh task');
+    const d3 = await call('POST', `/workflow-tasks/${task3!.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
+    assert.ok(d3.status < 300, JSON.stringify(d3.body).slice(0, 200));
+    await waitRun(started.run.id, ['completed']);
+  });
+
   it('two concurrent re-runs: the exclusive claim lets exactly one through and the loser resets nothing', async () => {
     const def = (await ok('POST', '/workflows', { name: 'Race rerun', graph: { nodes: [
       { id: 'n', type: 'notify', name: 'hi', config: { recipient: 'x', message: 'y' } },
