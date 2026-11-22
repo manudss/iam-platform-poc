@@ -219,9 +219,13 @@ export class BusHost {
         for (const k of m.emits ?? []) { e.emits.add(k); e.declare_kinds.set(k, { name: k, mode: 'notify' }); }
         if (!e.subscriptions.size && !e.declare_kinds.size && !e.emits.size) want.delete(m.id);
       }
+      // NATS subscribe queues a wire command. Publishing the mandatory route first
+      // exposes a window where an immediate core call gets "no responder". Flush
+      // acknowledges all serving subscriptions before the core can select them.
+      for (const id of want.keys()) this.serve(id);
+      await this.nc.flush();
       for (const [id, reg] of want) {
         await this.post('/v1/bus/plugins/register', { plugin: id, subscriptions: [...reg.subscriptions.values()], emits: [...reg.emits], declare_kinds: [...reg.declare_kinds.values()] });
-        this.serve(id);
       }
       // Internal services keep their own durable addresses; re-pushed here so a core restart heals them too.
       for (const [address, svc] of this.services) {
