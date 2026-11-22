@@ -102,8 +102,17 @@ export function createWorkflowEngine(deps) {
     } catch (e) { log.warn(`test branch cleanup for run ${runId}: ${e.message}`); }
   }
   // Robust whether or not a pass currently holds the live flag (a suspended run dropped it): the cancel
-  // survives and the next pass - or the walk - honors it, instead of crashing on a missing entry.
-  const cancelFlag = (runId) => { const f = live.get(runId); if (f) f.cancel = true; else live.set(runId, { cancel: true }); };
+  // survives and the next pass - or the walk - honors it, instead of crashing on a missing entry. When no
+  // pass holds the flag, arm the cancel only for a run that is still resumable: a finished run gets NO
+  // stale live entry (the map would otherwise keep one forever).
+  const cancelFlag = (runId) => {
+    const f = live.get(runId);
+    if (f) { f.cancel = true; return; }
+    void store.getRunById(runId).then((r) => {
+      if (!r || ['completed', 'failed', 'canceled'].includes(r.status)) return;
+      const g = live.get(runId); if (g) g.cancel = true; else live.set(runId, { cancel: true });
+    }).catch(() => { /* store gone */ });
+  };
   const forget = (runId) => { live.delete(runId); };
 
   /** Steps whose type branches: after they succeed, only their outgoing link carrying the chosen label is taken. */

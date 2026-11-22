@@ -110,6 +110,31 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(routes.length, 21);
   });
 
+  it('tenant binding and PII minimization on the REAL API (guard chain + response projections)', async () => {
+    // (a) The bearer token's tenant is bound to the route :tenant: a token of another tenant is refused
+    // on every surface, EVEN with a valid admin token (the identity binding wins over the capability).
+    const foreign = 'other-tenant:demo-alice';
+    for (const [m, p, b] of [['GET', '/workflows', undefined], ['POST', '/workflows', { name: 'x', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: {} }], edges: [] } }], ['GET', '/workflow-tasks?scope=all', undefined], ['GET', '/versioning/tables', undefined], ['GET', '/versioning/tables/identities?ref=main', undefined]] as const)
+      assert.equal((await call(m, p, b as object | undefined, { token: foreign })).status, 403, `${m} ${p} must refuse another tenant's token`);
+    // (b) No token at all is refused; a malformed one too.
+    assert.equal((await call('GET', '/workflows', undefined, { token: null })).status, 401);
+    assert.equal((await call('GET', '/workflows', undefined, { token: 'garbage' })).status, 401);
+    // (c) The raw table browser returns FULL rows (every column a schema adds): it stays behind the
+    // admin capability - unlike the workflow/IGA surfaces which project minimal fields (asserted below
+    // on the evidence file of the recertification journeys).
+    assert.equal((await call('GET', '/versioning/tables/identities?ref=main', undefined, { admin: null })).status, 403, 'raw full-row reads are admin-only');
+    const rows = ((await ok('GET', '/versioning/tables/identities?ref=main')) as { rows: Record<string, unknown>[] }).rows;
+    assert.ok(rows.length >= 2 && rows.every((r) => r.id && r.display_name !== undefined), 'admin sees the raw rows');
+    // (d) The workflow surfaces project: a run view carries no identity profile columns at all.
+    const def = (await ok('POST', '/workflows', { name: 'Projection probe', graph: { nodes: [{ id: 'a', type: 'wait', name: 'a', config: { seconds: 0 } }], edges: [] } })) as { definition: { id: string } };
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    await waitRun(started.run.id, ['completed']);
+    const view = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
+    assert.deepEqual(Object.keys(view.run).sort(), ['base_branch', 'branch', 'definition_id', 'edges', 'error', 'finished_at', 'id', 'name', 'order', 'simulatedOnly', 'started_at', 'started_by', 'status', 'tenant', 'test'].sort(), 'the run view is a fixed minimal projection (pinned: a future profile/PII field breaks this)');
+    assert.equal(typeof (view.run as unknown as Record<string, unknown>).started_by, 'string', 'started_by is an actor id, never a profile');
+    assert.ok(!JSON.stringify(view).includes('display_name') && !JSON.stringify(view).includes('email'), 'no identity profile field leaks into a run view');
+  });
+
   it('refuses an invalid graph (cycle, unknown type) and an unknown field', async () => {
     const bad = (g: object) => call('POST', '/workflows', { name: 'x', graph: g });
     assert.equal((await bad({ nodes: [{ id: 'a', type: 'wait', name: 'a', config: {} }, { id: 'b', type: 'wait', name: 'b', config: {} }], edges: [{ from: 'a', to: 'b' }, { from: 'b', to: 'a' }] })).status, 400);
@@ -412,7 +437,26 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
   };
 
   it('recertification mixed: the APPROVED identity keeps every right, only the denied one is remediated', async () => {
+    // Isolated fixture: bob MUST hold at least one role, whatever the suite order, so the denial below
+    // can never pass without a real revocation and a real publication. Granted through the normal path.
+    const held0 = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows.filter((r) => r.identity_id === 'demo-bob').map((r) => r.role_id);
+    const fixtureRole = ['accountant', 'payment-approver'].find((r) => !held0.includes(r) && !(r === 'payment-approver' && held0.includes('payment-creator')));
+    assert.ok(fixtureRole, `no SoD-safe fixture role available (bob holds ${held0.join(',')})`);
+    const grantDef = (await ok('POST', '/workflows', { name: 'Mixed fixture grant', graph: { nodes: [
+      { id: 'grant', type: 'lyam-grant-assignment', name: 'grant', config: { identity: 'demo-bob', role: fixtureRole } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Mixed fixture' } },
+    ], edges: [{ from: 'grant', to: 'publish' }] } })) as { definition: { id: string } };
+    const grantRun = (await ok('POST', `/workflows/${grantDef.definition.id}/runs`)) as RunView;
+    const gApproval = await waitTask(grantRun.run.id, 'publish-approval');
+    const gPr = Number((gApproval.detail.pr as Record<string, unknown>).id);
+    assert.ok((await call('POST', `/workflow-tasks/${gApproval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
+    const gWatch = await waitTask(grantRun.run.id, 'publish-merge-watch');
+    assert.ok((await call('POST', `/versioning/pulls/${gPr}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
+    assert.ok((await call('POST', `/workflow-tasks/${gWatch.id}/decision`, { decision: 'merged', justification: 'merged' }, { token: `${T}:admin-two` })).status < 300);
+    await waitRun(grantRun.run.id, ['completed'], 30000);
     const before = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
+    const bobRoles = before.filter((r) => r.identity_id === 'demo-bob').map((r) => r.role_id).sort();
+    assert.ok(bobRoles.length >= 1, 'the denied identity holds at least one role: the journey must revoke and publish for real');
     const aliceRoles = before.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort();
     assert.ok(aliceRoles.length >= 3, 'alice still holds her seeded roles at this point of the suite');
     const def = (await ok('POST', '/workflows', { name: 'Recert mixed', graph: templateGraph('demo-bob,demo-alice') })) as { definition: { id: string } };
@@ -434,8 +478,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       const inboxNow = (await ok('GET', '/workflow-tasks?scope=all')) as { tasks: { id: string; kind: string; run_id: string | null }[] };
       const approval = inboxNow.tasks.find((t) => t.run_id === started.run.id && t.kind === 'publish-approval' && true);
       if (approval) {
-        const full = (await ok('GET', `/workflow-tasks/${approval.id}`)) as { detail: Record<string, unknown> };
-        const prId = Number((full.detail.pr as Record<string, unknown>).id);
+        const prId = Number(((approval as { detail?: Record<string, unknown> }).detail!.pr as Record<string, unknown>).id);
         assert.ok((await call('POST', `/workflow-tasks/${approval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` })).status < 300);
         const watch = await waitTask(started.run.id, 'publish-merge-watch');
         assert.ok((await call('POST', `/versioning/pulls/${prId}/merge`, {}, { token: `${T}:demo-alice` })).status < 300);
@@ -450,12 +493,14 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       await new Promise((r) => setTimeout(r, 500));
     }
     await waitRun(started.run.id, ['completed'], 30000);
+    assert.equal(published, true, 'bob held a role: the publication MUST have happened (no silent skip)');
     const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
     assert.equal(((v.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).skipped ?? false), !published, 'publish happened exactly when there was something to publish');
     const evidence = (v.steps.find((x) => x.node_id === 'close')!.output as Record<string, unknown>).evidence as Record<string, unknown>;
     assert.equal((evidence.totals as Record<string, unknown>).remediated, 1, 'only the denied identity was remediated');
     const after = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
     assert.deepEqual(after.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort(), aliceRoles, 'APPROVED: demo-alice keeps every role, exactly as before');
+    for (const role of bobRoles) assert.ok(!after.some((r) => r.identity_id === 'demo-bob' && r.role_id === role), `denied: ${role} really revoked on main`);
   });
 
   it('recertification template shape: conditional denial branch, remediation LOOPS over several identities and roles', async () => {
@@ -520,6 +565,12 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(step('publish').status, 'skipped', 'approval preserves the rights: no useless pull request');
     assert.equal(v.run.branch, null, 'no data branch at all');
     assert.equal(step('close').status, 'done');
+    // PII minimization: the persisted evidence file projects each item to exactly these fields -
+    // no displayName, no email, no profile column the schema may carry.
+    const ev = (step('close').output as Record<string, unknown>).evidence as Record<string, unknown>;
+    for (const it of ev.items as Record<string, unknown>[])
+      assert.deepEqual(Object.keys(it).sort(), ['decidedAt', 'decidedBy', 'identity', 'reason', 'remediation', 'roles', 'state'].sort(), 'minimal item projection in the evidence file');
+    assert.ok(!JSON.stringify(ev).includes('Alice Demo'), 'no display name persisted in the evidence');
   });
 
   it('recertification snapshot conflict: no useless pull request, the close stays blocked and the conflict visible', async () => {

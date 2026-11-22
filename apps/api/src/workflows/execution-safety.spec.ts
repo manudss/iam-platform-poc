@@ -105,6 +105,21 @@ describe('run control: cancel versus concurrent kicks',()=>{
     assert.equal(h.row.status,'canceled','the cancel survives the concurrent kick');
     assert.notEqual(st(h,'b').status,'done','the walk stopped before the next step');
     h.engine.cancelFlag('run-test'); // no live entry held after the run ended: robust, no crash
+    await new Promise((r)=>setTimeout(r,50));
+    h.engine.kick('run-test'); // a terminal run is not re-executed and arms no stale flag
+    await new Promise((r)=>setTimeout(r,100));
     assert.equal(h.row.status,'canceled');
+    assert.notEqual(st(h,'b').status,'done');
+  });
+  it('cancelFlag on a COMPLETED run arms nothing and never re-runs it',async()=>{
+    const h=makeHarness({nodes:[node('a','wait',{seconds:0})],edges:[]});
+    await settle(h);
+    assert.equal(h.row.status,'completed');
+    h.engine.cancelFlag('run-test');
+    await new Promise((r)=>setTimeout(r,50));
+    h.engine.kick('run-test');
+    await new Promise((r)=>setTimeout(r,100));
+    assert.equal(h.row.status,'completed','a finished run is never disturbed');
+    assert.equal(st(h,'a').attempts,1,'no extra execution pass');
   });
 });
