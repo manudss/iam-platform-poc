@@ -224,6 +224,20 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
         assert.equal(await svc.authenticate('acme-demo', 'fict-pb', TEMP + 'P'), false, 'the refused publication left its credential off main');
       } finally { delete process.env.IAM_WORKSPACE_MODE; }
     });
+    it('through the REAL engine publish wrapper (allow-list gate included): the precheck reaches the real publisher inside its queue, a rejection merges nothing', async () => {
+      activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
+      const head = await runBranch('run-pre-w', 'fict-pw');
+      const ws = (WorkflowEngine.prototype as any).workspaceEffects.call({ publisher: mkPub(), settingsFor: async () => ({ publishAllowedWorkflows: 'wf-fict' }) }, v);
+      process.env.IAM_WORKSPACE_MODE = '1';
+      try {
+        const before = await mainHead(); let ran = 0;
+        await assert.rejects(() => ws.publish('acme-demo', { runId: 'run-w', workflowId: 'wf-fict', branch: 'run-pre-w', expectedHead: head, precheck: async () => { ran++; throw new Error('guard flipped'); } }), /guard flipped/);
+        assert.equal(ran, 1); assert.equal(await mainHead(), before); assert.equal(activations.length, 0);
+        const ok = await ws.publish('acme-demo', { runId: 'run-w', workflowId: 'wf-fict', branch: 'run-pre-w', expectedHead: head, precheck: async () => { ran++; } });
+        assert.equal(ok.published, true); assert.equal(ran, 2);
+        await assert.rejects(() => ws.publish('acme-demo', { runId: 'run-w', workflowId: 'wf-other', branch: 'run-pre-w', expectedHead: head, precheck: async () => {} }), /not authorized/);
+      } finally { delete process.env.IAM_WORKSPACE_MODE; }
+    });
     it('a block written while the publication runs is neither lost nor undone, and the workflow unblock then lifts the block its own run set', async () => {
       activations = []; mode = 'ok'; state = { state: 'applied', commit: 'old' };
       const head = await runBranch('run-pub-3', 'fict-p3');
