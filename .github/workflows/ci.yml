@@ -116,6 +116,14 @@ jobs:
           (cd apps/web && npm ci)
           mkdir /tmp/pw && (cd /tmp/pw && npm init -y >/dev/null && npm i playwright-core >/dev/null)
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/ui-e2e.mjs /tmp/ui-shots
+      - name: UI end-to-end screenshots (fictional data, no secrets)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-e2e-screenshots
+          path: /tmp/ui-shots
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Branding browser end-to-end (production SSR, real Dolt and Apply)
         run: |
           (cd apps/web && npm run build)
