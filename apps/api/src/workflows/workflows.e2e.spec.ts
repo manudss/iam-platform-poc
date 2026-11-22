@@ -928,6 +928,12 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(fired, 'the cron scheduler started a run within 90 s');
     const pausedRuns = (await ok('GET', `/workflow-runs?definition=${off.definition.id}`)) as { runs: unknown[] };
     assert.equal(pausedRuns.runs.length, 0, 'a paused cron workflow never fires');
+    // Seeing a run row proves scheduling, not completion. Stop new fixture triggers and wait for
+    // every observed cron run before deleting its definition; production correctly refuses active runs.
+    await ok('POST', `/workflows/${on.definition.id}/active`, { active: false });
+    await waitRun(fired!.id, ['completed']);
+    const scheduled = await ok('GET', `/workflow-runs?definition=${on.definition.id}`) as { runs: { id: string; startedBy: string }[] };
+    for (const run of scheduled.runs.filter(r => r.startedBy === 'cron')) await waitRun(run.id, ['completed']);
     await ok('DELETE', `/workflows/${on.definition.id}`);
     await ok('DELETE', `/workflows/${off.definition.id}`);
   });
