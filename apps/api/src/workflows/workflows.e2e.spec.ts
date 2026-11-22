@@ -487,6 +487,16 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
   });
 
   it('recertification journey: campaign > review task > pool decision > resume > strict close (real Dolt)', async () => {
+    // The early minimal fixture has no live login column. Pool actors must now be actual active
+    // directory identities, not authentication-only names accepted by the fake HTTP guard.
+    await app.get(VersioningService).at('main', async c => {
+      const [cols] = await c.query('show columns from identities');
+      if (!(cols as { Field: string }[]).some(x => x.Field === 'login_enabled')) await c.query('alter table identities add column login_enabled boolean not null default true');
+      for (const id of ['iga-reviewer', 'admin-two', 'review-manager-a', 'review-manager-b', 'review-employee']) await c.query('insert into identities (id, display_name, department, manager_id, login_enabled) values (?, ?, null, null, true)', [id, id]);
+      await c.query("update identities set manager_id = 'review-manager-a' where id = 'review-employee'");
+      await c.query("call dolt_add('.')"); await c.query("call dolt_commit('-m','live review actors fixture')");
+    });
+
     const def = (await ok('POST', '/workflows', { name: 'Recert journey', graph: { nodes: [
       { id: 'c1', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Q4 recert demo-bob', users: 'demo-bob', ref: 'main' } },
       { id: 'c2', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.c1.id}}', assignTo: 'iga' } },
@@ -514,16 +524,41 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal((await ok('GET', `/workflow-tasks?scope=all`) as never as { tasks: { status: string }[] }).tasks.filter((t) => t.status === 'open').length, 0, 'no open task remains');
   });
 
-  it('late campaign review: real task storage, escalation once, new decider resumes the real engine and closes', async () => {
-    // The minimal SQL fixture predates directory migrations: explicitly provide the active-account
-    // column required by the live escalation check (no stub of the check or reads service).
+  it('manager change requires explicit reassignment, removes former owner authority and resumes the original real engine', async () => {
+    const def = await ok('POST', '/workflows', { name: 'Manager-bound recertification', graph: { nodes: [
+      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Manager review', users: 'review-employee', ref: 'main' } },
+      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'manager', dueInDays: '3' } },
+      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
+    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'close' }] } }) as { definition: { id: string } };
+    const started = await ok('POST', `/workflows/${def.definition.id}/runs`) as RunView;
+    const task = await waitTask(started.run.id, 'iga-review');
+    const original = (await app.get(WorkflowStore).getTask(task.id))!;
+    assert.equal(original.assignee, 'review-manager-a');
     await app.get(VersioningService).at('main', async c => {
-      const [cols] = await c.query('show columns from identities');
-      if (!(cols as { Field: string }[]).some(x => x.Field === 'login_enabled')) await c.query('alter table identities add column login_enabled boolean not null default true');
-      await c.query('update identities set login_enabled = true where id = ?', ['demo-alice']);
-      await c.query("call dolt_add('.')"); await c.query("call dolt_commit('-m','active review target fixture')");
+      await c.query("update identities set manager_id = 'review-manager-b' where id = 'review-employee'");
+      await c.query("call dolt_add('.')"); await c.query("call dolt_commit('-m','manager changed during review fixture')");
     });
+    const oldDecision = await call('POST', `/workflow-tasks/${task.id}/decision`, { decision: 'approved' }, { token: `${T}:review-manager-a` });
+    assert.equal(oldDecision.status, 409);
+    assert.equal((await app.get(WorkflowStore).getTask(task.id))!.assignee, 'review-manager-a', 'no silent reassignment');
+    const moveDef = await ok('POST', '/workflows', { name: 'Explicit manager replacement', graph: { nodes: [
+      { id: 'move', type: 'iga-reassign-review', name: 'move', config: { campaignId: task.detail.campaignId, from: 'review-manager-a', to: 'manager', reason: 'manager changed' } },
+    ], edges: [] } }) as { definition: { id: string } };
+    const move = await ok('POST', `/workflows/${moveDef.definition.id}/runs`) as RunView;
+    await waitRun(move.run.id, ['completed']);
+    const current = (await app.get(WorkflowStore).getTask(task.id))!;
+    assert.equal(current.assignee, 'review-manager-b'); assert.equal(current.due_at, original.due_at); assert.equal(current.run_id, original.run_id);
+    assert.equal((await call('POST', `/workflow-tasks/${task.id}/decision`, { decision: 'approved' }, { token: `${T}:review-manager-a` })).status, 403);
+    const decided = await call('POST', `/workflow-tasks/${task.id}/decision`, { decision: 'approved' }, { token: `${T}:review-manager-b` });
+    assert.ok(decided.status < 300, JSON.stringify(decided.body));
+    const done = await waitRun(started.run.id, ['completed']);
+    assert.equal(done.run.branch, null, 'review ownership does not write an access branch');
+    assert.equal(done.steps.find(step => step.node_id === 'close')!.status, 'done');
+  });
 
+  it('late campaign review: real task storage, escalation once, new decider resumes the real engine and closes', async () => {
+    // Live directory actors are established by the earlier recertification fixture.
     const def = (await ok('POST', '/workflows', { name: 'Late recert journey', graph: { nodes: [
       { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Late review', users: 'demo-bob', ref: 'main' } },
       { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga', dueInDays: '1', escalateTo: 'admin' } },

@@ -110,7 +110,10 @@ export class WorkflowTasksService {
       created_at: now(), due_at: a.dueInSeconds ? ts(Date.now() + a.dueInSeconds * 1000) : null, reminded_at: null, decided_at: null,
     };
     if (a.escalateTo) t.detail = { ...t.detail, escalateTo: a.escalateTo };
-    if (t.assignee === 'admin' || t.assignee === 'iga') t.detail = { ...t.detail, pool: t.assignee };
+    if (t.assignee === 'admin' || t.assignee === 'iga') {
+      t.detail = { ...t.detail, pool: t.assignee };
+      if (t.kind === 'iga-review') delete t.detail.reviewManager;
+    }
     t.assignee = t.kind === 'iga-review'
       ? await this.activeReviewAssignee(t.tenant, t.assignee, [t.detail?.identity, t.detail?.subject].filter((x): x is string => typeof x === 'string'))
       : this.resolveAssignee(t.assignee);
@@ -150,6 +153,36 @@ export class WorkflowTasksService {
     if (!(await this.store.markTaskApplied(taskId, String(consumer).slice(0, 120), String(revision).slice(0, 80)))) throw new ConflictException('the effect of this approval could not be recorded for this consumer');
   }
 
+  /** A changed manager never silently receives (or leaves behind) authority on a pending review.
+   * The operator must explicitly reassign it. Reads are live main, not the campaign snapshot. */
+  private async assertReviewManager(t: TaskRow): Promise<void> {
+    const expected = t.detail?.reviewManager;
+    if (typeof expected !== 'string') return; // explicit pool/named assignment, not manager-bound
+    const reads = this.readsRef as WorkflowReads | undefined;
+    if (!reads || typeof t.detail?.identity !== 'string') throw new ConflictException('review manager validation unavailable');
+    let user;
+    try { user = await reads.readUser(t.tenant, 'main', t.detail.identity); }
+    catch { throw new ConflictException('review manager validation unavailable (read failed)'); }
+    if (!user || user.manager !== expected) throw new ConflictException('the manager changed: explicit review reassignment is required before a decision');
+  }
+
+  private async moveReview(t: TaskRow, target: string, by: string, reason: string, pool?: string, manager?: string, startedBy?: string): Promise<TaskRow> {
+    const version = t.detail?.reviewAssignmentVersion ?? 0;
+    if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) throw new ConflictException('invalid review assignment version');
+    const from = t.delegated_to ?? t.assignee;
+    const history = Array.isArray(t.detail?.reviewAssignmentHistory) ? t.detail.reviewAssignmentHistory : [];
+    const detail: Record<string, unknown> = { ...t.detail, reviewAssignmentVersion: version + 1,
+      reassignedFrom: from, reassignedBy: by, ...(startedBy ? { reassignedStartedBy: startedBy } : {}), reassignReason: reason.slice(0, 200),
+      reviewAssignmentHistory: [...history, { from, to: target, by, reason: reason.slice(0, 200), at: now() }] };
+    if (pool) detail.pool = pool; else delete detail.pool;
+    if (manager) detail.reviewManager = manager; else delete detail.reviewManager;
+    delete detail.escalationError;
+    const saved = await this.store.reassignReviewTask(t, target, detail);
+    if (!saved) throw new ConflictException('review changed while reassigning: reload before trying again');
+    this.emit(t.tenant, 'workflow.task-assigned', { task: t.id, kind: t.kind, title: t.title, assignee: target, actor: by });
+    return saved;
+  }
+
   /** Decision by an authenticated person. Returns the decided task and kicks the waiting run. */
   async decide(tenant: string, id: string, actor: string, decision: unknown, justification: unknown): Promise<TaskRow> {
     const t = await this.store.getTask(id);
@@ -178,9 +211,15 @@ export class WorkflowTasksService {
     }
     const isAdmin = this.isAdmin(actor);
     const pool = typeof t.detail?.pool === 'string' ? this.poolMembers(t.detail.pool) : [];
-    const saved = isAdmin || pool.includes(actor)
-      ? await this.store.decideTaskAs(id, actor, d, just || null, now())
-      : await this.store.decideTask(id, actor, d, just || null, now());
+    if (t.kind === 'iga-review') {
+      await this.requireActiveReviewTarget(tenant, actor);
+      await this.assertReviewManager(t);
+    }
+    const saved = t.kind === 'iga-review'
+      ? await this.store.decideReviewTask(t, actor, d, just || null, now(), isAdmin || pool.includes(actor))
+      : isAdmin || pool.includes(actor)
+        ? await this.store.decideTaskAs(id, actor, d, just || null, now())
+        : await this.store.decideTask(id, actor, d, just || null, now());
     if (!saved) {
       const again = await this.store.getTask(id);
       if (again && again.status === 'decided') throw new ConflictException(`this task was just decided by ${again.decided_by}`);
@@ -197,6 +236,14 @@ export class WorkflowTasksService {
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
     const rawTo = String(to ?? '').trim();
+    if (t.kind === 'iga-review') {
+      const pool = typeof t.detail?.pool === 'string' ? this.poolMembers(t.detail.pool) : [];
+      if (!this.isAdmin(actor) && !pool.includes(actor) && (t.delegated_to ?? t.assignee) !== actor) throw new ForbiddenException('only the current review decider or their pool may delegate');
+      await this.requireActiveReviewTarget(tenant, actor);
+      await this.assertReviewManager(t);
+      const target = await this.activeReviewAssignee(tenant, rawTo, [t.detail?.identity, t.detail?.subject].filter((x): x is string => typeof x === 'string'));
+      return this.moveReview(t, target, actor, 'explicit delegation', rawTo === 'admin' || rawTo === 'iga' ? rawTo : undefined);
+    }
     const target = this.resolveAssignee(rawTo);
     const pool = typeof t.detail?.pool === 'string' ? this.poolMembers(t.detail.pool) : [];
     if (!this.isAdmin(actor) && !pool.includes(actor) && t.assignee !== actor && t.delegated_to !== actor) throw new ForbiddenException('only the assigned decider (or a pool member) can delegate this task');
@@ -218,17 +265,27 @@ export class WorkflowTasksService {
   /** True for a subject allowed to administer review deciders: the admin list or the IGA pool. */
   isDeciderAdmin(sub: unknown): boolean { return typeof sub === 'string' && (this.admins().includes(sub) || this.poolMembers('iga').includes(sub)); }
 
-  /** Replaces the decider of an OPEN task from a workflow/IGA step (an absent validator). AUTHORITY: the person who started the workflow must be an admin or an IGA pool member (the right to run a workflow is not the right to move reviews), and the new decider must be a member of the admin/IGA pool: a free choice of any id would let a starter pick an accomplice. The task stays open, keeps its deadline and records who it was taken from. Refused when the new decider is the person the task is about. */
+  /** Replaces the decider of an OPEN task from a workflow/IGA step (an absent validator). AUTHORITY: the person who started the workflow must be an admin or an IGA pool member (the right to run a workflow is not the right to move reviews), and the new decider must be a member of the admin/IGA pool or the reviewed person's current active manager, selected explicitly by the manager keyword. A free arbitrary id is not a replacement authority. The task stays open, keeps its deadline and records who it was taken from. Refused when the new decider is the person the task is about. */
   async reassignOpen(tenant: string, id: string, to: unknown, by: string, reason: string, startedBy?: string): Promise<TaskRow> {
     const t = await this.store.getTask(id);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
     if (!this.isDeciderAdmin(startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
     const rawTo = String(to ?? '').trim();
-    const target = await this.activeReviewAssignee(tenant, rawTo, [t.detail?.identity, t.detail?.subject].filter((x): x is string => typeof x === 'string'));
-    if (!this.isDeciderAdmin(target)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
+    let target: string;
+    if (t.kind === 'iga-review' && rawTo === 'manager') {
+      const reads = this.readsRef as WorkflowReads | undefined;
+      if (!reads || typeof t.detail?.identity !== 'string') throw new ConflictException('review manager validation unavailable');
+      const subject = await reads.readUser(tenant, 'main', t.detail.identity);
+      if (!subject || !subject.manager) throw new ConflictException('no current manager: explicitly select an eligible review pool');
+      target = await this.activeReviewAssignee(tenant, subject.manager, [t.detail.identity]);
+    } else {
+      target = await this.activeReviewAssignee(tenant, rawTo, [t.detail?.identity, t.detail?.subject].filter((x): x is string => typeof x === 'string'));
+      if (!this.isDeciderAdmin(target)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
+    }
     if (target === t.detail?.identity || target === t.detail?.subject) throw new ConflictException('the new decider is the person this task is about: refused');
     await this.requireActiveReviewTarget(tenant, target);
+    if (t.kind === 'iga-review') return this.moveReview(t, target, by, reason, rawTo === 'admin' || rawTo === 'iga' ? rawTo : undefined, rawTo === 'manager' ? target : undefined, startedBy);
     const from = t.delegated_to ?? t.assignee;
     await this.store.patchTaskDetail(id, { pool: rawTo === 'admin' || rawTo === 'iga' ? rawTo : null, reassignedFrom: from, reassignedBy: by, reassignedStartedBy: startedBy ?? null, reassignReason: String(reason ?? '').slice(0, 200) });
     const saved = await this.store.delegateTask(id, target, t.due_at ?? now());
@@ -284,11 +341,20 @@ export class WorkflowTasksService {
             if (!this.isDeciderAdmin(resolved)) throw new ForbiddenException('IGA escalation target is no longer in the admin or IGA pool');
             await this.requireActiveReviewTarget(t.tenant, resolved);
           }
-          if (resolved && (escalateTo === 'admin' || escalateTo === 'iga')) await this.store.patchTaskDetail(t.id, { pool: escalateTo });
+          if (resolved && t.kind !== 'iga-review' && (escalateTo === 'admin' || escalateTo === 'iga')) await this.store.patchTaskDetail(t.id, { pool: escalateTo });
         }
-        catch (e) { resolved = null; await this.store.patchTaskDetail(t.id, { escalationError: 'target rejected; task retained with current decider' }); this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (validation failed): the task stays with ${t.assignee}`); }
+        catch (e) { resolved = null;
+          if (t.kind === 'iga-review') {
+            await this.store.patchReviewTaskDetail(t, { ...t.detail, escalationError: 'target rejected; task retained with current decider' });
+          } else await this.store.patchTaskDetail(t.id, { escalationError: 'target rejected; task retained with current decider' });
+          this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (validation failed): the task stays with ${t.assignee}`); }
       }
-      if (resolved) await this.store.delegateTask(t.id, resolved, t.due_at);
+      if (resolved) {
+        if (t.kind === 'iga-review') {
+          try { await this.moveReview(t, resolved, 'system:workflow-deadline', 'deadline escalation', escalateTo === 'admin' || escalateTo === 'iga' ? escalateTo : undefined); }
+          catch (e) { if (e instanceof ConflictException) continue; throw e; } // do not patch/remind a stale row; unexpected storage errors remain visible
+        } else await this.store.delegateTask(t.id, resolved, t.due_at);
+      }
       if (!t.reminded_at) {
         await this.store.markTaskReminded(t.id, now());
         this.emit(t.tenant, 'workflow.task-overdue', { task: t.id, kind: t.kind, assignee: resolved ?? t.assignee });
