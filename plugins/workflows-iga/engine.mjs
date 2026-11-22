@@ -44,6 +44,9 @@ const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b a
   join sod_rules r on r.role_a = a.role_id and r.role_b = b.role_id`;
 
 class Canceled extends Error { constructor() { super('run canceled'); } }
+/** Statuses from which a run may still move: every status write is an atomic transition from this set,
+ *  so a terminal state (cancel/completed/failed) recorded concurrently always wins, with no read-then-write window. */
+const RESUMABLE = ['queued', 'running', 'waiting'];
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
 async function commit(c, message, author) {
   await c.query("CALL DOLT_ADD('-A')");
@@ -82,11 +85,9 @@ export function createWorkflowEngine(deps) {
         log.error(`run ${runId} crashed: ${e.message}`);
         try {
           // A crash landing AFTER a terminal state (a user cancel, or a concurrent pass that finished the
-          // run) must never rewrite it: e.g. cancel committed while this pass was mid-write on the run
-          // branch, the conflicting write threw, and the canceled run would otherwise end 'failed'.
-          const cur = await store.getRunById(runId);
-          if (cur && ['completed', 'failed', 'canceled'].includes(cur.status)) return;
-          await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() });
+          // run) must never rewrite it, not even in the window between a read and the write: the
+          // transition is atomic, guarded by the source statuses (a canceled run stays canceled).
+          await store.transitionRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }, RESUMABLE);
         } catch { /* store gone */ }
       }).finally(() => {
         if (state.rekick) { state.rekick = false; if (!live.has(runId)) live.set(runId, { cancel: false }); pass(); return; }
@@ -128,11 +129,11 @@ export function createWorkflowEngine(deps) {
   async function execute(runId) {
     const run = await store.getRunById(runId);
     if (!run || run.status === 'canceled' || run.status === 'completed') return;
-    await store.updateRun(runId, { status: 'running', error: null });
+    if (!await store.transitionRun(runId, { status: 'running', error: null }, RESUMABLE)) return; // turned terminal between the read and here
     // A restarted call may already have reached the remote service. Never continue past it.
     for (const st of await store.steps(runId)) if (st.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED' && st.status !== 'done') {
       await store.patchStep(runId, st.node_id, { status: 'failed', finished_at: now() });
-      await store.updateRun(runId, { status: 'failed', error: 'External effect uncertain: reconcile at the provider before creating a new run.', finished_at: now() }); return;
+      await store.transitionRun(runId, { status: 'failed', error: 'External effect uncertain: reconcile at the provider before creating a new run.', finished_at: now() }, RESUMABLE); return;
     }
     // A step left 'running' by a restart was cut in flight. A step that can have an effect outside the run (category real or any external block) is NEVER re-run by itself, and the run is
     // never reported completed over it: the run fails closed and the step is marked, for a manual reconciliation. A computed or simulated step has no effect and simply restarts.
@@ -142,7 +143,7 @@ export function createWorkflowEngine(deps) {
       if (!effectful) { await store.patchStep(runId, st.node_id, { status: 'pending' }); continue; }
       for (const o of await store.steps(runId)) if (o.status === 'pending') await store.patchStep(runId, o.node_id, { status: 'skipped' });
       await store.patchStep(runId, st.node_id, { status: 'failed', error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED', finished_at: now() });
-      await store.updateRun(runId, { status: 'failed', error: `step "${n?.name ?? st.node_id}" was interrupted by a restart while it ran: its effect is unknown, reconcile before creating a new run.`.slice(0, 500), finished_at: now() }); return;
+      await store.transitionRun(runId, { status: 'failed', error: `step "${n?.name ?? st.node_id}" was interrupted by a restart while it ran: its effect is unknown, reconcile before creating a new run.`.slice(0, 500), finished_at: now() }, RESUMABLE); return;
     }
     const { order } = validateGraph(run.graph);
     const nodes = new Map(run.graph.nodes.map((n) => [n.id, n]));
@@ -154,7 +155,7 @@ export function createWorkflowEngine(deps) {
     const chosen = new Map();
 
     const canceled = async () => {
-      await store.updateRun(runId, { status: 'canceled', finished_at: now() });
+      await store.transitionRun(runId, { status: 'canceled', finished_at: now() }, RESUMABLE);
       live.delete(runId);
     };
 
@@ -183,7 +184,7 @@ export function createWorkflowEngine(deps) {
         return true; // error links read taken from the step's failed status; the walk continues
       }
       for (const s of await store.steps(runId)) if (s.status === 'pending') await store.patchStep(runId, s.node_id, { status: 'skipped' });
-      await store.updateRun(runId, { status: 'failed', error: `step "${node.name}" failed: ${message}`.slice(0, 500), finished_at: now() });
+      await store.transitionRun(runId, { status: 'failed', error: `step "${node.name}" failed: ${message}`.slice(0, 500), finished_at: now() }, RESUMABLE);
       live.delete(runId);
       return false;
     };
@@ -209,7 +210,7 @@ export function createWorkflowEngine(deps) {
       if (res.output?.branch) chosen.set(nodeId, res.output.branch);
       if (node.type === 'loop') chosen.set(nodeId, 'done');
     }
-    await store.updateRun(runId, { status: 'completed', finished_at: now() });
+    await store.transitionRun(runId, { status: 'completed', finished_at: now() }, RESUMABLE);
     live.delete(runId);
   }
 
@@ -354,7 +355,7 @@ export function createWorkflowEngine(deps) {
       if (e instanceof WorkflowSuspend) {
         say(`WAITING for a human decision (${e.wait?.kind ?? 'task'}${e.wait?.taskId ? ' ' + e.wait.taskId : ''}): the run pauses here and resumes when the task is decided`);
         await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs, input: { ...node.config, wait: e.wait } });
-        await store.updateRun(run.id, { status: 'waiting' });
+        await store.transitionRun(run.id, { status: 'waiting' }, RESUMABLE);
         return { suspended: true };
       }
       if ((await store.step(run.id, node.id))?.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED') {

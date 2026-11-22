@@ -16,7 +16,7 @@ function harness(nodes: any[], opts: { secrets?: RunSecrets; preDone?: Record<st
   const steps = new Map<string, any>();
   for (const id of order) steps.set(id, { run_id: row.id, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null, ...(opts.preDone?.[id] ?? {}) });
   const store = {
-    getRunById: async (id: string) => (id === row.id ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, runningRuns: async () => [],
+    getRunById: async (id: string) => (id === row.id ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, transitionRun: async (_i: string, p: any, from: string[]) => { if (!from.includes(row.status as string)) return false; Object.assign(row, p); return true; }, runningRuns: async () => [],
     step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); },
   };
   const secrets = opts.secrets ?? new RunSecrets();

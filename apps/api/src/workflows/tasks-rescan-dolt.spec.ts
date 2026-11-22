@@ -76,4 +76,23 @@ describe('rescan tasks across several overdue ticks (real Dolt)', { skip: !have 
     await svc.scanOverdue();
     assert.deepEqual(kicks, [], 'a decided watch is never rescanned');
   });
+
+  it('terminal run transitions are atomic on real Dolt: a late crash or cancel never overwrites a terminal state', async () => {
+    const mkRun = (id: string, status: string) => ({ id, tenant: 'acme', definition_id: 'wf-def-x', name: 't', graph: { nodes: [], edges: [] }, branch: null, base_branch: null, status, error: null, started_by: 'tester', started_at: now(), finished_at: null, test: false });
+    const RESUMABLE = ['queued', 'running', 'waiting'];
+
+    // Cancel lands first (as the user asked); the in-flight pass's late crash transition is refused atomically.
+    await store.createRun(mkRun('run-atomic-1', 'running') as never, []);
+    assert.equal(await store.transitionRun('run-atomic-1', { status: 'canceled', finished_at: now() }, RESUMABLE), true, 'cancel from a resumable state applies');
+    assert.equal(await store.transitionRun('run-atomic-1', { status: 'failed', error: 'internal error: boom', finished_at: now() }, RESUMABLE), false, 'the late crash write is refused');
+    const r1 = (await store.getRunById('run-atomic-1'))!;
+    assert.equal(r1.status, 'canceled', 'canceled survives the racing crash');
+    assert.equal(r1.error, null, 'no internal error recorded over the cancel');
+
+    // Completed already acquired: same refusal (a crash after completion never fails a finished run).
+    await store.createRun(mkRun('run-atomic-2', 'running') as never, []);
+    assert.equal(await store.transitionRun('run-atomic-2', { status: 'completed', finished_at: now() }, RESUMABLE), true);
+    assert.equal(await store.transitionRun('run-atomic-2', { status: 'failed', error: 'internal error: boom' }, RESUMABLE), false);
+    assert.equal(((await store.getRunById('run-atomic-2'))!).status, 'completed', 'completed survives the racing crash');
+  });
 });

@@ -246,6 +246,17 @@ export class WorkflowStore {
     const m = await this.meta();
     try { await m.query(`update workflow_runs set ${sets.join(', ')} where id = ?`, vals); } finally { await m.end(); }
   }
+  /** Atomic status transition: the write lands only while the run is in one of the `from` statuses,
+   * so a terminal state (cancel/completed/failed) recorded by another writer between a caller's read
+   * and this write always wins. Returns true when the transition was applied. */
+  async transitionRun(id: string, patch: Partial<Pick<RunRow, 'status' | 'error' | 'branch' | 'finished_at'>>, from: string[]): Promise<boolean> {
+    const sets: string[] = [], vals: unknown[] = [];
+    for (const k of ['status', 'error', 'branch', 'finished_at'] as const) if (k in patch) { sets.push(`${k} = ?`); vals.push(patch[k] ?? null); }
+    if (!sets.length || !from.length) return false;
+    vals.push(id, ...from);
+    const m = await this.meta();
+    try { const [r] = await m.query(`update workflow_runs set ${sets.join(', ')} where id = ? and status in (${from.map(() => '?').join(',')})`, vals); return Number((r as { affectedRows: number }).affectedRows) > 0; } finally { await m.end(); }
+  }
   /** Boot-resume failure marker: set ONLY while the run is still resumable and carries no more useful error
    * (a run that turned terminal, or failed for its own reason since the scan, keeps its state untouched). */
   async markResumeFailed(id: string, message: string): Promise<void> {

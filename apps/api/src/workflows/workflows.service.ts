@@ -307,7 +307,8 @@ export class WorkflowsService {
     while (grew) { grew = false; for (const e of view.run.edges) if (down.has(e.from) && !down.has(e.to)) { down.add(e.to); grew = true; } }
     if (view.steps.some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) throw new ConflictException('External effect uncertain: rerun is blocked');
     for (const s of view.steps) if (down.has(s.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, output: null, finished_at: null });
-    await this.store.updateRun(r.id, { status: 'queued', error: null, finished_at: null });
+    if (!await this.store.transitionRun(r.id, { status: 'queued', error: null, finished_at: null }, ['completed', 'failed', 'canceled']))
+      throw new ConflictException('this run changed state while being re-run: rerun did not land');
     this.engine.kick(r.id);
     return this.runView(tenant, r.id);
   }
@@ -347,7 +348,8 @@ export class WorkflowsService {
     for (const s of view.steps) {
       if (s.status === 'skipped' || (failed && s.node_id === failed.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, finished_at: null });
     }
-    await this.store.updateRun(r.id, { status: 'queued', error: null, finished_at: null });
+    if (!await this.store.transitionRun(r.id, { status: 'queued', error: null, finished_at: null }, ['failed', 'canceled']))
+      throw new ConflictException('this run changed state while being retried: retry did not land');
     this.engine.kick(r.id);
     return this.runView(tenant, r.id);
   }
@@ -358,7 +360,9 @@ export class WorkflowsService {
     this.engine.cancelFlag(view.run.id);
     await this.tasksSvc()?.cancelForRun(tenant, view.run.id);
     // A run parked between steps (queued, or running without a live executor after a crash) is canceled here.
-    await this.store.updateRun(view.run.id, { status: 'canceled', finished_at: now() });
+    // Atomic: a pass that reached a terminal state between the check above and this write keeps it.
+    if (!await this.store.transitionRun(view.run.id, { status: 'canceled', finished_at: now() }, ['queued', 'running', 'waiting']))
+      throw new ConflictException(`this run just turned ${(await this.store.getRun(tenant, view.run.id))?.status ?? 'unknown'}: cancel did not land`);
     return this.runView(tenant, view.run.id);
   }
 
