@@ -6,7 +6,7 @@ import { Edge, Node, Vflow } from 'ngx-vflow';
 import { Session } from '../session';
 import {
   DefinitionSummary, RunSummary, RunView, WfNodeComponent, WfNodeData,
-  categoryLabel, categoryOf, clientOf,
+  categoryLabel, categoryOf, clientOf, parseTs,
 } from './wf-model';
 import { WbTabs, WbTabsBar } from './workbench-tabs';
 
@@ -29,7 +29,7 @@ export function stepDataLink(runBranch: string | null, output: unknown): { table
 const duration = (r: { startedAt?: string; finishedAt?: string | null; started_at?: string | null; finished_at?: string | null }): string => {
   const a = r.startedAt ?? r.started_at, b = r.finishedAt ?? r.finished_at;
   if (!a) return '-';
-  const ms = (b ? Date.parse(b) : Date.now()) - Date.parse(a);
+  const ms = (b ? parseTs(b) : Date.now()) - parseTs(a);
   return ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60000)} min ${Math.round((ms % 60000) / 1000)} s`;
 };
 
