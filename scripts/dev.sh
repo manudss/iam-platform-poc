@@ -30,8 +30,16 @@ done
 
 compose=(docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml)
 
-# Fail fast with a clear message when a port the stack publishes is already taken
-# (otherwise compose fails later with a cryptic bind error).
+case "${1:-}" in
+  --down)
+    shift
+    if [ "${1:-}" = '--volumes' ]; then "${compose[@]}" down -v; else "${compose[@]}" down; fi
+    exit $?
+    ;;
+esac
+
+# Fail fast with a clear message when a port the stack publishes is already taken, but only
+# on the way UP: --down must stay usable exactly when a previous stack holds the ports.
 ports=(4200 3000 8081 3307 5433 7233 4222 8200)
 busy=()
 for port in "${ports[@]}"; do
@@ -42,14 +50,6 @@ if [ "${#busy[@]}" -gt 0 ]; then
   echo 'Free them (or, if a previous dev stack is running: scripts/dev.sh --down), then re-run.' >&2
   exit 1
 fi
-
-case "${1:-}" in
-  --down)
-    shift
-    if [ "${1:-}" = '--volumes' ]; then "${compose[@]}" down -v; else "${compose[@]}" down; fi
-    exit $?
-    ;;
-esac
 
 echo ''
 echo 'Starting the Lyam dev stack (first start: Rust build + npm installs, several minutes).'

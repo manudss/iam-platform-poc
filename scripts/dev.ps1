@@ -53,8 +53,13 @@ if (-not (Test-Path .env)) {
 
 $compose = @('compose', '--env-file', '.env', '-f', 'infra/docker-compose.yml', '-f', 'infra/docker-compose.dev.yml')
 
-# Fail fast with a clear message when a port the stack publishes is already taken
-# (otherwise compose fails later with a cryptic bind error).
+if ($Down) {
+  if ($Volumes) { docker @compose down -v } else { docker @compose down }
+  exit $LASTEXITCODE
+}
+
+# Fail fast with a clear message when a port the stack publishes is already taken, but only
+# on the way UP: -Down must stay usable exactly when a previous stack holds the ports.
 $busy = @()
 foreach ($port in 4200, 3000, 8081, 3307, 5433, 7233, 4222, 8200) {
   $client = New-Object System.Net.Sockets.TcpClient
@@ -68,11 +73,6 @@ if ($busy.Count -gt 0) {
   Write-Host "These local ports are already in use: $($busy -join ', ')"
   Write-Host 'Free them (or, if a previous dev stack is running: scripts\dev.ps1 -Down), then re-run.'
   exit 1
-}
-
-if ($Down) {
-  if ($Volumes) { docker @compose down -v } else { docker @compose down }
-  exit $LASTEXITCODE
 }
 
 Write-Host ''
