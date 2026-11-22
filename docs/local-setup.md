@@ -6,7 +6,7 @@ and protect nothing.
 ## Fast path: one command, Docker only (recommended)
 
 The whole stack (Dolt seeded with fictional data, PostgreSQL, Temporal, NATS, OpenBao, Rust core, NestJS API,
-Angular console) runs in containers with the sources mounted: **saving a file reloads the console and
+Angular console) runs in containers (core + API share one: their sign-in gate is loopback-only by design) with the sources mounted: **saving a file reloads the console and
 recompiles/restarts the API**. The only prerequisite is Docker Desktop (Windows/macOS) or Docker Engine +
 the compose plugin (Linux) - no Node, no Rust, no MSVC build tools to install.
 
@@ -27,7 +27,7 @@ volumes, so the next starts take seconds. Then open http://localhost:4200 and si
 
 - **Stop**: Ctrl+C in the terminal. **Reset the data**: `scripts\dev.ps1 -Down -Volumes` (or `bash scripts/dev.sh --down --volumes`) - the Dolt seed replays on the next start.
 - **Hot reload**: console and API recompile on save (polling watchers: Docker Desktop bind mounts deliver no
-  file events). After editing the Rust core: `docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart core` (incremental rebuild), or keep `docker compose ... watch` running to rebuild automatically.
+  file events). After editing the Rust core: `docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart app` (incremental rebuild), or keep `docker compose ... watch` running to rebuild automatically.
 - **API admin token** (the console asks for it on administration features): `local-dev-api-token` by default,
   overridable in `.env` (see the commented `DEV_*` variables in `.env.example`).
 - Editing in **IntelliJ IDEA** (any edition), VS Code or any other editor works the same: the files are

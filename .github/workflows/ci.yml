@@ -227,7 +227,7 @@ jobs:
         run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
   dev-stack:
     # The one-command local development stack (scripts/dev.ps1 / scripts/dev.sh,
-    # infra/docker-compose.dev.yml): builds the three application containers, boots the whole stack
+    # infra/docker-compose.dev.yml): builds the application containers, boots the whole stack
     # and checks it end to end with its check script (console, API through the console proxy,
     # real PKCE sign-in as demo-alice, seeded Dolt data read with the token). Keeps the
     # documented developer path honest. First-run Rust build happens inside the core container.

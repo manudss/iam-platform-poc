@@ -1,4 +1,6 @@
-// Local development runner for the API container of infra/docker-compose.dev.yml. NOT for production.
+// Local development runner for the API, inside the app container of infra/docker-compose.dev.yml
+// (started by infra/dev/app-dev.sh after the Rust core; the core<->API gate is loopback-only by
+// design, hence one container). NOT for production.
 //  1. waits for Dolt, NATS and the Rust core (the first core build takes several minutes),
 //  2. installs the npm dependencies once per lockfile change (named volumes keep them between runs),
 //  3. compiles the API, starts it, then recompiles and restarts it when apps/api/src or plugins change.
@@ -126,7 +128,7 @@ async function main() {
   await waitTcp('dolt', 3306, 120_000, 'Dolt');
   await waitTcp('nats', 4222, 120_000, 'NATS');
   log('waiting for the Rust core (the FIRST container build compiles it: several minutes, then cached)');
-  await waitHttpOk('http://core:8081/health', 20 * 60_000, 'core');
+  await waitHttpOk(process.env.CORE_HEALTH_URL ?? 'http://127.0.0.1:8081/health', 20 * 60_000, 'core');
   await ensureInstalls();
   let since = latestMtimeMs(WATCHED);
   for (;;) {

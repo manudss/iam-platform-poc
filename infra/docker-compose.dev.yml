@@ -1,6 +1,10 @@
-# Full LOCAL development stack: the application processes (Rust core, NestJS API, Angular console)
-# run in containers with the sources mounted and hot reload, on top of the infrastructure services
-# of infra/docker-compose.yml (Dolt seeded, PostgreSQL, Temporal, NATS JetStream, OpenBao dev).
+# Full LOCAL development stack: the application processes (Rust core + NestJS API in one "app"
+# container, Angular console in a "web" container) run with the sources mounted and hot reload,
+# on top of the infrastructure services of infra/docker-compose.yml (Dolt seeded, PostgreSQL,
+# Temporal, NATS JetStream, OpenBao dev).
+# Core and API share one container because the sign-in gate between them is loopback-only by
+# design (the core refuses a non-loopback IAM_AUTH_GATE_ADDR): infra/dev/Dockerfile carries the
+# Rust toolchain AND Node 22, infra/dev/app-dev.sh supervises both processes.
 #
 # Prerequisite: Docker Desktop (Windows/macOS) or Docker Engine + the compose plugin (Linux).
 # Nothing else to install: no Node, no Rust, no MSVC build tools on the host.
@@ -13,54 +17,37 @@
 # First start compiles the Rust core and installs the npm dependencies inside the containers (several
 # minutes); the build caches live in named volumes, so later starts take seconds.
 # Hot reload: the console recompiles on save (--poll, needed through Docker Desktop bind mounts), the
-# API recompiles and restarts on save (infra/dev/api-dev.mjs, TSC_WATCHFILE polling), and a core rebuild
-# is one `docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart core`
+# API recompiles and restarts on save (infra/dev/api-dev.mjs, TSC_WATCHFILE polling), and a core
+# rebuild is one `docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart app`
 # (incremental) or automatic with `docker compose ... watch` (develop.watch below).
 #
 # All published ports stay on 127.0.0.1. All tokens below are documented LOCAL placeholders (same
 # spirit as the dev-only-change-me values of .env.example): they protect nothing, are overridable in
 # .env, and must never be reused outside a local machine.
 services:
-  core:
-    image: rust:1-bookworm
-    working_dir: /repo/core
-    command: bash -c 'until (echo > /dev/tcp/nats/4222) 2>/dev/null; do sleep 0.5; done; cargo build -p iam-core --locked && exec target/debug/iam-core'
+  app:
+    build:
+      context: ..
+      dockerfile: infra/dev/Dockerfile
+    working_dir: /repo
+    command: bash infra/dev/app-dev.sh
     environment:
-      IAM_CORE_ADDR: 0.0.0.0:8081   # reachable from the api container; published on host loopback only
+      # Rust core (started by infra/dev/app-dev.sh):
+      IAM_CORE_ADDR: 0.0.0.0:8081   # reachable from the web container; published on host loopback only
       IAM_CORE_ADMIN_TOKEN: ${DEV_CORE_ADMIN_TOKEN:-local-dev-core-token}
       IAM_CORE_NATS_URL: nats:4222
       IAM_CORE_NATS_PASSWORD: core-dev   # local dev user of conf/nats-local.conf
       IAM_CORE_STATE_DIR: /var/lib/lyam-core
       IAM_POLICY_FILE: /repo/policies/demo.cedar
-      IAM_AUTH_GATE_ADDR: api:3000
-      IAM_AUTH_GATE_TOKEN: ${DEV_AUTH_GATE_TOKEN:-local-dev-gate-token}
       IAM_IDP_EXTRA_REDIRECT_URIS: http://localhost:4200/callback
-    volumes:
-      - ../:/repo
-      - dev-core-target:/repo/core/target
-      - dev-cargo-registry:/usr/local/cargo/registry
-      - dev-core-state:/var/lib/lyam-core
-    ports: ["127.0.0.1:8081:8081"]
-    depends_on: [nats]
-    develop:
-      watch:
-        - action: rebuild
-          path: ../core
-        - action: rebuild
-          path: ../policies
-
-  api:
-    image: node:22-bookworm-slim
-    working_dir: /repo
-    command: node infra/dev/api-dev.mjs
-    environment:
-      API_PORT: "3000"
-      IAM_CORE_URL: http://core:8081
-      # String verified inside the tokens, not a container address: the core's default issuer.
-      IAM_ISSUER: http://127.0.0.1:8081
-      IAM_CORE_ADMIN_TOKEN: ${DEV_CORE_ADMIN_TOKEN:-local-dev-core-token}
-      IAM_API_ADMIN_TOKEN: ${DEV_API_ADMIN_TOKEN:-local-dev-api-token}
+      # The gate is loopback-only by design: the API is the sibling process in this same container.
+      IAM_AUTH_GATE_ADDR: 127.0.0.1:3000
       IAM_AUTH_GATE_TOKEN: ${DEV_AUTH_GATE_TOKEN:-local-dev-gate-token}
+      # NestJS API (run by infra/dev/api-dev.mjs):
+      API_PORT: "3000"
+      IAM_CORE_URL: http://127.0.0.1:8081
+      IAM_ISSUER: http://127.0.0.1:8081   # string verified inside the tokens (the core's default issuer)
+      IAM_API_ADMIN_TOKEN: ${DEV_API_ADMIN_TOKEN:-local-dev-api-token}
       IAM_BUS_NATS_URL: nats:4222
       IAM_BUS_NATS_USER: api-host
       IAM_BUS_NATS_PASSWORD: api-host-dev   # local dev user of conf/nats-local.conf
@@ -80,12 +67,23 @@ services:
       # IAM_TEMPORAL_ADDR: temporal:7233
     volumes:
       - ../:/repo
+      - dev-core-target:/repo/core/target
+      - dev-cargo-registry:/usr/local/cargo/registry
+      - dev-core-state:/var/lib/lyam-core
       - dev-api-node-modules:/repo/apps/api/node_modules
       - dev-root-node-modules:/repo/node_modules
       - dev-npm-cache:/root/.npm
       - dev-api-state:/var/lib/lyam-dev
-    ports: ["127.0.0.1:3000:3000"]
-    depends_on: [core, dolt, nats]
+    ports:
+      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:3000:3000"
+    depends_on: [dolt, nats]
+    develop:
+      watch:
+        - action: restart
+          path: ../core
+        - action: restart
+          path: ../policies
 
   web:
     image: node:22-bookworm-slim
@@ -100,7 +98,7 @@ services:
       - dev-web-angular-cache:/repo/apps/web/.angular
       - dev-npm-cache:/root/.npm
     ports: ["127.0.0.1:4200:4200"]
-    depends_on: [api]
+    depends_on: [app]
 
 volumes:
   dev-core-target: {}
