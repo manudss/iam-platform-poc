@@ -115,3 +115,31 @@ describe('iga late reviews and validator replacement', () => {
     await assert.rejects(iga.reassignReviewTasks('acme', 'a', 'iga-1', { from: 'x', to: 'iga' }), /pool is empty/);
   });
 });
+
+describe('iga: access changed after the campaign launched (acceptance criterion)', () => {
+  const build = (current: string[]) => {
+    const updates: { id: string; patch: Record<string, any> }[] = [];
+    const store: any = {
+      igaGetCampaign: async () => ({ id: 'iga-1', tenant: 'acme', kind: 'user-access', name: 'Q4', ref: 'main', status: 'open', scope: {}, created_by: 'a', created_at: 'now', closed_by: null, closed_at: null, evidence: null }),
+      igaListItems: async () => [{ id: 'item-1', tenant: 'acme', campaign_id: 'iga-1', identity: 'emp', kind: 'user-access', action: 'review', state: 'denied', payload: { roles: ['r1', 'r2'] } }],
+      igaUpdateItem: async (id: string, patch: Record<string, any>) => { updates.push({ id, patch }); return true; },
+    };
+    const reads: any = { listAssignments: async () => ({ assignments: current.map((role) => ({ identity: 'emp', role })) }) };
+    return { iga: new WorkflowsIgaService(store, undefined, reads, undefined), updates };
+  };
+  it('unchanged roles: the revocation is prepared', async () => {
+    const { iga, updates } = build(['r1', 'r2']);
+    const r = await iga.prepareRemediation('acme', 'workflow:r', 'iga-1', {});
+    assert.equal(r.remediation[0].actions?.length, 2);
+    assert.equal(updates[0].patch.state, 'remediation-prepared');
+  });
+  it('a role added, or removed by someone else, after launch: conflict reported, nothing prepared, no state change', async () => {
+    for (const current of [['r1', 'r2', 'r3'], ['r1'], []]) {
+      const { iga, updates } = build(current);
+      const r = await iga.prepareRemediation('acme', 'workflow:r', 'iga-1', {});
+      assert.match(String(r.remediation[0].conflict), /roles changed since the snapshot/);
+      assert.equal(r.remediation[0].actions, undefined);
+      assert.equal(updates.length, 0);
+    }
+  });
+});

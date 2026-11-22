@@ -109,6 +109,28 @@ describe('workflow blocks: lifecycle and roles writes (run branch)', () => {
   });
 });
 
+describe('workflow blocks: lyam-update-role', () => {
+  const dbFor = (row: Record<string, unknown> | null, queries: { q: string; v?: unknown[] }[]) => (async (fn: (db: { query: (q: string, v?: unknown[]) => Promise<unknown> }) => Promise<void>) => fn({ query: async (q: string, v?: unknown[]) => { queries.push({ q, v }); return q.startsWith('select') ? [row ? [row] : []] : [{ affectedRows: 1 }]; } })) as never;
+  it('validates: nothing to change, bad sensitivity', () => {
+    const b = externalBlock('lyam-update-role')!;
+    assert.throws(() => b.validate({ id: 'auditor' }), /nothing to change/);
+    assert.throws(() => b.validate({ id: 'auditor', sensitive: 'maybe' }), /sensitive/);
+  });
+  it('test run writes nothing; real run updates label and sensitivity on the run branch', async () => {
+    const b = externalBlock('lyam-update-role')!; const queries: { q: string; v?: unknown[] }[] = [];
+    assert.equal((await b.run(mk({ test: true, branchWrite: dbFor({ id: 'auditor', is_sensitive: 0 }, queries), config: { id: 'auditor', label: 'Auditor', sensitive: 'yes' } }).c))!.updated, false);
+    assert.equal(queries.length, 0);
+    assert.equal((await b.run(mk({ branchWrite: dbFor({ id: 'auditor', is_sensitive: 0 }, queries), config: { id: 'auditor', label: 'Auditor', sensitive: 'yes' } }).c))!.updated, true);
+    assert.match(queries[1].q, /update roles set label = \?, is_sensitive = 1 where id = \?/);
+  });
+  it('an unknown role is refused (never created) and a sensitive role is never downgraded', async () => {
+    const b = externalBlock('lyam-update-role')!; const queries: { q: string; v?: unknown[] }[] = [];
+    await assert.rejects(b.run(mk({ branchWrite: dbFor(null, queries), config: { id: 'ghost', label: 'X', sensitive: 'unchanged' } }).c), /unknown role/);
+    await assert.rejects(b.run(mk({ branchWrite: dbFor({ id: 'admin', is_sensitive: 1 }, queries), config: { id: 'admin', sensitive: 'no' } }).c), /reviewed change/);
+    assert.ok(queries.every((x) => x.q.startsWith('select')), 'no write was attempted');
+  });
+});
+
 describe('workflow blocks: IGA recertification socle', () => {
   const fakeIga = () => {
     const calls: string[] = [];

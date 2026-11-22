@@ -274,6 +274,34 @@ const lyamCreateRole = writeBlock('lyam-create-role', 'Create a role', 'REAL wri
     return { id: c.id, created: true };
 });
 
+const lyamUpdateRole = writeBlock('lyam-update-role', 'Update a role', 'REAL write ON THE RUN BRANCH: changes the label of an EXISTING role, or marks it sensitive. Reviewed and published like every other data change. Making a sensitive role non-sensitive is refused (it weakens the separation-of-duties controls: use a reviewed change, not a workflow step). An unknown role is refused, never created.', [
+    { key: 'id', label: 'Role id', type: 'string', required: true },
+    { key: 'label', label: 'New label', type: 'string' },
+    { key: 'sensitive', label: 'Sensitive', type: 'select', options: ['unchanged', 'yes', 'no'], default: 'unchanged' },
+], (cfg) => {
+    const sensitive = str(cfg.sensitive, 'sensitive', 9, false) || 'unchanged';
+    if (!['unchanged', 'yes', 'no'].includes(sensitive)) bad('lyam-update-role.sensitive: unchanged, yes or no');
+    const label = str(cfg.label, 'lyam-update-role.label', 80, false);
+    if (!label && sensitive === 'unchanged') bad('lyam-update-role: nothing to change (give a label or a sensitivity)');
+    return { id: idf(cfg.id, 'lyam-update-role.id'), label: label || undefined, sensitive };
+}, async (ctx) => {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) { ctx.log(`test run: would update role "${c.id}" on the run branch`); return { id: c.id, updated: false }; }
+    await ctx.branchWrite(async (db) => {
+        const [ex] = await db.query('select id, is_sensitive from roles where id = ?', [c.id]);
+        const row = (ex ?? [])[0];
+        if (!row) bad(`lyam-update-role: unknown role "${c.id}" (creating a role is lyam-create-role)`);
+        if (c.sensitive === 'no' && Number(row.is_sensitive) === 1) bad(`lyam-update-role: the role "${c.id}" is sensitive; removing that flag needs a reviewed change, not a workflow step`);
+        const sets = [], vals = [];
+        if (c.label) { sets.push('label = ?'); vals.push(c.label); }
+        if (c.sensitive === 'yes') { sets.push('is_sensitive = 1'); }
+        if (!sets.length) return;
+        await db.query(`update roles set ${sets.join(', ')} where id = ?`, [...vals, c.id]);
+    }, `workflow: update role ${c.id}`);
+    ctx.log(`role "${c.id}" updated on the run branch`);
+    return { id: c.id, updated: true };
+});
+
 const lyamProposeRoleRemoval = {
     type: 'lyam-propose-role-removal', family: 'lyam', label: 'Propose a role removal', simulated: false, category: 'real',
     description: 'Opens an approval task for the removal of a role and SUSPENDS the run until the decision. The block never removes anything itself: an approval is a decision by a person, and the removal happens in a later step only after approval.',
@@ -1313,7 +1341,7 @@ export const LYAM_ADMIN_BLOCKS = [
     // P0
     lyamRequestApproval,
     lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
-    lyamUpdateUser, lyamSetLoginEnabled, lyamCreateRole, lyamProposeRoleRemoval,
+    lyamUpdateUser, lyamSetLoginEnabled, lyamCreateRole, lyamUpdateRole, lyamProposeRoleRemoval,
     igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaMarkRemediated, igaCloseCampaign, igaReadCampaign, igaReadOverdue, igaReassignReviews,
     lyamGrantAssignment, lyamRevokeAssignment,
     lyamReadDiff, lyamRequestPublish,
