@@ -3,7 +3,7 @@ import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Session } from '../session';
-import { WfTask, clientOf, decisionChoices, justificationRequired, taskSummary } from './wf-model';
+import { WfTask, clientOf, decisionChoices, justificationRequired, parseTs, taskSummary } from './wf-model';
 import { WbTabsBar } from './workbench-tabs';
 
 // ---- Task inbox: the durable human tasks of the workflows (approvals, reviews, publication watches).
@@ -115,7 +115,7 @@ export class WorkflowTasksPage implements OnInit, OnDestroy {
   protected choices = decisionChoices;
   protected summary = taskSummary;
   protected needsJustification = justificationRequired;
-  protected overdue(t: WfTask) { return t.status === 'open' && !!t.due_at && Date.parse(t.due_at) <= Date.now(); }
+  protected overdue(t: WfTask) { return t.status === 'open' && !!t.due_at && parseTs(t.due_at) <= Date.now(); }
 
   protected async decide(t: WfTask, decision: string) {
     this.busy.set(true); this.note.set('');

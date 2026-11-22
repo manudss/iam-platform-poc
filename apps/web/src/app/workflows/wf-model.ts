@@ -260,6 +260,8 @@ export const taskSummary = (t: WfTask): string => {
   return bits.join(' · ');
 };
 
+/** API timestamps are naive UTC ("YYYY-MM-DD HH:MM:SS.mmm"); parse them as UTC, not browser-local. */
+export const parseTs = (iso: string): number => Date.parse(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
 export const clientOf = (s: Session) => new WorkflowClient(s.api, () => s.adminToken());
 
 export const SAMPLE_WORKFLOWS: { name: string; description: string; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[] }[] = [

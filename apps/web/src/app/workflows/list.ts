@@ -3,7 +3,7 @@ import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Session } from '../session';
-import { DefinitionSummary, DemoSheet, RunSummary, WfTrigger, clientOf } from './wf-model';
+import { DefinitionSummary, DemoSheet, RunSummary, WfTrigger, clientOf, parseTs } from './wf-model';
 import { MiniGraph, miniGraph } from './graph-utils';
 
 // ---- Workflows list, direction C: one card per workflow (trigger chip, graph thumbnail, run stats,
@@ -14,7 +14,7 @@ const triggerLabel = (t: WfTrigger | null): string => (t?.cron ? `⏰ ${t.cron}`
 /** Short relative time in the future: "in 5 min", "in 2 h", "tomorrow". */
 const until = (iso: string | null | undefined): string => {
   if (!iso) return '';
-  const ms = Date.parse(iso) - Date.now();
+  const ms = parseTs(iso) - Date.now();
   if (ms < 0) return 'overdue';
   if (ms < 60000) return 'in <1 min';
   if (ms < 3600000) return `in ${Math.round(ms / 60000)} min`;
@@ -23,7 +23,7 @@ const until = (iso: string | null | undefined): string => {
 };
 const ago = (iso: string | null): string => {
   if (!iso) return '';
-  const ms = Date.now() - Date.parse(iso.replace(' ', 'T'));
+  const ms = Date.now() - parseTs(iso);
   if (ms < 60000) return `${Math.max(1, Math.round(ms / 1000))} s ago`;
   if (ms < 3600000) return `${Math.round(ms / 60000)} min ago`;
   if (ms < 86400000) return `${Math.round(ms / 3600000)} h ago`;
