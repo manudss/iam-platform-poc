@@ -76,6 +76,27 @@ export class WorkflowTasksService {
     return n;
   }
 
+  /** Resolve IGA pools against live main. Unknown/disabled members are not eligible; an unavailable
+   * read stops selection rather than silently routing around an outage. Generic approvals are unchanged. */
+  async activeReviewAssignee(tenant: string, name: string, excluded: string[] = []): Promise<string> {
+    const pool = name === 'admin' || name === 'iga';
+    const candidates = pool ? [...new Set(this.poolMembers(name))] : [this.resolveAssignee(name)];
+    if (!candidates.length) throw new ConflictException('the review decider pool is empty');
+    const reads = this.readsRef as WorkflowReads | undefined;
+    if (!reads) throw new ConflictException('review decider validation unavailable');
+    for (const candidate of candidates) {
+      if (excluded.includes(candidate)) continue;
+      let user;
+      try { user = await reads.readUser(tenant, 'main', candidate); }
+      catch (e) {
+        if (e instanceof BadRequestException && /^unknown identity /.test(e.message)) continue;
+        throw new ConflictException('review decider validation unavailable (read failed)');
+      }
+      if (user?.loginEnabled === true) return candidate;
+    }
+    throw new ConflictException('no eligible review decider: must exist, have login enabled and not be the person this task is about');
+  }
+
   /** Creates (or returns, idempotent by run step) the task a waiting block asks for. */
   async request(a: TaskRequest): Promise<TaskRow> {
     // A re-run of the same waiting step reuses its task: never a second task for the same run step+kind.
@@ -90,8 +111,10 @@ export class WorkflowTasksService {
     };
     if (a.escalateTo) t.detail = { ...t.detail, escalateTo: a.escalateTo };
     if (t.assignee === 'admin' || t.assignee === 'iga') t.detail = { ...t.detail, pool: t.assignee };
-    t.assignee = this.resolveAssignee(t.assignee);
-    if (t.assignee === t.detail?.identity || t.assignee === t.detail?.subject) {
+    t.assignee = t.kind === 'iga-review'
+      ? await this.activeReviewAssignee(t.tenant, t.assignee, [t.detail?.identity, t.detail?.subject].filter((x): x is string => typeof x === 'string'))
+      : this.resolveAssignee(t.assignee);
+    if (t.kind !== 'iga-review' && (t.assignee === t.detail?.identity || t.assignee === t.detail?.subject)) {
       // The beneficiary never receives their own certification task: the pool takes it instead.
       const pool = (process.env.IAM_API_IGA_SUBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
       const fallback = [...pool, ...this.admins()].find((x) => x !== t.assignee);
@@ -202,7 +225,7 @@ export class WorkflowTasksService {
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
     if (!this.isDeciderAdmin(startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
     const rawTo = String(to ?? '').trim();
-    const target = this.resolveAssignee(rawTo);
+    const target = await this.activeReviewAssignee(tenant, rawTo, [t.detail?.identity, t.detail?.subject].filter((x): x is string => typeof x === 'string'));
     if (!this.isDeciderAdmin(target)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
     if (target === t.detail?.identity || target === t.detail?.subject) throw new ConflictException('the new decider is the person this task is about: refused');
     await this.requireActiveReviewTarget(tenant, target);
@@ -250,7 +273,7 @@ export class WorkflowTasksService {
       let resolved: string | null = null;
       if (escalateTo && !t.reminded_at) {
         try {
-          resolved = this.resolveAssignee(escalateTo);
+          resolved = t.kind === 'iga-review' ? await this.activeReviewAssignee(t.tenant, escalateTo, [t.detail?.identity, t.detail?.subject].filter((x): x is string => typeof x === 'string')) : this.resolveAssignee(escalateTo);
           // The escalation never lands on the person the task is about (they could never decide it): the pool member who is not that person takes it, else the task stays where it is.
           const about = [t.detail?.identity, t.detail?.subject].filter((x) => typeof x === 'string');
           if (resolved && about.includes(resolved)) {

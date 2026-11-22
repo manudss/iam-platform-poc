@@ -95,7 +95,7 @@ export class WorkflowsIgaService {
     const escalateTo = input.escalateTo === undefined || input.escalateTo === null || String(input.escalateTo).trim() === '' ? undefined : String(input.escalateTo).trim();
     if (escalateTo && !dueInSeconds) throw new BadRequestException('escalateTo needs dueInDays');
     if (escalateTo) {
-      const target = this.tasks.resolveAssignee(escalateTo); // refused now rather than silently ignored at the deadline
+      const target = await this.tasks.activeReviewAssignee(tenant, escalateTo); // refused now rather than silently ignored at the deadline
       if (!this.tasks.isDeciderAdmin(target)) throw new BadRequestException('escalateTo: "iga", "admin" or a member of the admin or IGA pool');
       await this.tasks.requireActiveReviewTarget(tenant, target);
     }
@@ -138,8 +138,8 @@ export class WorkflowsIgaService {
     if (from === to) throw new BadRequestException('from and to are the same decider');
     // Authority is checked BEFORE any task is touched: a refusal here changes nothing.
     if (!this.tasks.isDeciderAdmin(input.startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
-    if (!this.tasks.isDeciderAdmin(this.tasks.resolveAssignee(to))) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
-    await this.tasks.requireActiveReviewTarget(tenant, this.tasks.resolveAssignee(to));
+    const replacement = await this.tasks.activeReviewAssignee(tenant, to);
+    if (!this.tasks.isDeciderAdmin(replacement)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
     const mine = (await this.store.listTasksByCampaign(tenant, campaignId)).filter((t) => t.kind === 'iga-review' && t.status === 'open' && (t.delegated_to ?? t.assignee) === from);
     const reassigned: string[] = [], refused: { task: string; reason: string }[] = [];
     for (const t of mine) {
