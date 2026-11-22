@@ -6,6 +6,7 @@ import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow,
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
+import { LYAM_ADMIN_BLOCKS } from './lyam-admin-blocks.mjs';
 
 /**
  * The block catalogue this plugin exposes on the `workflows.blocks` surface (SPIKE).
@@ -839,7 +840,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

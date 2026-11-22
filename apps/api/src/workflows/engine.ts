@@ -1,16 +1,20 @@
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
 import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
-import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { validateSettings } from '../plugins/v1/settings.js';
 import { VersioningService } from '../versioning/versioning.service.js';
+import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { authorOf } from '../versioning/guards.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { resolveEngine } from '../plugins/v1/engines.js';
 import { RunRow, StepRow, WorkflowStore } from './store.js';
+import { WorkflowTasksService } from './tasks.js';
+import { WorkflowReads } from './reads.js';
+import { WorkflowsIgaService } from './iga.service.js';
 import type { WfGraph } from './model.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
@@ -19,6 +23,10 @@ import { inForce } from '../accounts/blocks.js';
 import { patchSecurity } from '../accounts/security-config.js';
 import { UsersService } from '../users/users.service.js';
 import { RunSecrets } from './run-secrets.js';
+import { CorePolicySource } from '../policies/policy-studio.js';
+import { STEP_TYPES, substituteEventPayload, validateGraph } from './model.js';
+import { randomBytes } from 'node:crypto';
+import { BadRequestException } from '@nestjs/common';
 
 export { hasDataSteps } from './model.js';
 
@@ -34,6 +42,7 @@ export { hasDataSteps } from './model.js';
  * replacement plugin extending `workflows-engine-base` takes over with no core change. A run in flight
  * when the provider changes finishes on the engine instance that started it.
  */
+interface PublishEffects { diff: (from: string, to: string) => Promise<unknown>; status: (tenant: string, id: number) => Promise<{ pullRequest: unknown }>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: unknown; reused: boolean }> }
 interface EngineDeps {
   store: WorkflowStore;
   versioning: { createBranch: (branch: string, base: string) => Promise<unknown>; writeOn: <T>(branch: string, fn: (c: unknown) => Promise<T>) => Promise<T>; defaultBranch: string; deleteBranch?: (branch: string) => Promise<unknown> };
@@ -46,6 +55,14 @@ interface EngineDeps {
   secrets?: RunSecrets;
   users?: UserEffects;
   links?: LinkEffects;
+  /** Durable human tasks, business reads and IGA campaigns (the lyam-* and iga-* blocks). Absent in minimal test harnesses: the blocks then refuse honestly. */
+  tasks?: WorkflowTasksService;
+  reads?: WorkflowReads;
+  iga?: WorkflowsIgaService;
+  publish?: PublishEffects;
+  runs?: unknown;
+  policies?: unknown;
+  pluginsAdmin?: unknown;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
 /** The durable ticket > account > sheet-row correlation (meta store). Every call is scoped to the run's tenant by the engine; a block never passes a tenant. */
@@ -78,6 +95,7 @@ interface WorkflowEngineApi {
   resume: () => Promise<void>;
   kick: (runId: string) => void;
   cancelFlag: (runId: string) => void;
+  clearStaleCancel: (runId: string, claimedAt: number) => void;
   forget: (runId: string) => void;
 }
 
@@ -86,7 +104,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown, @Optional() @Inject(forwardRef(() => PullRequestService)) private readonly prs?: unknown) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -103,6 +121,10 @@ export class WorkflowEngine implements OnModuleInit {
       secrets: new RunSecrets(),
       users: this.userEffects(),
       links: this.linkEffects(store),
+      tasks: (tasks ?? undefined) as WorkflowTasksService | undefined, reads: (reads ?? undefined) as WorkflowReads | undefined, iga: (iga ?? undefined) as WorkflowsIgaService | undefined,
+      runs: this.runEffects(),
+      publish: this.publishEffects(v),
+      policies: { validate: async (_tenant: string, candidate: unknown) => { try { const r = await new CorePolicySource().validate(candidate as never); return { valid: true, ...(r && typeof r === 'object' ? r as unknown as Record<string, unknown> : {}) }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } } },
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },
     };
   }
@@ -144,6 +166,79 @@ export class WorkflowEngine implements OnModuleInit {
       },
       firstAccess: (tenant, id, ref) => users.firstAccessState(tenant, id, ref),
       emailOf: async (_tenant, id, ref) => { const e = ((await users.list(ref)).find((x) => x.id === id) as { email?: unknown } | undefined)?.email; return typeof e === 'string' ? e : null; },
+    };
+  }
+
+  /** Child runs and run reads (the lyam-start-workflow / lyam-read-run blocks). A child run is a normal
+   *  queued run started by 'workflow:<parent run id>': it validates and runs on the same engine. */
+  private runEffects() {
+    const store = this.store;
+    return {
+      get: async (tenant: string, runId: string) => {
+        const r = await store.getRun(tenant, runId);
+        if (!r) throw new BadRequestException(`lyam-read-run: unknown run "${runId}"`);
+        const steps = await store.steps(r.id);
+        return { id: r.id, definitionId: r.definition_id, name: r.name, status: r.status, error: r.error, startedBy: r.started_by, startedAt: r.started_at, finishedAt: r.finished_at, steps: steps.map((s) => ({ step: s.node_id, status: s.status, output: s.output })) };
+      },
+      start: async (tenant: string, workflowId: string, input: Record<string, unknown>, startedBy: string) => {
+        const d = await store.getDefinition(tenant, workflowId, currentBranch() ?? 'main');
+        if (!d) throw new BadRequestException(`lyam-start-workflow: unknown workflow "${workflowId}" on this ref`);
+        if (!d.active) throw new BadRequestException(`lyam-start-workflow: the workflow "${workflowId}" is disabled`);
+        // Sub-workflow guards: a disabled definition never starts; the SAME definition never appears twice in
+        // the starter chain (runaway recursion — unique run ids alone detect nothing); nesting stops at 8 runs;
+        // a run starts at most 32 direct children (fanout bound).
+        let parentRef: string | null = startedBy.startsWith('workflow:') ? startedBy.slice('workflow:'.length) : null;
+        if (parentRef && (await store.countRunsStartedBy(tenant, startedBy)) >= 32) throw new BadRequestException(`lyam-start-workflow: run ${parentRef} already started 32 child runs (fanout bound)`);
+        for (let depth = 0; parentRef; depth++) {
+          if (depth >= 8) throw new BadRequestException('lyam-start-workflow: sub-workflow nesting too deep (8 runs maximum)');
+          const parent: RunRow | null = await store.getRun(tenant, parentRef);
+          if (!parent) break;
+          if (parent.definition_id === d.id) throw new BadRequestException(`lyam-start-workflow: the workflow "${workflowId}" is already running upstream in this starter chain (recursive invocation refused)`);
+          parentRef = parent.started_by?.startsWith('workflow:') ? parent.started_by.slice('workflow:'.length) : null;
+        }
+        const payload: Record<string, string> = {};
+        for (const [k, v] of Object.entries(input ?? {})) if (/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(k)) payload[k] = String(v).slice(0, 200);
+        const resolved = substituteEventPayload(d.graph, payload);
+        const { order, graph } = validateGraph(resolved);
+        const runId = `run-${randomBytes(6).toString('hex')}`;
+        const run: RunRow = { id: runId, tenant, definition_id: d.id, name: d.name, graph, branch: null, base_branch: currentBranch(), status: 'queued', error: null, started_by: startedBy, started_at: new Date().toISOString().slice(0, 23).replace('T', ' '), finished_at: null, test: false };
+        const steps: StepRow[] = order.map((nodeId: string) => {
+          const n = graph.nodes.find((x: { id: string }) => x.id === nodeId)!;
+          return { run_id: run.id, node_id: nodeId, status: 'pending', simulated: STEP_TYPES[n.type].simulated, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null };
+        });
+        await store.createRun(run, steps);
+        this.kick(run.id);
+        return { id: run.id, definitionId: d.id, started: true };
+      },
+    };
+  }
+
+  /** Publication of a run branch: the Dolt diff, and opening (or reusing) the pull request a human reviews.
+   *  The merge itself stays a human action; absent in minimal servers, the blocks refuse honestly. */
+  private publishEffects(v: VersioningService): PublishEffects | undefined {
+    const prs = this.prs as PullRequestService | undefined;
+    const store = this.store;
+    if (!prs) return undefined;
+    return {
+      diff: async (from: string, to: string) => v.diffSummary(from, to, true),
+      status: async (tenant: string, id: number) => { const r = await prs.get(tenant, id); return { pullRequest: (r as { pullRequest: unknown }).pullRequest }; },
+      request: async (tenant: string, runId: string, title: string) => {
+        const r = await store.getRun(tenant, runId);
+        if (!r) throw new BadRequestException(`lyam-request-publish: unknown run "${runId}"`);
+        if (r.test) throw new BadRequestException('lyam-request-publish: a test run has no publishable branch');
+        if (!r.branch) throw new BadRequestException('lyam-request-publish: this run only had simulated steps: there is no data branch to publish');
+        const target = r.base_branch ?? 'main';
+        const open = await prs.list(tenant, 'open');
+        const existing = (open.pullRequests as { source: string }[]).find((p) => p.source === r.branch);
+        if (existing) return { pullRequest: existing as unknown, reused: true };
+        try {
+          const pr = await prs.create(tenant, { title, body: `Data changes produced by workflow run ${r.id} on branch ${r.branch}. The merge stays a human action.`, source: r.branch, target }, `workflow:${runId}`);
+          return { pullRequest: pr as unknown, reused: false };
+        } catch (e) {
+          if ((e as { status?: number }).status === 409) { const again = await prs.list(tenant, 'open'); const pr = (again.pullRequests as { source: string }[]).find((p) => p.source === r.branch); if (pr) return { pullRequest: pr as unknown, reused: true }; }
+          throw e;
+        }
+      },
     };
   }
 
@@ -192,27 +287,64 @@ export class WorkflowEngine implements OnModuleInit {
     return resolveEngine(() => this.registryFor(run.branch), run.tenant, 'workflows.engine', 'engine.mjs', (mod: { createWorkflowEngine: (deps: EngineDeps) => WorkflowEngineApi }) => mod.createWorkflowEngine(this.deps), this);
   }
 
-  /** Resumes interrupted runs: grouped by the registry that must resolve the provider, kicked individually. */
+  /** Resumes interrupted runs: grouped by the registry that must resolve the provider, kicked individually. A
+   * run whose provider cannot be resolved at boot is retried with backoff, then left with an explicit
+   * reconciliable error: never silently stuck in 'running', never blindly replayed. */
   async onModuleInit() {
     if (!dataReady()) { void awaitDataReady().then(() => this.onModuleInit()).catch(() => this.log.error('resume refused after data migrations')); return; }
     let runs: RunRow[] = [];
     try { runs = await this.store.runningRuns(); } catch (e) { this.log.warn(`resume scan failed: ${(e as Error).message}`); return; }
     for (const r of runs) {
-      try { (await this.engineFor(r)).kick(r.id); } catch (e) { this.log.warn(`run ${r.id} not resumed: ${(e as Error).message}`); }
+      try { (await this.engineFor(r)).kick(r.id); } catch (e) { void this.resumeWithRetry(r, (e as Error).message); }
     }
+  }
+
+  /** Bounded retry of a boot resume that could not resolve the run's engine (provider plugin still loading or
+   * faulted). After the last attempt the run keeps its status but carries an explicit RESUME_FAILED error, so a
+   * stuck run is visible and reconciliable instead of silently 'running' forever. Every attempt only ever calls
+   * kick: execution re-derives from the persisted steps, so no effect is blindly replayed. */
+  private resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  private resumeStopped = false;
+  onModuleDestroy() { this.resumeStopped = true; for (const t of this.resumeTimers) clearTimeout(t); this.resumeTimers.clear(); }
+  private resumeDelay(ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { this.resumeTimers.delete(t); resolve(!this.resumeStopped); }, ms);
+      this.resumeTimers.add(t);
+    });
+  }
+  private async resumeWithRetry(run: RunRow, firstError: string) {
+    const delays = (process.env.WF_RESUME_RETRY_DELAYS_MS ?? '5000,30000,120000').split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n) && n > 0);
+    let last = firstError;
+    for (const d of delays) {
+      if (!(await this.resumeDelay(d))) return; // shutting down: no late write after close
+      try {
+        (await this.engineFor(run)).kick(run.id);
+        this.log.log(`run ${run.id} resumed after a retry`);
+        try { await this.store.clearResumeFailed(run.id); } catch { /* the marker stays, the run did resume */ }
+        return;
+      } catch (e) { last = (e as Error).message; }
+    }
+    if (this.resumeStopped) return;
+    const message = `RESUME_FAILED: engine unavailable after ${delays.length + 1} attempts: ${last}`;
+    this.log.error(`run ${run.id}: ${message}`);
+    try { await this.store.markResumeFailed(run.id, message); } catch (e) { this.log.error(`run ${run.id}: the resume failure could not be recorded: ${(e as Error).message}`); }
   }
 
   /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately. */
   kick(runId: string) { void this.delegate(runId, (e) => e.kick(runId)); }
   cancelFlag(runId: string) { void this.delegate(runId, (e) => e.cancelFlag(runId)); }
+  /** Awaited by relaunches: the stale flag must be cleared before the kick is delegated, or the new pass
+   *  could start on the old flag and cancel itself. Fail-safe: unlike the fire-and-forget delegations, a
+   *  failure REJECTS (the caller then restores the run and skips the kick) instead of kicking on the old flag. */
+  clearStaleCancel(runId: string, claimedAt: number) { return this.delegate(runId, (e) => e.clearStaleCancel(runId, claimedAt), true); }
   forget(runId: string) { void this.delegate(runId, (e) => e.forget(runId)); }
 
-  private async delegate(runId: string, op: (e: WorkflowEngineApi) => void) {
+  private async delegate(runId: string, op: (e: WorkflowEngineApi) => void, strict = false) {
     try {
       const run = await this.store.getRunById(runId);
-      if (!run) { this.log.warn(`run ${runId} not found`); return; }
+      if (!run) throw new Error(`run ${runId} not found`);
       op(await this.engineFor(run));
-    } catch (e) { this.log.warn(`run ${runId}: ${(e as Error).message}`); }
+    } catch (e) { this.log.warn(`run ${runId}: ${(e as Error).message}`); if (strict) throw e; }
   }
 }
 

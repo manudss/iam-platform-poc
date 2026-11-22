@@ -31,7 +31,17 @@ export interface WfBlockCtx {
   tenant: string; config: Record<string, unknown>; settings: Record<string, unknown>; dryRun: boolean;
   log: (line: string) => void; outputs: Record<string, Record<string, unknown>>;
   /** Test run: blocks with an immediate effect only log what they would do. */
-  test?: boolean; runId?: string; accounts?: import('./engine.js').AccountEffects;
+  test?: boolean; runId?: string; nodeId?: string; accounts?: import('./engine.js').AccountEffects;
+  /** Durable-wait context (the recorded task id), the run starter (anti-self-approval) and the run's base branch. */
+  resumeWait?: { taskId?: string; kind?: string; campaignId?: string } | null;
+  startedBy?: string; baseBranch?: string; runBranch?: string | null;
+  /** Shared business services (durable tasks, typed reads, IGA campaigns, child runs, policy validation). Absent in minimal servers: the block refuses honestly. */
+  tasks?: import('./tasks.js').WorkflowTasksService;
+  reads?: import('./reads.js').WorkflowReads;
+  iga?: import('./iga.service.js').WorkflowsIgaService;
+  runs?: { get: (tenant: string, runId: string) => Promise<Record<string, unknown>>; start: (tenant: string, workflowId: string, input: Record<string, unknown>, startedBy: string) => Promise<Record<string, unknown>> };
+  publish?: { diff: (from: string, to: string) => Promise<unknown>; status: (tenant: string, id: number) => Promise<{ pullRequest: unknown }>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: Record<string, unknown>; reused: boolean }> };
+  policies?: { validate: (tenant: string, candidate: unknown) => Promise<Record<string, unknown>> };
   branchWrite: (fn: (db: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }) => Promise<void>, message?: string) => Promise<void>;
 }
 export interface WfBlock {

@@ -30,13 +30,23 @@
  *  - an EXTERNAL effect (HTTP call, Jira ticket, real Google write) is NOT reverted by abandoning the branch:
  *    the block's own log line says exactly what really happened outside (dry-run or real).
  */
-import { STEP_TYPES, externalBlock, externalBlockProvider, loopBody, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
+import { createRequire } from 'node:module';
+import { STEP_TYPES, WorkflowSuspend, externalBlock, externalBlockProvider, loopBody, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
+
+const { HttpException } = createRequire(new URL('./package.json', import.meta.url))('@nestjs/common');
+// The business-error allowlist: only a real HttpException thrown by OUR code (block validation, tasks,
+// IGA, versioning services) with a safe business code is surfaced verbatim. A provider error that merely
+// CARRIES a numeric .status (HTTP response, SDK failure) is masked like any other unexpected error.
+const SAFE_BUSINESS_STATUS = new Set([400, 403, 404, 409, 422]);
 
 const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
   from assignments a join assignments b on a.identity_id = b.identity_id
   join sod_rules r on r.role_a = a.role_id and r.role_b = b.role_id`;
 
 class Canceled extends Error { constructor() { super('run canceled'); } }
+/** Statuses from which a run may still move: every status write is an atomic transition from this set,
+ *  so a terminal state (cancel/completed/failed) recorded concurrently always wins, with no read-then-write window. */
+const RESUMABLE = ['queued', 'running', 'waiting'];
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
 async function commit(c, message, author) {
   await c.query("CALL DOLT_ADD('-A')");
@@ -55,13 +65,37 @@ export function createWorkflowEngine(deps) {
     try { for (const r of await store.runningRuns()) kick(r.id); } catch (e) { log.warn(`resume scan failed: ${e.message}`); }
   }
 
-  /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately. */
+  /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately.
+   *  Executions of the SAME run are serialized: a kick landing while an execution is in flight (a
+   *  second decision arriving mid-resume, a task rescan, a manual retry) only asks for one more pass
+   *  once the current one settles. Without this, two concurrent passes both scan and patch the same
+   *  step rows: one pass sees the other's in-flight 'running' step, mistakes it for a crash leftover
+   *  and fails the run closed while the other pass completes the walk - a corrupt half-skipped run. */
+  const executing = new Map();
   function kick(runId) {
-    live.set(runId, { cancel: false });
-    void execute(runId).catch(async (e) => {
-      log.error(`run ${runId} crashed: ${e.message}`);
-      try { await store.updateRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }); } catch { /* store gone */ }
-    }).finally(() => void disposeTestBranch(runId));
+    // A kick landing mid-pass only asks for one more pass: it must NEVER rewrite the live flag, or a
+    // cancellation recorded during the current pass would be silently erased.
+    const cur = executing.get(runId);
+    if (cur) { cur.rekick = true; return; }
+    if (!live.has(runId)) live.set(runId, { cancel: false });
+    const state = { rekick: false };
+    executing.set(runId, state);
+    const pass = () => {
+      void execute(runId).catch(async (e) => {
+        log.error(`run ${runId} crashed: ${e.message}`);
+        try {
+          // A crash landing AFTER a terminal state (a user cancel, or a concurrent pass that finished the
+          // run) must never rewrite it, not even in the window between a read and the write: the
+          // transition is atomic, guarded by the source statuses (a canceled run stays canceled).
+          await store.transitionRun(runId, { status: 'failed', error: `internal error: ${e.message}`.slice(0, 500), finished_at: now() }, RESUMABLE);
+        } catch { /* store gone */ }
+      }).finally(() => {
+        if (state.rekick) { state.rekick = false; if (!live.has(runId)) live.set(runId, { cancel: false }); pass(); return; }
+        executing.delete(runId);
+        void disposeTestBranch(runId);
+      });
+    };
+    pass();
   }
 
   /** A test run's branch is DISPOSABLE: once the run is terminal, the branch is dropped so a test
@@ -75,7 +109,28 @@ export function createWorkflowEngine(deps) {
       await store.updateRun(runId, { branch: `${run.branch} (dropped: disposable test branch)` });
     } catch (e) { log.warn(`test branch cleanup for run ${runId}: ${e.message}`); }
   }
-  const cancelFlag = (runId) => { live.get(runId).cancel = true; };
+  // Robust whether or not a pass currently holds the live flag (a suspended run dropped it): the cancel
+  // survives and the next pass - or the walk - honors it, instead of crashing on a missing entry. When no
+  // pass holds the flag, arm the cancel only for a run that is still resumable: a finished run gets NO
+  // stale live entry (the map would otherwise keep one forever).
+  // The flag carries the cancel's timestamp: a cancel on a parked (waiting/queued) run has no live pass to
+  // consume it, so it would otherwise sit in the map and instantly re-cancel a later retry/rerun of that run.
+  const cancelFlag = (runId) => {
+    const at = Date.now();
+    const f = live.get(runId);
+    if (f) { f.cancel = at; return; }
+    void store.getRunById(runId).then((r) => {
+      if (!r || ['completed', 'failed', 'canceled'].includes(r.status)) return;
+      const g = live.get(runId); if (g) g.cancel = at; else live.set(runId, { cancel: at });
+    }).catch(() => { /* store gone */ });
+  };
+  // Called by a relaunch (retry/rerun) once it has claimed the run: drops a cancel flag stamped BEFORE the
+  // claim (left over from the cancellation that was just reversed). A flag stamped AFTER the claim is a
+  // fresh, concurrent cancellation and is never erased here.
+  const clearStaleCancel = (runId, claimedAt) => {
+    const f = live.get(runId);
+    if (f && f.cancel && f.cancel < claimedAt) f.cancel = false;
+  };
   const forget = (runId) => { live.delete(runId); };
 
   /** Steps whose type branches: after they succeed, only their outgoing link carrying the chosen label is taken. */
@@ -84,11 +139,11 @@ export function createWorkflowEngine(deps) {
   async function execute(runId) {
     const run = await store.getRunById(runId);
     if (!run || run.status === 'canceled' || run.status === 'completed') return;
-    await store.updateRun(runId, { status: 'running', error: null });
+    if (!await store.transitionRun(runId, { status: 'running', error: null }, RESUMABLE)) return; // turned terminal between the read and here
     // A restarted call may already have reached the remote service. Never continue past it.
     for (const st of await store.steps(runId)) if (st.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED' && st.status !== 'done') {
       await store.patchStep(runId, st.node_id, { status: 'failed', finished_at: now() });
-      await store.updateRun(runId, { status: 'failed', error: 'External effect uncertain: reconcile at the provider before creating a new run.', finished_at: now() }); return;
+      await store.transitionRun(runId, { status: 'failed', error: 'External effect uncertain: reconcile at the provider before creating a new run.', finished_at: now() }, RESUMABLE); return;
     }
     // A step left 'running' by a restart was cut in flight. A step that can have an effect outside the run (category real or any external block) is NEVER re-run by itself, and the run is
     // never reported completed over it: the run fails closed and the step is marked, for a manual reconciliation. A computed or simulated step has no effect and simply restarts.
@@ -98,7 +153,7 @@ export function createWorkflowEngine(deps) {
       if (!effectful) { await store.patchStep(runId, st.node_id, { status: 'pending' }); continue; }
       for (const o of await store.steps(runId)) if (o.status === 'pending') await store.patchStep(runId, o.node_id, { status: 'skipped' });
       await store.patchStep(runId, st.node_id, { status: 'failed', error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED', finished_at: now() });
-      await store.updateRun(runId, { status: 'failed', error: `step "${n?.name ?? st.node_id}" was interrupted by a restart while it ran: its effect is unknown, reconcile before creating a new run.`.slice(0, 500), finished_at: now() }); return;
+      await store.transitionRun(runId, { status: 'failed', error: `step "${n?.name ?? st.node_id}" was interrupted by a restart while it ran: its effect is unknown, reconcile before creating a new run.`.slice(0, 500), finished_at: now() }, RESUMABLE); return;
     }
     const { order } = validateGraph(run.graph);
     const nodes = new Map(run.graph.nodes.map((n) => [n.id, n]));
@@ -110,7 +165,7 @@ export function createWorkflowEngine(deps) {
     const chosen = new Map();
 
     const canceled = async () => {
-      await store.updateRun(runId, { status: 'canceled', finished_at: now() });
+      await store.transitionRun(runId, { status: 'canceled', finished_at: now() }, RESUMABLE);
       live.delete(runId);
     };
 
@@ -139,7 +194,7 @@ export function createWorkflowEngine(deps) {
         return true; // error links read taken from the step's failed status; the walk continues
       }
       for (const s of await store.steps(runId)) if (s.status === 'pending') await store.patchStep(runId, s.node_id, { status: 'skipped' });
-      await store.updateRun(runId, { status: 'failed', error: `step "${node.name}" failed: ${message}`.slice(0, 500), finished_at: now() });
+      await store.transitionRun(runId, { status: 'failed', error: `step "${node.name}" failed: ${message}`.slice(0, 500), finished_at: now() }, RESUMABLE);
       live.delete(runId);
       return false;
     };
@@ -160,11 +215,12 @@ export function createWorkflowEngine(deps) {
       const arrived = edges.filter((e) => e.to === nodeId && edgeTaken(e, stepsById)).map((e) => e.from);
       const res = node.type === 'loop' ? await runLoop(run, node, step, edgeTaken) : await runStep(run, node, step, '', arrived);
       if (res.canceled) { await canceled(); return; }
+      if (res.suspended) { live.delete(runId); return; } // parked on a durable human task: the task service kicks the run back
       if (!res.ok) { if (!(await failOrBranch(node, res.error))) return; continue; }
       if (res.output?.branch) chosen.set(nodeId, res.output.branch);
       if (node.type === 'loop') chosen.set(nodeId, 'done');
     }
-    await store.updateRun(runId, { status: 'completed', finished_at: now() });
+    await store.transitionRun(runId, { status: 'completed', finished_at: now() }, RESUMABLE);
     live.delete(runId);
   }
 
@@ -203,11 +259,12 @@ export function createWorkflowEngine(deps) {
           const arrived = run.graph.edges.filter((e) => e.to === bid && edgeTaken(e, stepsById, node.id)).map((e) => e.from);
           const res = await runStep(run, run.graph.nodes.find((n) => n.id === bid), await store.step(run.id, bid), `iteration ${i + 1}: `, arrived);
           if (res.canceled) throw new Canceled();
+          if (res.suspended) throw new Error(`body step "${bs.node_id}" tried to wait for a human decision: waiting steps belong AFTER the loop, not inside its body`);
           if (!res.ok) throw new Error(`body step "${bs.node_id}" failed on iteration ${i + 1}: ${res.error}`);
         }
       }
-      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: { count: capped.length } });
-      return { ok: true, output: { count: capped.length } };
+      await store.patchStep(run.id, node.id, { status: 'done', finished_at: now(), log: logs, output: { count: capped.length, branch: 'done' } });
+      return { ok: true, output: { count: capped.length, branch: 'done' } };
     } catch (e) {
       if (e instanceof Canceled) { await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs }); return { canceled: true }; }
       if ((await store.steps(run.id)).some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) {
@@ -289,7 +346,10 @@ export function createWorkflowEngine(deps) {
       const outputs = {};
       for (const s of await store.steps(run.id)) if (s.output !== null && s.output !== undefined) outputs[s.node_id] = s.output;
       node = substituteStepOutputs(node, outputs);
-      await store.patchStep(run.id, node.id, { input: node.config });
+      // The durable-wait payload recorded at the last suspension survives in the stored input: carry it
+      // over the resolved-config rewrite so a resumed block still sees ctx.resumeWait.
+      const priorWait = (await store.step(run.id, node.id))?.input?.wait;
+      await store.patchStep(run.id, node.id, { input: priorWait ? { ...node.config, wait: priorWait } : node.config });
       let output;
       if (node.type === 'if' || node.type === 'switch' || node.type === 'merge') output = logicStep(node, arrived ?? [], say);
       else if (STEP_TYPES[node.type].simulated && !externalBlock(node.type)) await simulated(run, node, step.attempts, say);
@@ -301,6 +361,12 @@ export function createWorkflowEngine(deps) {
       if (e instanceof Canceled) {
         await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs });
         return { canceled: true };
+      }
+      if (e instanceof WorkflowSuspend) {
+        say(`WAITING for a human decision (${e.wait?.kind ?? 'task'}${e.wait?.taskId ? ' ' + e.wait.taskId : ''}): the run pauses here and resumes when the task is decided`);
+        await store.patchStep(run.id, node.id, { status: 'pending', error: null, log: logs, input: { ...node.config, wait: e.wait } });
+        await store.transitionRun(run.id, { status: 'waiting' }, RESUMABLE);
+        return { suspended: true };
       }
       if ((await store.step(run.id, node.id))?.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED') {
         const message = 'EXTERNAL_EFFECT_REVIEW_REQUIRED'; say('External effect uncertain. Automatic retry and error-route continuation are blocked; reconcile at the provider.');
@@ -367,6 +433,7 @@ export function createWorkflowEngine(deps) {
     const provider = externalBlockProvider(node.type);
     const outputs = {};
     for (const s of await store.steps(run.id)) if (s.output) outputs[s.node_id] = s.output;
+    const priorInput = (await store.step(run.id, node.id))?.input;
     const resolved = substituteStepOutputs(node, outputs);
     const managed = /^(google-sheets-|jira-)/.test(node.type) || node.type === 'http-request';
     const simulation = managed && (run.test || resolved.config.executionMode !== 'real');
@@ -437,6 +504,20 @@ export function createWorkflowEngine(deps) {
       hasRunBranch: !!run.branch,
       test: !!run.test,
       runId: run.id,
+      nodeId: node.id,
+      // Durable-wait context: the wait payload recorded when this step last suspended (its task id), the
+      // run starter (anti-self-approval), the branch the run started from, and the shared business
+      // services (durable tasks, reads, IGA recertification, child runs). Absent when the server has none.
+      resumeWait: priorInput?.wait ?? null,
+      startedBy: run.started_by,
+      baseBranch: run.base_branch ?? deps.versioning.defaultBranch,
+      tasks: deps.tasks,
+      reads: deps.reads,
+      iga: deps.iga,
+      runs: deps.runs,
+      publish: deps.publish,
+      policies: deps.policies,
+      pluginsAdmin: deps.pluginsAdmin,
       branchWrite: async (fn, message) => {
         const branch = await ensureBranch(run, say);
         await deps.branchRun(branch, () => deps.versioning.writeOn(branch, async (c) => {
@@ -449,7 +530,15 @@ export function createWorkflowEngine(deps) {
       },
     };
     let output;
-    try { output = await block.run(ctx); } catch { throw new Error('External action failed; check connection and provider status.'); }
+    try { output = await block.run(ctx); } catch (e) {
+      if (e instanceof WorkflowSuspend) throw e;
+      // Public business errors (4xx thrown by the block's own validation, allowlisted) surface with their
+      // message; anything else (provider errors, unexpected exceptions, messages carrying a secret) stays masked.
+      const msg = typeof e?.message === 'string' ? e.message.slice(0, 500) : '';
+      const leaks = deps.secrets && msg && deps.secrets.valuesOf(run.id).some((v) => v && msg.includes(v));
+      if (e instanceof HttpException && SAFE_BUSINESS_STATUS.has(e.getStatus()) && msg && !leaks) { const pub = new Error(msg); pub.status = e.getStatus(); throw pub; }
+      throw new Error('External action failed; check connection and provider status.');
+    }
     // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
     if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
     if (managed && !simulation && ((node.type === 'jira-create-issue' && !output?.key) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
@@ -521,7 +610,7 @@ export function createWorkflowEngine(deps) {
     return output;
   }
 
-  return { resume, kick, cancelFlag, forget };
+  return { resume, kick, cancelFlag, clearStaleCancel, forget };
 }
 
 export { hasDataSteps } from './model.mjs';

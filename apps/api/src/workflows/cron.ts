@@ -1,9 +1,10 @@
 import { dataReady } from '../migrations/readiness.js';
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { nextCronFire } from './model.js';
 import { WorkflowStore } from './store.js';
 import { WorkflowsService } from './workflows.service.js';
+import { WorkflowTasksService } from './tasks.js';
 
 /**
  * Cron scheduler (phase 3): every tick, every ACTIVE definition whose trigger is a cron schedule and whose
@@ -17,7 +18,7 @@ export class WorkflowCronService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('workflow-cron');
   private timer?: ReturnType<typeof setInterval>;
   private ticking = false;
-  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry) {}
+  constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly tasks?: WorkflowTasksService) {}
 
   onModuleInit() {
     const tickMs = Number(process.env.WF_CRON_TICK_MS ?? 20000);
@@ -37,6 +38,7 @@ export class WorkflowCronService implements OnModuleInit, OnModuleDestroy {
     if (this.ticking) return; // a slow tick (cold Dolt) never overlaps the next one
     this.ticking = true;
     try {
+      if (this.tasks) { try { await this.tasks.scanOverdue(); } catch (e) { this.log.warn(`task overdue scan: ${(e as Error).message}`); } }
       const now = Date.now();
       const minute = WorkflowCronService.minuteKey(now);
       for (const d of await this.store.listAllDefinitions(this.store.liveRef)) {

@@ -211,6 +211,14 @@ export class WorkflowClient {
   /** Saves a template from an explicit graph (editor canvas) or from a saved definition (fromDefinition). */
   saveTemplate(body: { name: string; description: string; category: string; graph?: { nodes: WfNode[]; edges: WfEdge[] }; trigger?: WfTrigger | null; fromDefinition?: string }) { return this.req<{ template: WfTemplate }>('POST', '/workflow-templates', body); }
   deleteTemplate(id: string) { return this.req<{ deleted: string }>('DELETE', `/workflow-templates/${id}`); }
+  /** The durable-task inbox: my own OPEN tasks by default (pool members included), everything for an admin
+   * with scope=all; status=all includes decided and canceled tasks. truncated: the 200-row cap was hit. */
+  tasks(scope: 'mine' | 'all' = 'mine', status: 'open' | 'all' = 'open') {
+    const q = [scope === 'all' ? 'scope=all' : '', status === 'all' ? 'status=all' : ''].filter(Boolean).join('&');
+    return this.req<{ tasks: WfTask[]; truncated: boolean }>('GET', `/workflow-tasks${q ? `?${q}` : ''}`);
+  }
+  decideTask(id: string, decision: string, justification: string) { return this.req<WfTask>('POST', `/workflow-tasks/${encodeURIComponent(id)}/decision`, { decision, justification }); }
+  delegateTask(id: string, to: string) { return this.req<WfTask>('POST', `/workflow-tasks/${encodeURIComponent(id)}/delegate`, { to }); }
 }
 
 // ---- Initial canvas framing ----
@@ -234,6 +242,26 @@ export interface FrameRect { left: number; top: number; right: number; bottom: n
 export const rectsWithin = (inner: FrameRect[], outer: FrameRect, tolerance = 2): boolean =>
   inner.every((r) => r.left >= outer.left - tolerance && r.top >= outer.top - tolerance && r.right <= outer.right + tolerance && r.bottom <= outer.bottom + tolerance);
 
+/** A durable human task of the workflow inbox (approval, review, watch): deciding resumes the waiting run. */
+export interface WfTask { id: string; tenant: string; kind: string; title: string; detail: Record<string, unknown>; assignee: string; delegated_to: string | null; status: 'open' | 'decided' | 'canceled'; decision: string | null; justification: string | null; decided_by: string | null; run_id: string | null; node_id: string | null; prevent_self: boolean; created_at: string; due_at: string | null; reminded_at: string | null; decided_at: string | null }
+/** Decision buttons of a task: the workflow lists them in detail.decisions; the default pair is approve/refuse. */
+export const decisionChoices = (t: WfTask): string[] => Array.isArray(t.detail?.['decisions']) && (t.detail['decisions'] as unknown[]).length ? (t.detail['decisions'] as unknown[]).map(String) : ['approved', 'refused'];
+/** The server requires a justification for any decision that is not an approval, and on tasks that ask for one. */
+export const justificationRequired = (t: WfTask, decision: string): boolean => t.detail?.['requireJustification'] === true || decision !== 'approved';
+/** Short label of the most useful detail fields (identity under review, pull request, campaign) - the rest stays in the JSON detail. */
+export const taskSummary = (t: WfTask): string => {
+  const d = t.detail ?? {};
+  const bits: string[] = [];
+  if (typeof d['identity'] === 'string') bits.push(`identity ${d['identity']}`);
+  if (typeof d['subject'] === 'string') bits.push(`subject ${d['subject']}`);
+  const pr = d['pr'] as { id?: unknown } | undefined;
+  if (pr && pr.id !== undefined) bits.push(`PR #${pr.id}`);
+  if (typeof d['campaign'] === 'string') bits.push(`campaign ${d['campaign']}`);
+  return bits.join(' · ');
+};
+
+/** API timestamps are naive UTC ("YYYY-MM-DD HH:MM:SS.mmm"); parse them as UTC, not browser-local. */
+export const parseTs = (iso: string): number => Date.parse(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
 export const clientOf = (s: Session) => new WorkflowClient(s.api, () => s.adminToken());
 
 export const SAMPLE_WORKFLOWS: { name: string; description: string; trigger?: WfTrigger; nodes: WfNode[]; edges: WfEdge[] }[] = [

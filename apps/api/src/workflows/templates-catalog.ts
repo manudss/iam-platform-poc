@@ -86,6 +86,20 @@ export const OFFICIAL_TEMPLATES: CatalogTemplate[] = [
     { id: 'grant', type: 'assign-role', name: 'Grant the role', config: { identity: '{{event.subject}}', role: '{{steps.each.item}}' } },
     { id: 'tell', type: 'notify', name: 'Summary to HR (simulated)', config: { recipient: 'hr', message: '{{steps.each.count}} role(s) processed' } },
   ], edges: [{ from: 'each', to: 'grant', label: 'each' }, { from: 'each', to: 'tell', label: 'done' }] },
+  { id: 'recertification-denial-remediation', name: 'recertification: review > conditional remediation loop > publish > close', category: 'Governance', source: 'official', description: 'MANUAL start (no schedule: activate and configure deliberately). The full IGA loop, proven end to end on a real Dolt base: a campaign snapshots the users in scope, the IGA pool reviews each item (anti-self-approval enforced), then a CONDITION keeps the two paths apart: nothing denied = straight to the strict close, no branch, no pull request, every right preserved. A denial prepares the remediation and a LOOP revokes each denied role of each denied identity on the run branch (the actions come from the prepare step, never a fixed id); the publication is requested and APPROVED by an administrator but only lands when the pull request is really MERGED (the run watches the real PR state); a second loop marks each denied item remediated only after the revocation is verified effective on the campaign ref; the campaign closes with its complete evidence file (an unresolved item blocks the closure unless a human exception is justified). Before activating, replace the campaign scope (replace-with-user-id) with the users to recertify.', nodes: [
+    { id: 'campaign', type: 'iga-create-campaign', name: 'Create the campaign', config: { name: 'Access recertification', users: 'replace-with-user-id', ref: 'main' } },
+    { id: 'open', type: 'iga-open-review-tasks', name: 'Open the review tasks (IGA pool)', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga' } },
+    { id: 'await', type: 'iga-await-decisions', name: 'Await the review decisions', config: { campaignId: '{{steps.campaign.id}}' } },
+    { id: 'any', type: 'if', name: 'Any denial?', config: { left: '{{steps.await.denied}}', op: 'gt', right: '0' } },
+    { id: 'prepare', type: 'iga-prepare-remediation', name: 'Prepare the remediation of denied items', config: { campaignId: '{{steps.campaign.id}}' } },
+    { id: 'revloop', type: 'loop', name: 'For each denied role', config: { items: '{{steps.prepare.actions}}', maxItems: 50 } },
+    { id: 'revoke', type: 'lyam-revoke-assignment', name: 'Revoke the denied role', config: { action: '{{steps.revloop.item}}' } },
+    { id: 'publish', type: 'lyam-request-publish', name: 'Request the publication (approval, then real merge)', config: { title: 'Recertification remediation' } },
+    { id: 'fixloop', type: 'loop', name: 'For each denied identity', config: { items: '{{steps.prepare.deniedItems}}', maxItems: 50 } },
+    { id: 'mark', type: 'iga-mark-remediated', name: 'Mark remediated (verified effective)', config: { campaignId: '{{steps.campaign.id}}', item: '{{steps.fixloop.item}}', note: 'revoked and published' } },
+    { id: 'join', type: 'merge', name: 'Join the two paths', config: {} },
+    { id: 'close', type: 'iga-close-campaign', name: 'Close the campaign (strict, evidence file)', config: { campaignId: '{{steps.campaign.id}}' } },
+  ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'any' }, { from: 'any', to: 'prepare', label: 'true' }, { from: 'any', to: 'join', label: 'false' }, { from: 'prepare', to: 'revloop' }, { from: 'revloop', to: 'revoke', label: 'each' }, { from: 'revloop', to: 'publish', label: 'done' }, { from: 'publish', to: 'fixloop' }, { from: 'fixloop', to: 'mark', label: 'each' }, { from: 'fixloop', to: 'join', label: 'done' }, { from: 'join', to: 'close' }] },
 ];
 
 /**

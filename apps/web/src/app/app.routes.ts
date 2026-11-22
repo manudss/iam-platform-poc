@@ -56,6 +56,7 @@ export const routes: Routes = [
       { path: 'workflows/templates', loadComponent: () => import('./workflows').then(m => m.WorkflowTemplatesPage), title: 'Workflow templates', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/edit/:id', loadComponent: () => import('./workflows').then(m => m.WorkflowEditPage), title: 'Workflow editor', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/runs', loadComponent: () => import('./workflows').then(m => m.WorkflowExecutionsPage), title: 'Workflow executions', canActivate: [workflowsEnabledGuard] },
+      { path: 'workflows/tasks', loadComponent: () => import('./workflows').then(m => m.WorkflowTasksPage), title: 'Workflow tasks', canActivate: [workflowsEnabledGuard] },
       { path: 'workflows/run/:id', loadComponent: () => import('./workflows').then(m => m.WorkflowRunPage), title: 'Workflow run', canActivate: [workflowsEnabledGuard] },
       { path: 'database', pathMatch: 'full', redirectTo: 'database/home' },
       { path: 'review', canActivate: [accessGuard], component: ReviewPage, title: 'Review changes' },

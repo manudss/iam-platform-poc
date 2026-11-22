@@ -11,7 +11,7 @@ import {
 import { ValidationIssue, autoLayout, defaultLabel, edgeLabelChoices, outgoingLabels, validateGraph } from './graph-utils';
 import { WbTabs, WbTabsBar } from './workbench-tabs';
 import { managedProvider, editedAction, simulatedAction } from './execution-policy';
-import { WorkflowConnection } from './wf-model';
+import { parseTs, WorkflowConnection } from './wf-model';
 import { filterPlaceholders, insertPlaceholder, phTokenAt } from './placeholder-pick';
 
 import { branchStyle, workflowPorts, logicType } from './logic-ports';
@@ -492,7 +492,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     this.vfEdges.update(edges => [...edges.filter(e => !(e.source === id && edgeLabelOf(e) === 'error')), ...(target ? [this.makeEdge(`${id}->${target}#error`, id, target, undefined, 'error')] : [])]);
   }
   protected testProgress() { const steps = this.testView()?.steps ?? []; return steps.length ? Math.round(100 * steps.filter(s => ['done', 'failed', 'skipped', 'canceled'].includes(s.status)).length / steps.length) : 0; }
-  protected testDuration() { const r = this.testView()?.run; if (!r?.started_at || !r.finished_at) return ''; const ms = Date.parse(r.finished_at) - Date.parse(r.started_at); return Number.isFinite(ms) ? `${Math.max(0, ms / 1000).toFixed(1)} s` : ''; }
+  protected testDuration() { const r = this.testView()?.run; if (!r?.started_at || !r.finished_at) return ''; const ms = parseTs(r.finished_at) - parseTs(r.started_at); return Number.isFinite(ms) ? `${Math.max(0, ms / 1000).toFixed(1)} s` : ''; }
   private readonly selectionPanel = effect(() => { if (this.selectedNode()) { this.triggerSelected.set(false); this.mobilePanel.set('settings'); } });
 
   ngOnInit() {

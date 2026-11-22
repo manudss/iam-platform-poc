@@ -23,6 +23,7 @@ function makeHarness(graphInput: unknown, run: Record<string, unknown> = {}) {
   const store = {
     getRunById: async (id: string) => (id === row.id ? row : null),
     updateRun: async (id: string, patch: Record<string, unknown>) => { Object.assign(row, patch); },
+    transitionRun: async (_id: string, patch: Record<string, unknown>, from: string[]) => { if (!from.includes(row.status as string)) return false; Object.assign(row, patch); return true; },
     runningRuns: async () => [],
     step: async (_r: string, nodeId: string) => steps.get(nodeId) ?? null,
     steps: async () => [...steps.values()],

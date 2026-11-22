@@ -1,6 +1,9 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
+import { ModuleRef } from '@nestjs/core';
+import { Logger } from '@nestjs/common';
+import { WorkflowTasksService } from './tasks.js';
 import { blockCatalogue, runStepCategory, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -17,7 +20,16 @@ export interface RunView { run: Omit<RunRow, 'graph'> & { simulatedOnly: boolean
 /** API surface of the workflows feature. All state changes are validated here; the engine only executes. */
 @Injectable()
 export class WorkflowsService {
-  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
+  constructor(private readonly store: WorkflowStore, private readonly engine: WorkflowEngine, private readonly prs: PullRequestService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly modules?: ModuleRef) {}
+
+  private tasksWarned = false;
+  /** The durable task service, resolved lazily (an import() type annotation emits Object metadata and Nest
+   *  would inject undefined). A resolution failure is logged once, never swallowed. */
+  private tasksSvc(): WorkflowTasksService | undefined {
+    if (!this.modules) return undefined;
+    try { return this.modules.get(WorkflowTasksService, { strict: false }); }
+    catch (e) { if (!this.tasksWarned) { this.tasksWarned = true; new Logger('workflows').warn(`task service unresolved: run cancellation will not cancel tasks (${(e as Error).message})`); } return undefined; }
+  }
 
   /** The registry of the current workspace branch (plugin enablement is per tenant AND branch). */
   private async registry(): Promise<PluginRegistry> {
@@ -179,7 +191,7 @@ export class WorkflowsService {
   async removeRun(tenant: string, runId: unknown) {
     const r = await this.store.getRun(tenant, this.checkId(runId, 'run id'));
     if (!r) throw new NotFoundException('unknown run');
-    if (r.status === 'queued' || r.status === 'running') throw new ConflictException('cancel the run first');
+    if (r.status === 'queued' || r.status === 'running' || r.status === 'waiting') throw new ConflictException('cancel the run first');
     await this.store.deleteRun(r.id);
     return { deleted: r.id };
   }
@@ -239,7 +251,7 @@ export class WorkflowsService {
 
   async listRuns(tenant: string, definitionId?: string, filters: { status?: string; tests?: boolean } = {}) {
     if (definitionId !== undefined) this.checkId(definitionId, 'workflow id');
-    if (filters.status !== undefined && !['queued', 'running', 'completed', 'failed', 'canceled'].includes(filters.status)) throw new BadRequestException('status: queued, running, completed, failed or canceled');
+    if (filters.status !== undefined && !['queued', 'running', 'waiting', 'completed', 'failed', 'canceled'].includes(filters.status)) throw new BadRequestException('status: queued, running, waiting, completed, failed or canceled');
     const runs = (await this.store.listRuns(tenant, definitionId, 200))
       .filter((r) => (filters.tests ? true : !r.test) && (!filters.status || r.status === filters.status))
       .slice(0, 50);
@@ -294,8 +306,19 @@ export class WorkflowsService {
     let grew = true;
     while (grew) { grew = false; for (const e of view.run.edges) if (down.has(e.from) && !down.has(e.to)) { down.add(e.to); grew = true; } }
     if (view.steps.some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) throw new ConflictException('External effect uncertain: rerun is blocked');
-    for (const s of view.steps) if (down.has(s.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, output: null, finished_at: null });
-    await this.store.updateRun(r.id, { status: 'queued', error: null, finished_at: null });
+    // The atomic transition is the exclusive right to relaunch: it is claimed BEFORE any step is reset, so a
+    // concurrent rerun that loses the race 409s without having wiped the winner's relaunched state.
+    if (!await this.store.transitionRun(r.id, { status: 'queued', error: null, finished_at: null }, ['completed', 'failed', 'canceled']))
+      throw new ConflictException('this run changed state while being re-run: rerun did not land');
+    const claimedAt = Date.now();
+    try {
+      for (const s of view.steps) if (down.has(s.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, output: null, finished_at: null });
+      await this.engine.clearStaleCancel(r.id, claimedAt); // only flags stamped BEFORE the claim; a fresh concurrent cancel survives
+    } catch (e) {
+      // Same safe exit as retry: restore the pre-claim state, guarded, so the run stays re-runnable.
+      await this.store.transitionRun(r.id, { status: r.status, error: r.error, finished_at: r.finished_at }, ['queued']).catch(() => undefined);
+      throw e;
+    }
     this.engine.kick(r.id);
     return this.runView(tenant, r.id);
   }
@@ -331,21 +354,42 @@ export class WorkflowsService {
     const r = view.run;
     if (r.status !== 'failed' && r.status !== 'canceled') throw new ConflictException(`only a failed or canceled run can be retried (this one is ${r.status})`);
     if (view.steps.some(s => s.error === 'EXTERNAL_EFFECT_REVIEW_REQUIRED')) throw new ConflictException('External effect uncertain: reconcile at the provider; retry is blocked');
-    const failed = view.steps.find((s) => s.status === 'failed');
-    for (const s of view.steps) {
-      if (s.status === 'skipped' || (failed && s.node_id === failed.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, finished_at: null });
+    // Claim first (same reason as rerunFrom): only the request that wins the transition may touch the steps.
+    if (!await this.store.transitionRun(r.id, { status: 'queued', error: null, finished_at: null }, ['failed', 'canceled']))
+      throw new ConflictException('this run changed state while being retried: retry did not land');
+    const claimedAt = Date.now();
+    try {
+      const failed = view.steps.find((s) => s.status === 'failed');
+      const wasCanceled = r.status === 'canceled';
+      for (const s of view.steps) {
+        if (s.status === 'skipped' || (failed && s.node_id === failed.node_id)) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, finished_at: null });
+        // A canceled run had every durable task canceled with it: a step PARKED on its old task (pending with a
+        // recorded wait) would fail closed on a decision that will never come: reset it fresh so it re-opens a
+        // NEW task. A step already DONE keeps its result (its wait reference is history, not a resume handle);
+        // a FAILED run's other waiting tasks are still open and keep their reference (idempotent resume).
+        else if (wasCanceled && s.status === 'pending' && s.input?.wait) await this.store.patchStep(r.id, s.node_id, { status: 'pending', error: null, input: null, finished_at: null });
+      }
+      await this.engine.clearStaleCancel(r.id, claimedAt);
+    } catch (e) {
+      // Safe exit: the claim is won but the relaunch could not be prepared. Put the run back in its pre-claim
+      // state so it stays retryable; the guard from 'queued' never erases a concurrent transition that landed
+      // meanwhile (a fresh cancel, or a pass started by a waiting task's kick).
+      await this.store.transitionRun(r.id, { status: r.status, error: r.error, finished_at: r.finished_at }, ['queued']).catch(() => undefined);
+      throw e;
     }
-    await this.store.updateRun(r.id, { status: 'queued', error: null, finished_at: null });
     this.engine.kick(r.id);
     return this.runView(tenant, r.id);
   }
 
   async cancel(tenant: string, runId: unknown) {
     const view = await this.runView(tenant, runId);
-    if (view.run.status !== 'queued' && view.run.status !== 'running') throw new ConflictException(`this run is already ${view.run.status}`);
+    if (view.run.status !== 'queued' && view.run.status !== 'running' && view.run.status !== 'waiting') throw new ConflictException(`this run is already ${view.run.status}`);
     this.engine.cancelFlag(view.run.id);
+    await this.tasksSvc()?.cancelForRun(tenant, view.run.id);
     // A run parked between steps (queued, or running without a live executor after a crash) is canceled here.
-    await this.store.updateRun(view.run.id, { status: 'canceled', finished_at: now() });
+    // Atomic: a pass that reached a terminal state between the check above and this write keeps it.
+    if (!await this.store.transitionRun(view.run.id, { status: 'canceled', finished_at: now() }, ['queued', 'running', 'waiting']))
+      throw new ConflictException(`this run just turned ${(await this.store.getRun(tenant, view.run.id))?.status ?? 'unknown'}: cancel did not land`);
     return this.runView(tenant, view.run.id);
   }
 
