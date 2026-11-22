@@ -321,7 +321,7 @@ const jiraCreateIssue = {
   fields: [
     { key: 'dryRun', label: 'Dry run (no real creation)', type: 'boolean', default: true },
     { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
-    { key: 'issueTypeId', label: 'Issue type ID (numeric)', type: 'string', required: true, default: '10001', help: 'Jira numeric id of the issue type (Task is often 10001 on a fresh site)' },
+    { key: 'issueTypeId', label: 'Issue type ID (numeric)', type: 'string', required: true, help: 'Jira numeric id from the target project create metadata. Names and ids vary by site: never infer an id from the name Task.' },
     { key: 'summary', label: 'Summary', type: 'string', required: true },
     { key: 'description', label: 'Description', type: 'text' },
     { key: 'labels', label: 'Labels (comma separated)', type: 'string', help: 'e.g. badge-demo. The Jira Done trigger of the badge workflow only sees tickets carrying its label. Jira ignores a label when the field is not on the create screen of the project.' },

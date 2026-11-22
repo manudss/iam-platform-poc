@@ -19,6 +19,7 @@ describe('badge templates: validated texts and ticket label', () => {
     assert.equal(t.summary, '[Badge] Préparer le badge de {{event.prenom}} {{event.nom}}');
     assert.ok(t.description.startsWith('Demande automatique de la démo Lyam. Personne : {{event.prenom}} {{event.nom}}'));
     assert.ok(t.description.endsWith('Aucun mot de passe dans ce ticket.'));
+    assert.equal(t.issueTypeId, '10003', 'Task in this demo KAN project, read from its creation metadata, not a universal Jira id');
     assert.equal(t.labels, 'badge-demo');
     assert.equal(tpl('badge-done-temporary-password').trigger!.config!.label, t.labels, 'phase 2 only sees tickets carrying the label phase 1 sets');
     assert.deepEqual(externalBlock('jira-create-issue')!.validate({ ...t, dryRun: true }).labels, ['badge-demo']);

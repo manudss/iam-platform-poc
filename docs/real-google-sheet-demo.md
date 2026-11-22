@@ -93,3 +93,7 @@ The official badge templates are paused and simulated when instantiated. They do
 - No password is stored in a ticket, spreadsheet, graph or output. `[[password]]` and `[[expiry]]` are mail-only markers. The recipient must match the linked account and be explicitly allowed.
 
 These changes update the template catalogue, not workflow definitions already instantiated on a deployment. No spreadsheet write, Jira issue or e-mail is performed by loading the catalogue or running validation tests.
+
+### Target Jira issue type
+
+For the configured demo site, a read-only check of KAN creation metadata on 22 November 2026 found Task = `10003` and the `labels` field available. The badge template uses this site-specific example. The generic Jira create block has no guessed issue-type default. Check the target project metadata and set `issueTypeId` before any real run, especially when reusing the template on another site. This metadata check is not a ticket creation test.
