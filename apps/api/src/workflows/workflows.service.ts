@@ -6,6 +6,7 @@ import { Logger } from '@nestjs/common';
 import { WorkflowTasksService } from './tasks.js';
 import { blockCatalogue, runStepCategory, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
+import { isFrozenApprovedReset, RESET_FROZEN } from './reset-freeze.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
 import { DefinitionRow, RunRow, StepRow, TemplateRow, WorkflowStore } from './store.js';
@@ -107,6 +108,7 @@ export class WorkflowsService {
     if (!create && !existing) throw new NotFoundException('unknown workflow');
     // active defaults to true on create and is preserved on update unless the caller passes it (false = paused: event triggers skip it).
     const active = body.active === undefined ? (existing?.active ?? true) : body.active === true || body.active === 'true';
+    if (active && isFrozenApprovedReset(graph)) throw new ForbiddenException(RESET_FROZEN);
     const def: DefinitionRow = { id: wid, tenant, name, description, graph, trigger, active, tags, created_by: existing?.created_by ?? String(sub ?? 'unknown'), created_at: existing?.created_at ?? now(), updated_at: now() };
     await this.store.putDefinition(def, ref);
     return { definition: def };
@@ -183,6 +185,7 @@ export class WorkflowsService {
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), ref);
     if (!d) throw new NotFoundException('unknown workflow');
     if (typeof active !== 'boolean') throw new BadRequestException('active (boolean) is required');
+    if (active && isFrozenApprovedReset(d.graph)) throw new ForbiddenException(RESET_FROZEN);
     await this.store.putDefinition({ ...d, active }, ref);
     return { definition: { id: d.id, active } };
   }
@@ -230,6 +233,7 @@ export class WorkflowsService {
     // A run executes effects now, so it always uses the LIVE (main) definition, never an unreviewed branch edit.
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), this.store.liveRef);
     if (!d) throw new NotFoundException('unknown workflow');
+    if (isFrozenApprovedReset(d.graph)) throw new ForbiddenException(RESET_FROZEN);
     await this.checkProviders(tenant, d.graph);
     const runId = event?.eventId ? `run-${createHash('sha256').update(JSON.stringify([tenant, d.id, event.branch, event.eventId])).digest('hex').slice(0, 32)}` : `run-${randomBytes(6).toString('hex')}`;
     if (event?.eventId && await this.store.getRun(tenant, runId)) return this.runView(tenant, runId);

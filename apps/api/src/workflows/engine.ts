@@ -2,7 +2,7 @@ import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import type { WorkflowIntake } from './intake.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
 import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
-import { forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { ForbiddenException, forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 import { validateConfig } from '../authn/config.js';
 import { validateSettings } from '../plugins/v1/settings.js';
@@ -24,6 +24,7 @@ import { BlocksService } from '../accounts/blocks.service.js';
 import { inForce } from '../accounts/blocks.js';
 import { patchSecurity } from '../accounts/security-config.js';
 import { UsersService } from '../users/users.service.js';
+import { isFrozenApprovedReset, RESET_FROZEN } from './reset-freeze.js';
 import { RunSecrets } from './run-secrets.js';
 import { CorePolicySource } from '../policies/policy-studio.js';
 import { STEP_TYPES, substituteEventPayload, validateGraph } from './model.js';
@@ -359,6 +360,15 @@ export class WorkflowEngine implements OnModuleInit {
 
   /** The engine of the plugin serving the workflows.engine slot for this run. */
   private async engineFor(run: RunRow): Promise<WorkflowEngineApi> {
+    // This core-owned barrier applies BEFORE provider resolution, including a replacement engine,
+    // boot recovery and retries of old queued runs. It cannot be overridden by plugin grants/settings.
+    if (!run.test && isFrozenApprovedReset(run.graph)) return {
+      resume: async () => {},
+      kick: () => { void this.store.transitionRun(run.id, { status: 'failed', error: RESET_FROZEN, finished_at: new Date().toISOString().slice(0, 23).replace('T', ' ') }, ['queued', 'running', 'waiting']).catch(() => this.log.error(`run ${run.id}: could not record frozen reset refusal; no provider was called`)); },
+      cancelFlag: () => {},
+      clearStaleCancel: () => { throw new ForbiddenException(RESET_FROZEN); },
+      forget: () => {},
+    };
     return resolveEngine(() => this.registryFor(run.branch), run.tenant, 'workflows.engine', 'engine.mjs', (mod: { createWorkflowEngine: (deps: EngineDeps) => WorkflowEngineApi }) => mod.createWorkflowEngine(this.deps), this);
   }
 

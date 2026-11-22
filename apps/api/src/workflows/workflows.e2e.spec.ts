@@ -13,6 +13,8 @@ import { CanActivate, ExecutionContext, ForbiddenException, INestApplication, Un
 import { Test } from '@nestjs/testing';
 import { WorkflowsModule } from './workflows.module.js';
 import { branchContext } from '../workspace/context.js';
+import { WorkflowEngine } from './engine.js';
+import { validateGraph } from './model.js';
 import { WorkflowConnections } from './connections.js';
 import { SignupService } from '../profile/signup.service.js';
 import { WorkflowsService } from './workflows.service.js';
@@ -924,6 +926,35 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(!all2.templates.some((t) => t.id === t1.template.id), 'the deleted template leaves the gallery');
     await ok('DELETE', `/workflows/${def.definition.id}`);
   });
+  it('reset freeze refuses activation/start and an old queued run before any first-step effect; generic password remains available', async () => {
+    const graph = { nodes: [
+      { id: 'block', type: 'lyam-block-account', name: 'would block first', config: { subject: 'demo-bob', kind: 'suspended', message: 'Fictional freeze test' } },
+      { id: 'apply', type: 'lyam-apply-password-reset', name: 'reset', config: { approvalTaskId: 'task-fixture', subject: 'demo-bob', passwordRef: 'fixture-ref', hours: '24' } },
+    ], edges: [{ from: 'block', to: 'apply' }] };
+    const def = await ok('POST', '/workflows', { name: 'Frozen reset fixture', active: false, graph }) as { definition: { id: string } };
+    assert.equal((await call('POST', `/workflows/${def.definition.id}/active`, { active: true })).status, 403);
+    assert.equal((await call('POST', `/workflows/${def.definition.id}/runs`)).status, 403);
+    assert.equal((await call('POST', '/workflows', { name: 'Cannot activate reset', active: true, graph })).status, 403);
+    const store = app.get(WorkflowStore); const checked = validateGraph(graph);
+    const run: any = { id: 'run-reset-frozen-fixture', tenant: T, definition_id: def.definition.id, name: 'old queued reset', graph: checked.graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'demo-alice', started_at: new Date().toISOString().slice(0, 23).replace('T', ' '), finished_at: null, test: false };
+    await store.createRun(run, checked.order.map(id => ({ run_id: run.id, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null })) as never);
+    const engine = app.get(WorkflowEngine) as any;
+    const originalRegistry = engine.registryFor;
+    let providerReads = 0;
+    engine.registryFor = () => { providerReads++; throw new Error('must not resolve a provider for a frozen reset'); };
+    let failed: RunView;
+    try { engine.kick(run.id); failed = await waitRun(run.id, ['failed']); }
+    finally { engine.registryFor = originalRegistry; }
+    assert.equal(providerReads, 0, 'freeze is before any plugin provider lookup');
+    assert.match(failed.run.error!, /RESET_FROZEN/); assert.equal(failed.run.branch, null);
+    assert.ok(failed.steps.every(s => s.attempts === 0 && s.status === 'pending'), 'even the first generic block did not execute');
+    const dry = await ok('POST', '/workflows/test-run', { graph }) as RunView;
+    assert.equal((await waitRun(dry.run.id, ['completed', 'failed'])).run.status, 'completed');
+    const generic = { nodes: [{ id: 'pw', type: 'lyam-set-temporary-password', name: 'Generic badge password', config: { subject: 'demo-bob', passwordRef: 'fixture-ref', hours: '24' } }], edges: [] };
+    const saved = await call('POST', '/workflows', { name: 'Generic remains activatable', active: true, graph: generic });
+    assert.ok(saved.status < 300, JSON.stringify(saved.body));
+  });
+
   it('restart durability: a waiting run survives a REAL app restart, a crashed effectful step fails closed', async () => {
     const graph = { nodes: [
       { id: 'grant', type: 'lyam-grant-assignment', name: 'grant', config: { identity: 'demo-bob', role: 'branch-merger' } },
@@ -941,6 +972,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     try {
       await meta.query("update workflow_runs set status='running', finished_at=null where id=?", [runB.run.id]);
       await meta.query("update workflow_steps set status='running', finished_at=null, output=null where run_id=? and node_id='grant'", [runB.run.id]);
+      await meta.query("update workflow_runs set status='queued', finished_at=null where id='run-reset-frozen-fixture'");
     } finally { await meta.end(); }
     // C: a whole IGA campaign waits across the same real application restart.
     const defC = (await ok('POST', '/workflows', { name: 'Restart recertification', graph: { nodes: [
@@ -956,6 +988,10 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     await app.close();
     const m2 = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
     app = m2.createNestApplication(); await app.init(); await app.listen(13432);
+    const frozenAfterRestart = await waitRun('run-reset-frozen-fixture', ['failed']);
+    assert.match(frozenAfterRestart.run.error!, /RESET_FROZEN/);
+    assert.ok(frozenAfterRestart.steps.every(step => step.attempts === 0), 'boot recovery did not enter any frozen step');
+    assert.equal((await call('POST', '/workflow-runs/run-reset-frozen-fixture/retry')).status, 403, 'retry cannot unfreeze the stored reset');
     // The durable state store kept the enablement: the routes answer right after the boot, and the boot-time
     // resume scan (onModuleInit, run during app.init) recovers the interrupted runs on the NORMAL path - no
     // manual re-enable, no re-triggered scan.

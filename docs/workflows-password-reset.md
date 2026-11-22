@@ -1,6 +1,6 @@
 # Approved password reset workflow: status and manual reconciliation
 
-Status: **NOT READY as a secured path.** Keep it disabled for real accounts. This page states what the template guarantees, what is proven, and what an operator does after an interruption. It is not a promise of end-to-end safety.
+Status: **NOT READY as a secured path.** The server refuses activation and every real start of the approval-bound path. A core-owned engine barrier also stops old queued/running/waiting runs before provider resolution or any next step, including retries and boot recovery. There is no environment, plugin-setting, graph or request override. The editor may simulate it without effects. Existing effects from older runs are not reversed by this freeze. This page states what the template guarantees, what is proven, and what an operator does after an interruption. It is not a promise of end-to-end safety.
 
 ## Path
 
@@ -28,10 +28,18 @@ Several API processes; a kill in the middle of a real Dolt merge; the real activ
 
 | Observed | What it means | What to do |
 | --- | --- | --- |
-| Run failed or waiting, approval consumed, no applied revision | Claim done, effect not recorded. Another node or run is refused. | Only the same node can resume. Otherwise create a new approval and a new run. |
-| Credential on the run branch, nothing published | Versioned, not live. | Discard the branch, or publish it through the normal review. |
-| Data merged on main, activation not recorded | The new credential may already be live while the account is still blocked. | Re-run publication of the same head (it only completes the activation), then lift the block with the account blocks page. |
-| Run restarted after a crash | The generated password lived in memory and is gone. No mail can be sent. | New approval and new run. Do not reuse the old credential. |
+| Run failed or waiting, approval consumed, no applied revision | Claim done, effect not recorded. Another node or run is refused. | The frozen workflow cannot resume, even on the same node. Inspect the recorded state; recovery needs a separately approved and qualified manual path. |
+| Credential on the run branch, nothing published | Versioned, not live. | Inspect or discard the branch. Do not use the frozen workflow to publish an unfinished reset. |
+| Data merged on main, activation not recorded | The new credential may already be live while the account is still blocked. | Inspect the actual main/activation/credential receipts with the operator. The frozen workflow cannot be used as an automatic recovery path. |
+| Run restarted after a crash | The generated password lived in memory and is gone. No mail can be sent. | Do not reuse the old credential or retry the frozen path. Use separately approved manual recovery after checking the account state. |
 | Account stays blocked | Unblock only runs at the end of the path. | An administrator lifts the block that this run set, after checking the credential state. |
 
 No step above needs a secret in a ticket, a log or this page.
+
+## Exposure and delivery boundary
+
+The block catalogue and official template remain visible to workflow administrators for inspection and effect-free editor tests. Workflow routes require AuthGuard, AdminGuard and the workflows-iga enabled guard. `workflow-connectors` supplies the blocks through its catalogue entrypoint; enabling or granting that provider does not remove the core freeze. This is not a UI-only hide and does not depend on the provider being disabled.
+
+Detection covers the proposal/apply block types anywhere in the stored graph (including disconnected, error or parallel paths), plus reset-bound publish/secret-mail configuration. Generic `lyam-set-temporary-password` and the badge flow remain outside this path and do not acquire a new approval requirement. A privileged operator could still perform separate manual account operations; this freeze makes no claim to forbid those unrelated tools.
+
+Delivery is cumulative against main so the authority and live-target corrections land in the same merge as the new IGA operations, never as a vulnerable intermediate state. This does not make reset ready: its server execution remains refused.
