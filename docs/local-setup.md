@@ -1,9 +1,50 @@
-# Local setup (step by step)
+# Local setup
 
 Local development only, fictional demo data. All passwords/tokens below are the public placeholder values of `.env.example`
-and protect nothing. Commands are given for **Windows PowerShell** (primary) and **bash** (Linux/macOS).
+and protect nothing.
 
-Recommended path: infrastructure in Docker (`infra/docker-compose.yml`), the three application processes run natively:
+## Fast path: one command, Docker only (recommended)
+
+The whole stack (Dolt seeded with fictional data, PostgreSQL, Temporal, NATS, OpenBao, Rust core, NestJS API,
+Angular console) runs in containers with the sources mounted: **saving a file reloads the console and
+recompiles/restarts the API**. The only prerequisite is Docker Desktop (Windows/macOS) or Docker Engine +
+the compose plugin (Linux) - no Node, no Rust, no MSVC build tools to install.
+
+```powershell
+# Windows PowerShell, from the repository root:
+powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
+```
+```bash
+# Linux/macOS (or WSL), from the repository root:
+bash scripts/dev.sh
+```
+
+The script offers to install Docker Desktop when it is missing (winget on Windows), waits for the engine,
+creates `.env` from `.env.example` on the first run, then starts everything. First start compiles the Rust
+core inside its container and installs the npm dependencies (several minutes); the caches live in Docker
+volumes, so the next starts take seconds. Then open http://localhost:4200 and sign in as
+`demo-alice` / `demo-only-not-a-secret` (fictional).
+
+- **Stop**: Ctrl+C in the terminal. **Reset the data**: `scripts\dev.ps1 -Down -Volumes` (or `bash scripts/dev.sh --down --volumes`) - the Dolt seed replays on the next start.
+- **Hot reload**: console and API recompile on save (polling watchers: Docker Desktop bind mounts deliver no
+  file events). After editing the Rust core: `docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart core` (incremental rebuild), or keep `docker compose ... watch` running to rebuild automatically.
+- **API admin token** (the console asks for it on administration features): `local-dev-api-token` by default,
+  overridable in `.env` (see the commented `DEV_*` variables in `.env.example`).
+- Editing in **IntelliJ IDEA** (any edition), VS Code or any other editor works the same: the files are
+  edited on the host and the containers do the rest. A dev container also exists for GitHub Codespaces
+  (`.devcontainer/`, see `docs/demo.md`) - it is not needed for this path.
+
+The direct equivalent of the script, from the repository root:
+
+```powershell
+Copy-Item .env.example .env   # once, if .env is missing
+docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up --build
+```
+
+## Native path (advanced, without Docker)
+
+Infrastructure in Docker (`infra/docker-compose.yml`), the three application processes run natively.
+Commands are given for **Windows PowerShell** (primary) and **bash** (Linux/macOS):
 
 | Process | Port | Started from |
 |---|---|---|
