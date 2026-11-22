@@ -531,17 +531,15 @@ export class WorkflowStore {
   async igaGetCampaign(tenant: string, id: string): Promise<Record<string, unknown> | null> {
     const m = await this.meta();
     try {
-      await this.ensureIga(m);
       const [r] = await m.query('select * from iga_campaigns where id = ? and tenant = ?', [id, tenant]);
       const row = (r as Record<string, unknown>[])[0];
       if (!row) return null;
       return { ...row, scope: WorkflowStore.igaJson(row.scope), evidence: row.evidence === null ? null : WorkflowStore.igaJson(row.evidence) };
-    } finally { await m.end(); }
+    } catch (e) { if (WorkflowStore.noTable(e)) return null; throw e; } finally { await m.end(); }
   }
   async igaListCampaigns(tenant: string): Promise<Record<string, unknown>[]> {
     const m = await this.meta();
     try {
-      await this.ensureIga(m);
       const [r] = await m.query('select id, tenant, kind, name, ref, status, created_by, created_at, closed_by, closed_at from iga_campaigns where tenant = ? order by created_at desc limit 100', [tenant]);
       return r as Record<string, unknown>[];
     } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
@@ -549,12 +547,11 @@ export class WorkflowStore {
   async igaListItems(tenant: string, campaignId: string, state?: string): Promise<Record<string, unknown>[]> {
     const m = await this.meta();
     try {
-      await this.ensureIga(m);
       const where = ['campaign_id = ?', 'tenant = ?'], vals: unknown[] = [campaignId, tenant];
       if (state) { where.push('state = ?'); vals.push(state); }
       const [r] = await m.query(`select * from iga_items where ${where.join(' and ')} order by identity limit 500`, vals);
       return (r as Record<string, unknown>[]).map((x) => ({ ...x, payload: WorkflowStore.igaJson(x.payload) }));
-    } finally { await m.end(); }
+    } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
   }
   async igaUpdateItem(id: string, patch: { state?: string; payload?: Record<string, unknown>; decided_by?: string | null; decided_at?: string | null; decision_reason?: string | null; run_id?: string | null }): Promise<void> {
     const m = await this.meta();
@@ -577,7 +574,6 @@ export class WorkflowStore {
   async listTasksByCampaign(tenant: string, campaignId: string): Promise<TaskRow[]> {
     const m = await this.meta();
     try {
-      await this.ensureTasks(m);
       const [r] = await m.query("select * from workflow_tasks where tenant = ? and json_unquote(json_extract(detail, '$.campaignId')) = ? order by created_at limit 1000", [tenant, campaignId]);
       return (r as Record<string, unknown>[]).map(WorkflowStore.task);
     } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
@@ -586,7 +582,6 @@ export class WorkflowStore {
   async listDueTasks(at: string): Promise<TaskRow[]> {
     const m = await this.meta();
     try {
-      await this.ensureTasks(m);
       const [r] = await m.query("select * from workflow_tasks where status = 'open' and due_at is not null and due_at <= ? and (reminded_at is null or json_extract(detail, '$.rescan') = true) order by due_at limit 500", [at]);
       return (r as Record<string, unknown>[]).map(WorkflowStore.task);
     } catch (e) { if (WorkflowStore.noTable(e)) return []; throw e; } finally { await m.end(); }
