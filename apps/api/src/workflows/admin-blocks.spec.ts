@@ -274,6 +274,15 @@ describe('lyam-await-run bounded read-only wait', () => {
   });
 });
 
+describe('bounded child wait timeout', () => {
+  it('polls a human-waiting child until the actual deadline, even when poll interval exceeds timeout', async () => {
+    let reads = 0; const began = Date.now();
+    const c = mk({ config: { runId: 'run-child', timeoutSeconds: 1, pollSeconds: 10 }, runs: { get: async () => { reads++; return { id: 'run-child', status: 'waiting' }; } } } as never).c;
+    await assert.rejects(externalBlock('lyam-await-run')!.run(c), /still waiting/);
+    assert.ok(Date.now() - began >= 900); assert.ok(reads >= 2);
+  });
+});
+
 describe('SoD read, bounded agent proposal and connection probes', () => {
   it('SoD read computes with no hypothetical grants or revocations', async () => {
     const b = externalBlock('lyam-read-sod-conflicts')!;

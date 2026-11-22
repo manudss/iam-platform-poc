@@ -24,6 +24,14 @@ describe('google sheets create column', () => {
     await assert.rejects(api.createGoogleColumn({}, src, 'x', async () => []), /header row/);
     assert.ok(!calls.some((c) => c.action === 'create-column'));
   });
+  it('missing update receipt fails after one write attempt, never retries automatically', async () => {
+    let writes = 0;
+    await assert.rejects(api.createGoogleColumn({}, src, 'status', async (_p: string, action: string) => {
+      if (action === 'get-many-rows') return [{ row: 1, values: { A: 'name' } }];
+      writes++; return {};
+    }), /did not confirm/);
+    assert.equal(writes, 1);
+  });
   it('the block is a no-op on the demo sheet and in dry run, and refuses a real call without connection', async () => {
     const b = externalBlock('google-sheets-create-column')!;
     const mk = (config: unknown, dryRun = false, settings = {}) => ({ tenant: 'acme', config, settings, dryRun, log: () => {}, outputs: {} }) as never;

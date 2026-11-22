@@ -3,7 +3,7 @@ import { startTestBus, TestBus } from '../testing/test-bus.js';
 // Auth is replaced by a fake that mirrors the real guard's contract (bearer token, tenant claim must equal :tenant),
 // because the real one needs the Rust core; the real AdminGuard is used. Skipped if the dolt binary is missing (DOLT_BIN).
 import 'reflect-metadata';
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, INestApplication, Un
 import { Test } from '@nestjs/testing';
 import { WorkflowsModule } from './workflows.module.js';
 import { branchContext } from '../workspace/context.js';
-import { WorkflowIntake } from './intake.js';
+import { WorkflowConnections } from './connections.js';
 import { SignupService } from '../profile/signup.service.js';
 import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsController } from './workflows.controller.js';
@@ -986,10 +986,25 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.ok(((vA.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).merged) === true);
   });
 
-  it('signup intake workflow uses the real signup service, writes only the run branch and projects no credentials', async () => {
-    let intakeFailure = ''; const intake = app.get(WorkflowIntake); const originalResolve = intake.resolve.bind(intake);
-    intake.resolve = async (...args) => { try { return await originalResolve(...args); } catch (e) { intakeFailure = String((e as Error).message); throw e; } };
+  it('connection probe engine hook rejects an unauthorized starter before any probe, while admin can test a bounded list', async () => {
+    const probes = mock.method(app.get(WorkflowConnections), 'test', async (_t: string, id: string) => ({ id, status: 'Success', readOnly: true }) as never);
+    try {
+      const def = await ok('POST', '/workflows', { name: 'Fictional connection probes', graph: { nodes: [
+        { id: 'probe', type: 'lyam-test-connections', name: 'probe', config: { ids: 'one,two' } },
+      ], edges: [] } }) as { definition: { id: string } };
+      const unauthorized = await app.get(WorkflowsService).start(T, def.definition.id, 'not-an-admin') as RunView;
+      assert.equal((await waitRun(unauthorized.run.id, ['failed'])).run.status, 'failed');
+      assert.equal(probes.mock.calls.length, 0);
+      const started = await ok('POST', `/workflows/${def.definition.id}/runs`) as RunView;
+      const completed = await waitRun(started.run.id, ['completed', 'failed']);
+      assert.equal(completed.run.status, 'completed', completed.run.error ?? '');
+      assert.equal(probes.mock.calls.length, 2);
+    } finally { probes.mock.restore(); }
+  });
+
+  it('signup approval fails before branch creation, pending removal, directory calls or account events', async () => {
     const signup = app.get(SignupService);
+    const approve = mock.method(signup, 'approve'); const events = mock.method(app.get(ApplicationBus), 'emit');
     // Fictional preconfirmed request. No real mailbox, password or external service.
     signup.pending.set('intake-demo', { tenant: T, id: 'intake-demo', display_name: 'Intake Demo', email: 'intake@example.invalid', values: {}, confirmed: true, salt: 'fictional-salt', hash: 'fictional-hash', at: Date.now() });
     const def = await ok('POST', '/workflows', { name: 'Signup intake', graph: { nodes: [
@@ -1004,15 +1019,15 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       await new Promise(r => setTimeout(r, 100));
       done = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).runView(T, start.run.id)) as RunView;
     }
-    assert.equal(done.run.status, 'completed', (done.run.error ?? '') + ' ' + intakeFailure);
-    assert.ok(done.run.branch);
+    assert.equal(done.run.status, 'failed'); assert.match(done.run.error!, /publication-aware/);
+    assert.equal(done.run.branch, null); assert.equal(approve.mock.calls.length, 0);
+    assert.equal(signup.pending.has('intake-demo'), true, 'the request survives the refusal');
+    assert.ok(!events.mock.calls.some(c => ['user.created', 'user.blocked', 'signup.approved'].includes(c.arguments[0].type) && c.arguments[0].payload.subject === 'intake-demo'));
     const live = (await app.get(VersioningService).tableRows('main', 'identities', 100, 0)) as unknown as { rows: { id: string }[] };
     assert.ok(!live.rows.some(x => x.id === 'intake-demo'), 'approval does not publish the new account');
-    const branch = await app.get(VersioningService).tableRows(done.run.branch!, 'identities', 100, 0) as unknown as { rows: { id: string }[] };
-    assert.ok(branch.rows.some(x => x.id === 'intake-demo'));
     assert.ok(!JSON.stringify(done).includes('fictional-hash') && !JSON.stringify(done).includes('fictional-salt'));
-    assert.equal((done.steps.find(st => st.node_id === 'resolve')!.output as any).publicationRequired, true);
-    } finally { intake.resolve = originalResolve; if (oldWorkspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = oldWorkspace; }
+    assert.notEqual(done.run.error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED', 'known pre-effect refusal is not an uncertain write');
+    } finally { approve.mock.restore(); events.mock.restore(); if (oldWorkspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = oldWorkspace; }
   });
 
   it('connection CRUD and draft probes stay behind tenant/auth/admin and never reveal credentials', async()=>{

@@ -521,10 +521,11 @@ export function createWorkflowEngine(deps) {
       intake: deps.intake ? {
         read: (kind, subject) => deps.intake.read(run.tenant, kind, subject, run.started_by),
         resolve: async (kind, subject, snapshot, decision) => {
-          // Signup approval writes a new identity onto the run branch. Profile resolution uses
-          // the existing service's immediate merge of the pending personal branch into main.
+          // Validate unsupported cases before recording an effect intent or creating any branch.
+          // Profile resolution uses the existing immediate personal-branch merge/refusal.
           await deps.intake.prepareResolve(kind, decision, run.started_by);
-          const branch = kind === 'signup' && decision === 'approve' ? await ensureBranch(run, say) : (run.base_branch ?? deps.versioning.defaultBranch);
+          await ctx.markEffectPending({ kind, subject, decision });
+          const branch = run.base_branch ?? deps.versioning.defaultBranch;
           return deps.branchRun(branch, () => deps.intake.resolve(run.tenant, kind, subject, snapshot, decision, run.started_by));
         },
       } : undefined,

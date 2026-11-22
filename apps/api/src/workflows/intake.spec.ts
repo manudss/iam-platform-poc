@@ -23,11 +23,13 @@ describe('workflow intake adapter (business services doubled)', () => {
       await assert.rejects(service.read('other', 'signup', 'applicant', 'admin'), /tenant/);
       const r = await service.read('acme', 'signup', 'applicant', 'admin');
       assert.ok(!JSON.stringify(r).includes('private'));
-      mutate(); await assert.rejects(service.resolve('acme', 'signup', 'applicant', r.snapshot, 'approve', 'admin'), /changed/);
+      mutate(); await assert.rejects(service.resolve('acme', 'signup', 'applicant', r.snapshot, 'reject', 'admin'), /changed/);
       assert.equal(calls.length, 0);
       const fresh = await service.read('acme', 'signup', 'applicant', 'admin');
-      assert.equal((await service.resolve('acme', 'signup', 'applicant', fresh.snapshot, 'approve', 'admin')).publicationRequired, true);
-      assert.deepEqual(calls, ['approve:applicant:admin']);
+      await assert.rejects(service.resolve('acme', 'signup', 'applicant', fresh.snapshot, 'approve', 'admin'), /publication-aware/);
+      assert.deepEqual(calls, []);
+      assert.equal((await service.resolve('acme', 'signup', 'applicant', fresh.snapshot, 'reject', 'admin')).immediate, true);
+      assert.deepEqual(calls, ['reject:applicant']);
     } finally { if (workspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = workspace; if (old === undefined) delete process.env.IAM_API_ADMIN_SUBJECTS; else process.env.IAM_API_ADMIN_SUBJECTS = old; }
   });
   it('profile resolution reuses the business rule, starter cannot resolve own request', async () => {

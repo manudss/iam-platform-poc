@@ -512,13 +512,13 @@ const jiraAddComment = {
 
 const jiraUpdateIssue = {
   type: 'jira-update-issue', family: 'Jira', label: 'Update a Jira issue (Activepieces)', simulated: false,
-  description: 'Sets the summary and/or the labels of an existing issue through the Activepieces jira-cloud piece (labels REPLACE the current list). A set is repeatable, but it is a real external write not reverted by the run branch. A field the issue edit screen does not offer is ignored by Jira. dryRun on (default) = SIMULATED.',
+  description: 'Sets the summary and/or the labels of an existing issue through the Activepieces jira-cloud piece (labels REPLACE the current list). Notifications or automation may run on every write; an uncertain effect is not automatically replayed. This immediate write is not reverted by the run branch. A field the issue edit screen does not offer is ignored by Jira. dryRun on (default) = SIMULATED.',
   fields: [
     { key: 'dryRun', label: 'Dry run (no real update)', type: 'boolean', default: true },
     { key: 'project', label: 'Project key', type: 'string', required: true, default: 'KAN' },
     { key: 'issueKey', label: 'Issue key', type: 'string', required: true },
     { key: 'summary', label: 'New summary', type: 'string' },
-    { key: 'labels', label: 'Labels, replaces the list (comma separated)', type: 'string' },
+    { key: 'labels', label: 'Labels, replaces the list (comma separated)', type: 'string', help: 'Include any existing watcher label you want to keep. Omitting it removes it and can stop the Jira Done watcher from matching this issue.' },
   ],
   outputs: [{ key: 'updated', description: 'true when Jira accepted the update' }],
   validate(cfg) {

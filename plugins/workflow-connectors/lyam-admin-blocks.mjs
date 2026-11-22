@@ -236,7 +236,7 @@ const lyamReadRun = readBlock('lyam-read-run', 'Read a workflow run', 'Reads the
     return r;
 });
 
-const lyamAwaitRun = readBlock('lyam-await-run', 'Wait for a sub-workflow run', 'Waits, by polling the run state (read only), until the child run started by lyam-start-workflow completes, for at most timeoutSeconds (1 to 120). It FAILS the step when the child failed, was canceled, is parked on a human task, or did not finish in time: the step never reports a child as done that is not. The wait is inside one step, not a durable suspension: a restart simply polls again (nothing is written). For a longer wait, use a human task or read the run later.', [
+const lyamAwaitRun = readBlock('lyam-await-run', 'Wait for a sub-workflow run', 'Waits, by polling the run state (read only), until the child run started by lyam-start-workflow completes, for at most timeoutSeconds (1 to 120). It FAILS the step when the child failed, was canceled, or did not finish in time (human-waiting children are polled until timeout): the step never reports a child as done that is not. The wait is inside one step, not a durable suspension: a restart simply polls again (nothing is written). For a longer wait, use a human task or read the run later.', [
     { key: 'runId', label: 'Child run id', type: 'string', required: true },
     { key: 'timeoutSeconds', label: 'Maximum wait in seconds (1 to 120)', type: 'number', default: 30 },
     { key: 'pollSeconds', label: 'Poll every N seconds (1 to 10)', type: 'number', default: 2 },
@@ -252,8 +252,9 @@ const lyamAwaitRun = readBlock('lyam-await-run', 'Wait for a sub-workflow run', 
         const r = await runs.get(ctx.tenant, runId);
         if (r.status === 'completed') { ctx.log(`run ${r.id}: completed`); return { ...r, finished: true }; }
         if (r.status === 'failed' || r.status === 'canceled') bad(`lyam-await-run: the child run ${r.id} ${r.status}`);
-        if (Date.now() + poll * 1000 > until) bad(`lyam-await-run: the child run ${r.id} is still ${r.status} after ${timeout}s (a run parked on a human task needs that decision first)`);
-        await new Promise((res) => setTimeout(res, poll * 1000));
+        const remaining = until - Date.now();
+        if (remaining <= 0) bad(`lyam-await-run: the child run ${r.id} is still ${r.status} after ${timeout}s (a run parked on a human task needs that decision first)`);
+        await new Promise((res) => setTimeout(res, Math.min(poll * 1000, remaining)));
     }
 });
 
@@ -300,7 +301,7 @@ const lyamSetLoginEnabled = writeBlock('lyam-set-login-enabled', 'Enable or disa
     return { id: c.id, enabled: c.enabled, updated: true };
 });
 
-const lyamResolveIntake = writeBlock('lyam-resolve-intake-request', 'Resolve a signup or profile request', 'REAL: administrator starter required. Resolves the exact snapshot read earlier; changed or self requests are refused. Signup approve requires workspace mode and email confirmation and creates the user ON THE RUN BRANCH, publication still required. Signup reject removes the pending request immediately. Profile resolution uses the existing immediate personal-branch merge/refusal. Self edits and resolution are serialized inside one API process, not across API replicas. A crash during the call stops for review, never blindly repeats. Pending signup requests are in memory and do not survive a server restart.', [
+const lyamResolveIntake = writeBlock('lyam-resolve-intake-request', 'Resolve a signup or profile request', 'REAL: administrator starter required. Resolves the exact snapshot read earlier; changed or self requests are refused. Signup approve is REFUSED before effects until publication-aware request finalization exists: a discarded branch must not lose the request or emit an early approval/account-block event. Signup reject removes the pending request immediately. Profile resolution uses the existing immediate personal-branch merge/refusal. Self edits and resolution are serialized inside one API process, not across API replicas. A crash during the call stops for review, never blindly repeats. Pending signup requests are in memory and do not survive a server restart.', [
     { key: 'kind', label: 'Kind', type: 'select', options: ['signup', 'profile'], required: true },
     { key: 'subject', label: 'Request id', type: 'string', required: true },
     { key: 'snapshot', label: 'Digest from Read request', type: 'string', required: true },
@@ -309,7 +310,6 @@ const lyamResolveIntake = writeBlock('lyam-resolve-intake-request', 'Resolve a s
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) return { kind: c.kind, subject: c.subject, resolved: false, dryRun: true };
     if (!['signup', 'profile'].includes(c.kind) || !['approve', 'reject'].includes(c.decision)) bad('kind: signup/profile; decision: approve/reject');
-    await ctx.markEffectPending?.({ kind: c.kind, subject: c.subject, decision: c.decision });
     return need(ctx.intake, 'lyam-resolve-intake-request').resolve(c.kind, c.subject, c.snapshot, c.decision);
 });
 

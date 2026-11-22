@@ -45,9 +45,8 @@ const plugin = loadPluginModule('directory', 'signup.mjs') as SignupPluginModule
 export class SignupService {
   private readonly notifier?: PluginRegistry;
   private readonly events?: ApplicationBus;
-  async prepareWorkflowApproval() { if (!this.users) throw new Error('directory unavailable'); await this.users.init(); }
   private readonly manager: ReturnType<SignupPluginModule['createSignupManager']>;
-  constructor(profile: ProfileService, @Optional() private readonly users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry) {
+  constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry) {
     this.notifier = reg; this.authn = authn; this.events = events;
     this.manager = plugin.createSignupManager({
       signupOpen: (t) => profile.signupOpen(t),

@@ -191,9 +191,11 @@ describe('badge ticket then sheet trace recovery', () => {
   });
 });
 
-describe('Jira comment and transition are non-repeatable external effects', () => {
+describe('Jira writes and Sheets column creation stop on uncertain external effects', () => {
   const real = { executionMode: 'real', connectionId: 'conn-test', realConfirmed: true };
   const cfgs: Record<string, object> = {
+    'jira-update-issue': { project: 'KAN', issueKey: 'KAN-1', summary: 'Fictional update', ...real },
+    'google-sheets-create-column': { source: 'google', spreadsheetId: 'fictional-sheet', sheetId: 1, columnName: 'receipt', ...real },
     'jira-add-comment': { project: 'KAN', issueKey: 'KAN-1', comment: 'hello', ...real },
     'jira-transition-issue': { project: 'KAN', issueKey: 'KAN-1', transitionId: '31', ...real },
   };

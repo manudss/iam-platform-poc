@@ -1,12 +1,11 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { SignupService } from '../profile/signup.service.js';
-import { workspaceMode } from '../workspace/context.js';
 import { ProfileService } from '../profile/profile.service.js';
 
 /** Admin intake operations reuse the existing business services, not SQL copies of their rules.
  * Snapshot digests bind a resolution to the request read by this workflow. No password/hash/token is exposed.
- * Profile resolution is immediate; signup approval writes on the run branch and still needs publication.
+ * Profile resolution is immediate. Signup approval is refused until publication-aware finalization exists.
  */
 @Injectable()
 export class WorkflowIntake {
@@ -38,10 +37,7 @@ export class WorkflowIntake {
   }
   async prepareResolve(kind: string, decision: string, starter: string) {
     this.admin(starter);
-    if (kind === 'signup' && decision === 'approve') {
-      if (!workspaceMode()) throw new ForbiddenException('workflow signup approval requires workspace mode to isolate the new account on its run branch');
-      await this.signup?.prepareWorkflowApproval();
-    }
+    if (kind === 'signup' && decision === 'approve') throw new ForbiddenException('workflow signup approval requires publication-aware request finalization; no signup effect was performed');
   }
   async resolve(tenant: string, kind: string, subject: string, snapshot: string, decision: string, starter: string): Promise<{ kind: string; subject: string; resolved: string; publicationRequired?: boolean; immediate?: boolean }> {
     this.admin(starter);
@@ -49,13 +45,9 @@ export class WorkflowIntake {
     if (subject.split(';')[0] === starter) throw new ForbiddenException('a starter cannot resolve their own signup or profile request');
     const request = await this.raw(tenant, kind, subject);
     if (!/^[a-f0-9]{64}$/.test(snapshot) || this.hash(request) !== snapshot) throw new ConflictException('request changed since it was read; read and review again');
-    if (kind === 'signup') {
-      if (decision === 'approve') {
-        if (!workspaceMode()) throw new ForbiddenException('workflow signup approval requires workspace mode to isolate the new account on its run branch');
-        await this.signup!.approve(tenant, subject, starter, snapshot);
-      }
-      else this.signup!.reject(subject, tenant, snapshot);
-    } else await this.profile!.resolveReviewedSnapshot(tenant, subject, decision === 'approve', starter, snapshot);
-    return { kind, subject, resolved: decision, ...(kind === 'signup' && decision === 'approve' ? { publicationRequired: true } : { immediate: true }) };
+    await this.prepareResolve(kind, decision, starter);
+    if (kind === 'signup') this.signup!.reject(subject, tenant, snapshot);
+    else await this.profile!.resolveReviewedSnapshot(tenant, subject, decision === 'approve', starter, snapshot);
+    return { kind, subject, resolved: decision, immediate: true };
   }
 }
