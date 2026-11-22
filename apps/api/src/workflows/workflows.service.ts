@@ -388,8 +388,12 @@ export class WorkflowsService {
     await this.tasksSvc()?.cancelForRun(tenant, view.run.id);
     // A run parked between steps (queued, or running without a live executor after a crash) is canceled here.
     // Atomic: a pass that reached a terminal state between the check above and this write keeps it.
-    if (!await this.store.transitionRun(view.run.id, { status: 'canceled', finished_at: now() }, ['queued', 'running', 'waiting']))
-      throw new ConflictException(`this run just turned ${(await this.store.getRun(tenant, view.run.id))?.status ?? 'unknown'}: cancel did not land`);
+    if (!await this.store.transitionRun(view.run.id, { status: 'canceled', finished_at: now() }, ['queued', 'running', 'waiting'])) {
+      const current = await this.store.getRun(tenant, view.run.id);
+      // cancelFlag wakes a live executor. It can complete this same cancellation before our CAS.
+      // That is success, not a conflict. Other terminal states must still remain untouched.
+      if (current?.status !== 'canceled') throw new ConflictException(`this run just turned ${current?.status ?? 'unknown'}: cancel did not land`);
+    }
     return this.runView(tenant, view.run.id);
   }
 
