@@ -202,6 +202,7 @@ describe('packaged profile components (plugins/*/screens/*.mjs)', () => {
     expect(cur.type).toBe('password'); expect(next.type).toBe('password');
     const btns = root.querySelectorAll('.reveal-btn'); expect(btns.length).toBe(2);
     const b = btns[1] as HTMLButtonElement; expect(b.getAttribute('type')).toBe('button'); expect(b.getAttribute('aria-pressed')).toBe('false');
+    expect(b.textContent).toBe(''); expect(b.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); b.dispatchEvent(down); expect(down.defaultPrevented).toBe(true);
     b.click(); expect(next.type).toBe('text'); expect(cur.type).toBe('password'); expect(b.getAttribute('aria-pressed')).toBe('true');
     const wrap = next.closest('.reveal-wrap')!;

@@ -17,11 +17,15 @@ describe('RevealPassword', () => {
     expect(a.type).toBe('password'); expect(btn).toBeTruthy();
     expect(btn.getAttribute('type')).toBe('button'); expect(btn.getAttribute('aria-pressed')).toBe('false');
     expect(btn.getAttribute('aria-label')).toBe('Show what you typed');
+    expect(btn.textContent).toBe(''); expect(btn.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect(btn.querySelector('svg')?.getAttribute('focusable')).toBe('false');
+    expect(btn.querySelectorAll('svg path').length).toBe(1);
   });
   it('toggles only the input type, then hides again on blur and on destroy', () => {
     const f = mount(); const el: HTMLElement = f.nativeElement;
     const a = el.querySelector('#a') as HTMLInputElement; const btn = el.querySelector('.reveal-btn') as HTMLButtonElement;
     btn.click(); expect(a.type).toBe('text'); expect(btn.getAttribute('aria-pressed')).toBe('true'); expect(btn.getAttribute('aria-label')).toBe('Hide what you typed');
+    expect(btn.querySelectorAll('svg path').length).toBe(2);
     const wrap = a.closest('.reveal-wrap')!;
     wrap.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: btn })); expect(a.type).toBe('text');   // moving to the button keeps it
     wrap.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null })); expect(a.type).toBe('password');
