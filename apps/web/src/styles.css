@@ -75,5 +75,5 @@ button.danger{color:var(--on-bad)}
 .reveal-wrap > input[type] { width: 100%; min-width: 0; box-sizing: border-box; padding-inline-end: 3rem; }
 .reveal-wrap > .reveal-btn { position: absolute; inset-inline-end: 2px; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 40px; height: 40px; max-height: calc(100% - 4px); min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: .4rem; background: transparent; color: var(--ink, currentColor); font: inherit; cursor: pointer; }
 .reveal-wrap > .reveal-btn svg { display: block; width: 20px; height: 20px; pointer-events: none; }
-.reveal-wrap > .reveal-btn:hover { background: var(--row-hover, #7772); }
+.reveal-wrap > .reveal-btn:hover { background: var(--row-hover); }
 .reveal-wrap > .reveal-btn:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; }
