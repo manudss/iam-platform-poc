@@ -8,3 +8,4 @@ export * from './workflows/templates';
 export * from './workflows/editor';
 export * from './workflows/executions';
 export * from './workflows/list';
+export * from './workflows/tasks';

@@ -98,6 +98,7 @@ External actions default to <b>Simulation</b>. <b>Real external actions</b> requ
   <a class="btn secondary" routerLink="/workflows/templates" title="Start from a template">+ Templates</a>
   <a class="btn" routerLink="/workflows/edit/new">+ New workflow</a>
   <a class="btn secondary" routerLink="/workflows/runs">Executions</a>
+  <a class="btn secondary" routerLink="/workflows/tasks">Task inbox</a>
   <a class="btn secondary" routerLink="/workflows/connections">Connections</a>
 </div>
 <div class="wlc-tools">
