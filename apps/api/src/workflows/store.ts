@@ -246,6 +246,17 @@ export class WorkflowStore {
     const m = await this.meta();
     try { await m.query(`update workflow_runs set ${sets.join(', ')} where id = ?`, vals); } finally { await m.end(); }
   }
+  /** Boot-resume failure marker: set ONLY while the run is still resumable and carries no more useful error
+   * (a run that turned terminal, or failed for its own reason since the scan, keeps its state untouched). */
+  async markResumeFailed(id: string, message: string): Promise<void> {
+    const m = await this.meta();
+    try { await m.query("update workflow_runs set error = ? where id = ? and status in ('queued','running','waiting') and (error is null or error like 'RESUME_FAILED:%')", [message, id]); } finally { await m.end(); }
+  }
+  /** Clears the boot-resume marker once a resume actually succeeded. Never touches any other error. */
+  async clearResumeFailed(id: string): Promise<void> {
+    const m = await this.meta();
+    try { await m.query("update workflow_runs set error = null where id = ? and error like 'RESUME_FAILED:%'", [id]); } finally { await m.end(); }
+  }
   /** Per-definition run statistics for the list cards (test runs excluded; POC-scale aggregation in JS). */
   async runStats(tenant: string): Promise<Map<string, { runs: number; ok: number; last: RunRow | null }>> {
     const out = new Map<string, { runs: number; ok: number; last: RunRow | null }>();

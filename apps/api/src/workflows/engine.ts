@@ -302,16 +302,31 @@ export class WorkflowEngine implements OnModuleInit {
    * faulted). After the last attempt the run keeps its status but carries an explicit RESUME_FAILED error, so a
    * stuck run is visible and reconciliable instead of silently 'running' forever. Every attempt only ever calls
    * kick: execution re-derives from the persisted steps, so no effect is blindly replayed. */
+  private resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  private resumeStopped = false;
+  onModuleDestroy() { this.resumeStopped = true; for (const t of this.resumeTimers) clearTimeout(t); this.resumeTimers.clear(); }
+  private resumeDelay(ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { this.resumeTimers.delete(t); resolve(!this.resumeStopped); }, ms);
+      this.resumeTimers.add(t);
+    });
+  }
   private async resumeWithRetry(run: RunRow, firstError: string) {
     const delays = (process.env.WF_RESUME_RETRY_DELAYS_MS ?? '5000,30000,120000').split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n) && n > 0);
     let last = firstError;
     for (const d of delays) {
-      await new Promise((r) => setTimeout(r, d));
-      try { (await this.engineFor(run)).kick(run.id); this.log.log(`run ${run.id} resumed after a retry`); return; } catch (e) { last = (e as Error).message; }
+      if (!(await this.resumeDelay(d))) return; // shutting down: no late write after close
+      try {
+        (await this.engineFor(run)).kick(run.id);
+        this.log.log(`run ${run.id} resumed after a retry`);
+        try { await this.store.clearResumeFailed(run.id); } catch { /* the marker stays, the run did resume */ }
+        return;
+      } catch (e) { last = (e as Error).message; }
     }
+    if (this.resumeStopped) return;
     const message = `RESUME_FAILED: engine unavailable after ${delays.length + 1} attempts: ${last}`;
     this.log.error(`run ${run.id}: ${message}`);
-    try { await this.store.updateRun(run.id, { error: message }); } catch (e) { this.log.error(`run ${run.id}: the resume failure could not be recorded: ${(e as Error).message}`); }
+    try { await this.store.markResumeFailed(run.id, message); } catch (e) { this.log.error(`run ${run.id}: the resume failure could not be recorded: ${(e as Error).message}`); }
   }
 
   /** Starts the asynchronous execution of a run already recorded as queued. Returns immediately. */

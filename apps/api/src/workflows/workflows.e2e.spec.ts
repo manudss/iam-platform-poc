@@ -55,6 +55,10 @@ interface RunView { run: { id: string; status: string; branch: string | null; er
 // base boots with the plugins already enabled and the boot-time resume scan is the normal path - no manual
 // re-enable. A memory store (the previous harness) lost the enablement at restart, which forced the old restart
 // test to re-enable by hand and re-trigger the scan: an assisted proof, not the production path.
+// DIVERGENCE from the flat production factory (plugins-v1.module): that one REFUSES a Dolt store when a shipped
+// plugin declares secret settings (SSO plugins do); this harness registers the same shipped list without that
+// guard because no secret value is ever written here (nothing SSO is configured). The durability and boot
+// ordering under test are identical; the secret-refusal policy itself is not exercised by this suite.
 const durablePlugins = async (v: VersioningService, events: ApplicationBus, busRef: BusHostRef): Promise<PluginRegistry> => {
   const ds = new DoltPluginStore(v);
   const r = new PluginRegistry(ds, ds, (e) => console.log(`[plugins] ${JSON.stringify(e)}`), ds);
