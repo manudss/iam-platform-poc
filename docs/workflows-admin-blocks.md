@@ -29,8 +29,9 @@ accepted guarantee.
 - **Engine recovery**: runs interrupted by a crash resume automatically after restart; this is
   proven against the **durable plugin store** (DoltPluginStore). A bounded retry
   (`resumeWithRetry`) tolerates a plugin that is enabled again shortly after boot; if the window
-  is exceeded the run carries a visible `RESUME_FAILED:<runId>` error and a restart (or a new
-  resume request) picks it up. The marker is only written while the run is still resumable and
+  is exceeded the run carries a visible `RESUME_FAILED: engine unavailable after N attempts: <cause>`
+  error; the demonstrated recovery from that state is a restart (a task decision also kicks the run).
+  The marker is only written while the run is still resumable and
   never overwrites a terminal run or a more useful error, and it is cleared when a later retry
   succeeds. Pending retry timers are cancelled on shutdown.
 - **Minimized review outputs**: recertification review items expose only what the reviewer needs.
@@ -61,19 +62,32 @@ that is the documented, expected difference, not a bug.
 ## Visual proof (local demo)
 
 `scripts/wf-shots.mjs` drives a real local stack (Dolt + NATS + core + API + built console) with
-system Chrome: real sign-in of `demo-alice` through the IdP, a publish-approval workflow created
-on a fresh working branch and merged to `main` through the pull-request flow, a run started by
-its public webhook trigger (so the starter is `webhook` and the administrator may decide),
-decision in the inbox, real merge of the run-branch pull request, declaration on the merge-watch
-task, and a completed run. Captures live under `docs/images/wf-admin-blocks/`:
+system Chrome. Two channels are used, and the captures only prove what each channel is:
+
+- **Done in the UI (real browser, real IdP sign-in as `demo-alice`)**: navigation, inbox
+  filtering, opening the approval task, typing the justification, clicking `approved`.
+- **Done through the API (same identity, admin capability)**: working-branch creation, workflow
+  definition save, both pull-request merges, the webhook trigger fire, and the `merged`
+  declaration on the merge-watch task.
+
+One test aid, not a standard journey: the console keeps the operator-typed admin capability
+token in memory only, so a scripted full-page reload would lose it. The script injects the same
+`x-api-admin-token` header at fetch level on every request. The captures therefore prove the UI
+journey under a real IdP sign-in, not that an unassisted navigation session preserves admin
+rights — the documented operator path remains typing the token in the shell header field.
+
+Captures live under `docs/images/wf-admin-blocks/` (captions limited to what is visible):
 
 1. `01-console-home.png` — console after sign-in.
 2. `02-workflows-list.png` — workflows list.
 3. `03-templates.png` — templates gallery.
 4. `04-run-waiting.png` — run waiting on the publication approval.
-5. `05-task-inbox-open.png` — task inbox, approval selected.
-6. `06-task-decided.png` — decision `approved` with justification, "the run resumes".
-7. `07-run-after-decision.png` — run completed, both steps done.
+5. `05-task-inbox-open.png` — task inbox with the approval selected; the list also shows older
+   tasks from earlier capture attempts, some genuinely past their due time.
+6. `06-task-decided.png` — the "Task decided: approved. The run resumes." banner (the typed
+   justification is below the fold).
+7. `07-run-after-decision.png` — run `completed` with both graph nodes checked; only the first
+   step row is readable in the steps list without scrolling.
 
 The script is repeatable: it creates a fresh working branch per run and revokes the previous
 proof grant first, so the grant step always has a real change to publish.
