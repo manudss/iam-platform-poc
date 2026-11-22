@@ -1,4 +1,5 @@
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
+import type { WorkflowIntake } from './intake.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
 import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
 import { forwardRef, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
@@ -64,6 +65,8 @@ interface EngineDeps {
   publish?: PublishEffects;
   runs?: unknown;
   policies?: unknown;
+  connectionTests?: unknown;
+  intake?: WorkflowIntake;
   pluginsAdmin?: unknown;
   log: { warn: (m: string) => void; error: (m: string) => void };
 }
@@ -160,7 +163,7 @@ export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
   private readonly deps: EngineDeps;
 
-  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown, @Optional() @Inject(forwardRef(() => PullRequestService)) private readonly prs?: unknown) {
+  constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown, @Optional() @Inject(forwardRef(() => PullRequestService)) private readonly prs?: unknown, @Optional() @Inject('WORKFLOW_INTAKE') private readonly intake?: WorkflowIntake) {
     this.deps = {
       store,
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
@@ -179,7 +182,18 @@ export class WorkflowEngine implements OnModuleInit {
       users: this.userEffects(),
       links: this.linkEffects(store),
       tasks: (tasks ?? undefined) as WorkflowTasksService | undefined, reads: (reads ?? undefined) as WorkflowReads | undefined, iga: (iga ?? undefined) as WorkflowsIgaService | undefined,
+      intake: this.intake,
       runs: this.runEffects(),
+      connectionTests: { test: async (tenant: string, ref: string, ids: string[], startedBy: string) => {
+        if (!(tasks as WorkflowTasksService | undefined)?.isAdmin(startedBy)) throw new BadRequestException('connection probes require a run started by an administrator');
+        if (!this.connections) throw new BadRequestException('managed connections unavailable');
+        const results: Record<string, unknown>[] = [];
+        for (const id of ids) {
+          try { results.push(await branchContext.run({ branch: ref }, () => this.connections!.test(tenant, id))); }
+          catch { results.push({ id, status: 'Failed', message: 'Connection unavailable or test refused.' }); }
+        }
+        return { results };
+      } },
       publish: this.publishEffects(v),
       policies: { validate: async (_tenant: string, candidate: unknown) => { try { const r = await new CorePolicySource().validate(candidate as never); return { valid: true, ...(r && typeof r === 'object' ? r as unknown as Record<string, unknown> : {}) }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } } },
       log: { warn: (m) => this.log.warn(m), error: (m) => this.log.error(m) },

@@ -12,6 +12,10 @@ import { join, resolve } from 'node:path';
 import { CanActivate, ExecutionContext, ForbiddenException, INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { WorkflowsModule } from './workflows.module.js';
+import { branchContext } from '../workspace/context.js';
+import { WorkflowIntake } from './intake.js';
+import { SignupService } from '../profile/signup.service.js';
+import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsController } from './workflows.controller.js';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { VersioningModule } from '../versioning/versioning.module.js';
@@ -75,7 +79,7 @@ const durablePluginsFactory = { factory: durablePlugins, inject: [VersioningServ
 const call = async (method: string, path: string, body?: object, o: { token?: string | null; admin?: string | null } = {}) => {
   const token = o.token === undefined ? `${T}:demo-alice` : o.token;
   const admin = o.admin === undefined ? ADMIN : o.admin;
-  const r = await fetch(`${API}/tenants/${T}${path}`, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...(admin ? { 'x-api-admin-token': admin } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(`${API}/tenants/${T}${path}`, { method, headers: { 'content-type': 'application/json', ...(process.env.IAM_WORKSPACE_MODE === '1' ? { 'x-iam-branch': 'main' } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}), ...(admin ? { 'x-api-admin-token': admin } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const text = await r.text(); let json: unknown; try { json = JSON.parse(text); } catch { json = text; }
   return { status: r.status, body: json as never };
 };
@@ -115,7 +119,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       if (spawnSync(doltBin, ['--host', '127.0.0.1', '--port', String(PORT), '--no-tls', '-u', 'root', 'sql', '-q', 'select 1'], { env }).status === 0) break;
       await new Promise((r) => setTimeout(r, 150));
     }
-    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice,admin-two', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
+    Object.assign(process.env, { DOLT_PORT: String(PORT), DOLT_DATABASE: 'iam', IAM_CREDENTIAL_FILE: join(dir, 'credentials.json'), IAM_API_ADMIN_TOKEN: ADMIN, IAM_API_ADMIN_SUBJECTS: 'demo-alice,admin-two', IAM_API_IGA_SUBJECTS: 'demo-alice,iga-reviewer' });
     delete process.env.IAM_WORKSPACE_MODE;
     const m = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
     app = m.createNestApplication(); await app.init(); await app.listen(13432);
@@ -527,6 +531,16 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
     await waitRun(started.run.id, ['waiting']);
     const task = await waitTask(started.run.id, 'iga-review');
+    const unauthorizedDef = await ok('POST', '/workflows', { name: 'Unauthorized replacement', graph: { nodes: [
+      { id: 'move', type: 'iga-reassign-review', name: 'move', config: { campaignId: task.detail.campaignId, from: 'demo-alice', to: 'admin' } },
+    ], edges: [] } }) as { definition: { id: string } };
+    const unauthorized = await call('POST', `/workflows/${unauthorizedDef.definition.id}/runs`, {}, { token: `${T}:not-an-iga-admin` });
+    assert.equal(unauthorized.status, 403, 'the legacy route guard also refuses this starter');
+    // Trigger/internal launch bypasses route guards: the operation itself must still refuse.
+    const internal = await app.get(WorkflowsService).start(T, unauthorizedDef.definition.id, 'not-an-iga-admin');
+    const rejectedMove = await waitRun(internal.run.id, ['failed']);
+    assert.match(String(rejectedMove.run.error), /admin or an IGA pool member/);
+    assert.equal((await app.get(WorkflowStore).getTask(task.id))?.delegated_to, null, 'opening Workflows does not authorize moving a review');
     const meta = await createConnection({ host: '127.0.0.1', port: PORT, user: 'root', database: 'iam_meta', dateStrings: true });
     try { await meta.query("update workflow_tasks set due_at = '2020-01-01 00:00:00.000' where id = ?", [task.id]); } finally { await meta.end(); }
     const tasks = app.get(WorkflowTasksService);
@@ -928,6 +942,16 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       await meta.query("update workflow_runs set status='running', finished_at=null where id=?", [runB.run.id]);
       await meta.query("update workflow_steps set status='running', finished_at=null, output=null where run_id=? and node_id='grant'", [runB.run.id]);
     } finally { await meta.end(); }
+    // C: a whole IGA campaign waits across the same real application restart.
+    const defC = (await ok('POST', '/workflows', { name: 'Restart recertification', graph: { nodes: [
+      { id: 'campaign', type: 'iga-create-campaign', name: 'campaign', config: { name: 'Restart review', users: 'demo-bob', ref: 'main' } },
+      { id: 'open', type: 'iga-open-review-tasks', name: 'open', config: { campaignId: '{{steps.campaign.id}}', assignTo: 'iga' } },
+      { id: 'await', type: 'iga-await-decisions', name: 'await', config: { campaignId: '{{steps.campaign.id}}' } },
+      { id: 'close', type: 'iga-close-campaign', name: 'close', config: { campaignId: '{{steps.campaign.id}}' } },
+    ], edges: [{ from: 'campaign', to: 'open' }, { from: 'open', to: 'await' }, { from: 'await', to: 'close' }] } })) as { definition: { id: string } };
+    const runC = await ok('POST', `/workflows/${defC.definition.id}/runs`) as RunView;
+    await waitRun(runC.run.id, ['waiting']);
+    const reviewC = await waitTask(runC.run.id, 'iga-review');
     // REAL restart: the whole Nest application stops and boots again over the SAME Dolt base.
     await app.close();
     const m2 = await Test.createTestingModule({ imports: [WorkflowsModule, VersioningModule] }).overrideGuard(AuthGuard).useValue(new FakeAuth()).overrideProvider(PluginRegistry).useFactory(durablePluginsFactory).compile();
@@ -936,6 +960,14 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     // resume scan (onModuleInit, run during app.init) recovers the interrupted runs on the NORMAL path - no
     // manual re-enable, no re-triggered scan.
     assert.equal((await call('GET', '/workflows')).status, 200, 'the plugin enablement survived the restart (durable store)');
+    const persistedC = await app.get(WorkflowStore).getTask(reviewC.id);
+    assert.equal(persistedC?.status, 'open', 'IGA review task survives application restart');
+    const cTasks = (await app.get(WorkflowStore).listTasks(T, { runId: runC.run.id })).filter(t => t.kind === 'iga-review');
+    assert.equal(cTasks.length, 1, 'restart did not duplicate the review task');
+    assert.ok((await call('POST', `/workflow-tasks/${reviewC.id}/decision`, { decision: 'approved' }, { token: `${T}:iga-reviewer` })).status < 300);
+    const completedC = await waitRun(runC.run.id, ['completed']);
+    const evidenceC = completedC.steps.find(st => st.node_id === 'close')!.output as { evidence: { totals: { approved: number } } };
+    assert.equal(evidenceC.evidence.totals.approved, 1, 'the same durable campaign closes with its evidence after restart');
     // B: the resume scan refuses to guess the effect of the cut step: failed closed, marked for reconciliation.
     const vB = await waitRun(runB.run.id, ['failed'], 30000);
     assert.match(String(vB.run.error), /interrupted by a restart/, 'the crashed run fails closed');
@@ -952,6 +984,35 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const vA = (await ok('GET', `/workflow-runs/${runA.run.id}`)) as RunView;
     assert.equal(vA.run.status, 'completed', 'the waiting run resumed and completed after the restart');
     assert.ok(((vA.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).merged) === true);
+  });
+
+  it('signup intake workflow uses the real signup service, writes only the run branch and projects no credentials', async () => {
+    let intakeFailure = ''; const intake = app.get(WorkflowIntake); const originalResolve = intake.resolve.bind(intake);
+    intake.resolve = async (...args) => { try { return await originalResolve(...args); } catch (e) { intakeFailure = String((e as Error).message); throw e; } };
+    const signup = app.get(SignupService);
+    // Fictional preconfirmed request. No real mailbox, password or external service.
+    signup.pending.set('intake-demo', { tenant: T, id: 'intake-demo', display_name: 'Intake Demo', email: 'intake@example.invalid', values: {}, confirmed: true, salt: 'fictional-salt', hash: 'fictional-hash', at: Date.now() });
+    const def = await ok('POST', '/workflows', { name: 'Signup intake', graph: { nodes: [
+      { id: 'read', type: 'lyam-read-intake-request', name: 'read', config: { kind: 'signup', subject: 'intake-demo' } },
+      { id: 'resolve', type: 'lyam-resolve-intake-request', name: 'resolve', config: { kind: 'signup', subject: 'intake-demo', snapshot: '{{steps.read.snapshot}}', decision: 'approve' } },
+    ], edges: [{ from: 'read', to: 'resolve' }] } }) as { definition: { id: string } };
+    const oldWorkspace = process.env.IAM_WORKSPACE_MODE; process.env.IAM_WORKSPACE_MODE = '1';
+    try {
+    const start = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).start(T, def.definition.id, 'demo-alice')) as RunView;
+    let done: RunView = start; const until = Date.now() + 20000;
+    while (!['completed', 'failed'].includes(done.run.status) && Date.now() < until) {
+      await new Promise(r => setTimeout(r, 100));
+      done = await branchContext.run({ branch: 'main' }, () => app.get(WorkflowsService).runView(T, start.run.id)) as RunView;
+    }
+    assert.equal(done.run.status, 'completed', (done.run.error ?? '') + ' ' + intakeFailure);
+    assert.ok(done.run.branch);
+    const live = (await app.get(VersioningService).tableRows('main', 'identities', 100, 0)) as unknown as { rows: { id: string }[] };
+    assert.ok(!live.rows.some(x => x.id === 'intake-demo'), 'approval does not publish the new account');
+    const branch = await app.get(VersioningService).tableRows(done.run.branch!, 'identities', 100, 0) as unknown as { rows: { id: string }[] };
+    assert.ok(branch.rows.some(x => x.id === 'intake-demo'));
+    assert.ok(!JSON.stringify(done).includes('fictional-hash') && !JSON.stringify(done).includes('fictional-salt'));
+    assert.equal((done.steps.find(st => st.node_id === 'resolve')!.output as any).publicationRequired, true);
+    } finally { intake.resolve = originalResolve; if (oldWorkspace === undefined) delete process.env.IAM_WORKSPACE_MODE; else process.env.IAM_WORKSPACE_MODE = oldWorkspace; }
   });
 
   it('connection CRUD and draft probes stay behind tenant/auth/admin and never reveal credentials', async()=>{

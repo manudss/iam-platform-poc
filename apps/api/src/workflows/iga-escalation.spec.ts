@@ -235,3 +235,16 @@ describe('active live review target checks', () => {
     }
   });
 });
+
+describe('IGA action-time recheck after preparation', () => {
+  it('refuses access drift immediately before a prepared branch revocation', async () => {
+    const { iga } = setup();
+    const item = { id: 'i', identity: 'emp', state: 'remediation-prepared', payload: { roles: ['r1'] } };
+    (iga as any).store.igaListItems = async () => [item];
+    (iga as any).readsRef = { listAssignments: async () => ({ assignments: [{ role: 'r1' }] }) };
+    await iga.assertPreparedAction('acme', 'iga-1', 'i', 'emp', 'r1');
+    (iga as any).readsRef = { listAssignments: async () => ({ assignments: [{ role: 'r1' }, { role: 'r2' }] }) };
+    await assert.rejects(iga.assertPreparedAction('acme', 'iga-1', 'i', 'emp', 'r1'), /after preparation/);
+    await assert.rejects(iga.assertPreparedAction('acme', 'iga-1', 'i', 'other', 'r1'), /not a prepared/);
+  });
+});

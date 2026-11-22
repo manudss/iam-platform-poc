@@ -41,6 +41,7 @@ export function createSignupManager(deps) {
     if (hits.size > 5000) hits.clear();
   };
   const purge = () => { const now = Date.now(); for (const [k, p] of pending) if (now - p.at > TTL_MS) pending.delete(k); };
+  const project = p => ({ id: p.id, display_name: p.display_name, email: p.email, values: p.values, confirmed: p.confirmed, at: new Date(p.at).toISOString() });
   const api = {
     // Exposed for tests and operational inspection.
     pending, hits,
@@ -68,7 +69,7 @@ export function createSignupManager(deps) {
       const dup = [...pending.values()].some((p) => p.id === b.id || p.email.toLowerCase() === b.email.toLowerCase());
       if (taken || dup || pending.size >= MAX_PENDING) return NEUTRAL;
       const token = randomBytes(24).toString('base64url'), salt = randomBytes(24).toString('hex');
-      pending.set(b.id, { id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
+      pending.set(b.id, { tenant, id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
       // The confirmation e-mail goes through the notify.templates renderer + notify.default slot when the core
       // wires `deliver` (docs/mail-templates.md); the legacy dep outboxSend stays for adapters without it.
       if (deps.deliver) await deps.deliver({ tenant, to: b.email, template: 'signup-confirmation', data: { token, subjectUser: b.id }, subjectUser: b.id, effectKey: `signup-confirmation:${b.id}:${sha(token).slice(0, 16)}` });
@@ -78,15 +79,17 @@ export function createSignupManager(deps) {
       deps.emit('signup.requested', tenant, branch, { subject: b.id, email: b.email });
       return NEUTRAL;
     },
-    confirm(_tenant, token) {
+    confirm(tenant, token) {
       const t = typeof token === 'string' ? sha(token) : '';
-      for (const p of pending.values()) if (t && p.tokenHash === t && Date.now() - p.at <= TTL_MS) p.confirmed = true;
+      for (const p of pending.values()) if (p.tenant === tenant && t && p.tokenHash === t && Date.now() - p.at <= TTL_MS) p.confirmed = true;
       return { status: 'ok', message: 'If the code was valid, the request now waits for administrator approval.' };
     },
-    list() { purge(); return { requests: [...pending.values()].map((p) => ({ id: p.id, display_name: p.display_name, email: p.email, values: p.values, confirmed: p.confirmed, at: new Date(p.at).toISOString() })) }; },
+    list(tenant) { purge(); return { requests: [...pending.values()].filter(p => tenant === undefined || p.tenant === tenant).map(project) }; },
     /** Creates a plain account on the CURRENT working branch (live only after Apply). No role is granted, ever. */
-    async approve(tenant, id, actor) {
+    async approve(tenant, id, actor, expectedSnapshot) {
       const p = pending.get(id); if (!p) throw new NotFoundException('unknown request');
+      if (p.tenant !== tenant) throw new NotFoundException('unknown request');
+      if (expectedSnapshot && sha(JSON.stringify(project(p))) !== expectedSnapshot) throw new ConflictException('request changed since review');
       if (!p.confirmed) throw new ConflictException('the e-mail address is not confirmed yet');
       if (!deps.usersSave) throw new ForbiddenException('no directory');
       const user = await deps.usersSave(p.id, { id: p.id, display_name: p.display_name, email: p.email, login_enabled: true }, true, { salt: p.salt, hash: p.hash }, tenant);
@@ -95,7 +98,7 @@ export function createSignupManager(deps) {
       deps.emit('signup.approved', tenant, deps.currentBranch() ?? 'main', { subject: p.id, email: p.email });
       return { approved: true, user, note: 'Created on the working branch with no role. Sign-in works after Apply.' };
     },
-    reject(id) { if (!pending.delete(id)) throw new NotFoundException('unknown request'); return { rejected: true }; },
+    reject(id, tenant, expectedSnapshot) { if (expectedSnapshot && (!pending.has(id) || sha(JSON.stringify(project(pending.get(id)))) !== expectedSnapshot)) throw new ConflictException('request changed since review'); if (tenant !== undefined && pending.get(id)?.tenant !== tenant) throw new NotFoundException('unknown request'); if (!pending.delete(id)) throw new NotFoundException('unknown request'); return { rejected: true }; },
   };
   return api;
 }

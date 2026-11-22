@@ -9,7 +9,7 @@ const src = { source: 'google', spreadsheetId: 'fictional-sheet', sheetId: 7 };
 const runner = (header: string[], calls: { action: string; props: any }[]) => async (_pkg: string, action: string, a: { propsValue: any }) => {
   calls.push({ action, props: a.propsValue });
   if (action === 'get-many-rows') return [{ row: 1, values: Object.fromEntries(header.map((h, i) => [String.fromCharCode(65 + i), h])) }];
-  return {};
+  return { updatedCells: 1 };
 };
 describe('google sheets create column', () => {
   it('adds a new header after one fresh read', async () => {

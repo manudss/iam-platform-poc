@@ -1,49 +1,55 @@
 # Workflow admin blocks: coverage and evidence
 
-Status at this commit. Evidence levels: **block** = the block exists in the catalogue; **double** = a test against in-memory doubles; **real piece** = the real Activepieces action against a local fake server; **real Dolt** = a spec on a real Dolt server. A block existing says nothing about its quality.
+This is a traceability matrix, not a production-readiness claim. Evidence: **block** means catalogue presence; **double** means controlled dependencies; **piece fixture** runs the installed Activepieces action against a local fake HTTP server or nock fixture; **Dolt integration** uses real Dolt, durable workflow store, engine and application bus. HTTP authentication in the workflow integration suite is faked; the real AdminGuard remains active. No live Jira/Google account was called.
 
-## Families
+## Fourteen families
 
-| Family | Blocks | Evidence |
+| ID / family | Implementation | Evidence and limits |
 |---|---|---|
-| Reads (users, roles, assignments, organizations, applications, authn, profile schema, runs) | `lyam-read-*`, `lyam-search-users`, `lyam-list-*` | block, double |
-| Users and profiles | `lyam-create-user`, `lyam-update-user`, `lyam-set-login-enabled`, `set-profile-field` | block, double. **Gap**: no block that handles a sign-up request or a self-service profile change review. |
-| Roles and assignments | `lyam-create-role`, `lyam-update-role` (new), `lyam-grant-assignment`, `lyam-revoke-assignment`, `lyam-simulate-assignment`, `lyam-propose-role-removal` | block, double. SoD conflicts are read through `lyam-simulate-assignment` only: **gap**, no separate SoD read. |
-| Organizations | `lyam-create-organization`, `lyam-assign-organization`, `lyam-org-impact`, `lyam-remove-org-member`, `lyam-propose-org-removal` | block, double |
-| Approvals and tasks | `lyam-request-approval`, task inbox, delegation, anti-self-approval | block, double, real Dolt (task consumption) |
-| Publication | `lyam-read-diff`, `lyam-request-publish`, `lyam-publish-workspace` | block, double, real Dolt |
-| Applications | `lyam-create-application`, `lyam-set-application-enabled`, `lyam-set-application-roles`, `lyam-propose-application-removal` | block, double |
-| Authentication | `lyam-read-authn`, `lyam-read-enrollments`, `lyam-propose-authn-policy`, `lyam-request-reenrollment` | block, double. Re-enrollment is immediate and not versioned. |
-| Policies | `lyam-validate-policy`, `lyam-propose-policy-change` | block, double |
-| Plugins, mail templates, theme | `lyam-read-plugin-states`, `lyam-propose-plugin-change`, mail template and theme read/preview/propose | block, double |
-| Imports | `lyam-import-csv`, `lyam-import-scim` | block, double. **Gap**: no bulk connection test. |
-| External connectors (Activepieces) | Sheets read/update/add-row; Jira create/search plus **get, comment, transition (new)** | block, double; Jira get/comment/transition: real piece against a local fake Jira server. Not tested against a real Jira site. **Gap**: Sheets find-rows and create-column are not wrapped. |
-| Sub-workflows | `lyam-start-workflow`, `lyam-read-run` | block, double. **Gap**: no block that waits for a child run; the child is followed by reading its run. |
-| Delegations | `lyam-list-delegations`, `lyam-revoke-delegation-request` | block, double. **Gap**: no block that proposes a bounded access for an agent. |
-| IGA recertification | `iga-*` | see below |
+| F1 Reads | User/search, role, assignment, organization, application, authn, profile schema, run projections | `admin-blocks`, `reads`, `workflows.e2e`; persisted workflow reads omit profile/email by default |
+| F2 Users and profiles | Create/update, login enablement, profile field; read/resolve signup and self-profile review | `intake` adapter doubles and actual ProfileService serialization; `workflows.e2e` actual SignupService creates only on run branch, not main. Signup approve requires workspace mode; in-memory pending requests are not restart-durable. Profile resolution is immediate. Snapshot/self-edit serialization is single-process, not distributed |
+| F3 Roles and assignments | Create/update, grant/revoke, simulation, explicit current SoD conflicts, removal proposal | `admin-blocks`, `workflows.e2e`; branch writes and SoD simulation, not automatic publication |
+| F4 Organizations | Create/assign, impact, member removal, removal proposal | block + double |
+| F5 Approvals and tasks | Request, inbox, decision, delegation, overdue/reassignment, anti-self-approval | `tasks-service`, `task-consume-dolt`, `iga-escalation`, `workflows.e2e`; validated caller and current active target |
+| F6 Publication | Diff, publication request, publisher precheck, human merge | `workflows.e2e`, `publish-*`; real Dolt/publisher with activation registries stubbed. Not a live deployment |
+| F7 Applications | Create, enablement, role binding, removal proposal | block + double |
+| F8 Authentication | Read policies/enrollments, policy proposal, re-enrollment request, first access | block + double. Re-enrollment is immediate and not versioned; demo outbox only. Secured password-reset path remains frozen and NOT READY; generic temporary-password block is unchanged |
+| F9 Policies | Validate, propose changes | block + double |
+| F10 Plugins, mail and theme | Read state, propose plugin/settings, mail template/theme read/preview/proposal | block + double. No permission to install arbitrary code |
+| F11 Imports and external connectors | CSV/SCIM; bounded group connection probes; Sheets read/add/update/find rows/create column; Jira create/search/get/update/comment/transition | `google-sheets-contract`, `jira-actions`, `sheet-create-column`; actual installed pieces on local fixtures, not live accounts. Existing Sheets update-row reuses `update_row`. Jira update verifies returned fields; external effects stop for review when uncertain. Column precheck is not a lock against concurrent header creation |
+| F12 Sub-workflows | Start/read child; bounded await | `admin-blocks`; wait polls up to 120 seconds, fails on failed/canceled/timeout, polls a human-waiting child until timeout. Not a durable asynchronous child join; restarting starts polling again |
+| F13 Delegations | List/revoke request; bounded agent-access proposal | `admin-blocks`; proposal requires exact tool scope, beneficiary, upstream delegation and future expiry within 24 hours. Proposal only: no grant, secret or automatic activation |
+| F14 IGA recertification | Campaign, reviews, delayed escalation, decisions, prepared removal, closure/evidence | Six steps and five criteria below |
 
-## IGA recertification, six steps
+Error-route notification can use the existing error edge and notification blocks. The generic notification is simulated, and workflow mail uses the demo outbox; no real delivery claim is made.
 
-| Step | Block / service | Evidence |
+## IGA: six steps
+
+| Step | Implementation | Evidence |
 |---|---|---|
-| 1. Freeze the scope | `iga-create-campaign` (cap 200 items, Lyam roles only) | double |
-| 2. List items | `iga-list-items` | double |
-| 3. Open review tasks | `iga-open-review-tasks`, now with optional `dueInDays` (1 to 90) and `escalateTo` | double |
-| 3b. Late and absent validators (new) | `iga-read-overdue` (read only), `iga-reassign-review`; a manager that is unknown or login-disabled sends the task to the IGA pool and the item says so | double |
-| 4. Decisions | `iga-await-decisions`, durable tasks, anti-self-approval | double, real Dolt (tasks) |
-| 5. Remediation | `iga-prepare-remediation` (re-reads access, reports a conflict), `iga-mark-remediated` (re-reads the ref) | double |
-| 6. Close with evidence | `iga-close-campaign`, `iga-read-campaign` | double |
+| 1 Freeze scope | `iga-create-campaign`, up to 200 items, Lyam roles only | `workflows.e2e`: keep, prepare revoke, reject, removed and absent-manager campaigns on real Dolt |
+| 2 List items | `iga-list-items`, minimal projections | double + Dolt integration |
+| 3 Open reviews | `iga-open-review-tasks`, bounded deadline, explicit escalation target; unknown/disabled manager routes to pool, read outage fails rather than being treated as absent | `iga-escalation`, `workflows.e2e` |
+| 4 Collect decisions | `iga-await-decisions`, durable open tasks, anti-self-review, caller-authorized reassignment | `tasks-service`, `workflows.e2e`: delayed review stays visible, escalates once, authorized pool decision resumes campaign |
+| 5 Prepare and confirm remediation | Snapshot access recheck during preparation, again immediately before prepared branch revocation; mark-remediated rejects remaining snapshot roles and newly appeared roles | `iga-escalation`, `iga-mark-remediated`, `workflows.e2e`. The action-time check is not atomic with a later human branch merge |
+| 6 Close with evidence | Campaign summary/digest, unresolved removals remain visible, explicit authorized exceptions | double + complete real-Dolt campaigns in `workflows.e2e` |
 
-Decisions fixed by the owner for this increment: a late review stays visible and is escalated once, never revoked or kept automatically; rights are Lyam roles only; no external or multi-level extension.
+Delays never choose retain/revoke automatically. No automatic reconciliation, unlock, external-right review or multilevel extension is added.
 
-## Acceptance criteria
+## Five acceptance criteria
 
-| Criterion | Test | Level |
+| Criterion | Concrete test / proof | Remaining boundary |
 |---|---|---|
-| Restart without loss | tasks are durable rows and a re-run of a step reuses its task; `task-consume-dolt.spec.ts` (kill after claim) | real Dolt for tasks; the campaign flow itself is not restarted end to end |
-| Validator in scope, no conflict of interest | `tasks-service.spec.ts` (anti-self-approval), `iga-escalation.spec.ts` (replacement refused when it is the person under review) | double |
-| Access changed after launch is detected | `iga-escalation.spec.ts` "access changed after the campaign launched" | double |
-| Removal refused or unknown stays visible, never closes wrongly | `iga-mark-remediated.spec.ts` | double |
-| Test run without real effect | every write block returns early in test and dry-run mode; `admin-blocks.spec.ts` | double |
+| Restart without loss | `workflows.e2e`: waiting IGA campaign, stop/recreate Nest app, same task, no duplicate, decision resumes and closes; `task-consume-dolt`: crash/claim consumption | Local single-process restart, not distributed failover |
+| Validator in scope, no conflict of interest | `tasks-service` + `iga-escalation`; real engine refuses unauthorized starter, legacy route refuses too; deadline validates active target on main; real delayed campaign decides through admin pool | Authn mocked in integration, real AdminGuard |
+| Access changed after launch detected | `iga-escalation`: snapshot mismatch before preparation and action-time check; `iga-mark-remediated`: newly appeared roles, including initially empty snapshot | No atomic guarantee covering a future human merge |
+| Refused or unknown removal stays visible | `iga-mark-remediated` doubles; `workflows.e2e` refused/removed/exception closure paths | Full external entitlement reconciliation is outside this increment |
+| Test run without real effects | `admin-blocks`, `execution-safety`, `workflows.e2e`: test/dry no-op, no grant/revoke data branch for retained/delayed campaigns; fixture-only connector calls | A fixture test is not evidence of live provider delivery |
 
-No criterion is covered by a full end-to-end real-Dolt campaign run.
+## Operational boundaries
+
+Run-branch changes still need review/publication. Immediate profile resolution, rejection, factor changes and notifications are not undone by discarding a branch. Intake effects record an uncertainty marker before calling the business service; a crash requires review, not blind replay. Pending signup requests and the profile serialization lock are local to one API process. Long-lived child waiting, multi-replica intake coordination, live provider verification, and the secured reset path are not claimed complete.
+
+## Current validation checkpoint
+
+TypeScript compilation and focused signup integration pass. The latest combined local run completed all listed subtests without a failure, but its process did not exit before the runner timeout, so that invocation is not a green suite verdict. Final clean-exit validation and CI are still pending.

@@ -106,8 +106,8 @@ export class WorkflowsIgaService {
       let managerAbsent = false;
       if (assignTo === 'manager' && manager) {
         // Absence (unknown identity, login disabled) is not a read failure: a failed read stops the step (it can be retried, tasks are idempotent per step) instead of being filed as an absent manager.
-        try { const u = await this.reads?.readUser(tenant, campaign.ref, manager); managerAbsent = !u || u.loginEnabled === false; }
-        catch (e) { if (/unknown identity/i.test((e as Error).message)) managerAbsent = true; else throw new ConflictException(`cannot tell whether the manager "${manager}" is available (read failed: ${(e as Error).message}): no task opened for this item, retry`); }
+        try { const u = await this.reads?.readUser(tenant, 'main', manager); managerAbsent = !u || u.loginEnabled === false; }
+        catch (e) { if (/unknown identity/i.test((e as Error).message)) managerAbsent = true; else throw new ConflictException(`cannot tell whether the manager "${manager}" is available (read failed): no task opened for this item, retry`); }
       }
       const assignee = assignTo === 'manager' ? (manager && !managerAbsent ? manager : 'iga') : assignTo;
       const t = await this.tasks.request({
@@ -215,6 +215,20 @@ export class WorkflowsIgaService {
     return { campaign: campaignId, remediation: out, actor };
   }
 
+  /** Recheck the live campaign ref immediately before a prepared action writes to its run branch.
+   * This is not atomic with the later human merge; Dolt conflict review and markRemediated remain required.
+   */
+  async assertPreparedAction(tenant: string, campaignId: string, itemId: string, identity: string, role: string) {
+    const campaign = await this.get(tenant, campaignId);
+    if (campaign.status !== 'open' || !this.reads) throw new ConflictException('campaign closed or live reads unavailable');
+    const item = (await this.listItems(tenant, campaignId)).items.find(i => i.id === itemId);
+    if (!item || item.identity !== identity || item.state !== 'remediation-prepared' || !Array.isArray(item.payload?.roles) || !(item.payload.roles as string[]).includes(role)) throw new ConflictException('action is not a prepared reviewed role of this campaign item');
+    const roles = item.payload.roles as string[];
+    const current = (await this.reads.listAssignments(campaign.ref, { identity })).assignments.map(a => a.role);
+    if (roles.some(r => !current.includes(r)) || current.some(r => !roles.includes(r))) throw new ConflictException('access changed after preparation: review again before applying the action');
+    return { checkedOn: campaign.ref };
+  }
+
   /** Step 4b: the remediation of an item was APPLIED (through a controlled change, e.g. the run branch of
    *  the calling workflow): record the application and its proof. Never called by a decision alone. */
   /** A remediation is 'remediated' only when the revoked roles are EFFECTIVELY gone on the campaign ref
@@ -239,6 +253,9 @@ export class WorkflowsIgaService {
     // payload means the item is corrupt (or hand-written), never "nothing to verify" - that would fail open.
     if (!Array.isArray(item.payload?.roles)) throw new ConflictException('this item has no valid role snapshot (payload.roles missing or malformed): review it again before marking anything remediated');
     const roles = item.payload.roles as string[];
+    if (!this.reads) throw new BadRequestException('live reads unavailable: cannot verify remediation');
+    const currentRoles = (await this.reads.listAssignments(campaign.ref, { identity: item.identity })).assignments.map(a => a.role);
+    if (currentRoles.some(r => !roles.includes(r))) throw new ConflictException('new access appeared after review: review again before marking remediated');
     // A denied item whose snapshot held NO role (an explicitly empty array) has nothing to revoke: the
     // remediation is vacuously effective (the denial and its reason stay on the evidence file). Refusing
     // it would strand the item in remediation-prepared forever and make the campaign impossible to close.

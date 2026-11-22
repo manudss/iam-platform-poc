@@ -45,6 +45,8 @@ export interface WfBlockCtx {
   iga?: import('./iga.service.js').WorkflowsIgaService;
   runs?: { get: (tenant: string, runId: string) => Promise<Record<string, unknown>>; start: (tenant: string, workflowId: string, input: Record<string, unknown>, startedBy: string) => Promise<Record<string, unknown>> };
   publish?: { diff: (from: string, to: string) => Promise<unknown>; status: (tenant: string, id: number) => Promise<{ pullRequest: unknown }>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: Record<string, unknown>; reused: boolean }> };
+  intake?: { read: (kind: string, subject: string) => Promise<Record<string, unknown>>; resolve: (kind: string, subject: string, snapshot: string, decision: string) => Promise<Record<string, unknown>> };
+  connectionTests?: { test: (tenant: string, ref: string, ids: string[], startedBy: string) => Promise<Record<string, unknown>> };
   policies?: { validate: (tenant: string, candidate: unknown) => Promise<Record<string, unknown>> };
   branchWrite: (fn: (db: { query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]> }) => Promise<void>, message?: string) => Promise<void>;
 }

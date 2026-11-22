@@ -65,5 +65,19 @@ export async function createGoogleColumn(auth, source, columnName, run = runPiec
   const header = (await readGoogleRows(auth, source, false, run)).find(r => r.rowNumber === 1);
   if (!header) throw new Error('Google Sheet requires a header row');
   if (Object.values(header.values).some(v => String(v) === columnName)) throw new Error('Google Sheet column already exists');
-  return run(PACKAGE, 'create-column', { auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, columnName } });
+  const result = await run(PACKAGE, 'create-column', { auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, columnName } });
+  if (!(Number(result?.updatedCells) >= 1)) throw new Error('Google Sheets did not confirm the new column header; inspect the sheet before retrying');
+  return result;
+}
+
+/** Uses the installed Find Rows action. Resolve the named header first because its columnName is a LETTER, not a header label. */
+export async function findGoogleRows(auth, source, columnName, searchValue, limit = 100, run = runPieceAction) {
+  const raw = await readGoogleRows(auth, source, false, run);
+  const header = raw.find(r => r.rowNumber === 1);
+  const letter = Object.keys(namedColumns(header, { [columnName]: 'find' }))[0];
+  return sheetRows(await run(PACKAGE, 'find_rows', { auth, propsValue: {
+    spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false,
+    columnName: letter, searchValue, matchCase: true, startingRow: 2, numberOfRows: limit,
+    headerRow: 1, useHeaderNames: true,
+  } }));
 }

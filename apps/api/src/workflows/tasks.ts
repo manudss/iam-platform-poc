@@ -263,7 +263,7 @@ export class WorkflowTasksService {
           }
           if (resolved && (escalateTo === 'admin' || escalateTo === 'iga')) await this.store.patchTaskDetail(t.id, { pool: escalateTo });
         }
-        catch (e) { resolved = null; await this.store.patchTaskDetail(t.id, { escalationError: 'target rejected; task retained with current decider' }); this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (${(e as Error).message}): the task stays with ${t.assignee}`); }
+        catch (e) { resolved = null; await this.store.patchTaskDetail(t.id, { escalationError: 'target rejected; task retained with current decider' }); this.log.warn(`task ${t.id}: escalation target "${escalateTo}" rejected (validation failed): the task stays with ${t.assignee}`); }
       }
       if (resolved) await this.store.delegateTask(t.id, resolved, t.due_at);
       if (!t.reminded_at) {

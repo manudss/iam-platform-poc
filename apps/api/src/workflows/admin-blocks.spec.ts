@@ -273,3 +273,30 @@ describe('lyam-await-run bounded read-only wait', () => {
     for (const status of ['failed', 'canceled', 'waiting']) await assert.rejects(b.run(mk({ runs: { get: async () => ({ id: 'child', status }) } as never, config: cfg }).c));
   });
 });
+
+describe('SoD read, bounded agent proposal and connection probes', () => {
+  it('SoD read computes with no hypothetical grants or revocations', async () => {
+    const b = externalBlock('lyam-read-sod-conflicts')!;
+    const out = await b.run(mk({ reads: { simulateAssignments: async (_r: string, g: unknown[], r: unknown[]) => { assert.deepEqual(g, []); assert.deepEqual(r, []); return { conflicts: [], conflictsCount: 0 }; } } as never }).c);
+    assert.equal(out!.conflictsCount, 0);
+  });
+  it('bounded access is a proposal only, admin pool, no wildcard or unbounded expiry', async () => {
+    const b = externalBlock('lyam-propose-agent-access')!;
+    const cfg = { identity: 'bot', upstream: 'jira', tool: 'getIssue', expiresAt: new Date(Date.now() + 3600000).toISOString(), reason: 'read one issue' };
+    const clean = b.validate(cfg); assert.equal(clean.assignee, 'admin');
+    assert.equal((clean.detail as any).proposalOnly, true);
+    assert.throws(() => b.validate({ ...cfg, tool: '*' }));
+    assert.throws(() => b.validate({ ...cfg, expiresAt: '2020-01-01' }));
+    const tasks = fakeTasks();
+    await assert.rejects(b.run(mk({ config: clean, tasks: tasks as never }).c), /waiting/);
+    assert.equal(tasks.tasks.size, 1);
+  });
+  it('connection bulk test is a no-op in tests, caps the list and forwards the trusted run starter', async () => {
+    const b = externalBlock('lyam-test-connections')!; let calls = 0;
+    const connectionTests = { test: async (_t: string, _r: string, ids: string[], starter: string) => { calls++; assert.deepEqual(ids, ['one', 'two']); assert.equal(starter, 'boss'); return { results: [] }; } };
+    const c = mk({ config: { ids: 'one,two,one' }, startedBy: 'boss', connectionTests } as never).c;
+    await b.run({ ...c, test: true }); assert.equal(calls, 0);
+    await b.run(c); assert.equal(calls, 1);
+    await assert.rejects(b.run({ ...c, config: { ids: '../bad' } }));
+  });
+});

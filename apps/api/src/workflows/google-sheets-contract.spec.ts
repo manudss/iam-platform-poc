@@ -94,3 +94,26 @@ describe('google-sheets-update through the block with the installed piece (netwo
     assert.deepEqual(body.values, [[null, null, null, null, null, null, 'ok']]);
   });
 });
+
+describe('Find Rows and Create Column installed piece contracts', () => {
+  const auth = { type: 'OAUTH2', access_token: 'FICTIONAL-CONTRACT' };
+  it('Find Rows resolves a named header and returns only exact matches with real row numbers', async () => {
+    googleFixture();
+    const rows = await helpers.findGoogleRows(auth, source, 'nom', 'Durand', 100);
+    assert.deepEqual(rows.map((r: any) => r.rowNumber), [4]);
+    assert.equal(rows[0].values.nom, 'Durand');
+  });
+  it('Create Column inserts at the end then writes its header, through the installed piece', async () => {
+    googleFixture();
+    const insert = nock('https://sheets.googleapis.com').post('/v4/spreadsheets/fictional-contract-sheet:batchUpdate', (body: any) => {
+      assert.equal(body.requests[0].insertDimension.range.startIndex, headers.length);
+      assert.equal(body.requests[0].insertDimension.range.dimension, 'COLUMNS');
+      return true;
+    }).reply(200, {});
+    const write = nock('https://sheets.googleapis.com').put(/\/values\//, (body: any) => {
+      assert.deepEqual(body.values, [['new-column']]); return true;
+    }).query(true).reply(200, { updatedCells: 1 });
+    await helpers.createGoogleColumn(auth, source, 'new-column');
+    assert.ok(insert.isDone() && write.isDone());
+  });
+});

@@ -2,7 +2,7 @@ import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { runPieceAction } from './adapter.mjs';
-import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, createGoogleColumn } from './sheets-api.mjs';
+import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, createGoogleColumn, findGoogleRows } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
@@ -323,12 +323,34 @@ const sheetsAddRow = {
   },
 };
 
+const sheetsFindRows = {
+  type: 'google-sheets-find-rows', family: 'Google Sheets', label: 'Find sheet rows (Activepieces)', simulated: false,
+  description: 'Finds exact, case-sensitive matches in a named header through the Activepieces Find Rows action, capped at 200. Refuses missing or duplicate headers. Read only. The demo sheet is local simulated data.',
+  fields: [...sheetSourceFields, { key: 'columnName', label: 'Header to search', type: 'string', required: true }, { key: 'searchValue', label: 'Exact value', type: 'string', required: true }, { key: 'limit', label: 'Maximum matches (1 to 200)', type: 'number', default: 100 }],
+  outputs: [{ key: 'rows', description: 'Matching rows with rowNumber and values' }, { key: 'count', description: 'Number of returned matches (capped)' }],
+  validate(cfg) {
+    const limit = Number(cfg.limit ?? 100);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) bad('limit: an integer from 1 to 200');
+    return { ...sheetSource(cfg), columnName: str(cfg.columnName, 'columnName', 60), searchValue: str(cfg.searchValue, 'searchValue', 200), limit };
+  },
+  async run(ctx) {
+    const c = ctx.config;
+    if (ctx.dryRun) return { rows: [], count: 0, dryRun: true };
+    if (c.source === 'demo-sheet') { const rows = demoSheet.rows().filter(r => String(r.values[c.columnName] ?? '') === c.searchValue).slice(0, c.limit); return { rows, count: rows.length }; }
+    const auth = googleAuth(ctx.settings);
+    if (!auth) bad('google-sheets-find-rows: configure a managed Google Sheets connection first');
+    const rows = await findGoogleRows(auth, c, c.columnName, c.searchValue, c.limit);
+    ctx.log(`Google Sheets: ${rows.length} matching row(s), capped at ${c.limit} (read only)`);
+    return { rows, count: rows.length };
+  },
+};
+
 const sheetsCreateColumn = {
   type: 'google-sheets-create-column',
   family: 'Google Sheets',
   label: 'Add a sheet column (Activepieces)',
   simulated: false,
-  description: 'Adds a header column to a Google Sheet through the Activepieces google-sheets piece. Refused when a column with that header already exists (never a duplicate header). On the demo sheet nothing is changed. A real column is an external write not reverted by the run branch.',
+  description: 'Adds a header column to a Google Sheet through the Activepieces google-sheets piece. Refused when the precheck finds an existing header. Concurrent header edits between the precheck and insertion are not locked. On the demo sheet nothing is changed. A real column is an external write not reverted by the run branch.',
   fields: [
     ...sheetSourceFields,
     { key: 'columnName', label: 'Column header', type: 'string', required: true },
@@ -507,8 +529,9 @@ const jiraUpdateIssue = {
   async run(ctx) {
     const c = ctx.config;
     if (c.dryRun || ctx.dryRun) { ctx.log(`DRY-RUN: would update Jira issue ${c.issueKey} (nothing changed)`); return { updated: false, dryRun: true }; }
-    await runPieceAction('@activepieces/piece-jira-cloud', 'update_issue', { auth: jiraAuth(ctx, 'jira-update-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, issueFields: { ...(c.summary ? { summary: c.summary } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } } });
-    ctx.log(`Jira issue ${c.issueKey} updated (REAL external write)`);
+    const result = await runPieceAction('@activepieces/piece-jira-cloud', 'update_issue', { auth: jiraAuth(ctx, 'jira-update-issue'), propsValue: { projectId: c.project, issueId: c.issueKey, issueFields: { ...(c.summary ? { summary: c.summary } : {}), ...(c.labels.length ? { labels: c.labels } : {}) } } });
+    if ((c.summary && result?.fields?.summary !== c.summary) || (c.labels.length && JSON.stringify([...(result?.fields?.labels ?? [])].sort()) !== JSON.stringify([...c.labels].sort()))) throw new Error('Jira did not confirm the requested field values; inspect the issue before retrying');
+    ctx.log(`Jira issue ${c.issueKey} updated and values confirmed (REAL external write)`);
     return { updated: true };
   },
 };
@@ -982,7 +1005,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

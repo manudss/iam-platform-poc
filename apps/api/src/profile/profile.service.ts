@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -84,6 +85,9 @@ export class ProfileService {
   }
   /** Immediate policy: the value changes at once (on main live, on the tested branch in a branch test). Review policy: the edits wait on the person's own pending change set until a validator accepts them — the same circuit on main and in a branch test; in a test the set is cut from and merged back into the TESTED branch, never main. */
   async patchSelf(tenant: string, sub: string, input: unknown, ref: 'live' | 'work' = 'live') {
+    return this.reviewLock(tenant, sub, () => this.patchSelfUnlocked(tenant, sub, input, ref));
+  }
+  private async patchSelfUnlocked(tenant: string, sub: string, input: unknown, ref: 'live' | 'work' = 'live') {
     await this.subject(tenant, sub, ref);
     const changes = await this.check(tenant, ref, 'self', input);
     const branch = ref === 'work' ? currentBranch() : 'main';
@@ -94,6 +98,24 @@ export class ProfileService {
     }
     return this.self(tenant, sub, ref);
   }
+  // One server process serializes self edits and resolutions of the same person's pending request.
+  // This does not claim distributed locking between API processes.
+  private reviewTails = new Map<string, Promise<unknown>>();
+  private async reviewLock<T>(tenant: string, subject: string, fn: () => Promise<T>): Promise<T> {
+    const key = JSON.stringify([tenant, subject.split(';')[0]]);
+    const next = (this.reviewTails.get(key) ?? Promise.resolve()).catch(() => undefined).then(fn);
+    this.reviewTails.set(key, next);
+    try { return await next; } finally { if (this.reviewTails.get(key) === next) this.reviewTails.delete(key); }
+  }
+
+  async resolveReviewedSnapshot(tenant: string, id: string, accept: boolean, actor: string, digest: string) {
+    return this.reviewLock(tenant, id, async () => {
+      const request = (await this.reviews(tenant)).reviews.find(r => r.id === id);
+      if (!request || createHash('sha256').update(JSON.stringify(request)).digest('hex') !== digest) throw new ForbiddenException('pending profile changed since review; read it again');
+      return this.resolveReviewUnlocked(tenant, id, accept, actor);
+    });
+  }
+
   /** Validator view: who has pending edits and what would change (current live value next to the proposed one). Profile values only: no authority field can be in a pending set. */
   async reviews(tenant: string) {
     const out = [];
@@ -108,6 +130,9 @@ export class ProfileService {
   }
   /** A validator cannot accept their own edits (separation of duties). Accepting merges the personal branch into its base (main, or the tested branch whose console the validator is using), refusing deletes it. */
   async resolveReview(tenant: string, id: string, accept: boolean, actor: string) {
+    return this.reviewLock(tenant, id, () => this.resolveReviewUnlocked(tenant, id, accept, actor));
+  }
+  private async resolveReviewUnlocked(tenant: string, id: string, accept: boolean, actor: string) {
     const i = id.lastIndexOf(';');
     const subject = i < 0 ? id : id.slice(0, i), base = i < 0 ? 'main' : id.slice(i + 1);
     if (!SUBJECT.test(subject)) throw new BadRequestException('invalid user id');

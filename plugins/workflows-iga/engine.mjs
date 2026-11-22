@@ -443,7 +443,7 @@ export function createWorkflowEngine(deps) {
       // The base ref is the approved configuration context, not the lazily created business-write branch.
       const connected = await deps.connectionFor(run.tenant, run.base_branch ?? deps.versioning.defaultBranch, resolved.config.connectionId, node.type);
       settings = connected.settings; secret = connected.secret;
-      const creation = node.type === 'google-sheets-create-column' || node.type === 'google-sheets-add-row' || node.type === 'jira-create-issue' || node.type === 'jira-add-comment' || node.type === 'jira-transition-issue' || (node.type === 'http-request' && !['GET', 'HEAD'].includes(resolved.config.method));
+      const creation = node.type === 'jira-update-issue' || node.type === 'google-sheets-create-column' || node.type === 'google-sheets-add-row' || node.type === 'jira-create-issue' || node.type === 'jira-add-comment' || node.type === 'jira-transition-issue' || (node.type === 'http-request' && !['GET', 'HEAD'].includes(resolved.config.method));
       if (creation) await store.patchStep(run.id, node.id, { error: 'EXTERNAL_EFFECT_REVIEW_REQUIRED' });
     } else if (!managed) settings = provider && deps.settingsFor ? await deps.settingsFor(run.tenant, run.branch ?? run.base_branch, provider) : {};
     // A real mail is a non-repeatable external effect: if the process stops before the step is recorded done, the run stops for review (the provider idempotency key makes a deliberate new run return the same mail within 24 hours).
@@ -517,6 +517,17 @@ export function createWorkflowEngine(deps) {
       startedBy: run.started_by,
       baseBranch: run.base_branch ?? deps.versioning.defaultBranch,
       tasks: deps.tasks,
+      connectionTests: deps.connectionTests,
+      intake: deps.intake ? {
+        read: (kind, subject) => deps.intake.read(run.tenant, kind, subject, run.started_by),
+        resolve: async (kind, subject, snapshot, decision) => {
+          // Signup approval writes a new identity onto the run branch. Profile resolution uses
+          // the existing service's immediate merge of the pending personal branch into main.
+          await deps.intake.prepareResolve(kind, decision, run.started_by);
+          const branch = kind === 'signup' && decision === 'approve' ? await ensureBranch(run, say) : (run.base_branch ?? deps.versioning.defaultBranch);
+          return deps.branchRun(branch, () => deps.intake.resolve(run.tenant, kind, subject, snapshot, decision, run.started_by));
+        },
+      } : undefined,
       reads: deps.reads,
       iga: deps.iga,
       runs: deps.runs,
@@ -546,7 +557,7 @@ export function createWorkflowEngine(deps) {
     }
     // Fail closed: a block output (or what it logged) that carries a run secret is never stored.
     if (deps.secrets) { const text = JSON.stringify(output ?? {}); if (deps.secrets.valuesOf(run.id).some(v => v && text.includes(v))) throw new Error('External action failed; check connection and provider status.'); }
-    if (managed && !simulation && ((node.type === 'google-sheets-create-column' && output?.created !== true) || (node.type === 'jira-create-issue' && !output?.key) || (node.type === 'jira-add-comment' && !output?.commentId) || (node.type === 'jira-transition-issue' && output?.transitioned !== true) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
+    if (managed && !simulation && ((node.type === 'jira-update-issue' && output?.updated !== true) || (node.type === 'google-sheets-create-column' && output?.created !== true) || (node.type === 'jira-create-issue' && !output?.key) || (node.type === 'jira-add-comment' && !output?.commentId) || (node.type === 'jira-transition-issue' && output?.transitioned !== true) || (node.type === 'google-sheets-add-row' && !(Number(output?.rowNumber) > 0)) || (node.type === 'http-request' && !(Number(output?.status) >= 200 && Number(output?.status) < 400)))) throw new Error('External response did not confirm success.');
     if (managed && !simulation) { try { output = JSON.parse(safe(JSON.stringify(output ?? {}))); } catch { output = {}; } }
 
     if (output !== undefined && output !== null && typeof output !== 'object') return { value: String(output) };

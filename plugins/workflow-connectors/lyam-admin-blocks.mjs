@@ -183,6 +183,27 @@ const lyamSimulateAssignment = readBlock('lyam-simulate-assignment', 'Simulate a
     return out;
 });
 
+const lyamReadIntake = readBlock('lyam-read-intake-request', 'Read a signup or profile request', 'Reads a pending request and returns its snapshot digest, never the password, email, token or profile values. Requires an administrator starter. Use the digest to resolve exactly that request; changed requests are refused.', [
+    { key: 'kind', label: 'Kind', type: 'select', options: ['signup', 'profile'], required: true },
+    { key: 'subject', label: 'Request id (user id for signup, review id for profile)', type: 'string', required: true },
+], async ctx => need(ctx.intake, 'lyam-read-intake-request').read(str(ctx.config.kind, 'kind', 10), str(ctx.config.subject, 'subject', 150)));
+
+const lyamTestConnections = readBlock('lyam-test-connections', 'Test managed connections (read only)', 'Runs the existing read-only probe for each named managed connection (maximum 10, sequential). A run started by an administrator is required by the server. Returns only the fixed status and safe failure class, never credentials or remote data. Simulation and test runs make no calls.', [
+    { key: 'ids', label: 'Managed connection ids (comma separated, maximum 10)', type: 'string', required: true },
+], async ctx => {
+    const ids = [...new Set(str(ctx.config.ids, 'ids', 400).split(',').map(v => v.trim()).filter(Boolean))];
+    if (!ids.length || ids.length > 10 || ids.some(id => !/^[a-z0-9][a-z0-9-]{0,38}$/.test(id))) bad('ids: one to ten managed connection ids');
+    if (ctx.test || ctx.dryRun) return { results: ids.map(id => ({ id, status: 'Simulated' })), dryRun: true };
+    return need(ctx.connectionTests, 'lyam-test-connections').test(ctx.tenant, ctx.baseBranch || 'main', ids, ctx.startedBy);
+});
+
+const lyamReadSodConflicts = readBlock('lyam-read-sod-conflicts', 'Read current SoD conflicts', 'Reads the conflicts of the current assignments against SoD rules on the selected ref. No hypothetical change, no write.', [
+    { key: 'ref', label: 'Ref', type: 'select', options: ['base', 'run'], default: 'base' },
+], async (ctx) => {
+    const r = await need(ctx.reads, 'lyam-read-sod-conflicts').simulateAssignments(readRef(ctx, ctx.config), [], []);
+    return { conflicts: r.conflicts, conflictsCount: r.conflictsCount };
+});
+
 const lyamListOrganizations = readBlock('lyam-list-organizations', 'List organizations', 'Lists the organizations and their members on a ref.', [
     { key: 'ref', label: 'Ref', type: 'select', options: ['base', 'run'], default: 'base' },
 ], async (ctx) => {
@@ -277,6 +298,19 @@ const lyamSetLoginEnabled = writeBlock('lyam-set-login-enabled', 'Enable or disa
     }, `workflow: ${c.enabled ? 'enable' : 'disable'} login ${c.id}`);
     ctx.log(`login ${c.enabled ? 'enabled' : 'disabled'} for "${c.id}" on the run branch`);
     return { id: c.id, enabled: c.enabled, updated: true };
+});
+
+const lyamResolveIntake = writeBlock('lyam-resolve-intake-request', 'Resolve a signup or profile request', 'REAL: administrator starter required. Resolves the exact snapshot read earlier; changed or self requests are refused. Signup approve requires workspace mode and email confirmation and creates the user ON THE RUN BRANCH, publication still required. Signup reject removes the pending request immediately. Profile resolution uses the existing immediate personal-branch merge/refusal. Self edits and resolution are serialized inside one API process, not across API replicas. A crash during the call stops for review, never blindly repeats. Pending signup requests are in memory and do not survive a server restart.', [
+    { key: 'kind', label: 'Kind', type: 'select', options: ['signup', 'profile'], required: true },
+    { key: 'subject', label: 'Request id', type: 'string', required: true },
+    { key: 'snapshot', label: 'Digest from Read request', type: 'string', required: true },
+    { key: 'decision', label: 'Decision', type: 'select', options: ['approve', 'reject'], required: true },
+], cfg => ({ kind: str(cfg.kind, 'kind', 10), subject: str(cfg.subject, 'subject', 150), snapshot: str(cfg.snapshot, 'snapshot', 120), decision: str(cfg.decision, 'decision', 10) }), async ctx => {
+    const c = ctx.config;
+    if (ctx.test || ctx.dryRun) return { kind: c.kind, subject: c.subject, resolved: false, dryRun: true };
+    if (!['signup', 'profile'].includes(c.kind) || !['approve', 'reject'].includes(c.decision)) bad('kind: signup/profile; decision: approve/reject');
+    await ctx.markEffectPending?.({ kind: c.kind, subject: c.subject, decision: c.decision });
+    return need(ctx.intake, 'lyam-resolve-intake-request').resolve(c.kind, c.subject, c.snapshot, c.decision);
 });
 
 const lyamCreateRole = writeBlock('lyam-create-role', 'Create a role', 'REAL write ON THE RUN BRANCH: creates a role (id, label, sensitivity). The change is reviewed and published like every other data change.', [
@@ -390,18 +424,19 @@ const lyamRevokeAssignment = writeBlock('lyam-revoke-assignment', 'Revoke a role
         const raw = String(cfg.action).trim();
         if (/^\{\{.+\}\}$/.test(raw)) return { action: raw }; // a loop placeholder resolves at runtime
         let a; try { a = JSON.parse(raw); } catch { bad('lyam-revoke-assignment.action: not valid JSON'); }
-        return { identity: userId(a?.identity, 'lyam-revoke-assignment.action.identity'), role: idf(a?.role, 'lyam-revoke-assignment.action.role') };
+        return { identity: userId(a?.identity, 'lyam-revoke-assignment.action.identity'), role: idf(a?.role, 'lyam-revoke-assignment.action.role'), ...(a?.campaignId ? { campaignId: str(a.campaignId, 'campaignId', 48), item: str(a.item, 'item', 48) } : {}) };
     }
     return { identity: userId(cfg.identity, 'lyam-revoke-assignment.identity'), role: idf(cfg.role, 'lyam-revoke-assignment.role') };
 }, async (ctx) => {
     let c = ctx.config;
     if (c.action && !c.identity) {
         let a; try { a = JSON.parse(String(c.action)); } catch { bad('lyam-revoke-assignment.action: the loop item is not a remediation action JSON'); }
-        c = { identity: userId(a?.identity, 'lyam-revoke-assignment.action.identity'), role: idf(a?.role, 'lyam-revoke-assignment.action.role') };
+        c = { identity: userId(a?.identity, 'lyam-revoke-assignment.action.identity'), role: idf(a?.role, 'lyam-revoke-assignment.action.role'), ...(a?.campaignId ? { campaignId: str(a.campaignId, 'campaignId', 48), item: str(a.item, 'item', 48) } : {}) };
     }
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would revoke "${c.role}" from "${c.identity}" on the run branch`); return { identity: c.identity, role: c.role, revoked: false }; }
     let revoked = false;
     await ctx.branchWrite(async (db) => {
+        if (c.campaignId) await need(ctx.iga, 'lyam-revoke-assignment').assertPreparedAction(ctx.tenant, c.campaignId, c.item, c.identity, c.role);
         const [u] = await db.query('select id from identities where id = ?', [c.identity]);
         if (!(u ?? []).length) bad(`lyam-revoke-assignment: unknown identity "${c.identity}"`);
         const [w] = await db.query('delete from assignments where identity_id = ? and role_id = ?', [c.identity, c.role]);
@@ -483,7 +518,7 @@ const igaPrepareRemediation = writeBlock('iga-prepare-remediation', 'IGA: prepar
     const r = await need(ctx.iga, 'iga-prepare-remediation').prepareRemediation(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, {});
     const prepared = r.remediation.filter((x) => x.actions && !x.conflict);
     // Loop-ready flat forms: one entry per revoke action, one per denied identity (mark-remediated loops over it).
-    const actions = prepared.flatMap((x) => (x.actions ?? []).filter((a) => a.type === 'revoke-role').map((a) => ({ item: x.item, identity: a.identity ?? x.identity, role: a.role })));
+    const actions = prepared.flatMap((x) => (x.actions ?? []).filter((a) => a.type === 'revoke-role').map((a) => ({ campaignId: c.campaignId, item: x.item, identity: a.identity ?? x.identity, role: a.role })));
     const deniedItems = prepared.map((x) => x.identity);
     ctx.log(`${prepared.length} item(s) prepared (${actions.length} revoke action(s)), ${r.remediation.filter((x) => x.conflict).length} conflict(s)`);
     const conflictItems = r.remediation.filter((x) => x.conflict);
@@ -716,6 +751,19 @@ const lyamListDelegations = readBlock('lyam-list-delegations', 'List the task de
 const lyamRevokeDelegationRequest = proposeBlock('lyam-revoke-delegation-request', 'Request a delegation revocation', 'Opens an approval task asking an administrator to revoke a delegation (the block never revokes it itself).',
     [{ key: 'task', label: 'Task id', type: 'string', required: true }, { key: 'reason', label: 'Reason', type: 'text', required: true }, { key: 'assignee', label: 'Decider', type: 'string', default: 'admin' }],
     (cfg) => ({ title: `Revoke the delegation of task ${str(cfg.task, 'task', 48)}`, detail: { task: str(cfg.task, 'task', 48), reason: str(cfg.reason, 'reason', 500) }, assignee: str(cfg.assignee, 'assignee', 64, false) || 'admin' }));
+
+const lyamProposeAgentAccess = proposeBlock('lyam-propose-agent-access', 'Propose bounded agent access', 'Opens an admin approval task for access by one identity to one named upstream tool until a required expiry. Proposal only: it creates no delegation secret and grants nothing. After approval an administrator must apply the bounded grant in the console; the decision alone is not access.', [
+    { key: 'identity', label: 'Agent identity id', type: 'string', required: true },
+    { key: 'upstream', label: 'Upstream id', type: 'string', required: true },
+    { key: 'tool', label: 'Exact tool name (no wildcard)', type: 'string', required: true },
+    { key: 'expiresAt', label: 'Expiry (ISO timestamp with timezone, within 24 hours)', type: 'string', required: true },
+    { key: 'reason', label: 'Reason', type: 'text', required: true },
+], cfg => {
+    const identity = userId(cfg.identity, 'identity'), upstream = idf(cfg.upstream, 'upstream'), tool = str(cfg.tool, 'tool', 64), expiresAt = str(cfg.expiresAt, 'expiresAt', 40);
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tool)) bad('tool: an exact tool name, no wildcard');
+    if (!/(Z|[+-]\d\d:\d\d)$/i.test(expiresAt) || !Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now() || Date.parse(expiresAt) > Date.now() + 86400000) bad('expiresAt: a future ISO timestamp with timezone within 24 hours');
+    return { title: `Bounded agent access for ${identity}`, assignee: 'admin', detail: { identity, upstream, tool, expiresAt, reason: str(cfg.reason, 'reason', 500), proposalOnly: true } };
+});
 
 const lyamReadDiff = {
     type: 'lyam-read-diff', family: 'lyam', label: 'Read the run branch diff', simulated: false, category: 'real',
@@ -1361,7 +1409,7 @@ const lyamApplyPasswordReset = {
 export const LYAM_ADMIN_BLOCKS = [
     // P0
     lyamRequestApproval,
-    lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
+    lyamReadUser, lyamSearchUsers, lyamListRoles, lyamListAssignments, lyamSimulateAssignment, lyamReadSodConflicts, lyamTestConnections, lyamReadIntake, lyamResolveIntake, lyamListOrganizations, lyamListApplications, lyamReadProfileSchema,
     lyamUpdateUser, lyamSetLoginEnabled, lyamCreateRole, lyamUpdateRole, lyamProposeRoleRemoval,
     igaCreateCampaign, igaListItems, igaOpenReviewTasks, igaAwaitDecisions, igaPrepareRemediation, igaMarkRemediated, igaCloseCampaign, igaReadCampaign, igaReadOverdue, igaReassignReviews,
     lyamGrantAssignment, lyamRevokeAssignment,
@@ -1369,7 +1417,7 @@ export const LYAM_ADMIN_BLOCKS = [
     // P1
     lyamCreateOrganization, lyamAssignOrganization, lyamCreateApplication, lyamCheckAccountBlocks, lyamStartWorkflow, lyamReadRun, lyamAwaitRun,
     // P2
-    lyamValidatePolicy, lyamProposePolicyChange, lyamReadPluginStates, lyamProposePluginChange, lyamListDelegations, lyamRevokeDelegationRequest,
+    lyamValidatePolicy, lyamProposePolicyChange, lyamReadPluginStates, lyamProposePluginChange, lyamListDelegations, lyamRevokeDelegationRequest, lyamProposeAgentAccess,
     // Completion of the brief's partial families
     lyamOrgImpact, lyamRemoveOrgMember, lyamProposeOrgRemoval,
     lyamSetApplicationEnabled, lyamSetApplicationRoles, lyamProposeApplicationRemoval,

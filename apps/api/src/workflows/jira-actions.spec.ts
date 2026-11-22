@@ -8,16 +8,17 @@ import { externalBlock } from './model.js';
 // What this shows: the piece builds the expected REST calls and the block maps the replies. It does not show behaviour against a real Jira site.
 async function withFakeJira(fn: (url: string, seen: { method: string; url: string; body: string }[]) => Promise<void>) {
   const seen: { method: string; url: string; body: string }[] = [];
+  let issueFields = { status: { name: 'Done' }, summary: 's', labels: ['a', 'b'] };
   const srv = http.createServer((req, res) => {
     let b = ''; req.on('data', (d) => (b += d));
     req.on('end', () => {
       seen.push({ method: req.method ?? '', url: req.url ?? '', body: b });
       res.setHeader('content-type', 'application/json');
       if ((req.url ?? '').includes('editmeta')) res.end(JSON.stringify({ fields: { summary: { key: 'summary', name: 'Summary', required: true, schema: { type: 'string', system: 'summary' }, operations: ['set'] }, labels: { key: 'labels', name: 'Labels', required: false, schema: { type: 'array', items: 'string', system: 'labels' }, operations: ['add', 'set', 'remove'] } } }));
-      else if (req.method === 'PUT') { res.statusCode = 204; res.end(); }
+      else if (req.method === 'PUT') { issueFields = { ...issueFields, ...JSON.parse(b).fields }; res.statusCode = 204; res.end(); }
       else if ((req.url ?? '').includes('/comment')) res.end(JSON.stringify({ id: '777' }));
       else if ((req.url ?? '').includes('/transitions')) { res.statusCode = 204; res.end(); }
-      else res.end(JSON.stringify({ key: 'KAN-1', fields: { status: { name: 'Done' }, summary: 's', labels: ['a', 'b'] } }));
+      else res.end(JSON.stringify({ key: 'KAN-1', fields: issueFields }));
     });
   });
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
