@@ -520,7 +520,14 @@ try {
     await page.waitForFunction((x) => location.pathname.startsWith(x), p);
     await page.waitForSelector('main.content section, main.content .stats');
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    assert.ok(over <= 2, `${p}: horizontal overflow of ${over}px at 390px`);
+    let detail = '';
+    if (over > 2) { // diagnostic only (the 2px tolerance and this assertion are unchanged): name the elements wider than the viewport, selector and sizes only, no text
+      const offenders = await page.evaluate(() => [...document.querySelectorAll('body *')].map((el) => ({ el, r: el.getBoundingClientRect() })).filter((x) => x.r.width > 0 && x.r.right > window.innerWidth + 2)
+        .slice(0, 8).map(({ el, r }) => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.classList.length ? '.' + [...el.classList].slice(0, 3).join('.') : ''} left=${Math.round(r.left)} width=${Math.round(r.width)} right=${Math.round(r.right)} position=${getComputedStyle(el).position}`));
+      await page.screenshot({ path: join(out, `overflow-${p.replace(/\W+/g, '_')}.png`), fullPage: true }).catch(() => {});
+      detail = ` (viewport ${await page.evaluate(() => window.innerWidth)}px, scrollWidth ${await page.evaluate(() => document.documentElement.scrollWidth)}px; wider than viewport: ${offenders.join(' | ') || 'none found'})`;
+    }
+    assert.ok(over <= 2, `${p}: horizontal overflow of ${over}px at 390px${detail}`);
   }
   await page.click('button.burger'); await page.waitForSelector('.layout.open nav a'); await page.waitForTimeout(500); await page.screenshot({ path: join(out, '9-mobile-menu.png') });
   await page.click('nav a[data-nav="/overview"]'); await page.waitForFunction(() => !document.querySelector('.layout.open'));
