@@ -37,6 +37,29 @@ const svc = (over: Record<string, unknown> = {}) => {
   return { s: new WorkflowTasksService(fakeStore(over) as never, undefined, { get: () => ({ kick: (id: string) => kicks.push(id) }) } as never), kicks };
 };
 
+describe('WorkflowsIgaService.close: an approved exception covers ONLY the unresolved set it approved', () => {
+  const mkIga = (items: { id: string; state: string }[]) => {
+    const store = {
+      igaGetCampaign: async () => ({ id: 'camp-1', tenant: 'acme', kind: 'user-access', name: 'c', ref: 'main', scope: {}, status: 'open', created_by: 'x', created_at: '', closed_at: null, closed_by: null, evidence: null }),
+      igaListItems: async () => items.map((i) => ({ ...i, identity: `id-of-${i.id}`, payload: {}, decided_by: null, decided_at: null, decision_reason: null })),
+      igaCloseCampaign: async () => undefined,
+    };
+    return new WorkflowsIgaService(store as never);
+  };
+  it('a drift between the approved unresolved set and the current one blocks the closure', async () => {
+    // One item stays remediation-prepared; the exception approved exactly that set: closure proceeds.
+    const ok = mkIga([{ id: 'item-1', state: 'remediation-prepared' }]);
+    const closed = await ok.close('acme', 'workflow:run-9', 'camp-1', { exception: { by: 'iga-lead', justification: 'accepted residual risk', approvedUnresolved: ['item-1'] } });
+    assert.equal((closed.evidence.totals as Record<string, unknown>).remediationPrepared, 1);
+    // A second item became unresolved AFTER the approval: not covered, closure refused.
+    const drift = mkIga([{ id: 'item-1', state: 'remediation-prepared' }, { id: 'item-2', state: 'pending' }]);
+    await assert.rejects(drift.close('acme', 'workflow:run-9', 'camp-1', { exception: { by: 'iga-lead', justification: 'accepted residual risk', approvedUnresolved: ['item-1'] } }), /not covered.*item-2|changed since the exception was approved/);
+    // No approved set recorded at all: nothing is covered.
+    const none = mkIga([{ id: 'item-1', state: 'denied' }]);
+    await assert.rejects(none.close('acme', 'workflow:run-9', 'camp-1', { exception: { by: 'iga-lead', justification: 'x', approvedUnresolved: [] } }), /changed since the exception was approved/);
+  });
+});
+
 describe('WorkflowTasksService (real service, in-memory store)', () => {
   it('inbox: scope=all is honored for an admin only - anyone else sees strictly their own tasks', async () => {
     tasks = new Map([['task-1', mkTask({ assignee: 'boss' })], ['task-2', mkTask({ id: 'task-2', assignee: 'root' })]]);

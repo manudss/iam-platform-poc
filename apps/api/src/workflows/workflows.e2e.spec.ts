@@ -226,6 +226,24 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     assert.equal(after.rows.length, 5);
   });
 
+  it('lyam-grant-assignment refuses a SoD-conflicting grant BEFORE any write (no branch, no commit)', async () => {
+    const def = (await ok('POST', '/workflows', { name: 'Grant conflict', graph: { nodes: [
+      { id: 'g', type: 'lyam-grant-assignment', name: 'Grant payment-approver', config: { identity: 'demo-bob', role: 'payment-approver' } },
+    ], edges: [] } })) as { definition: { id: string } };
+    const before = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: unknown[] }).rows.length;
+    const started = (await ok('POST', `/workflows/${def.definition.id}/runs`)) as RunView;
+    const v = await waitRun(started.run.id, ['failed']);
+    assert.match(v.run.error ?? '', /segregation of duties/, 'demo-bob already holds payment-creator: the grant is refused before the write');
+    assert.match(v.run.error ?? '', /BEFORE any write/);
+    // Nothing was written: main is unchanged, and the lazily created branch carries no assignment either.
+    const rows = (await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: unknown[] };
+    assert.equal(rows.rows.length, before, 'main untouched');
+    if (v.run.branch) {
+      const onBranch = (await ok('GET', `/versioning/tables/assignments?ref=${v.run.branch}`)) as { rows: unknown[] };
+      assert.equal(onBranch.rows.length, before, 'the refusal happened before any write: the branch carries no assignment');
+    }
+  });
+
   it('SoD conflict produced by a run is logged and refused at merge', async () => {
     const def = (await ok('POST', '/workflows', { name: 'Conflict on purpose', graph: { nodes: [
       { id: 'g', type: 'assign-role', name: 'Give approver to the creator', config: { identity: 'demo-bob', role: 'payment-approver' } },

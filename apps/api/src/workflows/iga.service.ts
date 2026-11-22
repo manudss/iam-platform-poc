@@ -205,7 +205,7 @@ export class WorkflowsIgaService {
    *  allowIncomplete records it explicitly in the evidence. */
   /** Strict close. An incomplete campaign closes ONLY through a traced human exception (an authorized
    *  decider approved it with a justification): never through a workflow config flag. */
-  async close(tenant: string, actor: string, campaignId: string, input: { exception?: { by?: unknown; justification?: unknown } } = {}) {
+  async close(tenant: string, actor: string, campaignId: string, input: { exception?: { by?: unknown; justification?: unknown; approvedUnresolved?: unknown } } = {}) {
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is already closed');
     const items = (await this.listItems(tenant, campaignId)).items;
@@ -218,6 +218,12 @@ export class WorkflowsIgaService {
       if (!by || by.startsWith('workflow:') || !justification) {
         throw new ConflictException(`this campaign is not complete: ${pending.length} undecided item(s), ${unremediated.length} denied item(s) without applied remediation. An incomplete closure needs a human exception (an authorized decider, with a justification), never a config flag.`);
       }
+      // The exception covers EXACTLY the unresolved set the decider approved: an item that became
+      // unresolved AFTER the decision (a requeue, a new denial) is not covered - re-approve or resolve it.
+      const approved = new Set(Array.isArray(input.exception?.approvedUnresolved) ? (input.exception!.approvedUnresolved as unknown[]).map(String) : []);
+      const current = [...pending, ...unremediated].map((i) => i.id);
+      const drift = current.filter((id) => !approved.has(id));
+      if (drift.length) throw new ConflictException(`the unresolved items changed since the exception was approved (${drift.join(', ')} not covered): resolve them or request a new exception`);
       incomplete = { authorizedBy: by, justification: justification.slice(0, 1000),
         undecided: pending.map((i) => ({ item: i.id, identity: i.identity, state: i.state })),
         unremediated: unremediated.map((i) => ({ item: i.id, identity: i.identity, state: i.state })) };

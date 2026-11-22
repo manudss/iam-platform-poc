@@ -114,14 +114,14 @@ describe('workflow blocks: IGA recertification socle', () => {
     const conflict = Object.assign(new Error('this campaign is not complete: 1 undecided item(s), 0 denied item(s)'), { getStatus: () => 409 });
     const iga = { ...fakeIga(), listItems: async () => ({ items: [{ id: 'item-1', identity: 'emp', state: 'pending' }] }), close: async (_t: string, _a: string, _c: string, input: unknown) => { closeCalls.push(input); if (!closeCalls.length || !((input as Record<string, unknown>).exception)) throw conflict; return { campaign: 'iga-1', status: 'closed', evidence: { digest: 'abc123' } }; } };
     const requested: Record<string, unknown>[] = [];
-    const tasks = { check: async () => ({ state: 'decided', task: { id: 'task-9', status: 'decided', decision: 'approved', decided_by: 'iga-two', justification: 'accepted risk' } }), request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-9' }; } };
+    const tasks = { check: async () => ({ state: 'decided', task: { id: 'task-9', status: 'decided', decision: 'approved', decided_by: 'iga-two', justification: 'accepted risk', detail: { unresolved: [{ item: 'item-1', identity: 'emp', state: 'pending' }] } } }), request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-9' }; } };
     const b = externalBlock('iga-close-campaign')!;
     await assert.rejects(b.run(mk({ iga: iga as never, tasks: tasks as never, config: { campaignId: 'iga-1' } }).c), /waiting/);
     assert.equal(requested[0].kind, 'iga-close-exception');
     assert.equal((requested[0].detail as Record<string, unknown[]>).unresolved.length, 1);
     const out = await run1('iga-close-campaign', mk({ iga: iga as never, tasks: tasks as never, config: { campaignId: 'iga-1' }, resumeWait: { taskId: 'task-9', kind: 'iga-close-campaign' } }).c as never);
     assert.equal(out.status, 'closed');
-    assert.deepEqual(closeCalls[1], { exception: { by: 'iga-two', justification: 'accepted risk' } }, 'the evidence names the human who authorized the exception');
+    assert.deepEqual(closeCalls[1], { exception: { by: 'iga-two', justification: 'accepted risk', approvedUnresolved: ['item-1'] } }, 'the evidence names the human who authorized the exception AND the exact unresolved set they approved');
   });
   it('create/list/open/await/record/prepare/close go through the service, test runs stay dry', async () => {
     const iga = fakeIga();
@@ -176,7 +176,8 @@ describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', 
     assert.equal((out.pullRequest as Record<string, unknown>).id, 7);
     const requested: Record<string, unknown>[] = [];
     let chk: Record<string, unknown> = { state: 'open', task: { id: 'task-5', kind: 'publish-approval', status: 'open', detail: { pr: { id: 7 } } } };
-    const tasks = { check: async () => chk, request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-6' }; } };
+    const settled: { id: string; note: string }[] = [];
+    const tasks = { check: async () => chk, request: async (a: Record<string, unknown>) => { requested.push(a); return { id: 'task-6' }; }, settleSystem: async (_t: string, id: string, _a: string, note: string) => { settled.push({ id, note }); return true; } };
     await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' } }).c), /waiting/);
     assert.equal(requested[0].kind, 'publish-approval');
     assert.equal(requested[0].assignee, 'admin');
@@ -193,9 +194,22 @@ describe('workflow blocks: publication (lyam-read-diff, lyam-request-publish)', 
     chk = { state: 'open', task: { id: 'task-6', kind: 'publish-merge-watch', status: 'open', detail: { pr: { id: 7 } } } };
     prState = 'closed';
     await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-6', kind: 'lyam-request-publish' } }).c), /closed without merge/);
+    assert.deepEqual(settled.map((x) => x.id), ['task-6'], 'the open watch was settled when the PR closed, audit note recorded');
     prState = 'merged';
     const done = await run1('lyam-request-publish', mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-6', kind: 'lyam-request-publish' } }).c as never);
     assert.equal(done.merged, true);
+    assert.deepEqual(settled.map((x) => x.id), ['task-6', 'task-6'], 'the open watch was settled when the merge landed');
+    // Point 2: the PR is merged BEFORE the approval is decided - the orphan approval is settled, the run concludes from the real state.
+    prState = 'merged';
+    chk = { state: 'open', task: { id: 'task-5', kind: 'publish-approval', status: 'open', detail: { pr: { id: 7 } } } };
+    const early = await run1('lyam-request-publish', mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c as never);
+    assert.equal(early.merged, true, 'a direct merge concludes the publication even without the approval');
+    assert.deepEqual(settled.map((x) => x.id), ['task-6', 'task-6', 'task-5'], 'the orphan approval task was settled, not left open forever');
+    prState = 'closed';
+    chk = { state: 'open', task: { id: 'task-5', kind: 'publish-approval', status: 'open', detail: { pr: { id: 7 } } } };
+    await assert.rejects(externalBlock('lyam-request-publish')!.run(mk({ publish: publish as never, tasks: tasks as never, runBranch: 'wf-run-1', config: { await: 'yes' }, resumeWait: { taskId: 'task-5', kind: 'lyam-request-publish' } }).c), /closed without merge/);
+    assert.deepEqual(settled.map((x) => x.id), ['task-6', 'task-6', 'task-5', 'task-5'], 'closed before approval: orphan settled too');
+    prState = 'open';
     // A human "merged" marking contradicted by the real PR state fails honestly.
     prState = 'open';
     chk = { state: 'decided', task: { id: 'task-6', kind: 'publish-merge-watch', status: 'decided', decision: 'merged', detail: { pr: { id: 7 } } } };

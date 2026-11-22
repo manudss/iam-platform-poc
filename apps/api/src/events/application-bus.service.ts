@@ -25,6 +25,7 @@ export const APP_EVENT_KINDS = [
   'app.registered', 'app.updated', 'app.removed',
   'sso.login.succeeded', 'sso.login.denied', 'sso.login.failed', 'sso.assertion.issued', 'sso.token.issued',
   'workflow.task-assigned', 'workflow.task-decided', 'workflow.task-overdue',
+    'workflow.task-canceled',
   'iga.campaign-launched', 'iga.decision-recorded', 'iga.remediation-resolved', 'iga.campaign-closed',
 ] as const;
 

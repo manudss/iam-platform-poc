@@ -199,6 +199,16 @@ export class WorkflowTasksService {
     return n;
   }
 
+  /** The system settles a wait that external state made moot (a pull request merged or closed BEFORE the
+   *  approval was decided): canceled with the reason recorded - the audit row stays, nothing is destroyed. */
+  async settleSystem(tenant: string, taskId: string, actor: string, note: unknown): Promise<boolean> {
+    const t = await this.store.getTask(taskId);
+    if (!t || t.tenant !== tenant || t.status !== 'open') return false;
+    const ok = await this.store.settleTask(taskId, actor, String(note ?? '').slice(0, 500), now());
+    if (ok) this.emit(tenant, 'workflow.task-canceled', { task: taskId, kind: t.kind, actor });
+    return ok;
+  }
+
   /** A canceled run cancels its open tasks: no orphan approvals that can never resume anything. */
   async cancelForRun(tenant: string, runId: string): Promise<number> {
     const t = await this.store.getRun(tenant, runId);

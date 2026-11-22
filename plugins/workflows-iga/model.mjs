@@ -78,6 +78,7 @@ export const WF_EVENTS = {
     'workflow.task-assigned': { label: 'A workflow created a human task', payload: ['task', 'kind', 'title', 'assignee', 'actor'] },
     'workflow.task-decided': { label: 'A human task was decided', payload: ['task', 'kind', 'decision', 'actor'] },
     'workflow.task-overdue': { label: 'A human task passed its deadline (reminder or escalation)', payload: ['task', 'kind', 'assignee'] },
+    'workflow.task-canceled': { label: 'A wait was settled by the system (its external state moved first)', payload: ['task', 'kind', 'actor'] },
     'iga.campaign-launched': { label: 'A recertification campaign was launched', payload: ['campaign', 'actor'] },
     'iga.decision-recorded': { label: 'A recertification decision was recorded', payload: ['campaign', 'subject', 'role', 'decision', 'actor'] },
     'iga.remediation-resolved': { label: 'A recertification remediation was prepared or failed', payload: ['campaign', 'subject', 'role', 'result'] },

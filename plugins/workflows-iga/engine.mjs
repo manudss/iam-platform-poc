@@ -30,7 +30,14 @@
  *  - an EXTERNAL effect (HTTP call, Jira ticket, real Google write) is NOT reverted by abandoning the branch:
  *    the block's own log line says exactly what really happened outside (dry-run or real).
  */
+import { createRequire } from 'node:module';
 import { STEP_TYPES, WorkflowSuspend, externalBlock, externalBlockProvider, loopBody, stepCategory, substituteStepOutputs, validateGraph } from './model.mjs';
+
+const { HttpException } = createRequire(new URL('./package.json', import.meta.url))('@nestjs/common');
+// The business-error allowlist: only a real HttpException thrown by OUR code (block validation, tasks,
+// IGA, versioning services) with a safe business code is surfaced verbatim. A provider error that merely
+// CARRIES a numeric .status (HTTP response, SDK failure) is masked like any other unexpected error.
+const SAFE_BUSINESS_STATUS = new Set([400, 403, 404, 409, 422]);
 
 const SOD_SQL = `select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB
   from assignments a join assignments b on a.identity_id = b.identity_id
@@ -479,10 +486,9 @@ export function createWorkflowEngine(deps) {
       if (e instanceof WorkflowSuspend) throw e;
       // Public business errors (4xx thrown by the block's own validation, allowlisted) surface with their
       // message; anything else (provider errors, unexpected exceptions, messages carrying a secret) stays masked.
-      const st = typeof e?.getStatus === 'function' ? e.getStatus() : e?.status;
       const msg = typeof e?.message === 'string' ? e.message.slice(0, 500) : '';
       const leaks = deps.secrets && msg && deps.secrets.valuesOf(run.id).some((v) => v && msg.includes(v));
-      if (typeof st === 'number' && st >= 400 && st < 500 && msg && !leaks) { const pub = new Error(msg); pub.status = st; throw pub; }
+      if (e instanceof HttpException && SAFE_BUSINESS_STATUS.has(e.getStatus()) && msg && !leaks) { const pub = new Error(msg); pub.status = e.getStatus(); throw pub; }
       throw new Error('External action failed; check connection and provider status.');
     }
     // Fail closed: a block output (or what it logged) that carries a run secret is never stored.

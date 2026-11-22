@@ -434,6 +434,15 @@ export class WorkflowStore {
     } finally { await m.end(); }
   }
   /** Cancels every open task of a run (the run itself was canceled: its waits must not stay decidable). */
+  /** Settle ONE open wait (status canceled, who + why recorded): the audit row survives, no history lost. */
+  async settleTask(id: string, actor: string, note: string, at: string): Promise<boolean> {
+    const m = await this.meta();
+    try {
+      const [r] = await m.query("update workflow_tasks set status = 'canceled', decided_by = ?, justification = ?, decided_at = ? where id = ? and status = 'open'", [actor, note, at, id]);
+      return Number((r as { affectedRows?: number })?.affectedRows ?? 0) > 0;
+    } finally { await m.end(); }
+  }
+
   async cancelTasksForRun(runId: string, at: string): Promise<number> {
     const m = await this.meta();
     try {

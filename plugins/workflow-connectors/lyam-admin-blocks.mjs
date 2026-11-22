@@ -299,17 +299,26 @@ const lyamGrantAssignment = writeBlock('lyam-grant-assignment', 'Grant a role as
 ], (cfg) => ({ identity: userId(cfg.identity, 'lyam-grant-assignment.identity'), role: idf(cfg.role, 'lyam-grant-assignment.role') }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would grant "${c.role}" to "${c.identity}" on the run branch`); return { identity: c.identity, role: c.role, granted: false }; }
-    let granted = false;
+    let granted = false, sensitive = false, before = [];
     await ctx.branchWrite(async (db) => {
         const [u] = await db.query('select id from identities where id = ?', [c.identity]);
         if (!(u ?? []).length) bad(`lyam-grant-assignment: unknown identity "${c.identity}"`);
-        const [r] = await db.query('select id from roles where id = ?', [c.role]);
+        const [r] = await db.query('select id, is_sensitive from roles where id = ?', [c.role]);
         if (!(r ?? []).length) bad(`lyam-grant-assignment: unknown role "${c.role}"`);
+        sensitive = !!r[0].is_sensitive;
+        const [cur] = await db.query('select role_id from assignments where identity_id = ? order by role_id', [c.identity]);
+        before = (cur ?? []).map((x) => x.role_id);
+        // SoD guard BEFORE the write: a grant that would put two conflicting roles on the identity is
+        // refused here - the branch never carries the conflict, the human publication is not a loophole.
+        const [viol] = await db.query('select r.role_a as roleA, r.role_b as roleB from assignments a join sod_rules r on (r.role_a = a.role_id and r.role_b = ?) or (r.role_b = a.role_id and r.role_a = ?) where a.identity_id = ?', [c.role, c.role, c.identity]);
+        if ((viol ?? []).length) bad(`lyam-grant-assignment: granting "${c.role}" to "${c.identity}" would violate the segregation of duties (${viol[0].roleA} + ${viol[0].roleB}): refused BEFORE any write`);
         const [w] = await db.query('insert ignore into assignments (identity_id, role_id) values (?,?)', [c.identity, c.role]);
         granted = Number(w?.affectedRows ?? 0) > 0;
     }, `workflow: grant ${c.role} to ${c.identity}`);
+    if (sensitive) ctx.log(`"${c.role}" is a SENSITIVE role: the grant stays on the run branch and lands only through a human publication review`);
     ctx.log(granted ? `"${c.role}" granted to "${c.identity}" on the run branch` : `"${c.identity}" already holds "${c.role}": nothing to grant`);
-    return { identity: c.identity, role: c.role, granted };
+    // The explicit diff the human review relies on: the roles before, the roles after.
+    return { identity: c.identity, role: c.role, granted, sensitive, diff: { before, after: granted ? [...before, c.role].sort() : before } };
 });
 
 const lyamRevokeAssignment = writeBlock('lyam-revoke-assignment', 'Revoke a role assignment', 'REAL write ON THE RUN BRANCH: removes a role from an identity (idempotent: an absent assignment is reported, not an error). The identity must exist. The revocation is reviewed and published like every other data change.', [
@@ -407,7 +416,8 @@ const igaCloseCampaign = {
             const chk = await need(ctx.tasks, 'iga-close-campaign').check(ctx.tenant, ctx.resumeWait.taskId);
             const t = chk.task;
             if (chk.state === 'decided' && t?.decision === 'approved') {
-                const r = await iga.close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { exception: { by: t.decided_by, justification: t.justification } });
+                const approvedUnresolved = Array.isArray(t?.detail?.unresolved) ? t.detail.unresolved.map((u) => u?.item).filter(Boolean) : [];
+                const r = await iga.close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { exception: { by: t.decided_by, justification: t.justification, approvedUnresolved } });
                 ctx.log(`campaign ${c.campaignId} closed with a human exception authorized by ${t.decided_by} (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
                 return r;
             }
@@ -630,6 +640,9 @@ const lyamRequestPublish = {
             // equals an applied publication. merged = success; anything closed without merge = failure.
             const prView = await publish.status(ctx.tenant, prId);
             const prState = String(prView?.pullRequest?.status ?? 'open');
+            // The real PR state moved BEFORE this wait was decided (merged or closed directly): settle the
+            // orphan wait with the reason recorded (the audit row stays), then conclude from the PR state.
+            if (prState !== 'open' && chk.state === 'open') await tasks.settleSystem(ctx.tenant, t.id, `workflow:${ctx.runId}`, `pull request #${prId} ${prState}: this wait is settled`);
             if (prState === 'merged') { ctx.log(`pull request #${prId} merged: the publication landed`); return { pullRequest: prView.pullRequest, reused: false, decision: 'approved', decidedBy: t?.decided_by ?? null, merged: true }; }
             if (prState !== 'open') bad(`lyam-request-publish: pull request #${prId} is ${prState} (closed without merge): the publication did not land`);
             if (t?.kind === 'publish-approval') {
