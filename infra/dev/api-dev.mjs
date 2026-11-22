@@ -94,6 +94,8 @@ async function ensureInstalls() {
     log('installing the shared plugin dependencies (npm ci at the repository root)');
     if ((await run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: REPO })) !== 0) throw new Error('root npm ci failed');
     writeStamp(REPO);
+    // npm ci wipes node_modules: re-link the host-provided packages before checking.
+    if ((await run('node', ['scripts/plugin-deps.mjs'], { cwd: REPO })) !== 0) throw new Error('plugin-deps relink failed');
   }
   if ((await run('node', ['scripts/plugin-deps.mjs', '--check'], { cwd: REPO })) !== 0) throw new Error('plugin-deps check failed');
   // Dev signing keys + trust store, plugins re-signed from the current sources (idempotent).
