@@ -259,6 +259,8 @@ jobs:
           npm install --prefix /tmp/gallery-pw playwright-core
           export NODE_PATH=/tmp/gallery-pw/node_modules CHROME_BIN=$(command -v google-chrome)
           node --test scripts/gallery-launch-popup.test.mjs
+          docker cp iam-demo-ci:/app/web/dist/web/browser /tmp/gallery-browser
+          GALLERY_WEB_ROOT=/tmp/gallery-browser GALLERY_BOOTSTRAP_SHOTS=/tmp/gallery-shots/bootstrap node --test scripts/gallery-bootstrap.test.mjs
           node scripts/gallery-e2e.mjs http://localhost:8080 /tmp/gallery-shots
       - name: Gallery screenshots
         if: always()
