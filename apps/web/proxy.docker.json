@@ -1,0 +1,8 @@
+{
+  "/core": { "target": "http://core:8081", "pathRewrite": { "^/core": "" } },
+  "/api": { "target": "http://api:3000", "pathRewrite": { "^/api": "" } },
+  "/authorize": { "target": "http://core:8081" },
+  "/token": { "target": "http://core:8081" },
+  "/jwks.json": { "target": "http://core:8081" },
+  "/.well-known": { "target": "http://core:8081" }
+}
