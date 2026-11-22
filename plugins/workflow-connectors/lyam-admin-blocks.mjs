@@ -923,7 +923,7 @@ const hasSecretValue = (o) => {
 const IMPORT_SOD_SQL = 'select a.identity_id as identity, r.role_a as roleA, r.role_b as roleB from assignments a join assignments b on a.identity_id = b.identity_id join sod_rules r on r.role_a = a.role_id and r.role_b = b.role_id';
 
 /** The staging the core import flow applies (apps/api/src/dolt/changes.controller.ts stageImport), on the run branch. */
-const importBlock = (type, label, source, parse) => writeBlock(type, label, `REAL write ON THE RUN BRANCH: validates a ${source} import (strict parsing, known roles, 1 to 500 rows) and stages it on the run branch, then runs the Separation-of-Duties simulation. Nothing lands on main without the human publication review; a mergeable:false result lists the violations to fix first.`, [
+const importBlock = (type, label, source, parse) => writeBlock(type, label, `REAL write ON THE RUN BRANCH: validates a ${source} import (strict parsing, known roles, 1 to 500 rows, sensitive roles refused) and stages it on the run branch, then runs the Separation-of-Duties simulation. Nothing lands on main without the human publication review; a mergeable:false result lists the violations to fix first, and the identities the import overwrites are listed. Note: the payload lives in the workflow definition (readable by definition readers): import the smallest useful extract.`, [
     { key: 'payload', label: `${source} payload`, type: 'text', required: true },
 ], (cfg) => {
     const payload = str(cfg.payload, `${type}.payload`, 200000);
@@ -1001,7 +1001,7 @@ const lyamProposeMailTemplate = writeBlock('lyam-propose-mail-template', 'Propos
     const subject = str(cfg.subject, 'subject', 200, false), text = str(cfg.text, 'text', 20000, false), html = str(cfg.html, 'html', 50000, false);
     if (!subject && !text && !html) bad('lyam-propose-mail-template: at least one of subject, text or html');
     // Backstop, not a sanitizer: an override reaches every future mail, so active content is refused outright.
-    if (html && /<\s*script|\bon[a-z]+\s*=|javascript\s*:/i.test(html)) bad('lyam-propose-mail-template.html: active content (script, event handler, javascript:) is refused');
+    if (html && /<\s*(script|iframe|form)\b|\bon[a-z]+\s*=|javascript\s*:/i.test(html)) bad('lyam-propose-mail-template.html: active content (script, iframe, form, event handler, javascript:) is refused');
     return { key, subject, text, html };
 }, async (ctx) => {
     const c = ctx.config;
@@ -1078,7 +1078,7 @@ const redactSecrets = (o) => {
 
 const lyamProposeAuthnPolicy = {
     type: 'lyam-propose-authn-policy', family: 'lyam', label: 'Propose an authentication policy change', simulated: false, category: 'real',
-    description: 'Opens a REINFORCED approval task (whole admin pool, anti-self-approval) for an authentication policy change, SUSPENDS the run until the decision, and only after approval writes the validated configuration ON THE RUN BRANCH (versioned: reviewed and published like every other change). The candidate is validated before the task opens and again by the configuration service at write time. Instance secrets never transit the block: they stay in the server-side secret store.',
+    description: 'Opens a REINFORCED approval task (whole admin pool, anti-self-approval) for an authentication policy change, SUSPENDS the run until the decision, and only after approval writes the validated configuration ON THE RUN BRANCH (versioned: reviewed and published like every other change). The candidate is validated before the task opens and again by the configuration service at write time, and the applied object is bound to the approved one by a hash recorded in the task. Values under secret-LOOKING keys are refused: that is a key-name heuristic, not a guarantee that no secret can pass under an innocuous key — the control is the admin pool reviewing the exact approved object. Secrets belong in the server-side store, referenced by name.',
     fields: [
         { key: 'config', label: 'Configuration (JSON)', type: 'text', required: true },
         { key: 'reason', label: 'Reason', type: 'text', required: true },
@@ -1125,7 +1125,7 @@ const lyamProposeAuthnPolicy = {
 
 const lyamRequestReenrollment = {
     type: 'lyam-request-reenrollment', family: 'lyam', label: 'Request a re-enrollment', simulated: false, category: 'real',
-    description: 'After a human approval, asks for a factor to be enrolled again: removes the current enrollment and notifies the user, who re-enrolls themself in self-service. The block NEVER enrolls a factor in the holder\'s place. IMMEDIATE, UNVERSIONED effects: the removal and the notification apply at once and are NOT reverted by a later merge or publication; a durable intent is recorded right before them, so a crash leaves the step in review (EXTERNAL_EFFECT_REVIEW_REQUIRED) rather than retrying blindly. The notification goes to the demonstration outbox (real=false): no real e-mail is sent. Session revocation is deliberately absent: the brief makes it conditional on a safe business service, which does not exist yet.',
+    description: 'After a human approval, asks for a factor to be enrolled again: removes the current enrollment and notifies the user, who re-enrolls themself in self-service. The block NEVER enrolls a factor in the holder\'s place. IMMEDIATE, UNVERSIONED effects: the removal and the notification apply at once and are NOT reverted by a later merge or publication; a durable intent is recorded right before them, so a crash leaves the step in review (EXTERNAL_EFFECT_REVIEW_REQUIRED) rather than retrying blindly. The notification goes to the demonstration outbox (real=false): no real e-mail is sent. Session revocation is deliberately absent: the brief makes it conditional on a safe business service, which does not exist yet. Scope of the lockout guard: \'enrolled\' means a recorded enrollment of one of the five factor kinds — a recorded-but-unusable factor is not distinguished, and removals are serialized per user inside one API process only.',
     fields: [
         { key: 'user', label: 'User id', type: 'string', required: true },
         { key: 'instance', label: 'Method instance id', type: 'string', required: true },
@@ -1182,14 +1182,39 @@ const lyamRequestReenrollment = {
     },
 };
 
-const lyamProposePasswordReset = proposeBlock('lyam-propose-password-reset', 'Propose a password reset', 'Opens an approval task for a password reset (anti-self-approval). The block never touches the credential itself: after approval, the following steps do it with the existing guarded trio (lyam-generate-password, lyam-set-temporary-password, lyam-send-secret-mail). What is VERSIONED: the temporary credential, on the run branch until publication. What is IMMEDIATE once published: the forced first-access change (the user chooses their own password at the next sign-in), not reverted by a later publication. The secret mail stays guarded by its real-state check and goes to the demonstration outbox: no real e-mail.',
-    [{ key: 'subject', label: 'User id', type: 'string', required: true }, { key: 'hours', label: 'Temporary validity (hours)', type: 'string', default: '24' }, { key: 'reason', label: 'Reason', type: 'text', required: true }],
-    (cfg) => {
+const lyamProposePasswordReset = {
+    type: 'lyam-propose-password-reset', family: 'lyam', label: 'Propose a password reset', simulated: false, category: 'real',
+    description: 'Opens an approval task for a password reset (whole admin pool, anti-self-approval; the beneficiary is barred from deciding by the anti-self rule, which covers detail.subject). The block never touches the credential itself: after approval, the following steps do it with the existing guarded trio (lyam-generate-password, lyam-set-temporary-password, lyam-send-secret-mail). Guards at proposal time: the target must EXIST, and an administrator target is refused (an admin credential reset is a console operation between two administrators, never a workflow effect). What is VERSIONED: the temporary credential, on the run branch until publication. What is IMMEDIATE once published: the forced first-access change (the user chooses their own password at the next sign-in), not reverted by a later publication. The secret mail stays guarded by its real-state check and goes to the demonstration outbox: no real e-mail.',
+    fields: [
+        { key: 'subject', label: 'User id', type: 'string', required: true },
+        { key: 'hours', label: 'Temporary validity (hours)', type: 'string', default: '24' },
+        { key: 'reason', label: 'Reason', type: 'text', required: true },
+    ],
+    outputs: [{ key: 'taskId', description: 'The durable task id' }, { key: 'decision', description: 'approved or refused' }, { key: 'decidedBy', description: 'Who decided' }],
+    validate(cfg) {
         const hours = str(cfg.hours, 'hours', 8, false) || '24';
         if (!/^\d{1,4}(\.\d{1,2})?$/.test(hours) || !(Number(hours) > 0 && Number(hours) <= 720)) bad('hours: more than 0 and at most 720');
         // The decider is ALWAYS the whole admin pool: a credential operation is never routed to a chosen person by the workflow author.
-        return { title: `Password reset for ${userId(cfg.subject, 'subject')}`, detail: { subject: userId(cfg.subject, 'subject'), hours, reason: str(cfg.reason, 'reason', 500) }, assignee: 'admin' };
-    });
+        return { subject: userId(cfg.subject, 'subject'), hours, reason: str(cfg.reason, 'reason', 500), title: `Password reset for ${userId(cfg.subject, 'subject')}`, detail: { subject: userId(cfg.subject, 'subject'), hours, reason: str(cfg.reason, 'reason', 500) }, assignee: 'admin' };
+    },
+    async run(ctx) {
+        const c = ctx.config;
+        const tasks = need(ctx.tasks, 'lyam-propose-password-reset');
+        if (ctx.resumeWait?.taskId) {
+            const chk = await tasks.check(ctx.tenant, ctx.resumeWait.taskId);
+            const t = chk.task;
+            if (chk.state === 'decided' && t?.decision) return { taskId: t.id, decision: t.decision, decidedBy: t.decided_by, justification: t.justification ?? '' };
+            if (t?.status === 'canceled') bad('lyam-propose-password-reset: the task was canceled');
+            throw new WorkflowSuspend({ taskId: ctx.resumeWait.taskId, kind: 'lyam-propose-password-reset' });
+        }
+        if (ctx.test || ctx.dryRun) { ctx.log(`test run: would open the proposal task "${c.title}"`); return { taskId: 'test', decision: 'approved', decidedBy: 'admin', justification: '' }; }
+        // Proposal-time guards: the target must exist on the run base, and an administrator target is refused.
+        if (need(ctx.authn, 'lyam-propose-password-reset').targetIsAdmin(c.subject)) bad(`lyam-propose-password-reset: "${c.subject}" is an administrator: an admin credential reset is a console operation between two administrators, never a workflow effect`);
+        await need(ctx.reads, 'lyam-propose-password-reset').readUser(ctx.tenant, ctx.baseBranch || 'main', c.subject); // throws on an unknown identity
+        const t = await tasks.request({ tenant: ctx.tenant, kind: 'lyam-propose-password-reset', title: c.title, detail: { ...c.detail, decisions: ['approved', 'refused'] }, assignee: 'admin', preventSelfApproval: true, runId: ctx.runId, nodeId: ctx.nodeId });
+        throw new WorkflowSuspend({ taskId: t.id, kind: 'lyam-propose-password-reset' });
+    },
+};
 
 export const LYAM_ADMIN_BLOCKS = [
     // P0

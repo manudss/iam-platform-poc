@@ -95,6 +95,43 @@ export interface AuthnEffects {
   unenroll: (tenant: string, a: { runId: string; user: string; instance: string; reason: string }) => Promise<{ removed: boolean }>;
   notify: (tenant: string, m: { to: string; subject: string; text: string; subjectUser: string }) => Promise<void>;
 }
+const FACTOR_KEYS = ['totp', 'pin', 'email', 'external', 'webauthn'] as const;
+
+/** Builds the authentication effects handed to the workflow blocks. unenroll() is SERIALIZED per
+ * (tenant, user) inside this process: two concurrent re-enrollments of a person's two last factors
+ * can never both pass the last-factor check — the second reads the state the first left and refuses.
+ * Scope: one API process; a multi-process deployment would need a shared lock (none exists yet). */
+export function buildAuthnEffects(authn: AuthnService | undefined, tasks: WorkflowTasksService | undefined, events?: ApplicationBus): AuthnEffects | undefined {
+  if (!authn) return undefined;
+  const locks = new Map<string, Promise<unknown>>();
+  const serialized = <T>(key: string, fn: () => Promise<T>): Promise<T> => {
+    const run = (locks.get(key) ?? Promise.resolve()).then(fn, fn);
+    locks.set(key, run.catch(() => undefined));
+    return run;
+  };
+  return {
+    enrollments: async (tenant, user) => (await authn.enroll.status(tenant, user)) as Record<string, unknown>,
+    targetIsAdmin: (subject) => (tasks?.isAdmin(subject) ?? false),
+    validatePolicy: (input) => { try { validateConfig(input); return { valid: true, errors: [] }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } },
+    savePolicy: async (tenant, a) => branchContext.run({ branch: a.branch }, () => authn.saveConfig(tenant, a.input)),
+    unenroll: (tenant, a) => serialized(`${tenant}${a.user}`, async () => {
+      // The state NOW, never a stale proposal: a factor already gone is the wanted end state, not an error.
+      const st = (await authn.enroll.status(tenant, a.user)) as Record<string, Record<string, unknown>>;
+      const cur = st[a.instance];
+      const enrolled = !!cur && FACTOR_KEYS.some((k) => !!cur[k]);
+      if (!enrolled) return { removed: false };
+      // Defense in depth (the block guards it too): never remove the LAST enrolled factor — the user
+      // must sign in to re-enroll, so that would lock them out with no self-service way back.
+      const others = Object.entries(st).filter(([i, x]) => i !== a.instance && FACTOR_KEYS.some((k) => !!x[k]));
+      if (!others.length) throw new BadRequestException(`unenroll: "${a.instance}" is the last enrolled factor of "${a.user}": removing it would lock the user out`);
+      await authn.enroll.remove(tenant, a.user, a.instance);
+      events?.emit({ type: 'authn.reenrollment-requested', tenant, actor: `workflow:${a.runId}`, subject: a.user, instance: a.instance, reason: a.reason } as never);
+      return { removed: true };
+    }),
+    notify: async (tenant, m) => { await authn.outbox.send({ tenant, to: m.to, subject: m.subject, text: m.text, subjectUser: m.subjectUser }); },
+  };
+}
+
 /** Publication of a run branch to main (the lyam-publish-workspace block). Absent when the server has no publisher: the block then refuses. */
 export interface WorkspaceEffects {
   headOf: (branch: string) => Promise<string | null>;
@@ -260,29 +297,7 @@ export class WorkflowEngine implements OnModuleInit {
   }
 
   private authnEffects(): AuthnEffects | undefined {
-    const authn = this.authn; if (!authn) return undefined;
-    const tasks = this.tasks as WorkflowTasksService | undefined;
-    return {
-      enrollments: async (tenant, user) => (await authn.enroll.status(tenant, user)) as Record<string, unknown>,
-      targetIsAdmin: (subject) => (tasks?.isAdmin(subject) ?? false),
-      validatePolicy: (input) => { try { validateConfig(input); return { valid: true, errors: [] }; } catch (e) { return { valid: false, errors: [(e as Error).message] }; } },
-      savePolicy: async (tenant, a) => branchContext.run({ branch: a.branch }, () => authn.saveConfig(tenant, a.input)),
-      unenroll: async (tenant, a) => {
-        // The state NOW, never a stale proposal: a factor already gone is the wanted end state, not an error.
-        const st = (await authn.enroll.status(tenant, a.user)) as Record<string, Record<string, unknown>>;
-        const cur = st[a.instance];
-        const enrolled = !!cur && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!cur[k]);
-        if (!enrolled) return { removed: false };
-        // Defense in depth (the block guards it too): never remove the LAST enrolled factor — the user
-        // must sign in to re-enroll, so that would lock them out with no self-service way back.
-        const others = Object.entries(st).filter(([i, x]) => i !== a.instance && ['totp', 'pin', 'email', 'external', 'webauthn'].some((k) => !!x[k]));
-        if (!others.length) throw new BadRequestException(`unenroll: "${a.instance}" is the last enrolled factor of "${a.user}": removing it would lock the user out`);
-        await authn.enroll.remove(tenant, a.user, a.instance);
-        this.events?.emit({ type: 'authn.reenrollment-requested', tenant, actor: `workflow:${a.runId}`, subject: a.user, instance: a.instance, reason: a.reason } as never);
-        return { removed: true };
-      },
-      notify: async (tenant, m) => { await authn.outbox.send({ tenant, to: m.to, subject: m.subject, text: m.text, subjectUser: m.subjectUser }); },
-    };
+    return buildAuthnEffects(this.authn, this.tasks as WorkflowTasksService | undefined, this.events);
   }
 
   private accountEffects(): AccountEffects | undefined {

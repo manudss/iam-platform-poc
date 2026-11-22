@@ -333,6 +333,20 @@ describe('completion: authentication (reads, reinforced policy, immediate re-enr
     assert.equal(intent, 0);
   });
 
+  it('lyam-request-reenrollment refuses at APPLY time when the target became an administrator after approval', async () => {
+    const svc = fakeTasks();
+    let isAdmin = false;
+    const authn = { targetIsAdmin: () => isAdmin, enrollments: async () => ({ 'm1:i1': { totp: true }, 'm2:i1': { pin: true } }), unenroll: async () => ({ removed: true }), notify: async () => undefined };
+    await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: authn as never, config: { user: 'u1', instance: 'm1:i1', reason: 'r' } }).c as never), /waiting/);
+    const t = svc.approve([...svc.tasks.keys()][0]);
+    isAdmin = true; // the target was promoted to administrator after the approval
+    let intent = 0, removed = 0;
+    const authn2 = { ...authn, unenroll: async () => { removed++; return { removed: true }; } };
+    await assert.rejects(run1('lyam-request-reenrollment', mk({ tasks: svc as never, authn: authn2 as never, markEffectPending: (async () => { intent++; }) as never, config: { user: 'u1', instance: 'm1:i1', reason: 'r' }, resumeWait: { taskId: t.id } as never }).c as never), /administrator/);
+    assert.equal(intent, 0, 'no durable intent recorded: the refusal precedes it');
+    assert.equal(removed, 0, 'the factor was never touched');
+  });
+
   it('lyam-request-reenrollment does not notify when the factor is already gone at apply time', async () => {
     const svc = fakeTasks();
     let notified = 0;
@@ -344,16 +358,40 @@ describe('completion: authentication (reads, reinforced policy, immediate re-enr
     assert.equal(notified, 0);
   });
 
-  it('lyam-propose-password-reset validates the window and only opens a task', async () => {
+  it('lyam-propose-password-reset validates the window, refuses an admin target and an unknown user, and only opens a task', async () => {
     assert.throws(() => externalBlock('lyam-propose-password-reset')!.validate({ subject: 'u1', hours: '0', reason: 'r' } as never), /hours/);
     assert.throws(() => externalBlock('lyam-propose-password-reset')!.validate({ subject: 'u1', hours: '721', reason: 'r' } as never), /hours/);
-    const svc = fakeTasks();
     const vcfg = externalBlock('lyam-propose-password-reset')!.validate({ subject: 'u1', hours: '24', reason: 'forgotten' } as never);
-    await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svc as never, config: vcfg }).c as never), /waiting for lyam-propose-password-reset/);
+    const okAuthn = { targetIsAdmin: () => false };
+    const okReads = { readUser: async () => ({ id: 'u1' }) };
+    // An administrator target is refused before any task opens.
+    const svcA = fakeTasks();
+    await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svcA as never, authn: { targetIsAdmin: () => true } as never, reads: okReads as never, config: vcfg }).c as never), /administrator/);
+    assert.equal(svcA.tasks.size, 0);
+    // An unknown identity is refused (the read service throws), before any task opens.
+    const svcU = fakeTasks();
+    const noUser = { readUser: async () => { throw new Error('unknown identity "u1"'); } };
+    await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svcU as never, authn: okAuthn as never, reads: noUser as never, config: vcfg }).c as never), /unknown identity/);
+    assert.equal(svcU.tasks.size, 0);
+    const svc = fakeTasks();
+    await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svc as never, authn: okAuthn as never, reads: okReads as never, config: vcfg }).c as never), /waiting for lyam-propose-password-reset/);
     const t = [...svc.tasks.values()][0];
     assert.equal(t.preventSelfApproval, true);
     assert.equal(t.assignee, 'admin');
-    assert.equal((t.detail as { hours: string }).hours, '24');
+    assert.equal((t.detail as { hours: string, subject: string }).hours, '24');
+    assert.equal((t.detail as { subject: string }).subject, 'u1');
+    // A refused decision comes back as a decision; a canceled task fails honestly.
+    t.status = 'decided'; t.decision = 'refused'; t.decided_by = 'root'; t.justification = 'not verified';
+    const out = await run1('lyam-propose-password-reset', mk({ tasks: svc as never, authn: okAuthn as never, reads: okReads as never, config: vcfg, resumeWait: { taskId: t.id } as never }).c as never);
+    assert.deepEqual({ decision: out.decision, decidedBy: out.decidedBy }, { decision: 'refused', decidedBy: 'root' });
+    const svc2 = fakeTasks();
+    await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svc2 as never, authn: okAuthn as never, reads: okReads as never, config: vcfg }).c as never), /waiting/);
+    const t2 = [...svc2.tasks.values()][0]; t2.status = 'canceled';
+    await assert.rejects(run1('lyam-propose-password-reset', mk({ tasks: svc2 as never, authn: okAuthn as never, reads: okReads as never, config: vcfg, resumeWait: { taskId: t2.id } as never }).c as never), /canceled/);
+    // A test run opens nothing.
+    const svc3 = fakeTasks();
+    const dry = await run1('lyam-propose-password-reset', mk({ test: true, tasks: svc3 as never, authn: okAuthn as never, reads: okReads as never, config: vcfg }).c as never);
+    assert.equal(dry.taskId, 'test'); assert.equal(svc3.tasks.size, 0);
   });
 });
 

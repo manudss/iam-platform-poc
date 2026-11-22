@@ -112,6 +112,18 @@ describe('WorkflowTasksService (real service, in-memory store)', () => {
     assert.equal(decided.decided_by, 'iga-two', 'the second pool member decided, not only the first');
     await assert.rejects(s.decide('acme', 'task-1', 'iga-lead', 'approved', ''), /already decided/);
   });
+  it('a password-reset task: the beneficiary can never decide their own reset, even in the admin pool', async () => {
+    // The block forces assignee 'admin' and carries detail.subject: the anti-self rule bars the beneficiary.
+    tasks = new Map([['task-pr', mkTask({ id: 'task-pr', kind: 'lyam-propose-password-reset', assignee: 'root', prevent_self: true, detail: { pool: 'admin', subject: 'root', hours: '24', decisions: ['approved', 'refused'] } })]]);
+    runs = new Map([['run-1', { id: 'run-1', started_by: 'alice' }]]);
+    const { s } = svc();
+    await assert.rejects(s.decide('acme', 'task-pr', 'root', 'approved', ''), /beneficiary/);
+    const other = mkTask({ id: 'task-pr2', kind: 'lyam-propose-password-reset', assignee: 'root', prevent_self: true, detail: { pool: 'admin', subject: 'u1', hours: '24', decisions: ['approved', 'refused'] } });
+    tasks.set('task-pr2', other);
+    const decided = await s.decide('acme', 'task-pr2', 'root', 'approved', 'verified by phone');
+    assert.equal(decided.status, 'decided', 'another admin decides a reset targeting someone else');
+  });
+
   it('a re-enrollment task: only the admin pool decides, never a non-admin non-assignee', async () => {
     // The block forces assignee 'admin', resolved to the pool: an arbitrary user id chosen by the
     // workflow author can never be the decider of this immediate, non-reverted effect.
