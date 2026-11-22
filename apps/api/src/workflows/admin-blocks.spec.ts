@@ -159,6 +159,32 @@ describe('workflow blocks: IGA recertification socle', () => {
     assert.equal(out.status, 'closed');
     assert.deepEqual(closeCalls[1], { exception: { by: 'iga-two', justification: 'accepted risk', approvedUnresolved: ['item-1'] } }, 'the evidence names the human who authorized the exception AND the exact unresolved set they approved');
   });
+  it('iga-close-campaign: a crash after the committed close resumes with the stored evidence; another actor\'s closure still fails', async () => {
+    let closed = false; const closeCalls: unknown[] = [];
+    const iga = {
+      ...fakeIga(),
+      close: async (_t: string, _a: string, _c: string, input: unknown) => {
+        closeCalls.push(input);
+        if (closed) throw Object.assign(new Error('this campaign is already closed'), { getStatus: () => 409 });
+        closed = true; return { campaign: 'iga-1', status: 'closed', evidence: { digest: 'aaa111' } };
+      },
+      getCampaign: async () => ({ id: 'iga-1', status: closed ? 'closed' : 'open', closed_by: closed ? 'workflow:run-1' : null, evidence: closed ? { digest: 'aaa111' } : null }),
+    };
+    // First pass: the close COMMITS. Crash = the step result is never recorded; the resumed run re-executes the block.
+    assert.equal((await run1('iga-close-campaign', mk({ iga: iga as never, config: { campaignId: 'iga-1' } }).c as never)).status, 'closed');
+    const resumed = await run1('iga-close-campaign', mk({ iga: iga as never, config: { campaignId: 'iga-1' } }).c as never);
+    assert.equal(resumed.status, 'closed');
+    assert.equal(resumed.resumed, true, 'the resumed run completes instead of failing on the 409');
+    assert.equal((resumed.evidence as { digest: string }).digest, 'aaa111', 'the committed evidence is returned, no new closure');
+    assert.equal(closeCalls.length, 2, 'one committed close + one recognized retry; no second effect');
+    // A campaign closed by ANY OTHER actor (another run, a human) is never silently adopted: the step still fails.
+    const other = { ...iga, getCampaign: async () => ({ id: 'iga-1', status: 'closed', closed_by: 'iga-human', evidence: { digest: 'bbb222' } }) };
+    await assert.rejects(run1('iga-close-campaign', mk({ iga: other as never, config: { campaignId: 'iga-1' } }).c as never), /already closed/);
+    // Same crash boundary on the exception path: the approved exception close committed, then the process died.
+    const tasks = { check: async () => ({ state: 'decided', task: { id: 'task-9', status: 'decided', decision: 'approved', decided_by: 'iga-two', justification: 'accepted risk', detail: { unresolved: [] } } }), request: async () => ({ id: 'task-9' }) };
+    const outExc = await run1('iga-close-campaign', mk({ iga: iga as never, tasks: tasks as never, config: { campaignId: 'iga-1' }, resumeWait: { taskId: 'task-9', kind: 'iga-close-campaign' } }).c as never);
+    assert.equal(outExc.resumed, true, 'the exception path also resumes on its own committed close');
+  });
   it('create/list/open/await/record/prepare/close go through the service, test runs stay dry', async () => {
     const iga = fakeIga();
     assert.equal((await run1('iga-create-campaign', mk({ iga: iga as never, config: { name: 'Q4', kind: 'user-access', ref: 'main', scope: {} } }).c as never)).id, 'iga-1');
