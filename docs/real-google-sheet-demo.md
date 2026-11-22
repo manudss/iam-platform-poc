@@ -79,3 +79,39 @@ An unresolved Google login/key, a missing secret store, an unmerged code fix or 
 - Google credential types and direct per-document service-account sharing: https://developers.google.com/workspace/guides/create-credentials
 - Google Sheets quotas/pricing: https://developers.google.com/workspace/sheets/api/limits . Standard usage is currently at no additional cost; stay within the published quotas and do not enable paid quota increases.
 - Pinned OpenBao image and binary location: https://github.com/openbao/openbao/blob/v2.7.2/Dockerfile . Its dev mode is explicitly not for production.
+
+
+## Badge templates: preparation checklist
+
+The official badge templates are paused and simulated when instantiated. They do not authorize a real run. Configure and review both graphs before activation:
+
+- Phase 1 ticket uses a configurable `labels` field (comma separated), set to `badge-demo`. Phase 2 filters on the same label. Verify that the Jira create metadata includes the labels field; the installed Activepieces action only sends fields present in that metadata.
+- Phase 1 records the durable ticket/account/row correlation, then writes the ticket key to the sheet with the `trace` node, before marking `cree=ok`. The trace column defaults to `ticket` and is editable in that node. It must exist before a real run.
+- The final marker column remains configurable on phase 2's `mark` node. Its existing default `badge` is not a decision about a live sheet header. Set it to the header approved for that sheet (for example `badge-fait` when that is what was approved). Do not create or rename other columns by inference.
+- The row key defaults to a unique `email` column. Adding that column, selecting an actual recipient and allowing that recipient for secret mail are separate live setup steps requiring approval. The template never hardcodes a real address.
+- French ticket/mail text follows the demo plan. The generic mail greeting is `Bonjour` rather than `Bonjour Camille`; the account identifier, validity duration and recorded expiry are substituted at runtime. These adaptations must be included in the exact rendered message shown for approval before sending. The 24-hour default is not an unchanging claim about the expiry.
+- No password is stored in a ticket, spreadsheet, graph or output. `[[password]]` and `[[expiry]]` are mail-only markers. The recipient must match the linked account and be explicitly allowed.
+
+These changes update the template catalogue, not workflow definitions already instantiated on a deployment. No spreadsheet write, Jira issue or e-mail is performed by loading the catalogue or running validation tests.
+
+### Target Jira issue type
+
+For the configured demo site, a read-only check of KAN creation metadata on 22 November 2026 found Task = `10003` and the `labels` field available. The badge template uses this site-specific example. The generic Jira create block has no guessed issue-type default. Check the target project metadata and set `issueTypeId` before any real run, especially when reusing the template on another site. This metadata check is not a ticket creation test.
+
+### Stable-key writes, preflight and recovery
+
+The badge templates no longer write using the row number saved by the trigger or an earlier lookup. Both phase 1 writes (`trace`, `mark`) and the final phase 2 marker resolve the unique row key immediately before writing. Missing/duplicate keys or headers stop the write, without positional fallback. Phase 1 begins with a read-only `preflight` node that requires exactly one row and the configured `email`, `ticket`, final-marker and `cree` headers before any account or ticket effect. If you change the key or final marker header in a copied workflow, change the preflight configuration too. A header removed later still fails at write time.
+
+This is NOT an atomic compare-and-set. The installed Google action ultimately writes by row number. Re-resolving the key handles a sort between the trigger and the write, and between failed attempts, but cannot protect against a concurrent sort in the last read/write gap. Keep sorting/row insertion/deletion and manual edits paused during the demo run. Without that operational freeze this integration is not qualified for concurrent editing. Do not describe the flow as fully protected from concurrent Google edits.
+
+After a failed trace, retry the failed step in the SAME persisted run. The successful ticket step and its key remain persisted and are not re-run. Starting a new run is not a safe retry and can create another ticket. An uncertain Jira creation remains held for provider reconciliation by the existing engine guard. A Sheets cell set is repeatable, resolving the key afresh on each attempt.
+
+During first real qualification, inspect the created ticket and confirm `badge-demo` is actually present before expecting the Done watcher. The metadata check and no-network argument test do not prove a provider accepted the label. Do not create a second ticket merely to retry a failed trace.
+
+### Wording and approval boundary
+
+The template is preparation, not evidence of an approved send. Before the first real ticket/mail, review the complete rendered content and approved recipient with the owner. Compared with the plan's example for Camille Martin, the template substitutes the actual first/last name and actual department/role in the ticket, uses a generic mail greeting, inserts the linked account identifier, and displays recorded hours plus exact expiry. The subject remains French. The expiry addition, greeting change and actual column-value substitutions are adaptations, not verbatim approved text. Comments or tests saying the wording follows the plan do not authorize external communication.
+
+Changing these plugin blocks also requires the normal plugin signature generation and deployment checks. No signature, simulation, connection, recipient or publication guard is bypassed by the catalogue changes.
+
+Phase 2 also preflights the stable key and the final output header in `find`, before `gen`, `set`, publication, mail or unblock. Its `requiredColumns` must match the final `mark.column`; phase 1 preflight must include that same final marker header plus its trace and cree columns. The catalogue tests assert this synchronization for the shipped defaults. When editing an instantiated graph, review all these fields together before enabling it; the general graph validator does not infer that two unrelated strings are intended to name the same column. No live column is added by this check.
