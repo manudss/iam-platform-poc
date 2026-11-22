@@ -62,6 +62,11 @@ jobs:
         run: |
           git fetch origin main
           node scripts/data-migrations.mjs --base origin/main
+      # A PR that adds a data migration must ship its reviewed digest-specific verifier,
+      # counter-tests and the CI step running them - otherwise the host qualification
+      # fails closed at deploy time (that is what put the demo under maintenance after #118).
+      - name: Migration verifier guard
+        run: python3 deploy/oci/migration-verifier-guard.py --base origin/main
       - name: Event circuit inventory guard
         run: node scripts/event-inventory.mjs --check
       - run: cargo build -p iam-core --locked
@@ -189,10 +194,17 @@ jobs:
         run: |
           python3 deploy/oci/ordered-queue.test.py
           python3 deploy/oci/qualification.test.py
+          python3 deploy/oci/verify-0002-account-blocks.test.py
+          python3 deploy/oci/recover-0002.test.py
+          python3 deploy/oci/migration-verifier-guard.test.py
+          python3 deploy/oci/update-preflight.test.py
+          python3 deploy/oci/front-barrier-check.test.py
+          command -v bwrap >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap; }
+          python3 deploy/oci/qualification-container.test.py
           node --check deploy/oci/qualification-container.mjs
           node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
-        run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
+        run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs deploy/oci/qualification-container.authprobe.test.mjs
   compose:
     runs-on: ubuntu-latest
     timeout-minutes: 25

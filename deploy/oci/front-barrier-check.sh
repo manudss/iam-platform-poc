@@ -50,6 +50,13 @@ gate_down() { rm -f "$BARRIER_FILE"; }
 
 # --- synchronized single-connection driver ------------------------------------------------
 # HEAD carries no body: the response ends at the blank line, so reads never desynchronize.
+# DETERMINISTIC failure classification: a driver-level failure (connect, write, status
+# unreadable or not 3 digits, truncated headers, peer close, timeout) becomes a
+# CLASSIFIED TOKEN, never a silent set -e death and never free text in the report, so
+# the phase-2 assertion fails LOUDLY with the token instead of dying before any report.
+# The drill semantics are unchanged: ONE and the same connection across the gate, no
+# reconnect, no weakened assertion.
+READ_TIMEOUT="${LYAM_BARRIER_READ_TIMEOUT:-10}"
 HOSTPORT="${ORIGIN#*://}"; HOSTPORT="${HOSTPORT%%/*}"
 HOST="${HOSTPORT%%:*}"; PORT="${HOSTPORT#*:}"; [ "$PORT" = "$HOSTPORT" ] && { case "$ORIGIN" in https:*) PORT=443 ;; *) PORT=80 ;; esac; }
 
@@ -60,20 +67,42 @@ open_conn() {
       mkfifo "$WORK/in" "$WORK/out"
       openssl s_client -quiet -connect "$HOST:$PORT" -servername "$HOST" < "$WORK/in" > "$WORK/out" 2>/dev/null &
       SSL_PID=$!
-      exec 9>"$WORK/in" 8<"$WORK/out" ;;
+      exec 9>"$WORK/in" 8<"$WORK/out" || { echo "FATAL: cannot open the TLS pipe to $HOST:$PORT" >&2; exit 1; } ;;
     http://*)
-      exec 9<>"/dev/tcp/$HOST/$PORT" 8<&9 ;;
+      exec 9<>"/dev/tcp/$HOST/$PORT" 8<&9 || { echo "FATAL: cannot connect to $HOST:$PORT" >&2; exit 1; } ;;
     *) echo "unsupported origin scheme: $ORIGIN" >&2; exit 1 ;;
   esac
 }
-close_conn() { exec 9>&- 8<&- || true; [ -n "$SSL_PID" ] && { kill "$SSL_PID" 2>/dev/null || true; SSL_PID=""; }; }
+close_conn() {  # must ALWAYS return 0: a trailing [ -n "" ] test under set -e kills silently
+  exec 9>&- 8<&- || true
+  if [ -n "$SSL_PID" ]; then kill "$SSL_PID" 2>/dev/null || true; SSL_PID=""; fi
+  return 0
+}
 
-http_head() { # prints the status code of one HEAD /healthz on the open connection
-  printf 'HEAD /healthz HTTP/1.1\r\nHost: %s\r\n\r\n' "$HOST" >&9
-  local line code
-  IFS=' ' read -r _ code _ <&8
-  while IFS= read -r line <&8; do [ "$line" = $'\r' ] && break; done
-  echo "${code%$'\r'}"
+http_head() { # prints the 3-digit status code of one HEAD /healthz on the open
+              # connection, or a DRIVER_* token classifying the failure; returns 0
+  trap '' PIPE  # subshell-scoped (always called in $()): a closed peer makes printf
+                # fail with EPIPE -> DRIVER_WRITE_FAILED, instead of a SIGPIPE death
+  if ! printf 'HEAD /healthz HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\n\r\n' "$HOST" >&9; then
+    echo "DRIVER_WRITE_FAILED"; return 0
+  fi
+  local line code end_seen
+  if ! IFS=' ' read -r -t "$READ_TIMEOUT" _ code _ <&8; then
+    echo "DRIVER_STATUS_UNREADABLE"; return 0   # peer closed, EOF, or $READ_TIMEOUT s timeout
+  fi
+  code="${code%$'\r'}"
+  case "$code" in
+    [0-9][0-9][0-9]) ;;
+    *) echo "DRIVER_STATUS_INVALID"; return 0 ;;  # never interpolate free text into FAIL
+  esac
+  end_seen=0
+  while IFS= read -r -t "$READ_TIMEOUT" line <&8; do
+    if [ "$line" = $'\r' ]; then end_seen=1; break; fi
+  done
+  # the header block is complete ONLY at its empty CRLF line: EOF or timeout first
+  # means the response is truncated and the code must not be trusted
+  [ "$end_seen" = 1 ] || { echo "DRIVER_HEADERS_UNREADABLE"; return 0; }
+  echo "$code"
 }
 
 note "== 1. baseline: gate OPEN =="

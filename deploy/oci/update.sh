@@ -279,6 +279,28 @@ fi
 QUALIFICATION_EXPECTED_IMAGE="$PREVIOUS"
 QUALIFICATION_EVIDENCE=""
 
+# Pre-gate qualification auth probe: while the CURRENT version still serves and BEFORE the
+# maintenance gate is armed, prove the configured qualification credentials can still
+# complete the OIDC login the after-phase smoke will need. A static auth file left stale
+# by a credential rotation was discovered only at the smoke phase, with the site already
+# behind maintenance (the recurring incident class); a failed probe here refuses the
+# update with the gate NEVER armed and the running service untouched. Side-effect
+# boundary: the probe performs ONE real password login (first origin only), so issuer-side session/audit
+# entries may be created; the authorization code is never redeemed and no application
+# data, gate or deployment state changes. Skipped on a first deploy (nothing serving).
+if [ -n "$PREVIOUS" ] && { [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; }; then
+  if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)" = "true" ]; then
+    "$POST_CHECK" --phase authprobe --container "$CONTAINER" --image "$PREVIOUS" --env-file "$ENV_FILE"       --data-dir "$DATA_DIR" --backup-dir "$BACKUP_DIR" --barrier-file "$BARRIER_FILE"       --target-image "$IMAGE" --evidence-dir "$BACKUP_DIR"       || fail 1 "pre-gate qualification auth probe failed or UNKNOWN; the maintenance gate was never armed and the running service was left untouched (stale qualification credentials? a probe login can create issuer-side session/audit entries)"
+  elif [ "$(getconf LYAM_AUTH_PROBE)" = "off" ]; then
+    # Documented recovery mode ONLY for the case the probe cannot run at all (current
+    # container not running): an explicit operator setting, logged loudly. It never
+    # disables the probe while the current version is actually serving.
+    log "WARNING: pre-gate qualification auth probe DISABLED by operator (LYAM_AUTH_PROBE=off, current container not running) - stale-credential failures will surface only at the smoke phase, behind the armed gate"
+  else
+    fail 1 "the current container is not running: the pre-gate auth probe cannot run and this refusal is not bypassed silently - restart the previous version first, or set LYAM_AUTH_PROBE=off in $ENV_FILE for a deliberate, documented recovery"
+  fi
+fi
+
 run_container() {
   img="$1"; port="$2"
   # on-failure, never unless-stopped: an unmanaged auto-restart at host boot would start the

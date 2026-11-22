@@ -34,7 +34,7 @@ case "$1" in
     fi ;;
   inspect)
     case "$*" in
-      *State.Running*) echo false; exit 0 ;;
+      *State.Running*) [ -f "$STUB_DIR/stopped" ] && echo false || echo true; exit 0 ;;
     esac
     [ -f "$STUB_DIR/current" ] && cat "$STUB_DIR/current" || exit 1 ;;
   stop|rm|start) exit 0 ;;
@@ -73,7 +73,7 @@ echo 200
 `;
 
 /** Builds a host sandbox: env file, data dir, stub docker. Options override the scenario. */
-function setup({ label = 'auto never', current = OLD, health = true, healthOld = true, dataset = true, pause = false, pg = false, pgFail = false, runFail = false, keep = null, extraEnv = [] } = {}) {
+function setup({ label = 'auto never', current = OLD, health = true, healthOld = true, dataset = true, pause = false, pg = false, pgFail = false, runFail = false, keep = null, stopped = false, extraEnv = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'lyam-update-'));
   const stub = join(dir, 'stub');
   mkdirSync(join(stub, 'labels'), { recursive: true });
@@ -86,6 +86,7 @@ function setup({ label = 'auto never', current = OLD, health = true, healthOld =
   writeFileSync(join(stub, 'healthy'), `${healthOld ? `${OLD}\n` : ''}${health ? `${NEW}\n` : ''}`);
   if (label !== null) writeFileSync(join(stub, 'labels', NEW.replaceAll(/[ /:@]/g, '_')), label);
   if (current !== null) writeFileSync(join(stub, 'current'), current);
+  if (stopped) writeFileSync(join(stub, 'stopped'), '');
   if (pgFail) writeFileSync(join(stub, 'pg-fail'), '');
   if (runFail) writeFileSync(join(stub, 'run-fail'), NEW);
   const data = join(dir, 'data');
@@ -381,17 +382,86 @@ test('automatic queue refuses absent qualification BEFORE stopping or backing up
 test('mandatory post-check is inside gate before removal, failure keeps maintenance armed', () => {
   const {env,dir,stub}=setup();
   const hook=join(dir,'post-check.sh');
-  writeFileSync(hook,`#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] || exit 99\necho checked >> "$STUB_DIR/post-checked"\n[ "$2" = before ] && exit 0\nexit 1\n`);chmodSync(hook,0o755);
+  // The auth probe runs BEFORE the gate (asserts MAINTENANCE absent); before/after stay inside it.
+  writeFileSync(hook,`#!/bin/sh\nif [ "$2" = authprobe ]; then [ -f "$STUB_DIR/MAINTENANCE" ] && exit 98; echo authprobe >> "$STUB_DIR/post-phases"; exit 0; fi\n[ -f "$STUB_DIR/MAINTENANCE" ] || exit 99\necho "$2" >> "$STUB_DIR/post-phases"\n[ "$2" = before ] && exit 0\nexit 1\n`);chmodSync(hook,0o755);
   writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
   const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
-  assert.equal(r.status,4);assert.ok(existsSync(join(stub,'MAINTENANCE')));assert.ok(existsSync(join(stub,'post-checked')));
+  assert.equal(r.status,4);assert.ok(existsSync(join(stub,'MAINTENANCE')));
+  assert.equal(readFileSync(join(stub,'post-phases'),'utf8'),'authprobe\nbefore\nafter\n');
 });
 
 test('mandatory post-check succeeds before marker removal and receives actual immutable image', () => {
   const {env,dir,stub}=setup();
   const hook=join(dir,'post-check.sh');
-  writeFileSync(hook,`#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] || exit 99\necho "$*" > "$STUB_DIR/post-args"\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(hook,`#!/bin/sh\nif [ "$2" = authprobe ]; then [ -f "$STUB_DIR/MAINTENANCE" ] && exit 98; else [ -f "$STUB_DIR/MAINTENANCE" ] || exit 99; fi\necho "$*" >> "$STUB_DIR/post-args"\nexit 0\n`);chmodSync(hook,0o755);
   writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
   const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
-  assert.equal(r.status,0,r.stderr);assert.ok(!existsSync(join(stub,'MAINTENANCE')));assert.match(readFileSync(join(stub,'post-args'),'utf8'),/--image ghcr/);
+  assert.equal(r.status,0,r.stderr);assert.ok(!existsSync(join(stub,'MAINTENANCE')));
+  const calls=readFileSync(join(stub,'post-args'),'utf8');
+  assert.match(calls,/--image ghcr/);assert.match(calls.split('\n')[0],/--phase authprobe/);
+});
+
+test('a failed pre-gate auth probe refuses the update before the gate is armed', () => {
+  const {env,dir,stub}=setup();
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\n[ "$2" = authprobe ] && exit 1\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  assert.equal(r.status,1);assert.match(r.stderr,/auth probe/);
+  assert.ok(!existsSync(join(stub,'MAINTENANCE')));assert.doesNotMatch(r.calls,/docker (stop|run)/);
+});
+
+test('the pre-gate auth probe also runs without --require-qualification when a post-check is configured', () => {
+  const {env,dir,stub}=setup();
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\necho "$2" >> "$STUB_DIR/post-phases"\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
+  const r=run(env,'--image',NEW,'--env-file',env);
+  assert.equal(r.status,0,r.stderr);
+  assert.equal(readFileSync(join(stub,'post-phases'),'utf8').split('\n')[0],'authprobe');
+});
+
+test('a stopped current container refuses the update pre-gate and names the explicit recovery mode', () => {
+  const {env,dir,stub}=setup({stopped:true});
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\necho "$2" >> "$STUB_DIR/post-phases"\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  assert.equal(r.status,1);assert.match(r.stderr,/LYAM_AUTH_PROBE=off/);assert.match(r.stderr,/not bypassed silently/);
+  assert.ok(!existsSync(join(stub,'MAINTENANCE')));assert.doesNotMatch(r.calls,/docker (stop|run)/);
+  assert.ok(!existsSync(join(stub,'post-phases')));  // the probe hook was never called
+});
+
+test('LYAM_AUTH_PROBE=off is honored only when the probe cannot run, and logged loudly', () => {
+  const {env,dir,stub}=setup({stopped:true});
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\necho "$2" >> "$STUB_DIR/post-phases"\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\nLYAM_AUTH_PROBE=off\n`);
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  assert.equal(r.status,0,r.stderr);assert.match(r.stderr+r.stdout,/auth probe DISABLED by operator/);
+  assert.doesNotMatch(readFileSync(join(stub,'post-phases'),'utf8'),/authprobe/);
+});
+
+test('LYAM_AUTH_PROBE=off never disables the probe while the current version is serving', () => {
+  const {env,dir,stub}=setup();
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\nif [ "$2" = authprobe ]; then [ -f "$STUB_DIR/MAINTENANCE" ] && exit 98; fi\necho "$2" >> "$STUB_DIR/post-phases"\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\nLYAM_AUTH_PROBE=off\n`);
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  assert.equal(r.status,0,r.stderr);
+  assert.equal(readFileSync(join(stub,'post-phases'),'utf8').split('\n')[0],'authprobe');
+});
+
+test('no previous container: the auth probe is skipped (nothing serving to probe)', () => {
+  const {env,dir,stub}=setup({current:null});
+  const hook=join(dir,'post-check.sh');
+  writeFileSync(hook,`#!/bin/sh\necho "$2" >> "$STUB_DIR/post-phases"\nexit 0\n`);chmodSync(hook,0o755);
+  writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
+  const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
+  // The no-current-container fixture never reaches a healthy lift; what is pinned here is
+  // the probe point: no authprobe call, and no pre-gate probe refusal either.
+  assert.notEqual(r.status,0);
+  assert.doesNotMatch(r.stderr,/auth probe/);
+  const phases=existsSync(join(stub,'post-phases'))?readFileSync(join(stub,'post-phases'),'utf8'):'';
+  assert.doesNotMatch(phases,/authprobe/);assert.match(phases,/before/);
 });

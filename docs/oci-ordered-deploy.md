@@ -152,6 +152,143 @@ read-only offline Dolt inventory in the helper image, real PG17 SQL, metadata-on
 permissions/coverage, the actual hosted form fields, and TLS front checks. Missing inputs
 or implementation failures leave maintenance armed and are blockers, never success claims.
 
+### Pre-gate qualification auth probe (`--phase authprobe`)
+
+What it is. While the CURRENT version still serves and BEFORE `update.sh` arms the maintenance gate, `update.sh`
+calls `$LYAM_POST_UPDATE_CHECK --phase authprobe`. The checker runs `docker exec` inside the running current
+container and proves the credentials in the policy's `authFile` can still complete the OIDC password login
+the after-phase smoke needs. A stale credential then refuses the update with the gate never armed and the
+running service untouched, instead of being found at the smoke phase behind maintenance.
+
+What it does on the network (only the container's own local base, `http://127.0.0.1:8080`): `GET /healthz`,
+one `GET /core/authorize` per origin (form reachable), and ONE `POST /core/authorize/login` on the FIRST origin.
+The public origins are only used as `redirect_uri` values and are never contacted. The authorization code is
+never redeemed (no `/core/token`), no application API is called, there is no retry, and each call times out
+after 15 seconds. The first failure stops the probe.
+
+Account. There is no dedicated probe account in this repository. The probe reads the same `authFile` as the
+existing smoke and uses the same `password-only` chain as the smoke, so it adds no new account or chain
+dependency. WHICH account that file holds is host state the repository cannot show (it may be a demo
+account such as demo-alice); the operator states it before installation. If that account is an
+administrator, remember the probe adds one login per update cycle on it.
+
+Side effects. One real password login per cycle creates ordinary issuer-side session and audit entries and counts
+toward any account lockout or throttling policy. It does not change application data, the gate or the queue.
+
+Scope limit. It says nothing about public reachability or TLS. It proves only that these credentials
+complete this login against the locally running current container.
+
+When the current container is not running the probe cannot run and the update is refused (nothing is bypassed
+silently). A deliberate recovery sets `LYAM_AUTH_PROBE=off` in the environment file; the updater logs a loud
+warning, and it never disables the probe while the current version is serving.
+
+Coherent installation (the host files are installed copies, so merging this change alters none of them). Install
+together, BETWEEN cycles, with the queue idle, from the reviewed merged main, and record the hashes:
+`update.sh`, `qualification.py`, `qualification-container.mjs`, `ordered-queue.py`, `update-preflight.py`.
+`update.sh` passes `--phase authprobe` and `--target-image`, `--evidence-dir` to `$LYAM_POST_UPDATE_CHECK`, a
+file that belongs to the host (example path `/opt/lyam/bin/post-update-check`) and is not in the repository.
+Operator check before the first update with the new `update.sh`: that executable is `qualification.py` from the
+same reviewed main (same sha256) or a reviewed wrapper that forwards the phase and all options. A new `update.sh`
+with a checker that lacks the `authprobe` phase refuses every update before the gate is armed (service intact,
+deployments blocked).
+
+Preflight configuration is a separate decision. Installing `ordered-queue.py` WITHOUT
+`/opt/lyam/deploy-preflight.json` keeps the migration cold-check inactive: a missing verifier for a migrating
+digest is then only caught by the controller during the cycle (the #118 class: site already behind
+maintenance). That is reduced coverage, not an equivalent protection. With the file present, every plan digest
+must be pinned (migrating deploy) or declared `noTransform` (the operator's statement, not a proof), otherwise the
+drain refuses the plan before any state write; the digest only exists after the image is built, so this costs one
+host action per merge. Arm the pin for the digest of the next migrating deploy.
+
+### Digest-specific transformation verifiers
+
+A verifier such as `deploy/oci/verify-0002-account-blocks.py` is root-owned, installed next to
+`qualification.py` (same directory; it imports the controller's comparison), executable, and listed
+in the independent policy under `transformationVerifiers` keyed by the **exact** `--image` string the
+updater passes, including the repository prefix (`ghcr.io/manudss/iam-platform-poc@sha256:...`), not
+a bare or shortened digest. The controller invokes it as `verifier <before.json> <after.json>` with
+the private hash-only evidence, which is only read, never modified. It must prove every declared
+transformation of that exact transition and preservation of everything else, exit 0 only on complete
+proof, and treat anything unknown as failure. Hash-only evidence alone cannot prove commit content,
+so the verifier additionally performs read-only live checks with a two-class guarantee. On the one
+TRANSFORMED branch (iam/main): the captured AFTER root must equal the database hash of its own branch
+commit via DOLT_HASHOF_DB('<branch>') with DOLT_HASHOF_DB('WORKING') proving a clean working set, and
+the captured BEFORE root must equal DOLT_HASHOF_DB('HEAD') inside the host-proven revision database
+'<database>/<before-commit>' - a dirty working set at either capture time is UNKNOWN, not silently
+accepted (raw commit hashes are rejected as DOLT_HASHOF_DB refspecs by the deployed Dolt 2.6.1; on
+database iam, branch refs, WORKING, HEAD and the revision database are host-proven coherent). On every
+UNCHANGED branch the guarantee is PRESERVATION, not commit/root binding: the live session identity
+(DATABASE()), the branch head (dolt_branches, the capture's own read path) and DOLT_HASHOF_DB('WORKING')
+must equal the capture exactly, before and after and at the fresh recapture; any head or root drift is
+refused, while a pre-existing dirty working set preserved identically is accepted - cleanliness is only
+required where a commit is claimed to explain the state. Named refs and revision databases are NOT used
+on unchanged branches: on this host they returned another database's root for iam_meta while DATABASE()
+kept echoing the requested name (fixtures 2026-11-21; mechanism unproven, not attributed to a defect).
+No ref is ever created.
+CI enforces the supply side: a PR that adds a version to data/migrations/manifest.json must ship deploy/oci/verify-<id>-*.py, its counter-test suite and the ci.yml step running it (deploy/oci/migration-verifier-guard.py). This is a structural aid only: it checks that the pieces exist (and runs the counter-test suite separately), it does not prove that the verifier is valid, that the ci.yml step really runs in CI, or that the host policy matches. It does not remove the possibility of a fail-closed host stop at deploy time, and it is not a qualified nominal path.
+On the host side, BETWEEN cycles only, the operator installs the reviewed verifier root 0700, adds the exact target image key to the live policy's transformationVerifiers, and proves it with the read-only deploy/oci/update-preflight.py (--image <exact ref> --verifier-sha256 <reviewed pin>) BEFORE update.sh starts its before-phase - the policy hash is captured into before.json, so a mid-cycle policy change fails closed by design. The preflight checks structure only (exact key, root ownership, 0700, pin); its ci.yml presence check in the guard is a text heuristic (the suite is executed separately by the guard). The drain can enforce the same cold check per entry. The SSH guard accepts only the constant argv `status`/`drain` and the plan stdin schema is strictly {sha,parent,digest}, so the wiring is OPERATOR-SIDE, never CI flags or plan fields: a private root-owned 0600 config /opt/lyam/deploy-preflight.json (format 1) names the reviewed installed update-preflight.py (executor-owned 0700), the controller's own live policy file, and verifierPins mapping a target image digest to the reviewed sha256 of its transformation verifier - installed ONLY from the guard-linted repo file deploy/oci/transformation-verifiers.json, so a pin's provenance is the reviewed repo, never a plan author. An entry whose digest is pinned is preflighted for its exact image BEFORE the updater arms the front gate or touches application state, with a bounded 120s timeout failing closed (exit 124, phase 'preflight' in the failed marker). An ABSENT config means byte-exact prior behavior; a PRESENT but invalid config refuses the whole plan before any state write - the protection is never silently half-armed. With the config present, EVERY plan entry's digest needs an explicit disposition or the drain refuses before any state write: a pin (migrating deploy, cold-preflighted) or an explicit noTransform entry (operator declaration; the controller remains the mid-cycle closed backstop for an unlisted drift) - a digest in both is invalid, and an undeclared digest is never silently skipped. State the cost plainly: noTransform is a HUMAN operator declaration, not a proof, and once the config is installed every new target digest needs an explicit disposition or the automatic deployment refuses - that loss of unattended rollout for undeclared digests is the price of closing the silent-skip class, not a defect. The three host pieces are installed atomically coherent, IN ORDER: the reviewed preflight binary (root 0700) first, the live-policy entry between cycles second, and the 0600 config LAST - its presence is what arms the wiring. The preflight parses the policy with the controller's own policy_load, so a policy the controller would refuse mid-cycle fails cold. Already-confirmed overlapping entries are not re-preflighted. update.sh itself is unchanged by this wiring. Separately, update.sh runs a pre-gate AUTH PROBE: while the current version still serves and before the gate is armed, the qualification controller (--phase authprobe) proves the configured credentials still complete the OIDC login the after-phase smoke needs - a static auth file left stale by a credential rotation is the recurring incident class. A failed probe refuses the update with the gate never armed and the running service untouched; a probe performs a REAL login per origin (issuer-side session/audit entries may be created; the authorization code is never redeemed; no application data changes). The probe performs ONE real password login, on the first origin only (later origins get a form-only check), stops at the first failure, never retries, and bounds every fetch with its own AbortSignal; the account can be an administrator with a lockout policy - keep probe accounts dedicated where possible and expect session/audit entries per probe. The probe runs whenever a post-check is configured, with or without --require-qualification, and is skipped on a first deploy. Its image-identity check is near-tautological by design (the caller just read that image from the same container): it proves credential validity against the locally running container, NOT public reachability or TLS. If the current container is NOT running the probe cannot run and the update refuses closed; a deliberate recovery sets LYAM_AUTH_PROBE=off in the env file (explicit, loudly logged, honored ONLY while the container is not running - it never disables the probe against a serving version). The setting is a recovery tool, not a configuration: REMOVE it right after the recovery so the next incident cannot inherit the bypass.
+The migration commit chain/content is read from live Dolt with every diff flag present
+and explicitly valued (absent or NULL flags are UNKNOWN), and a COMPLETE fresh recapture through the
+controller's own immutable capture machinery (Dolt+Bao container script, controller PostgreSQL
+surfaces, credential files, migration ledger) must equal the historical after-capture exactly - a
+database, branch, table, secret or ledger entry created after the capture is detected.
+
+The policy file is hashed into each `before.json`: **changing the policy between the before and after
+phases of one update fails closed** (`qualification policy changed mid-update`). A verifier entry can
+therefore never be added to rescue an already-failed after-phase. And while the failed run's
+maintenance marker still stands, the updater refuses to start over a gate it does not own, so a plain
+re-run is not available either. The reviewed recovery for this situation is an EXPLICIT exceptional
+operation, never a silent bypass:
+
+1. Review and install the verifier; do not touch the policy.
+2. `recover-0002-proof.py` (no business-data mutation; its audited OIDC logins create ordinary
+   session/audit events and it creates its report files): full verifier pass on the preserved
+   evidence pair, the controller's immutable smoke re-run on the gated candidate (real OIDC login
+   per origin, negative redirect, journal, ledger), gate still 503 on every origin, exact marker
+   ownership token with a dead owner process, both runner locks free, queue state exactly the
+   reviewed failed entry. Runner hashes cover the queue runner at its REAL installed path
+   (`/usr/local/libexec/lyam-queue/ordered-queue.py`), never a copy; the effective environment
+   configuration is frozen into the report. One private hash-only PASS report; any failure means
+   no lift and no journal change.
+3. Only after the coordinated owner approval, `recover-0002-close.py --approval-ref <reference>`
+   (the reference RECORDS the external approval; it is a trace field, not a permission check):
+   requires a fresh PASS proof (stale or future-dated reports are refused), frozen
+   runner/policy/evidence/queue/env hashes, re-checks every precondition live (including exactly
+   one container of the verified image, running and stable for at least 30s), runs the COMPLETE
+   verifier recapture again under both locks immediately before any lift, archives the queue state
+   (pending+failed), the proof AND both evidence files into a private incident bundle, then lifts
+   the marker, proves 200 on every origin, re-runs the real OIDC smoke and a complete post-smoke
+   recapture - strict on every surface (schema, sequence DEFINITIONS, Dolt, Bao, credentials,
+   ledger) except declared append-only PostgreSQL table rows and sequence CURRENT VALUES; row
+   comparison walks the union of hashes with every multiplicity preserved, so a vanished row is
+   always caught; sequences are monotonic counters: advancement is allowed, any rewind
+   (last_value down, is_called True->False) or unknown type/shape is refused; the activation
+   journal must stay exactly as captured; only declared audit tables may grow, counted and
+   traced. Only then the reviewed entry is
+   appended to the queue history (same SHA/parent/digest, existing entries untouched) in one atomic
+   fsynced write, with a separate incident trace linking failure, proofs and approval.
+
+Failure semantics of the closure (faithful exit codes, no silent claims):
+  - 1: aborted before any lift - gate untouched, no journal change;
+  - 2: failure after lift, gate re-armed with the archived token AND 503 re-confirmed on every
+    origin - no journal change;
+  - 3: failure after lift, re-arm attempted but 503 NOT re-confirmed - gate state unknown, the
+    operator must verify the origins immediately; OR the queue file could not be re-read after a
+    failed journal append - journal state UNKNOWN (never claimed unadvanced), operator reconciles;
+  - 4: the incident trace failed AFTER the journal append - partial commit: the journal advanced
+    and the verified front stays open (re-arming would contradict the journal); the operator
+    completes the trace from the private archive.
+SIGTERM/SIGINT during the lifted window take the same re-arm path, and ANY interruption of the
+journal append (error, timeout or signal) resolves the journal state by INTEGRALLY comparing the
+queue file with the expected repaired state and the original: advanced, unchanged or UNKNOWN -
+never claimed from local sequencing. No in-process mechanism can survive SIGKILL, a power loss or
+an OOM kill between lift and re-arm: those are documented residual limits requiring operator
+reconciliation (check every origin for 503, re-arm manually with the archived token, reconcile the
+journal against the private incident archive), not a promise of perfect protection.
+
+Do not modify the policy mid-cycle, do not delete the preserved evidence, and do not lift the gate on
+the strength of anything but this reviewed sequence.
+
 ### Existing HTTP-loopback copies
 
 For existing isolated copies whose preserved issuer/redirect origins are HTTP loopback,
