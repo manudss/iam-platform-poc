@@ -1184,7 +1184,7 @@ const lyamRequestReenrollment = {
 
 const lyamProposePasswordReset = {
     type: 'lyam-propose-password-reset', family: 'lyam', label: 'Propose a password reset', simulated: false, category: 'real',
-    description: 'Opens an approval task for a password reset (whole admin pool, anti-self-approval; the beneficiary is barred from deciding by the anti-self rule, which covers detail.subject). The block never touches the credential itself: after approval, the following steps do it with the existing guarded trio (lyam-generate-password, lyam-set-temporary-password, lyam-send-secret-mail). Guards at proposal time: the target must EXIST, and an administrator target is refused (an admin credential reset is a console operation between two administrators, never a workflow effect). What is VERSIONED: the temporary credential, on the run branch until publication. What is IMMEDIATE once published: the forced first-access change (the user chooses their own password at the next sign-in), not reverted by a later publication. The secret mail stays guarded by its real-state check and goes to the demonstration outbox: no real e-mail.',
+    description: 'Opens an approval task for a password reset (whole admin pool, anti-self-approval; the beneficiary is barred from deciding by the anti-self rule, which covers detail.subject). The block never touches the credential itself: after approval, the following steps do it: lyam-generate-password, then lyam-apply-password-reset (bound to this approval, this account and this validity, admin status re-checked at the effect), then publication, then lyam-send-secret-mail given the same approval task (re-checked before the mail). Do not use the generic lyam-set-temporary-password in a reset path: it knows no approval. Guards at proposal time: the target must EXIST, and an administrator target is refused (an admin credential reset is a console operation between two administrators, never a workflow effect). What is VERSIONED: the temporary credential, on the run branch until publication. What is IMMEDIATE once published: the forced first-access change (the user chooses their own password at the next sign-in), not reverted by a later publication. The secret mail stays guarded by its real-state check and goes to the demonstration outbox: no real e-mail.',
     fields: [
         { key: 'subject', label: 'User id', type: 'string', required: true },
         { key: 'hours', label: 'Temporary validity (hours)', type: 'string', default: '24' },
@@ -1221,6 +1221,53 @@ const lyamProposePasswordReset = {
     },
 };
 
+
+/**
+ * Authority check for a password reset, run AT THE EFFECT (never only at proposal): the approval task must be decided "approved", be the reset
+ * proposal of THIS run, and be bound to exactly this target and this validity; and the target must not be an administrator right now.
+ * Used by lyam-apply-password-reset (before the credential is written) and by lyam-send-secret-mail when it carries the approval (before the mail leaves).
+ */
+export async function assertResetApproval(ctx, who, taskId, subject, hours) {
+    const tasks = need(ctx.tasks, who), authn = need(ctx.authn, who);
+    const id = str(taskId, `${who}.approvalTaskId`, 80);
+    const chk = await tasks.check(ctx.tenant, id);
+    const t = chk?.task;
+    if (!t || chk.state !== 'decided' || t.status !== 'decided' || t.decision !== 'approved') bad(`${who}: the approval task is not an approved decision`);
+    if (t.kind !== 'lyam-propose-password-reset') bad(`${who}: the task is not a password reset proposal`);
+    if (t.run_id !== ctx.runId) bad(`${who}: the approval was given to another run: it cannot be used here`);
+    if (String(t.detail?.subject) !== String(subject)) bad(`${who}: the approval covers another account than "${subject}"`);
+    if (String(t.detail?.hours) !== String(hours)) bad(`${who}: the approval covers another validity than ${hours} h`);
+    if (authn.targetIsAdmin(subject)) bad(`${who}: "${subject}" is an administrator now: the approval is refused, an admin credential reset is a console operation`);
+}
+
+const lyamApplyPasswordReset = {
+    type: 'lyam-apply-password-reset', family: 'lyam', label: 'Apply an approved password reset', simulated: false, category: 'real',
+    description: 'Records the generated password as the TEMPORARY credential of the account, on the run branch (versioned: not active until published and activated), ONLY IF the approval task of the reset proposal of this run is approved AND bound to this exact account and validity, AND the account is not an administrator at this moment. It replaces "Set the password as temporary" in a reset path: that generic block does not know any approval. The password never appears in the output. After this step: the first-access change is forced at the next sign-in (immediate once published, not reverted by a later publication). Residual window, stated: between this step and the publication the run branch holds the credential; the publication review shows it, and the secret mail (given the same approval task) re-checks approval binding and admin status right before it leaves.',
+    fields: [
+        { key: 'approvalTaskId', label: 'Approval task', type: 'string', required: true, help: '{{steps.<propose-reset>.taskId}}' },
+        { key: 'subject', label: 'User id', type: 'string', required: true, help: 'must be the account of the approval' },
+        { key: 'passwordRef', label: 'Password reference', type: 'string', required: true, help: 'from the generate step' },
+        { key: 'hours', label: 'Validity (hours)', type: 'string', required: true, help: 'must equal the approved validity' },
+    ],
+    outputs: [{ key: 'subject', description: 'The user id' }, { key: 'revision', description: 'The credential revision written on the run branch' }, { key: 'expiresAt', description: 'Expiry (ms since epoch)' }, { key: 'hours', description: 'The validity' }],
+    validate(cfg) {
+        const hours = str(cfg.hours, 'hours', 8);
+        if (!/\{\{/.test(hours) && (!/^\d{1,4}(\.\d{1,2})?$/.test(hours) || !(Number(hours) > 0 && Number(hours) <= 720))) bad('hours: more than 0 and at most 720');
+        return { approvalTaskId: str(cfg.approvalTaskId, 'approvalTaskId', 80), subject: userId(cfg.subject, 'subject'), passwordRef: str(cfg.passwordRef, 'passwordRef', 80), hours };
+    },
+    async run(ctx) {
+        const c = ctx.config;
+        if (ctx.test || ctx.dryRun) { ctx.log(`test run: would apply an approved reset for "${c.subject}" - nothing written`); return { subject: c.subject, revision: null, expiresAt: null, hours: Number(c.hours) }; }
+        if (!ctx.secrets || !ctx.setTemporaryPassword) bad('lyam-apply-password-reset: not available on this server');
+        await assertResetApproval(ctx, 'lyam-apply-password-reset', c.approvalTaskId, c.subject, c.hours);
+        const password = ctx.secrets.reveal(c.passwordRef);
+        const r = await ctx.setTemporaryPassword({ id: c.subject, password, hours: Number(c.hours) });
+        if (!r?.revision || !(r.expiresAt > 0)) bad('lyam-apply-password-reset: the credential was not confirmed with its first-access rule');
+        ctx.log(`approved reset applied on the run branch for "${c.subject}" (revision ${String(r.revision).slice(0, 8)}, ${c.hours} h); not active until published`);
+        return { subject: c.subject, revision: String(r.revision), expiresAt: r.expiresAt, hours: Number(c.hours) };
+    },
+};
+
 export const LYAM_ADMIN_BLOCKS = [
     // P0
     lyamRequestApproval,
@@ -1238,5 +1285,5 @@ export const LYAM_ADMIN_BLOCKS = [
     lyamSetApplicationEnabled, lyamSetApplicationRoles, lyamProposeApplicationRemoval,
     lyamImportCsv, lyamImportScim,
     lyamReadMailTemplates, lyamPreviewMailTemplate, lyamProposeMailTemplate, lyamPreviewTheme, lyamProposeTheme,
-    lyamReadAuthn, lyamReadEnrollments, lyamProposeAuthnPolicy, lyamRequestReenrollment, lyamProposePasswordReset,
+    lyamReadAuthn, lyamReadEnrollments, lyamProposeAuthnPolicy, lyamRequestReenrollment, lyamProposePasswordReset, lyamApplyPasswordReset,
 ];

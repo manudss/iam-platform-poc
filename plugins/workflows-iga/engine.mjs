@@ -471,7 +471,7 @@ export function createWorkflowEngine(deps) {
     say(`block "${block.label ?? node.type}" provided by the ${provider} plugin`);
     const author = deps.authorOf(`wf-${run.started_by}`);
     // The secret API a block gets depends on ITS type: only the generation block can create one, only set-temporary and the secret mail can resolve one (and only inside this run). No block ever receives a way to list them.
-    const secretUse = { 'lyam-set-temporary-password': 'set-temporary', 'lyam-send-secret-mail': 'mail' }[node.type];
+    const secretUse = { 'lyam-set-temporary-password': 'set-temporary', 'lyam-apply-password-reset': 'set-temporary', 'lyam-send-secret-mail': 'mail' }[node.type];
     const secrets = deps.secrets ? {
       generate: () => { if (node.type !== 'lyam-generate-password') throw new Error('secret reference unavailable'); return deps.secrets.create(run.id, ['set-temporary', 'mail']); },
       reveal: ref => { if (!secretUse) throw new Error('secret reference unavailable'); return deps.secrets.reveal(run.id, ref, secretUse); },

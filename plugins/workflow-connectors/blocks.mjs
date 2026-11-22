@@ -6,7 +6,7 @@ import { serviceAccountAuth, readGoogleRows, writeGoogleRow } from './sheets-api
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
-import { LYAM_ADMIN_BLOCKS } from './lyam-admin-blocks.mjs';
+import { LYAM_ADMIN_BLOCKS, assertResetApproval } from './lyam-admin-blocks.mjs';
 
 /**
  * The block catalogue this plugin exposes on the `workflows.blocks` surface (SPIKE).
@@ -693,6 +693,7 @@ const lyamSendSecretMail = {
     { key: 'hours', label: 'Validity (hours)', type: 'string', required: true, help: 'same value as the set-temporary step' },
     { key: 'revision', label: 'Credential revision', type: 'string', required: true, help: '{{steps.<set-temporary>.revision}}' },
     { key: 'sourceHead', label: 'Published head', type: 'string', required: true, help: '{{steps.<publish>.sourceHead}}' },
+    { key: 'resetApprovalTaskId', label: 'Reset approval task (reset path only)', type: 'string', required: false, help: '{{steps.<propose-reset>.taskId}}: when set, the approval and the non-admin status of the account are re-checked right before the mail leaves' },
     { key: 'ownerRun', label: 'Run that set the account block', type: 'string', required: true, help: '{{steps.<resolve-ticket>.phase1Run}}: the only block allowed to be in force when the mail leaves' },
   ],
   outputs: [{ key: 'to', description: 'The recipient' }, { key: 'accepted', description: 'true when the provider accepted the mail (not proof of delivery)' }, { key: 'messageId', description: 'The provider message id' }, { key: 'expiresAt', description: 'The expiry shown in the mail' }],
@@ -701,7 +702,7 @@ const lyamSendSecretMail = {
     if (!/\{\{/.test(to) && !MAIL_RE.test(to)) bad('lyam-send-secret-mail.to: one e-mail address');
     const text = str(cfg.text, 'lyam-send-secret-mail.text', 4000);
     if (!text.includes('[[password]]') || !text.includes('[[expiry]]')) bad('lyam-send-secret-mail.text: must contain [[password]] and [[expiry]]');
-    return { account: userId(cfg.account, 'lyam-send-secret-mail.account'), to, subject: str(cfg.subject, 'lyam-send-secret-mail.subject', 150), text, passwordRef: str(cfg.passwordRef, 'lyam-send-secret-mail.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-send-secret-mail.hours'), revision: str(cfg.revision, 'lyam-send-secret-mail.revision', 80), ownerRun: str(cfg.ownerRun, 'lyam-send-secret-mail.ownerRun', 80), sourceHead: str(cfg.sourceHead, 'lyam-send-secret-mail.sourceHead', 80) };
+    return { account: userId(cfg.account, 'lyam-send-secret-mail.account'), to, subject: str(cfg.subject, 'lyam-send-secret-mail.subject', 150), text, passwordRef: str(cfg.passwordRef, 'lyam-send-secret-mail.passwordRef', 80), hours: hoursOf(cfg.hours, 'lyam-send-secret-mail.hours'), revision: str(cfg.revision, 'lyam-send-secret-mail.revision', 80), ownerRun: str(cfg.ownerRun, 'lyam-send-secret-mail.ownerRun', 80), sourceHead: str(cfg.sourceHead, 'lyam-send-secret-mail.sourceHead', 80), ...(String(cfg.resetApprovalTaskId ?? '').trim() ? { resetApprovalTaskId: str(cfg.resetApprovalTaskId, 'lyam-send-secret-mail.resetApprovalTaskId', 80) } : {}) };
   },
   async run(ctx) {
     const c = ctx.config;
@@ -713,6 +714,8 @@ const lyamSendSecretMail = {
     if (!allowed.includes(c.to.toLowerCase())) bad('lyam-send-secret-mail: this recipient is not in the allowed recipients setting');
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) bad('lyam-send-secret-mail: RESEND_API_KEY is not set on the server (nothing sent)');
+    // Reset path only: the approval and the target's non-admin status are re-checked right before the mail leaves.
+    if (c.resetApprovalTaskId) await assertResetApproval(ctx, 'lyam-send-secret-mail', c.resetApprovalTaskId, c.account, c.hours);
     const { expiresAt } = await verifySecretMailState(ctx, c);
     const password = ctx.secrets.reveal(c.passwordRef);
     const body = c.text.split('[[password]]').join(password).split('[[expiry]]').join(new Date(expiresAt).toISOString().replace('T', ' ').slice(0, 16) + ' UTC').split('[[hours]]').join(String(Number(c.hours)));

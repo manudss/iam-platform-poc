@@ -435,3 +435,60 @@ describe('completion: plugin protections (reinforced validation)', () => {
     assert.equal((t.detail as { reinforced?: string }).reinforced, undefined);
   });
 });
+
+describe('completion: password reset approval -> effect binding', () => {
+  const APPLY = () => externalBlock('lyam-apply-password-reset')!;
+  const setup = (over: Record<string, unknown> = {}) => {
+    const svc = fakeTasks();
+    const t = { id: 'task-r', kind: 'lyam-propose-password-reset', run_id: 'run-1', detail: { subject: 'u1', hours: '24' }, ...over };
+    svc.tasks.set('task-r', { status: 'open', ...t });
+    svc.approve('task-r');
+    const writes: unknown[] = [];
+    let isAdmin = false;
+    const base = { tasks: svc as never, authn: { targetIsAdmin: () => isAdmin } as never, secrets: { reveal: () => 'x' } as never, setTemporaryPassword: (async (a: unknown) => { writes.push(a); return { revision: 'rev12345', expiresAt: Date.now() + 1000 }; }) as never };
+    const cfg = (o: Record<string, string> = {}) => APPLY().validate({ approvalTaskId: 'task-r', subject: 'u1', passwordRef: 'ref', hours: '24', ...o } as never);
+    return { svc, writes, base, cfg, promote: () => { isAdmin = true; } };
+  };
+  it('applies only the approved reset bound to this run, this account and this validity', async () => {
+    const s = setup();
+    const out = await run1('lyam-apply-password-reset', mk({ ...s.base, config: s.cfg() }).c as never);
+    assert.equal(out.subject, 'u1'); assert.equal(s.writes.length, 1);
+  });
+  it('refuses a substituted target, a different validity, another run, a non-reset task and a refused or open task', async () => {
+    const s = setup();
+    for (const [cfgOver, re] of [[{ subject: 'u2' }, /another account/], [{ hours: '48' }, /another validity/]] as const) {
+      await assert.rejects(run1('lyam-apply-password-reset', mk({ ...s.base, config: s.cfg(cfgOver) }).c as never), re);
+    }
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...setup({ run_id: 'run-9' }).base, config: s.cfg() }).c as never), /another run/);
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...setup({ kind: 'lyam-request-approval' }).base, config: s.cfg() }).c as never), /not a password reset proposal/);
+    const refused = setup(); const rt = refused.svc.tasks.get('task-r')!; rt.decision = 'refused';
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...refused.base, config: s.cfg() }).c as never), /not an approved decision/);
+    const open = setup(); open.svc.tasks.get('task-r')!.status = 'open';
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...open.base, config: s.cfg() }).c as never), /not an approved decision/);
+    assert.equal(s.writes.length + refused.writes.length + open.writes.length, 0);
+  });
+  it('refuses a target promoted to administrator after the approval, before any credential is written', async () => {
+    const s = setup();
+    s.promote();
+    await assert.rejects(run1('lyam-apply-password-reset', mk({ ...s.base, config: s.cfg() }).c as never), /administrator now/);
+    assert.equal(s.writes.length, 0);
+  });
+  it('the secret mail carrying the approval re-checks it right before sending (promotion after the credential step)', async () => {
+    const s = setup();
+    const mail = externalBlock('lyam-send-secret-mail')!;
+    const vcfg = mail.validate({ account: 'u1', to: 'u1@example.test', subject: 's', text: 'p [[password]] e [[expiry]]', passwordRef: 'ref', hours: '24', revision: 'rev', ownerRun: 'r0', sourceHead: 'h', resetApprovalTaskId: 'task-r' } as never);
+    assert.equal((vcfg as { resetApprovalTaskId?: string }).resetApprovalTaskId, 'task-r');
+    s.promote();
+    const prev = process.env.RESEND_API_KEY; process.env.RESEND_API_KEY = 'fake-not-used';
+    try {
+      await assert.rejects(run1('lyam-send-secret-mail', mk({ ...s.base, markEffectPending: (async () => undefined) as never, settings: { mailAllowedRecipients: 'u1@example.test' }, config: vcfg }).c as never), /administrator now/);
+    } finally { if (prev === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = prev; }
+    // Without the optional field the generic block validates exactly as before.
+    assert.equal('resetApprovalTaskId' in (mail.validate({ account: 'u1', to: 'u1@example.test', subject: 's', text: 'p [[password]] e [[expiry]]', passwordRef: 'ref', hours: '24', revision: 'rev', ownerRun: 'r0', sourceHead: 'h' } as never) as object), false);
+  });
+  it('a test run writes nothing', async () => {
+    const s = setup();
+    const out = await run1('lyam-apply-password-reset', mk({ ...s.base, test: true, config: s.cfg() }).c as never);
+    assert.equal(out.revision, null); assert.equal(s.writes.length, 0);
+  });
+});
