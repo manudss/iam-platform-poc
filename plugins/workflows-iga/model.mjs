@@ -91,9 +91,10 @@ export function placeholderKeys(value) {
         return [];
     return [...value.matchAll(new RegExp(PLACEHOLDER.source, 'g'))].map((m) => m[1]);
 }
-const STEP_PLACEHOLDER = /\{\{steps\.([a-z0-9-]+)\.([a-zA-Z0-9_]+)\}\}/g;
+const STEP_PLACEHOLDER = /\{\{steps\.([a-z0-9-]+)\.([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*)\}\}/g;
 /** Upstream-output placeholders used in a config string, e.g. "{{steps.read.rowNumber}}" -> [{node, key}]. */
 export function stepPlaceholderRefs(value) {
+    if (value && typeof value==='object')return Object.values(value).flatMap(stepPlaceholderRefs);
     if (typeof value !== 'string')
         return [];
     return [...value.matchAll(new RegExp(STEP_PLACEHOLDER.source, 'g'))].map((m) => ({ node: m[1], key: m[2] }));
@@ -101,20 +102,20 @@ export function stepPlaceholderRefs(value) {
 /** Replaces {{steps.<node>.<key>}} placeholders from the outputs of already-finished steps (engine, at step time).
  * A missing step or key refuses the step with a clear error. Objects are injected as JSON. */
 export function substituteStepOutputs(node, outputs) {
-    const config = {};
-    for (const [k, v] of Object.entries(node.config)) {
-        if (typeof v !== 'string') { config[k] = v; continue; }
-        config[k] = v.replace(new RegExp(STEP_PLACEHOLDER.source, 'g'), (_m, id, key) => {
-            const out = outputs[id];
-            if (out === undefined || out === null)
-                throw new BadRequestException(`step "${node.id}": {{steps.${id}.${key}}} cannot resolve: step "${id}" produced no output`);
-            const val = out[key];
-            if (val === undefined)
-                throw new BadRequestException(`step "${node.id}": {{steps.${id}.${key}}} cannot resolve: no key "${key}" in the output of "${id}" (has: ${Object.keys(out).join(', ') || 'none'})`);
-            return typeof val === 'object' ? JSON.stringify(val) : String(val);
-        });
-    }
-    return { ...node, config };
+    const forbidden=new Set(['__proto__','prototype','constructor']);
+    const resolve=(id,path)=>{let value=outputs[id];for(const key of path.split('.')){if(forbidden.has(key)||value===null||value===undefined||!Object.prototype.hasOwnProperty.call(Object(value),key))throw new BadRequestException(`step "${node.id}": upstream path cannot resolve`);value=value[key];}if(value===undefined)throw new BadRequestException(`step "${node.id}": upstream value missing`);return value;};
+    const visit=(value,typed=false)=>{
+      if(Array.isArray(value))return value.map(x=>visit(x,true));
+      if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>{if(forbidden.has(k))throw new BadRequestException('unsafe config property');return[k,visit(v,true)];}));
+      if(typeof value!=='string')return value;
+      // Valid JSON containers are parsed before interpolation, so quotes and native
+      // object/array/boolean/number values cannot corrupt or inject JSON syntax.
+      if(!typed&&/^[\[{]/.test(value.trim())){try{const parsed=JSON.parse(value);return JSON.stringify(visit(parsed,true));}catch(e){if(e instanceof BadRequestException)throw e;}}
+      const match=[...value.matchAll(new RegExp(STEP_PLACEHOLDER.source,'g'))];
+      if(typed&&match.length===1&&match[0][0]===value)return resolve(match[0][1],match[0][2]);
+      return value.replace(new RegExp(STEP_PLACEHOLDER.source,'g'),(_m,id,path)=>{const val=resolve(id,path);return typeof val==='object'?JSON.stringify(val):String(val);});
+    };
+    return {...node,config:Object.fromEntries(Object.entries(node.config).map(([k,v])=>[k,visit(v)]))};
 }
 /** Save-time check: every {{steps.<id>.<key>}} must reference a step that comes EARLIER in the execution order. */
 export function validateStepPlaceholders(graph, order) {

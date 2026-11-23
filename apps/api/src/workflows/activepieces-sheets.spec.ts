@@ -38,7 +38,7 @@ import{ActivepiecesSheetsService}from'./activepieces-sheets.js';
 describe('native trigger runtime with persisted fixtures, not live Google',()=>{
  function harness(key='new-worksheet'){
   const memory=new Map<string,unknown>();const d:any={id:'wf-fictional',tenant:'t',active:true,trigger:{event:Object.entries(full.GOOGLE_SHEETS_EVENTS).find(([,e]:any)=>e.activepiecesTrigger===key)![0],config:{connectionId:'conn-test',spreadsheetId:'fictional'}}};
-  const store:any={liveRef:'main',pieceClaim:async()=>true,pieceRelease:async()=>{},pieceGet:async(t:string,s:string,k:string)=>memory.get(t+s+k)??null,piecePut:async(t:string,s:string,k:string,v:unknown)=>{memory.set(t+s+k,structuredClone(v));},pieceDelete:async(t:string,s:string,k:string)=>{memory.delete(t+s+k);},getDefinition:async()=>d};
+  const store:any={liveRef:'main',pieceClaim:async()=>true,pieceRelease:async()=>{},pieceGet:async(t:string,s:string,k:string)=>memory.get(t+s+k)??null,piecePut:async(t:string,s:string,k:string,v:unknown)=>{memory.set(t+s+k,structuredClone(v));},pieceDelete:async(t:string,s:string,k:string)=>{memory.delete(t+s+k);},getDefinition:async()=>d,listAllDefinitions:async()=>[d],pieceSubscriptions:async()=>[]};
   const runs:any[]=[];const service:any=new ActivepiecesSheetsService(store,{resolve:async()=>({settings})}as any,{start:async(...args:any[])=>{runs.push(args);return{};}}as any,{isActive:()=>true}as any,{}as any);
   const state:any={key,config:d.trigger.config,fingerprint:'fictional',token:'fixture-token',lastRenew:Date.now(),status:'active'};return{service,memory,d,state,runs,store};
  }
@@ -51,6 +51,17 @@ describe('native trigger runtime with persisted fixtures, not live Google',()=>{
  });
  it('unknown, stale and wrong-token webhooks cannot invoke native triggers',async()=>{
   const h=harness('googlesheets_new_row_added');await assert.rejects(()=>h.service.webhook('t',h.d.id,'wrong',{},{}));await h.store.piecePut('t','trigger:wf-fictional','lyam:subscription',h.state);await assert.rejects(()=>h.service.webhook('t',h.d.id,'wrong',{},{}));assert.equal(h.runs.length,0);
+ });
+ it('failed native enable is retained for review and never automatically enabled a second time',async()=>{
+  const h=harness();const trigger=full.SHEETS_TRIGGERS[h.state.key],old=trigger.onEnable;let enables=0;trigger.onEnable=async()=>{enables++;throw Error('provider response lost');};
+  try{await h.service.tick();assert.equal((await h.store.pieceGet('t','trigger:wf-fictional','lyam:subscription')as any).status,'review');await h.service.tick();assert.equal(enables,1);}finally{trigger.onEnable=old;}
+ });
+ it('failed native disable persists disabling and cannot duplicate remote teardown',async()=>{
+  const h=harness();h.d.active=false;h.state.fingerprint='old';await h.store.piecePut('t','trigger:wf-fictional','lyam:subscription',h.state);const trigger=full.SHEETS_TRIGGERS[h.state.key],old=trigger.onDisable;let disables=0;trigger.onDisable=async()=>{disables++;throw Error('stop response lost');};
+  try{await h.service.tick();assert.equal((await h.store.pieceGet('t','trigger:wf-fictional','lyam:subscription')as any).status,'disabling');await h.service.tick();assert.equal(disables,1);}finally{trigger.onDisable=old;}
+ });
+ it('durable mutex rejection prevents native execution and releases no foreign owner',async()=>{
+  const h=harness();let release=0;h.store.pieceClaim=async()=>false;h.store.pieceRelease=async()=>{release++;};await assert.rejects(()=>h.service.locked('t','wf-fictional',()=>{throw Error('must not execute');}),/crash reconciliation/);assert.equal(release,0);
  });
  it('installed polling trigger consumes persistent cursor and emits only new worksheet objects',async()=>{
   nock.disableNetConnect();nock('https://sheets.googleapis.com').get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Existing'}},{properties:{sheetId:4,title:'New'}}]});
@@ -99,6 +110,12 @@ describe('native exports and custom API HTTP contracts, no live account',()=>{
   const result=await adapter.runPieceAction('@activepieces/piece-google-sheets','export_sheet',{auth:{type:'OAUTH2',access_token:'FICTIONAL'},propsValue:{spreadsheetId:'fictional',sheetId:0,format:'csv',returnAsText:false},runtime:{files:{write:async(f:any)=>{file=f;return '/private/fixture.csv';}}}});
   assert.deepEqual(file.data,bytes);assert.equal(file.fileName,'exported_sheet.csv');assert.deepEqual(result,{file:'/private/fixture.csv',filename:'exported_sheet.csv',format:'csv'});
  });
+ it('native Find Rows and Get Row retain exact array/object forms and letter-keyed values',async()=>{
+  nock.disableNetConnect();nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Source'}}]});nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(function(uri:string){return[200,{values:decodeURIComponent(uri).includes('A1:ZZZ1')?[['Name','State']]:[['Camille','OK']]}];});
+  const auth={type:'OAUTH2',access_token:'FICTIONAL'},props={spreadsheetId:'fictional',sheetId:0,headerRow:1,useHeaderNames:false};
+  const found=await adapter.runPieceAction('@activepieces/piece-google-sheets','find_rows',{auth,propsValue:{...props,columnName:'A',searchValue:'Camille',matchCase:true,numberOfRows:2},runtime});assert.deepEqual(found,[{row:1,values:{A:'Camille',B:'OK'}}]);
+  const row=await adapter.runPieceAction('@activepieces/piece-google-sheets','find_row_by_num',{auth,propsValue:{...props,rowNumber:2},runtime});assert.deepEqual(row,{found:true,row:2,values:{A:'Camille',B:'OK'}});
+ });
  it('installed custom API preserves URL and response with controlled OAuth fixture',async()=>{
   nock.disableNetConnect();const request=nock('https://sheets.googleapis.com').get('/v4/spreadsheets/fictional').query({fields:'spreadsheetId'}).matchHeader('authorization','Bearer FICTIONAL').reply(200,{spreadsheetId:'fictional'});
   const props={url:{url:'/v4/spreadsheets/fictional'},method:'GET',queryParams:{fields:'spreadsheetId'},followRedirects:false};full.validateCustomCall(props);
@@ -114,5 +131,21 @@ describe('native operational status read only',()=>{
  it('returns only tenant-scoped safe status and recovery guidance, never invokes a provider',async()=>{
   let tenant='';const ctrl=new ActivepiecesSheetsController({webhook:()=>{throw Error('must not run');}}as any,{}as any,{pieceStatuses:async(t:string)=>{tenant=t;return[{scope:'trigger:fixture',subscription:{status:'review'},locked:true,pending:2}];}}as any);
   const result=await ctrl.status('tenant-fixture');assert.equal(tenant,'tenant-fixture');assert.equal(result.entries[0].pending,2);assert.match(result.recovery,/stop the former worker/);assert.equal(JSON.stringify(result).includes('token'),false);
+ });
+});
+
+import{substituteStepOutputs}from'./model.js';
+describe('generic typed nested native results, no provider or business-specific transformation',()=>{
+ const source={read:{result:[{row:2,values:{A:'Camille "Quote"',B:false,C:7}}]}};
+ it('resolves nested array paths and typed JSON values without injecting JSON syntax',()=>{
+  const node:any={id:'update',type:'test',config:{row_id:'{{steps.read.result.0.row}}',values:'{"A":"{{steps.read.result.0.values.A}}","B":"{{steps.read.result.0.values.B}}","C":"{{steps.read.result.0.values.C}}"}'}};
+  const result=substituteStepOutputs(node,source);assert.equal(result.config.row_id,'2');assert.deepEqual(JSON.parse(String(result.config.values)),{A:'Camille "Quote"',B:false,C:7});
+ });
+ it('rejects prototype paths and missing nested native outputs',()=>{
+  for(const path of ['result.99.row','result.constructor','result.__proto__'])assert.throws(()=>substituteStepOutputs({id:'n',config:{v:'{{steps.read.'+path+'}}'}}as any,source));
+ });
+ it('generic JSON operations count and filter native arrays without flattening them',async()=>{
+  const b=externalBlock('json-values')!;const rows=[{fields:{status:{name:'Done'}}},{fields:{status:{name:'Open'}}}];
+  const result=await b.run({config:b.validate({input:JSON.stringify(rows),operation:'filter-equals',field:'fields.status.name',equals:'Done'}),dryRun:true}as any);assert.equal(result!.count,1);assert.deepEqual(result!.value,[rows[0]]);
  });
 });
