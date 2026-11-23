@@ -16,6 +16,7 @@ import { EffectsService } from './effects/effects.service.js';
 import { startBusHarness, busBinsPresent, BusHarness } from './testing/bus-harness.js';
 import { createServer, Server } from 'node:http';
 import { DoltService } from './dolt/dolt.service.js';
+import { waitForCondition } from './testing/wait-for-condition.js';
 
 const root = resolve(process.cwd(), '../..');
 const doltBin = process.env.DOLT_BIN, pgBin = process.env.PG_BIN;
@@ -81,7 +82,13 @@ describe('EffectsService wiring: real Dolt export + PostgreSQL + core + bus -> l
     await sql("delete from assignments where identity_id='demo-alice' and role_id='payment-approver'");
     const b = await svc.activate(T, await new DoltService().head(), 'req-eff-0002');
     assert.deepEqual([b.state, b.seq], ['applied', 2]);
-    await pump(() => sinkCalls.length >= 7 && targetCalls.length >= 7);
+    // The loopback sink records success before fetch resolves and EffectStore.mark(done) commits.
+    // Call counts alone race that final durable write, especially after a failed delivery retry.
+    await waitForCondition(async () => {
+      if (sinkCalls.length < 7 || targetCalls.length < 7) return false;
+      const ledger = (await pool.query("select count(*)::int total, count(*) filter (where state <> 'done')::int pending from effects where tenant=$1", [T])).rows[0];
+      return ledger.total === 14 && ledger.pending === 0;
+    }, { timeoutMs: 15000, intervalMs: 100, label: 'activation 2: all 14 tenant effects durably done' });
     const want = [`${T}:2:notify:demo-alice:payment-approver:revoked`, `${T}:2:notify:demo-bob:payment-approver:granted`];
     assert.deepEqual(sinkCalls.filter((c) => c.key.startsWith(`${T}:2:`)).map((c) => c.key).sort(), want);
     assert.deepEqual(targetCalls.filter((c) => c.key.startsWith(`${T}:2:`)).map((c) => `${c.method} ${c.url}`).sort(), ['DELETE /Users/demo-alice/Roles/payment-approver', 'PUT /Users/demo-bob/Roles/payment-approver']);
