@@ -54,3 +54,17 @@ describe('IGA per-access review keeps independent decisions and direct provenanc
     assert.equal(access.items.length, 1); assert.deepEqual(access.items[0].payload.roles, ['keep']);
   });
 });
+
+describe('bounded template remediation refuses before any item preparation', () => {
+  it('51 denied accesses refuse as one batch, 50 fit, service callers without a limit remain unchanged', async () => {
+    const f = fixture(); f.current(Array.from({ length: 51 }, (_, i) => `role-${i}`));
+    const c = await f.iga.createCampaign('acme', 'owner', { name: 'Large batch', granularity: 'access', scope: { users: ['emp'] } });
+    f.items.forEach(i => { i.state = 'denied'; });
+    await assert.rejects(f.iga.prepareRemediation('acme', 'owner', c.id, { maxActions: 50 }), /no item prepared and no revocation/);
+    assert.ok(f.items.every(i => i.state === 'denied' && !i.payload.remediation));
+    f.items[50].state = 'approved';
+    assert.equal((await f.iga.prepareRemediation('acme', 'owner', c.id, { maxActions: 50 })).remediation.length, 50);
+    f.items.forEach(i => { i.state = 'denied'; });
+    assert.equal((await f.iga.prepareRemediation('acme', 'owner', c.id, {})).remediation.length, 51);
+  });
+});

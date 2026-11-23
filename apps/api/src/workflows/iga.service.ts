@@ -224,12 +224,20 @@ export class WorkflowsIgaService {
   }
 
   /** Step 4: for every denied item, the remediation actions (revoke the reviewed roles), after a FRESH snapshot check on the campaign ref: roles changed since the campaign snapshot = conflict, no action prepared. */
-  async prepareRemediation(tenant: string, actor: string, campaignId: string, input: { items?: unknown }) {
+  async prepareRemediation(tenant: string, actor: string, campaignId: string, input: { items?: unknown; maxActions?: unknown }) {
     if (!this.reads) throw new BadRequestException('remediation needs the reads service (server)');
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
     const wanted = Array.isArray(input.items) && input.items.length ? new Set(input.items.map(String)) : null;
     const denied = (await this.listItems(tenant, campaignId, 'denied')).items.filter((i) => !wanted || wanted.has(i.id));
+    // Explicit opt-in bound for a caller whose later loops cannot process the complete batch.
+    // Check BEFORE preparing any item or touching directory data. Other callers keep their contract.
+    if (input.maxActions !== undefined) {
+      const max = Number(input.maxActions);
+      if (!Number.isInteger(max) || max < 1 || max > 200) throw new BadRequestException('maxActions: 1 to 200');
+      const actions = denied.reduce((n, i) => n + (Array.isArray(i.payload?.roles) ? i.payload.roles.length : 0), 0);
+      if (denied.length > max || actions > max) throw new ConflictException(`remediation batch exceeds explicit limit ${max} (${denied.length} denied items, ${actions} actions): no item prepared and no revocation performed; use a narrower campaign or a workflow supporting the complete batch`);
+    }
     const out: { item: string; identity: string; actions?: { type: string; identity: string; role: string }[]; conflict?: string }[] = [];
     for (const i of denied) {
       if (!Array.isArray(i.payload?.roles)) {

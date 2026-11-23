@@ -672,7 +672,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     return JSON.parse(JSON.stringify(legacy).replaceAll('replace-with-user-id', users)) as { nodes: { id: string; type: string; name: string; config: Record<string, unknown> }[]; edges: { from: string; to: string; label?: string }[] };
   };
 
-  it('recertification access-level: keep and deny roles of the SAME identity with real publication', async () => {
+  it('recertification access-level: two denied roles and one kept role of the SAME identity in a single publication with real publication', async () => {
     // Isolated fixture: bob MUST hold at least one role, whatever the suite order, so the denial below
     // can never pass without a real revocation and a real publication. Granted through the normal path.
     const held0 = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows.filter((r) => r.identity_id === 'demo-bob').map((r) => r.role_id);
@@ -704,7 +704,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     for (const r of reviews) {
       const access = r.detail.access as { role: string; provenance: { type: string } };
       assert.equal(access.provenance.type, 'direct');
-      const approvedOne = !(r.detail.identity === 'demo-alice' && access.role === aliceRoles[0]);
+      const approvedOne = !(r.detail.identity === 'demo-alice' && aliceRoles.slice(0, 2).includes(access.role));
       const d = await call('POST', `/workflow-tasks/${r.id}/decision`, { decision: approvedOne ? 'approved' : 'denied', justification: approvedOne ? 'still needed' : 'no longer needed' }, { token: `${T}:iga-reviewer` });
       assert.ok(d.status < 300, JSON.stringify(d.body).slice(0, 200));
     }
@@ -731,19 +731,25 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       await new Promise((r) => setTimeout(r, 500));
     }
     await waitRun(started.run.id, ['completed'], 30000);
-    assert.equal(published, true, 'bob held a role: the publication MUST have happened (no silent skip)');
+    assert.equal(published, true, 'denied Alice roles require one real publication, no silent skip');
     const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
     assert.equal(((v.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).skipped ?? false), !published, 'publish happened exactly when there was something to publish');
     const evidence = (v.steps.find((x) => x.node_id === 'close')!.output as Record<string, unknown>).evidence as Record<string, unknown>;
-    assert.equal((evidence.totals as Record<string, unknown>).remediated, 1, 'only the denied identity was remediated');
+    assert.equal((evidence.totals as Record<string, unknown>).remediated, 2, 'both denied access items were remediated after one publication');
     const after = ((await ok('GET', '/versioning/tables/assignments?ref=main')) as { rows: { identity_id: string; role_id: string }[] }).rows;
-    assert.deepEqual(after.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort(), aliceRoles.slice(1), 'same identity keeps its approved roles and loses only its denied role');
+    assert.deepEqual(after.filter((r) => r.identity_id === 'demo-alice').map((r) => r.role_id).sort(), aliceRoles.slice(2), 'same identity keeps its approved roles and loses exactly its two denied roles');
     assert.deepEqual(after.filter(r => r.identity_id === 'demo-bob').map(r => r.role_id).sort(), bobRoles, 'the other identity keeps every approved role');
     assert.equal((evidence.accessReviews as unknown[]).length, reviews.length);
+    const proofs = (evidence.accessReviews as { identity: string; access: { role: string; provenance: { type: string } }; state: string }[]).filter(i => i.identity === 'demo-alice' && i.state === 'remediated');
+    assert.deepEqual(proofs.map(i => i.access.role).sort(), aliceRoles.slice(0, 2));
+    assert.ok(proofs.every(i => i.access.provenance.type === 'direct'));
+    const publishTasks = (await ok('GET', '/workflow-tasks?scope=all&status=all') as { tasks: { kind: string; run_id: string }[] }).tasks.filter(t => t.run_id === started.run.id && t.kind === 'publish-approval');
+    assert.equal(publishTasks.length, 1, 'both denied roles share a single publication approval');
     const restoreDef = (await ok('POST', '/workflows', { name: 'Restore access review fixture', graph: { nodes: [
       { id: 'grant', type: 'lyam-grant-assignment', name: 'restore', config: { identity: 'demo-alice', role: aliceRoles[0] } },
-      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Restore reviewed test fixture role' } },
-    ], edges: [{ from: 'grant', to: 'publish' }] } })) as { definition: { id: string } };
+      { id: 'grant2', type: 'lyam-grant-assignment', name: 'restore second', config: { identity: 'demo-alice', role: aliceRoles[1] } },
+      { id: 'publish', type: 'lyam-request-publish', name: 'publish', config: { title: 'Restore reviewed test fixture roles' } },
+    ], edges: [{ from: 'grant', to: 'grant2' }, { from: 'grant2', to: 'publish' }] } })) as { definition: { id: string } };
     const restoreRun = await ok('POST', `/workflows/${restoreDef.definition.id}/runs`) as RunView;
     const restoreApproval = await waitTask(restoreRun.run.id, 'publish-approval');
     await call('POST', `/workflow-tasks/${restoreApproval.id}/decision`, { decision: 'approved' }, { token: `${T}:admin-two` });
@@ -812,7 +818,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       await new Promise((r) => setTimeout(r, 500));
     }
     await waitRun(started.run.id, ['completed'], 30000);
-    assert.equal(published, true, 'bob held a role: the publication MUST have happened (no silent skip)');
+    assert.equal(published, true, 'denied Alice roles require one real publication, no silent skip');
     const v = (await ok('GET', `/workflow-runs/${started.run.id}`)) as RunView;
     assert.equal(((v.steps.find((x) => x.node_id === 'publish')!.output as Record<string, unknown>).skipped ?? false), !published, 'publish happened exactly when there was something to publish');
     const evidence = (v.steps.find((x) => x.node_id === 'close')!.output as Record<string, unknown>).evidence as Record<string, unknown>;

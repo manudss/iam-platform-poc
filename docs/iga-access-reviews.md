@@ -8,7 +8,8 @@ Only the denied item's role produces a revoke action. Preparation and the pre-wr
 
 Limits:
 - This source models direct assignments only. No indirect application entitlements or group-derived access inventory is asserted. The database has no assignment generation id: revoke-and-regrant of an identical person/role between snapshots is not distinguishable from the same assignment remaining present.
-- Campaigns cap at 200 items; the existing template loop caps at 50 remediation actions. A larger remediation must be split deliberately, not silently considered complete.
+- Campaigns cap at 200 items. The catalog template explicitly refuses a batch above 50 denied items or revoke actions BEFORE preparing any remediation item or revoking anything. It never runs a truncated 50-action subset. A campaign already reviewed beyond that limit remains open for reconciliation; use a narrower campaign or an explicitly complete larger-batch workflow. Other workflows and loop semantics are unchanged.
+- Several denied roles of one person are revoked on the same run branch and published together once. Sequential publications against the original full baseline may fail closed and are not promised.
 - Preparing several roles, human publication and verifying removal are separate steps. Concurrent directory changes can require fresh review; this is not a transaction spanning decision and publication.
 - Roles absent from a person's source yield no access item in access mode, not an invented empty access. Person mode retains its legacy empty-role item behavior.
 - This branch builds on the reliability fixes in PR #152. It does not merge them or replace the separate active-review authority changes in PR #143.

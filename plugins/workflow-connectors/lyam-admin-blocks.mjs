@@ -537,12 +537,13 @@ const igaAwaitDecisions = {
 
 const igaPrepareRemediation = writeBlock('iga-prepare-remediation', 'IGA: prepare the remediation', 'REAL: for every denied item, prepares the remediation actions (revoke the reviewed roles) after a FRESH snapshot check: roles changed since the campaign = conflict, nothing prepared for that item.', [
     { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
-], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-prepare-remediation.campaignId', 48) }), async (ctx) => {
+    { key: 'maxActions', label: 'Optional complete-batch limit (1 to 200)', type: 'number' },
+], (cfg) => { const max = cfg.maxActions === undefined || cfg.maxActions === '' ? undefined : Number(cfg.maxActions); if (max !== undefined && (!Number.isInteger(max) || max < 1 || max > 200)) bad('maxActions: 1 to 200'); return { campaignId: str(cfg.campaignId, 'iga-prepare-remediation.campaignId', 48), ...(max === undefined ? {} : { maxActions: max }) }; }, async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would prepare the remediation of campaign ${c.campaignId}`); return { campaign: c.campaignId, remediation: [] }; }
-    const r = await need(ctx.iga, 'iga-prepare-remediation').prepareRemediation(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, {});
+    const r = await need(ctx.iga, 'iga-prepare-remediation').prepareRemediation(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { maxActions: c.maxActions });
     const prepared = r.remediation.filter((x) => x.actions && !x.conflict);
-    // Loop-ready flat forms: one entry per revoke action, one per denied identity (mark-remediated loops over it).
+    // Loop-ready flat forms: one entry per revoke action, one per denied review item (mark-remediated loops over it).
     const actions = prepared.flatMap((x) => (x.actions ?? []).filter((a) => a.type === 'revoke-role').map((a) => ({ campaignId: c.campaignId, item: x.item, identity: a.identity ?? x.identity, role: a.role })));
     const deniedItems = prepared.map((x) => x.item);
     ctx.log(`${prepared.length} item(s) prepared (${actions.length} revoke action(s)), ${r.remediation.filter((x) => x.conflict).length} conflict(s)`);
