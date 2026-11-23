@@ -184,12 +184,29 @@ docker compose --env-file .env -f infra/docker-compose.yml down -v     # also de
 | `link.exe not found` while building the core | install the MSVC C++ Build Tools (step 1) |
 | API answers 401 `bad issuer` | `IAM_ISSUER` differs between core and API |
 | API 500 / `Access denied for user 'root'` on assignments | `DOLT_PASSWORD` not equal to `DOLT_ROOT_PASSWORD` of `.env` |
-| Container path: API restarts with `Access denied for user 'root'` (Dolt log: `Error authenticating user root using: mysql_native_password`) and the console shows proxy `ECONNREFUSED` on port 3000 | the `dolt-data` volume predates the current `.env`: a server stores its root credentials at the FIRST initialization of its data directory and ignores later `DOLT_ROOT_PASSWORD` changes (an old attempt without today's `.env` froze a different password). Confirm with `docker volume inspect <project>_dolt-data --format "{{.CreatedAt}}"`. Fix: `scripts\dev.ps1 -Down -Volumes` (or `dev.sh --down --volumes`) then start again - the volumes only ever hold the fictional seed data, re-created automatically on the next start |
+| Container path: API restarts with `Access denied for user 'root'` (Dolt log: `Error authenticating user root using: mysql_native_password`) and the console shows proxy `ECONNREFUSED` on port 3000 | most likely a `dolt-data` volume initialized with different root credentials: Dolt creates the root superuser only at the FIRST server start of a data directory and ignores later `DOLT_ROOT_PASSWORD` values on an existing volume. Do NOT reset right away: confirm with the read-only probe first, see "Dolt root access denied" below |
 | `password authentication failed` (PostgreSQL) | password in `IAM_PG_URL` not equal to `RUNTIME_PG_PASSWORD`, or the volume was created with another password (`down -v`) |
 | Assignments empty / no `iam` database | Dolt volume existed before the seed: `down -v` then `up -d` |
 | Sign-in redirect fails | console opened on `127.0.0.1:4200` instead of `localhost:4200` |
 | Port 3307/5433/4222/7233/8200/8081/3000/4200 already used | stop the other process, or change the compose port mapping / `IAM_CORE_ADDR` / `API_PORT` (the console proxy `apps/web/proxy.conf.json` expects 8081 and 3000) |
 | "Activate" gives `state: recorded` / decisions deny | `IAM_CORE_ADMIN_TOKEN` missing or different on core and API |
+
+### Dolt root access denied (container path)
+
+Confirm the cause read-only, from the repository root (the API container image carries the probe;
+no password is ever printed):
+
+```powershell
+docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml run --rm app node infra/dev/dolt-probe.mjs
+```
+
+- `ACCEPTED: an EMPTY password` -> the volume was initialized before today's `.env` existed
+  (empty password frozen). Keep your data: stop the `dolt` service, align the stored account with
+  `docker compose ... run --rm --entrypoint dolt -w /var/lib/dolt dolt sql -q "ALTER USER 'root'@'%' IDENTIFIED BY '<the DOLT_ROOT_PASSWORD value from your .env>';"`, then start again.
+- `REFUSED` for both candidates -> read the stored accounts the same way (`SELECT User, Host FROM
+  mysql.user` with `--entrypoint dolt`) and align host/password accordingly.
+- Only when the probe shows the volume holds nothing you need (it is designed to hold only the
+  fictional seed data, re-created automatically): `scripts\dev.ps1 -Down -Volumes` resets everything.
 
 ## 8. Tests
 - Core: `cd core; cargo test`

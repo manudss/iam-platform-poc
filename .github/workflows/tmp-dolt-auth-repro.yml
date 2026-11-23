@@ -1,0 +1,72 @@
+# TEMPORARY reproduction (deleted before merge): proves, on the exact dolt-sql-server:latest
+# image, (1) that root credentials freeze at first initialization of the data directory, (2) the
+# exact server error a later mismatched DOLT_ROOT_PASSWORD produces, (3) that the read-only probe
+# (infra/dev/dolt-probe.mjs) discriminates the accepted credential, and (4) whether the
+# volume-preserving repair (direct `dolt sql` while the server is stopped) works.
+name: tmp-dolt-auth-repro
+on: push
+permissions: { contents: read }
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install the API dependencies (mysql2 for the probe)
+        run: npm ci --no-audit --no-fund --prefix apps/api
+      - name: First generation of the volume (password A)
+        run: |
+          set -eux
+          docker volume create repro-dolt-auth
+          docker run -d --name dolt1 -p 127.0.0.1:3306:3306 \
+            -e DOLT_ROOT_PASSWORD=password-generation-A -e DOLT_ROOT_HOST='%' \
+            -v repro-dolt-auth:/var/lib/dolt dolthub/dolt-sql-server:latest
+          for i in $(seq 1 60); do
+            if DOLT_HOST=127.0.0.1 DOLT_PORT=3306 DOLT_PASSWORD=password-generation-A \
+               node infra/dev/dolt-probe.mjs | grep -q 'ACCEPTED: the password from your .env'; then exit 0; fi
+            sleep 2
+          done
+          echo 'server never accepted generation-A password' >&2; exit 1
+      - name: "Second generation (password B), same volume: frozen credential expected"
+        run: |
+          set -eux
+          docker rm -f dolt1
+          docker run -d --name dolt2 -p 127.0.0.1:3306:3306 \
+            -e DOLT_ROOT_PASSWORD=password-generation-B -e DOLT_ROOT_HOST='%' \
+            -v repro-dolt-auth:/var/lib/dolt dolthub/dolt-sql-server:latest
+          for i in $(seq 1 60); do
+            if DOLT_HOST=127.0.0.1 DOLT_PORT=3306 DOLT_PASSWORD=password-generation-A \
+               node infra/dev/dolt-probe.mjs | tee /tmp/probe-A.txt | grep -q 'ACCEPTED: the password from your .env'; then break; fi
+            sleep 2
+          done
+          grep -q 'ACCEPTED: the password from your .env' /tmp/probe-A.txt   # the FROZEN generation-A credential still rules
+          DOLT_HOST=127.0.0.1 DOLT_PORT=3306 DOLT_PASSWORD=password-generation-B \
+            node infra/dev/dolt-probe.mjs | tee /tmp/probe-B.txt
+          grep -q 'REFUSED: the password from your .env' /tmp/probe-B.txt    # generation-B password rejected
+          grep -qi 'Access denied' /tmp/probe-B.txt                          # the exact error family the API hit
+      - name: Read the stored accounts directly (server stopped, no auth needed)
+        run: |
+          docker rm -f dolt2
+          docker run --rm --entrypoint dolt -w /var/lib/dolt -v repro-dolt-auth:/var/lib/dolt \
+            dolthub/dolt-sql-server:latest sql -q "SELECT User, Host FROM mysql.user;"
+      - name: "Volume-preserving repair attempt: align the stored root password while stopped"
+        run: |
+          set -eux
+          docker run --rm --entrypoint dolt -w /var/lib/dolt -v repro-dolt-auth:/var/lib/dolt \
+            dolthub/dolt-sql-server:latest sql -q "ALTER USER 'root'@'%' IDENTIFIED BY 'password-generation-B';"
+          docker run -d --name dolt3 -p 127.0.0.1:3306:3306 \
+            -e DOLT_ROOT_PASSWORD=password-generation-B -e DOLT_ROOT_HOST='%' \
+            -v repro-dolt-auth:/var/lib/dolt dolthub/dolt-sql-server:latest
+          for i in $(seq 1 60); do
+            if DOLT_HOST=127.0.0.1 DOLT_PORT=3306 DOLT_PASSWORD=password-generation-B \
+               node infra/dev/dolt-probe.mjs | tee /tmp/probe-after.txt | grep -q 'ACCEPTED: the password from your .env'; then exit 0; fi
+            sleep 2
+          done
+          echo 'repair failed: generation-B password still not accepted' >&2; exit 1
+      - name: Cleanup
+        if: ${{ always() }}
+        run: |
+          docker rm -f dolt1 dolt2 dolt3 2>/dev/null || true
+          docker volume rm repro-dolt-auth 2>/dev/null || true
