@@ -61,6 +61,28 @@ describe('launchpad: the applications a signed-in person may open, with their SS
     assert.equal(byId.get('payroll').protocol, 'saml');
   });
 
+  it('a deliberately disabled connector lists no apps without invoking its refusing base; re-enable restores rights-filtered inventory', async () => {
+    const reg = app.get(PluginRegistry);
+    await reg.disable(T, 'oidc-provider'); await reg.disable(T, 'saml-idp');
+    await reg.disable(T, 'app-connector');
+    try {
+      const r = await api('demo-alice'); assert.equal(r.status, 200);
+      const body = await r.json() as any;
+      assert.equal(body.inventory, 'disabled'); assert.deepEqual(body.apps, []);
+      assert.equal((await api()).status, 403, 'disabled inventory still requires authentication');
+    } finally { await reg.enable(T, 'app-connector', {}); await reg.enable(T, 'oidc-provider', {}); await reg.enable(T, 'saml-idp', {}); }
+    const restored = await (await api('demo-alice')).json() as any;
+    assert.equal(restored.inventory, 'enabled');
+    assert.deepEqual(restored.apps.map((a: any) => a.id).sort(), ['payroll', 'wiki']);
+  });
+
+  it('an enabled connector error is not hidden as a successful empty inventory', async () => {
+    const svc = app.get(AppConnectorService), original = svc.liveApps;
+    svc.liveApps = async () => { throw Error('fictional enabled provider failure'); };
+    try { assert.equal((await api('demo-alice')).status, 500); }
+    finally { svc.liveApps = original; }
+  });
+
   it('serves artwork at a content-hashed immutable URL instead of inline, publicly, without enumeration', async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20" fill="teal"/></svg>';
     const logo = 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
