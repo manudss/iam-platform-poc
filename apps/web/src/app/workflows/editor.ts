@@ -450,6 +450,10 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       else v.fitView({ padding: 0.14, duration: 120 }); // last-resort best effort, same as the old behavior
       return;
     }
+    // A long one-column graph cannot fit above minZoom. Anchor immediately on mobile rather
+    // than retrying a mathematically impossible fit and leaving the trigger offscreen.
+    const anchor = readable && canvas.clientWidth < 500 ? anchorViewport(this.allNodes(), 0.85, 80) : null;
+    if (anchor) { v.viewportTo({ ...anchor, zoom:0.85 }); return; }
     v.fitView({ padding: 0.14, duration: 120 });
     this.verifyFraming(attempt, performance.now(), readable);
   }
@@ -514,7 +518,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       this.name = ''; this.description = ''; this.tags = ''; this.active = true; this.seq = 0;
       this.triggerSelected.set(false); this.triggerEvent.set(''); this.match.set({}); this.triggerCfg.set({});
       this.activeEdge.set(''); this.pendingPort.set(null); this.insertEdge.set(null);
-      this.testView.set(null); this.testError.set(''); this.testOpen.set(false); clearInterval(this.testTimer);
+      this.testView.set(null); this.testRunning.set(false); this.testError.set(''); this.testOpen.set(false); clearInterval(this.testTimer);
       this.note.set(''); this.savedDefinition = '';
       const epoch = ++this.loadEpoch;
       const draft = this.drafts.get(`${this.s.branch()}/${id}`);
@@ -975,21 +979,24 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
 
   }
   protected async runTest() {
+    const epoch = this.loadEpoch;
     let payload: Record<string, unknown> = {};
     try { payload = this.testPayload.trim() ? JSON.parse(this.testPayload) : {}; } catch { this.testError.set('The payload is not valid JSON.'); return; }
     this.testError.set(''); this.testRunning.set(true);
     try {
       const v = await clientOf(this.s).testRun(this.graph(), this.triggerPayload(), payload);
+      if (epoch !== this.loadEpoch) return;
       this.testView.set(v); this.refreshTestTints();
       clearInterval(this.testTimer);
-      this.testTimer = setInterval(() => void this.pollTest(v.run.id), 700);
-    } catch (e) { this.testError.set((e as Error).message); this.testRunning.set(false); }
+      this.testTimer = setInterval(() => void this.pollTest(v.run.id, epoch), 700);
+    } catch (e) { if (epoch === this.loadEpoch) { this.testError.set((e as Error).message); this.testRunning.set(false); } }
   }
-  private async pollTest(id: string) {
+  private async pollTest(id: string, epoch = this.loadEpoch) {
     try {
       const v = await clientOf(this.s).run(id);
+      if (epoch !== this.loadEpoch) return;
       this.testView.set(v); this.refreshTestTints();
       if (v.run.status !== 'running' && v.run.status !== 'queued') { clearInterval(this.testTimer); this.testRunning.set(false); }
-    } catch { clearInterval(this.testTimer); this.testRunning.set(false); }
+    } catch { if (epoch === this.loadEpoch) { clearInterval(this.testTimer); this.testRunning.set(false); } }
   }
 }

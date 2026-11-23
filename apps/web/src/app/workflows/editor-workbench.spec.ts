@@ -49,6 +49,13 @@ describe('direction C editor workbench', () => {
     expect(e.name).toBe('Second'); expect(e.undoStack).toEqual([]); expect(e.dirty()).toBe(false);
     e.ngOnDestroy();
   });
+  it('does not stamp another tab saved when an old save finishes', async () => {
+    let finish!: (x:unknown)=>void;
+    update.mockImplementationOnce(() => new Promise(resolve => finish=resolve));
+    const saving = e.save(); e.loadEpoch++; e.id='w2'; e.name='Second tab'; e.savedDefinition='not-saved';
+    finish({status:200,data:{}}); await saving;
+    expect(e.id).toBe('w2'); expect(e.name).toBe('Second tab'); expect(e.savedDefinition).toBe('not-saved');
+  });
   it('only marks real graph or metadata changes dirty; undo restores saved state', () => {
     expect(e.dirty()).toBe(false);
     e.name = 'Renamed'; expect(e.dirty()).toBe(true);
