@@ -92,3 +92,13 @@ audit. The authorized plan must name those effects. No activation replay,
 container update, restart, policy rewrite, before replacement or improvised
 transformation verifier is part of this harness. It remains draft pending an
 independent final review and isolated full recovery rehearsal.
+
+Final review hardening: recovery is armed before unlink so a signal immediately
+after the syscall rearms the marker. Tests inject that exact interruption and
+foreign-marker arrival. All incident/target/qualification-attestation/source
+checks run before qualification/opening, then queue recording rechecks under
+both locks. Manifest origins must equal the pinned policy origins. The executed
+queue and harness, qualification pair, policy and original before are pinned and
+rehash-checked after qualification.12 harness tests pass. File hashes and
+operator references still do not authenticate the user's permission. Full
+isolated recovery rehearsal is still required before a ready verdict.

@@ -9,7 +9,8 @@ class Recovery(unittest.TestCase):
   for name in ['qualification.py','qualification-container.mjs']:(self.d/name).write_text('fictional pinned script')
   def pin(p):return {'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
   self.pin=pin
-  self.m={'format':1,'kind':'reviewed-in-place-opening','authorization_ref':'reviewed user approval reference','evidence_refs':['private incident'],'state':str(self.state),'pause_file':str(self.pause),'original_before':pin(self.before),'qualification_script':pin(self.d/'qualification.py'),'qualification_helper':pin(self.d/'qualification-container.mjs'),'barrier_token':self.token,'former_pid':361992,'barrier_file':str(self.barrier),'origins':['https://example.test'],'container':'fictional','repository':'reviewed-repository','queue_manifest':{'format':1,'kind':'reviewed-in-place','state_fingerprint':r.queue.fingerprint(state),'expected_delivered':last,'authorization_ref':'approval','evidence_refs':['evidence'],'original_unresolved':{k:state[k] for k in ['pending','failed']},'chain':[{**pending,'outcome':'delivered'}],'target':{'sha':sha,'digest':digest},'qualification':{'sha':sha,'digest':digest,'evidence_refs':['qualification']}},'qualification_args':{'container':'fictional','env-file':'private-env','data-dir':'private-data','backup-dir':'backup','target-image':self.image,'evidence-dir':str(self.d),'policy':'private-policy','receipt-file':str(self.d/'success.json')}}
+  self.policy=self.d/'policy.json';self.policy.write_text(json.dumps({'origins':['https://example.test']}))
+  self.m={'format':1,'kind':'reviewed-in-place-opening','authorization_ref':'reviewed user approval reference','evidence_refs':['private incident'],'state':str(self.state),'pause_file':str(self.pause),'original_before':pin(self.before),'qualification_script':pin(self.d/'qualification.py'),'qualification_helper':pin(self.d/'qualification-container.mjs'),'barrier_token':self.token,'former_pid':361992,'barrier_file':str(self.barrier),'origins':['https://example.test'],'container':'fictional','repository':'reviewed-repository','queue_manifest':{'format':1,'kind':'reviewed-in-place','state_fingerprint':r.queue.fingerprint(state),'expected_delivered':last,'authorization_ref':'approval','evidence_refs':['evidence'],'original_unresolved':{k:state[k] for k in ['pending','failed']},'chain':[{**pending,'outcome':'delivered'}],'target':{'sha':sha,'digest':digest},'qualification':{'sha':sha,'digest':digest,'evidence_refs':['qualification']}},'queue_script':pin(Path(r.__file__).with_name('ordered-queue.py').resolve()),'harness_script':pin(Path(r.__file__).resolve()),'policy':pin(self.policy),'qualification_args':{'container':'fictional','env-file':'private-env','data-dir':'private-data','backup-dir':'backup','target-image':self.image,'evidence-dir':str(self.d),'policy':str(self.policy),'receipt-file':str(self.d/'success.json')}}
  def tearDown(self):self.tmp.cleanup()
  def qualify(self,args,**kw):
   self.calls.append(args);after=self.d/'after.json';smoke=self.d/'smoke.json';after.write_text(json.dumps({'image':self.image,'policyHash':'p'}));smoke.write_text(json.dumps({'journal':{'count':1},'ledger':'valid'}));receipt={'format':1,'result':'qualified','transportCoverage':'TLS_EXPECTED_ORIGINS','image':self.image,'policyHash':'p'}
@@ -66,4 +67,13 @@ class Recovery(unittest.TestCase):
   with patch.object(Path,'unlink',interrupted):
    with self.assertRaises(KeyboardInterrupt):self.recover()
   self.assertEqual(self.barrier.read_text(),'foreign-owner')
+ def test_wrong_policy_origins_refuse_before_smoke(self):
+  self.m['origins']=['https://other.test']
+  with self.assertRaisesRegex(ValueError,'origins differ'):self.recover()
+  self.assertEqual(self.calls,[]);self.assertTrue(self.barrier.exists())
+ def test_changed_script_during_smoke_stops_before_open(self):
+  def changed(args,**kw):
+   result=self.qualify(args,**kw);Path(self.m['qualification_helper']['path']).write_text('changed');return result
+  with self.assertRaisesRegex(ValueError,'pinned'):self.recover(run=changed)
+  self.assertTrue(self.barrier.exists());self.assertNotIn('record',self.calls)
 if __name__=='__main__':unittest.main()

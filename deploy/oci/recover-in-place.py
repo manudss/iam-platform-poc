@@ -23,6 +23,8 @@ def recover(m,run=subprocess.run,is_dead=dead,front=probe,observe=queue.observe_
  queue.reference(m.get('authorization_ref'));queue.references(m.get('evidence_refs'))
  state_path=Path(m['state']);state=queue.load(state_path);review=m['queue_manifest'];queue.checked_manifest(state,review,'reviewed-in-place')
  if not Path(m['pause_file']).is_file():raise ValueError('deployment pause required')
+ queue_path=checked_file(m['queue_script']);harness_path=checked_file(m['harness_script']);policy_path=checked_file(m['policy'])
+ if queue_path!=Path(__file__).with_name('ordered-queue.py').resolve() or harness_path!=Path(__file__).resolve():raise ValueError('executed recovery pair differs from pinned files')
  before=checked_file(m['original_before']);qualification=checked_file(m['qualification_script']);checked_file(m['qualification_helper'])
  if qualification.parent!=Path(m['qualification_helper']['path']).parent or qualification.name!='qualification.py' or Path(m['qualification_helper']['path']).name!='qualification-container.mjs':raise ValueError('pinned qualification pair required')
  token=m['barrier_token'];match=re.fullmatch(r'lyam-update:([1-9][0-9]*):[0-9]{8}T[0-9]{6}Z',token)
@@ -34,23 +36,29 @@ def recover(m,run=subprocess.run,is_dead=dead,front=probe,observe=queue.observe_
  if not pending or not failed or state.get('resume_required') or review.get('original_unresolved')!={'pending':pending,'failed':failed}:raise ValueError('exact unresolved original incident required')
  if failed.get('sha')!=pending.get('sha') or failed.get('digest',pending.get('digest'))!=pending.get('digest') or pending.get('parent')!=state['history'][-1]['sha']:raise ValueError('inconsistent failed incident')
  if any(target.get(k)!=pending.get(k) for k in ['sha','digest']):raise ValueError('exact failed pending target required')
+ qualification_attestation=review.get('qualification',{})
+ if any(qualification_attestation.get(k)!=target.get(k) for k in ['sha','digest']):raise ValueError('exact target qualification attestation required')
+ queue.references(qualification_attestation.get('evidence_refs'))
  chain=review.get('chain')
  if not isinstance(chain,list) or len(chain)!=1 or any(chain[0].get(k)!=v for k,v in {'sha':pending['sha'],'parent':pending['parent'],'outcome':'delivered'}.items()):raise ValueError('singleton delivered chain required')
  verify(m['repository'],state['history'][-1]['sha'],chain)
  observe(m['container'],target)
  origins=m['origins']
+ policy=json.loads(policy_path.read_text())
+ if origins!=policy.get('origins'):raise ValueError('opening origins differ from pinned qualification policy')
  if not isinstance(origins,list) or not origins or any(not re.fullmatch(r'https://[a-zA-Z0-9.-]+(?::[0-9]+)?',o) for o in origins):raise ValueError('explicit TLS origins required')
  if any(front(o)!=503 for o in origins):raise ValueError('maintenance not proven')
  # Explicit qualification arguments only, never source the updater. Smoke signs in and can append sessions/audit.
  args=m['qualification_args'];required=['container','env-file','data-dir','backup-dir','target-image','evidence-dir','policy','receipt-file']
  if Path(args.get('receipt-file','')).exists():raise ValueError('fresh success receipt path required')
- if set(args)!=set(required) or args['container']!=m['container'] or Path(args['evidence-dir'])/'before.json'!=before:raise ValueError('qualification must retain original before path')
+ if set(args)!=set(required) or args['container']!=m['container'] or Path(args['evidence-dir'])/'before.json'!=before or Path(args['policy'])!=policy_path:raise ValueError('qualification must retain original before path')
  image='ghcr.io/manudss/iam-platform-poc@'+target['digest']
  command=[str(qualification),'--phase','after','--image',image,'--barrier-file',str(barrier)]
  for key in required:command+=['--'+key,str(args[key])]
  result=run(command,check=False)
  if result.returncode!=0:raise ValueError('qualification failed; maintenance retained')
- checked_file(m['original_before']);observe(m['container'],target)
+ for key in ['original_before','qualification_script','qualification_helper','queue_script','harness_script','policy']:checked_file(m[key])
+ observe(m['container'],target)
  # Load only the exact predeclared fresh receipt written after successful comparison.
  receipt_path=Path(args['receipt-file']);receipt=json.loads(receipt_path.read_text());proof={'receipt':{'path':str(receipt_path),'sha256':hashlib.sha256(receipt_path.read_bytes()).hexdigest()}}
  for key in ['before','after','smoke']:proof[key]={'path':receipt[key+'_path'],'sha256':receipt[key+'_sha256']}
