@@ -107,7 +107,10 @@ const lpBody = await lp.text();
 if (!lp.ok) fail('launchpad (My applications) with the signed-in token', `HTTP ${lp.status}: ${lpBody.slice(0, 300)}`);
 let lpJson; try { lpJson = JSON.parse(lpBody); } catch { fail('launchpad (My applications) with the signed-in token', 'non-JSON body'); }
 if (!Array.isArray(lpJson.apps)) fail('launchpad (My applications) with the signed-in token', 'apps is not an array');
-ok('launchpad (My applications) with the signed-in token', `${lpJson.apps.length} applications, inventory ${lpJson.inventory}`);
+// The demo seed installs AND enables the app-connector with the fictional gallery: a graceful empty page
+// (inventory disabled) masks a failed plugin enable - the expected fresh state is an enabled inventory with apps.
+if (lpJson.inventory !== 'enabled' || lpJson.apps.length === 0) fail('launchpad (My applications) with the signed-in token', `expected enabled inventory with demo applications, got inventory=${lpJson.inventory} apps=${lpJson.apps.length}`);
+ok('launchpad (My applications) with the signed-in token', `${lpJson.apps.length} applications, inventory enabled`);
 
 // 7. the local console edge attaches the admin capability server-side (hosted-demo model): the exact
 // calls of the Roles / working-branch screen succeed through the proxy WITHOUT any x-api-admin-token
