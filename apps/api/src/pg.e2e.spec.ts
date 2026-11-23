@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
-import { ActivationService } from './activation/activation.service.js';
+import { ActivationService, withActivationActor } from './activation/activation.service.js';
 import { SecretsService } from './integrations/secrets.service.js';
 
 const bin = process.env.PG_BIN;
@@ -61,6 +61,43 @@ describe('activation journal on real PostgreSQL', { skip: !have && 'PG_BIN not s
     const r = await Promise.all(Array.from({ length: 8 }, (_, n) => a.activate('t3', `cc${n}`.padEnd(8, '0'))));
     assert.deepEqual(r.map((x) => x.seq).sort((x, y) => x - y), [1, 2, 3, 4, 5, 6, 7, 8]);
     await a.onModuleDestroy();
+  });
+  it('persists activation metadata across restart, never backfills unknown actors, and keeps attribution on retry', async () => {
+    const a = new ActivationService();
+    const first = await withActivationActor({ kind: 'user', id: 'fixture-alice' }, () => a.activate('audit-fixture', 'aaaaaaaa', 'audit-request-001'));
+    assert.equal(first.actor?.id, 'fixture-alice');
+    assert.ok(Number.isFinite(Date.parse(first.recordedAt!)));
+    await a.onModuleDestroy();
+    const b = new ActivationService();
+    const retry = await withActivationActor({ kind: 'user', id: 'fixture-bob' }, () => b.activate('audit-fixture', 'aaaaaaaa', 'audit-request-001'));
+    assert.equal(retry.actor?.id, 'fixture-alice'); assert.equal(retry.recordedAt, first.recordedAt);
+    const c = new pg.Client({ connectionString: process.env.IAM_PG_URL }); await c.connect();
+    try { await c.query("INSERT INTO activations (tenant,seq,commit_hash,state,activated_at) VALUES ('legacy-fixture',1,'bbbbbbbb','applied','2020-01-01T00:00:00Z')"); } finally { await c.end(); }
+    const old = (await b.list('legacy-fixture'))[0];
+    assert.equal(old.recordedAt, '2020-01-01T00:00:00.000Z'); assert.equal(old.actor, undefined); assert.equal(old.appliedAt, undefined);
+    assert.equal((await b.list('other-tenant')).length, 0);
+    await b.onModuleDestroy();
+  });
+  it('persists successful confirmation time but never stamps a failed activation as applied', async () => {
+    const originalFetch = globalThis.fetch;
+    const originalCore = process.env.IAM_CORE_URL, originalToken = process.env.IAM_CORE_ADMIN_TOKEN;
+    process.env.IAM_CORE_URL = 'http://fictional-core.invalid'; process.env.IAM_CORE_ADMIN_TOKEN = 'fictional-token';
+    const a = new ActivationService(undefined, { snapshotAt: async () => ({}), tagActivation: async () => undefined } as never);
+    try {
+      globalThis.fetch = async () => new Response('{}', { status: 200 });
+      const ok = await withActivationActor({ kind: 'system', id: 'test-system' }, () => a.activate('confirmation-fixture', 'aaaaaaaa'));
+      assert.equal(ok.state, 'applied'); assert.ok(ok.appliedAt);
+      globalThis.fetch = async () => new Response('', { status: 503 });
+      const failed = await a.activate('confirmation-fixture', 'bbbbbbbb');
+      assert.equal(failed.state, 'failed'); assert.equal(failed.appliedAt, undefined);
+      const b = new ActivationService();
+      try { const rows = await b.list('confirmation-fixture'); assert.equal(rows[0].appliedAt, ok.appliedAt); assert.equal(rows[0].actor?.kind, 'system'); assert.equal(rows[1].appliedAt, undefined); }
+      finally { await b.onModuleDestroy(); }
+    } finally {
+      await a.onModuleDestroy(); globalThis.fetch = originalFetch;
+      if (originalCore === undefined) delete process.env.IAM_CORE_URL; else process.env.IAM_CORE_URL = originalCore;
+      if (originalToken === undefined) delete process.env.IAM_CORE_ADMIN_TOKEN; else process.env.IAM_CORE_ADMIN_TOKEN = originalToken;
+    }
   });
   it('PostgreSQL URL taken from the secret store when IAM_PG_URL is unset (secret store STUBBED here; real OpenBao is tested separately)', async () => {
     const url = process.env.IAM_PG_URL!;

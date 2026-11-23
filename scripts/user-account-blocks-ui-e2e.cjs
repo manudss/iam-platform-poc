@@ -3,7 +3,13 @@ const {chromium}=require('playwright-core');
 const {pathToFileURL}=require('node:url');
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'../apps/web/dist/web/browser'),out=path.resolve(process.argv[2]||'/tmp/user-account-block-shots');fs.mkdirSync(out,{recursive:true});
-const server=http.createServer((req,res)=>{let f=path.join(root,req.url.split('?')[0]);if(!path.extname(f))f=path.join(root,'index.csr.html');if(!fs.existsSync(f))f=path.join(root,'index.html');res.setHeader('Content-Type',{'.js':'text/javascript','.css':'text/css','.html':'text/html'}[path.extname(f)]||'application/octet-stream');res.end(fs.readFileSync(f));});
+const server=http.createServer((req,res)=>{
+ let f=path.join(root,req.url.split('?')[0]);
+ if(!path.extname(f))f=path.join(root,'index.csr.html');
+ if(!fs.existsSync(f)&&f.endsWith('index.csr.html'))f=path.join(root,'index.html');
+ if(!fs.existsSync(f)||!fs.statSync(f).isFile()){res.statusCode=404;res.end('Not found');return;}
+ res.setHeader('Content-Type',{'.js':'text/javascript','.css':'text/css','.html':'text/html'}[path.extname(f)]||'application/octet-stream');res.end(fs.readFileSync(f));
+});
 const users=['alice','bob','claire','draft'].map(id=>({id,display_name:id[0].toUpperCase()+id.slice(1)+' Example',department:'Fictional',email:id+'@example.invalid',manager_id:null,login_enabled:true,hasCredential:true}));
 const labels={suspended:'Account suspended',disabled:'Account disabled',locked:'Account locked after too many failed attempts',pending_approval:'Account waiting for approval',pending_verification:'E-mail address not verified yet'};
 (async()=>{const {generateTheme,themeCss}=await import(pathToFileURL(path.resolve(__dirname,'../apps/api/dist/branding/theme-engine.js')).href);const alternateCss=themeCss(generateTheme({primary:'#00695c',accent:'#4db6ac'}),{baseline:'',footer:''});await new Promise(r=>server.listen(14218,'127.0.0.1',r));const browser=await chromium.launch({executablePath:process.env.CHROME_BIN||'/usr/bin/google-chrome-stable',args:['--no-sandbox']});

@@ -19,7 +19,7 @@ describe('api', () => {
     process.env.IAM_API_ADMIN_TOKEN = 'local-demo-simulation-token';
     const m = await Test.createTestingModule({ imports: [AppModule] })
       // Unit-level only: activation logic without auth. Auth is covered end-to-end in e2e.spec.ts.
-      .overrideGuard(AuthGuard).useValue({ canActivate: () => true }).compile();
+      .overrideGuard(AuthGuard).useValue({ canActivate: (ctx: any) => { ctx.switchToHttp().getRequest().user = { sub: 'fixture-admin' }; return true; } }).compile();
     app = m.createNestApplication();
     await app.init();
   });

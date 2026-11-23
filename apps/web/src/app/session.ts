@@ -1,5 +1,5 @@
 import { Injectable, OnDestroy, REQUEST, inject, signal } from '@angular/core';
-import { ApiClient, Change, sessionCookieToken } from './api';
+import { ApiClient, Change, sessionCookieToken, ActivationRecord } from './api';
 import { computed } from '@angular/core';
 import type { Access } from './access';
 import { Router } from '@angular/router';
@@ -8,7 +8,7 @@ import { preloadLaunchpadChunk, prefetchLaunchpad } from './launchpad-preload';
 
 export type Tone = 'info' | 'error';
 export interface Assignment { identity_id: string; role_id: string }
-export interface Activation { seq: number; commit: string }
+export type Activation = ActivationRecord;
 
 /**
  * State shared by all pages of the console: the API client (token kept across visits while valid, docs/session.md), the signed-in flag, the last

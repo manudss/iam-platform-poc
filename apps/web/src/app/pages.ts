@@ -47,29 +47,7 @@ export class OverviewPage implements OnInit {
   }
 }
 
-/** Explicit, journaled activation of the current Dolt main. */
-@Component({
-  selector: 'app-activation', styleUrl: './pages.css',
-  template: `
-  <section class="card"><h3>Activation (explicit, journaled)</h3>
-    <p class="hint">Merging changes Dolt main; activating makes the current main head the policy the decision point uses, and records it.</p>
-    <p>Use the global Apply action to merge data and publish its permissions together. This page records the resulting activations.</p>
-  </section>
-  <section class="card"><h3>Journal</h3>
-    <div class="scroll"><table class="grid"><thead><tr><th>#</th><th>Dolt commit</th></tr></thead><tbody>
-      @for (a of s.activations(); track a.seq) { <tr><td>#{{ a.seq }}</td><td><code>{{ a.commit }}</code></td></tr> }
-      @empty { <tr><td colspan="2" class="empty">Nothing activated yet.</td></tr> }
-    </tbody></table></div>
-  </section>`,
-})
-export class ActivationPage implements OnInit {
-  protected readonly s = inject(Session);
-  async ngOnInit() { try { await this.s.refresh(); } catch (e) { this.s.say((e as Error).message, 'error'); } }
-  protected async activate() {
-    try { const a = await this.s.api.activate(); this.s.say(`Activated main head as #${a.seq} (event: ${a.event}).`); await this.s.refresh(); }
-    catch (e) { this.s.say((e as Error).message, 'error'); }
-  }
-}
+export { ActivationPage } from './activation-page';
 
 @Component({ selector: 'app-plugins-page', imports: [PluginsAdmin], template: `<app-plugins-admin [api]="s.api" [pluginId]="id()" (opened)="open($event)" />` })
 export class PluginsPage {

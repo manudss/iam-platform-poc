@@ -48,7 +48,7 @@ it('observed live sequence protects later activations even when startup skipped 
 it('PostgreSQL allocation carries the floor inside the existing tenant transaction', async () => {
   const s = setup();
   const queries: {sql:string; args?:unknown[]}[]=[];
-  const c={query:async(sql:string,args?:unknown[])=>{queries.push({sql,args});return {rows:[{seq:8}]};},release:()=>{}};
+  const c={query:async(sql:string,args?:unknown[])=>{queries.push({sql,args});return {rows:[{seq:8,activated_at:new Date(0)}]};},release:()=>{}};
   (s as any).resolved=Promise.resolve('postgresql://fixture');
   (s as any).db=async()=>({connect:async()=>c});
   assert.equal((await s.activate('t1',C1,undefined,8)).seq,8);

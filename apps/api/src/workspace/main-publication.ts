@@ -2,7 +2,7 @@ import { ModuleRef } from '@nestjs/core';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
-import { ActivationService } from '../activation/activation.service.js';
+import { withActivationActor, ActivationService } from '../activation/activation.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkspaceController } from './workspace.controller.js';
 import { branchContext, workspaceMode } from './context.js';
@@ -21,7 +21,7 @@ export class MainPublication implements OnModuleInit {
         const merged = await this.v.mergeInto(source, 'main', `Publish reviewed branch ${source}`, sub);
         if (!merged.mergeable || !merged.commit) throw new Error(`Merge refused: ${merged.reasons.join('; ')}`);
         this.registries.drop('main'); await this.registries.get('main');
-        const activation = await this.activation.activate(tenant, merged.commit);
+        const activation = await withActivationActor({kind:'user',id:String(sub)},()=>this.activation.activate(tenant, merged.commit));
         if (activation.state !== 'applied') throw new Error('Data merged but permission activation failed; reconcile before retrying.');
         return { commit: merged.commit };
       }
@@ -33,7 +33,8 @@ export class MainPublication implements OnModuleInit {
     };
   }
   /** Called by the API launcher before listen, not by unrelated module test harnesses. */
-  async start() {
+  async start() { return withActivationActor({ kind: 'system', id: 'startup-main' }, () => this.startOnce()); }
+  private async startOnce() {
     if (process.env.IAM_AUTO_ACTIVATE_MAIN === '0' || !this.activation.applyEnabled) return;
     const head = (await this.v.branches()).branches.find(b => b.name === 'main')?.commit;
     if (!head) throw new Error('Automatic activation requires main');
