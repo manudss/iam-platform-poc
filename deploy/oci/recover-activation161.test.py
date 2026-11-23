@@ -145,4 +145,21 @@ class OpeningTests(unittest.TestCase):
  def test_old_plan_refused_even_if_resume_flag_later_explicitly_cleared(self):
   self.runit();state=r.queue.load(self.f.incident);state['resume_required']=False;state['resumptions']=[{'observed_running':{'sha':'a'*40}}];r.queue.atomic(self.f.incident,state)
   with self.assertRaisesRegex(ValueError,'predates'):r.queue.deploy(self.f.incident,{'format':1,'base':'b'*40,'entries':[]},'never-run')
+ def test_identity_changes_only_immediately_before_unlink_refuses(self):
+  a=self.attempt();seen=[0]
+  def identify(c):
+   seen[0]+=1;return {'Id':'original' if seen[0]<3 else 'replacement'}
+  with self.assertRaisesRegex(ValueError,'before opening'):self.runit(a,identify=identify)
+  self.assertEqual(seen[0],3);self.assertTrue(self.barrier.exists())
+ def test_distinct_claim_guard_independent_of_oexcl(self):
+  # os.open never gets the opportunity to reject the already existing path.
+  self.m['one_shot_claim']=self.f.m['one_shot_claim'];self.sync()
+  original=r.os.open
+  def guarded(path,*args,**kwargs):
+   if str(path)==self.f.m['one_shot_claim']:raise AssertionError('distinct guard did not run')
+   return original(path,*args,**kwargs)
+  with patch.object(r.os,'open',guarded),self.assertRaisesRegex(ValueError,'distinct absolute'):self.attempt()
+ def test_plan_record_nonzero_guard_with_all_other_state_pins_matching(self):
+  state=json.loads(self.f.incident.read_text());state['failed']['exit']=0;self.f.incident.write_text(json.dumps(state));closed=copy.deepcopy(self.f.m);closed['original_incident']=state;closed['incident_sha256']=r.ex.sha(self.f.incident.read_bytes());m=copy.deepcopy(self.m);m['queue_manifest']['state_fingerprint']=r.queue.fingerprint(state);m['queue_manifest']['original_unresolved']['failed']=state['failed']
+  with self.assertRaisesRegex(ValueError,'unresolved failed'):r.plan_record(m,closed,'a'*64,lambda *a:None,lambda *a:None)
 if __name__=='__main__':unittest.main()
