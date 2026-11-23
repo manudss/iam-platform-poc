@@ -5,6 +5,12 @@ import { WorkflowStore } from './store.js';
 import { WorkflowTasksService } from './tasks.js';
 import { WorkflowReads } from './reads.js';
 
+// JSON columns may reorder object keys. Hash a stable JSON representation, including nested objects.
+function sortedJson(value: unknown): string {
+  const sort = (v: any): any => Array.isArray(v) ? v.map(sort) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sort(v[k])])) : v;
+  return JSON.stringify(sort(JSON.parse(JSON.stringify(value))));
+}
+
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
 /** Task timestamps are stored as UTC text without a zone suffix. */
 const utcMs = (v: string) => { const x = v.replace(' ', 'T'); return Date.parse(/(Z|[+-]\d\d:?\d\d)$/i.test(x) ? x : x + 'Z'); };
@@ -51,9 +57,19 @@ export class WorkflowsIgaService {
     const ref = String(input.ref ?? 'main');
     const scope = (input.scope ?? {}) as { department?: string; role?: string; users?: string[] };
     const listed = Array.isArray(scope.users) && scope.users.length ? scope.users.map(String) : null;
-    const users = listed
-      ? await Promise.all(listed.map((u) => this.reads!.readUser(tenant, ref, u)))
-      : (await this.reads.listUsers(tenant, ref, { department: scope.department, limit: 200 })).users;
+    // The frozen scope must be the COMPLETE population: listUsers caps at 200 rows and reports the real
+    // total in count — a population beyond the cap refuses the campaign, never a silently truncated one.
+    let population: number;
+    let users: { id: string; displayName?: string; roles?: string[]; manager: string | null }[];
+    if (listed) {
+      users = await Promise.all(listed.map((u) => this.reads!.readUser(tenant, ref, u)));
+      population = listed.length;
+    } else {
+      const page = await this.reads.listUsers(tenant, ref, { department: scope.department, limit: 200 });
+      if (page.count > page.users.length) throw new BadRequestException(`the scope selects ${page.count} people on this ref, beyond the 200-item campaign cap: narrow the scope (a frozen campaign never starts from a truncated population)`);
+      population = page.count;
+      users = page.users;
+    }
     const scoped: { id: string; displayName: string; roles: string[]; manager: string | null }[] = [];
     for (const u of users) {
       const roles = 'roles' in u && Array.isArray((u as { roles?: unknown }).roles) ? (u as { roles: string[] }).roles : (await this.reads.listAssignments(ref, { identity: u.id })).assignments.map((a) => a.role);
@@ -64,7 +80,7 @@ export class WorkflowsIgaService {
     if (scoped.length > 200) throw new BadRequestException('a campaign is capped at 200 items in this poc (narrow the scope)');
     const id = `iga-${randomBytes(6).toString('hex')}`;
     await this.store.igaPutCampaign(
-      { id, tenant, kind, name, ref, status: 'open', scope: scope as Record<string, unknown>, created_by: actor, created_at: now() },
+      { id, tenant, kind, name, ref, status: 'open', scope: { ...scope, population } as Record<string, unknown>, created_by: actor, created_at: now() },
       scoped.map((u) => ({ id: `item-${randomBytes(6).toString('hex')}`, identity: u.id, kind, action: 'review', payload: { roles: u.roles, displayName: u.displayName, manager: u.manager } })),
     );
     this.emit(tenant, 'iga.campaign-launched', { campaign: id, actor });
@@ -313,15 +329,34 @@ export class WorkflowsIgaService {
         undecided: pending.map((i) => ({ item: i.id, identity: i.identity, state: i.state })),
         unremediated: unremediated.map((i) => ({ item: i.id, identity: i.identity, state: i.state })) };
     }
+    // Plan step 2: access added or removed AFTER the snapshot must not disappear from the evidence. For an
+    // approved or still-open item the drift is otherwise invisible (only a denied item gets a fresh-snapshot
+    // check); for a remediated item the drift shows the remediation's effect. Recorded per item, never blocking.
+    const drift = new Map<string, { added: string[]; removed: string[] } | null>();
+    const unreadable: string[] = [];
+    if (this.reads) {
+      for (const i of items) {
+        const snap = Array.isArray(i.payload?.roles) ? (i.payload!.roles as unknown[]).map(String) : [];
+        try {
+          const cur = (await this.reads.listAssignments(campaign.ref, { identity: i.identity })).assignments.map((a) => a.role);
+          const added = cur.filter((r) => !snap.includes(r)), removed = snap.filter((r) => !cur.includes(r));
+          drift.set(i.identity, added.length || removed.length ? { added, removed } : null);
+        } catch { unreadable.push(i.identity); }
+      }
+    } else { unreadable.push(...items.map((i) => i.identity)); }
     const evidence: Record<string, unknown> = { incompleteClosure: incomplete,
       campaign: campaign.id, kind: campaign.kind, name: campaign.name, ref: campaign.ref, scope: campaign.scope,
       createdBy: campaign.created_by, createdAt: campaign.created_at, closedBy: actor, closedAt: now(),
-      totals: { items: items.length, approved: items.filter((i) => i.state === 'approved').length, denied: items.filter((i) => i.state === 'denied').length, remediationPrepared: items.filter((i) => i.state === 'remediation-prepared').length, remediated: items.filter((i) => i.state === 'remediated').length, undecided: pending.length },
+      totals: { items: items.length, approved: items.filter((i) => i.state === 'approved').length, denied: items.filter((i) => i.state === 'denied').length, remediationPrepared: items.filter((i) => i.state === 'remediation-prepared').length, remediated: items.filter((i) => i.state === 'remediated').length, undecided: pending.length, withRoleDrift: [...drift.values()].filter(Boolean).length },
+      // Separate section: the per-item projection stays minimal (contract pinned by the e2e); only drifted items appear here.
+      roleDrift: Object.fromEntries([...drift].filter(([, d]) => d).map(([id, d]) => [id, d])),
+      roleDriftUnreadable: unreadable,
+      roleDriftNote: `post-snapshot roles checked on campaign ref: ${items.length - unreadable.length}/${items.length}; unreadable identities listed in roleDriftUnreadable, never treated as unchanged; recorded, never blocking`,
       items: items.map((i) => ({ identity: i.identity, roles: i.payload?.roles ?? [], state: i.state, decidedBy: i.decided_by, decidedAt: i.decided_at, reason: i.decision_reason, remediation: i.payload?.remediation ?? null })),
-      digest: null,
+      digestFormat: 'sha256-json-sorted-keys-v1', digest: null,
     };
-    evidence.digest = createHash('sha256').update(JSON.stringify({ ...evidence, digest: null })).digest('hex');
-    await this.store.igaCloseCampaign(campaignId, actor, now(), evidence);
+    evidence.digest = createHash('sha256').update(sortedJson({ ...evidence, digest: null })).digest('hex');
+    if (!await this.store.igaCloseCampaign(campaignId, actor, now(), evidence)) throw new ConflictException('this campaign is already closed');
     this.emit(tenant, 'iga.campaign-closed', { campaign: campaignId, actor });
     return { campaign: campaignId, status: 'closed', evidence };
   }
