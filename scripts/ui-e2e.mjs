@@ -212,7 +212,7 @@ try {
   await page.click('#review-apply'); await page.waitForSelector('#workspace-apply');
   await page.click('#workspace-apply');await page.locator('app-apply-dialog dialog[open]').getByRole('button',{name:'Apply to main',exact:true}).click(); await status('Applied');
   await nav('/assignments'); await page.waitForSelector('#assignments .pill:text-is("accountant")');
-  await nav('/activation'); await page.waitForSelector('td:text-is("#1")'); await shot('4-activated');
+  await nav('/activation'); await page.waitForSelector('.entry b:text-is("#1")'); await shot('4-activated');
   await nav('/overview'); await page.waitForSelector('.stat'); assert.ok((await page.locator('.stat').count()) >= 5); await noBanner('overview'); await shot('4b-overview');
 
   // ---- event bus observer (real core + NATS; only with NATS_BIN) ----
