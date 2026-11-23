@@ -16,6 +16,7 @@ import { branchContext } from '../workspace/context.js';
 import { WorkflowEngine } from './engine.js';
 import { validateGraph } from './model.js';
 import { WorkflowConnections } from './connections.js';
+import { SIGNUP_REQUEST_STORE, SignupRequestStore } from '../profile/signup-request-store.js';
 import { SignupService } from '../profile/signup.service.js';
 import { WorkflowsService } from './workflows.service.js';
 import { WorkflowsController } from './workflows.controller.js';
@@ -1158,7 +1159,8 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     const signup = app.get(SignupService);
     const approve = mock.method(signup, 'approve'); const events = mock.method(app.get(ApplicationBus), 'emit');
     // Fictional preconfirmed request. No real mailbox, password or external service.
-    signup.pending.set('intake-demo', { tenant: T, id: 'intake-demo', display_name: 'Intake Demo', email: 'intake@example.invalid', values: {}, confirmed: true, salt: 'fictional-salt', hash: 'fictional-hash', at: Date.now() });
+    const queue = app.get<SignupRequestStore>(SIGNUP_REQUEST_STORE);
+    await queue.save(T, (await queue.load(T)).revision, [{ tenant: T, id: 'intake-demo', display_name: 'Intake Demo', email: 'intake@example.invalid', values: {}, confirmed: true, salt: 'fictional-salt', hash: 'fictional-hash', at: Date.now() }]);
     const def = await ok('POST', '/workflows', { name: 'Signup intake', graph: { nodes: [
       { id: 'read', type: 'lyam-read-intake-request', name: 'read', config: { kind: 'signup', subject: 'intake-demo' } },
       { id: 'resolve', type: 'lyam-resolve-intake-request', name: 'resolve', config: { kind: 'signup', subject: 'intake-demo', snapshot: '{{steps.read.snapshot}}', decision: 'approve' } },
@@ -1173,7 +1175,7 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
     }
     assert.equal(done.run.status, 'failed'); assert.match(done.run.error!, /publication-aware/);
     assert.equal(done.run.branch, null); assert.equal(approve.mock.calls.length, 0);
-    assert.equal(signup.pending.has('intake-demo'), true, 'the request survives the refusal');
+    assert.equal((await signup.list(T)).requests.some((r: any) => r.id === 'intake-demo'), true, 'the request survives the refusal');
     assert.ok(!events.mock.calls.some(c => ['user.created', 'user.blocked', 'signup.approved'].includes(c.arguments[0].type) && c.arguments[0].payload.subject === 'intake-demo'));
     const live = (await app.get(VersioningService).tableRows('main', 'identities', 100, 0)) as unknown as { rows: { id: string }[] };
     assert.ok(!live.rows.some(x => x.id === 'intake-demo'), 'approval does not publish the new account');

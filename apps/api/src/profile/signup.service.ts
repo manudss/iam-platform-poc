@@ -1,3 +1,4 @@
+import { SIGNUP_REQUEST_STORE, SignupRequestStore } from './signup-request-store.js';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { UsersService } from '../users/users.service.js';
 import { AuthnService } from '../authn/flow.service.js';
@@ -14,6 +15,8 @@ import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
  */
 interface SignupPluginModule {
   createSignupManager: (deps: {
+    pendingLoad?: SignupRequestStore['load'];
+    pendingSave?: SignupRequestStore['save'];
     signupOpen: (tenant: string) => Promise<boolean>;
     schema: (tenant: string, ctx: 'signup', ref: 'live') => Promise<{ key: string; label: string; type: string; help?: string; options?: string[]; required?: boolean }[]>;
     signupValues: (tenant: string, input: unknown) => Promise<Record<string, string | number | boolean | null>>;
@@ -33,10 +36,10 @@ interface SignupPluginModule {
     hits: Map<string, number[]>;
     schema: (tenant: string) => Promise<unknown>;
     submit: (tenant: string, body: unknown, ip: string) => Promise<unknown>;
-    confirm: (tenant: string, token: unknown) => { status: string; message: string };
-    list: (tenant?: string) => { requests: unknown[] };
+    confirm: (tenant: string, token: unknown) => Promise<{ status: string; message: string }>;
+    list: (tenant?: string) => { requests: unknown[] } | Promise<{ requests: unknown[] }>;
     approve: (tenant: string, id: string, actor: string, expectedSnapshot?: string) => Promise<unknown>;
-    reject: (id: string, tenant?: string, expectedSnapshot?: string) => { rejected: boolean };
+    reject: (id: string, tenant?: string, expectedSnapshot?: string) => Promise<{ rejected: boolean }>;
   };
 }
 const plugin = loadPluginModule('directory', 'signup.mjs') as SignupPluginModule;
@@ -46,9 +49,11 @@ export class SignupService {
   private readonly notifier?: PluginRegistry;
   private readonly events?: ApplicationBus;
   private readonly manager: ReturnType<SignupPluginModule['createSignupManager']>;
-  constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry) {
+  constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry, @Optional() @Inject(SIGNUP_REQUEST_STORE) requests?: SignupRequestStore) {
     this.notifier = reg; this.authn = authn; this.events = events;
     this.manager = plugin.createSignupManager({
+      pendingLoad: requests ? (t) => requests.load(t) : undefined,
+      pendingSave: requests ? (t, revision, rows) => requests.save(t, revision, rows) : undefined,
       signupOpen: (t) => profile.signupOpen(t),
       schema: (t, ctx, ref) => profile.schema(t, ctx, ref) as never,
       signupValues: (t, input) => profile.signupValues(t, input),

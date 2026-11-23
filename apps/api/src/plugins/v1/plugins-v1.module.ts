@@ -26,6 +26,7 @@ import { AuthGuard } from '../../auth/auth.guard.js';
 import { AdminGuard } from '../../auth/admin.guard.js';
 import { AuthGateController } from './auth-gate.controller.js';
 import { ProfileService, PROFILE_STORE, SIGNUP_ALLOWED, defaultSignupAllowed } from '../../profile/profile.service.js';
+import { SIGNUP_REQUEST_STORE, DoltSignupRequestStore, MemorySignupRequestStore } from '../../profile/signup-request-store.js';
 import { SignupService } from '../../profile/signup.service.js';
 import { SignupController } from '../../profile/signup.controller.js';
 import { TestAccountController } from '../../profile/test-account.controller.js';
@@ -51,7 +52,7 @@ import { AccountBlocksController } from '../../accounts/blocks.controller.js';
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
   controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, AccountBlocksController, DirectoryAccountStatusController, ProfileController, SignupController, TestAccountController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, LaunchpadController, LaunchpadLogoController, RolesController, SigninOptionsController, MailTemplatesController],
-  providers: [{ provide: APP_LEVEL_CLEANUP, useFactory: (a: AuthnService) => ({ clear: (t: string, id: string) => a.clearAppLevel(t, id) }), inject: [AuthnService] }, { provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BrandingService, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
+  providers: [{ provide: SIGNUP_REQUEST_STORE, useFactory: () => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltSignupRequestStore() : new MemorySignupRequestStore() }, { provide: APP_LEVEL_CLEANUP, useFactory: (a: AuthnService) => ({ clear: (t: string, id: string) => a.clearAppLevel(t, id) }), inject: [AuthnService] }, { provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BrandingService, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
     provide: MAIL_TEMPLATE_STORE,
     inject: [VersioningService],
     useFactory: (v: VersioningService) => process.env.IAM_WORKSPACE_MODE === '1' || process.env.IAM_PLUGIN_STORE === 'dolt' ? new DoltMailTemplateStore(v, (w) => currentBranch(w)) : new MemoryMailTemplateStore(),

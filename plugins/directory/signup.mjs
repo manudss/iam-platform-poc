@@ -34,6 +34,18 @@ const MAX_PENDING = 50, PER_IP_HOUR = 5, TTL_MS = 24 * 3600 * 1000;
 
 export function createSignupManager(deps) {
   const pending = new Map(); const hits = new Map();
+  let revision = 0;
+  const load = async (tenant) => {
+    if (!deps.pendingLoad) return;
+    const queue = await deps.pendingLoad(tenant); revision = queue.revision;
+    for (const [k, p] of pending) if (p.tenant === tenant) pending.delete(k);
+    for (const p of queue.requests) pending.set(`${tenant}/${p.id}`, p);
+  };
+  const save = async (tenant) => {
+    if (!deps.pendingSave) return;
+    await deps.pendingSave(tenant, revision, [...pending.values()].filter(p => p.tenant === tenant)); revision++;
+  };
+  const key = (tenant, id) => deps.pendingLoad ? `${tenant}/${id}` : id;
   const limit = (ip) => {
     const now = Date.now(), h = (hits.get(ip) ?? []).filter((t) => now - t < 3600_000);
     if (h.length >= PER_IP_HOUR) throw new HttpException('too many requests', 429);
@@ -66,10 +78,11 @@ export function createSignupManager(deps) {
       const values = await deps.signupValues(tenant, b.values);
       // Neutral answers: a taken id, a pending request and a full queue look exactly like success (no account enumeration).
       const taken = deps.usersList ? (await deps.usersList('main')).some((u) => u.id === b.id || (u.email && u.email.toLowerCase() === b.email.toLowerCase())) : false;
-      const dup = [...pending.values()].some((p) => p.id === b.id || p.email.toLowerCase() === b.email.toLowerCase());
-      if (taken || dup || pending.size >= MAX_PENDING) return NEUTRAL;
+      const dup = [...pending.values()].some((p) => p.tenant === tenant && (p.id === b.id || p.email.toLowerCase() === b.email.toLowerCase()));
+      if (taken || dup || [...pending.values()].filter(p => p.tenant === tenant).length >= MAX_PENDING) return NEUTRAL;
       const token = randomBytes(24).toString('base64url'), salt = randomBytes(24).toString('hex');
-      pending.set(b.id, { tenant, id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
+      pending.set(key(tenant, b.id), { tenant, id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
+      await save(tenant);
       // The confirmation e-mail goes through the notify.templates renderer + notify.default slot when the core
       // wires `deliver` (docs/mail-templates.md); the legacy dep outboxSend stays for adapters without it.
       if (deps.deliver) await deps.deliver({ tenant, to: b.email, template: 'signup-confirmation', data: { token, subjectUser: b.id }, subjectUser: b.id, effectKey: `signup-confirmation:${b.id}:${sha(token).slice(0, 16)}` });
@@ -79,26 +92,45 @@ export function createSignupManager(deps) {
       deps.emit('signup.requested', tenant, branch, { subject: b.id, email: b.email });
       return NEUTRAL;
     },
-    confirm(tenant, token) {
+    async confirm(tenant, token) {
       const t = typeof token === 'string' ? sha(token) : '';
       for (const p of pending.values()) if (p.tenant === tenant && t && p.tokenHash === t && Date.now() - p.at <= TTL_MS) p.confirmed = true;
+      await save(tenant);
       return { status: 'ok', message: 'If the code was valid, the request now waits for administrator approval.' };
     },
     list(tenant) { purge(); return { requests: [...pending.values()].filter(p => tenant === undefined || p.tenant === tenant).map(project) }; },
     /** Creates a plain account on the CURRENT working branch (live only after Apply). No role is granted, ever. */
     async approve(tenant, id, actor, expectedSnapshot) {
-      const p = pending.get(id); if (!p) throw new NotFoundException('unknown request');
+      const p = pending.get(key(tenant, id)); if (!p) throw new NotFoundException('unknown request');
       if (p.tenant !== tenant) throw new NotFoundException('unknown request');
       if (expectedSnapshot && sha(JSON.stringify(project(p))) !== expectedSnapshot) throw new ConflictException('request changed since review');
       if (!p.confirmed) throw new ConflictException('the e-mail address is not confirmed yet');
       if (!deps.usersSave) throw new ForbiddenException('no directory');
       const user = await deps.usersSave(p.id, { id: p.id, display_name: p.display_name, email: p.email, login_enabled: true }, true, { salt: p.salt, hash: p.hash }, tenant);
       await deps.putWorking(tenant, p.id, p.values, actor);
-      pending.delete(id);
+      pending.delete(key(tenant, id));
+      await save(tenant);
       deps.emit('signup.approved', tenant, deps.currentBranch() ?? 'main', { subject: p.id, email: p.email });
       return { approved: true, user, note: 'Created on the working branch with no role. Sign-in works after Apply.' };
     },
-    reject(id, tenant, expectedSnapshot) { if (expectedSnapshot && (!pending.has(id) || sha(JSON.stringify(project(pending.get(id)))) !== expectedSnapshot)) throw new ConflictException('request changed since review'); if (tenant !== undefined && pending.get(id)?.tenant !== tenant) throw new NotFoundException('unknown request'); if (!pending.delete(id)) throw new NotFoundException('unknown request'); return { rejected: true }; },
+    async reject(id, tenant, expectedSnapshot) {
+      const k = key(tenant, id), p = pending.get(k);
+      if (!p || p.tenant !== tenant) throw new NotFoundException('unknown request');
+      if (expectedSnapshot && sha(JSON.stringify(project(p))) !== expectedSnapshot) throw new ConflictException('request changed since review');
+      pending.delete(k); await save(tenant); return { rejected: true };
+    },
   };
+  if (deps.pendingLoad) {
+    // Serialize the shared cache/revision inside this process. SQL CAS also rejects stale replicas.
+    let tail = Promise.resolve();
+    for (const name of ['submit', 'confirm', 'list', 'approve', 'reject']) {
+      const fn = api[name];
+      api[name] = (...args) => {
+        const tenant = name === 'reject' ? args[1] : args[0];
+        const call = tail.then(async () => { await load(tenant); return fn(...args); });
+        tail = call.catch(() => {}); return call;
+      };
+    }
+  }
   return api;
 }

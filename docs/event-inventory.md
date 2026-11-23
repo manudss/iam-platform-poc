@@ -14,7 +14,7 @@ Production code: 44 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:97 |
 | ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:143 |
 | ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:170 |
-| ApplicationBus.emit | emitter | user.blocked | apps/api/src/profile/signup.service.ts:101 |
+| ApplicationBus.emit | emitter | user.blocked | apps/api/src/profile/signup.service.ts:106 |
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:153 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:155 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:156 |
@@ -28,7 +28,7 @@ Production code: 44 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:55 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:191 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:256 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/profile/signup.service.ts:83 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/profile/signup.service.ts:88 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:77 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:119 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
@@ -38,8 +38,8 @@ Production code: 44 points. Test code: 92 points.
 | plugin deps.emit (durable app event) | emitter | app.registered | plugins/app-connector/handlers.mjs:114 |
 | plugin deps.emit (durable app event) | emitter | app.updated | plugins/app-connector/handlers.mjs:120 |
 | plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:126 |
-| plugin deps.emit (durable app event) | emitter | signup.requested | plugins/directory/signup.mjs:79 |
-| plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:98 |
+| plugin deps.emit (durable app event) | emitter | signup.requested | plugins/directory/signup.mjs:92 |
+| plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:113 |
 | plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/oidc-provider/handlers.mjs:175 |
 | plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/oidc-provider/handlers.mjs:183 |
 | plugin deps.emit (durable app event) | emitter | organization.member-added | plugins/organizations/handlers.mjs:72 |

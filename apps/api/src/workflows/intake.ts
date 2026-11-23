@@ -18,7 +18,7 @@ export class WorkflowIntake {
   private async raw(tenant: string, kind: string, subject: string) {
     if (kind === 'signup') {
       if (!this.signup) throw new BadRequestException('signup service unavailable');
-      const request = (this.signup.list(tenant).requests as { id: string; confirmed: boolean }[]).find(r => r.id === subject);
+      const request = ((await this.signup.list(tenant)).requests as { id: string; confirmed: boolean }[]).find(r => r.id === subject);
       if (!request) throw new BadRequestException('no signup request in this tenant');
       return request;
     }
@@ -46,7 +46,7 @@ export class WorkflowIntake {
     const request = await this.raw(tenant, kind, subject);
     if (!/^[a-f0-9]{64}$/.test(snapshot) || this.hash(request) !== snapshot) throw new ConflictException('request changed since it was read; read and review again');
     await this.prepareResolve(kind, decision, starter);
-    if (kind === 'signup') this.signup!.reject(subject, tenant, snapshot);
+    if (kind === 'signup') await this.signup!.reject(subject, tenant, snapshot);
     else await this.profile!.resolveReviewedSnapshot(tenant, subject, decision === 'approve', starter, snapshot);
     return { kind, subject, resolved: decision, immediate: true };
   }
