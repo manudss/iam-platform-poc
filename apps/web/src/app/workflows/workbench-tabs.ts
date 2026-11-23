@@ -76,7 +76,7 @@ export class WbTabs {
 `], template: `
 <div class="wbt-bar" role="tablist">
   @for (t of tabs.tabs(); track t.kind + ':' + t.id) {
-    <a class="wbt-tab" role="tab" [class.current]="tabs.isActive(t)" [routerLink]="tabs.urlOf(t)">
+    <a class="wbt-tab" role="tab" [class.current]="tabs.isActive(t)" [routerLink]="t.kind === 'run' ? '/workflows/runs' : tabs.urlOf(t)" [queryParams]="t.kind === 'run' ? { run: t.id } : {}">
       <span class="wbt-ico" aria-hidden="true">{{t.kind === 'run' ? '▶' : '✎'}}</span><span class="wbt-label">{{t.label}}</span>@if (t.kind === 'workflow' && dirtyId() === t.id) {<span class="wbt-dirty" aria-label="Unsaved changes">●</span>}<button class="wbt-x" (click)="tabs.close(t, $event)" [attr.aria-label]="'Close ' + t.label" title="Close">×</button>
     </a>
   }

@@ -124,20 +124,19 @@ export class WfNodeComponent extends CustomNodeComponent<WfNodeData> {
 }
 
 // ---- Visual trigger node: shown as the first node when the workflow starts on an event. Distinct dashed
-// amber look, no target handle (nothing points into it), not selectable or editable on the canvas: the
-// trigger itself is edited with the Start trigger field above the canvas.
+// amber look, no target handle (nothing points into it). The card opens the same inspector as Edit.
 export const TRIGGER_NODE_ID = '__trigger';
-export interface WfTriggerNodeData { name: string }
+export interface WfTriggerNodeData { name: string; open?: () => void }
 
 @Component({
   selector: 'app-wf-trigger-node',
   imports: [HandleComponent],
   template: `
-    <div class="wf-node wf-trigger">
+    <button type="button" class="wf-node wf-trigger" aria-label="Configure start trigger" (pointerdown)="$event.stopPropagation()" (click)="data()?.open?.(); $event.stopPropagation()">
       <span class="wf-node-badge trigger">TRIGGER</span>
       <span class="wf-node-name">{{ data()?.name }}</span>
-      <span class="wf-trigger-hint">starts the first steps</span>
-    </div>
+      <span class="wf-trigger-hint">starts the first steps · click to configure</span>
+    </button>
     <handle type="source" position="right" />
   `,
   styles: [`
@@ -156,6 +155,8 @@ export interface WfTriggerNodeData { name: string }
       align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .04em;
       padding: 2px 7px; border-radius: 999px; background: var(--warn-soft); color: var(--warn-ink); border: 1px solid var(--warn-line);
     }
+    .wf-trigger { text-align: left; cursor: pointer; font-family: inherit; }
+    .wf-trigger:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
     .wf-trigger-hint { font-size: 11px; color: var(--muted); }
     handle { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%;
       background: var(--card); border: 2px solid var(--warn-line); transform: translateY(-50%); }
