@@ -1,3 +1,5 @@
+import { UserAccountBlocks } from './user-account-blocks';
+import { DirectoryAccountStatuses, BLOCK_LABELS, activeBlocks, accountState, matchesAccount } from './account-state';
 import { RevealPassword } from './reveal-password';
 import { Component, HostListener, inject, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -72,18 +74,18 @@ export function userStats(users: UserProfile[]): UserStats {
   };
 }
 
-@Component({ selector: 'app-users', imports: [FormsModule, RouterLink, RolesRights, UserPluginSections, UserAvatar, RevealPassword], styleUrl: './users.css', template: `
+@Component({ selector: 'app-users', imports: [FormsModule, RouterLink, RolesRights, UserPluginSections, UserAvatar, RevealPassword, UserAccountBlocks], styleUrl: './users.css', template: `
 <p class="lead">Manage the directory used for sign-in. Profiles are committed to the selected working branch; password hashes are kept outside the database explorer.</p>
 <p class="hint">Fictional demo only: do not enter real personal data. The data is kept on the server's disk and is backed up before each update, but this is a demo and nothing here is guaranteed to be kept. A new account has no role until an administrator assigns one from this drawer or Assignments; creating a user never grants access by itself.</p>
 @if (note()) { <p role="status" class="msg">{{note()}}</p> }
 <div class="head">
-  <div class="grow"><h2>Users</h2><span class="cnt">{{stats().total}} users · {{stats().enabled}} can sign in · {{stats().depts}} departments</span></div>
+  <div class="grow"><h2>Users</h2><span class="cnt">{{stats().total}} users · {{stats().enabled}} enabled on branch · {{stats().depts}} departments</span></div>
   <button id="user-create" (click)="start()" [disabled]="busy() || s.branch()==='main'" [title]="s.branch()==='main' ? 'Main is read only: pick a working branch above' : 'Create a user on the working branch'">Create user</button>
   <button class="secondary" (click)="load()">Refresh</button>
 </div>
 <div class="stats">
   <div class="stat"><span class="n">{{stats().total}}</span><span class="l">Users</span></div>
-  <div class="stat"><span class="n">{{stats().enabled}}</span><span class="l">Sign-in enabled</span></div>
+  <div class="stat"><span class="n">{{stats().enabled}}</span><span class="l">Enabled on branch</span></div>
   <div class="stat"><span class="n">{{stats().noCred}}</span><span class="l">No credential</span></div>
   <div class="stat"><span class="n">{{stats().depts}}</span><span class="l">Departments</span></div>
 </div>
@@ -93,20 +95,28 @@ export function userStats(users: UserProfile[]): UserStats {
     <option value="">All departments</option>
     @for (d of departments(); track d) { <option [value]="d">{{d}}</option> }
   </select>
-  <select name="userStatus" [ngModel]="fstatus()" (ngModelChange)="fstatus.set($event)" aria-label="Sign-in status filter">
-    <option value="">Any status</option>
+  <select name="userStatus" [ngModel]="fstatus()" (ngModelChange)="fstatus.set($event)" aria-label="Branch sign-in status filter">
+    <option value="">Any branch sign-in setting</option>
     <option value="enabled">Sign-in enabled</option>
     <option value="disabled">Disabled</option>
     <option value="no-credential">No credential</option>
   </select>
+  <select name="accountBlocked" [ngModel]="fblocked()" (ngModelChange)="fblocked.set($event)" aria-label="Live block filter">
+    <option value="">All live block states</option><option value="blocked">Blocked accounts</option><option value="clear">No active block</option>
+  </select>
+  <select name="accountBlockKind" [ngModel]="fblockKind()" (ngModelChange)="fblockKind.set($event)" aria-label="Active block type filter">
+    <option value="">All active block types</option>@for (k of blockKinds; track k) { <option [value]="k">{{blockLabels[k]}}</option> }
+  </select>
 </div>
+<p class="hint">Branch sign-in settings above need Review &amp; Apply. Live state below includes all active security blocks, with expired locks excluded. "Not blocked" does not guarantee access to an application. Last checked: {{checkedAt()}}. Use Refresh for changes made elsewhere.</p>
+@if (stateError()) { <p role="alert" class="msg bad">{{stateError()}}</p> }
 <div class="tcard"><div class="twrap"><table id="users-table">
 <thead><tr>
   <th><button class="thbtn" (click)="sortBy('name')">User {{sortIcon('name')}}</button></th>
   <th><button class="thbtn" (click)="sortBy('dept')">Department {{sortIcon('dept')}}</button></th>
   <th>E-mail</th><th>Manager</th>
-  <th><button class="thbtn" (click)="sortBy('status')">Sign-in {{sortIcon('status')}}</button></th>
-  <th></th>
+  <th><button class="thbtn" (click)="sortBy('status')">Branch sign-in {{sortIcon('status')}}</button></th>
+  <th>Live account state</th><th></th>
 </tr></thead>
 <tbody>
 @for (u of filtered(); track u.id) {<tr>
@@ -115,14 +125,17 @@ export function userStats(users: UserProfile[]): UserStats {
   <td class="mail">{{u.email || '—'}}</td>
   <td class="mgr">{{managerName(u)}}</td>
   <td><span class="st" [class.ok]="userStatus(u)==='enabled'" [class.off]="userStatus(u)==='no-credential'" [class.bad]="userStatus(u)==='disabled'">{{statusLabel(userStatus(u))}}</span></td>
-  <td class="acts"><button class="secondary rowbtn" [attr.id]="'user-open-'+u.id" (click)="start(u)" [title]="readOnly() ? 'Main is read only: opens the user sheet without any way to change it' : 'Edit this user on the working branch'">{{readOnly() ? 'View' : 'Edit'}}</button>
+  <td class="live-account-state"><span class="st" [class.bad]="liveState(u.id)==='Blocked' || liveState(u.id)==='Sign-in disabled'" [class.ok]="liveState(u.id)==='Not blocked'">{{liveState(u.id)}}</span>
+    @for (b of liveBlocks(u.id); track b.kind) { <small class="block-kind">{{blockLabels[b.kind] || b.kind}}</small> }
+  </td>
+  <td class="acts"><button class="secondary rowbtn" [attr.id]="'user-open-'+u.id" (click)="start(u)" [title]="readOnly() ? 'View the main profile; authorised live block controls remain available' : 'Edit this user on the working branch'">{{readOnly() ? 'View' : 'Edit'}}</button>
     <span class="rowmenu"><button class="secondary rowbtn" (click)="toggleMenu(u.id, $event)" [attr.aria-expanded]="menuFor()===u.id" aria-label="More actions">⋯</button>
       @if (menuFor()===u.id) {<span class="pop" (click)="$event.stopPropagation()">
         <button (click)="quickToggle(u)" [disabled]="busy() || s.branch()==='main' || !u.hasCredential" [class.danger]="u.login_enabled" [title]="!u.hasCredential ? 'No credential yet: give one with Edit first' : ''">{{u.login_enabled ? 'Disable sign-in' : 'Enable sign-in'}}</button>
       </span>}
     </span></td>
 </tr>}
-@empty {<tr><td colspan="6" class="empty">No users match.</td></tr>}
+@empty {<tr><td colspan="7" class="empty">No users match.</td></tr>}
 </tbody></table></div>
 <div class="tfoot"><span>{{filtered().length}} of {{people().length}} users · sorted by {{sortLabel()}}</span></div></div>
 
@@ -133,13 +146,20 @@ export function userStats(users: UserProfile[]): UserStats {
     @else {<span class="av big" [style.background]="'color-mix(in srgb, '+deptColor(form.department || 'user')+' 13%, transparent)'" [style.color]="deptColor(form.department || 'user')" [style.border]="'1px solid '+deptColor(form.department || 'user')">{{initials(form.display_name || form.id || '?')}}</span>}
     <span class="tx"><h3>{{key ? (form.display_name || key) : 'Create user'}}</h3>
       @if (key) {<span class="sub">{{key}} · <span class="tag" [style.background]="'color-mix(in srgb, '+deptColor(form.department || 'user')+' 13%, transparent)'" [style.color]="deptColor(form.department || 'user')">{{form.department || '—'}}</span>
-        @if (current(); as cu) {<span class="st" [class.ok]="userStatus(cu)==='enabled'" [class.off]="userStatus(cu)==='no-credential'" [class.bad]="userStatus(cu)==='disabled'">{{statusLabel(userStatus(cu))}}</span>}</span>}
+        @if (current(); as cu) {<span class="st" [class.ok]="userStatus(cu)==='enabled'" [class.off]="userStatus(cu)==='no-credential'" [class.bad]="userStatus(cu)==='disabled'">Branch: {{statusLabel(userStatus(cu))}}</span>}</span>}
     </span>
     <button class="secondary x" type="button" (click)="cancel()" title="Close">✕</button>
   </div>
   @if (partialSave()) { <p role="alert" class="msg bad" id="user-partial-save">User details were saved to this branch, but the additional profile fields were not saved. Your field edits are kept below. Retry saves those fields without repeating unchanged user details. Nothing becomes live until Review &amp; Apply.</p> }
-  @if (key && canProtect()) { <p class="hint" id="user-protection-link">Sign-in protection: <a [routerLink]="['/account-protection']" [queryParams]="{subject: key}">block or review this account</a></p> }
-  @if (readOnly()) { <p class="msg" id="user-readonly-note" role="status">Viewing main (read only). Pick a working branch to change anything.</p> }
+  @if (key) {
+    <section class="panel user-live-status"><h4>Live account state</h4><strong>{{liveState(key)}}</strong>
+      @for (b of liveBlocks(key); track b.kind) { <p>{{blockLabels[b.kind] || b.kind}}</p> }
+      <p class="hint">Profile changes below belong to the selected branch. Live security blocks are independent.</p>
+    </section>
+    @if (canProtect()) { <app-user-account-blocks [userId]="key" (changed)="loadAccountStates()" /> }
+    @else { <p class="hint">Managing blocks and viewing their reasons needs the account-blocks permission.</p> }
+  }
+  @if (readOnly()) { <p class="msg" id="user-readonly-note" role="status">Viewing the main profile (read only). Pick a working branch to edit profile data. Authorised live block actions above remain available.</p> }
   <form (ngSubmit)="save()"><fieldset class="ro-set" [disabled]="readOnly()">
   <h4>Identity</h4>
   <label>User ID<input name="uid" [(ngModel)]="form.id" [disabled]="!!key" required pattern="[a-z0-9-]{1,32}" />@if(!key){<small>Lowercase letters, digits and dashes; cannot change later.</small>}</label>
@@ -194,6 +214,23 @@ export class UsersPage {
   protected photos = this.pictures.map;
   protected readOnly() { return this.s.branch() === 'main'; }
   private pvalsFor: string | null = null; private profileRequest = 0;
+  protected accountStates = signal<DirectoryAccountStatuses>({ asOf: 0, accounts: {} });
+  protected stateError = signal(''); protected fblocked = signal(''); protected fblockKind = signal('');
+  protected readonly blockLabels = BLOCK_LABELS; protected readonly blockKinds = Object.keys(BLOCK_LABELS);
+  private serverOffset = 0;
+  protected clock = signal(Date.now()); private stateRequest = 0;
+  private clockTimer?: ReturnType<typeof setInterval>;
+  protected checkedAt() { return this.accountStates().asOf ? new Date(this.accountStates().asOf).toLocaleTimeString('en-GB') : 'not yet checked'; }
+  protected liveState(id: string) { return accountState(this.accountStates().accounts[id], this.clock()); }
+  protected liveBlocks(id: string) { return activeBlocks(this.accountStates().accounts[id]?.blocks ?? [], this.clock()); }
+  protected async loadAccountStates() {
+    const request = ++this.stateRequest, branch = this.s.branch(); this.accountStates.set({ asOf: 0, accounts: {} }); this.stateError.set('');
+    try { const r = await this.s.api.raw<DirectoryAccountStatuses>('GET', '/directory-account-status', undefined, this.h());
+      if (request !== this.stateRequest || branch !== this.s.branch()) return;
+      if (r.status >= 400 || !r.data?.accounts || typeof r.data.asOf !== 'number') throw new Error('Live account state unavailable. Refresh to check again.');
+      this.serverOffset = r.data.asOf - Date.now(); this.accountStates.set(r.data); this.clock.set(r.data.asOf);
+    } catch (e) { if (request === this.stateRequest) this.stateError.set((e as Error).message); }
+  }
   protected search = signal(''); protected fdept = signal(''); protected fstatus = signal<'' | UserStatus>('');
   protected sortKey = signal<SortKey>('name'); protected sortDir = signal<1 | -1>(1);
   protected menuFor = signal<string | null>(null);
@@ -204,7 +241,7 @@ export class UsersPage {
   protected readonly initials = initials; protected readonly deptColor = deptColor;
   protected readonly userStatus = userStatus; protected readonly statusLabel = statusLabel;
 
-  ngOnInit() { void this.load(); }
+  ngOnInit() { void this.load(); if (typeof window !== 'undefined') this.clockTimer = setInterval(() => this.clock.set(Date.now() + this.serverOffset), 1000); }
 
   /** Referenced managers (reference rows) feed the manager field and the chain, never the list. */
   protected people = computed(() => this.users().filter((u) => !(u as { reference?: boolean }).reference));
@@ -213,7 +250,7 @@ export class UsersPage {
   protected canEditAuthority() { const a = this.s.access(); return !a || !a.screenAccess || !a.screens || a.screens.includes('authority-edit'); }
   protected stats = computed(() => userStats(this.people()));
   protected departments = computed(() => [...new Set(this.people().map((u) => u.department).filter(Boolean))].sort());
-  protected filtered = computed(() => sortUsers(filterUsers(this.people(), { q: this.search(), dept: this.fdept(), status: this.fstatus() }), this.sortKey(), this.sortDir()));
+  protected filtered = computed(() => sortUsers(filterUsers(this.people().filter(u => matchesAccount(this.accountStates().accounts[u.id], this.fblocked(), this.fblockKind(), this.clock())), { q: this.search(), dept: this.fdept(), status: this.fstatus() }), this.sortKey(), this.sortDir()));
   // NOT computed(): key is a plain property (ngModel-bound form state), so a computed would cache the first user opened.
   protected current() { return this.users().find((u) => u.id === this.key) ?? null; }
   protected chain() { const c = this.current(); return c ? managerChain(c, this.users()) : null; }
@@ -226,7 +263,7 @@ export class UsersPage {
   protected toggleMenu(id: string, ev: Event) { ev.stopPropagation(); this.menuFor.update((m) => (m === id ? null : id)); }
   @HostListener('document:click') closeMenu() { this.menuFor.set(null); }
 
-  protected async load() { try { const r = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}); this.users.set(r.data.users); void this.loadPhotos(); } catch (e) { this.note.set((e as Error).message); } }
+  protected async load() { void this.loadAccountStates(); try { const r = await this.s.api.raw<{ users: UserProfile[] }>('GET', '/users', undefined, this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}); this.users.set(r.data.users); void this.loadPhotos(); } catch (e) { this.note.set((e as Error).message); } }
   private async loadPhotos() { await this.pictures.ensure(true); }
   protected start(u?: UserProfile) { this.partialSave.set(false); this.savedDetails = ''; this.menuFor.set(null); this.key = u?.id ?? null; this.form = { id: u?.id ?? '', display_name: u?.display_name ?? '', email: u?.email ?? '', department: u?.department ?? '', manager_id: u?.manager_id ?? '', login_enabled: u?.login_enabled ?? true }; this.password = ''; this.editing.set(true); this.pfields.set([]); this.pvals.set({}); this.pchanged = {}; this.pvalsFor = u?.id ?? null; ++this.profileRequest; if (u) void this.loadP(u.id); }
   private h(): Record<string, string> { return this.s.adminToken() ? { 'x-api-admin-token': this.s.adminToken() } : {}; }
@@ -234,7 +271,7 @@ export class UsersPage {
   protected setP(k: string, v: unknown) { this.pvals.update((x) => ({ ...x, [k]: v })); this.pchanged[k] = v === '' ? null : v; }
   protected boolStr(k: string) { const v = this.pvals()[k]; return v === true ? 'true' : v === false ? 'false' : ''; }
   protected cancel() { this.partialSave.set(false); this.savedDetails = ''; this.password = ''; this.tempPassword = ''; this.editing.set(false); this.pvals.set({}); this.pfields.set([]); this.pvalsFor = null; ++this.profileRequest; }
-  ngOnDestroy() { this.cancel(); }
+  ngOnDestroy() { ++this.stateRequest; clearInterval(this.clockTimer); this.cancel(); }
   protected disableAndSave() { this.form.login_enabled = false; void this.save(); }
   protected async quickToggle(u: UserProfile) {
     this.menuFor.set(null); this.busy.set(true);

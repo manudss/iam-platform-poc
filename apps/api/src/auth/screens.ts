@@ -33,7 +33,7 @@ export function screensFor(method: string, path: string): Screen[] {
   const p = path.replace(/^\/+/, '').split('?')[0]; const seg = p.split('/'); const first = seg[0];
   switch (first) {
     case 'versioning': return doltScreens(method, seg.slice(1).join('/'));
-    case 'users': return ['users'];
+    case 'users': case 'directory-account-status': return ['users'];
     case 'profile-reviews': return ['profile-reviews'];
     case 'profile-fields': case 'profile-components-inventory': return ['profile-fields'];
     case 'profile-components': case 'profile-schema': return ['users', 'profile-fields', 'profile-reviews', 'my-profile'];

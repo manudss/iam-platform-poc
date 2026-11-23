@@ -24,7 +24,7 @@ export class AccountBlocksController {
   private sub = (req: { user?: { sub?: string } }) => String(req.user?.sub ?? '');
 
   @Get('account-blocks') async list(@Param('tenant') t: string) {
-    return { kinds: MANUAL_KINDS, labels: BLOCK_LABEL, messageMax: MESSAGE_MAX, accounts: (await this.svc.list(t)).map((a) => ({ ...a, blocks: a.blocks.map((b) => ({ ...b, reference: blockReference(b) })) })) };
+    return { asOf: Date.now(), kinds: MANUAL_KINDS, labels: BLOCK_LABEL, messageMax: MESSAGE_MAX, accounts: (await this.svc.list(t)).map((a) => ({ ...a, blocks: a.blocks.map((b) => ({ ...b, reference: blockReference(b) })) })) };
   }
   @Post('accounts/:subject/blocks') async block(@Param('tenant') t: string, @Param('subject') subject: string, @Req() req: any, @Body() b: { kind?: string; message?: string; until?: number; hold?: boolean }) {
     assertNotBranchTest(req);

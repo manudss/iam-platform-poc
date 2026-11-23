@@ -41,6 +41,7 @@ import { AuthnService } from '../../authn/flow.service.js';
 import { AuthnAdminController } from '../../authn/authn.controller.js';
 import { AuthnSelfController } from '../../authn/self.controller.js';
 import { SessionAdminController } from '../../authn/session.controller.js';
+import { DirectoryAccountStatusController } from '../../accounts/directory-status.controller.js';
 import { AccountBlocksController } from '../../accounts/blocks.controller.js';
 
 /**
@@ -49,7 +50,7 @@ import { AccountBlocksController } from '../../accounts/blocks.controller.js';
  */
 @Module({
   imports: [VersioningModule, UsersModule, EventsModule],
-  controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, AccountBlocksController, ProfileController, SignupController, TestAccountController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, LaunchpadController, LaunchpadLogoController, RolesController, SigninOptionsController, MailTemplatesController],
+  controllers: [BrandingController, PluginsAdminController, PluginHttpController, AuthGateController, AuthnAdminController, AuthnSelfController, SessionAdminController, AccountBlocksController, DirectoryAccountStatusController, ProfileController, SignupController, TestAccountController, OrgController, AppConnectorController, SsoInteractionController, SamlInteractionController, LaunchpadController, LaunchpadLogoController, RolesController, SigninOptionsController, MailTemplatesController],
   providers: [{ provide: APP_LEVEL_CLEANUP, useFactory: (a: AuthnService) => ({ clear: (t: string, id: string) => a.clearAppLevel(t, id) }), inject: [AuthnService] }, { provide: SIGNUP_ALLOWED, useValue: defaultSignupAllowed }, BrandingService, BranchRegistries, AuthGuard, AdminGuard, BusHostRef, AuthnService, DemoDataService, ProfileService, SignupService, OrgService, AppConnectorService, OidcProviderService, SamlIdpService, SecretsService, MailTemplatesService, {
     provide: MAIL_TEMPLATE_STORE,
     inject: [VersioningService],

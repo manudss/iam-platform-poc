@@ -15,6 +15,8 @@ import { createRequire } from 'node:module';
 import { openManage } from './branch-ui.mjs';
 const { chromium } = createRequire(import.meta.url)('playwright-core');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// Always run the isolated user-sheet regression too; this path is already called by the CI browser job.
+assert.equal(spawnSync(process.execPath, [join(root, 'scripts/user-account-blocks-ui-e2e.cjs'), join(resolve(process.argv[2] ?? '/tmp/blocks-shots'), 'user-directory')], { env: process.env, stdio: 'inherit' }).status, 0, 'user-sheet account block regression');
 const { totpAt } = await import(join(root, 'apps/api/dist/authn/totp.js'));
 const out = resolve(process.argv[2] ?? join(tmpdir(), 'iam-authn-shots')); mkdirSync(out, { recursive: true });
 const dolt = process.env.DOLT_BIN, chrome = process.env.CHROME_BIN; if (!dolt || !chrome) { console.log('SKIPPED: DOLT_BIN and CHROME_BIN are required'); process.exit(0); }

@@ -5,7 +5,7 @@ import { LevelChain, LevelGauge, LevelSelect, levelChains } from './level-select
 import { Session } from './session';
 
 export interface BlockRow { id: string; kind: string; message: string; origin: string; setBy: string; setAt: number; until?: number; hold?: boolean; reference: string }
-export interface Listing { kinds: string[]; labels: Record<string, string>; messageMax: number; accounts: { subject: string; blocks: BlockRow[] }[] }
+export interface Listing { asOf?: number; kinds: string[]; labels: Record<string, string>; messageMax: number; accounts: { subject: string; blocks: BlockRow[] }[] }
 export interface SecurityForm { lockEnabled: boolean; maxFailures: number; windowMinutes: number; lockMinutes: number; adminMinLevel: number; adminMaxAgeMinutes: number; holdAfterVerification: boolean; appLevels: { id: string; level: number }[] }
 
 /** The form shows minutes, the API stores seconds (and the parsed config reports milliseconds for the lockout): the three conversions live here, tested. */
