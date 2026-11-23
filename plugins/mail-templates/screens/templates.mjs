@@ -24,10 +24,14 @@ input[type=email]{max-width:16em}
 label.fl{display:flex;flex-direction:column;font-size:.85em;gap:.2em;margin-bottom:.6em}
 input[type=text],textarea{font:inherit;padding:.3em .45em;border:1px solid var(--field-line);border-radius:6px}
 textarea{min-height:12em;font-family:ui-monospace,monospace;font-size:.85em}
-.tabs{display:flex;gap:.3em;margin-bottom:.5em}
-.tabs button{color:var(--label);border:1px solid var(--field-line);background:var(--bg);border-radius:6px 6px 0 0;padding:.3em .9em}
+.body-editor{margin-bottom:.6em}
+.body-toolbar{display:flex;justify-content:space-between;align-items:center;gap:.6em;flex-wrap:wrap;padding:.45em .6em;background:var(--panel);border:1px solid var(--field-line);border-radius:6px 6px 0 0}
+.body-label{font-size:.85em;font-weight:600;color:var(--label)}
+.tabs{display:flex;gap:.25em;margin:0}
+.body-editor #mt-body{display:block;box-sizing:border-box;width:100%;margin:0;border-top:0;border-radius:0 0 6px 6px}
+.tabs button{color:var(--label);border:1px solid var(--field-line);background:var(--bg);border-radius:4px;padding:.3em .9em;margin:0}
 .tabs button:hover:not(:disabled){color:var(--label);background:var(--panel);border-color:var(--muted)}
-.tabs button.on{color:var(--ink);background:var(--card);border-bottom-color:var(--card)}
+.tabs button.on{color:var(--ink);background:var(--card);border-color:var(--ink)}
 iframe.big{height:100%;min-height:26em}
 .vars{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4em .8em;margin:.6em 0}
 .panel{border:1px solid var(--line);border-radius:8px;padding:.8em}
@@ -74,9 +78,13 @@ class MailTemplatesScreen extends HTMLElement {
       for (const it of this._items.filter((x) => !x.layout)) {
         if (this._view !== 'gallery') return;
         const p = await this.call('POST', '/mail-templates/preview', { key: it.key });
-        if (p.status < 400 && p.data.html) { this._previews[it.key] = p.data.html; this.paintPreview(it.key); }
+        if (p.status < 400) { this._previews[it.key] = this.previewDocument(p.data); this.paintPreview(it.key); }
       }
     } catch (e) { this.say('', String(e?.message ?? e)); }
+  }
+  // Display-only document. Plain-text delivery stays plain text; never interpret its markup.
+  previewDocument(data) {
+    return data.html || `<html><head><style>body{margin:0;padding:20px;background:#fff;color:#202124;font:15px/1.55 system-ui,sans-serif}pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}</style></head><body><pre>${this.esc(data.text ?? '')}</pre></body></html>`;
   }
   paintPreview(key) {
     const f = this.querySelector(`iframe[data-prev="${CSS.escape(key)}"]`);
@@ -106,7 +114,7 @@ class MailTemplatesScreen extends HTMLElement {
       ? { html: e.html ?? '', vars: { ...(e.vars ?? {}) } }
       : { subject: e.subject ?? '', text: e.text ?? '', html: e.html ?? '' };
     this._data = Object.fromEntries((r.data.variables ?? []).map((v) => [v.name, v.sample ?? `sample-${v.name}`]));
-    this._tab = 'html'; this._view = 'edit';
+    this._tab = this._draft.html?.trim() ? 'html' : 'text'; this._view = 'edit';
     this.render();
     void this.refreshPreview();
   }
@@ -117,7 +125,7 @@ class MailTemplatesScreen extends HTMLElement {
       : { key: d.key, data: this._data, override: { subject: this._draft.subject, text: this._draft.text, ...(this._draft.html ? { html: this._draft.html } : {}) } };
     const r = await this.call('POST', '/mail-templates/preview', body);
     const f = this.querySelector('#mt-big');
-    if (r.status < 400 && f) f.srcdoc = r.data.html ?? `<p>${this.esc(r.data.text ?? '')}</p>`;
+    if (r.status < 400 && f) f.srcdoc = this.previewDocument(r.data);
     else if (r.status >= 400) this.say('', Array.isArray(r.data.message) ? r.data.message.join(' ') : (r.data.message ?? 'Preview refused'));
   }
   previewSoon() { clearTimeout(this._pt); this._pt = setTimeout(() => void this.refreshPreview(), 350); }
@@ -196,10 +204,10 @@ class MailTemplatesScreen extends HTMLElement {
         <p class="hint">logoUrl set: {{logo}} becomes that image. footer also joins the plain-text body after a dash line.</p></div>`
     : `
       <label class="fl">Subject<input type="text" id="mt-subject" value="${this.esc(this._draft.subject)}"></label>
-      <div class="tabs" role="tablist">
+      <div class="body-editor"><div class="body-toolbar"><span class="body-label">Message body</span><div class="tabs" role="tablist" aria-label="Message body format">
         <button role="tab" class="${this._tab === 'text' ? 'on' : ''}" aria-selected="${this._tab === 'text'}" data-tab="text">Text</button>
-        <button role="tab" class="${this._tab === 'html' ? 'on' : ''}" aria-selected="${this._tab === 'html'}" data-tab="html">HTML</button></div>
-      <textarea id="mt-body" spellcheck="false" ${this._tab === 'text' ? '' : ''}>${this.esc(this._tab === 'text' ? this._draft.text : this._draft.html)}</textarea>
+        <button role="tab" class="${this._tab === 'html' ? 'on' : ''}" aria-selected="${this._tab === 'html'}" data-tab="html">HTML</button></div></div>
+      <textarea id="mt-body" spellcheck="false" ${this._tab === 'text' ? '' : ''}>${this.esc(this._tab === 'text' ? this._draft.text : this._draft.html)}</textarea></div>
       ${d.owned ? `<label class="fl">Parameters (name,type,required yes/no)<textarea id="mt-parameters">${this.esc(d.variables.map(v=>[v.name,v.type,v.required?'yes':'no'].join(',')).join('\n'))}</textarea></label>` : ''}
       <div class="panel"><strong>Sample data (preview and tests)</strong>
         <div class="vars">${(d.variables ?? []).map((v) => `<label class="fl">{{${this.esc(v.name)}}}<input type="text" data-var="${this.esc(v.name)}" ${v.type==='temporary-password' ? 'disabled' : ''} value="${v.type==='temporary-password' ? '[secret parameter]' : this.esc(this._data[v.name] ?? '')}"></label>`).join('')}</div></div>`;
@@ -218,7 +226,7 @@ class MailTemplatesScreen extends HTMLElement {
         ${d.customized ? `<button class="secondary" id="mt-restore" ${main ? 'disabled' : ''}>${d.owned ? 'Delete template' : 'Restore default'}</button>` : ''}
         ${!d.layout && !(d.variables??[]).some(v=>v.type==='temporary-password') ? '<input type="email" id="mt-to" placeholder="Send a test to…" aria-label="Test recipient"><button class="secondary" id="mt-test">Send test</button>' : ''}
       </div></section>
-    <section><iframe class="big" id="mt-big" title="Live preview" sandbox=""></iframe></section>
+    <section>${!d.layout && !this._draft.html?.trim() ? '<p class="hint">Plain-text preview. Line breaks are preserved; this is not an HTML e-mail. Previewing does not send mail.</p>' : ''}<iframe class="big" id="mt-big" title="Live preview" sandbox=""></iframe></section>
   </div>
   ${main ? '<p class="hint">main is read only: choose a working branch to save.</p>' : ''}`;
     const q = (s) => this.querySelector(s);

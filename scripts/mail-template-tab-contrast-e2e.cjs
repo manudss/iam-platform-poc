@@ -30,6 +30,8 @@ const detail = {key:'workflow.notify', name:'Workflow notification', plugin:'wor
       await page.addScriptTag({type:'module',content:fs.readFileSync(path.join(root,'plugins/mail-templates/screens/templates.mjs'),'utf8')});
       await page.getByRole('button',{name:'Edit',exact:true}).click();
       await page.getByRole('tab',{name:'HTML',exact:true}).waitFor();
+      const placement=await page.locator('.body-toolbar').evaluate(el=>{const bar=el.getBoundingClientRect(),body=document.querySelector('#mt-body').getBoundingClientRect();return {left:Math.abs(bar.left-body.left),right:Math.abs(bar.right-body.right),gap:Math.abs(bar.bottom-body.top)};});
+      assert.ok(placement.left<1&&placement.right<1&&placement.gap<1,JSON.stringify(placement));
       const ratios=[];
       async function check() {
         const data=await page.locator('[role=tab]').evaluateAll(tabs => {
