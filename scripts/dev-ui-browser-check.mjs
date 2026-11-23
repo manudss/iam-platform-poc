@@ -24,11 +24,14 @@ const browser = await chromium.launch({ executablePath: chrome, headless: true, 
 let failed = false;
 const fail = (name, why) => { failed = true; console.log('FAIL', name, why); };
 const ok = (name, extra = '') => console.log('PASS', name, extra);
+const pageErrors = []; // JS errors and console.error lines, so a stuck screen explains itself in the job log
+let page = null;
 try {
   const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  page = await ctx.newPage();
   const bannerHit = { at: null };
-  page.on('console', () => {});
+  page.on('pageerror', (e) => pageErrors.push(`pageerror: ${String(e).slice(0, 200)}`));
+  page.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`console.error: ${m.text().slice(0, 200)}`); });
 
   // 1. real PKCE sign-in through the authorize form, landing on the console
   const verifier = b64url(randomBytes(40));
@@ -73,6 +76,16 @@ try {
     else if (/Branch unavailable/i.test(body)) fail('Roles screen without a typed token', 'branch pill stuck on "Branch unavailable"');
     else ok('Roles screen without a typed token', 'personal branch opened, no capability banner');
   }
+} catch (e) {
+  failed = true;
+  console.log('FAIL browser flow crashed:', String(e && e.message || e).split('\n').slice(0, 3).join(' | ').slice(0, 400));
+  if (page) {
+    console.log('page url:', page.url());
+    const body = await page.textContent('body').catch(() => '<unreadable>');
+    console.log('page body (first 400 chars):', (body || '').replace(/\s+/g, ' ').slice(0, 400) || '<empty>');
+    await page.screenshot({ path: join(out, 'failure.png'), fullPage: true }).catch(() => {});
+  }
 } finally { await browser.close(); }
+if (pageErrors.length) console.log('page errors:', JSON.stringify(pageErrors.slice(0, 10)));
 if (failed) { console.log('DEV UI BROWSER CHECK FAILED'); process.exit(1); }
 console.log('DEV UI BROWSER CHECK PASSED');
