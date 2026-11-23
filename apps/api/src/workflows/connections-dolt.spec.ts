@@ -38,4 +38,17 @@ describe('connection metadata on real Dolt', {skip:!have && 'DOLT_BIN missing'},
     await versioning.at('main',async c=>{const [dirty]=await c.query('select * from dolt_status');assert.deepEqual(dirty,[]);});
     await branchContext.run({branch:'connections-edit'},()=>service.remove('tenant-a',created.connection.id));
   });
+  it('connector state and private files survive service recreation, isolate tenants/scopes and delete durably',async()=>{
+    const one=new WorkflowStore(versioning);await one.piecePut('tenant-a','trigger:fictional','cursor',{row:7,pending:['event-a']});await one.piecePut('tenant-a','file:run-a','file-a',{name:'fictional.csv',data:'bmFtZQ=='});
+    const two=new WorkflowStore(versioning);assert.deepEqual(await two.pieceGet('tenant-a','trigger:fictional','cursor'),{row:7,pending:['event-a']});assert.equal(await two.pieceGet('tenant-b','trigger:fictional','cursor'),null);assert.equal(await two.pieceGet('tenant-a','trigger:other','cursor'),null);assert.deepEqual(await two.pieceGet('tenant-a','file:run-a','file-a'),{name:'fictional.csv',data:'bmFtZQ=='});
+    await two.pieceDelete('tenant-a','trigger:fictional','cursor');assert.equal(await one.pieceGet('tenant-a','trigger:fictional','cursor'),null);
+  });
+
+  it('durable connector mutex rejects competing instances and releases only its owner',async()=>{
+    const a=new WorkflowStore(versioning),b=new WorkflowStore(versioning);
+    const results=await Promise.all([a.pieceClaim('tenant-a','trigger:lock-test','a'),b.pieceClaim('tenant-a','trigger:lock-test','b')]);assert.equal(results.filter(Boolean).length,1);
+    const owner=results[0]?'a':'b',other=results[0]?'b':'a';await a.pieceRelease('tenant-a','trigger:lock-test',other);assert.equal(await b.pieceClaim('tenant-a','trigger:lock-test','c'),false);
+    await a.pieceRelease('tenant-a','trigger:lock-test',owner);assert.equal(await b.pieceClaim('tenant-a','trigger:lock-test','c'),true);await b.pieceRelease('tenant-a','trigger:lock-test','c');
+  });
+
 });

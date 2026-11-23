@@ -99,6 +99,23 @@ export class WorkflowStore {
     return this.open();
   }
 
+  /** Connector reads do not migrate an existing deployment at boot. First write prepares storage. */
+  private async pieceTable(c:Connection){await c.query('CREATE TABLE IF NOT EXISTS workflow_piece_state (tenant VARCHAR(64) NOT NULL, scope_id VARCHAR(200) NOT NULL, state_key VARCHAR(200) NOT NULL, value_json LONGTEXT NOT NULL, PRIMARY KEY(tenant,scope_id,state_key))');}
+  async pieceGet(tenant:string,scope:string,key:string):Promise<unknown>{
+    const c=await this.meta();try{const [rows]=await c.query('SELECT value_json FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key=?',[tenant,scope,key]);const r=(rows as {value_json:string}[])[0];return r?JSON.parse(r.value_json):null;}catch(e){if(WorkflowStore.noTable(e))return null;throw e;}finally{await c.end();}
+  }
+  async piecePut(tenant:string,scope:string,key:string,value:unknown){
+    const text=JSON.stringify(value);if(text===undefined||text.length>16_000_000)throw new BadRequestException('connector state too large or undefined');
+    const c=await this.meta();try{await this.pieceTable(c);await c.query('REPLACE INTO workflow_piece_state (tenant,scope_id,state_key,value_json) VALUES (?,?,?,?)',[tenant,scope,key,text]);}finally{await c.end();}
+  }
+  async pieceSubscriptions():Promise<{tenant:string,scope:string,state:unknown}[]>{
+    const c=await this.meta();try{const[rows]=await c.query("SELECT tenant,scope_id,value_json FROM workflow_piece_state WHERE state_key='lyam:subscription'");return (rows as any[]).map(r=>({tenant:r.tenant,scope:r.scope_id,state:JSON.parse(r.value_json)}));}catch(e){if(WorkflowStore.noTable(e))return [];throw e;}finally{await c.end();}
+  }
+  async pieceDelete(tenant:string,scope:string,key:string){const c=await this.meta();try{await c.query('DELETE FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key=?',[tenant,scope,key]);}catch(e){if(!WorkflowStore.noTable(e))throw e;}finally{await c.end();}}
+  /** Durable fail-closed mutex. No expiry: a crashed owner requires operator reconciliation, never an overlapping provider call. */
+  async pieceClaim(tenant:string,scope:string,owner:string){const c=await this.meta();try{await this.pieceTable(c);let r:any;try{[r]=await c.query("INSERT IGNORE INTO workflow_piece_state (tenant,scope_id,state_key,value_json) VALUES (?,?,'lyam:lock',?)",[tenant,scope,JSON.stringify({owner,at:Date.now()})]);}catch(e){if(WorkflowStore.writeConflict(e))return false;throw e;}return Number(r.affectedRows)===1;}finally{await c.end();}}
+  async pieceRelease(tenant:string,scope:string,owner:string){const c=await this.meta();try{await c.query("DELETE FROM workflow_piece_state WHERE tenant=? AND scope_id=? AND state_key='lyam:lock' AND JSON_UNQUOTE(JSON_EXTRACT(value_json,'$.owner'))=?",[tenant,scope,owner]);}finally{await c.end();}}
+
   /** Initial migration prepares storage before any workflow runner is allowed to start. */
   async prepareMigrationStorage() { const c = await this.meta(); await c.end(); }
 
