@@ -107,3 +107,5 @@ button.danger:hover:not(:disabled) { background: var(--bad-soft); color: var(--b
 .av.list-photo { object-fit: cover; border: 1px solid var(--line); box-sizing: border-box; }
 .ro-set { border: 0; padding: 0; margin: 0; min-width: 0; }
 .ro-set:disabled { opacity: 1; }
+
+.block-kind{display:block;color:var(--label);margin-top:.25rem}.user-live-status{padding:1rem;border:1px solid var(--line);border-radius:var(--radius);margin-top:1rem}.user-live-status h4{margin-top:0}

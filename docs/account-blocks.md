@@ -54,7 +54,7 @@ Order for an existing dataset: back up, adopt baseline 0001 (the existing proced
 
 ## Console
 
-- `/account-protection` (screen `account-blocks`): blocked accounts (block with a type and a message, lift) and settings (lockout, administration level, per-application levels, hold). The Users drawer links to it for the open user (`?subject=`), only for people who may open the screen.
+- `/account-protection` (screen `account-blocks`): blocked accounts (block with a type and a message, lift) and settings (lockout, administration level, per-application levels, hold). The global page stays available. The Users drawer now embeds live block controls for the selected person, only for people who may open the `account-blocks` screen; no account ID needs to be copied.
 - `/step-up`: the re-sign-in page. It lists only chains that reach the level, says plainly when none exists, and the sign-in must end on the same account.
 - The launchpad shows "Level N" on applications with a minimum level.
 
@@ -88,3 +88,13 @@ The sign-in page of the core shows a refusal caused by a block as a card: the ty
 ## The classic password path
 
 When no sign-in chain is live, the single base-password path is used. It goes through the same blocks and the same automatic lock: a locked account evaluates no password, a block in force is shown only after the password is proved, and a wrong password counts toward the lock. A block never depends on which sign-in method is configured. This was found by the real-browser test (`scripts/account-blocks-e2e.mjs`), which signs in before any chain exists.
+
+## User directory status and embedded controls
+
+The Users list and drawer distinguish branch profile settings from live account state. A profile enabled on a working branch can still be disabled on main, blocked operationally, or not published yet. The list shows every active block type. Its live-state/type filters combine with search, department and branch profile filters. A timed block stops matching when it expires; a held block does not. "Not blocked" is not a promise that every application or policy will allow access.
+
+`GET tenants/:t/directory-account-status` is a read-only users-screen endpoint scoped by the same `user:read` decision as the directory. Reference-only manager rows do not gain a status entry. It returns published/main sign-in flags and operational type/expiry/hold metadata, not messages, authors, run IDs, references or credential revisions. Detailed reasons and management remain behind the separate account-blocks screen right. The as-of timestamp anchors expiry to server time; Refresh checks changes made elsewhere. A failed read is unavailable, never unblocked.
+
+The embedded controls are outside the branch profile form, including on main. Their HTML confirmation names the target and states that the live change is immediate and is not undone by cancelling the profile. They use the existing block/unblock endpoints, preserve self/last-admin/server and branch-test guards, and lift only the chosen block. Existing sessions are not revoked. Expired stored blocks are labelled separately. An uncertain write stops for a state refresh instead of auto-retrying.
+
+Regression: `scripts/user-account-blocks-ui-e2e.cjs` runs the real built Angular bundle with isolated fictional API responses in light/dark desktop/mobile. The existing CI account-block browser entrypoint invokes it; no extra workflow permission is needed. Backend scope/data minimisation and UI request/confirmation/filter rules have unit tests. This UI regression does not replace the real-service sign-in suites.
