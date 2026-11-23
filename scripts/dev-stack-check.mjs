@@ -165,8 +165,8 @@ if (process.env.DEV_PERSISTENCE_CHECK === '1') {
         try {
           const [a] = await c.query('SELECT identity_id, role_id FROM assignments ORDER BY 1,2');
           await c.query(\"CALL dolt_commit('--allow-empty','-m','CI persistent startup regression')\");
-          const [h] = await c.query('SELECT hash FROM dolt_log LIMIT 1');
-          console.log(JSON.stringify({head:h[0].hash, assignments:a}));
+          const [h] = await c.query('SELECT commit_hash FROM dolt_log LIMIT 1');
+          console.log(JSON.stringify({head:h[0].commit_hash, assignments:a}));
         } finally { await c.end(); }
       })().catch(e=>{console.error(e.message);process.exitCode=1;});
     `);
@@ -180,9 +180,8 @@ if (process.env.DEV_PERSISTENCE_CHECK === '1') {
       if (current.commit !== expected.head || current.seq <= before.seq) throw new Error('core has not converged');
       return true;
     }, 4 * 60_000);
-    const data = await fetch(`${BASE}/api/tenants/acme-demo/assignments`, { headers: admH });
-    const rows = await data.text();
-    if (!data.ok || !rows.includes('demo-bob')) fail('persistent restart data', `HTTP ${data.status}, fixture missing`);
+    // Core restart rotates the demo signing key: the earlier sign-in token is deliberately not reused.
+    // Compare every assignment directly in the persisted fixture instead; browser sign-in runs next.
     const afterRows = JSON.parse(docker('exec', '-T', 'app', 'node', '-e', `
       (async()=>{const mysql=require('/repo/apps/api/node_modules/mysql2/promise');
         const c=await mysql.createConnection({host:process.env.DOLT_HOST,port:Number(process.env.DOLT_PORT),user:process.env.DOLT_USER,password:process.env.DOLT_PASSWORD,database:'iam/main'});
