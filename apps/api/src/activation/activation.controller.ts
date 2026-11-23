@@ -1,23 +1,25 @@
 import { workspaceMode } from '../workspace/context.js';
 import { ForbiddenException } from '@nestjs/common';
-import { BadGatewayException, BadRequestException, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { AdminGuard } from '../auth/admin.guard.js';
-import { ActivationService } from './activation.service.js';
+import { ActivationReadService } from './activation-read.service.js';
+import { withActivationActor, ActivationService } from './activation.service.js';
 import { DoltService } from '../dolt/dolt.service.js';
 
 @UseGuards(AuthGuard)
 @Controller('tenants/:tenant/activations')
 export class ActivationController {
-  constructor(private readonly svc: ActivationService, private readonly dolt: DoltService) {}
+  constructor(private readonly svc: ActivationService, private readonly dolt: DoltService, private readonly reads: ActivationReadService) {}
 
   @UseGuards(AdminGuard)
   @Post()
-  async activate(@Param('tenant') tenant: string, @Body() body: { commit?: string; requestId?: string }) {
+  async activate(@Param('tenant') tenant: string, @Body() body: { commit?: string; requestId?: string }, @Req() req: { user: { sub: string } }) {
     if(workspaceMode())throw new ForbiddenException('Apply working data first. Policy publication is separate and disabled in this sandbox workspace.');
     try {
       // No commit given: activate the current Dolt main head.
-      const r = await this.svc.activate(tenant, body?.commit ?? (await this.dolt.head()), body?.requestId);
+      const commit = body?.commit ?? (await this.dolt.head());
+      const r = await withActivationActor({ kind: 'user', id: req.user.sub }, () => this.svc.activate(tenant, commit, body?.requestId));
       if (r.state === 'failed') throw new BadGatewayException(r);
       return r;
     } catch (e) {
@@ -33,8 +35,16 @@ export class ActivationController {
     return this.svc.reconcile(tenant);
   }
 
+  @UseGuards(AdminGuard)
+  @Get('status')
+  status(@Param('tenant') tenant: string) { return this.reads.status(tenant); }
+
+  @UseGuards(AdminGuard)
+  @Get('journal')
+  journal(@Param('tenant') tenant: string) { return this.svc.list(tenant); }
+
   @Get()
   async list(@Param('tenant') tenant: string) {
-    return this.svc.list(tenant);
+    return (await this.svc.list(tenant)).map(({ seq, commit }) => ({ seq, commit }));
   }
 }

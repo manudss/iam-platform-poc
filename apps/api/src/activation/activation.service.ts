@@ -1,6 +1,12 @@
 import { dataReady } from '../migrations/readiness.js';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import pg from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+export interface ActivationActor { kind: 'user' | 'system' | 'workflow'; id: string }
+const actorContext = new AsyncLocalStorage<ActivationActor>();
+/** Only server-side authenticated entry points supply attribution, never request bodies or Dolt authors. */
+export function withActivationActor<T>(actor: ActivationActor, work: () => T): T { return actorContext.run(actor, work); }
 import { DoltService } from '../dolt/dolt.service.js';
 import { SecretsService } from '../integrations/secrets.service.js';
 
@@ -11,6 +17,9 @@ export interface Activation {
   state: ActivationState;
   error?: string;
   requestId?: string;
+  recordedAt?: string;
+  appliedAt?: string;
+  actor?: ActivationActor;
 }
 
 /** pending: journaled, not yet applied. applied: the Rust core confirmed this version. failed: core apply failed (retry or reconcile). recorded: journal only (core apply not configured). */
@@ -68,6 +77,9 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS state text NOT NULL DEFAULT 'recorded';
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS error text;
        ALTER TABLE activations ADD COLUMN IF NOT EXISTS request_id text;
+       ALTER TABLE activations ADD COLUMN IF NOT EXISTS actor_id text;
+       ALTER TABLE activations ADD COLUMN IF NOT EXISTS actor_kind text;
+       ALTER TABLE activations ADD COLUMN IF NOT EXISTS applied_at timestamptz;
        CREATE UNIQUE INDEX IF NOT EXISTS activations_request ON activations (tenant, request_id) WHERE request_id IS NOT NULL`).then(() => undefined);
     return this.ready.then(() => this.pool!);
   }
@@ -120,9 +132,9 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) throw new Error(`core refused activation: HTTP ${res.status} ${await res.text()}`);
-      await this.setState(a, 'applied');
+      const appliedAt = await this.setState(a, 'applied');
       await this.dolt.tagActivation(a.tenant, a.seq, a.commit).catch(() => undefined); // reference only; core already applied
-      return { ...a, state: 'applied', error: undefined };
+      return { ...a, state: 'applied', error: undefined, appliedAt };
     } catch (e) {
       const msg = (e as Error).message.slice(0, 300);
       await this.setState(a, 'failed', msg);
@@ -133,10 +145,11 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
   private async setState(a: Activation, state: ActivationState, error?: string) {
     if (!(await this.resolveUrl())) {
       const m = this.mem.find((x) => x.tenant === a.tenant && x.seq === a.seq);
-      if (m) { m.state = state; m.error = error; }
-      return;
+      if (m) { m.state = state; m.error = error; if (state === 'applied') m.appliedAt = new Date().toISOString(); }
+      return m?.appliedAt;
     }
-    await (await this.db()).query('UPDATE activations SET state=$3, error=$4 WHERE tenant=$1 AND seq=$2', [a.tenant, a.seq, state, error ?? null]);
+    const r = await (await this.db()).query("UPDATE activations SET state=$3, error=$4, applied_at=CASE WHEN $3='applied' THEN now() ELSE applied_at END WHERE tenant=$1 AND seq=$2 RETURNING applied_at", [a.tenant, a.seq, state, error ?? null]);
+    return r.rows[0]?.applied_at ? new Date(r.rows[0].applied_at).toISOString() : undefined;
   }
 
   /**
@@ -159,10 +172,12 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
 
   private async record(tenant: string, commit: string, requestId?: string, minSeq?: number): Promise<Activation> {
     const state: ActivationState = this.applyEnabled ? 'pending' : 'recorded';
+    const actor = actorContext.getStore();
+    const recordedAt = new Date().toISOString();
     if (!(await this.resolveUrl())) {
       const max = this.mem.filter((a) => a.tenant === tenant).reduce((m, a) => Math.max(m, a.seq), 0);
       const seq = Math.max(max + 1, minSeq ?? 1);
-      const a: Activation = { tenant, seq, commit, state, requestId };
+      const a: Activation = { tenant, seq, commit, state, requestId, recordedAt, actor };
       this.mem.push(a);
       return { ...a };
     }
@@ -173,16 +188,16 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
       // GREATEST ignores a NULL minSeq; a minSeq already below the journal's next seq changes nothing.
       const r = await c.query('SELECT GREATEST(COALESCE(MAX(seq),0)+1, $2) AS seq FROM activations WHERE tenant=$1', [tenant, minSeq ?? null]);
       const seq = Number(r.rows[0].seq);
-      await c.query('INSERT INTO activations (tenant, seq, commit_hash, state, request_id) VALUES ($1,$2,$3,$4,$5)', [tenant, seq, commit, state, requestId ?? null]);
+      const inserted = await c.query('INSERT INTO activations (tenant, seq, commit_hash, state, request_id, actor_id, actor_kind) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING activated_at', [tenant, seq, commit, state, requestId ?? null, actor?.id ?? null, actor?.kind ?? null]);
       await c.query('COMMIT');
-      return { tenant, seq, commit, state, requestId };
+      return { tenant, seq, commit, state, requestId, actor, recordedAt: new Date(inserted.rows[0].activated_at).toISOString() };
     } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
   }
 
   async list(tenant: string): Promise<Activation[]> {
     if (!(await this.resolveUrl())) return this.mem.filter((a) => a.tenant === tenant).map((a) => ({ ...a }));
-    const r = await (await this.db()).query('SELECT seq, commit_hash, state, error, request_id FROM activations WHERE tenant=$1 ORDER BY seq', [tenant]);
-    return r.rows.map((x) => ({ tenant, seq: x.seq as number, commit: x.commit_hash as string, state: x.state as ActivationState, error: (x.error as string | null) ?? undefined, requestId: (x.request_id as string | null) ?? undefined }));
+    const r = await (await this.db()).query('SELECT seq, commit_hash, state, error, request_id, activated_at, applied_at, actor_id, actor_kind FROM activations WHERE tenant=$1 ORDER BY seq', [tenant]);
+    return r.rows.map((x) => ({ tenant, seq: x.seq as number, commit: x.commit_hash as string, state: x.state as ActivationState, error: (x.error as string | null) ?? undefined, requestId: (x.request_id as string | null) ?? undefined, recordedAt: x.activated_at ? new Date(x.activated_at).toISOString() : undefined, appliedAt: x.applied_at ? new Date(x.applied_at).toISOString() : undefined, actor: x.actor_id && ['user', 'system', 'workflow'].includes(x.actor_kind) ? { id: String(x.actor_id), kind: x.actor_kind as ActivationActor['kind'] } : undefined }));
   }
 
   async current(tenant: string): Promise<Activation | undefined> {

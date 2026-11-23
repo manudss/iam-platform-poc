@@ -27,6 +27,9 @@ export function sessionCookieToken(cookieHeader: string): string {
   return '';
 }
 
+export interface ActivationRecord { seq: number; commit: string; state?: 'pending' | 'applied' | 'failed' | 'recorded'; recordedAt?: string; appliedAt?: string; actor?: { kind: 'user' | 'system' | 'workflow'; id: string }; requestId?: string; error?: string }
+export interface ActivationStatus { status: 'confirmed' | 'none' | 'disabled' | 'unavailable'; checkedAt: string; core: { seq: number; commit: string } | null; main: string | null; matchesMain?: boolean | null }
+
 export interface SigninChain { id: string; name: string; declaredLevel: number; effectiveLevel: number; mfa: boolean; simulated: boolean; recommended: boolean; steps: { name: string; type: string; simulated: boolean }[]; note?: string }
 export interface SigninOptions { mode: 'choice' | 'legacy'; chains: SigninChain[]; note?: string }
 /** Present only when the application has a level rule that the current sign-in does not meet. */
@@ -248,7 +251,9 @@ export class ApiClient {
   /** 409 means refused because of a SoD violation (data.violations lists them). */
   merge(branch: string) { return this.call<{ commit?: string; violations?: Violation[] }>('POST', `/changes/${branch}/merge`); }
   async activate(commit?: string) { return (await this.call<{ seq: number; commit: string; event: string }>('POST', '/activations', commit ? { commit } : {})).data; }
-  async activations() { return (await this.call<{ seq: number; commit: string }[]>('GET', '/activations')).data; }
+  async activations() { return (await this.call<ActivationRecord[]>('GET', '/activations')).data; }
+  async activationJournal(adminToken = '') { return (await this.call<ActivationRecord[]>('GET', '/activations/journal', undefined, { 'x-api-admin-token': adminToken })).data; }
+  async activationStatus(adminToken = '') { const r = await this.raw<ActivationStatus>('GET', '/activations/status', undefined, { 'x-api-admin-token': adminToken }); if (r.status >= 400) throw new Error('Activation status unavailable'); return r.data; }
 }
 
 // ---- Plugin administration (generic, schema-driven; see docs/plugins.md) ----

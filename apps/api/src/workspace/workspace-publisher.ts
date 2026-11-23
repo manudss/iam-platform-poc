@@ -3,7 +3,7 @@ import { Injectable, Optional, BadRequestException, ConflictException } from '@n
 import { BranchProtectionService } from '../versioning/branch-protection.service.js';
 import { VersioningService } from '../versioning/versioning.service.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
-import { ActivationService } from '../activation/activation.service.js';
+import { withActivationActor, ActivationService } from '../activation/activation.service.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { applyContext, workspaceMode } from './context.js';
 
@@ -112,7 +112,7 @@ export class WorkspacePublisher {
   this.registries.drop('main');await this.registries.get('main');
   // main also carries what other merged branches brought: check the exact version about to go live.
   const blockedMain=await this.authn?.applyBlocker(tenant,'main');if(blockedMain)throw new ConflictException({code:'unreachable-level',message:`Apply refused: ${blockedMain}. The data is merged but not live; the active rule is unchanged.`,reasons:[blockedMain],violations:[]});
-  const activation=await this.activation.activate(tenant,r.commit,`workspace-${r.commit}`);
+  const activation=await withActivationActor({kind:actor.startsWith('wf-')?'workflow':'user',id:actor},()=>this.activation.activate(tenant,r.commit,`workspace-${r.commit}`));
   if(activation.state!=='applied')return {applied:false,merged:true,retryRequired:true,branch,commit:r.commit,activation,message:'Data merged into main, but permission activation failed. Retry Apply on this branch; no second merge is needed.'};
   this.pending.delete(this.pendingKey(branch,info.commit));return {applied:true,branch,commit:r.commit,activation};
  }
