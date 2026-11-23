@@ -25,8 +25,9 @@ label.fl{display:flex;flex-direction:column;font-size:.85em;gap:.2em;margin-bott
 input[type=text],textarea{font:inherit;padding:.3em .45em;border:1px solid var(--field-line);border-radius:6px}
 textarea{min-height:12em;font-family:ui-monospace,monospace;font-size:.85em}
 .tabs{display:flex;gap:.3em;margin-bottom:.5em}
-.tabs button{border:1px solid var(--field-line);background:var(--bg);border-radius:6px 6px 0 0;padding:.3em .9em}
-.tabs button.on{background:var(--card);border-bottom-color:var(--card)}
+.tabs button{color:var(--label);border:1px solid var(--field-line);background:var(--bg);border-radius:6px 6px 0 0;padding:.3em .9em}
+.tabs button:hover:not(:disabled){color:var(--label);background:var(--panel);border-color:var(--muted)}
+.tabs button.on{color:var(--ink);background:var(--card);border-bottom-color:var(--card)}
 iframe.big{height:100%;min-height:26em}
 .vars{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4em .8em;margin:.6em 0}
 .panel{border:1px solid var(--line);border-radius:8px;padding:.8em}
@@ -196,8 +197,8 @@ class MailTemplatesScreen extends HTMLElement {
     : `
       <label class="fl">Subject<input type="text" id="mt-subject" value="${this.esc(this._draft.subject)}"></label>
       <div class="tabs" role="tablist">
-        <button role="tab" class="${this._tab === 'text' ? 'on' : ''}" data-tab="text">Text</button>
-        <button role="tab" class="${this._tab === 'html' ? 'on' : ''}" data-tab="html">HTML</button></div>
+        <button role="tab" class="${this._tab === 'text' ? 'on' : ''}" aria-selected="${this._tab === 'text'}" data-tab="text">Text</button>
+        <button role="tab" class="${this._tab === 'html' ? 'on' : ''}" aria-selected="${this._tab === 'html'}" data-tab="html">HTML</button></div>
       <textarea id="mt-body" spellcheck="false" ${this._tab === 'text' ? '' : ''}>${this.esc(this._tab === 'text' ? this._draft.text : this._draft.html)}</textarea>
       ${d.owned ? `<label class="fl">Parameters (name,type,required yes/no)<textarea id="mt-parameters">${this.esc(d.variables.map(v=>[v.name,v.type,v.required?'yes':'no'].join(',')).join('\n'))}</textarea></label>` : ''}
       <div class="panel"><strong>Sample data (preview and tests)</strong>
