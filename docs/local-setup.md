@@ -184,6 +184,7 @@ docker compose --env-file .env -f infra/docker-compose.yml down -v     # also de
 | `link.exe not found` while building the core | install the MSVC C++ Build Tools (step 1) |
 | API answers 401 `bad issuer` | `IAM_ISSUER` differs between core and API |
 | API 500 / `Access denied for user 'root'` on assignments | `DOLT_PASSWORD` not equal to `DOLT_ROOT_PASSWORD` of `.env` |
+| Container path: API restarts with `Access denied for user 'root'` (Dolt log: `Error authenticating user root using: mysql_native_password`) and the console shows proxy `ECONNREFUSED` on port 3000 | the `dolt-data` volume predates the current `.env`: a server stores its root credentials at the FIRST initialization of its data directory and ignores later `DOLT_ROOT_PASSWORD` changes (an old attempt without today's `.env` froze a different password). Confirm with `docker volume inspect <project>_dolt-data --format "{{.CreatedAt}}"`. Fix: `scripts\dev.ps1 -Down -Volumes` (or `dev.sh --down --volumes`) then start again - the volumes only ever hold the fictional seed data, re-created automatically on the next start |
 | `password authentication failed` (PostgreSQL) | password in `IAM_PG_URL` not equal to `RUNTIME_PG_PASSWORD`, or the volume was created with another password (`down -v`) |
 | Assignments empty / no `iam` database | Dolt volume existed before the seed: `down -v` then `up -d` |
 | Sign-in redirect fails | console opened on `127.0.0.1:4200` instead of `localhost:4200` |
