@@ -60,11 +60,10 @@ export class SignupService {
       usersStage: users ? (id, body, pre, tenant) => users.save(id, body, true, pre, tenant, undefined, true) : undefined,
       verifyPublished: users ? async (tenant, p) => {
         const live = (await users.list('main')).find(u => u.id === p.id) as Record<string, unknown> | undefined;
-        return !!live && live.display_name === p.display_name && live.email === p.email && live.login_enabled === true && live.credential_revision === p.staged.revision && await profile.verifyPublishedSignup(tenant, p.id, p.values);
+        return !!live && live.hasCredential === true && live.display_name === p.display_name && live.email === p.email && live.login_enabled === true && live.credential_revision === p.staged.revision && await profile.verifyPublishedSignup(tenant, p.id, p.values);
       } : undefined,
-      finalizeHold: authn ? async (tenant, id) => {
-        if ((await authn.liveSecurity(tenant)).holdAfterVerification)
-          await authn.blocks.add(tenant, { subject: id, kind: 'pending_approval', message: 'Your account was created and is waiting to be activated.', origin: 'automatic', setBy: 'system', setAt: Date.now(), hold: true });
+      finalizeHold: authn ? async (tenant) => {
+        if ((await authn.liveSecurity(tenant)).holdAfterVerification) throw new Error('holdAfterVerification changed: stop and reconcile publication activation before finalizing signup');
       } : undefined,
       pendingLoad: requests ? (t) => requests.load(t) : undefined,
       pendingSave: requests ? (t, revision, rows) => requests.save(t, revision, rows) : undefined,

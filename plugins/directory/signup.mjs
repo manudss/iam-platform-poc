@@ -79,7 +79,7 @@ export function createSignupManager(deps) {
       // Neutral answers: a taken id, a pending request and a full queue look exactly like success (no account enumeration).
       const taken = deps.usersList ? (await deps.usersList('main')).some((u) => u.id === b.id || (u.email && u.email.toLowerCase() === b.email.toLowerCase())) : false;
       const dup = [...pending.values()].some((p) => p.tenant === tenant && (p.id === b.id || p.email.toLowerCase() === b.email.toLowerCase()));
-      if (taken || dup || [...pending.values()].filter(p => p.tenant === tenant).length >= MAX_PENDING) return NEUTRAL;
+      if (taken || dup || [...pending.values()].filter(p => p.tenant === tenant && p.staged?.state !== 'finalized').length >= MAX_PENDING) return NEUTRAL;
       const token = randomBytes(24).toString('base64url'), salt = randomBytes(24).toString('hex');
       pending.set(key(tenant, b.id), { tenant, id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
       await save(tenant);

@@ -14,7 +14,7 @@ Production code: 46 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:97 |
 | ApplicationBus.emit | emitter | profile.review-resolved | apps/api/src/profile/profile.service.ts:143 |
 | ApplicationBus.emit | emitter | profile.updated | apps/api/src/profile/profile.service.ts:170 |
-| ApplicationBus.emit | emitter | user.blocked | apps/api/src/profile/signup.service.ts:120 |
+| ApplicationBus.emit | emitter | user.blocked | apps/api/src/profile/signup.service.ts:119 |
 | ApplicationBus.emit | emitter | user.created | apps/api/src/users/users.service.ts:153 |
 | ApplicationBus.emit | emitter | user.department-changed | apps/api/src/users/users.service.ts:155 |
 | ApplicationBus.emit | emitter | user.disabled | apps/api/src/users/users.service.ts:156 |
@@ -28,7 +28,7 @@ Production code: 46 points. Test code: 92 points.
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:55 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:191 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:260 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/profile/signup.service.ts:102 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/profile/signup.service.ts:101 |
 | callSlot (blocking hook) | caller | auth.password | apps/api/src/users/users.service.ts:77 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/users/users.service.ts:119 |
 | core bus emit (Rust) | emitter | - | core/crates/iam-core/src/bus_wiring.rs:155 |
