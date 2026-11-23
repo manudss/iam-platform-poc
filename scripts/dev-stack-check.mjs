@@ -11,6 +11,7 @@
 const BASE = (process.env.BASE ?? 'http://127.0.0.1:4200').replace(/\/$/, '');
 const WAIT_MINUTES = Number(process.env.WAIT_MINUTES ?? 15); // first run compiles the Rust core
 import { createHash, randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const b64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -143,4 +144,53 @@ const csrf = await fetch(`${BASE}/api/tenants/acme-demo/workspace/personal`, { m
 if (csrf.status !== 403) fail('local console edge: cross-site mutation gets no capability', `expected 403, got HTTP ${csrf.status}`);
 ok('local console edge: cross-site mutation gets no capability', 'foreign Origin refused with 403');
 
+// CI-only persistence regression. Never opt in against a developer's real dataset: this creates
+// empty main commits in the disposable CI fixture, but preserves every volume and data row.
+if (process.env.DEV_PERSISTENCE_CHECK === '1') {
+  const composeArgs = ['compose', '--env-file', '.env', '-f', 'infra/docker-compose.yml', '-f', 'infra/docker-compose.dev.yml'];
+  const docker = (...args) => execFileSync('docker', [...composeArgs, ...args], { encoding: 'utf8', timeout: 120_000 });
+  const version = async () => {
+    const r = await fetch(`${BASE}/core/v1/version?tenant=acme-demo`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) throw new Error(`version HTTP ${r.status}`);
+    return r.json();
+  };
+  // Two restarts prove allocation does not fall back to a row COUNT after a raised sequence.
+  for (let cycle = 1; cycle <= 2; cycle++) {
+    const before = await version();
+    const output = docker('exec', '-T', 'app', 'node', '-e', `
+      (async () => {
+        const mysql = require('/repo/apps/api/node_modules/mysql2/promise');
+        const c = await mysql.createConnection({host:process.env.DOLT_HOST,port:Number(process.env.DOLT_PORT),
+          user:process.env.DOLT_USER,password:process.env.DOLT_PASSWORD,database:'iam/main'});
+        try {
+          const [a] = await c.query('SELECT identity_id, role_id FROM assignments ORDER BY 1,2');
+          await c.query(\"CALL dolt_commit('--allow-empty','-m','CI persistent startup regression')\");
+          const [h] = await c.query('SELECT hash FROM dolt_log LIMIT 1');
+          console.log(JSON.stringify({head:h[0].hash, assignments:a}));
+        } finally { await c.end(); }
+      })().catch(e=>{console.error(e.message);process.exitCode=1;});
+    `);
+    const expected = JSON.parse(output.trim());
+    if (expected.head === before.commit) fail('persistent restart', 'fixture did not move main');
+    docker('restart', 'app'); // NO down, volume deletion, seed or reset
+    await waitFor(`persistent restart ${cycle}`, async () => {
+      const health = await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(5000) });
+      if (!health.ok) throw new Error(`health HTTP ${health.status}`);
+      const current = await version();
+      if (current.commit !== expected.head || current.seq <= before.seq) throw new Error('core has not converged');
+      return true;
+    }, 4 * 60_000);
+    const data = await fetch(`${BASE}/api/tenants/acme-demo/assignments`, { headers: admH });
+    const rows = await data.text();
+    if (!data.ok || !rows.includes('demo-bob')) fail('persistent restart data', `HTTP ${data.status}, fixture missing`);
+    const afterRows = JSON.parse(docker('exec', '-T', 'app', 'node', '-e', `
+      (async()=>{const mysql=require('/repo/apps/api/node_modules/mysql2/promise');
+        const c=await mysql.createConnection({host:process.env.DOLT_HOST,port:Number(process.env.DOLT_PORT),user:process.env.DOLT_USER,password:process.env.DOLT_PASSWORD,database:'iam/main'});
+        try{const [r]=await c.query('SELECT identity_id, role_id FROM assignments ORDER BY 1,2');console.log(JSON.stringify(r));}finally{await c.end();}
+      })().catch(e=>{console.error(e.message);process.exitCode=1;});
+    `).trim());
+    if (JSON.stringify(afterRows) !== JSON.stringify(expected.assignments)) fail('persistent restart data', 'assignments changed across restart');
+    ok(`persistent restart ${cycle}`, `main converged past seq ${before.seq}; fictional assignments preserved`);
+  }
+}
 console.log('DEV STACK CHECK PASSED');

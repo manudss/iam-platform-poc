@@ -46,12 +46,18 @@ export class MainPublication implements OnModuleInit {
     });
     this.registries.drop('main'); await this.registries.get('main');
     const tenant = process.env.IAM_TENANT ?? 'acme-demo';
+    // Converge, never crash-loop: a live core ahead of the (possibly in-memory) journal would refuse
+    // the journaled seq as stale forever, so allocate past the core's active seq.
+    let minSeq: number | undefined;
     const response = await fetch(`${process.env.IAM_CORE_URL}/v1/version?tenant=${encodeURIComponent(tenant)}`);
     if (response.ok) {
-      const current = await response.json() as { commit: string };
+      const current = await response.json() as { commit: string; seq?: number };
+      if (!Number.isSafeInteger(current.seq) || current.seq! < 0) throw new Error('Cannot check active main: invalid core sequence');
+      this.activation.observeCoreSequence(tenant, current.seq!);
       if (current.commit === head) return;
+      minSeq = current.seq! + 1;
     } else if (response.status !== 404) throw new Error(`Cannot check active main: HTTP ${response.status}`);
-    const result = await this.activation.activate(tenant, head, undefined);
+    const result = await this.activation.activate(tenant, head, undefined, minSeq);
     if (result.state !== 'applied') throw new Error(`Automatic main activation failed: ${result.error ?? result.state}`);
   }
 }
