@@ -46,6 +46,6 @@ describe('liveApps: the live inventory ignores the request working branch', () =
     const profile = { pluginActive: async (t: string, id: string, ref: 'live' | 'work') => (ref === 'live' ? main : work).isActive(t, id) };
     const svc = new AppConnectorService(profile as never, new MemoryAppConnectorStore(), main, branches as never);
     const listed = await branchContext.run({ branch: 'personal/alice' }, () => svc.list(T));
-    assert.deepEqual(listed, [], 'list() runs on the branch registry (empty there), unchanged by the live fix');
+    assert.deepEqual(listed.apps, [], 'list() runs on the branch registry (empty there), unchanged by the live fix');
   });
 });

@@ -20,4 +20,4 @@ async function bootstrap() {
   releaseDataReady();
   await app.listen(Number(process.env.API_PORT ?? 3000));
 }
-bootstrap().catch(() => { console.error('[startup] startup failed; preserve migration journal and backups, no automatic seed/reset'); process.exit(1); });
+bootstrap().catch((e) => { console.error('[startup] startup failed:', e instanceof Error ? e.stack || e.message : e, '; preserve migration journal and backups, no automatic seed/reset'); process.exit(1); });

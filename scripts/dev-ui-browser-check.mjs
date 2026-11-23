@@ -10,7 +10,6 @@ import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright-core');
 const BASE = process.env.DEV_UI_BASE ?? 'http://localhost:4200'; // the sign-in redirect_uri is localhost:4200; 127.0.0.1 is a DIFFERENT origin (own sessionStorage), which bounced the check to /login
@@ -18,7 +17,6 @@ const out = process.argv[2] ?? join(tmpdir(), 'dev-ui-shots'); mkdirSync(out, { 
 const chrome = process.env.CHROME_BIN;
 if (!chrome) { console.log('SKIPPED: CHROME_BIN is required'); process.exit(0); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const b64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 const browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
 let failed = false;
@@ -33,12 +31,10 @@ try {
   page.on('pageerror', (e) => pageErrors.push(`pageerror: ${String(e).slice(0, 200)}`));
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push(`console.error: ${m.text().slice(0, 200)}`); });
 
-  // 1. real PKCE sign-in through the authorize form, landing on the console
-  const verifier = b64url(randomBytes(40));
-  const challenge = b64url(createHash('sha256').update(verifier).digest());
-  const state = b64url(randomBytes(40));
-  const q = new URLSearchParams({ response_type: 'code', client_id: 'demo-web', redirect_uri: 'http://localhost:4200/callback', state, code_challenge: challenge, code_challenge_method: 'S256' });
-  await page.goto(`${BASE}/core/authorize?${q}`);
+  // 1. real PKCE sign-in, started from the console's own login page: the console generates and stores
+  // the state + verifier, so driving /core/authorize directly would fail the callback's state check.
+  await page.goto(`${BASE}/login`);
+  await Promise.all([page.waitForURL(/\/core\/authorize\//, { timeout: 20000 }), page.click('button:has-text("Sign in")')]);
   await page.waitForSelector('input[name=password]', { timeout: 15000 });
   await page.fill('input[name=username]', 'demo-alice');
   await page.fill('input[name=password]', 'demo-only-not-a-secret');
