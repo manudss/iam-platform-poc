@@ -129,6 +129,7 @@ export class MailTemplatesService {
     for (const v of variables.filter((v:any)=>v.type==='temporary-password')) if (usedVars(o.subject).includes(v.name)) throw new BadRequestException('secret parameters are forbidden in the subject');
     if ((o.html?.length??0)>20000 || o.text.length>8000 || o.subject.length>150) throw new BadRequestException('template content is too long');
     if (o.html && /<\s*(script|iframe|form)\b|\bon[a-z]+\s*=|javascript\s*:/i.test(o.html)) throw new BadRequestException('active HTML is refused');
+    for(const v of variables.filter((v:any)=>v.type==='temporary-password')) if(!usedVars(o.text).includes(v.name)||!usedVars(o.text).includes('expiry')) throw new BadRequestException('secret text must include password and expiry placeholders');
     if(variables.some((v:any)=>v.type==='temporary-password') && o.html) throw new BadRequestException('secret templates must use plain text only');
     const definition:OwnedMailTemplate={name:b.name.trim(),description:String(b.description??'').slice(0,500),variables};
     await this.store.put(t,actor,key,{...o,definition});

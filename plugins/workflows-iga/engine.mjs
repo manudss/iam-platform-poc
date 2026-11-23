@@ -467,6 +467,9 @@ export function createWorkflowEngine(deps) {
             const tpl=await deps.reads.workflowMailTemplate(run.tenant,deps.versioning.defaultBranch,m.templateKey);
             const secret=tpl.variables.filter(v=>v.type==='temporary-password');
             if(tpl.revision!==m.templateRevision || secret.length!==1 || !tpl.variables.some(v=>v.name==='expiry'&&v.type==='text') || !String(tpl.effective.text).includes('{{'+secret[0].name+'}}') || !String(tpl.effective.text).includes('{{expiry}}')) throw new Error('Badge template must be published, reviewed and include its password and recorded expiry');
+            const password=n.config['param_'+secret[0].name];
+            if(tpl.effective.html || typeof password!=='string' || !/^\{\{steps\.[a-z0-9-]+\.passwordRef\}\}$/.test(password) || graphNodes.filter(x=>x.type==='lyam-set-temporary-password').some(x=>x.config.passwordRef!==password)) throw new Error('Badge template password reference must match the temporary credential source');
+            for(const v of tpl.variables.filter(v=>v.type!=='temporary-password'&&!['expiry','hours'].includes(v.name))) if(v.required!==false && !n.config['param_'+v.name]) throw new Error('Badge template parameter is missing before ticket claim');
             m.subject=tpl.effective.subject;m.text='[[password]] [[expiry]]';m.templateMail=true;
           }
           mails.push(m);
