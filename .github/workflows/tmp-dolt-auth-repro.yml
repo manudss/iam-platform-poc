@@ -51,6 +51,15 @@ jobs:
           docker rm -f dolt2
           docker run --rm --entrypoint dolt -w /var/lib/dolt -v repro-dolt-auth:/var/lib/dolt \
             dolthub/dolt-sql-server:latest sql -q "SELECT User, Host FROM mysql.user;"
+      - name: "Backup before repair: archive the stopped server's data dir with its own image"
+        run: |
+          set -eux
+          mkdir -p "$RUNNER_TEMP/dolt-backup"
+          docker run --rm -v repro-dolt-auth:/var/lib/dolt:ro -v "$RUNNER_TEMP/dolt-backup:/backup" \
+            dolthub/dolt-sql-server:latest \
+            tar czf /backup/dolt-data-backup.tgz -C /var/lib/dolt .
+          tar tzf "$RUNNER_TEMP/dolt-backup/dolt-data-backup.tgz" | tee /tmp/backup-listing.txt | head -5
+          grep -q 'privileges.db' /tmp/backup-listing.txt   # the credential store is in the backup
       - name: "Volume-preserving repair attempt: align the stored root password while stopped"
         run: |
           set -eux
@@ -70,3 +79,4 @@ jobs:
         run: |
           docker rm -f dolt1 dolt2 dolt3 2>/dev/null || true
           docker volume rm repro-dolt-auth 2>/dev/null || true
+          # kept: $RUNNER_TEMP/dolt-backup (throwaway runner copy, dies with the runner)
