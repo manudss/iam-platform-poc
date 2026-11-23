@@ -307,48 +307,80 @@ jobs:
           if ($out -like '*Mapped*launchpad*route*') { throw 'a non-error log line was kept' }
       - name: Startup diagnostic helper under the real PowerShell 5.1
         # scripts/dev-startup-diagnostic.ps1 is handed to developers verbatim: prove apply,
-        # idempotence, collect masking and byte-exact restore under the genuine 5.1 engine on a
-        # fixture repo (no docker on this path).
+        # idempotence, collect masking, hash-guarded restore and abort-safe pre-validation under
+        # the genuine 5.1 engine on fixture repos (no docker on this path).
         run: |
-          New-Item -ItemType Directory -Force -Path fixture-repo\apps\api\src, fixture-repo\infra | Out-Null
-          @'
+          function New-Fixture([string]$dir) {
+            New-Item -ItemType Directory -Force -Path "$dir\apps\api\src", "$dir\infra" | Out-Null
+            @'
           import { NestFactory } from '@nestjs/core';
           // his own local edit must survive the patch and the restore
           async function bootstrap() { const app = await NestFactory.create({}); await app.listen(3000); }
           bootstrap().catch(() => { console.error('[startup] startup failed; preserve migration journal and backups, no automatic seed/reset'); process.exit(1); });
-          '@ | Set-Content -Encoding utf8 fixture-repo\apps\api\src\main.ts
-          @'
+          '@ | Set-Content -Encoding utf8 "$dir\apps\api\src\main.ts"
+            @'
           environment:
             IAM_WORKSPACE_MODE: "1"
             IAM_DEMO_DATA_SEED: "1"
             IAM_PLUGIN_STORE: dolt
-          '@ | Set-Content -Encoding utf8 fixture-repo\infra\docker-compose.dev.yml
-          $mainBefore = (Get-FileHash fixture-repo\apps\api\src\main.ts).Hash
-          $compBefore = (Get-FileHash fixture-repo\infra\docker-compose.dev.yml).Hash
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-startup-diagnostic.ps1 -FixtureRoot fixture-repo | Out-File -Encoding utf8 apply1.txt
-          $main1 = Get-Content -Raw fixture-repo\apps\api\src\main.ts
+          '@ | Set-Content -Encoding utf8 "$dir\infra\docker-compose.dev.yml"
+          }
+          $diag = 'scripts/dev-startup-diagnostic.ps1'
+          # 1) apply + idempotence + state recording
+          New-Fixture fx1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx1 | Out-File -Encoding utf8 apply1.txt
+          if ($LASTEXITCODE -ne 0) { throw 'apply failed' }
+          $main1 = Get-Content -Raw fx1\apps\api\src\main.ts
           if ($main1 -notlike '*startup failed:*e instanceof Error*') { throw 'main.ts patch missing' }
           if ($main1 -notlike '*his own local edit must survive*') { throw 'pre-existing edit lost' }
-          if ((Get-Content -Raw fixture-repo\infra\docker-compose.dev.yml) -notlike '*IAM_DEMO_DATA_SEED: "0"*') { throw 'seed not disabled' }
-          if (-not (Test-Path fixture-repo\.startup-diagnostic-backup\main.ts.orig)) { throw 'main.ts backup missing' }
-          if (-not (Test-Path fixture-repo\.startup-diagnostic-backup\docker-compose.dev.yml.orig)) { throw 'compose backup missing' }
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-startup-diagnostic.ps1 -FixtureRoot fixture-repo | Out-File -Encoding utf8 apply2.txt
-          $main2 = Get-Content -Raw fixture-repo\apps\api\src\main.ts
-          if ($main1 -cne $main2) { throw 'second apply changed main.ts (not idempotent)' }
-          if ((Select-String -Path fixture-repo\.startup-diagnostic-backup\main.ts.orig -Pattern 'instanceof Error').Count -ne 0) { throw 'backup overwritten by second apply' }
+          if ((Get-Content -Raw fx1\infra\docker-compose.dev.yml) -notlike '*IAM_DEMO_DATA_SEED: "0"*') { throw 'seed not disabled' }
+          if (-not (Test-Path fx1\.startup-diagnostic-backup\main.ts.orig)) { throw 'main.ts backup missing' }
+          if (-not (Test-Path fx1\.startup-diagnostic-backup\docker-compose.dev.yml.orig)) { throw 'compose backup missing' }
+          if (-not (Test-Path fx1\.startup-diagnostic-backup\state.txt)) { throw 'post-patch hashes not recorded' }
+          if ((Get-Content -Raw apply1.txt) -notlike '*dev-startup-diagnostic.ps1*') { throw 'instructions do not use the real script path' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx1 | Out-File -Encoding utf8 apply2.txt
+          if ((Get-Content -Raw fx1\apps\api\src\main.ts) -cne $main1) { throw 'second apply changed main.ts (not idempotent)' }
+          if ((Select-String -Path fx1\.startup-diagnostic-backup\main.ts.orig -Pattern 'instanceof Error').Count -ne 0) { throw 'backup overwritten by second apply' }
+          # 2) collect + masking
           @'
           [Nest] 42 LOG [RouterExplorer] Mapped {/account-blocks, GET} route +1ms
           [startup] startup failed: Error: Automatic activation refused: Separation-of-Duties violations
           at MainPublication.start (/repo/apps/api/src/workspace/main-publication.ts:44:15)
           upstream said token=sekrit99 authorization: Bearer abcdef123456789 password=hunter2hunter2 dsn=postgres://pguser:pgpass99@runtime-pg:5432/runtime
-          '@ | Set-Content -Encoding utf8 fixture-repo\fixture-api.log
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-startup-diagnostic.ps1 -FixtureRoot fixture-repo -Collect -FixtureLog fixture-repo\fixture-api.log | Out-File -Encoding utf8 collect.txt
-          $diag = Get-Content -Raw fixture-repo\startup-diagnostic.txt
-          foreach ($need in 'Separation-of-Duties violations','MainPublication.start') { if ($diag -notlike "*$need*") { throw "missing: $need" } }
-          foreach ($bad in 'abcdef123456789','sekrit99','hunter2hunter2','pgpass99') { if ($diag -like "*$bad*") { throw "leaked: $bad" } }
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-startup-diagnostic.ps1 -FixtureRoot fixture-repo -Restore | Out-File -Encoding utf8 restore.txt
-          if ((Get-FileHash fixture-repo\apps\api\src\main.ts).Hash -ne $mainBefore) { throw 'main.ts restore not byte-exact' }
-          if ((Get-FileHash fixture-repo\infra\docker-compose.dev.yml).Hash -ne $compBefore) { throw 'compose restore not byte-exact' }
+          '@ | Set-Content -Encoding utf8 fx1\fixture-api.log
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx1 -Collect -FixtureLog fx1\fixture-api.log | Out-File -Encoding utf8 collect.txt
+          $out = Get-Content -Raw fx1\startup-diagnostic.txt
+          foreach ($need in 'Separation-of-Duties violations','MainPublication.start') { if ($out -notlike "*$need*") { throw "missing: $need" } }
+          foreach ($bad in 'abcdef123456789','sekrit99','hunter2hunter2','pgpass99') { if ($out -like "*$bad*") { throw "leaked: $bad" } }
+          # 3) restore REFUSES a file changed after the patch, restores the untouched one
+          Add-Content -Encoding utf8 fx1\apps\api\src\main.ts '// edited after the patch'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx1 -Restore | Out-File -Encoding utf8 restore1.txt
+          if ($LASTEXITCODE -eq 0) { throw 'restore should refuse a file changed after the patch' }
+          if ((Get-Content -Raw fx1\apps\api\src\main.ts) -notlike '*edited after the patch*') { throw 'restore overwrote a file changed after the patch' }
+          if (-not (Test-Path fx1\.startup-diagnostic-backup\main.ts.orig)) { throw 'refused restore must keep the backup' }
+          New-Fixture fx2
+          $mainBefore = (Get-FileHash fx2\apps\api\src\main.ts).Hash
+          $compBefore = (Get-FileHash fx2\infra\docker-compose.dev.yml).Hash
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx2 | Out-Null
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx2 -Restore | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'clean restore refused' }
+          if ((Get-FileHash fx2\apps\api\src\main.ts).Hash -ne $mainBefore) { throw 'main.ts restore not byte-exact' }
+          if ((Get-FileHash fx2\infra\docker-compose.dev.yml).Hash -ne $compBefore) { throw 'compose restore not byte-exact' }
+          # 4) unexpected compose format aborts EVERYTHING (main.ts untouched too)
+          New-Fixture fx3
+          Set-Content -Encoding utf8 fx3\infra\docker-compose.dev.yml "environment:`n  IAM_DEMO_DATA_SEED: `${IAM_DEMO_DATA_SEED:-0}"
+          $mainBefore3 = (Get-FileHash fx3\apps\api\src\main.ts).Hash
+          $compBefore3 = (Get-FileHash fx3\infra\docker-compose.dev.yml).Hash
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx3 | Out-File -Encoding utf8 apply3.txt
+          if ($LASTEXITCODE -eq 0) { throw 'unexpected compose format must abort' }
+          if ((Get-FileHash fx3\apps\api\src\main.ts).Hash -ne $mainBefore3) { throw 'main.ts written despite abort' }
+          if ((Get-FileHash fx3\infra\docker-compose.dev.yml).Hash -ne $compBefore3) { throw 'compose written despite abort' }
+          # 5) missing compose aborts EVERYTHING as well
+          New-Fixture fx4
+          Remove-Item -Force fx4\infra\docker-compose.dev.yml
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $diag -FixtureRoot fx4 | Out-File -Encoding utf8 apply4.txt
+          if ($LASTEXITCODE -eq 0) { throw 'missing compose must abort' }
+          if ((Select-String -Path fx4\apps\api\src\main.ts -Pattern 'instanceof Error').Count -ne 0) { throw 'main.ts written despite missing-compose abort' }
 
   compose:
     needs: control_policy
