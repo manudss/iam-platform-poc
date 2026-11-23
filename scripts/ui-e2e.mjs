@@ -581,9 +581,11 @@ try {
   // Child stdout/stderr used to be discarded, making an API error indistinguishable from a UI race.
   // The fixture is fictional/local. Print only bounded error lines, not full request logs or credentials.
   for (const entry of serverLogs) {
-    const lines = readFileSync(entry.path, 'utf8').split('\n').filter(line => /ERROR|Error:|ECONN|ETIMEDOUT|panic|error occurred while proxying/i.test(line));
-    const codes = [...new Set(lines.flatMap(line => line.match(/\b(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|EADDRINUSE|ENOENT|ER_[A-Z_]+)\b/g) ?? []))];
-    console.log('DIAG-SERVER', entry.name, JSON.stringify({ errorLineCount: lines.length, codes }));
+    try {
+      const lines = readFileSync(entry.path, 'utf8').split('\n').filter(line => /ERROR|Error:|ECONN|ETIMEDOUT|panic|error occurred while proxying/i.test(line));
+      const codes = [...new Set(lines.flatMap(line => line.match(/\b(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|EADDRINUSE|ENOENT|ER_[A-Z_]+)\b/g) ?? []))];
+      console.log('DIAG-SERVER', entry.name, JSON.stringify({ errorLineCount: lines.length, codes }));
+    } catch { console.log('DIAG-SERVER', entry.name, 'diagnostic unavailable'); }
   }
   throw error;
 } finally {
