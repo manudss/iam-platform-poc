@@ -125,6 +125,16 @@ const pers = await fetch(`${BASE}/api/tenants/acme-demo/workspace/personal`, { m
 const persBody = await pers.text();
 if (!pers.ok) fail('local console edge: open the personal branch (Roles screen call)', `HTTP ${pers.status}: ${persBody.slice(0, 300)}`);
 ok('local console edge: open the personal branch (Roles screen call)', 'personal branch opened without a manual token');
+// My applications must still answer the LIVE inventory while a working branch is selected: the live
+// provider is main's, never the branch's (the exact 500 a signed-in person with a branch hit).
+let persBranch = 'personal/unknown';
+try { const p = JSON.parse(persBody); persBranch = p.branch || p.name || p.id || persBranch; } catch { /* keep fallback */ }
+const lpBranch = await fetch(`${BASE}/api/sso/acme-demo/launchpad`, { headers: { authorization: `Bearer ${access}`, 'x-iam-branch': persBranch } });
+const lpBranchBody = await lpBranch.text();
+if (!lpBranch.ok) fail('launchpad with a working branch selected', `HTTP ${lpBranch.status}: ${lpBranchBody.slice(0, 300)}`);
+const lpBranchJson = JSON.parse(lpBranchBody);
+if (lpBranchJson.inventory !== 'enabled' || lpBranchJson.apps.length === 0) fail('launchpad with a working branch selected', `expected the live inventory, got inventory=${lpBranchJson.inventory} apps=${lpBranchJson.apps.length}`);
+ok('launchpad with a working branch selected', 'live inventory served while a personal branch is selected');
 const adm = await fetch(`${BASE}/api/tenants/acme-demo/versioning/branches`, { headers: admH });
 const admBody = await adm.text();
 if (!adm.ok) fail('local console edge: versioning/branches', `HTTP ${adm.status}: ${admBody.slice(0, 300)}`);
