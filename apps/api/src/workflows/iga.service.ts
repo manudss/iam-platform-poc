@@ -316,10 +316,27 @@ export class WorkflowsIgaService {
         undecided: pending.map((i) => ({ item: i.id, identity: i.identity, state: i.state })),
         unremediated: unremediated.map((i) => ({ item: i.id, identity: i.identity, state: i.state })) };
     }
+    // Plan step 2: access added or removed AFTER the snapshot must not disappear from the evidence. For an
+    // approved or still-open item the drift is otherwise invisible (only a denied item gets a fresh-snapshot
+    // check); for a remediated item the drift shows the remediation's effect. Recorded per item, never blocking.
+    const drift = new Map<string, { added: string[]; removed: string[] } | null>();
+    if (this.reads) {
+      for (const i of items) {
+        const snap = Array.isArray(i.payload?.roles) ? (i.payload!.roles as unknown[]).map(String) : [];
+        try {
+          const cur = (await this.reads.listAssignments(campaign.ref, { identity: i.identity })).assignments.map((a) => a.role);
+          const added = cur.filter((r) => !snap.includes(r)), removed = snap.filter((r) => !cur.includes(r));
+          drift.set(i.identity, added.length || removed.length ? { added, removed } : null);
+        } catch { drift.set(i.identity, null); }
+      }
+    }
     const evidence: Record<string, unknown> = { incompleteClosure: incomplete,
       campaign: campaign.id, kind: campaign.kind, name: campaign.name, ref: campaign.ref, scope: campaign.scope,
       createdBy: campaign.created_by, createdAt: campaign.created_at, closedBy: actor, closedAt: now(),
-      totals: { items: items.length, approved: items.filter((i) => i.state === 'approved').length, denied: items.filter((i) => i.state === 'denied').length, remediationPrepared: items.filter((i) => i.state === 'remediation-prepared').length, remediated: items.filter((i) => i.state === 'remediated').length, undecided: pending.length },
+      totals: { items: items.length, approved: items.filter((i) => i.state === 'approved').length, denied: items.filter((i) => i.state === 'denied').length, remediationPrepared: items.filter((i) => i.state === 'remediation-prepared').length, remediated: items.filter((i) => i.state === 'remediated').length, undecided: pending.length, withRoleDrift: [...drift.values()].filter(Boolean).length },
+      // Separate section: the per-item projection stays minimal (contract pinned by the e2e); only drifted items appear here.
+      roleDrift: Object.fromEntries([...drift].filter(([, d]) => d).map(([id, d]) => [id, d])),
+      roleDriftNote: this.reads ? 'roleDrift is the post-snapshot drift re-read on the campaign ref at close; recorded, never blocking' : 'role drift NOT recorded: no reads service',
       items: items.map((i) => ({ identity: i.identity, roles: i.payload?.roles ?? [], state: i.state, decidedBy: i.decided_by, decidedAt: i.decided_at, reason: i.decision_reason, remediation: i.payload?.remediation ?? null })),
       digest: null,
     };
