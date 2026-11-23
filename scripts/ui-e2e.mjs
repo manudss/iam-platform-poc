@@ -372,7 +372,7 @@ try {
   // an internal jump changes the address too: branches -> compare with main
   await nav('/database/branches'); await page.waitForSelector('text=protected');
   // the IAM pages still work after the explorer branch was applied to Dolt main
-  await nav('/activation'); await page.waitForSelector('td:text-is("#3")'); // startup #1, earlier Apply #2, human PR merge #3
+  await nav('/activation'); await page.waitForSelector('.entry b:text-is("#3")'); // startup #1, earlier Apply #2, human PR merge #3
   await noBanner('activation after explorer apply');
 
   // ---- Users page (redesign): stat cards, live search, rich drawer, footer count ----
