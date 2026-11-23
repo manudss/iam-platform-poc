@@ -1197,6 +1197,10 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
       const prId = Number((approval.detail.pr as Record<string, unknown>).id);
       const merged = await call('POST', `/versioning/pulls/${prId}/merge`, {}, { token: `${T}:demo-alice` });
       assert.ok(merged.status < 300, JSON.stringify(merged.body));
+      const published = (await app.get(UsersService).list('main')).find(u => u.id === 'intake-demo');
+      assert.equal(published?.login_enabled, true, 'hold=false: publication makes sign-in eligible before finalization, not vice versa');
+      assert.equal(published?.hasCredential, true);
+      assert.equal((await signup.list(T)).requests.some((r: any) => r.id === 'intake-demo'), true, 'request still awaits explicit finalization after publication');
       const marked = await call('POST', `/workflow-tasks/${watch.id}/decision`, { decision: 'merged', justification: 'reviewed and merged' }, { token: `${T}:admin-two` });
       assert.ok(marked.status < 300, JSON.stringify(marked.body));
       const done = await waitRun(start.run.id, ['completed', 'failed'], 30000);

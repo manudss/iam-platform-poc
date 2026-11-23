@@ -4,7 +4,7 @@
  * the mail outbox and the audit bus through `createSignupManager(deps)`.
  *
  * Public sign-up, closed unless an administrator opened it AND applied that setting. A request is only
- * a request: it is kept outside Dolt, needs e-mail confirmation (simulated outbox in this demo) and an
+ * a request: it uses an operational queue, needs e-mail confirmation (simulated outbox in this demo) and an
  * administrator's approval, and approval creates a plain account with NO role, NO department, NO manager.
  * Nothing here can grant access.
  *
@@ -30,16 +30,21 @@ const { BadRequestException, ConflictException, ForbiddenException, HttpExceptio
 const ID = /^[a-z0-9-]{1,32}$/, EMAIL = /^[^\s@<>",;]{1,64}@[^\s@<>",;]{1,190}$/;
 const NEUTRAL = { status: 'received', message: 'If the request can be accepted, it now waits for e-mail confirmation and administrator approval.' };
 const sha = (s) => createHash('sha256').update(s).digest('hex');
-const MAX_PENDING = 50, PER_IP_HOUR = 5, TTL_MS = 24 * 3600 * 1000;
+const MAX_PENDING = 50, MAX_QUEUE_ROWS = 1000, PER_IP_HOUR = 5, TTL_MS = 24 * 3600 * 1000;
 
 export function createSignupManager(deps) {
   const pending = new Map(); const hits = new Map();
+  const receiptKey = (tenant, run, id) => `${tenant}/receipt:${run}:${id}`;
+  const compactReceipt = p => ({ tenant: p.tenant, id: p.id, at: p.at, staged: { state: 'finalized', run: p.staged.run }, salt: '', hash: '', tokenHash: '' });
   let revision = 0;
   const load = async (tenant) => {
     if (!deps.pendingLoad) return;
     const queue = await deps.pendingLoad(tenant); revision = queue.revision;
     for (const [k, p] of pending) if (p.tenant === tenant) pending.delete(k);
-    for (const p of queue.requests) pending.set(`${tenant}/${p.id}`, p);
+    for (const p of queue.requests) {
+      if (p.staged?.state === 'finalized') pending.set(receiptKey(tenant, p.staged.run, p.id), compactReceipt(p));
+      else pending.set(`${tenant}/${p.id}`, p);
+    }
   };
   const save = async (tenant) => {
     if (!deps.pendingSave) return;
@@ -78,8 +83,9 @@ export function createSignupManager(deps) {
       const values = await deps.signupValues(tenant, b.values);
       // Neutral answers: a taken id, a pending request and a full queue look exactly like success (no account enumeration).
       const taken = deps.usersList ? (await deps.usersList('main')).some((u) => u.id === b.id || (u.email && u.email.toLowerCase() === b.email.toLowerCase())) : false;
-      const dup = [...pending.values()].some((p) => p.tenant === tenant && (p.id === b.id || p.email.toLowerCase() === b.email.toLowerCase()));
+      const dup = [...pending.values()].some((p) => p.tenant === tenant && p.staged?.state !== 'finalized' && (p.id === b.id || p.email.toLowerCase() === b.email.toLowerCase()));
       if (taken || dup || [...pending.values()].filter(p => p.tenant === tenant && p.staged?.state !== 'finalized').length >= MAX_PENDING) return NEUTRAL;
+      if ([...pending.values()].filter(p => p.tenant === tenant).length >= MAX_QUEUE_ROWS) throw new HttpException('signup receipt capacity reached; reconcile retained workflow receipts before accepting more requests', 503);
       const token = randomBytes(24).toString('base64url'), salt = randomBytes(24).toString('hex');
       pending.set(key(tenant, b.id), { tenant, id: b.id, display_name: b.display_name.trim(), email: b.email, values, salt, hash: scryptSync(b.password, salt, 64).toString('hex'), tokenHash: sha(token), confirmed: false, at: Date.now() });
       await save(tenant);
@@ -133,6 +139,8 @@ export function createSignupManager(deps) {
       return { prepared: true, publicationRequired: true };
     },
     async finalize(tenant, id, actor, run) {
+      const receipt = pending.get(receiptKey(tenant, run, id));
+      if (receipt && receipt.id === id && receipt.staged?.state === 'finalized') return { finalized: true, publicationRequired: false, resumed: true };
       const p = pending.get(key(tenant, id));
       if (!p || p.tenant !== tenant) throw new NotFoundException('unknown request');
       if (p.staged?.run === run && p.staged.state === 'finalized') return { finalized: true, publicationRequired: false, resumed: true };
@@ -140,7 +148,9 @@ export function createSignupManager(deps) {
       if (!deps.verifyPublished || !await deps.verifyPublished(tenant, p)) throw new ConflictException('signup is not effectively published with the prepared identity, credential and profile values');
       if (deps.finalizeHold) await deps.finalizeHold(tenant, id);
       // Keep a durable decision tombstone: approval is never resurrected by a stale queue writer.
-      p.staged.state = 'finalized'; p.salt = ''; p.hash = ''; p.tokenHash = ''; await save(tenant);
+      p.staged.state = 'finalized'; p.salt = ''; p.hash = ''; p.tokenHash = '';
+      pending.delete(key(tenant, id));
+      pending.set(receiptKey(tenant, run, id), compactReceipt(p)); await save(tenant);
       deps.emit('signup.approved', tenant, 'main', { subject: p.id, email: p.email });
       deps.emit('user.created', tenant, 'main', { subject: p.id, displayName: p.display_name, email: p.email, department: '' });
       return { finalized: true, publicationRequired: false };

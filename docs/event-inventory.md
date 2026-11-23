@@ -38,10 +38,10 @@ Production code: 46 points. Test code: 92 points.
 | plugin deps.emit (durable app event) | emitter | app.registered | plugins/app-connector/handlers.mjs:114 |
 | plugin deps.emit (durable app event) | emitter | app.updated | plugins/app-connector/handlers.mjs:120 |
 | plugin deps.emit (durable app event) | emitter | app.removed | plugins/app-connector/handlers.mjs:126 |
-| plugin deps.emit (durable app event) | emitter | signup.requested | plugins/directory/signup.mjs:92 |
-| plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:114 |
-| plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:144 |
-| plugin deps.emit (durable app event) | emitter | user.created | plugins/directory/signup.mjs:145 |
+| plugin deps.emit (durable app event) | emitter | signup.requested | plugins/directory/signup.mjs:98 |
+| plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:120 |
+| plugin deps.emit (durable app event) | emitter | signup.approved | plugins/directory/signup.mjs:154 |
+| plugin deps.emit (durable app event) | emitter | user.created | plugins/directory/signup.mjs:155 |
 | plugin deps.emit (durable app event) | emitter | sso.login.denied | plugins/oidc-provider/handlers.mjs:175 |
 | plugin deps.emit (durable app event) | emitter | sso.login.succeeded | plugins/oidc-provider/handlers.mjs:183 |
 | plugin deps.emit (durable app event) | emitter | organization.member-added | plugins/organizations/handlers.mjs:72 |
