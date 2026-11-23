@@ -84,7 +84,10 @@ class MailTemplatesScreen extends HTMLElement {
   }
   // Display-only document. Plain-text delivery stays plain text; never interpret its markup.
   previewDocument(data) {
-    return data.html || `<html><head><style>body{margin:0;padding:20px;background:#fff;color:#202124;font:15px/1.55 system-ui,sans-serif}pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}</style></head><body><pre>${this.esc(data.text ?? '')}</pre></body></html>`;
+    const theme = getComputedStyle(this);
+    const background = this.esc(theme.getPropertyValue('--card'));
+    const foreground = this.esc(theme.getPropertyValue('--ink'));
+    return data.html || `<html><head><style>body{margin:0;padding:20px;background:${background};color:${foreground};font:15px/1.55 system-ui,sans-serif}pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}</style></head><body><pre>${this.esc(data.text ?? '')}</pre></body></html>`;
   }
   paintPreview(key) {
     const f = this.querySelector(`iframe[data-prev="${CSS.escape(key)}"]`);

@@ -8,9 +8,11 @@ const out = process.argv[2] || '/tmp/mail-template-tab-contrast';
 fs.mkdirSync(out, { recursive: true });
 const detail = {key:'workflow.notify', name:'Workflow notification', plugin:'workflows-iga', variables:[], effective:{subject:'Workflow notification',text:'Workflow finished.',html:'<p>Workflow finished.</p>'}};
 (async () => {
+  const {generateTheme,themeCss}=await import(require('node:url').pathToFileURL(path.join(root,'apps/api/dist/branding/theme-engine.js')).href);
+  const alternate=themeCss(generateTheme({primary:'#00695c',accent:'#4db6ac'}),{baseline:'',footer:''});
   const browser = await chromium.launch({executablePath:'/usr/bin/google-chrome', args:['--no-sandbox']});
   try {
-    for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
+    for (const mobile of [false, true]) for (const theme of ['light', 'dark']) for(const accent of ['default','teal']) {
       const page = await browser.newPage({viewport:{width:mobile?390:1200,height:mobile?844:850}});
       const errors = [], calls = [];
       page.on('pageerror', e => errors.push(e.message));
@@ -23,6 +25,7 @@ const detail = {key:'workflow.notify', name:'Workflow notification', plugin:'wor
       });
       await page.setContent('<main style="padding:16px"><plg-mail-templates></plg-mail-templates></main>');
       await page.addStyleTag({path:path.join(root,'apps/web/src/styles.css')});
+      if(accent==='teal')await page.addStyleTag({content:alternate});
       await page.evaluate(t => {
         document.documentElement.dataset.theme=t;
         document.querySelector('plg-mail-templates').context={api:'https://fixture.invalid', token:'fictional', branch:'personal/fixture'};
@@ -53,11 +56,11 @@ const detail = {key:'workflow.notify', name:'Workflow notification', plugin:'wor
         await tab.focus();
         const outline=await tab.evaluate(el=>getComputedStyle(el).outlineStyle);
         assert.notEqual(outline,'none');
-        await page.screenshot({path:path.join(out,`${mobile?'mobile':'desktop'}-${theme}-${name}.png`),fullPage:true});
+        await page.screenshot({path:path.join(out,`${mobile?'mobile':'desktop'}-${theme}-${accent}-${name}.png`),fullPage:true});
       }
       assert.deepEqual(errors,[]);
       assert.ok(calls.every(c=>c.method==='GET'||c.path.endsWith('/preview')),JSON.stringify(calls));
-      console.log('PASS',mobile?'mobile':'desktop',theme,'normal/hover/selected/focus, minimum contrast',Math.min(...ratios),'no persistence or send');
+      console.log('PASS',accent,mobile?'mobile':'desktop',theme,'normal/hover/selected/focus, minimum contrast',Math.min(...ratios),'no persistence or send');
       await page.close();
     }
   } finally { await browser.close(); }

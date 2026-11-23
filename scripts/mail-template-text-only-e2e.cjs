@@ -4,9 +4,11 @@ const fs=require('node:fs'), path=require('node:path'), assert=require('node:ass
 const root=path.resolve(__dirname,'..'), out=process.argv[2]||'/tmp/mail-template-text-only';
 fs.mkdirSync(out,{recursive:true});
 (async()=>{
+  const {generateTheme,themeCss}=await import(require('node:url').pathToFileURL(path.join(root,'apps/api/dist/branding/theme-engine.js')).href);
+  const alternate=themeCss(generateTheme({primary:'#00695c',accent:'#4db6ac'}),{baseline:'',footer:''});
   const browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',args:['--no-sandbox']});
   try {
-    for(const mobile of [false,true]) for(const theme of ['light','dark']) for(const secret of [false,true]) {
+    for(const mobile of [false,true]) for(const theme of ['light','dark']) for(const secret of [false,true]) for(const accent of ['default','teal']) {
       let detail={key:'custom.fixture',name:secret?'Temporary access fixture':'Text notification fixture',plugin:'mail-templates',owned:true,customized:true,variables:secret?[{name:'password',type:'temporary-password',required:true},{name:'expiry',type:'text',required:true}]:[],effective:{subject:'Your access',text:secret?'Access {{password}} expires {{expiry}}.':'Hello, your workflow finished.'}};
       detail.effective.text += '\n\nAccount: sample-account\nLiteral <script>alert(1)</script> & <b>not HTML</b>.\n'+'long-line-'.repeat(40);
       const original=detail.effective.text, saves=[], errors=[], calls=[];
@@ -24,6 +26,7 @@ fs.mkdirSync(out,{recursive:true});
       });
       await page.setContent('<main style="padding:16px"><plg-mail-templates></plg-mail-templates></main>');
       await page.addStyleTag({path:path.join(root,'apps/web/src/styles.css')});
+      if(accent==='teal')await page.addStyleTag({content:alternate});
       await page.evaluate(t=>{document.documentElement.dataset.theme=t;document.querySelector('plg-mail-templates').context={api:'https://fixture.invalid',token:'fictional',branch:'personal/fixture'};},theme);
       await page.addScriptTag({type:'module',content:fs.readFileSync(path.join(root,'plugins/mail-templates/screens/templates.mjs'),'utf8')});
       const galleryPreview=page.frameLocator('iframe[data-prev]').locator('pre');
@@ -73,9 +76,9 @@ fs.mkdirSync(out,{recursive:true});
         } catch(e) {if(attempt>=2||!String(e).includes('Execution context was destroyed'))throw e;}
       }
       await page.locator('#mt-big').scrollIntoViewIfNeeded();
-      await page.screenshot({path:path.join(out,`${mobile?'mobile':'desktop'}-${theme}-${secret?'secret':'ordinary'}.png`),fullPage:true});
+      await page.screenshot({path:path.join(out,`${mobile?'mobile':'desktop'}-${theme}-${accent}-${secret?'secret':'ordinary'}.png`),fullPage:true});
       assert.deepEqual(errors,[]);assert.ok(calls.every(c=>!c.includes('send-test')),JSON.stringify(calls));
-      console.log('PASS',mobile?'mobile':'desktop',theme,secret?'secret':'ordinary','text default, 3 local saves preserve body, reopen');
+      console.log('PASS',accent,mobile?'mobile':'desktop',theme,secret?'secret':'ordinary','text default, 3 local saves preserve body, reopen');
       await page.close();
     }
   } finally {await browser.close();}
