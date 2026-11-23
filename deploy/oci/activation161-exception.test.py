@@ -145,4 +145,16 @@ class ExceptionMode(unittest.TestCase):
    for col in obj['postgres']['schema']['columns']:col.update(table_catalog='third_database',udt_catalog='third_database')
   r=self.runobj();r.policy['pgDatabase']='third_database';self.c['transaction']['database']='third_database';r.capture_value=self.c
   self.assertTrue(r.verify(self.b,self.a,q.compare))
+ def test_legacy_udt_catalog_guard_isolated(self):
+  self.b['postgres']['schema']['columns'][0]['udt_catalog']='wrong';self.a['postgres']['schema']['columns'][0]['udt_catalog']='wrong'
+  r=self.runobj();r.capture_value=self.c
+  with self.assertRaisesRegex(ValueError,'authorized database'):r.verify(self.b,self.a,q.compare)
+ def test_single_legacy_catalog_guard_isolated(self):
+  col=copy.deepcopy(self.b['postgres']['schema']['columns'][0]);col.update(column_name='legacy_second',ordinal_position=6,table_catalog='second',udt_catalog='fixture');self.b['postgres']['schema']['columns'].insert(0,col);self.a['postgres']['schema']['columns'].insert(0,copy.deepcopy(col))
+  r=self.runobj();r.capture_value=self.c
+  with self.assertRaisesRegex(ValueError,'original database'):r.verify(self.b,self.a,q.compare)
+ def test_new_column_table_catalog_guard_isolated(self):
+  self.a['postgres']['schema']['columns'][1]['table_catalog']='wrong'
+  r=self.runobj();r.capture_value=self.c
+  with self.assertRaisesRegex(ValueError,'position/catalog'):r.verify(self.b,self.a,q.compare)
 if __name__=='__main__':unittest.main()
