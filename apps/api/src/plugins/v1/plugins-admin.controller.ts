@@ -1,7 +1,7 @@
 import { Optional } from '@nestjs/common';
 import { BranchRegistries } from './branch-registries.js';
-import { currentBranch, workspaceMode } from '../../workspace/context.js';
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Headers, HttpException, NotFoundException, Param, Post, Put, Res, UseGuards } from '@nestjs/common';
+import { branchContext, currentBranch, workspaceMode } from '../../workspace/context.js';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Headers, HttpException, NotFoundException, Param, Post, Put, Req, Res, UseGuards } from '@nestjs/common';
 import { readFileSync, statSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { AuthGuard } from '../../auth/auth.guard.js';
@@ -40,6 +40,19 @@ function grants(b: unknown): Grants {
 export class PluginsAdminController {
   constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches: BranchRegistries, @Optional() private readonly profile?: ProfileService) {}
   private async registry(write=false) { return workspaceMode() ? this.branches.get(currentBranch(write)) : this.reg; }
+  /** Packaged screen and profile-component code is a READ of the plugin's signed folder that personal pages
+   * (the My profile security components, personal plugin screens) need while the session has no working
+   * branch. Resolve the LIVE configuration there instead of refusing the read as "administration". An
+   * explicit x-iam-branch keeps its exact branch view and its existing validation; every other route,
+   * and all writes, still require a chosen branch. */
+  private async assetRegistry(boundBranch?: string) {
+    if (!workspaceMode()) return this.reg;
+    if (branchContext.getStore()?.branch) return this.branches.get(currentBranch());
+    // No x-iam-branch: a token the core bound to a data branch keeps its OWN branch view (a branch-test
+    // session must not silently read another branch, and AuthGuard only refuses a contradictory header);
+    // every other session reads the live configuration.
+    return this.branches.get(boundBranch ?? 'main');
+  }
 
   @Get() async list(@Param('tenant') t: string) { return { tenant: t, plugins: (await this.registry()).list(t) }; }
   @Get('screens') async screens(@Param('tenant') t: string) { return { tenant: t, screens: (await this.registry()).screens(t) }; }
@@ -84,9 +97,9 @@ export class PluginsAdminController {
    * screens inventory); the plugin must be active for the tenant and the file must be a screen component the
    * manifest declares, never an arbitrary package file (the server-side handlers stay private). */
   @Get(':id/assets/{*path}')
-  async screenAsset(@Param('tenant') t: string, @Param('id') id: string, @Param('path') path: string[] | string, @Res() res: { type: (c: string) => { send: (b: unknown) => void } }) {
+  async screenAsset(@Param('tenant') t: string, @Param('id') id: string, @Param('path') path: string[] | string, @Res() res: { type: (c: string) => { send: (b: unknown) => void } }, @Req() req: { user?: { branch?: string } }) {
     const tail = (Array.isArray(path) ? path.join('/') : (path ?? '')).replace(/^\/+/, '');
-    const reg = await this.registry();
+    const reg = await this.assetRegistry(req.user?.branch);
     const impl = reg.impl(id);
     if (!impl) throw new NotFoundException(`unknown plugin ${id}`);
     if (!reg.isActive(t, id)) throw new ForbiddenException(`plugin ${id} is not enabled on this branch`);
