@@ -135,6 +135,25 @@ describe('workflows API + real Dolt', { skip: !have && 'dolt binary missing' }, 
   });
   after(async () => { await app?.close(); dolt?.kill(); await new Promise((r) => setTimeout(r, 800)); if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); });
 
+  it('workflow template creation, permissions, persistence and schema save validation on the real API',async()=>{
+    const body={key:'custom.workflow-fixture',name:'Welcome fixture',variables:[{name:'person',type:'text',required:true}],subject:'Welcome {{person}}',text:'Hello {{person}}'};
+    assert.equal((await call('POST','/mail-templates',body,{token:null})).status,401);
+    assert.equal((await call('POST','/mail-templates',body,{admin:null})).status,403);
+    assert.equal((await call('POST','/mail-templates',body,{token:'foreign:demo-alice'})).status,403);
+    const t=await ok('POST','/mail-templates',body) as any;
+    const graph=(params:any)=>({nodes:[{id:'mail',name:'Welcome',type:'lyam-send-template-mail',config:{to:'fictional@example.test',templateKey:t.key,templateRevision:t.revision,...params}}],edges:[]});
+    assert.equal((await call('POST','/workflows',{name:'Missing parameter',active:false,graph:graph({})})).status,400);
+    const saved=await ok('POST','/workflows',{name:'Template fixture',active:false,graph:graph({param_person:'Alice'})}) as any;
+    assert.equal(saved.definition.graph.nodes[0].config.param_person,'Alice');
+    const changed=await ok('PUT','/mail-templates/'+t.key,{subject:'Hi {{person}}',text:'Hello {{person}}'}) as any;assert.notEqual(changed.revision,t.revision);
+    assert.equal((await call('POST','/workflows',{name:'Stale template',active:false,graph:graph({param_person:'Alice'})})).status,400);
+    const sec=await ok('POST','/mail-templates',{key:'custom.secret-fixture',name:'Secret fixture',variables:[{name:'password',type:'temporary-password',required:true},{name:'expiry',type:'text',required:true}],subject:'Access',text:'{{password}} until {{expiry}}'}) as any;
+    const secretGraph=graph({param_password:'DO-NOT-PERSIST',param_person:undefined});Object.assign(secretGraph.nodes[0].config,{templateKey:sec.key,templateRevision:sec.revision});
+    assert.equal((await call('POST','/workflows',{name:'Reject literal',active:false,graph:secretGraph})).status,400);
+    assert.equal((await call('POST','/mail-templates/'+sec.key+'/send-test',{to:'fictional@example.test'})).status,400);
+    await ok('DELETE','/workflows/'+saved.definition.id);await ok('DELETE','/mail-templates/'+t.key);await ok('DELETE','/mail-templates/'+sec.key);
+  });
+
   it('both guards protect every route (controller level)', () => {
     const guards: unknown[] = Reflect.getMetadata('__guards__', WorkflowsController) ?? [];
     const names = guards.map((g) => (g as { name: string }).name);

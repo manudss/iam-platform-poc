@@ -7,7 +7,7 @@ describe('server-owned reset freeze detection', () => {
   for (const type of ['lyam-propose-password-reset', 'lyam-apply-password-reset']) it(`freezes ${type} even when disconnected or given client enable flags`, () => {
     assert.equal(isFrozenApprovedReset(graph(type, { enabled: true, resetReady: true, dryRun: true })), true);
   });
-  for (const type of ['lyam-publish-workspace', 'lyam-send-secret-mail']) it(`freezes guarded ${type} without an apply node`, () => {
+  for (const type of ['lyam-publish-workspace', 'lyam-send-secret-mail', 'lyam-send-template-mail']) it(`freezes guarded ${type} without an apply node`, () => {
     assert.equal(isFrozenApprovedReset(graph(type, { resetApprovalTaskId: '{{steps.old.taskId}}' })), true);
     assert.equal(isFrozenApprovedReset(graph(type)), false);
   });

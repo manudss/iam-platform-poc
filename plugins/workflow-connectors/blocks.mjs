@@ -976,7 +976,7 @@ const lyamSendTemplateMail = {
     for(const [k,v] of Object.entries(c)) if(k.startsWith('param_')) data[k.slice(6)]=v;
     const secret=tpl.variables.filter(v=>v.type==='temporary-password');
     if(secret.length>1) bad('only one secret parameter supported');
-    for(const v of tpl.variables.filter(v=>v.type!=='temporary-password')) if(String(data[v.name]??'').includes('secret:')) bad('secret references require a secret-typed parameter');
+    for(const v of tpl.variables.filter(v=>v.type!=='temporary-password')) if(String(data[v.name]??'').includes('secret:') || (secret.length&&String(data[v.name]??'').includes('[[password]]'))) bad('secret references require a secret-typed parameter');
     for(const v of secret) {
       const ref=data[v.name];
       if(typeof ref!=='string' || !/^secret:[a-f0-9]{24}$/.test(ref)) bad('secret parameter requires an opaque generated reference');
@@ -996,10 +996,11 @@ const lyamSendTemplateMail = {
     if(!rendered?.subject || !rendered?.text || /[\r\n]/.test(rendered.subject) || rendered.subject.includes('[[password]]')) bad('invalid rendered mail');
     if(secret.length && (!rendered.text.includes('[[password]]') || !String(tpl.effective?.text).includes('{{expiry}}'))) bad('secret template must include password and recorded expiry in its text');
     const {apiKey,from}=await currentMailPolicy(ctx,c.to,'lyam-send-template-mail');
+    if(secret.length && rendered.html) bad('secret templates must render plain text only');
     if(secret.length) {
       const password=ctx.secrets.reveal(refs[0]);
       rendered.text=rendered.text.split('[[password]]').join(password);
-      if(rendered.html) {const escaped=password.replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));rendered.html=rendered.html.split('[[password]]').join(escaped);}
+
     }
     const idempotencyKey=`wf-template/${ctx.runId}/${ctx.nodeId ?? c.templateKey}`;
     await ctx.markEffectPending({template:c.templateKey,templateRevision:c.templateRevision,idempotencyKey});

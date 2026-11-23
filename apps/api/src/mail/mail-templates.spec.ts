@@ -86,8 +86,12 @@ describe('user-created versioned templates', () => {
   it('never previews a supplied secret value and refuses secret send-test or subject interpolation',async()=>{
     const b={key:'custom.secret',name:'Secret fixture',variables:[{name:'password',type:'temporary-password',required:true},{name:'expiry',type:'text',required:true}],subject:'Your access',text:'{{password}} until {{expiry}}'};
     const d=await svc.create('secret','admin',b);
+    await assert.rejects(()=>svc.create('secret','admin',{...b,key:'custom.invalid-secret',variables:[{name:'password',type:'temporary-password',required:true}]}),/expiry/);
     const preview=await svc.preview('secret',{key:d.key,data:{password:'DO-NOT-LEAK',expiry:'sample'}});
     assert.ok(!JSON.stringify(preview).includes('DO-NOT-LEAK'));assert.match(preview.text,/secret parameter/);
+    await assert.rejects(()=>svc.validateWorkflowConfig('secret',{templateKey:d.key,templateRevision:d.revision,param_password:'DO-NOT-STORE',param_expiry:'derived'}),/upstream/);
+    await svc.validateWorkflowConfig('secret',{templateKey:d.key,templateRevision:d.revision,param_password:'{{steps.gen.passwordRef}}',param_expiry:'derived'});
+    await assert.rejects(()=>svc.put('secret','admin',d.key,{...b,html:'<a href="{{password}}">secret</a>'}),/plain text/);
     await assert.rejects(()=>svc.sendTest('secret','admin',d.key,{to:'demo@example.invalid'}),/cannot use send-test/);
     await assert.rejects(()=>svc.put('secret','admin',d.key,{...b,subject:'{{password}}'}),/subject/);
   });

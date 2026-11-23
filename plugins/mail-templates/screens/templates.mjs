@@ -222,7 +222,7 @@ class MailTemplatesScreen extends HTMLElement {
   ${main ? '<p class="hint">main is read only: choose a working branch to save.</p>' : ''}`;
     const q = (s) => this.querySelector(s);
     q('#mt-back')?.addEventListener('click', () => { this._view = 'gallery'; this._detail = null; this.render(); void this.load(); });
-    q('#mt-parameters')?.addEventListener('change',ev=>{d.variables=ev.target.value.split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{const [name,type,req]=line.split(',').map(x=>x.trim());return {name,type,required:req!=='no'};});});
+    q('#mt-parameters')?.addEventListener('change',ev=>{d.variables=ev.target.value.split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{const [name,type,req]=line.split(',').map(x=>x.trim());return {name,type,required:req!=='no'};});this.renderEditor();});
     q('#mt-save')?.addEventListener('click', () => void this.save());
     q('#mt-restore')?.addEventListener('click', () => void this.restore(d.key));
     q('#mt-test')?.addEventListener('click', () => void this.sendTest(d.key, q('#mt-to')?.value.trim()));

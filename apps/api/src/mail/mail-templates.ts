@@ -123,11 +123,13 @@ export class MailTemplatesService {
       return {name:v.name,type:v.type,required:v.required!==false};
     });
     if (variables.filter((v:any)=>v.type==='temporary-password').length>1) throw new BadRequestException('only one temporary password parameter is supported');
+    if(variables.some((v:any)=>v.type==='temporary-password') && (!variables.some((v:any)=>v.name==='expiry'&&v.type==='text') || variables.some((v:any)=>v.type==='temporary-password'&&(['expiry','hours'].includes(v.name)||!v.required)))) throw new BadRequestException('secret templates require a mandatory password parameter and a text expiry parameter');
     const decl:MailTemplateDecl={key,name:b.name,variables:variables.map((v:any)=>({name:v.name})),default:{subject:'',text:''}};
     const o = MailTemplatesService.validate(key,b,decl);
     for (const v of variables.filter((v:any)=>v.type==='temporary-password')) if (usedVars(o.subject).includes(v.name)) throw new BadRequestException('secret parameters are forbidden in the subject');
     if ((o.html?.length??0)>20000 || o.text.length>8000 || o.subject.length>150) throw new BadRequestException('template content is too long');
     if (o.html && /<\s*(script|iframe|form)\b|\bon[a-z]+\s*=|javascript\s*:/i.test(o.html)) throw new BadRequestException('active HTML is refused');
+    if(variables.some((v:any)=>v.type==='temporary-password') && o.html) throw new BadRequestException('secret templates must use plain text only');
     const definition:OwnedMailTemplate={name:b.name.trim(),description:String(b.description??'').slice(0,500),variables};
     await this.store.put(t,actor,key,{...o,definition});
     return this.detail(t,key);
@@ -218,6 +220,20 @@ export class MailTemplatesService {
     return { key, data, ...r };
   }
 
+  async validateWorkflowConfig(t:string,c:Record<string,unknown>) {
+    const d=await this.workflowTemplate(t,String(c.templateKey));
+    if(c.templateRevision!==d.revision) throw new BadRequestException('template changed, review its revision');
+    const hasSecret=d.variables.some(v=>'type' in v&&v.type==='temporary-password');
+    const vars=new Set(d.variables.map(v=>'param_'+v.name));
+    if(Object.keys(c).some(k=>k.startsWith('param_')&&!vars.has(k))) throw new BadRequestException('unknown template parameter');
+    for(const v of d.variables) {
+      if(hasSecret&&['expiry','hours'].includes(v.name))continue;
+      const value=c['param_'+v.name];
+      if(('required' in v?v.required:true) && (typeof value!=='string'||!value)) throw new BadRequestException('required template parameter missing');
+      if('type' in v && v.type==='temporary-password' && (typeof value!=='string'||!/^\{\{steps\.[a-z0-9-]+\.passwordRef\}\}$/.test(value))) throw new BadRequestException('secret template config must use an upstream passwordRef placeholder, never a value');
+    }
+  }
+
   async workflowTemplate(t:string,key:string) {
     const detail=await this.detail(t,key);
     if (detail.layout) throw new BadRequestException('layout cannot be sent');
@@ -234,6 +250,7 @@ export class MailTemplatesService {
     const savedLayout=await this.store.get(t,'_layout');
     const r=await renderMail(await this.registry(),t,key,data,{declaration:entry.decl,override:d.effective,layoutOverride:savedLayout ? {html:savedLayout.html,vars:savedLayout.vars}:null});
     if(!r) throw new BadRequestException('template renderer unavailable');
+    if((await this.detail(t,key)).revision!==revision) throw new BadRequestException('template changed during rendering');
     return r;
   }
 

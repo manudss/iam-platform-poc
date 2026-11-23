@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
 import { ModuleRef } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
+import { MailTemplatesService } from '../mail/mail-templates.js';
 import { WorkflowTasksService } from './tasks.js';
 import { blockCatalogue, runStepCategory, externalBlockProvider, hasDataSteps, isWildcardEvent, nextCronFire, placeholderKeys, STEP_TYPES, stepCategoryOf, substituteEventPayload, validateGraph, validateStepPlaceholders, validateTrigger, WF_EVENTS, WfGraph } from './model.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
@@ -11,7 +12,7 @@ import { BranchRegistries } from '../plugins/v1/branch-registries.js';
 import { WorkflowEngine } from './engine.js';
 import { DefinitionRow, RunRow, StepRow, TemplateRow, WorkflowStore } from './store.js';
 import { COMMUNITY_TEMPLATES, OFFICIAL_TEMPLATES } from './templates-catalog.js';
-import { currentBranch, workspaceMode } from '../workspace/context.js';
+import { branchContext, currentBranch, workspaceMode } from '../workspace/context.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const now = () => new Date().toISOString().slice(0, 23).replace('T', ' ');
@@ -38,9 +39,16 @@ export class WorkflowsService {
   }
 
   /** Every external block used by the graph must have its provider plugin enabled (fail closed). */
-  private async checkProviders(tenant: string, graph: WfGraph) {
+  private async checkProviders(tenant: string, graph: WfGraph, mailRef?:string) {
     const registry = await this.registry();
     const used = [...new Set(graph.nodes.map((n) => externalBlockProvider(n.type)).filter((p): p is string => !!p))];
+    for(const n of graph.nodes.filter(n=>n.type==='lyam-send-template-mail')) {
+      let mail:MailTemplatesService|undefined;
+      try {mail=this.modules?.get(MailTemplatesService,{strict:false});}catch{}
+      if(!mail) throw new BadRequestException('workflow mail template validation unavailable');
+      if(mailRef)await branchContext.run({branch:mailRef},()=>mail!.validateWorkflowConfig(tenant,n.config));
+      else await mail.validateWorkflowConfig(tenant,n.config);
+    }
     for (const p of used)
       if (!registry.isActive(tenant, p)) throw new BadRequestException(`this workflow uses blocks from the "${p}" plugin, which is disabled for this tenant: enable it from the Plugins page`);
   }
@@ -234,7 +242,7 @@ export class WorkflowsService {
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), this.store.liveRef);
     if (!d) throw new NotFoundException('unknown workflow');
     if (isFrozenApprovedReset(d.graph)) throw new ForbiddenException(RESET_FROZEN);
-    await this.checkProviders(tenant, d.graph);
+    await this.checkProviders(tenant, d.graph, this.store.liveRef);
     const runId = event?.eventId ? `run-${createHash('sha256').update(JSON.stringify([tenant, d.id, event.branch, event.eventId])).digest('hex').slice(0, 32)}` : `run-${randomBytes(6).toString('hex')}`;
     if (event?.eventId && await this.store.getRun(tenant, runId)) return this.runView(tenant, runId);
     const active = (await this.store.listRuns(tenant, d.id, 100)).filter((r) => r.status === 'queued' || r.status === 'running');
