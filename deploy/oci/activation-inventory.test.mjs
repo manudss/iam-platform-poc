@@ -33,7 +33,7 @@ test('network or redirect errors are unknown without echoing secret', async () =
 });
 test('request uses edge API, bearer and redirect refusal', async () => {
   await inventory({ origin, tenant, auth, fetchImpl: async (url, opts) => {
-    assert.equal(url, origin + '/api/tenants/t1/activations'); assert.equal(opts.method, 'GET');
+    assert.equal(url, origin + '/api/tenants/t1/activations/journal'); assert.equal(opts.method, 'GET');
     assert.equal(opts.redirect, 'error'); assert.equal(opts.headers.authorization, 'Bearer test.jwt.signature');
     return answer([]);
   } });

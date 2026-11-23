@@ -48,10 +48,72 @@ class Recovery(unittest.TestCase):
    'target':{'sha':S(4),'digest':D(4)},'qualification':{'sha':S(4),'digest':D(4),'evidence_refs':['exact target qualification attestation']}}
  def verify(self,*args):self.verifications.append(args)
  def observe(self,container,target):self.observations.append((container,target));return {**target,'running':True,'container':container}
- def recover(self,manifest=None,**kw):return q.record_reviewed_recovery(self.path,manifest or self.manifest(),'isolated-reviewed-repository','fixture',verify=kw.get('verify',self.verify),observe=kw.get('observe',self.observe))
+ def recover(self,manifest=None,**kw):return (q.record_reviewed_in_place if manifest and manifest.get('kind')=='reviewed-in-place' else q.record_reviewed_recovery)(self.path,manifest or self.manifest(),'isolated-reviewed-repository','fixture',verify=kw.get('verify',self.verify),observe=kw.get('observe',self.observe))
  def resume_manifest(self):
   s=q.load(self.path)
   return {'format':1,'kind':'reviewed-resume','state_fingerprint':q.fingerprint(s),'expected_delivered':{k:s['history'][-1][k] for k in ['sha','digest']},'authorization_ref':'separate resume approval attestation','evidence_refs':['operator recheck']}
+ def receipt(self):
+  import hashlib
+  directory=Path(self.tmp.name);image='ghcr.io/manudss/iam-platform-poc@'+D(2);proof={}
+  for key,value in [('before',{'image':'old','policyHash':'policy'}),('after',{'image':image,'policyHash':'policy'}),('smoke',{'journal':{'count':1},'ledger':'verified-fixture'})]:
+   path=directory/(key+'.json');raw=q.json.dumps(value).encode();path.write_bytes(raw);proof[key]={'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()}
+  receipt={'format':1,'result':'qualified','transportCoverage':'TLS_EXPECTED_ORIGINS','image':image,'policyHash':'policy',**{k+'_sha256':v['sha256'] for k,v in proof.items()}};path=directory/'receipt.json';raw=q.json.dumps(receipt).encode();path.write_bytes(raw);proof['receipt']={'path':str(path),'sha256':hashlib.sha256(raw).hexdigest()};return proof
+ def in_place_manifest(self):
+  m=self.manifest();m['kind']='reviewed-in-place';m['original_unresolved']={k:q.load(self.path)[k] for k in ['pending','failed']};m['qualification_receipt']=self.receipt();m['chain']=[{'sha':S(2),'parent':S(1),'outcome':'delivered'}];m['target']={'sha':S(2),'digest':D(2)};m['qualification']={**m['target'],'evidence_refs':['requalified exact image against original before snapshot']};return m
+ def test_exact_failed_image_may_be_qualified_in_place_without_redeployment(self):
+  s=self.recover(self.in_place_manifest());self.assertEqual([e['sha'] for e in s['history']],[S(1),S(2)]);self.assertTrue(s['resume_required']);self.assertEqual(s['recoveries'][0]['recovery_mode'],'qualified-in-place');self.assertEqual(s['recoveries'][0]['original_unresolved'],{k:self.state[k] for k in ['pending','failed']});self.assertEqual(len(self.verifications),1);self.assertEqual(len(self.observations),1)
+  with self.assertRaisesRegex(ValueError,'operator review'):q.deploy(self.path,plan(2,3),'must-not-run',lambda *a,**kw:self.fail('updater called'))
+  q.resume_reviewed(self.path,self.resume_manifest(),'fixture',self.observe);calls=[];q.deploy(self.path,plan(2,3),'next-updater',lambda args,**kw:calls.append(args) or SimpleNamespace(returncode=0));self.assertEqual(len(calls),1)
+ def test_in_place_refuses_changed_digest_source_outcome_or_qualification(self):
+  import copy
+  for alter in [lambda m:m['target'].update(digest=D(999)),lambda m:m['target'].update(sha=S(999)),lambda m:m['chain'][0].update(outcome='replaced'),lambda m:m['chain'][0].update(outcome='abandoned'),lambda m:m['chain'][0].update(parent=S(99)),lambda m:m['qualification'].update(digest=D(99)),lambda m:m.update(authorization_ref='')]:
+   m=self.in_place_manifest();alter(m);before=self.path.read_bytes()
+   with self.assertRaises(ValueError):self.recover(m)
+   self.assertEqual(self.path.read_bytes(),before);self.assertEqual(self.observations,[])
+ def test_in_place_stale_manifest_and_unobserved_image_cannot_clear_incident(self):
+  m=self.in_place_manifest();m['state_fingerprint']='stale'
+  with self.assertRaisesRegex(ValueError,'fingerprint'):self.recover(m)
+  def fail(*args):raise ValueError('running image changed')
+  with self.assertRaisesRegex(ValueError,'changed'):self.recover(self.in_place_manifest(),observe=fail)
+  self.assertEqual(q.load(self.path),self.state)
+ def test_in_place_failed_pending_mismatch_or_wrong_initial_parent_refuses(self):
+  import copy
+  for change in [lambda s:s['failed'].update(sha=S(99)),lambda s:s['pending'].update(parent=S(99))]:
+   state=copy.deepcopy(self.state);change(state);q.atomic(self.path,state);m=self.in_place_manifest();before=self.path.read_bytes()
+   with self.assertRaisesRegex(ValueError,'inconsistent'):self.recover(m)
+   self.assertEqual(self.path.read_bytes(),before);self.assertEqual(self.observations,[])
+ def test_two_entry_replacement_chain_remains_accepted(self):
+  m=self.manifest();m['chain']=[{'sha':S(2),'parent':S(1),'outcome':'replaced'},{'sha':S(3),'parent':S(2),'outcome':'delivered'}];m['target']={'sha':S(3),'digest':D(3)};m['qualification']={**m['target'],'evidence_refs':['target qualified']}
+  s=self.recover(m);self.assertEqual(s['history'][-1]['sha'],S(3));self.assertEqual(s['recoveries'][0]['recovery_mode'],'replacement-chain')
+ def test_singleton_cli_never_runs_without_pause_or_with_updater_lock_held(self):
+  import fcntl
+  lock=Path(self.tmp.name)/'update.lock';lock.touch();before=self.path.read_bytes();manifest=q.json.dumps(self.in_place_manifest())
+  args=['--update-lock',str(lock),'--repository','not-used','--container','fixture']
+  r=self.cli('record-reviewed-in-place',*args,input=manifest);self.assertNotEqual(r.returncode,0);self.assertIn('pause',r.stderr);self.assertEqual(self.path.read_bytes(),before)
+  (Path(self.tmp.name)/'PAUSED').touch()
+  with lock.open('a') as held:
+   fcntl.flock(held,fcntl.LOCK_EX);r=self.cli('record-reviewed-in-place',*args,input=manifest);self.assertNotEqual(r.returncode,0);self.assertIn('Errno 11',r.stderr);self.assertEqual(self.path.read_bytes(),before)
+ def test_singleton_is_refused_by_legacy_kind_and_new_kind_requires_exact_incident(self):
+  m=self.in_place_manifest();m['kind']='reviewed-recovery'
+  with self.assertRaises(ValueError):self.recover(m)
+  m=self.in_place_manifest();m['original_unresolved']['failed']={**m['original_unresolved']['failed'],'exit':99}
+  with self.assertRaisesRegex(ValueError,'original incident'):self.recover(m)
+ def test_in_place_receipt_hash_missing_file_and_failed_digest_refuse(self):
+  m=self.in_place_manifest();Path(m['qualification_receipt']['after']['path']).write_text('{}')
+  with self.assertRaisesRegex(ValueError,'hash mismatch'):self.recover(m)
+  m=self.in_place_manifest();Path(m['qualification_receipt']['smoke']['path']).unlink()
+  with self.assertRaisesRegex(ValueError,'absent'):self.recover(m)
+  s=q.load(self.path);s['failed']['digest']=D(99);q.atomic(self.path,s)
+  with self.assertRaisesRegex(ValueError,'digest divergence'):self.recover(self.in_place_manifest())
+ def test_in_place_atomic_crash_does_not_duplicate_and_legacy_format_reader_refuses(self):
+  from unittest.mock import patch
+  m=self.in_place_manifest();original=q.atomic
+  def crash(path,state):original(path,state);raise OSError('after durable replace')
+  with patch.object(q,'atomic',side_effect=crash):
+   with self.assertRaises(OSError):self.recover(m)
+  s=q.load(self.path);self.assertEqual(s['format'],2);self.assertTrue(s['resume_required']);self.assertEqual(s['recoveries'][-1]['kind'],'reviewed-in-place')
+  with self.assertRaisesRegex(ValueError,'fingerprint'):self.recover(m)
+  self.assertNotEqual(s['format'],1);self.assertEqual(len(s['recoveries']),1)
  def test_record_preserves_failed_entry_without_claiming_intermediates_delivered(self):
   s=self.recover();self.assertEqual(s['format'],2);self.assertTrue(s['resume_required']);self.assertEqual(s['recovery_fence'],S(4));self.assertEqual([e['sha'] for e in s['history']],[S(1),S(4)])
   self.assertEqual(s['recoveries'][0]['original_unresolved'],{k:self.state[k] for k in ['pending','failed']});self.assertEqual(len(self.observations),1);self.assertEqual(len(self.verifications),1)

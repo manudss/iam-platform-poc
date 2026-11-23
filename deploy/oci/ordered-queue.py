@@ -2,7 +2,7 @@
 """Durable ordered deployment journal. Root-owned, preinstalled operator trust boundary.
 Never fetched from an unqualified commit by an automatic deploy. No network credentials.
 """
-import argparse, fcntl, json, os, re, subprocess, sys, tempfile, datetime
+import hashlib, argparse, fcntl, json, os, re, subprocess, sys, tempfile, datetime
 from pathlib import Path
 SHA = re.compile(r'^[a-f0-9]{40}$')
 DIGEST = re.compile(r'^sha256:[a-f0-9]{64}$')
@@ -69,7 +69,7 @@ def deploy(path, plan, updater, runner=subprocess.run):
         state['pending']=entry; atomic(path,state)
         result=runner([updater,'--image','ghcr.io/manudss/iam-platform-poc@'+entry['digest'],'--require-qualification'],check=False)
         if result.returncode:
-            state['failed']={'sha':entry['sha'],'exit':result.returncode,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+            state['failed']={'sha':entry['sha'],'digest':entry['digest'],'exit':result.returncode,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
             atomic(path,state)
             raise RuntimeError('deployment failed; queue blocked, no later commit attempted')
         state['history'].append({**entry,'at':datetime.datetime.now(datetime.timezone.utc).isoformat()})
@@ -130,15 +130,15 @@ def observe_running(container, target):
         raise ValueError('running image source revision mismatch')
     return {'sha':target['sha'],'digest':target['digest'],'image_id':image['Id'],'container':container,'running':True}
 
-def record_reviewed_recovery(path,manifest,repository,container,verify=verify_source_chain,observe=observe_running):
+def record_reviewed_recovery(path,manifest,repository,container,verify=verify_source_chain,observe=observe_running,*,_in_place=False):
     import copy
-    state=load(path);checked_manifest(state,manifest,'reviewed-recovery')
+    state=load(path);checked_manifest(state,manifest,'reviewed-in-place' if _in_place else 'reviewed-recovery')
     pending,failed=state.get('pending'),state.get('failed')
     if not pending or not failed or state.get('resume_required'): raise ValueError('exact pending+failed incident required, not an unreviewed resume')
     if failed.get('sha')!=pending.get('sha') or pending.get('parent')!=state['history'][-1]['sha'] or not DIGEST.fullmatch(pending.get('digest','')):
         raise ValueError('inconsistent unresolved incident')
     chain=manifest.get('chain')
-    if not isinstance(chain,list) or not 2<=len(chain)<=256: raise ValueError('bounded replacement chain including failed entry and new target required')
+    if not isinstance(chain,list) or not (len(chain)==1 if _in_place else 2<=len(chain)<=256): raise ValueError('bounded reviewed chain including failed entry and observed target required')
     parent=state['history'][-1]['sha'];seen={parent}
     for i,entry in enumerate(chain):
         if not isinstance(entry,dict) or not SHA.fullmatch(entry.get('sha','')) or entry['sha'] in seen or entry.get('parent')!=parent:
@@ -150,23 +150,50 @@ def record_reviewed_recovery(path,manifest,repository,container,verify=verify_so
     if chain[0]['sha']!=pending['sha']: raise ValueError('chain does not start with the actual failed source')
     target=manifest.get('target',{})
     if target.get('sha')!=chain[-1]['sha'] or not DIGEST.fullmatch(target.get('digest','')): raise ValueError('exact corrected target source/digest required')
+    in_place=_in_place
+    if in_place and any(target.get(k)!=pending.get(k) for k in ['sha','digest']):
+        raise ValueError('in-place qualification must use exact original pending source and digest')
+    if in_place:
+        if manifest.get('original_unresolved')!={'pending':pending,'failed':failed}:raise ValueError('exact original incident required')
+        if failed.get('digest',pending['digest'])!=pending['digest']:raise ValueError('failed/pending digest divergence')
+        verify_qualification_receipt(manifest.get('qualification_receipt'),target)
     qualification=manifest.get('qualification',{})
     if any(qualification.get(k)!=target[k] for k in ['sha','digest']): raise ValueError('qualification attestation must bind exact target')
     references(qualification.get('evidence_refs'))
     verify(repository,state['history'][-1]['sha'],chain)
     observation=observe(container,target)
     now=datetime.datetime.now(datetime.timezone.utc).isoformat()
-    audit={'kind':'reviewed-recovery','at':now,'state_fingerprint':fingerprint(state),
+    audit={'kind':'reviewed-in-place' if in_place else 'reviewed-recovery','recovery_mode':'qualified-in-place' if in_place else 'replacement-chain','at':now,'state_fingerprint':fingerprint(state),
            'authorization_ref':manifest['authorization_ref'],'evidence_refs':manifest['evidence_refs'],
            'original_unresolved':{'pending':copy.deepcopy(pending),'failed':copy.deepcopy(failed)},
            'chain':copy.deepcopy(chain),'target':copy.deepcopy(target),'qualification_attestation':copy.deepcopy(qualification),
-           'observed_running':observation}
+           'observed_running':observation,**({'qualification_receipt':copy.deepcopy(manifest['qualification_receipt'])} if in_place else {})}
     state.setdefault('recoveries',[]).append(audit)
     state['history'].append({**target,'at':now,'mode':'observed-reviewed-recovery'})
     del state['pending'];del state['failed']
     state.update(format=2,recovery_fence=target['sha'],resume_required=True)
     atomic(path,state)
     return state
+
+def verify_qualification_receipt(proof,target):
+    if not isinstance(proof,dict) or set(proof)!={'receipt','before','after','smoke'}:raise ValueError('complete private qualification receipt required')
+    values={}
+    for key,spec in proof.items():
+        if not isinstance(spec,dict) or set(spec)!={'path','sha256'} or not re.fullmatch('[a-f0-9]{64}',spec.get('sha256','')):raise ValueError('invalid evidence hash')
+        path=Path(spec.get('path',''))
+        if not path.is_absolute() or not path.is_file() or path.stat().st_size>64*1024*1024:raise ValueError('private evidence file absent or oversized')
+        raw=path.read_bytes()
+        if hashlib.sha256(raw).hexdigest()!=spec['sha256']:raise ValueError('qualification evidence hash mismatch')
+        values[key]=json.loads(raw)
+    receipt=values['receipt'];image='ghcr.io/manudss/iam-platform-poc@'+target['digest']
+    if receipt.get('format')!=1 or receipt.get('result')!='qualified' or receipt.get('image')!=image or receipt.get('transportCoverage')!='TLS_EXPECTED_ORIGINS':raise ValueError('exact successful qualification receipt required')
+    for key in ['before','after','smoke']:
+        if receipt.get(key+'_sha256')!=proof[key]['sha256']:raise ValueError('qualification receipt evidence divergence')
+    if values['after'].get('image')!=image or values['before'].get('policyHash')!=values['after'].get('policyHash') or receipt.get('policyHash')!=values['after'].get('policyHash'):raise ValueError('qualification image or policy mismatch')
+    if not isinstance(values['smoke'].get('journal'),dict) or not values['smoke'].get('ledger'):raise ValueError('smoke coverage absent')
+
+def record_reviewed_in_place(path,manifest,repository,container,verify=verify_source_chain,observe=observe_running):
+    return record_reviewed_recovery(path,manifest,repository,container,verify,observe,_in_place=True)
 
 def resume_reviewed(path,manifest,container,observe=observe_running):
     state=load(path);checked_manifest(state,manifest,'reviewed-resume')
@@ -182,7 +209,7 @@ def resume_reviewed(path,manifest,container,observe=observe_running):
     return state
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('command',choices=['status','inspect-reviewed-state','initialize-reviewed','drain','record-reviewed-recovery','resume-reviewed'])
+    p=argparse.ArgumentParser();p.add_argument('command',choices=['status','inspect-reviewed-state','initialize-reviewed','drain','record-reviewed-recovery','record-reviewed-in-place','resume-reviewed'])
     p.add_argument('--state',default='/opt/lyam/deploy-queue/state.json');p.add_argument('--sha');p.add_argument('--digest')
     p.add_argument('--pause-file',default='/opt/lyam/UPDATE_PAUSED');p.add_argument('--update-lock',default='/opt/lyam/.update.lock')
     p.add_argument('--repository');p.add_argument('--container')
@@ -202,15 +229,15 @@ def main():
         if a.command=='initialize-reviewed':
             if path.exists() or not SHA.fullmatch(a.sha or '') or not DIGEST.fullmatch(a.digest or ''): raise ValueError('explicit verified initial SHA/digest required, never overwrite')
             atomic(path,{'format':1,'history':[{'sha':a.sha,'digest':a.digest}]});return
-        if a.command in ['record-reviewed-recovery','resume-reviewed']:
+        if a.command in ['record-reviewed-recovery','record-reviewed-in-place','resume-reviewed']:
             if not pause.is_file(): raise ValueError('operator must retain the deployment pause during journal review')
             if not Path(a.update_lock).is_file(): raise ValueError('existing configured updater lock required')
             manifest=json.load(sys.stdin)
             with open(a.update_lock,'a') as updater_lock:
                 fcntl.flock(updater_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                if a.command=='record-reviewed-recovery':
+                if a.command in ['record-reviewed-recovery','record-reviewed-in-place']:
                     if not a.repository: raise ValueError('reviewed local source repository required')
-                    record_reviewed_recovery(path,manifest,a.repository,a.container)
+                    (record_reviewed_in_place if a.command=='record-reviewed-in-place' else record_reviewed_recovery)(path,manifest,a.repository,a.container)
                     print('Observed corrected target journaled; incident retained; explicit resume still required; pause unchanged')
                 else:
                     resume_reviewed(path,manifest,a.container)

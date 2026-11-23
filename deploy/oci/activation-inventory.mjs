@@ -63,7 +63,7 @@ export async function inventory({ origin, tenant, auth, fetchImpl = fetch, timeo
     token = issued.id_token;
   } else fail('stdin must contain only id_token, or username and password');
   if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) fail('a session JWT is required, not the static admin capability');
-  const rows = await json(`/api/tenants/${encodeURIComponent(tenant)}/activations`, { method: 'GET', headers: { authorization: `Bearer ${token}` } }, 'journal');
+  const rows = await json(`/api/tenants/${encodeURIComponent(tenant)}/activations/journal`, { method: 'GET', headers: { authorization: `Bearer ${token}` } }, 'journal');
   validateRows(rows, tenant);
   return { version: 1, verified: true, origin: base, tenant, capturedAt: new Date().toISOString(), count: rows.length, rows };
 }

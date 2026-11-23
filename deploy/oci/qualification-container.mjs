@@ -5,12 +5,16 @@ import {readFileSync,cpSync,mkdtempSync,existsSync} from 'node:fs';
 import {createHash,randomBytes} from 'node:crypto';
 const hash=x=>createHash('sha256').update(x).digest('hex');
 const [mode]=process.argv.slice(1);let raw='';for await(const chunk of process.stdin){raw+=chunk;if(raw.length>262144)throw Error('input bound');}const p=JSON.parse(raw);
+let diagnosticStage='START',diagnosticHttp=0;
+const stage=(name)=>{diagnosticStage=name;diagnosticHttp=0;};
 const json=async(url,options={})=>{
  const r=await fetch(url,{...options,redirect:'manual',signal:AbortSignal.timeout(15000)});
+ diagnosticHttp=Number.isInteger(r.status)&&r.status>=100&&r.status<=599?r.status:0;
  if(r.status!==200||!/^application\/json(?:;|$)/i.test(r.headers.get('content-type')??''))throw Error('non-200 or non-JSON response');
  return r.json();
 };
 async function bao(){
+ stage('BAO_CAPTURE');
  const base=p.baoAddress,token=p.baoToken;
  if(!base||!token||!Array.isArray(p.baoMetadataRoots)||!p.baoMetadataRoots.length)throw Error('Bao metadata coverage/auth missing');
  const status=await json(base+'/v1/sys/health');if(status.sealed!==false)throw Error('Bao sealed/unknown');
@@ -29,6 +33,7 @@ async function bao(){
  return found;
 }
 function dolt(){
+ stage('DOLT_CAPTURE');
  const dir=p.running?'/data/dolt':mkdtempSync('/tmp/qualification-')+'/dolt';
  if(!p.running)cpSync('/data/dolt',dir,{recursive:true,errorOnExist:true});
  const query=(db,sql)=>{const r=JSON.parse(execFileSync('dolt',[...(p.running?['--host','127.0.0.1','--port','3307','--no-tls','-u','root','--password','']:[]),...(db?['--use-db='+db]:[]),'sql','-r','json','-q',sql],{cwd:dir,encoding:'utf8',maxBuffer:64*1024*1024}));if(!Array.isArray(r.rows))throw Error('Dolt inventory unknown');return r.rows;};
@@ -38,35 +43,56 @@ function dolt(){
   const rows=query(db+'/'+b.name,"SELECT DOLT_HASHOF_DB('WORKING') AS root");if(!rows[0]?.root)throw Error('Dolt working root unknown');return {database:db,branch:b.name,head:b.hash,root:rows[0].root};
  }));
 }
+function validateActivationProjection(rows,expected,tenant){
+ if(!Array.isArray(rows)||!Array.isArray(expected))throw Error('journal projection or independent journal missing');
+ let seq=0;for(const row of rows){
+  if(!row||typeof row!=='object'||!Number.isSafeInteger(row.seq)||row.seq<=seq||typeof row.commit!=='string'||!row.commit.trim())throw Error('journal sequence schema invalid');
+  // Older images return the full journal on this route. Validate those fields when present.
+  if(('tenant'in row&&row.tenant!==tenant)||('state'in row&&!['pending','recorded','applied','failed'].includes(row.state)))throw Error('legacy journal schema invalid');seq=row.seq;
+ }
+ if(JSON.stringify(rows.map(r=>({seq:r.seq,commit:r.commit})))!==JSON.stringify(expected))throw Error('authenticated activation sequence differs from independent journal');
+}
 async function smoke(){
+ stage('EDGE_HEALTH');
  const local='http://127.0.0.1:8080';
  if(!(await fetch(local+'/healthz')).ok)throw Error('edge health failed');
+ stage('AUTH_INPUT');
  const credentials=p.auth;
  if(typeof credentials.username!=='string'||typeof credentials.password!=='string')throw Error('auth input missing');
  let journal;
  for(const origin of p.origins){
   const verifier=randomBytes(32).toString('base64url'),challenge=createHash('sha256').update(verifier).digest('base64url'),state=randomBytes(16).toString('hex');
   const params=new URLSearchParams({client_id:'demo-web',redirect_uri:origin+'/callback',response_type:'code',state,code_challenge:challenge,code_challenge_method:'S256',chain:'password-only'});
+  stage('OIDC_FORM');
   const page=await fetch(local+'/core/authorize?'+params,{redirect:'manual'}),html=await page.text();
   if(page.status!==200||!html.includes('name="username"'))throw Error('expected origin/form refused');
   const fields={};for(const m of html.matchAll(/<input\b[^>]*>/gi)){const tag=m[0],name=tag.match(/\bname="([^"]+)"/i)?.[1],value=tag.match(/\bvalue="([^"]*)"/i)?.[1]??'';if(name&&!['username','password'].includes(name))fields[name]=value.replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'");}
   fields.username=credentials.username;fields.password=credentials.password;
+  stage('OIDC_LOGIN');
   const logged=await fetch(local+'/core/authorize/login',{method:'POST',redirect:'manual',headers:{'content-type':'application/x-www-form-urlencoded',cookie:page.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ')},body:new URLSearchParams(fields)});
+  diagnosticHttp=logged.status;
   if(logged.status!==302)throw Error('real OIDC login failed');
   const location=new URL(logged.headers.get('location')??'');if(location.origin!==origin||location.pathname!=='/callback'||location.searchParams.get('state')!==state||!location.searchParams.get('code'))throw Error('OIDC redirect/state failed');
+  stage('OIDC_TOKEN');
   const issued=await json(local+'/core/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code:location.searchParams.get('code'),code_verifier:verifier,redirect_uri:origin+'/callback',client_id:'demo-web'})});
   if(typeof issued.id_token!=='string')throw Error('token absent');
+  stage('OIDC_CLAIMS');
   const claims=JSON.parse(Buffer.from(issued.id_token.split('.')[1],'base64url').toString());
   if(claims.iss!==p.issuer||!(claims.aud==='demo-web'||Array.isArray(claims.aud)&&claims.aud.includes('demo-web')))throw Error('issuer/audience mismatch');
-  const session=await fetch(local+'/core/session/extend',{method:'POST',headers:{authorization:'Bearer '+issued.id_token}});if(![200,409].includes(session.status))throw Error('session token verification failed');
+  stage('SESSION_VERIFY');
+  const session=await fetch(local+'/core/session/extend',{method:'POST',headers:{authorization:'Bearer '+issued.id_token}});diagnosticHttp=session.status;if(![200,409].includes(session.status))throw Error('session token verification failed');
+  stage('ACTIVATION_HTTP');
   const rows=await json(local+'/api/tenants/'+encodeURIComponent(p.tenant)+'/activations',{headers:{authorization:'Bearer '+issued.id_token}});
-  if(!Array.isArray(rows))throw Error('journal unknown');let seq=0;
-  for(const row of rows){if(row.tenant!==p.tenant||!Number.isSafeInteger(row.seq)||row.seq<=seq||typeof row.commit!=='string'||!row.commit||!['pending','recorded','applied','failed'].includes(row.state))throw Error('journal schema invalid');seq=row.seq;}
-  journal={count:rows.length,checksum:hash(JSON.stringify(rows))};
+  stage('ACTIVATION_MATCH');
+  validateActivationProjection(rows,p.expectedActivationRows,p.tenant);
+  if(!/^[0-9a-f]{64}$/.test(p.expectedActivationChecksum??''))throw Error('independent journal checksum missing');
+  journal={count:rows.length,checksum:p.expectedActivationChecksum,source:'authenticated-sequence-projection+independent-postgres-journal'};
  }
+ stage('NEGATIVE_REDIRECT');
  const negative=await fetch(local+'/core/authorize?'+new URLSearchParams({client_id:'demo-web',redirect_uri:'https://example.invalid/callback',response_type:'code',state:'negative',code_challenge:'A'.repeat(43),code_challenge_method:'S256'}));
  if(!/unknown client/i.test(await negative.text()))throw Error('negative redirect check failed');
  if(p.reviewedLegacyRollback===true&&!existsSync('/data/migrations/journal.json')&&!existsSync('/app/migration-source/data/migrations/manifest.json'))return {journal,ledger:'legacy-rollback-no-migration-ledger'};
+ stage('MIGRATION_LEDGER');
  const ledger=JSON.parse(readFileSync('/data/migrations/journal.json','utf8'));
  if(ledger.format!==1||ledger.pending||!Array.isArray(ledger.entries)||!ledger.entries.length)throw Error('migration ledger incomplete');
  const expected=JSON.parse(readFileSync('/app/migration-source/data/migrations/manifest.json','utf8'));
@@ -77,4 +103,4 @@ try{
  if(mode==='capture')console.log(JSON.stringify({dolt:dolt(),bao:await bao()}));
  else if(mode==='smoke')console.log(JSON.stringify(await smoke()));
  else throw Error('invalid mode');
-}catch{console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}
+}catch{console.error('LYAM_QUALIFICATION_DIAGNOSTIC '+JSON.stringify({stage:diagnosticStage,http:diagnosticHttp}));console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}

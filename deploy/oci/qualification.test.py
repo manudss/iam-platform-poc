@@ -44,4 +44,48 @@ class Preserve(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    file=Path(d)/'private.json';q.private_json(file,{'ok':True});self.assertEqual(file.stat().st_mode&0o777,0o600)
    with self.assertRaises(FileExistsError):q.private_json(file,{})
+
+class ActivationJournal(unittest.TestCase):
+ def setUp(self):self.original=q.query;self.p={'tenant':'t1'}
+ def tearDown(self):q.query=self.original
+ def read(self,rows):
+  q.query=lambda p,sql:rows
+  return q.activation_journal(self.p)
+ def test_complete_state_and_projection(self):
+  rows=[{'tenant':'t1','seq':2,'commit':'abc','state':'applied','error':None,'requestId':None}]
+  self.assertEqual(self.read(rows),rows);self.assertEqual(q.journal_projection(rows),[{'seq':2,'commit':'abc'}])
+ def test_missing_or_invalid_privileged_journal_never_becomes_empty(self):
+  good={'tenant':'t1','seq':1,'commit':'abc','state':'applied'}
+  for rows in [None,{},[{'seq':1,'commit':'abc'}],[{**good,'tenant':'other'}],[{**good,'seq':True}],[{**good,'state':'unknown'}],[{**good,'commit':''}],[good,good],[{**good,'error':{}}]]:
+   with self.subTest(rows=rows):
+    with self.assertRaises(ValueError):self.read(rows)
+ def test_empty_verified_only_from_exact_sql_array(self):self.assertEqual(self.read([]),[])
+ def test_query_preserves_all_columns_and_quotes_tenant(self):
+  captured=[]
+  q.query=lambda p,sql:captured.append(sql) or []
+  q.activation_journal({'tenant':"a'b"})
+  self.assertIn('SELECT a.*',captured[0]);self.assertIn("tenant='a''b'",captured[0]);self.assertIn('ORDER BY seq',captured[0])
+
+
+class SafeDiagnostics(unittest.TestCase):
+ def test_child_codes_accept_only_closed_schema(self):
+  prefix='LYAM_QUALIFICATION_DIAGNOSTIC '
+  self.assertEqual(q.child_code(prefix+'{"stage":"SESSION_VERIFY","http":403}'),{'stage':'SESSION_VERIFY','http':403})
+  for body in ['{"stage":"SECRET_MARKER","http":403}','{"stage":"SMOKE","http":403}','{"stage":"OIDC_TOKEN","http":"secret"}','{"stage":"OIDC_TOKEN","http":403,"body":"secret"}','not-json']:
+   self.assertIsNone(q.child_code(prefix+body))
+ def test_exception_content_and_commands_never_enter_code(self):
+  q.stage('SMOKE');q.child_diagnostic=q.child_code('secret response and password')
+  self.assertEqual(q.diagnostic_code(),{'stage':'SMOKE'})
+
+class PrivateFailureCLI(unittest.TestCase):
+ def test_private_failure_file_exclusive_and_contains_no_path_or_secret(self):
+  import tempfile,subprocess,sys,os
+  with tempfile.TemporaryDirectory()as root:
+   diagnostic=Path(root)/'private-failure.json';secret=Path(root)/'SECRET-MARKER-policy.json';secret.write_text('{bad-json-SECRET-MARKER')
+   args=[sys.executable,str(Path(q.__file__)),'--phase','after','--policy',str(secret),'--failure-diagnostic-file',str(diagnostic)]
+   for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:args+=['--'+name,'fixture']
+   result=subprocess.run(args,text=True,capture_output=True)
+   self.assertNotEqual(result.returncode,0);value=diagnostic.read_text();self.assertNotIn('SECRET-MARKER',value+result.stdout+result.stderr);self.assertEqual(diagnostic.stat().st_mode&0o777,0o600);self.assertEqual(json.loads(value)['stage'],'POLICY');self.assertEqual(json.loads(value)['class'],'JSONDecodeError')
+   again=subprocess.run(args,text=True,capture_output=True);self.assertNotEqual(again.returncode,0);self.assertEqual(diagnostic.read_text(),value)
+
 if __name__=='__main__':unittest.main()
