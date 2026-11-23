@@ -30,6 +30,7 @@ jobs:
       gallery_bootstrap_required: ${{ steps.plan.outputs.gallery_bootstrap_required }}
       gallery_preferences_required: ${{ steps.plan.outputs.gallery_preferences_required }}
       dev_stack_check_required: ${{ steps.plan.outputs.dev_stack_check_required }}
+      dev_ui_browser_check_required: ${{ steps.plan.outputs.dev_ui_browser_check_required }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -250,7 +251,7 @@ jobs:
         if: needs.control_policy.outputs.dev_stack_check_required == 'true'
         run: node scripts/dev-stack-check.mjs
       - name: Dev console in a real browser (sign-in, My applications, Roles without a typed token)
-        if: needs.control_policy.outputs.dev_stack_check_required == 'true'
+        if: needs.control_policy.outputs.dev_ui_browser_check_required == 'true'
         run: |
           mkdir /tmp/pw-dev && (cd /tmp/pw-dev && npm init -y >/dev/null && npm i playwright-core >/dev/null)
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw-dev/node_modules node scripts/dev-ui-browser-check.mjs /tmp/dev-ui-shots
