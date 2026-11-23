@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -67,7 +67,10 @@ function stubbedDocker(log, exitCode = 0) {
   const stub = join(bin, 'docker');
   writeFileSync(stub, `#!/bin/sh\necho "$@" >> "$STUB_LOG"\necho "stub: daemon unreachable" >&2\nexit ${exitCode}\n`);
   chmodSync(stub, 0o755);
-  return { PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log };
+  // Same stub for Windows runners (Get-Command finds docker.cmd first there).
+  writeFileSync(join(bin, 'docker.cmd'),
+    `@echo off\r\necho %* >> "%STUB_LOG%"\r\necho stub: daemon unreachable 1>&2\r\nexit /b ${exitCode}\r\n`);
+  return { PATH: `${bin}${delimiter}${process.env.PATH}`, STUB_LOG: log };
 }
 
 function runDevSh(args, env, cwd = REPO) {
@@ -118,19 +121,23 @@ test('dev.sh up refuses a busy published port with a clear message, and starts o
 });
 
 // Non-regression for scripts/dev.ps1: the engine wait loop must survive a failing native `docker`
-// (Windows PowerShell 5.1 turns native stderr redirection under $ErrorActionPreference='Stop' into
-// a terminating NativeCommandError) and land on the guided message instead. Runs under any pwsh;
-// skipped when none is available (GitHub's runners ship one).
+// and land on the guided message instead of crashing. On Windows CI runners this executes under the
+// REAL Windows PowerShell 5.1 - the only place where native stderr redirection under
+// $ErrorActionPreference='Stop' throws a terminating NativeCommandError. Elsewhere it runs under
+// pwsh when one is available (generic coverage only) and is skipped without one.
 test('dev.ps1 waits out a stopped Docker engine and fails with the guided message', async (t) => {
-  if (!which('pwsh')) { t.skip('pwsh not available on this machine'); return; }
+  const interpreter = process.platform === 'win32' ? 'powershell.exe' : which('pwsh');
+  if (!interpreter) { t.skip('no PowerShell available on this machine'); return; }
   const log = join(make(), 'docker.log');
-  const r = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/dev.ps1', '-DockerStartTimeoutSeconds', '2'], {
-    cwd: REPO, env: { ...process.env, ...stubbedDocker(log, 1) }, encoding: 'utf8', timeout: 60_000,
+  const r = spawnSync(interpreter, ['-NoProfile', '-File', 'scripts/dev.ps1', '-DockerStartTimeoutSeconds', '2'], {
+    cwd: REPO, env: { ...process.env, ...stubbedDocker(log, 1) }, encoding: 'utf8', timeout: 90_000,
   });
-  const out = `${r.stdout}\n${r.stderr}`;
+  const out = `${r.stdout}
+${r.stderr}`;
   assert.equal(r.status, 1, `expected a clean guided failure: ${out}`);
   assert.match(out, /Docker engine is not running/, 'the guided message is shown');
-  assert.doesNotMatch(out, /NativeCommandError|not recognized as the name of a cmdlet/, 'no engine-level crash');
+  assert.doesNotMatch(out, /NativeCommandError/, 'the 5.1 terminating-error quirk is not hit');
+  assert.doesNotMatch(out, /not recognized as the name of a cmdlet/, 'no engine-level crash');
   assert.match(readFileSync(log, 'utf8'), /version/, 'the loop really probed the engine');
 });
 
