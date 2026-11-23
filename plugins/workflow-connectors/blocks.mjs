@@ -626,7 +626,13 @@ const MAIL_RE = /^[^\s@,;<>]{1,64}@[^\s@,;<>]{1,190}\.[A-Za-z]{2,}$/;
 function checkedMailPolicy(settings, to, label) {
   if (typeof to !== 'string' || !MAIL_RE.test(to)) bad(`${label}: one e-mail address`);
   const allowed = typeof settings?.mailAllowedRecipients === 'string' ? settings.mailAllowedRecipients.split(',').map(x => x.trim().toLowerCase()).filter(Boolean) : [];
-  if (!allowed.includes(to.toLowerCase())) bad(`${label}: this recipient is not in the allowed recipients setting`);
+  const domains = typeof settings?.mailAllowedDomains === 'string' ? settings.mailAllowedDomains.split(',').map(x => x.trim().toLowerCase()).filter(Boolean) : [];
+  // Exact ASCII DNS names only. Never treat a suffix, wildcard, URL or subdomain as a grant.
+  const domainName = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+  if (domains.some(x => !domainName.test(x))) bad(`${label}: allowed mail domains must be exact domain names, without @ or wildcards`);
+  const [local, domain] = to.toLowerCase().split('@');
+  const domainRecipient = /^[a-z0-9!#$%&'*+\/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+\/=?^_`{|}~-]+)*$/.test(local) && domainName.test(domain) && domains.includes(domain);
+  if (!allowed.includes(to.toLowerCase()) && !domainRecipient) bad(`${label}: this recipient is not in the allowed recipients or domains setting`);
   const apiKey = process.env.RESEND_API_KEY;
   if (typeof apiKey !== 'string' || !apiKey.trim()) bad(`${label}: RESEND_API_KEY is not set on the server (nothing sent)`);
   const from = str(settings?.mailFrom, 'mail sender', 200, false) || 'lyam@dss.name';
@@ -657,9 +663,9 @@ const lyamSendMail = {
   label: 'Send a mail (Resend)',
   simulated: false,
   category: 'real',
-  description: 'REAL and immediate: sends one mail through the notify.send hook (Resend when RESEND_API_KEY is set on the server). The recipient must be listed in the plugin setting "Mail block: allowed recipients" (empty refuses everything). The provider idempotency key (run, recipient, subject) makes a repeat within 24 hours return the first mail instead of sending another. The step needs the provider message id; without it the run stops for review. The id proves acceptance, not delivery. A test run only logs. Never put a secret in the text.',
+  description: 'REAL and immediate: sends one mail through the notify.send hook (Resend when RESEND_API_KEY is set on the server). The recipient must match an exact address or exact domain in the Mail block settings (both empty refuses everything). The provider idempotency key (run, recipient, subject) makes a repeat within 24 hours return the first mail instead of sending another. The step needs the provider message id; without it the run stops for review. The id proves acceptance, not delivery. A test run only logs. Never put a secret in the text.',
   fields: [
-    { key: 'to', label: 'Recipient (one address)', type: 'string', required: true, help: 'placeholders allowed; must be in the allowed recipients setting' },
+    { key: 'to', label: 'Recipient (one address)', type: 'string', required: true, help: 'placeholders allowed; must match an allowed address or exact domain' },
     { key: 'subject', label: 'Subject', type: 'string', required: true },
     { key: 'text', label: 'Text', type: 'text', required: true, help: 'plain text, up to 4000 characters, placeholders allowed' },
   ],

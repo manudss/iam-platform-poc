@@ -48,6 +48,19 @@ describe('workflow identity creation provenance', () => {
       assert.equal(f.writes.length,writes);assert.equal(f.row()!.email,config.email);
     }finally{if(previous===undefined)delete process.env.RESEND_API_KEY;else process.env.RESEND_API_KEY=previous;}
   });
+  it('phase1 preflight accepts any exact-domain address without an account identity list and rejects outside before writes',async()=>{
+    const old=process.env.RESEND_API_KEY;process.env.RESEND_API_KEY='fictional-key';
+    try {
+      for(const email of ['camille.martin@dss.name','another.person@DSS.NAME']) {
+        const f=fixture();await block().run(f.context({badgeMode:'request',config:{...config,email},preflightBadgeDelivery:async()=>({mailAllowedDomains:'dss.name'})}));
+        assert.equal(f.writes.filter(x=>x.startsWith('insert')).length,1);
+      }
+      for(const email of ['camille@sub.dss.name','camille@dss.name.evil','camille@example.invalid']) {
+        const f=fixture();await assert.rejects(()=>block().run(f.context({badgeMode:'request',config:{...config,email},preflightBadgeDelivery:async()=>({mailAllowedDomains:'dss.name'})})),/allowed recipients/);
+        assert.equal(f.entered(),0);
+      }
+    }finally{if(old===undefined)delete process.env.RESEND_API_KEY;else process.env.RESEND_API_KEY=old;}
+  });
   it('stores a non-configurable execution marker in the very same identity INSERT', async () => {
     const f = fixture({ legacy: true }); const output = await block().run(f.context());
     assert.equal(output?.identity, config.identity);
