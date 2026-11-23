@@ -158,6 +158,27 @@ export function autoLayout(nodes: WfNode[], edges: WfEdge[]): Map<string, { x: n
   return pos;
 }
 
+/** Fold topological layers into readable rows. Height is measured from each node's port count,
+ * so parallel branches and merges never overlap. This is view state, not execution order. */
+export function wrappedLayout(layers: Map<string, { x: number; y: number }>, heights: Map<string, number>, columns = 3): Map<string, { x: number; y: number }> {
+  const xs = [...new Set([...layers.values()].map(p => p.x))].sort((a, b) => a - b);
+  const out = new Map<string, { x: number; y: number }>();
+  let top = 220; // trigger occupies the first row above the steps
+  for (let start = 0; start < xs.length; start += columns) {
+    let rowHeight = 0;
+    for (let col = 0; col < columns && start + col < xs.length; col++) {
+      let y = top;
+      for (const [id, p] of layers) if (p.x === xs[start + col]) {
+        out.set(id, { x: 40 + col * 400, y });
+        y += Math.max(180, heights.get(id) ?? 180) + 60;
+      }
+      rowHeight = Math.max(rowHeight, y - top);
+    }
+    top += rowHeight + 120;
+  }
+  return out;
+}
+
 export const categoryBadge = (category: StepCategory) => category;
 
 // ---- Mini graph thumbnails (list cards, template cards): auto-layout positions normalized into a fixed box. ----

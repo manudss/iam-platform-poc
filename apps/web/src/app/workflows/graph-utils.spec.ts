@@ -1,5 +1,5 @@
 import { WfBlock, WfEvent, WfNode } from './wf-model';
-import { autoLayout, defaultLabel, edgeLabelChoices, loopBody, miniGraph, outgoingLabels, placeholdersIn, validateGraph } from './graph-utils';
+import { autoLayout, wrappedLayout, defaultLabel, edgeLabelChoices, loopBody, miniGraph, outgoingLabels, placeholdersIn, validateGraph } from './graph-utils';
 
 // Unit tests for the editor graph helpers: branch labels, client-side validation (mirrors the server
 // rules) and the layered auto-layout.
@@ -117,5 +117,21 @@ describe('miniGraph thumbnails', () => {
     expect(g.nodes.length).toBe(1);
     expect(g.nodes[0].x).toBeGreaterThan(0);
     expect(g.nodes[0].y).toBeGreaterThan(0);
+  });
+});
+
+describe('wrapped workflow layout', () => {
+  it('folds long chains at three layers and clears a tall parallel branch', () => {
+    const layers = new Map([['a',{x:0,y:0}],['b',{x:280,y:0}],['parallel',{x:280,y:140}],['c',{x:560,y:0}],['d',{x:840,y:0}]]);
+    const pos = wrappedLayout(layers,new Map([['parallel',500]]));
+    expect(pos.get('a')!.x).toBe(pos.get('d')!.x);
+    expect(pos.get('d')!.y).toBeGreaterThan(pos.get('parallel')!.y + 500);
+    expect(new Set([...pos.values()].map(p=>p.x)).size).toBe(3);
+  });
+  it('uses one column on mobile, preserves all nodes and deterministic order', () => {
+    const layers = new Map([['a',{x:0,y:0}],['b',{x:280,y:0}]]);
+    const pos = wrappedLayout(layers,new Map(),1);
+    expect(pos.size).toBe(2); expect(pos.get('a')!.x).toBe(pos.get('b')!.x);
+    expect(pos.get('b')!.y).toBeGreaterThan(pos.get('a')!.y);
   });
 });

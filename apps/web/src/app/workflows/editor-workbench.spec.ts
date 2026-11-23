@@ -1,3 +1,5 @@
+import { BehaviorSubject } from 'rxjs';
+import { convertToParamMap } from '@angular/router';
 import { ElementRef, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -9,12 +11,14 @@ import { edgeLabelOf } from './editor';
 describe('direction C editor workbench', () => {
   let e: any;
   let update: ReturnType<typeof vi.fn>;
+  let params: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
   beforeEach(() => {
+    params = new BehaviorSubject(convertToParamMap({id:'w1'}));
     update = vi.fn(async () => ({ status: 200, data: {} }));
     TestBed.configureTestingModule({ providers: [
       { provide: Session, useValue: { branch: signal('personal/alice'), adminToken: signal(''), api: { raw: update } } },
       { provide: Router, useValue: { url: '/workflows/edit/w1', navigateByUrl: vi.fn(async () => true) } },
-      { provide: ActivatedRoute, useValue: { snapshot: { paramMap: { get: () => 'w1' } } } },
+      { provide: ActivatedRoute, useValue: { paramMap: params, snapshot: { paramMap: { get: () => 'w1' } } } },
       { provide: ElementRef, useValue: new ElementRef(document.createElement('div')) },
     ] });
     e = TestBed.runInInjectionContext(() => new WorkflowEditPage());
@@ -24,6 +28,26 @@ describe('direction C editor workbench', () => {
       e.vfNodes.update((ns: any[]) => [...ns, e.makeNode(id, st, ns.length)]);
     }
     e.savedDefinition = e.definitionStamp();
+  });
+  it('opens the same inspector from the trigger card callback without changing the graph', () => {
+    e.triggerEvent.set('user.created'); e.vfNodes()[0].selected.set(true);
+    e.triggerNode().data().open();
+    expect(e.triggerSelected()).toBe(true); expect(e.mobilePanel()).toBe('settings');
+    expect(e.triggerEvent()).toBe('user.created'); expect(e.dirty()).toBe(true);
+  });
+  it('reloads on tab route changes and ignores a slower response from the old workflow', async () => {
+    const pending = new Map<string, (x:unknown)=>void>();
+    update.mockImplementation((_method: string, path: string) => {
+      if (/\/workflows\//.test(path)) return new Promise(resolve => pending.set(path,resolve));
+      return Promise.resolve({status:200,data:{events:[],blocks:[]}});
+    });
+    e.ngOnInit(); params.next(convertToParamMap({id:'w2'}));
+    const response = (name:string) => ({status:200,data:{definition:{name,description:'',active:false,graph:{nodes:[],edges:[]}}}});
+    pending.get('/workflows/w2')!(response('Second')); await Promise.resolve(); await Promise.resolve();
+    expect(e.name).toBe('Second'); expect(e.id).toBe('w2');
+    pending.get('/workflows/w1')!(response('Stale first')); await Promise.resolve(); await Promise.resolve();
+    expect(e.name).toBe('Second'); expect(e.undoStack).toEqual([]); expect(e.dirty()).toBe(false);
+    e.ngOnDestroy();
   });
   it('only marks real graph or metadata changes dirty; undo restores saved state', () => {
     expect(e.dirty()).toBe(false);
