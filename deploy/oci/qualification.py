@@ -91,6 +91,7 @@ def journal_projection(rows):return [{'seq':r['seq'],'commit':r['commit']} for r
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after'],required=True)
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
+    parser.add_argument('--receipt-file')
     parser.add_argument('--isolated-loopback-test',action='store_true')
     parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
     if not Path(a.barrier_file).is_file():raise ValueError('maintenance barrier absent')
@@ -131,7 +132,8 @@ def main():
     if before['policyHash']!=state['policyHash']:raise ValueError('qualification policy changed mid-update')
     after_file=evidence/('after-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
     private_json(after_file,state)
-    private_json(evidence/('smoke-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json'),smoke_result)
+    smoke_file=evidence/('smoke-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
+    private_json(smoke_file,smoke_result)
     changes=compare(before,state,p)
     if changes:
         # Each target digest needs a separate reviewed verifier. It receives hash-only snapshots,
@@ -139,6 +141,7 @@ def main():
         verifier=p.get('transformationVerifiers',{}).get(a.image)
         if not verifier or not Path(verifier).is_file() or not os.access(verifier,os.X_OK):raise ValueError('unexpected preservation changes; no digest-specific reviewed verifier')
         cmd([verifier,str(evidence/'before.json'),str(after_file)])
+    private_json(Path(a.receipt_file) if a.receipt_file else evidence/('qualified-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json'),{'before_path':str(evidence/'before.json'),'after_path':str(after_file),'smoke_path':str(smoke_file),'format':1,'result':'qualified','image':a.image,'policyHash':state['policyHash'],'before_sha256':digest((evidence/'before.json').read_bytes()),'after_sha256':digest(after_file.read_bytes()),'smoke_sha256':digest(smoke_file.read_bytes()),'transportCoverage':state['transportCoverage']})
     print('ISOLATED LOOPBACK ONLY: preservation/OIDC/journal checks passed, NO public TLS qualification, keep production paused' if a.isolated_loopback_test else 'Pre-opening preservation, migration, OIDC, journal and TLS checks passed; caller still owns barrier')
 if __name__=='__main__':
     try:main()
