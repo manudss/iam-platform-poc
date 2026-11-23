@@ -75,6 +75,19 @@ def policy_load(path, isolated_loopback=False):
     if not all(isinstance(p[k],list) for k in ['baoMetadataRoots','credentialFiles','appendOnlyTables']):raise ValueError('policy coverage invalid')
     return p
 
+def activation_journal(p):
+    # Independent privileged read uses the already-required PostgreSQL qualification account.
+    # It does not grant a low-assurance web session access to the administrator journal.
+    rows=query(p,"SELECT coalesce(json_agg(x ORDER BY seq),'[]') FROM (SELECT tenant,seq,commit_hash AS \"commit\",state,error,request_id AS \"requestId\" FROM public.activations WHERE tenant="+lit(p['tenant'])+") x")
+    if not isinstance(rows,list):raise ValueError('activation journal unknown')
+    last=0
+    for r in rows:
+        if not isinstance(r,dict) or r.get('tenant')!=p['tenant'] or type(r.get('seq')) is not int or r['seq']<=last or not isinstance(r.get('commit'),str) or not r['commit'].strip() or r.get('state') not in ['pending','recorded','applied','failed'] or any(r.get(k) is not None and not isinstance(r[k],str) for k in ['error','requestId']):raise ValueError('activation journal schema unknown')
+        last=r['seq']
+    return rows
+
+def journal_projection(rows):return [{'seq':r['seq'],'commit':r['commit']} for r in rows]
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after'],required=True)
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
@@ -103,8 +116,10 @@ def main():
         prior=json.loads((evidence/'before.json').read_text())
         legacy_rollback=prior['image']==a.image and prior.get('migrationLedger') is None
         smoke=['docker','exec','-i',a.container,'node','--input-type=module','-e',source,'smoke']
+        journal_before=activation_journal(p)
         auth=json.loads(Path(p['authFile']).read_text())
-        smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth,'reviewedLegacyRollback':legacy_rollback})))
+        smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth,'reviewedLegacyRollback':legacy_rollback,'expectedActivationRows':journal_projection(journal_before),'expectedActivationChecksum':digest(json.dumps(journal_before,sort_keys=True,separators=(',',':')).encode())})))
+    if a.phase=='after' and activation_journal(p)!=journal_before:raise ValueError('activation journal changed during smoke, repeat qualification after reconciliation')
     state=json.loads(cmd(node,json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})))
     ledger=Path(a.data_dir)/'migrations/journal.json'
     state['migrationLedger']=json.loads(ledger.read_text()) if ledger.exists() else None

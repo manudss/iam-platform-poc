@@ -38,6 +38,15 @@ function dolt(){
   const rows=query(db+'/'+b.name,"SELECT DOLT_HASHOF_DB('WORKING') AS root");if(!rows[0]?.root)throw Error('Dolt working root unknown');return {database:db,branch:b.name,head:b.hash,root:rows[0].root};
  }));
 }
+function validateActivationProjection(rows,expected,tenant){
+ if(!Array.isArray(rows)||!Array.isArray(expected))throw Error('journal projection or independent journal missing');
+ let seq=0;for(const row of rows){
+  if(!row||typeof row!=='object'||!Number.isSafeInteger(row.seq)||row.seq<=seq||typeof row.commit!=='string'||!row.commit.trim())throw Error('journal sequence schema invalid');
+  // Older images return the full journal on this route. Validate those fields when present.
+  if(('tenant'in row&&row.tenant!==tenant)||('state'in row&&!['pending','recorded','applied','failed'].includes(row.state)))throw Error('legacy journal schema invalid');seq=row.seq;
+ }
+ if(JSON.stringify(rows.map(r=>({seq:r.seq,commit:r.commit})))!==JSON.stringify(expected))throw Error('authenticated activation sequence differs from independent journal');
+}
 async function smoke(){
  const local='http://127.0.0.1:8080';
  if(!(await fetch(local+'/healthz')).ok)throw Error('edge health failed');
@@ -60,9 +69,9 @@ async function smoke(){
   if(claims.iss!==p.issuer||!(claims.aud==='demo-web'||Array.isArray(claims.aud)&&claims.aud.includes('demo-web')))throw Error('issuer/audience mismatch');
   const session=await fetch(local+'/core/session/extend',{method:'POST',headers:{authorization:'Bearer '+issued.id_token}});if(![200,409].includes(session.status))throw Error('session token verification failed');
   const rows=await json(local+'/api/tenants/'+encodeURIComponent(p.tenant)+'/activations',{headers:{authorization:'Bearer '+issued.id_token}});
-  if(!Array.isArray(rows))throw Error('journal unknown');let seq=0;
-  for(const row of rows){if(row.tenant!==p.tenant||!Number.isSafeInteger(row.seq)||row.seq<=seq||typeof row.commit!=='string'||!row.commit||!['pending','recorded','applied','failed'].includes(row.state))throw Error('journal schema invalid');seq=row.seq;}
-  journal={count:rows.length,checksum:hash(JSON.stringify(rows))};
+  validateActivationProjection(rows,p.expectedActivationRows,p.tenant);
+  if(!/^[0-9a-f]{64}$/.test(p.expectedActivationChecksum??''))throw Error('independent journal checksum missing');
+  journal={count:rows.length,checksum:p.expectedActivationChecksum,source:'authenticated-sequence-projection+independent-postgres-journal'};
  }
  const negative=await fetch(local+'/core/authorize?'+new URLSearchParams({client_id:'demo-web',redirect_uri:'https://example.invalid/callback',response_type:'code',state:'negative',code_challenge:'A'.repeat(43),code_challenge_method:'S256'}));
  if(!/unknown client/i.test(await negative.text()))throw Error('negative redirect check failed');

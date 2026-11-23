@@ -44,4 +44,21 @@ class Preserve(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    file=Path(d)/'private.json';q.private_json(file,{'ok':True});self.assertEqual(file.stat().st_mode&0o777,0o600)
    with self.assertRaises(FileExistsError):q.private_json(file,{})
+
+class ActivationJournal(unittest.TestCase):
+ def setUp(self):self.original=q.query;self.p={'tenant':'t1'}
+ def tearDown(self):q.query=self.original
+ def read(self,rows):
+  q.query=lambda p,sql:rows
+  return q.activation_journal(self.p)
+ def test_complete_state_and_projection(self):
+  rows=[{'tenant':'t1','seq':2,'commit':'abc','state':'applied','error':None,'requestId':None}]
+  self.assertEqual(self.read(rows),rows);self.assertEqual(q.journal_projection(rows),[{'seq':2,'commit':'abc'}])
+ def test_missing_or_invalid_privileged_journal_never_becomes_empty(self):
+  good={'tenant':'t1','seq':1,'commit':'abc','state':'applied'}
+  for rows in [None,{},[{'seq':1,'commit':'abc'}],[{**good,'tenant':'other'}],[{**good,'seq':True}],[{**good,'state':'unknown'}],[{**good,'commit':''}],[good,good],[{**good,'error':{}}]]:
+   with self.subTest(rows=rows):
+    with self.assertRaises(ValueError):self.read(rows)
+ def test_empty_verified_only_from_exact_sql_array(self):self.assertEqual(self.read([]),[])
+
 if __name__=='__main__':unittest.main()
