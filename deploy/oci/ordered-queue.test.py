@@ -52,6 +52,24 @@ class Recovery(unittest.TestCase):
  def resume_manifest(self):
   s=q.load(self.path)
   return {'format':1,'kind':'reviewed-resume','state_fingerprint':q.fingerprint(s),'expected_delivered':{k:s['history'][-1][k] for k in ['sha','digest']},'authorization_ref':'separate resume approval attestation','evidence_refs':['operator recheck']}
+ def in_place_manifest(self):
+  m=self.manifest();m['chain']=[{'sha':S(2),'parent':S(1),'outcome':'delivered'}];m['target']={'sha':S(2),'digest':D(2)};m['qualification']={**m['target'],'evidence_refs':['requalified exact image against original before snapshot']};return m
+ def test_exact_failed_image_may_be_qualified_in_place_without_redeployment(self):
+  s=self.recover(self.in_place_manifest());self.assertEqual([e['sha'] for e in s['history']],[S(1),S(2)]);self.assertTrue(s['resume_required']);self.assertEqual(s['recoveries'][0]['recovery_mode'],'qualified-in-place');self.assertEqual(s['recoveries'][0]['original_unresolved'],{k:self.state[k] for k in ['pending','failed']});self.assertEqual(len(self.verifications),1);self.assertEqual(len(self.observations),1)
+  with self.assertRaisesRegex(ValueError,'operator review'):q.deploy(self.path,plan(2,3),'must-not-run',lambda *a,**kw:self.fail('updater called'))
+  q.resume_reviewed(self.path,self.resume_manifest(),'fixture',self.observe);calls=[];q.deploy(self.path,plan(2,3),'next-updater',lambda args,**kw:calls.append(args) or SimpleNamespace(returncode=0));self.assertEqual(len(calls),1)
+ def test_in_place_refuses_changed_digest_source_outcome_or_qualification(self):
+  import copy
+  for alter in [lambda m:m['target'].update(digest=D(999)),lambda m:m['target'].update(sha=S(999)),lambda m:m['chain'][0].update(outcome='replaced'),lambda m:m['chain'][0].update(parent=S(99)),lambda m:m['qualification'].update(digest=D(99)),lambda m:m.update(authorization_ref='')]:
+   m=self.in_place_manifest();alter(m);before=self.path.read_bytes()
+   with self.assertRaises(ValueError):self.recover(m)
+   self.assertEqual(self.path.read_bytes(),before);self.assertEqual(self.observations,[])
+ def test_in_place_stale_manifest_and_unobserved_image_cannot_clear_incident(self):
+  m=self.in_place_manifest();m['state_fingerprint']='stale'
+  with self.assertRaisesRegex(ValueError,'fingerprint'):self.recover(m)
+  def fail(*args):raise ValueError('running image changed')
+  with self.assertRaisesRegex(ValueError,'changed'):self.recover(self.in_place_manifest(),observe=fail)
+  self.assertEqual(q.load(self.path),self.state)
  def test_record_preserves_failed_entry_without_claiming_intermediates_delivered(self):
   s=self.recover();self.assertEqual(s['format'],2);self.assertTrue(s['resume_required']);self.assertEqual(s['recovery_fence'],S(4));self.assertEqual([e['sha'] for e in s['history']],[S(1),S(4)])
   self.assertEqual(s['recoveries'][0]['original_unresolved'],{k:self.state[k] for k in ['pending','failed']});self.assertEqual(len(self.observations),1);self.assertEqual(len(self.verifications),1)

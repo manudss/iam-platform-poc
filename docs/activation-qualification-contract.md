@@ -34,3 +34,24 @@ actual generated journal SQL also ran on isolated local PostgreSQL with two
 tenants and returned only the target tenant with its native columns. This is not
 an isolated full deployment qualification or proof that the blocked host can
 open. Remote CI is separate.
+
+## Reviewed in-place recovery of an already installed image
+
+If the exact failed pending source AND digest are still running and pass the
+corrected qualification against the original pre-update evidence, the queue can
+record a one-entry reviewed recovery chain. Its only outcome is `delivered`.
+The exact source chain/main membership, state fingerprint, expected previous
+cursor, authorization/evidence references, exact qualification attestation and
+read-only Docker image/source checks still apply. A changed digest with the same
+source is not in-place recovery and is refused.
+
+The record stores `qualified-in-place`, preserves the original pending/failure
+incident, advances the history to the actually observed image and retains
+`resume_required`. The existing separate reviewed resume and external pause
+remain. No updater is called.30 queue tests cover this path and refusals.
+
+This is the minimal route for an image already installed whose only identified
+failure was qualification. It is not permission to use it, a substitute for
+integrity evidence or a path for installing a different image through an
+inherited maintenance barrier. If the image fails the corrected qualification,
+keep maintenance/pause and investigate instead of declaring it delivered.

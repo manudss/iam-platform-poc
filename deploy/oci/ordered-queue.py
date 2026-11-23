@@ -138,7 +138,7 @@ def record_reviewed_recovery(path,manifest,repository,container,verify=verify_so
     if failed.get('sha')!=pending.get('sha') or pending.get('parent')!=state['history'][-1]['sha'] or not DIGEST.fullmatch(pending.get('digest','')):
         raise ValueError('inconsistent unresolved incident')
     chain=manifest.get('chain')
-    if not isinstance(chain,list) or not 2<=len(chain)<=256: raise ValueError('bounded replacement chain including failed entry and new target required')
+    if not isinstance(chain,list) or not 1<=len(chain)<=256: raise ValueError('bounded reviewed chain including failed entry and observed target required')
     parent=state['history'][-1]['sha'];seen={parent}
     for i,entry in enumerate(chain):
         if not isinstance(entry,dict) or not SHA.fullmatch(entry.get('sha','')) or entry['sha'] in seen or entry.get('parent')!=parent:
@@ -150,13 +150,16 @@ def record_reviewed_recovery(path,manifest,repository,container,verify=verify_so
     if chain[0]['sha']!=pending['sha']: raise ValueError('chain does not start with the actual failed source')
     target=manifest.get('target',{})
     if target.get('sha')!=chain[-1]['sha'] or not DIGEST.fullmatch(target.get('digest','')): raise ValueError('exact corrected target source/digest required')
+    in_place=len(chain)==1
+    if in_place and any(target.get(k)!=pending.get(k) for k in ['sha','digest']):
+        raise ValueError('in-place qualification must use exact original pending source and digest')
     qualification=manifest.get('qualification',{})
     if any(qualification.get(k)!=target[k] for k in ['sha','digest']): raise ValueError('qualification attestation must bind exact target')
     references(qualification.get('evidence_refs'))
     verify(repository,state['history'][-1]['sha'],chain)
     observation=observe(container,target)
     now=datetime.datetime.now(datetime.timezone.utc).isoformat()
-    audit={'kind':'reviewed-recovery','at':now,'state_fingerprint':fingerprint(state),
+    audit={'kind':'reviewed-recovery','recovery_mode':'qualified-in-place' if in_place else 'replacement-chain','at':now,'state_fingerprint':fingerprint(state),
            'authorization_ref':manifest['authorization_ref'],'evidence_refs':manifest['evidence_refs'],
            'original_unresolved':{'pending':copy.deepcopy(pending),'failed':copy.deepcopy(failed)},
            'chain':copy.deepcopy(chain),'target':copy.deepcopy(target),'qualification_attestation':copy.deepcopy(qualification),
