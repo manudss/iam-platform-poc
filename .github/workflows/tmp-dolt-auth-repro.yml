@@ -85,3 +85,66 @@ jobs:
           docker rm -f dolt1 dolt2 dolt3 2>/dev/null || true
           docker volume rm repro-dolt-auth 2>/dev/null || true
           # kept: $RUNNER_TEMP/dolt-backup (throwaway runner copy, dies with the runner)
+
+  fresh-install:
+    # First-launch scenario: does a FRESH volume initialized through the real compose path
+    # (current compose files + .env.example values) accept the .env password? And what does a
+    # first init WITHOUT any env freeze? Gates any reset advice: a reset that reproduces 1045
+    # on a fresh volume would be useless.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install the API dependencies (mysql2 for the probe)
+        run: npm ci --no-audit --no-fund --prefix apps/api
+      - name: "Fresh volume, real compose path, .env present: the .env password must be accepted"
+        run: |
+          set -eux
+          cp .env.example .env
+          PW=$(grep '^DOLT_ROOT_PASSWORD=' .env | cut -d= -f2-)
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d dolt
+          ok=0
+          for i in $(seq 1 60); do
+            if DOLT_HOST=127.0.0.1 DOLT_PORT=3307 DOLT_PASSWORD="$PW" \
+               node infra/dev/dolt-probe.mjs | tee /tmp/probe-fresh.txt | grep -q 'ACCEPTED: the password from your .env'; then ok=1; break; fi
+            sleep 2
+          done
+          [ "$ok" = 1 ] || { echo 'FRESH INSTALL REFUSES the .env password: a reset would NOT fix the user' >&2; exit 1; }
+      - name: "Scoped reset itself: compose down -v must remove only this project's resources"
+        run: |
+          set -eux
+          docker volume ls --filter label=com.docker.compose.project --format '{{.Name}} {{.Labels}}' | tee /tmp/vols-before.txt
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down -v
+          # every compose-managed volume of this project is gone, nothing else was touched
+          ! docker volume ls --filter label=com.docker.compose.project=tmp-dolt-auth-repro --format '{{.Name}}' | grep .
+          docker volume ls --format '{{.Name}}' | tee /tmp/vols-after.txt
+      - name: "Re-init after reset through the same compose path: accepted again"
+        run: |
+          set -eux
+          PW=$(grep '^DOLT_ROOT_PASSWORD=' .env | cut -d= -f2-)
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d dolt
+          for i in $(seq 1 60); do
+            if DOLT_HOST=127.0.0.1 DOLT_PORT=3307 DOLT_PASSWORD="$PW" \
+               node infra/dev/dolt-probe.mjs | grep -q 'ACCEPTED: the password from your .env'; then exit 0; fi
+            sleep 2
+          done
+          echo 're-init after reset did not accept the .env password' >&2; exit 1
+      - name: "Characterize a first init with NO env at all (plain docker run, empty environment)"
+        run: |
+          set -eux
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down -v
+          docker volume create noenv-vol
+          docker run -d --name dolt-noenv -p 127.0.0.1:3306:3306 -v noenv-vol:/var/lib/dolt dolthub/dolt-sql-server:latest
+          sleep 8
+          DOLT_HOST=127.0.0.1 DOLT_PORT=3306 DOLT_PASSWORD=some-attempt node infra/dev/dolt-probe.mjs | tee /tmp/probe-noenv.txt || true
+          docker rm -f dolt-noenv
+          docker run --rm --entrypoint dolt -w /var/lib/dolt -v noenv-vol:/var/lib/dolt \
+            dolthub/dolt-sql-server:latest sql -q "SELECT User, Host FROM mysql.user;"
+      - name: Cleanup
+        if: ${{ always() }}
+        run: |
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down -v 2>/dev/null || true
+          docker rm -f dolt-noenv 2>/dev/null || true
+          docker volume rm noenv-vol 2>/dev/null || true
