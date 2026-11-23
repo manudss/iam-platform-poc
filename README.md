@@ -4,7 +4,7 @@ Proof of concept for a new IAM/IGA platform: plugins, versioned business data on
 branches, an event bus, no-code workflows, and bounded AI access (MCP server and gateway).
 Stack: Angular, NestJS, Rust core, Dolt.
 
-Docs: [local setup (start here)](docs/local-setup.md), [usage](docs/usage.md), [theming rules](docs/theming.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md), [workflows](docs/workflows.md), [SSO: applications, OIDC provider, decision](docs/sso-connectors.md), [policy studio (Cedar rules)](docs/policy-studio.md), [event bus](docs/event-bus.md), [plugin contract v2 (plugins served by the bus)](docs/plugin-contract-v2.md).
+Docs: [local setup (start here)](docs/local-setup.md) - one command, Docker only: `scripts/dev.ps1` (Windows) or `scripts/dev.sh` (Linux/macOS), then http://localhost:4200 - [usage](docs/usage.md), [theming rules](docs/theming.md), [end-to-end tests](docs/e2e.md), [plugin contract](docs/plugin-contract-v0.md), [workflows](docs/workflows.md), [SSO: applications, OIDC provider, decision](docs/sso-connectors.md), [policy studio (Cedar rules)](docs/policy-studio.md), [event bus](docs/event-bus.md), [plugin contract v2 (plugins served by the bus)](docs/plugin-contract-v2.md).
 
 ## Hosted demo (free tier)
 
@@ -76,8 +76,10 @@ LDAP/database connectors, a real SCIM server, a plugin signing CLI and key rotat
 work before any production use.
 
 ## Local use
-Full step-by-step guide (Windows PowerShell and bash, prerequisites, configuration, start, checks, troubleshooting):
-[docs/local-setup.md](docs/local-setup.md). Short version, from the repository root:
+One command, Docker only: `scripts/dev.ps1` (Windows) or `bash scripts/dev.sh` (Linux/macOS), then open
+http://localhost:4200 (demo-alice / demo-only-not-a-secret, fictional). Details and the native path without
+Docker (Windows PowerShell and bash, prerequisites, configuration, start, checks, troubleshooting):
+[docs/local-setup.md](docs/local-setup.md). Short native version, from the repository root:
 1. Prerequisites: Docker (Compose v2), Node.js 22+, Rust stable (on Windows also the MSVC C++ Build Tools).
 2. `cp .env.example .env` (PowerShell: `Copy-Item .env.example .env`) and optionally change the placeholder values (never commit `.env`).
 3. Build once: `cd core && cargo build -p iam-core`, `cd apps/api && npm ci && npm run build`, `cd apps/web && npm ci`.

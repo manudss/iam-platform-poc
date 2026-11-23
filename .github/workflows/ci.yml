@@ -29,6 +29,8 @@ jobs:
       password_eye_required: ${{ steps.plan.outputs.password_eye_required }}
       gallery_bootstrap_required: ${{ steps.plan.outputs.gallery_bootstrap_required }}
       gallery_preferences_required: ${{ steps.plan.outputs.gallery_preferences_required }}
+      dev_stack_check_required: ${{ steps.plan.outputs.dev_stack_check_required }}
+      dev_ui_browser_check_required: ${{ steps.plan.outputs.dev_ui_browser_check_required }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -224,6 +226,90 @@ jobs:
           node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
         run: node --test demo/dolt-state.test.mjs demo/start.test.mjs deploy/oci/activation-inventory.test.mjs deploy/oci/update.test.mjs deploy/oci/host-boot.test.mjs deploy/oci/companions/prepare-dirs.test.mjs
+  dev-stack:
+    # The one-command local development stack (scripts/dev.ps1 / scripts/dev.sh,
+    # infra/docker-compose.dev.yml): builds the application containers, boots the whole stack
+    # and checks it end to end with its check script (console, API through the console proxy,
+    # real PKCE sign-in as demo-alice, seeded Dolt data read with the token). Keeps the
+    # documented developer path honest. First-run Rust build happens inside the core container.
+    needs: control_policy
+    if: needs.control_policy.outputs.dev_stack_check_required == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - name: Dev runner unit tests (watcher and install stamp)
+        run: node --test infra/dev/api-dev.test.mjs
+      - name: Local console-edge injection unit tests (Vite proxyReq contract)
+        run: node --test apps/web/proxy.docker.test.cjs
+      - run: cp .env.example .env
+      - name: Build and start the dev stack
+        run: docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
+      - name: Verify the dev stack end to end
+        if: needs.control_policy.outputs.dev_stack_check_required == 'true'
+        run: DEV_PERSISTENCE_CHECK=1 node scripts/dev-stack-check.mjs
+      - name: Dev console in a real browser (sign-in, My applications, Roles without a typed token)
+        if: needs.control_policy.outputs.dev_ui_browser_check_required == 'true'
+        run: |
+          mkdir /tmp/pw-dev && (cd /tmp/pw-dev && npm init -y >/dev/null && npm i playwright-core >/dev/null)
+          CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw-dev/node_modules node scripts/dev-ui-browser-check.mjs /tmp/dev-ui-shots
+      - name: Dev console browser screenshots (fictional data, no secrets)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-ui-screenshots
+          path: /tmp/dev-ui-shots
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Dev stack logs on failure
+        if: ${{ failure() }}
+        run: |
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs --tail=150
+          echo '===== persisted API log (survives watch-mode restarts, holds the first-boot seed output) ====='
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec -T app sh -c 'tail -300 /var/lib/lyam-dev/api.log 2>/dev/null || echo no-persisted-api-log' || true
+      - name: Tear down
+        if: ${{ always() }}
+        run: docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down -v
+  dev-scripts-windows:
+    # The Windows launcher path under the REAL Windows PowerShell 5.1 (only present on a Windows
+    # runner): the native-stderr NativeCommandError quirk exists nowhere else, so the dev.ps1
+    # regression test in the dev runner suite earns its name only here. Same suite, name-filtered.
+    needs: control_policy
+    if: needs.control_policy.outputs.dev_stack_check_required == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Windows PowerShell 5.1 launcher regression test
+        run: node --test --test-name-pattern="dev.ps1" infra/dev/api-dev.test.mjs
+      - name: Diagnostic helper under the real PowerShell 5.1
+        # scripts/dev-api-errors.ps1 is handed to developers verbatim: prove its syntax, line
+        # selection and masking under the genuine 5.1 engine (only on a Windows runner) on a fixture.
+        run: |
+          @'
+          [Nest] 42 LOG [RouterExplorer] Mapped {/sso/acme-demo/launchpad, GET} route +0ms
+          [Nest] 42 ERROR [ExceptionsHandler] BoomException: synthetic connector failure
+          at AppConnectorService.liveApps (/repo/apps/api/src/connectors/app-connector.ts:10:11)
+          at LaunchpadController.build (/repo/apps/api/src/sso/launchpad.ts:52:25)
+          [Nest] 42 ERROR [ExceptionsHandler] upstream said token=sekrit99 authorization: Bearer abcdef123456789 password=hunter2hunter2
+          '@ | Set-Content -Encoding utf8 fixture-api.log
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-api-errors.ps1 -FixturePath fixture-api.log | Out-File -Encoding utf8 diag-out.txt
+          $out = Get-Content -Raw diag-out.txt
+          foreach ($need in 'synthetic connector failure','AppConnectorService.liveApps') { if ($out -notlike "*$need*") { throw "missing: $need" } }
+          foreach ($bad in 'abcdef123456789','sekrit99','hunter2hunter2') { if ($out -like "*$bad*") { throw "leaked: $bad" } }
+          if ($out -notlike '*upstream said*') { throw 'the error line itself was dropped' }
+          if ($out -like '*Mapped*launchpad*route*') { throw 'a non-error log line was kept' }
+      - name: Startup diagnostic helper under the real PowerShell 5.1
+        # scripts/dev-startup-diagnostic.ps1 is handed to developers verbatim: the test script
+        # proves it under the genuine 5.1 engine (asserted) on fixture repos, no docker needed.
+        run: pwsh -NoProfile -File scripts/dev-startup-diagnostic.test.ps1
+
   compose:
     needs: control_policy
     runs-on: ubuntu-latest

@@ -36,6 +36,13 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout;
   private ticking = false;
   private mem: Activation[] = [];
+  private seqFloors = new Map<string, number>();
+
+  /** Remember the live core watermark even when startup finds the same commit already active. */
+  observeCoreSequence(tenant: string, seq: number) {
+    if (!Number.isSafeInteger(seq) || seq < 0) throw new Error('invalid core sequence');
+    this.seqFloors.set(tenant, Math.max(this.seqFloors.get(tenant) ?? 1, seq + 1));
+  }
   private pool?: pg.Pool;
   private ready?: Promise<void>;
 
@@ -72,9 +79,17 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
    * Idempotence is per REQUEST id (client-supplied, stable across retries), never per commit hash: a request id seen before
    * returns/retries the same activation (same seq, no new effect); without it every call is a new activation (A -> B -> A = 3 seqs).
    */
-  async activate(tenant: string, commit: string, requestId?: string): Promise<ActivationResult> {
+  /**
+   * minSeq (startup convergence): allocate at least this seq. The core refuses a seq it already
+   * passed ("stale activation" / "same seq, different commit"), and the dev journal is in-memory,
+   * so after a restart the journal alone can allocate a seq the core refuses forever. The startup
+   * path passes core.seq + 1 so a live core and a fresh journal still converge.
+   */
+  async activate(tenant: string, commit: string, requestId?: string, minSeq?: number): Promise<ActivationResult> {
     if (!/^[0-9a-v]{8,64}$/.test(commit)) throw new Error('invalid commit hash');
     if (requestId !== undefined && !/^[A-Za-z0-9_-]{8,64}$/.test(requestId)) throw new Error('invalid request id');
+    if (minSeq !== undefined && (!Number.isSafeInteger(minSeq) || minSeq < 1)) throw new Error('invalid minSeq');
+    minSeq = Math.max(minSeq ?? 1, this.seqFloors.get(tenant) ?? 1);
     let a: Activation;
     const prior = requestId ? (await this.list(tenant)).find((x) => x.requestId === requestId) : undefined;
     if (prior) {
@@ -83,7 +98,7 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
       a = prior; // same request, pending/failed/recorded: retry the SAME activation
     } else {
       // No request id (or a new one) = a new explicit activation with a new seq, even for a commit activated before (A -> B -> A).
-      try { a = await this.record(tenant, commit, requestId); } catch (e) {
+      try { a = await this.record(tenant, commit, requestId, minSeq); } catch (e) {
         // Two concurrent calls with the same request id: the unique index lets one win; the other returns the winner.
         const winner = requestId && (e as { code?: string }).code === '23505' ? (await this.list(tenant)).find((x) => x.requestId === requestId) : undefined;
         if (!winner) throw e;
@@ -142,10 +157,11 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
     return { action: a.state === 'applied' ? 'reapplied' : 'failed', core, activation: a };
   }
 
-  private async record(tenant: string, commit: string, requestId?: string): Promise<Activation> {
+  private async record(tenant: string, commit: string, requestId?: string, minSeq?: number): Promise<Activation> {
     const state: ActivationState = this.applyEnabled ? 'pending' : 'recorded';
     if (!(await this.resolveUrl())) {
-      const seq = this.mem.filter((a) => a.tenant === tenant).length + 1;
+      const max = this.mem.filter((a) => a.tenant === tenant).reduce((m, a) => Math.max(m, a.seq), 0);
+      const seq = Math.max(max + 1, minSeq ?? 1);
       const a: Activation = { tenant, seq, commit, state, requestId };
       this.mem.push(a);
       return { ...a };
@@ -154,7 +170,8 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
     try {
       await c.query('BEGIN');
       await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [tenant]);
-      const r = await c.query('SELECT COALESCE(MAX(seq),0)+1 AS seq FROM activations WHERE tenant=$1', [tenant]);
+      // GREATEST ignores a NULL minSeq; a minSeq already below the journal's next seq changes nothing.
+      const r = await c.query('SELECT GREATEST(COALESCE(MAX(seq),0)+1, $2) AS seq FROM activations WHERE tenant=$1', [tenant, minSeq ?? null]);
       const seq = Number(r.rows[0].seq);
       await c.query('INSERT INTO activations (tenant, seq, commit_hash, state, request_id) VALUES ($1,$2,$3,$4,$5)', [tenant, seq, commit, state, requestId ?? null]);
       await c.query('COMMIT');

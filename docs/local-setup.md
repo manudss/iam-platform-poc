@@ -1,9 +1,53 @@
-# Local setup (step by step)
+# Local setup
 
 Local development only, fictional demo data. All passwords/tokens below are the public placeholder values of `.env.example`
-and protect nothing. Commands are given for **Windows PowerShell** (primary) and **bash** (Linux/macOS).
+and protect nothing.
 
-Recommended path: infrastructure in Docker (`infra/docker-compose.yml`), the three application processes run natively:
+## Fast path: one command, Docker only (recommended)
+
+The whole stack (Dolt seeded with fictional data, PostgreSQL, Temporal, NATS, OpenBao, Rust core, NestJS API,
+Angular console) runs in containers (core + API share one: their sign-in gate is loopback-only by design) with the sources mounted: **saving a file reloads the console and
+recompiles/restarts the API**. The only prerequisite is Docker Desktop (Windows/macOS) or Docker Engine +
+the compose plugin (Linux) - no Node, no Rust, no MSVC build tools to install.
+
+```powershell
+# Windows PowerShell, from the repository root:
+powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
+```
+```bash
+# Linux/macOS (or WSL), from the repository root:
+bash scripts/dev.sh
+```
+
+The script offers to install Docker Desktop when it is missing (winget on Windows), waits for the engine,
+creates `.env` from `.env.example` on the first run, then starts everything. First start compiles the Rust
+core inside its container and installs the npm dependencies (several minutes); the caches live in Docker
+volumes, so the next starts take seconds. Then open http://localhost:4200 and sign in as
+`demo-alice` / `demo-only-not-a-secret` (fictional).
+
+- **Stop**: Ctrl+C in the terminal. **Reset the data**: `scripts\dev.ps1 -Down -Volumes` (or `bash scripts/dev.sh --down --volumes`) - the Dolt seed replays on the next start.
+- **Hot reload**: console and API recompile on save (polling watchers: Docker Desktop bind mounts deliver no
+  file events). After editing the Rust core: `docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart app` (incremental rebuild), or keep `docker compose ... watch` running to rebuild automatically.
+- **API admin token**: the Docker console attaches it server-side to its proxied API calls (same model as the hosted
+  demo's edge), so the administration screens work with the `Admin capability` field left empty. It is
+  `local-dev-api-token` by default, overridable in `.env` (see the commented `DEV_*` variables in `.env.example`);
+  the value stays server-side, and every published port is loopback-only. Manual entry in the field remains the
+  fallback for the native path below (no local edge there).
+- Editing in **IntelliJ IDEA** (any edition), VS Code or any other editor works the same: the files are
+  edited on the host and the containers do the rest. A dev container also exists for GitHub Codespaces
+  (`.devcontainer/`, see `docs/demo.md`) - it is not needed for this path.
+
+The direct equivalent of the script, from the repository root:
+
+```powershell
+Copy-Item .env.example .env   # once, if .env is missing
+docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up --build
+```
+
+## Native path (advanced, without Docker)
+
+Infrastructure in Docker (`infra/docker-compose.yml`), the three application processes run natively.
+Commands are given for **Windows PowerShell** (primary) and **bash** (Linux/macOS):
 
 | Process | Port | Started from |
 |---|---|---|
@@ -143,11 +187,29 @@ docker compose --env-file .env -f infra/docker-compose.yml down -v     # also de
 | `link.exe not found` while building the core | install the MSVC C++ Build Tools (step 1) |
 | API answers 401 `bad issuer` | `IAM_ISSUER` differs between core and API |
 | API 500 / `Access denied for user 'root'` on assignments | `DOLT_PASSWORD` not equal to `DOLT_ROOT_PASSWORD` of `.env` |
+| Container path: API restarts with `Access denied for user 'root'` (Dolt log: `Error authenticating user root using: mysql_native_password`) and the console shows proxy `ECONNREFUSED` on port 3000 | most likely a `dolt-data` volume initialized with different root credentials: Dolt creates the root superuser only at the FIRST server start of a data directory and ignores later `DOLT_ROOT_PASSWORD` values on an existing volume. Do NOT reset right away: confirm with the read-only probe first, see "Dolt root access denied" below |
 | `password authentication failed` (PostgreSQL) | password in `IAM_PG_URL` not equal to `RUNTIME_PG_PASSWORD`, or the volume was created with another password (`down -v`) |
 | Assignments empty / no `iam` database | Dolt volume existed before the seed: `down -v` then `up -d` |
 | Sign-in redirect fails | console opened on `127.0.0.1:4200` instead of `localhost:4200` |
 | Port 3307/5433/4222/7233/8200/8081/3000/4200 already used | stop the other process, or change the compose port mapping / `IAM_CORE_ADDR` / `API_PORT` (the console proxy `apps/web/proxy.conf.json` expects 8081 and 3000) |
 | "Activate" gives `state: recorded` / decisions deny | `IAM_CORE_ADMIN_TOKEN` missing or different on core and API |
+
+### Dolt root access denied (container path)
+
+Confirm the cause read-only, from the repository root (the API container image carries the probe;
+no password is ever printed):
+
+```powershell
+docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml run --rm app node infra/dev/dolt-probe.mjs
+```
+
+- `ACCEPTED: an EMPTY password` -> the volume was initialized before today's `.env` existed
+  (empty password frozen). Keep your data: stop the `dolt` service, align the stored account with
+  `docker compose ... run --rm --entrypoint dolt -w /var/lib/dolt dolt sql -q "ALTER USER 'root'@'%' IDENTIFIED BY '<the DOLT_ROOT_PASSWORD value from your .env>';"`, then start again.
+- `REFUSED` for both candidates -> read the stored accounts the same way (`SELECT User, Host FROM
+  mysql.user` with `--entrypoint dolt`) and align host/password accordingly.
+- Only when the probe shows the volume holds nothing you need (it is designed to hold only the
+  fictional seed data, re-created automatically): `scripts\dev.ps1 -Down -Volumes` resets everything.
 
 ## 8. Tests
 - Core: `cd core; cargo test`

@@ -169,7 +169,15 @@ export class AppConnectorService {
   private engine(t: string): Promise<ReturnType<AppConnectorPluginModule['createAppRegistry']>> {
     return resolveEngine(() => this.branchRegistry(), t, 'connector.app', 'handlers.mjs', (mod: AppConnectorPluginModule) => mod.createAppRegistry(this.deps), this);
   }
+  private liveEngine(t: string): Promise<ReturnType<AppConnectorPluginModule['createAppRegistry']>> {
+    return resolveEngine(() => this.liveRegistry(), t, 'connector.app', 'handlers.mjs', (mod: AppConnectorPluginModule) => mod.createAppRegistry(this.deps), this);
+  }
   private async branchRegistry(): Promise<EngineRegistry> { return workspaceMode() && this.branches ? this.branches.get(branchContext.getStore()?.branch ?? 'main') : this.reg; }
+  /** The LIVE inventory resolves its provider on the LIVE (main) registry too: the launchpad checks the
+   * live enablement, so resolving the engine on the request's working branch threw no-provider whenever the
+   * connector was enabled on main but not on that branch (a signed-in person with a branch selected got a
+   * 500 on My applications instead of their live apps). */
+  private async liveRegistry(): Promise<EngineRegistry> { return workspaceMode() && this.branches ? this.branches.get('main') : this.reg; }
 
   async list(t: string) { try { return await (await this.engine(t)).list(t); } catch (e) { engineHttpError(e); } }
   private readonly liveCache = new RevisionCache<AppConnector[]>();
@@ -178,7 +186,7 @@ export class AppConnectorService {
    * stores without a revision (memory, tests) never cache. */
   async liveApps(t: string) {
     const revision = this.store.liveRevision ? await this.store.liveRevision() : null;
-    return this.liveCache.get(t, revision, () => this.engine(t).then((e) => e.liveApps(t)));
+    return this.liveCache.get(t, revision, () => this.liveEngine(t).then((e) => e.liveApps(t)));
   }
   async get(t: string, id: string) { try { return await (await this.engine(t)).get(t, id); } catch (e) { engineHttpError(e); } }
   /** A new application never inherits a level or age limit left under its id: cleared after the creation succeeded (a refused duplicate id must not wipe the existing application's level). */

@@ -1,0 +1,22 @@
+# Line endings. The dev stack bind-mounts this checkout into Linux containers and executes
+# some of it there (infra/dev/app-dev.sh, conf/nats-local.conf, data/demo/*.sql, the Node
+# sources): on Windows, core.autocrlf=true must never turn those into CRLF, or bash and the
+# servers fail inside the container. Everything Unix-consumed is pinned to LF.
+* text=auto
+*.sh       text eol=lf
+*.bash     text eol=lf
+*.mjs      text eol=lf
+*.cjs      text eol=lf
+*.js       text eol=lf
+*.ts       text eol=lf
+*.py       text eol=lf
+*.sql      text eol=lf
+*.conf     text eol=lf
+*.hcl      text eol=lf
+*.service  text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+.env*      text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
