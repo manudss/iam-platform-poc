@@ -28,8 +28,11 @@ volumes, so the next starts take seconds. Then open http://localhost:4200 and si
 - **Stop**: Ctrl+C in the terminal. **Reset the data**: `scripts\dev.ps1 -Down -Volumes` (or `bash scripts/dev.sh --down --volumes`) - the Dolt seed replays on the next start.
 - **Hot reload**: console and API recompile on save (polling watchers: Docker Desktop bind mounts deliver no
   file events). After editing the Rust core: `docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml restart app` (incremental rebuild), or keep `docker compose ... watch` running to rebuild automatically.
-- **API admin token** (the console asks for it on administration features): `local-dev-api-token` by default,
-  overridable in `.env` (see the commented `DEV_*` variables in `.env.example`).
+- **API admin token**: the Docker console attaches it server-side to its proxied API calls (same model as the hosted
+  demo's edge), so the administration screens work with the `Admin capability` field left empty. It is
+  `local-dev-api-token` by default, overridable in `.env` (see the commented `DEV_*` variables in `.env.example`);
+  the value stays server-side, and every published port is loopback-only. Manual entry in the field remains the
+  fallback for the native path below (no local edge there).
 - Editing in **IntelliJ IDEA** (any edition), VS Code or any other editor works the same: the files are
   edited on the host and the containers do the rest. A dev container also exists for GitHub Codespaces
   (`.devcontainer/`, see `docs/demo.md`) - it is not needed for this path.

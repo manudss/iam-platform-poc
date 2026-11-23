@@ -88,10 +88,14 @@ services:
   web:
     image: node:22-bookworm-slim
     working_dir: /repo/apps/web
+    environment:
+      # Server-side admin capability for the LOCAL console proxy only (same model as the hosted edge):
+      # attached to proxied API calls, never shipped to the browser. Documented local placeholder.
+      IAM_API_ADMIN_TOKEN: ${DEV_API_ADMIN_TOKEN:-local-dev-api-token}
     command: >
       sh -c 'if ! cmp -s package-lock.json node_modules/.dev-install-stamp 2>/dev/null;
       then npm ci --no-audit --no-fund && cp package-lock.json node_modules/.dev-install-stamp;
-      fi && exec npx ng serve --host 0.0.0.0 --port 4200 --poll 2000 --proxy-config proxy.docker.json'
+      fi && exec npx ng serve --host 0.0.0.0 --port 4200 --poll 2000 --proxy-config proxy.docker.cjs'
     volumes:
       - ../:/repo
       - dev-web-node-modules:/repo/apps/web/node_modules

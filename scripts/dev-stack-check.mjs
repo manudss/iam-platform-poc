@@ -109,4 +109,11 @@ let lpJson; try { lpJson = JSON.parse(lpBody); } catch { fail('launchpad (My app
 if (!Array.isArray(lpJson.apps)) fail('launchpad (My applications) with the signed-in token', 'apps is not an array');
 ok('launchpad (My applications) with the signed-in token', `${lpJson.apps.length} applications, inventory ${lpJson.inventory}`);
 
+// 7. the local console edge attaches the admin capability server-side (hosted-demo model): an
+// administration route answers through the proxy WITHOUT any x-api-admin-token header.
+const adm = await fetch(`${BASE}/api/tenants/acme-demo/versioning/branches`, { headers: { authorization: `Bearer ${access}`, 'x-iam-branch': 'main' } });
+const admBody = await adm.text();
+if (!adm.ok) fail('admin capability attached by the local console edge', `HTTP ${adm.status}: ${admBody.slice(0, 300)}`);
+ok('admin capability attached by the local console edge', 'versioning/branches answered without a manual token');
+
 console.log('DEV STACK CHECK PASSED');
