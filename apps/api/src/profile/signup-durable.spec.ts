@@ -49,3 +49,44 @@ describe('signup durable request adapter', () => {
     assert.deepEqual((await s.load('a')).requests, []);
   });
 });
+
+describe('signup publication-aware staging', () => {
+  it('keeps request until exact publication, isolates another run, and finalizes only once after restart', async () => {
+    const store = new MemorySignupRequestStore(); let token = '', published = false, creates = 0;
+    const events: string[] = [];
+    const mk = () => createSignupManager({
+      pendingLoad: (t: string) => store.load(t), pendingSave: (t: string, rev: number, rows: any[]) => store.save(t, rev, rows),
+      signupOpen: async () => true, signupValues: async () => ({ field: 'reviewed' }), usersList: async () => [], currentBranch: () => 'workflow/test',
+      emit: (type: string) => events.push(type), outboxSend: async (m: any) => { token = m.text.split(': ')[1]; },
+      usersStage: async () => { creates++; return { credential_revision: 'rev-1' }; }, putWorking: async () => {}, verifyPublished: async () => published,
+    });
+    await mk().submit('acme', body, 'ip'); await mk().confirm('acme', token);
+    const request = (await mk().list('acme')).requests[0];
+    const { createHash } = await import('node:crypto');
+    const snapshot = createHash('sha256').update(JSON.stringify(request)).digest('hex');
+    assert.equal((await mk().stageApprove('acme', body.id, 'admin', snapshot, 'run-1', 'workflow/test')).publicationRequired, true);
+    assert.equal(creates, 1);
+    assert.equal((await mk().list('acme')).requests.length, 1, 'discarding a branch does not remove its request');
+    assert.ok(!events.includes('signup.approved') && !events.includes('user.created'), 'no early live event');
+    await assert.rejects(mk().stageApprove('acme', body.id, 'admin', snapshot, 'run-other', 'workflow/other'), /reserved/);
+    await assert.rejects(mk().finalize('acme', body.id, 'admin', 'run-1'), /not effectively published/);
+    await assert.rejects(mk().reject(body.id, 'acme'), /reserved/);
+    published = true;
+    assert.equal((await mk().finalize('acme', body.id, 'admin', 'run-1')).finalized, true);
+    assert.equal((await mk().list('acme')).requests.length, 0);
+    assert.equal((await mk().finalize('acme', body.id, 'admin', 'run-1')).resumed, true);
+    assert.equal(events.filter(e => e === 'signup.approved').length, 1);
+    const saved = JSON.stringify(await store.load('acme'));
+    assert.ok(!saved.includes('rev-secret') && saved.includes('finalized'));
+  });
+  it('a failure after the reservation never blindly recreates a potentially created account', async () => {
+    const store = new MemorySignupRequestStore(); let token = '', calls = 0;
+    const mk = () => createSignupManager({ pendingLoad: (t: string) => store.load(t), pendingSave: (t: string, rev: number, rows: any[]) => store.save(t, rev, rows), signupOpen: async () => true, signupValues: async () => ({}), usersList: async () => [], currentBranch: () => undefined, emit: () => {}, outboxSend: async (m: any) => { token = m.text.split(': ')[1]; }, usersStage: async () => { calls++; throw Error('response lost'); } });
+    await mk().submit('acme', body, 'ip'); await mk().confirm('acme', token);
+    const { createHash } = await import('node:crypto');
+    const snapshot = createHash('sha256').update(JSON.stringify((await mk().list('acme')).requests[0])).digest('hex');
+    await assert.rejects(mk().stageApprove('acme', body.id, 'admin', snapshot, 'run-1', 'workflow/test'), /response lost/);
+    await assert.rejects(mk().stageApprove('acme', body.id, 'admin', snapshot, 'run-1', 'workflow/test'), /uncertain/);
+    assert.equal(calls, 1);
+  });
+});

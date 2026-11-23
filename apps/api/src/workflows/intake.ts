@@ -35,17 +35,27 @@ export class WorkflowIntake {
     const request = await this.raw(tenant, kind, subject);
     return { kind, subject, snapshot: this.hash(request), ...(kind === 'signup' ? { confirmed: (request as { confirmed: boolean }).confirmed } : {}) };
   }
-  async prepareResolve(kind: string, decision: string, starter: string) {
+  async prepareResolve(kind: string, decision: string, starter: string, run?: string) {
     this.admin(starter);
-    if (kind === 'signup' && decision === 'approve') throw new ForbiddenException('workflow signup approval requires publication-aware request finalization; no signup effect was performed');
+    if (kind === 'signup' && decision === 'approve' && !run) throw new ForbiddenException('workflow signup approval requires publication-aware request finalization; no signup effect was performed');
   }
-  async resolve(tenant: string, kind: string, subject: string, snapshot: string, decision: string, starter: string): Promise<{ kind: string; subject: string; resolved: string; publicationRequired?: boolean; immediate?: boolean }> {
+  async finalize(tenant: string, subject: string, starter: string, run: string) {
+    this.admin(starter);
+    if (subject === starter) throw new ForbiddenException('a starter cannot finalize their own signup');
+    if (!this.signup) throw new BadRequestException('signup service unavailable');
+    return this.signup.finalize(tenant, subject, starter, run);
+  }
+  async resolve(tenant: string, kind: string, subject: string, snapshot: string, decision: string, starter: string, workflow?: { run: string; branch: string }): Promise<{ kind: string; subject: string; resolved: string; publicationRequired?: boolean; immediate?: boolean }> {
     this.admin(starter);
     if (!['approve', 'reject'].includes(decision)) throw new BadRequestException('decision: approve or reject');
     if (subject.split(';')[0] === starter) throw new ForbiddenException('a starter cannot resolve their own signup or profile request');
     const request = await this.raw(tenant, kind, subject);
     if (!/^[a-f0-9]{64}$/.test(snapshot) || this.hash(request) !== snapshot) throw new ConflictException('request changed since it was read; read and review again');
-    await this.prepareResolve(kind, decision, starter);
+    await this.prepareResolve(kind, decision, starter, workflow?.run);
+    if (kind === 'signup' && decision === 'approve') {
+      await this.signup!.stageApprove(tenant, subject, starter, snapshot, workflow!.run, workflow!.branch);
+      return { kind, subject, resolved: 'prepared', publicationRequired: true };
+    }
     if (kind === 'signup') await this.signup!.reject(subject, tenant, snapshot);
     else await this.profile!.resolveReviewedSnapshot(tenant, subject, decision === 'approve', starter, snapshot);
     return { kind, subject, resolved: decision, immediate: true };

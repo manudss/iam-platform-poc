@@ -208,6 +208,10 @@ export class ProfileService {
     for (const f of schema) if (f.required && (out[f.key] === undefined || out[f.key] === null || out[f.key] === '')) throw new BadRequestException(`${f.label} is required`);
     return out;
   }
+  async verifyPublishedSignup(tenant: string, id: string, expected: Record<string, unknown>) {
+    const live = await this.store.get(tenant, id, 'live');
+    return Object.entries(expected).every(([k, v]) => v === null ? live[k] === undefined : live[k] === v);
+  }
   async putWorking(tenant: string, id: string, values: Record<string, string | number | boolean | null>, actor: string) { if (Object.keys(values).length) await this.store.put(tenant, id, values, 'work', actor); }
 
   /** Profile components contributed by the plugins active on this side, with the configuration applied. surface=self is the person's own page; surface=admin the administrator's user sheet. */

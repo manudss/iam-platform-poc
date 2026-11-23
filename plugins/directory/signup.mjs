@@ -52,8 +52,8 @@ export function createSignupManager(deps) {
     h.push(now); hits.set(ip, h);
     if (hits.size > 5000) hits.clear();
   };
-  const purge = () => { const now = Date.now(); for (const [k, p] of pending) if (now - p.at > TTL_MS) pending.delete(k); };
-  const project = p => ({ id: p.id, display_name: p.display_name, email: p.email, values: p.values, confirmed: p.confirmed, at: new Date(p.at).toISOString() });
+  const purge = () => { const now = Date.now(); for (const [k, p] of pending) if (!p.staged && now - p.at > TTL_MS) pending.delete(k); };
+  const project = p => ({ id: p.id, display_name: p.display_name, email: p.email, values: p.values, confirmed: p.confirmed, at: new Date(p.at).toISOString(), ...(p.staged ? { publication: { state: p.staged.state, run: p.staged.run, branch: p.staged.branch } } : {}) });
   const api = {
     // Exposed for tests and operational inspection.
     pending, hits,
@@ -98,11 +98,12 @@ export function createSignupManager(deps) {
       await save(tenant);
       return { status: 'ok', message: 'If the code was valid, the request now waits for administrator approval.' };
     },
-    list(tenant) { purge(); return { requests: [...pending.values()].filter(p => tenant === undefined || p.tenant === tenant).map(project) }; },
+    list(tenant) { purge(); return { requests: [...pending.values()].filter(p => (tenant === undefined || p.tenant === tenant) && p.staged?.state !== 'finalized').map(project) }; },
     /** Creates a plain account on the CURRENT working branch (live only after Apply). No role is granted, ever. */
     async approve(tenant, id, actor, expectedSnapshot) {
       const p = pending.get(key(tenant, id)); if (!p) throw new NotFoundException('unknown request');
       if (p.tenant !== tenant) throw new NotFoundException('unknown request');
+      if (p.staged) throw new ConflictException('request is reserved for publication; finalize or reconcile its staged workflow');
       if (expectedSnapshot && sha(JSON.stringify(project(p))) !== expectedSnapshot) throw new ConflictException('request changed since review');
       if (!p.confirmed) throw new ConflictException('the e-mail address is not confirmed yet');
       if (!deps.usersSave) throw new ForbiddenException('no directory');
@@ -113,9 +114,41 @@ export function createSignupManager(deps) {
       deps.emit('signup.approved', tenant, deps.currentBranch() ?? 'main', { subject: p.id, email: p.email });
       return { approved: true, user, note: 'Created on the working branch with no role. Sign-in works after Apply.' };
     },
+    async stageApprove(tenant, id, actor, expectedSnapshot, run, branch) {
+      const p = pending.get(key(tenant, id));
+      if (!p || p.tenant !== tenant) throw new NotFoundException('unknown request');
+      if (p.staged) {
+        if (p.staged.run === run && p.staged.state === 'prepared') return { prepared: true, publicationRequired: true };
+        throw new ConflictException('signup preparation is reserved or uncertain; reconcile before retry');
+      }
+      if (sha(JSON.stringify(project(p))) !== expectedSnapshot) throw new ConflictException('request changed since review');
+      if (!p.confirmed) throw new ConflictException('the e-mail address is not confirmed yet');
+      if (!deps.usersStage || !run || !branch || branch === 'main') throw new ForbiddenException('signup approval needs an isolated workflow branch');
+      // Reserve durably BEFORE any directory effect. Failure after this boundary requires reconciliation.
+      p.staged = { run, branch, actor, state: 'preparing' }; await save(tenant);
+      const user = await deps.usersStage(p.id, { id: p.id, display_name: p.display_name, email: p.email, login_enabled: true }, { salt: p.salt, hash: p.hash }, tenant);
+      await deps.putWorking(tenant, p.id, p.values, actor);
+      if (!user?.credential_revision) throw new ConflictException('prepared signup lacks a credential revision');
+      p.staged = { ...p.staged, state: 'prepared', revision: user.credential_revision }; await save(tenant);
+      return { prepared: true, publicationRequired: true };
+    },
+    async finalize(tenant, id, actor, run) {
+      const p = pending.get(key(tenant, id));
+      if (!p || p.tenant !== tenant) throw new NotFoundException('unknown request');
+      if (p.staged?.run === run && p.staged.state === 'finalized') return { finalized: true, publicationRequired: false, resumed: true };
+      if (!p.staged || p.staged.run !== run || p.staged.state !== 'prepared') throw new ConflictException('signup has no correlated prepared publication');
+      if (!deps.verifyPublished || !await deps.verifyPublished(tenant, p)) throw new ConflictException('signup is not effectively published with the prepared identity, credential and profile values');
+      if (deps.finalizeHold) await deps.finalizeHold(tenant, id);
+      // Keep a durable decision tombstone: approval is never resurrected by a stale queue writer.
+      p.staged.state = 'finalized'; p.salt = ''; p.hash = ''; p.tokenHash = ''; await save(tenant);
+      deps.emit('signup.approved', tenant, 'main', { subject: p.id, email: p.email });
+      deps.emit('user.created', tenant, 'main', { subject: p.id, displayName: p.display_name, email: p.email, department: '' });
+      return { finalized: true, publicationRequired: false };
+    },
     async reject(id, tenant, expectedSnapshot) {
       const k = key(tenant, id), p = pending.get(k);
       if (!p || p.tenant !== tenant) throw new NotFoundException('unknown request');
+      if (p.staged) throw new ConflictException('request reserved for publication; reconcile instead of rejecting');
       if (expectedSnapshot && sha(JSON.stringify(project(p))) !== expectedSnapshot) throw new ConflictException('request changed since review');
       pending.delete(k); await save(tenant); return { rejected: true };
     },
@@ -123,7 +156,7 @@ export function createSignupManager(deps) {
   if (deps.pendingLoad) {
     // Serialize the shared cache/revision inside this process. SQL CAS also rejects stale replicas.
     let tail = Promise.resolve();
-    for (const name of ['submit', 'confirm', 'list', 'approve', 'reject']) {
+    for (const name of ['submit', 'confirm', 'list', 'approve', 'reject', 'stageApprove', 'finalize']) {
       const fn = api[name];
       api[name] = (...args) => {
         const tenant = name === 'reject' ? args[1] : args[0];

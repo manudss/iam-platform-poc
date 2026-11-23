@@ -4,7 +4,7 @@ import { UsersService } from '../users/users.service.js';
 import { AuthnService } from '../authn/flow.service.js';
 import { ProfileService } from './profile.service.js';
 import { ApplicationBus } from '../events/application-bus.service.js';
-import { currentBranch } from '../workspace/context.js';
+import { currentBranch, workspaceMode } from '../workspace/context.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
@@ -15,6 +15,9 @@ import { renderMailOrLegacy } from '../plugins/v1/mail-catalogue.js';
  */
 interface SignupPluginModule {
   createSignupManager: (deps: {
+    usersStage?: (id: string, body: Record<string, unknown>, pre: { salt: string; hash: string }, tenant: string) => Promise<unknown>;
+    verifyPublished?: (tenant: string, p: any) => Promise<boolean>;
+    finalizeHold?: (tenant: string, id: string) => Promise<void>;
     pendingLoad?: SignupRequestStore['load'];
     pendingSave?: SignupRequestStore['save'];
     signupOpen: (tenant: string) => Promise<boolean>;
@@ -32,6 +35,8 @@ interface SignupPluginModule {
     emit: (type: string, tenant: string, branch: string, payload: Record<string, string>) => void;
     currentBranch: () => string | undefined;
   }) => {
+    stageApprove: (tenant: string, id: string, actor: string, snapshot: string, run: string, branch: string) => Promise<unknown>;
+    finalize: (tenant: string, id: string, actor: string, run: string) => Promise<unknown>;
     pending: Map<string, unknown>;
     hits: Map<string, number[]>;
     schema: (tenant: string) => Promise<unknown>;
@@ -52,6 +57,15 @@ export class SignupService {
   constructor(profile: ProfileService, @Optional() users?: UsersService, @Optional() authn?: AuthnService, @Optional() events?: ApplicationBus, @Optional() reg?: PluginRegistry, @Optional() @Inject(SIGNUP_REQUEST_STORE) requests?: SignupRequestStore) {
     this.notifier = reg; this.authn = authn; this.events = events;
     this.manager = plugin.createSignupManager({
+      usersStage: users ? (id, body, pre, tenant) => users.save(id, body, true, pre, tenant, undefined, true) : undefined,
+      verifyPublished: users ? async (tenant, p) => {
+        const live = (await users.list('main')).find(u => u.id === p.id) as Record<string, unknown> | undefined;
+        return !!live && live.display_name === p.display_name && live.email === p.email && live.login_enabled === true && live.credential_revision === p.staged.revision && await profile.verifyPublishedSignup(tenant, p.id, p.values);
+      } : undefined,
+      finalizeHold: authn ? async (tenant, id) => {
+        if ((await authn.liveSecurity(tenant)).holdAfterVerification)
+          await authn.blocks.add(tenant, { subject: id, kind: 'pending_approval', message: 'Your account was created and is waiting to be activated.', origin: 'automatic', setBy: 'system', setAt: Date.now(), hold: true });
+      } : undefined,
       pendingLoad: requests ? (t) => requests.load(t) : undefined,
       pendingSave: requests ? (t, revision, rows) => requests.save(t, revision, rows) : undefined,
       signupOpen: (t) => profile.signupOpen(t),
@@ -107,5 +121,10 @@ export class SignupService {
     }
     return out;
   }
+  async stageApprove(tenant: string, id: string, actor: string, snapshot: string, run: string, branch: string) {
+    if (!workspaceMode() || currentBranch(true) !== branch) throw new Error('signup staging requires workspace mode and the exact isolated run branch');
+    if (this.authn && (await this.authn.liveSecurity(tenant)).holdAfterVerification) throw new Error('workflow signup approval with holdAfterVerification requires publication-coupled activation; refusing before effects');
+    return this.manager.stageApprove(tenant, id, actor, snapshot, run, branch); }
+  finalize(tenant: string, id: string, actor: string, run: string) { return this.manager.finalize(tenant, id, actor, run); }
   reject(id: string, tenant?: string, expectedSnapshot?: string) { return this.manager.reject(id, tenant, expectedSnapshot); }
 }
