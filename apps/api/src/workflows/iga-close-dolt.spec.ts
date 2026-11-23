@@ -48,7 +48,8 @@ describe('IGA close and reentry on real Dolt', { skip: !have && 'DOLT_BIN missin
   }
   const service = (s: WorkflowStore) => new WorkflowsIgaService(s, undefined, { listAssignments: async () => ({ assignments: [] }) } as never);
   it('close commits to Dolt, fresh store parses the evidence, and the actual block resumes only its own close', async () => {
-    await campaign('iga-resume');
+    await store.igaPutCampaign({ id: 'iga-resume', tenant: 'acme', kind: 'user-access', name: 'Q4', ref: 'main', status: 'open', scope: { users: ['emp'], source: { ref: 'main', roles: ['r1'] } }, created_by: 'owner', created_at: '2026-11-23 00:00:00.000' }, [{ id: 'item-nested', identity: 'emp', kind: 'user-access', action: 'review', payload: { roles: ['r1'], remediation: { actions: [{ kind: 'revoke-role', role: 'r1' }], proof: { run: 'rem-1', ref: 'main' } } } }]);
+    await store.igaUpdateItem('item-nested', { state: 'remediated', decided_by: 'boss', decided_at: '2026-11-23 00:01:00.000', decision_reason: 'remove obsolete access' });
     const out = await service(store).close('acme', 'workflow:run-own', 'iga-resume');
     const restarted = new WorkflowStore(new VersioningService());
     const persisted = await restarted.igaGetCampaign('acme', 'iga-resume');
@@ -56,6 +57,8 @@ describe('IGA close and reentry on real Dolt', { skip: !have && 'DOLT_BIN missin
     assert.deepEqual(persisted!.evidence, out.evidence);
     const evidence = persisted!.evidence as Record<string, unknown>;
     const canonical = (v: any): string => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}` : JSON.stringify(v);
+    assert.deepEqual((evidence.roleDrift as any).emp, { added: [], removed: ['r1'] });
+    assert.equal((evidence.items as any[])[0].remediation.actions[0].role, 'r1');
     assert.equal(evidence.digestFormat, 'sha256-json-sorted-keys-v1');
     assert.equal(evidence.digest, createHash('sha256').update(canonical({ ...evidence, digest: null })).digest('hex'));
     const mod = await import(pathToFileURL(resolve('../../plugins/workflow-connectors/lyam-admin-blocks.mjs')).href);
@@ -66,6 +69,8 @@ describe('IGA close and reentry on real Dolt', { skip: !have && 'DOLT_BIN missin
     assert.equal(resumed.resumed, true);
     assert.deepEqual(resumed.evidence, evidence);
     await assert.rejects(() => block.run({ ...ctx, runId: 'run-other' }), /already closed/);
+    const corrupt = { ...persisted, evidence: { ...evidence, name: 'tampered' } };
+    await assert.rejects(() => block.run({ ...ctx, iga: { close: (...args: any[]) => (iga.close as any)(...args), getCampaign: async () => corrupt } }), /integrity check failed/);
     assert.deepEqual((await restarted.igaGetCampaign('acme', 'iga-resume'))!.evidence, evidence);
   });
   it('concurrent closures have one winner; no run can overwrite the winner actor or evidence', async () => {

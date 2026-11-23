@@ -546,6 +546,14 @@ const igaCloseCampaign = {
                 if (status !== 409 || !/already closed/.test(e?.message ?? '')) throw e;
                 const campaign = await iga.getCampaign(ctx.tenant, c.campaignId);
                 if (campaign?.status === 'closed' && campaign?.closed_by === `workflow:${ctx.runId}` && campaign?.evidence && typeof campaign.evidence.digest === 'string' && campaign.evidence.digest) {
+                    const proof = campaign.evidence;
+                    if (proof.digestFormat === 'sha256-json-sorted-keys-v1') {
+                        const canonical = v => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}` : JSON.stringify(v);
+                        if (proof.campaign !== c.campaignId || proof.closedBy !== `workflow:${ctx.runId}` || createHash('sha256').update(canonical({ ...proof, digest: null })).digest('hex') !== proof.digest)
+                            throw new Error('IGA evidence integrity check failed: reconcile the stored close');
+                    } else if (proof.digestFormat) throw new Error('Unsupported IGA evidence digest format');
+                    // Legacy evidence has no format. Preserve it byte-for-byte; its historical naive JSON
+                    // digest cannot reliably be recalculated after SQL reordered the keys. No rewrite.
                     ctx.log(`campaign ${c.campaignId} was already closed by THIS run before the interruption: resuming with the committed evidence (digest ${String(campaign?.evidence?.digest).slice(0, 12)}...)`);
                     return { campaign: c.campaignId, status: 'closed', evidence: campaign.evidence, resumed: true };
                 }
