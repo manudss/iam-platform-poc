@@ -20,7 +20,7 @@ export const CONTROLS = Object.freeze([Object.freeze({
 }), Object.freeze({
   id: 'dev_stack_check',
   path: 'scripts/dev-stack-check.mjs',
-  introducedBy: '7a22763ad4b0210f887ef9a75172dd2d54e9dec6',
+  introducedBy: 'f86f87777796193bb16f08216b343e98e9b5af4e',
 })]);
 const SHA = /^[a-f0-9]{40}$/;
 function git(repo, args) {
