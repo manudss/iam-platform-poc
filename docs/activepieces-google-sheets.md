@@ -1,0 +1,74 @@
+# Native Activepieces Google Sheets integration
+
+Work in progress. Not a production-complete or live-tested delivery yet.
+
+The installed version is `@activepieces/piece-google-sheets` 0.19.5. Its runtime
+catalogue contains 61 actions: 27 human-facing actions and 34 API/AI-input
+variants, plus four triggers. The public integration page lists 27 actions and
+four triggers: https://www.activepieces.com/pieces/google-sheets . The checked-in
+inventory records native keys instead of assuming the public page is exhaustive.
+
+The catalogue is generated from the installed package, preserving property keys
+and delegating execution to its actual action and trigger functions. No email,
+HR, badge or Done-status rule is embedded. Dropdown identifiers can be entered;
+the authenticated property resolver invokes native dropdown/dynamic property
+functions. JSON inputs retain the native resolved shape, not an alternative
+business schema. The UI exposes property-resolution results for inspection.
+Native results are returned as `result`; they are not flattened or renamed.
+
+## Lyam host services, not Activepieces guarantees
+
+- Managed write-only credentials and explicit Real confirmation. Simulation makes
+  no provider calls. The full catalogue needs an explicitly account-scoped Google
+  connection, because it can create/search/copy documents outside one legacy
+  bound spreadsheet. Broadening a saved connection needs its secret entered again;
+  old seals remain valid and old graphs keep their behavior.
+- Private file bytes and native state are stored in the operational meta database,
+  isolated by tenant and workflow/node (state) or run (files). Export downloads
+  require an authenticated administrator and matching tenant/run. File limit 8MB.
+- Native mutations and cursor-advancing actions persist an uncertain-effect
+  marker before invocation. A lost response requires review, not automatic replay.
+- Native trigger cursors and pending deliveries are durable. Polls stage cursor
+  changes and events in one envelope; interrupted application can be recovered.
+  Workflow event IDs deduplicate replayed deliveries.
+- Google row webhooks use the native Drive watch/renew/stop lifecycle, a random
+  route token and matching Google channel/resource IDs. HTTPS public base URL is
+  required via IAM_PUBLIC_BASE_URL or PUBLIC_BASE_URL. Renewal is checked every
+  minute after twelve hours. Uncertain enable/renew/disable remains in review;
+  no automatic second registration is attempted.
+- Custom API calls are limited to HTTPS sheets.googleapis.com/v4, no redirects
+  or caller-controlled authentication headers. This is a documented credential
+  boundary, not an upstream capability claim.
+
+No row lock, compare-and-swap, value CAS or transaction across Google and Lyam is
+provided. Native Update Row remains positional and USER_ENTERED. The optional
+checked cell wrapper in PR163 is a separate Lyam guard, not a native action and
+not a prerequisite of a native workflow. Demo rules belong in graph conditions,
+searches, transformations and native action parameters.
+
+## Qualification still required
+
+Tests cover exhaustive registration/dispatch with action doubles, representative
+installed native read/poll/webhook lifecycle/dynamic-field contracts over
+intercepted Google HTTP, and real local Dolt persistence/recreation and tenant
+isolation. None proves a live Google account, all61 real provider actions, a
+live callback route or a multi-replica scheduler. Browser UI inspection, broader
+regression tests and lifecycle/recovery review remain before a ready verdict.
+A file in the catalogue is not evidence of complete functionality.
+
+## Operations and remaining recovery UI
+
+Set `IAM_ACTIVEPIECES_API_BASE_URL` to the externally reachable API root, including
+`/api` when an edge proxy routes the API under that prefix. Existing
+`IAM_PUBLIC_BASE_URL` / `PUBLIC_BASE_URL` are fallbacks and must already name the
+API root, not merely a front-end origin. Callback setup is not live-qualified.
+
+Trigger delivery uses a database mutex across application instances. Action
+runtime state uses the same durable mutex per definition/node. The mutex does
+not expire: after a process crash, calls stop rather than overlap an uncertain
+provider call. Before releasing a stranded `lyam:lock`, an operator must stop
+the former worker and reconcile provider effects and subscription channels.
+There is not yet an in-app recovery/status panel. Do not call this production
+ready until that panel, lifecycle fault tests and delivery routing are verified.
+The last reviewed state of this branch has no live credentials, registration,
+workflow activation or Google changes performed by the development task.

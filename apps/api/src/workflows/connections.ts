@@ -52,18 +52,18 @@ export const connectionProvider = (type: string): ConnectionProvider | null => t
 /** Config fields that decide WHERE the stored credential is sent or as WHOM it acts: changing one needs the credential typed again, so a stored secret never follows a new destination. */
 const BOUND = ['instanceUrl', 'baseUrl', 'siteUrl', 'email', 'userEmail', 'spreadsheetId', 'sheetId'];
 /** The seal kept WITH the secret in the secret store (outside Dolt): provider and every bound field. resolve() recomputes it from the stored configuration, so a row edited in Dolt by any other path never receives the credential. */
-export const bindOf = (provider: string, config: Record<string, string>) => createHash('sha256').update(JSON.stringify([provider, ...BOUND.map(k => config[k] ?? '')])).digest('hex');
+export const bindOf = (provider: string, config: Record<string, string>) => createHash('sha256').update(JSON.stringify([provider, ...BOUND.map(k => config[k] ?? ''), ...(config.googleScope ? ['googleScope',config.googleScope] : [])])).digest('hex');
 /** Real external connections are OFF unless the server is explicitly started for them (a private space). Never inferred from data, never settable from a workflow or a connection. */
 export const realConnectionsEnabled = () => process.env.IAM_WORKFLOW_REAL_CONNECTIONS === '1';
 const requireRealEnabled = () => { if (!realConnectionsEnabled()) throw new ServiceUnavailableException('real external connections are disabled on this server (IAM_WORKFLOW_REAL_CONNECTIONS is not 1): nothing was saved, read or called'); };
-export const destinationChanged = (before: Record<string, string>, after: Record<string, string>) => BOUND.some(k => (before[k] ?? '') !== (after[k] ?? ''));
+export const destinationChanged = (before: Record<string, string>, after: Record<string, string>) => [...BOUND,'googleScope'].some(k => (before[k] ?? '') !== (after[k] ?? ''));
 export function validateConnection(body: Record<string, unknown>) {
   if (Object.keys(body).some(k => !['name', 'provider', 'config', 'secret'].includes(k))) throw new BadRequestException('unknown connection field');
   const provider = body.provider as ConnectionProvider;
   if (!['google-sheets', 'jira', 'http'].includes(provider)) throw new BadRequestException('invalid connection provider');
   const name = String(body.name ?? '').trim(); if (!name || name.length > 80) throw new BadRequestException('connection name required (max 80)');
   const raw = body.config; if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new BadRequestException('connection config must be an object');
-  const allowed = provider === 'jira' ? ['instanceUrl', 'email', 'siteUrl'] : provider === 'google-sheets' ? ['userEmail', 'spreadsheetId', 'sheetId'] : ['baseUrl'];
+  const allowed = provider === 'jira' ? ['instanceUrl', 'email', 'siteUrl'] : provider === 'google-sheets' ? ['userEmail', 'spreadsheetId', 'sheetId', 'googleScope'] : ['baseUrl'];
   const config: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) { if (!allowed.includes(k) || typeof v !== 'string' || v.length > 300) throw new BadRequestException('invalid connection config'); config[k] = v; }
   if (provider === 'jira' || provider === 'http') {
@@ -83,6 +83,7 @@ export function validateConnection(body: Record<string, unknown>) {
     config.siteUrl = site.toString();
   }
   if (provider === 'jira' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.email ?? '')) throw new BadRequestException('Jira account email required');
+  if(provider==='google-sheets'&&config.googleScope&&!['spreadsheet','account'].includes(config.googleScope))throw new BadRequestException('Google scope must be spreadsheet or account');
   if (provider === 'google-sheets' && config.sheetId && !/^\d{1,12}$/.test(config.sheetId)) throw new BadRequestException('sheet ID must be numeric');
   if (body.secret !== undefined && (typeof body.secret !== 'string' || !body.secret || body.secret.length > 20000)) throw new BadRequestException('invalid write-only secret');
   if (provider === 'google-sheets' && body.secret) {
@@ -147,7 +148,7 @@ export class WorkflowConnections {
     return this.probe(clean.provider, clean.config, settings);
   }
   private settings(provider: ConnectionProvider, config: Record<string,string>, secret: string): Record<string, unknown> {
-    return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraSiteUrl: config.siteUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
+    return provider === 'jira' ? {jiraInstanceUrl: config.instanceUrl, jiraSiteUrl: config.siteUrl, jiraEmail: config.email, jiraApiToken: secret} : provider === 'google-sheets' ? {googleServiceAccount: secret, googleUserEmail: config.userEmail,googleScope:config.googleScope??'spreadsheet'} : {httpAllowlist: new URL(config.baseUrl).hostname, httpConnectionBase: config.baseUrl, httpConnectionToken: secret};
   }
   private probeFailed(reason: ProbeFailure = 'unknown') { return {status: 'Failed', checkedAt: new Date().toISOString(), readOnly: true, reason, message: PROBE_FAILURE_MESSAGE[reason]}; }
   protected async httpProbe(url: string, options: unknown) {

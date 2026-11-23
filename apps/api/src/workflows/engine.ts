@@ -1,4 +1,5 @@
 import { automationHeld, assertAutomationAllowed } from '../automation/hold.js';
+import * as crypto from 'node:crypto';
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import type { WorkflowIntake } from './intake.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
@@ -48,6 +49,7 @@ export { hasDataSteps } from './model.js';
  */
 interface PublishEffects { diff: (from: string, to: string) => Promise<unknown>; status: (tenant: string, id: number) => Promise<{ pullRequest: unknown }>; request: (tenant: string, runId: string, title: string) => Promise<{ pullRequest: unknown; reused: boolean }> }
 interface EngineDeps {
+  pieceRuntime?: (tenant:string,definition:string,run:string,node:string)=>unknown;
   store: WorkflowStore;
   versioning: { createBranch: (branch: string, base: string) => Promise<unknown>; writeOn: <T>(branch: string, fn: (c: unknown) => Promise<T>) => Promise<T>; defaultBranch: string; deleteBranch?: (branch: string) => Promise<unknown> };
   authorOf: (actor: string) => string;
@@ -165,11 +167,22 @@ interface WorkflowEngineApi {
 @Injectable()
 export class WorkflowEngine implements OnModuleInit {
   private readonly log = new Logger('workflows');
+  private pieceRuntime(tenant:string,definition:string,run:string,node:string){
+    const scope='action:'+definition+':'+node;
+    return {
+      withLock:async(fn:()=>Promise<unknown>)=>{const owner=crypto.randomUUID();if(!await this.store.pieceClaim(tenant,scope,owner))throw Error('Native action state is busy or needs crash reconciliation');try{return await fn();}finally{await this.store.pieceRelease(tenant,scope,owner);}},
+      store:{get:(key:string)=>this.store.pieceGet(tenant,scope,key),put:(key:string,value:unknown)=>this.store.piecePut(tenant,scope,key,value),delete:(key:string)=>this.store.pieceDelete(tenant,scope,key)},
+      files:{write:async({fileName,data}:{fileName:string,data:Buffer})=>{if(data.length>8_000_000)throw Error('connector export exceeds 8MB');const id=crypto.randomUUID();await this.store.piecePut(tenant,'file:'+run,id,{name:fileName,data:data.toString('base64')});return '/tenants/'+encodeURIComponent(tenant)+'/workflow-runs/'+encodeURIComponent(run)+'/connector-files/'+id;}},
+      run:{id:run},project:{id:tenant},flow:{id:definition,version:{id:run}},step:{name:node},
+    };
+  }
+
   private readonly deps: EngineDeps;
 
   constructor(private readonly store: WorkflowStore, v: VersioningService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections, @Optional() private readonly authn?: AuthnService, @Optional() private readonly events?: ApplicationBus, @Optional() private readonly publisher?: WorkspacePublisher, @Optional() private readonly users?: UsersService, @Optional() @Inject(forwardRef(() => WorkflowTasksService)) private readonly tasks?: unknown, @Optional() @Inject(forwardRef(() => WorkflowReads)) private readonly reads?: unknown, @Optional() @Inject(forwardRef(() => WorkflowsIgaService)) private readonly iga?: unknown, @Optional() @Inject(forwardRef(() => PullRequestService)) private readonly prs?: unknown, @Optional() @Inject('WORKFLOW_INTAKE') private readonly intake?: WorkflowIntake) {
     this.deps = {
       store,
+      pieceRuntime: (tenant:string,definition:string,run:string,node:string) => this.pieceRuntime(tenant,definition,run,node),
       versioning: { createBranch: (b, base) => v.createBranch(b, base), writeOn: (b, fn) => v.writeOn(b, fn as never), defaultBranch: v.defaultBranch, deleteBranch: (b) => v.deleteBranch(b, async () => false) },
       authorOf,
       branchRun: (b, fn) => branchContext.run({ branch: b }, fn),
