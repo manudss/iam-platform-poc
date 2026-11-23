@@ -42,11 +42,14 @@ try {
   await page.waitForSelector('input[name=password]', { timeout: 15000 });
   await page.fill('input[name=username]', 'demo-alice');
   await page.fill('input[name=password]', 'demo-only-not-a-secret');
-  await Promise.all([page.waitForURL(/localhost:4200\//, { timeout: 20000 }), page.click('button[type=submit]')]);
+  await Promise.all([page.waitForURL(/localhost:4200\/callback/, { timeout: 20000 }), page.click('button[type=submit]')]);
+  // The callback page still has to exchange the code and store the session before it routes away;
+  // a manual goto here races that exchange, loses the session and the console bounces to /login.
+  await page.waitForURL((u) => !u.pathname.startsWith('/callback'), { timeout: 20000 });
   ok('browser sign-in', page.url().slice(0, 60));
 
   // 2. My applications: no Internal server error, the workspace renders
-  await page.goto(`${BASE}/my-applications`);
+  if (!page.url().includes('/my-applications')) await page.goto(`${BASE}/my-applications`);
   await page.waitForSelector('text=My applications', { timeout: 20000 });
   let sawError = false;
   for (let i = 0; i < 30; i++) {
