@@ -16,10 +16,10 @@ function setup(population: { count: number; listed: number }) {
   const reads: any = {
     listUsers: async (_t: string, _r: string, _f: { department?: string; limit?: number }) => ({
       count: population.count,
-      users: Array.from({ length: population.listed }, (_, i) => ({ id: `u${i}`, displayName: `User ${i}`, department: 'it', manager: null, email: null, loginEnabled: true })),
+      users: Array.from({ length: population.listed }, (_, i) => ({ id: `u${i}`, displayName: `User ${i}`, department: 'it', manager: `boss-${i}`, email: null, loginEnabled: true })),
     }),
     listAssignments: async () => ({ assignments: [{ role: 'r1' }] }),
-    readUser: async (_t: string, _r: string, id: string) => ({ id, displayName: id, roles: ['r1'] }),
+    readUser: async (_t: string, _r: string, id: string) => ({ id, displayName: id, roles: ['r1'], manager: `boss-${id}` }),
   };
   const iga = new WorkflowsIgaService(store, undefined as never, reads, undefined);
   return { iga, stored };
@@ -39,6 +39,7 @@ describe('iga campaign creation: the frozen scope is the complete population', (
     assert.equal(c.status, 'open');
     assert.equal((stored.campaign!.scope as { population: number }).population, 3, 'the evidence carries the frozen population');
     assert.equal(stored.items.length, 3, 'every person in scope got an item');
+    assert.deepEqual(stored.items.map((i: any) => i.payload.manager), ['boss-0', 'boss-1', 'boss-2'], 'manager provenance and full population survive the combined changes');
   });
   it('an explicit user list freezes exactly that list and records its size', async () => {
     const { iga, stored } = setup({ count: 999, listed: 0 }); // the listing is never used for an explicit scope
@@ -46,6 +47,7 @@ describe('iga campaign creation: the frozen scope is the complete population', (
     assert.equal(c.status, 'open');
     assert.equal((stored.campaign!.scope as { population: number }).population, 2);
     assert.equal(stored.items.length, 2);
+    assert.deepEqual(stored.items.map((i: any) => i.payload.manager), ['boss-u1', 'boss-u2'], 'explicit scopes retain manager provenance too');
   });
 });
 

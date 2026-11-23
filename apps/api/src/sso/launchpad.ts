@@ -43,11 +43,14 @@ export class LaunchpadController {
   /** The person's filtered launchpad payload: rights filtering (mayOpen) runs here, on every request. */
   private async build(t: string, r: { user: { sub: string }; headers: Record<string, unknown>; protocol?: string }) {
     const u = await this.dir.user(t, r.user.sub);
-    const [oidcOn, samlOn, live] = await Promise.all([
+    const [oidcOn, samlOn, connectorOn] = await Promise.all([
       this.profile.pluginActive(t, 'oidc-provider', 'live'),
       this.profile.pluginActive(t, 'saml-idp', 'live'),
-      this.apps.liveApps(t),
+      this.profile.pluginActive(t, 'app-connector', 'live'),
     ]);
+    // An intentionally disabled connector has no application inventory. Do not invoke its refusing base.
+    // An enabled provider failure still propagates, never masquerades as an empty successful inventory.
+    const live = connectorOn ? await this.apps.liveApps(t) : [];
     const base = baseUrl(r);
     // An application with a minimum sign-in level shows it before the click. No rule: the entry is exactly what it was.
     const levels = this.authn ? (await this.authn.liveSecurity(t)).appLevels : {};
@@ -62,7 +65,7 @@ export class LaunchpadController {
     }
     const values = await this.preferences.get(t, r.user.sub, 'live');
     let saved: unknown; try { saved = JSON.parse(String(values['console.launchpad'] ?? '{}')); } catch { saved = {}; }
-    return { user: { sub: r.user.sub, name: u?.display_name || r.user.sub }, apps, preferences: readPreferences(saved, apps.map(a => a.id)) };
+    return { user: { sub: r.user.sub, name: u?.display_name || r.user.sub }, apps, inventory: connectorOn ? 'enabled' : 'disabled', preferences: readPreferences(saved, apps.map(a => a.id)) };
   }
   /** Personal preferences always belong to the authenticated subject, never a body-supplied identity.
    * They use the existing live profile value store so they survive reloads and follow the user between devices. */

@@ -209,7 +209,7 @@ describe('WorkflowsIgaService review tasks carry the awaiting run id', () => {
     const created: Record<string, unknown>[] = [];
     const tasksSvc = { request: async (a: Record<string, unknown>) => { created.push(a); return { id: 'task-1', ...a }; } };
     const store = { igaGetCampaign: async () => ({ id: 'iga-1', tenant: 'acme', status: 'open' }), igaListItems: async () => [{ id: 'item-1', tenant: 'acme', campaign_id: 'iga-1', identity: 'emp', kind: 'user-access', action: 'review', payload: {}, state: 'pending', decided_by: null, decided_at: null, decision_reason: null, run_id: null }] };
-    const iga = new WorkflowsIgaService(store as never, tasksSvc as never);
+    const iga = new WorkflowsIgaService(store as never, tasksSvc as never, { readUser: async () => ({ manager: 'boss', loginEnabled: true }) } as never);
     await iga.openReviewTasks('acme', 'workflow:run-9', 'iga-1', { assignTo: 'manager', runId: 'run-9' });
     assert.equal(created[0].runId, 'run-9');
     assert.equal((created[0].detail as Record<string, unknown>).campaignId, 'iga-1');

@@ -23,15 +23,18 @@ function setup(opts: { managerLogin?: boolean | 'unknown' } = {}) {
     patchTaskDetail: async (id: string, patch: Record<string, unknown>) => { const t = tasks.get(id)!; for (const [k, v] of Object.entries(patch)) { if (v === null) delete t.detail[k]; else t.detail[k] = v; } },
     getRunById: async () => null,
     decideTaskAs: async (id: string, actor: string, d: string, j: string | null, at: string) => { const t = tasks.get(id)!; t.status = 'decided'; t.decision = d; t.decided_by = actor; t.justification = j; t.decided_at = at; return t; },
+    decideReviewTask: async (expected: any, actor: string, d: string, j: string | null, at: string, override: boolean) => { const t = tasks.get(expected.id)!; if (t.status !== 'open' || (!override && (t.delegated_to ?? t.assignee) !== actor)) return null; Object.assign(t, { status: 'decided', decision: d, decided_by: actor, justification: j, decided_at: at }); return t; },
+    reassignReviewTask: async (expected: any, target: string, detail: any) => { const t = tasks.get(expected.id)!; if (t.status !== 'open') return null; Object.assign(t, { assignee: target, delegated_to: null, detail }); return t; },
+    patchReviewTaskDetail: async (expected: any, detail: any) => { tasks.get(expected.id)!.detail = detail; return true; },
     listDueTasks: async () => [...tasks.values()].filter((t) => t.status === 'open' && t.due_at && (!t.reminded_at)),
     markTaskReminded: async (id: string, at: string) => { tasks.get(id)!.reminded_at = at; },
     delegateTask: async (id: string, to: string, at: string) => { const t = tasks.get(id); if (!t || t.status !== 'open') return null; t.delegated_to = to; t.due_at = at; return t; },
   };
   const bus: any = { emit: (e: { type: string; payload: any }) => events.push({ name: e.type, p: e.payload }) };
-  const taskSvc = new WorkflowTasksService(store, bus, undefined, { readUser: async (_t: string, ref: string, id: string) => { assert.equal(ref, 'main'); return { id, loginEnabled: true }; } } as never);
+  const taskSvc = new WorkflowTasksService(store, bus, undefined, { readUser: async (_t: string, ref: string, id: string) => { assert.equal(ref, 'main'); return { id, loginEnabled: true, manager: id === 'emp' || id === 'boss2' ? 'boss' : null }; } } as never);
   const kicks: string[] = [];
   (taskSvc as any).kick = (id: string) => kicks.push(id);
-  const reads: any = { readUser: async (_t: string, _r: string, id: string) => { if (opts.managerLogin === 'unknown' && id === 'boss') throw new Error('unknown identity'); return { id, loginEnabled: opts.managerLogin === false && id === 'boss' ? false : true }; } };
+  const reads: any = { readUser: async (_t: string, _r: string, id: string) => { if (opts.managerLogin === 'unknown' && id === 'boss') throw new Error('unknown identity'); return { id, loginEnabled: opts.managerLogin === false && id === 'boss' ? false : true, manager: id === 'emp' || id === 'boss2' ? 'boss' : null }; } };
   const iga = new WorkflowsIgaService(store, taskSvc as never, reads, undefined);
   return { iga, taskSvc, tasks, events, kicks };
 }
@@ -97,7 +100,7 @@ describe('iga late reviews and validator replacement', () => {
     const due = a.due_at;
     const r = await iga.reassignReviewTasks('acme', 'workflow:r', 'iga-1', { from: 'boss', to: 'iga', reason: 'on leave', startedBy: 'adm1' });
     assert.deepEqual(r.reassigned, [a.id]);
-    assert.equal(a.delegated_to, 'igaowner');
+    assert.equal(a.assignee, 'igaowner'); assert.equal(a.delegated_to, null);
     assert.equal(a.due_at, due);
     assert.equal(a.detail.reassignedFrom, 'boss');
     assert.equal(b.delegated_to ?? null, null, 'a decided task is untouched');
@@ -157,7 +160,7 @@ describe('iga reassignment authority and escalation safety', () => {
     assert.equal(await taskSvc.scanOverdue(), 0, 'not due yet');
     for (const t of tasks.values()) t.due_at = '2020-01-01 00:00:00.000';
     assert.equal(await taskSvc.scanOverdue(), 2);
-    for (const t of tasks.values()) { assert.equal(t.delegated_to, 'igaowner'); assert.ok(t.reminded_at); assert.equal(t.status, 'open'); }
+    for (const t of tasks.values()) { assert.equal(t.assignee, 'igaowner'); assert.equal(t.delegated_to, null); assert.ok(t.reminded_at); assert.equal(t.status, 'open'); }
     assert.deepEqual(kicks, ['run-7', 'run-7']);
     assert.equal(await taskSvc.scanOverdue(), 0, 'escalation happens once');
     const [a] = [...tasks.values()];
@@ -172,7 +175,7 @@ describe('iga reassignment authority and escalation safety', () => {
     for (const t of tasks.values()) { t.due_at = '2020-01-01 00:00:00.000'; if (t.detail.identity === 'emp') t.assignee = 'boss'; }
     await taskSvc.scanOverdue();
     const emp = [...tasks.values()].find((t) => t.detail.identity === 'emp')!;
-    assert.notEqual(emp.delegated_to, 'emp');
+    assert.notEqual(emp.delegated_to ?? emp.assignee, 'emp');
     process.env.IAM_API_IGA_SUBJECTS = 'emp'; process.env.IAM_API_ADMIN_SUBJECTS = 'emp';
     const { iga: i2, taskSvc: s2, tasks: t2 } = setup();
     process.env.IAM_API_IGA_SUBJECTS = 'igaowner,emp'; process.env.IAM_API_ADMIN_SUBJECTS = 'adm1';
@@ -181,7 +184,7 @@ describe('iga reassignment authority and escalation safety', () => {
     for (const t of t2.values()) t.due_at = '2020-01-01 00:00:00.000';
     await s2.scanOverdue();
     const stay = [...t2.values()].find((t) => t.detail.identity === 'emp')!;
-    assert.notEqual(stay.delegated_to, 'emp', 'never escalated onto the reviewed person');
+    assert.notEqual(stay.delegated_to ?? stay.assignee, 'emp', 'never escalated onto the reviewed person');
   });
 });
 

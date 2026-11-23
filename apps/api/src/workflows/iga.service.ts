@@ -60,7 +60,7 @@ export class WorkflowsIgaService {
     // The frozen scope must be the COMPLETE population: listUsers caps at 200 rows and reports the real
     // total in count — a population beyond the cap refuses the campaign, never a silently truncated one.
     let population: number;
-    let users: { id: string; displayName?: string; roles?: string[] }[];
+    let users: { id: string; displayName?: string; roles?: string[]; manager: string | null }[];
     if (listed) {
       users = await Promise.all(listed.map((u) => this.reads!.readUser(tenant, ref, u)));
       population = listed.length;
@@ -70,18 +70,18 @@ export class WorkflowsIgaService {
       population = page.count;
       users = page.users;
     }
-    const scoped: { id: string; displayName: string; roles: string[] }[] = [];
+    const scoped: { id: string; displayName: string; roles: string[]; manager: string | null }[] = [];
     for (const u of users) {
       const roles = 'roles' in u && Array.isArray((u as { roles?: unknown }).roles) ? (u as { roles: string[] }).roles : (await this.reads.listAssignments(ref, { identity: u.id })).assignments.map((a) => a.role);
       if (scope.role && !roles.includes(String(scope.role))) continue;
-      scoped.push({ id: u.id, displayName: (u as { displayName?: string }).displayName ?? u.id, roles });
+      scoped.push({ id: u.id, displayName: (u as { displayName?: string }).displayName ?? u.id, roles, manager: u.manager });
     }
     if (!scoped.length) throw new BadRequestException('the scope selects no user on this ref');
     if (scoped.length > 200) throw new BadRequestException('a campaign is capped at 200 items in this poc (narrow the scope)');
     const id = `iga-${randomBytes(6).toString('hex')}`;
     await this.store.igaPutCampaign(
       { id, tenant, kind, name, ref, status: 'open', scope: { ...scope, population } as Record<string, unknown>, created_by: actor, created_at: now() },
-      scoped.map((u) => ({ id: `item-${randomBytes(6).toString('hex')}`, identity: u.id, kind, action: 'review', payload: { roles: u.roles, displayName: u.displayName } })),
+      scoped.map((u) => ({ id: `item-${randomBytes(6).toString('hex')}`, identity: u.id, kind, action: 'review', payload: { roles: u.roles, displayName: u.displayName, manager: u.manager } })),
     );
     this.emit(tenant, 'iga.campaign-launched', { campaign: id, actor });
     return this.get(tenant, id);
@@ -111,24 +111,29 @@ export class WorkflowsIgaService {
     const escalateTo = input.escalateTo === undefined || input.escalateTo === null || String(input.escalateTo).trim() === '' ? undefined : String(input.escalateTo).trim();
     if (escalateTo && !dueInSeconds) throw new BadRequestException('escalateTo needs dueInDays');
     if (escalateTo) {
-      const target = this.tasks.resolveAssignee(escalateTo); // refused now rather than silently ignored at the deadline
+      const target = await this.tasks.activeReviewAssignee(tenant, escalateTo); // refused now rather than silently ignored at the deadline
       if (!this.tasks.isDeciderAdmin(target)) throw new BadRequestException('escalateTo: "iga", "admin" or a member of the admin or IGA pool');
       await this.tasks.requireActiveReviewTarget(tenant, target);
     }
     const out: { item: string; task: string | null; assignee: string; managerAbsent?: boolean }[] = [];
     for (const i of items) {
-      const manager = typeof i.payload?.manager === 'string' ? i.payload.manager : null;
+      let manager = typeof i.payload?.manager === 'string' ? i.payload.manager : null;
+      if (assignTo === 'manager') {
+        if (!this.reads) throw new ConflictException('review manager validation unavailable');
+        try { manager = (await this.reads.readUser(tenant, 'main', i.identity)).manager; }
+        catch { throw new ConflictException('cannot resolve current manager (read failed): no task opened for this item'); }
+      }
       // An absent validator (unknown or login-disabled manager, or no manager) never receives a task nobody will read: the iga pool takes it, and the item says why.
       let managerAbsent = false;
       if (assignTo === 'manager' && manager) {
         // Absence (unknown identity, login disabled) is not a read failure: a failed read stops the step (it can be retried, tasks are idempotent per step) instead of being filed as an absent manager.
-        try { const u = await this.reads?.readUser(tenant, 'main', manager); managerAbsent = !u || u.loginEnabled === false; }
+        try { const u = await this.reads?.readUser(tenant, 'main', manager); managerAbsent = !u || u.loginEnabled === false || manager === i.identity; }
         catch (e) { if (/unknown identity/i.test((e as Error).message)) managerAbsent = true; else throw new ConflictException(`cannot tell whether the manager "${manager}" is available (read failed): no task opened for this item, retry`); }
       }
       const assignee = assignTo === 'manager' ? (manager && !managerAbsent ? manager : 'iga') : assignTo;
       const t = await this.tasks.request({
         tenant, kind: 'iga-review', title: `Recertify ${i.identity} (${campaign.name})`,
-        detail: { campaignId, itemId: i.id, identity: i.identity, roles: i.payload?.roles ?? [], decisions: ['approved', 'denied'], ...(managerAbsent ? { managerAbsent: manager } : {}) },
+        detail: { campaignId, itemId: i.id, identity: i.identity, roles: i.payload?.roles ?? [], decisions: ['approved', 'denied'], ...(managerAbsent ? { managerAbsent: manager } : {}), ...(assignTo === 'manager' && manager && !managerAbsent ? { reviewManager: manager } : {}) },
         assignee, preventSelfApproval: true, runId: input.runId ?? campaignId, nodeId: i.id, ...(dueInSeconds ? { dueInSeconds } : {}), ...(escalateTo ? { escalateTo } : {}),
       });
       out.push({ item: i.id, task: t.id, assignee: t.assignee, ...(managerAbsent ? { managerAbsent: true } : {}) });
@@ -154,8 +159,10 @@ export class WorkflowsIgaService {
     if (from === to) throw new BadRequestException('from and to are the same decider');
     // Authority is checked BEFORE any task is touched: a refusal here changes nothing.
     if (!this.tasks.isDeciderAdmin(input.startedBy)) throw new ForbiddenException('only an admin or an IGA pool member who started the workflow can replace a validator');
-    if (!this.tasks.isDeciderAdmin(this.tasks.resolveAssignee(to))) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
-    await this.tasks.requireActiveReviewTarget(tenant, this.tasks.resolveAssignee(to));
+    if (to !== 'manager') {
+      const replacement = await this.tasks.activeReviewAssignee(tenant, to);
+      if (!this.tasks.isDeciderAdmin(replacement)) throw new ForbiddenException('the replacement must be a member of the admin or IGA pool');
+    }
     const mine = (await this.store.listTasksByCampaign(tenant, campaignId)).filter((t) => t.kind === 'iga-review' && t.status === 'open' && (t.delegated_to ?? t.assignee) === from);
     const reassigned: string[] = [], refused: { task: string; reason: string }[] = [];
     for (const t of mine) {

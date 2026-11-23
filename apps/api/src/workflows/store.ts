@@ -421,6 +421,40 @@ export class WorkflowStore {
       return this.getTask(id);
     } finally { await m.end(); }
   }
+  /** IGA decisions compare the exact assignment that the caller validated. A concurrent reassignment
+   * wins or loses as one SQL write, including admin/pool decisions; no stale-authorization override. */
+  async decideReviewTask(t: TaskRow, actor: string, decision: string, justification: string | null, at: string, override: boolean): Promise<TaskRow | null> {
+    const m = await this.meta();
+    try {
+      const [res] = await m.query("update workflow_tasks set status = 'decided', decision = ?, justification = ?, decided_by = ?, decided_at = ? where id = ? and tenant = ? and kind = 'iga-review' and status = 'open' and assignee = ? and coalesce(delegated_to, '') = ? and coalesce(JSON_UNQUOTE(JSON_EXTRACT(detail, '$.reviewAssignmentVersion')), '0') = ? and (? = true or coalesce(delegated_to, assignee) = ?)", [decision, justification, actor, at, t.id, t.tenant, t.assignee, t.delegated_to ?? '', String(t.detail?.reviewAssignmentVersion ?? 0), override, actor]);
+      if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
+      return this.getTask(t.id);
+    } catch (e) { if (WorkflowStore.noTable(e) || WorkflowStore.writeConflict(e)) return null; throw e; }
+    finally { await m.end(); }
+  }
+
+  /** Change review owner and audit detail together, while preserving due_at/reminded_at/run/item.
+   * Replaces assignee, not a second OR-authorized delegate: the former owner loses that authority. */
+  async reassignReviewTask(t: TaskRow, target: string, detail: Record<string, unknown>): Promise<TaskRow | null> {
+    const m = await this.meta();
+    try {
+      const [res] = await m.query("update workflow_tasks set assignee = ?, delegated_to = null, detail = ? where id = ? and tenant = ? and kind = 'iga-review' and status = 'open' and assignee = ? and coalesce(delegated_to, '') = ? and coalesce(JSON_UNQUOTE(JSON_EXTRACT(detail, '$.reviewAssignmentVersion')), '0') = ?", [target, JSON.stringify(detail), t.id, t.tenant, t.assignee, t.delegated_to ?? '', String(t.detail?.reviewAssignmentVersion ?? 0)]);
+      if (!Number((res as { affectedRows?: number }).affectedRows)) return null;
+      return this.getTask(t.id);
+    } catch (e) { if (WorkflowStore.noTable(e) || WorkflowStore.writeConflict(e)) return null; throw e; }
+    finally { await m.end(); }
+  }
+
+  /** Error annotation must not overwrite a concurrent assignment/decision or its audit detail. */
+  async patchReviewTaskDetail(t: TaskRow, detail: Record<string, unknown>): Promise<boolean> {
+    const m = await this.meta();
+    try {
+      const [res] = await m.query("update workflow_tasks set detail = ? where id = ? and tenant = ? and kind = 'iga-review' and status = 'open' and assignee = ? and coalesce(delegated_to, '') = ? and coalesce(JSON_UNQUOTE(JSON_EXTRACT(detail, '$.reviewAssignmentVersion')), '0') = ?", [JSON.stringify(detail), t.id, t.tenant, t.assignee, t.delegated_to ?? '', String(t.detail?.reviewAssignmentVersion ?? 0)]);
+      return Number((res as { affectedRows?: number }).affectedRows) > 0;
+    } catch (e) { if (WorkflowStore.noTable(e) || WorkflowStore.writeConflict(e)) return false; throw e; }
+    finally { await m.end(); }
+  }
+
   /** Claims a DECIDED task for one consumer (run:node), atomically at the SQL level: the conditional update succeeds for the first consumer only (proved on real Dolt with concurrent connections, see task-consume-dolt.spec). The same consumer asking again BEFORE the effect was recorded is idempotent (crash retry); once markTaskApplied ran, nobody can claim again, the same consumer included. */
   async consumeTask(id: string, consumer: string): Promise<{ ok: boolean; by: string | null; applied: boolean }> {
     const m = await this.meta();
