@@ -48,10 +48,12 @@ export class WorkflowsIgaService {
   }
 
   /** Step 1: snapshot the scope on a ref. Items are the users in scope with their current roles. */
-  async createCampaign(tenant: string, actor: string, input: { kind?: unknown; name?: unknown; ref?: unknown; scope?: unknown }) {
+  async createCampaign(tenant: string, actor: string, input: { kind?: unknown; name?: unknown; ref?: unknown; scope?: unknown; granularity?: unknown }) {
     if (!this.reads) throw new BadRequestException('IGA campaigns need the reads service (server)');
     const kind = String(input.kind ?? 'user-access');
     if (!['user-access', 'role-membership', 'application-access'].includes(kind)) throw new BadRequestException('kind: user-access, role-membership or application-access');
+    const granularity = String(input.granularity ?? 'person');
+    if (!['person', 'access'].includes(granularity)) throw new BadRequestException('granularity: person or access');
     const name = String(input.name ?? '').trim();
     if (!name || name.length > 120) throw new BadRequestException('name: 1..120 characters');
     const ref = String(input.ref ?? 'main');
@@ -72,19 +74,33 @@ export class WorkflowsIgaService {
     }
     const scoped: { id: string; displayName: string; roles: string[]; manager: string | null }[] = [];
     for (const u of users) {
-      const roles = 'roles' in u && Array.isArray((u as { roles?: unknown }).roles) ? (u as { roles: string[] }).roles : (await this.reads.listAssignments(ref, { identity: u.id })).assignments.map((a) => a.role);
+      const direct = granularity === 'access' ? await this.reads.listAssignments(ref, { identity: u.id, limit: 1000 }) : null;
+      if (direct && direct.count > direct.assignments.length) throw new BadRequestException('direct assignment population truncated: narrow the scope');
+      const roles = direct ? direct.assignments.map(a => a.role) : 'roles' in u && Array.isArray((u as { roles?: unknown }).roles) ? (u as { roles: string[] }).roles : (await this.reads.listAssignments(ref, { identity: u.id })).assignments.map((a) => a.role);
       if (scope.role && !roles.includes(String(scope.role))) continue;
       scoped.push({ id: u.id, displayName: (u as { displayName?: string }).displayName ?? u.id, roles, manager: u.manager });
     }
     if (!scoped.length) throw new BadRequestException('the scope selects no user on this ref');
     if (scoped.length > 200) throw new BadRequestException('a campaign is capped at 200 items in this poc (narrow the scope)');
+    const snapshots = scoped.flatMap(u => granularity === 'access'
+      ? u.roles.filter(role => !scope.role || role === String(scope.role)).map(role => ({ identity: u.id, payload: { roles: [role], snapshotRoles: u.roles, displayName: u.displayName, manager: u.manager, access: { kind: 'role-assignment', role, provenance: { type: 'direct', source: 'lyam.assignments', ref, identity: u.id, role } } } }))
+      : [{ identity: u.id, payload: { roles: u.roles, displayName: u.displayName, manager: u.manager } }]);
+    if (!snapshots.length) throw new BadRequestException('the scope selects no direct role assignment');
+    if (snapshots.length > 200) throw new BadRequestException('a campaign is capped at 200 review items; narrow the scope');
     const id = `iga-${randomBytes(6).toString('hex')}`;
     await this.store.igaPutCampaign(
-      { id, tenant, kind, name, ref, status: 'open', scope: { ...scope, population } as Record<string, unknown>, created_by: actor, created_at: now() },
-      scoped.map((u) => ({ id: `item-${randomBytes(6).toString('hex')}`, identity: u.id, kind, action: 'review', payload: { roles: u.roles, displayName: u.displayName, manager: u.manager } })),
+      { id, tenant, kind, name, ref, status: 'open', scope: { ...scope, granularity, population, reviewItems: snapshots.length } as Record<string, unknown>, created_by: actor, created_at: now() },
+      snapshots.map((u) => ({ id: `item-${randomBytes(6).toString('hex')}`, identity: u.identity, kind, action: 'review', payload: u.payload })),
     );
     this.emit(tenant, 'iga.campaign-launched', { campaign: id, actor });
     return this.get(tenant, id);
+  }
+
+  private async roleSnapshot(ref: string, identity: string): Promise<string[]> {
+    if (!this.reads) throw new BadRequestException('live reads unavailable');
+    const page = await this.reads.listAssignments(ref, { identity, limit: 1000 });
+    if (page.count > page.assignments.length) throw new ConflictException('role population truncated: cannot verify reviewed access');
+    return page.assignments.map(a => a.role);
   }
 
   getCampaign(tenant: string, id: string) { return this.get(tenant, id); }
@@ -133,7 +149,7 @@ export class WorkflowsIgaService {
       const assignee = assignTo === 'manager' ? (manager && !managerAbsent ? manager : 'iga') : assignTo;
       const t = await this.tasks.request({
         tenant, kind: 'iga-review', title: `Recertify ${i.identity} (${campaign.name})`,
-        detail: { campaignId, itemId: i.id, identity: i.identity, roles: i.payload?.roles ?? [], decisions: ['approved', 'denied'], ...(managerAbsent ? { managerAbsent: manager } : {}), ...(assignTo === 'manager' && manager && !managerAbsent ? { reviewManager: manager } : {}) },
+        detail: { campaignId, itemId: i.id, identity: i.identity, roles: i.payload?.roles ?? [], ...(assignTo === 'manager' && manager && !managerAbsent ? { reviewManager: manager } : {}), ...(i.payload?.access ? { access: i.payload.access } : {}), decisions: ['approved', 'denied'], ...(managerAbsent ? { managerAbsent: manager } : {}) },
         assignee, preventSelfApproval: true, runId: input.runId ?? campaignId, nodeId: i.id, ...(dueInSeconds ? { dueInSeconds } : {}), ...(escalateTo ? { escalateTo } : {}),
       });
       out.push({ item: i.id, task: t.id, assignee: t.assignee, ...(managerAbsent ? { managerAbsent: true } : {}) });
@@ -222,9 +238,9 @@ export class WorkflowsIgaService {
         continue;
       }
       const snapshotRoles = i.payload.roles as string[];
-      const current = await this.reads.listAssignments(campaign.ref, { identity: i.identity });
-      const currentRoles = current.assignments.map((a) => a.role);
-      const changed = snapshotRoles.some((r) => !currentRoles.includes(r)) || currentRoles.some((r) => !snapshotRoles.includes(r));
+      const baseline = Array.isArray(i.payload.snapshotRoles) ? i.payload.snapshotRoles as string[] : snapshotRoles;
+      const currentRoles = await this.roleSnapshot(campaign.ref, i.identity);
+      const changed = baseline.some((r) => !currentRoles.includes(r)) || currentRoles.some((r) => !baseline.includes(r));
       if (changed) {
         out.push({ item: i.id, identity: i.identity, conflict: `roles changed since the snapshot (then: ${snapshotRoles.join(',') || 'none'}; now: ${currentRoles.join(',') || 'none'}): review again before remediating` });
         this.emit(tenant, 'iga.remediation-resolved', { campaign: campaignId, subject: i.identity, role: snapshotRoles.join(',') || '*', result: 'conflict' });
@@ -246,8 +262,8 @@ export class WorkflowsIgaService {
     if (campaign.status !== 'open' || !this.reads) throw new ConflictException('campaign closed or live reads unavailable');
     const item = (await this.listItems(tenant, campaignId)).items.find(i => i.id === itemId);
     if (!item || item.identity !== identity || item.state !== 'remediation-prepared' || !Array.isArray(item.payload?.roles) || !(item.payload.roles as string[]).includes(role)) throw new ConflictException('action is not a prepared reviewed role of this campaign item');
-    const roles = item.payload.roles as string[];
-    const current = (await this.reads.listAssignments(campaign.ref, { identity })).assignments.map(a => a.role);
+    const roles = Array.isArray(item.payload.snapshotRoles) ? item.payload.snapshotRoles as string[] : item.payload.roles as string[];
+    const current = await this.roleSnapshot(campaign.ref, identity);
     if (roles.some(r => !current.includes(r)) || current.some(r => !roles.includes(r))) throw new ConflictException('access changed after preparation: review again before applying the action');
     return { checkedOn: campaign.ref };
   }
@@ -261,7 +277,9 @@ export class WorkflowsIgaService {
     const campaign = await this.get(tenant, campaignId);
     if (campaign.status !== 'open') throw new ConflictException('this campaign is closed');
     const items = (await this.listItems(tenant, campaignId)).items;
-    const item = items.find((x) => x.id === itemId || x.identity === itemId);
+    const matching = items.filter((x) => x.id === itemId || x.identity === itemId);
+    if (matching.length > 1) throw new ConflictException('ambiguous identity: use the stable review item id');
+    const item = matching[0];
     if (!item) throw new NotFoundException('unknown item');
     if (item.state !== 'remediation-prepared') throw new ConflictException(`this item is ${item.state}: prepare its remediation first`);
     const runId = String(proof.runId ?? '').trim();
@@ -277,8 +295,9 @@ export class WorkflowsIgaService {
     if (!Array.isArray(item.payload?.roles)) throw new ConflictException('this item has no valid role snapshot (payload.roles missing or malformed): review it again before marking anything remediated');
     const roles = item.payload.roles as string[];
     if (!this.reads) throw new BadRequestException('live reads unavailable: cannot verify remediation');
-    const currentRoles = (await this.reads.listAssignments(campaign.ref, { identity: item.identity })).assignments.map(a => a.role);
-    if (currentRoles.some(r => !roles.includes(r))) throw new ConflictException('new access appeared after review: review again before marking remediated');
+    const currentRoles = await this.roleSnapshot(campaign.ref, item.identity);
+    const baseline = Array.isArray(item.payload.snapshotRoles) ? item.payload.snapshotRoles as string[] : roles;
+    if (currentRoles.some(r => !baseline.includes(r))) throw new ConflictException('new access appeared after review: review again before marking remediated');
     // A denied item whose snapshot held NO role (an explicitly empty array) has nothing to revoke: the
     // remediation is vacuously effective (the denial and its reason stay on the evidence file). Refusing
     // it would strand the item in remediation-prepared forever and make the campaign impossible to close.
@@ -287,10 +306,10 @@ export class WorkflowsIgaService {
     if (!run.branch) throw new BadRequestException(`remediation proof: run ${runId} had no data branch (simulated steps only): it cannot have applied anything`);
     {
       if (!this.reads) throw new BadRequestException('the remediation cannot be verified on this server (reads unavailable): refusing to mark remediated on trust');
-      const onRef = (await this.reads.listAssignments(campaign.ref, { identity: item.identity })).assignments.map((a) => a.role).filter((r) => roles.includes(r));
+      const onRef = (await this.roleSnapshot(campaign.ref, item.identity)).filter((r) => roles.includes(r));
       if (onRef.length) {
         let onBranch = onRef;
-        if (run.branch) { try { onBranch = (await this.reads.listAssignments(run.branch, { identity: item.identity })).assignments.map((a) => a.role).filter((r) => roles.includes(r)); } catch { onBranch = onRef; } }
+        if (run.branch) { try { onBranch = (await this.roleSnapshot(run.branch, item.identity)).filter((r) => roles.includes(r)); } catch { onBranch = onRef; } }
         if (!onBranch.length) throw new ConflictException(`the role(s) ${onRef.join(', ')} are revoked on run branch ${run.branch} but that branch is not published to ${campaign.ref}: publish it, then mark remediated`);
         throw new ConflictException(`the role(s) ${onRef.join(', ')} are still assigned to ${item.identity} on ${campaign.ref}: the remediation is not effective`);
       }
@@ -336,9 +355,9 @@ export class WorkflowsIgaService {
     const unreadable: string[] = [];
     if (this.reads) {
       for (const i of items) {
-        const snap = Array.isArray(i.payload?.roles) ? (i.payload!.roles as unknown[]).map(String) : [];
+        const snap = Array.isArray(i.payload?.snapshotRoles) ? (i.payload.snapshotRoles as unknown[]).map(String) : Array.isArray(i.payload?.roles) ? (i.payload.roles as unknown[]).map(String) : [];
         try {
-          const cur = (await this.reads.listAssignments(campaign.ref, { identity: i.identity })).assignments.map((a) => a.role);
+          const cur = await this.roleSnapshot(campaign.ref, i.identity);
           const added = cur.filter((r) => !snap.includes(r)), removed = snap.filter((r) => !cur.includes(r));
           drift.set(i.identity, added.length || removed.length ? { added, removed } : null);
         } catch { unreadable.push(i.identity); }
@@ -353,6 +372,7 @@ export class WorkflowsIgaService {
       roleDriftUnreadable: unreadable,
       roleDriftNote: `post-snapshot roles checked on campaign ref: ${items.length - unreadable.length}/${items.length}; unreadable identities listed in roleDriftUnreadable, never treated as unchanged; recorded, never blocking`,
       items: items.map((i) => ({ identity: i.identity, roles: i.payload?.roles ?? [], state: i.state, decidedBy: i.decided_by, decidedAt: i.decided_at, reason: i.decision_reason, remediation: i.payload?.remediation ?? null })),
+      accessReviews: items.filter(i => i.payload?.access).map(i => ({ item: i.id, identity: i.identity, access: i.payload.access, state: i.state, decidedBy: i.decided_by, decidedAt: i.decided_at, reason: i.decision_reason })),
       digestFormat: 'sha256-json-sorted-keys-v1', digest: null,
     };
     evidence.digest = createHash('sha256').update(sortedJson({ ...evidence, digest: null })).digest('hex');
