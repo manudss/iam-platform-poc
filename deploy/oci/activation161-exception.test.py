@@ -102,6 +102,10 @@ class ExceptionMode(unittest.TestCase):
   # All three manifest fields are supplied for conflict cases. Missing policy proves flag refusal precedes external work.
   for extra in [['--reviewed-activation161-manifest','x'],['--reviewed-activation161-manifest','x','--reviewed-activation161-manifest-sha256','x','--closed-exception-output','x','--receipt-file','x'],['--reviewed-activation161-manifest','x','--reviewed-activation161-manifest-sha256','x','--closed-exception-output','x','--isolated-loopback-test']]:
    out=subprocess.run(base+['--policy',str(policy)]+extra,capture_output=True,text=True);self.assertEqual(out.returncode,1);self.assertFalse((self.d/'closed-exception-result.json').exists())
+ def test_failed_exit_zero_or_noninteger_refuse_even_with_matching_pins(self):
+  for value in [0,'4',None,False]:
+   self.tearDown();self.setUp();state=json.loads(self.incident.read_text());state['failed']['exit']=value;self.incident.write_text(json.dumps(state));self.m['original_incident']=state;self.m['incident_sha256']=ex.sha(self.incident.read_bytes());self.manifest.write_text(json.dumps(self.m))
+   with self.subTest(exit=value),self.assertRaisesRegex(ValueError,'unresolved failed'):self.runobj()
  def test_production_order_smoke_then_final_capture_then_save(self):
   import ast
   tree=ast.parse((ex.HERE/'qualification.py').read_text());fn=next(x for x in tree.body if isinstance(x,ast.FunctionDef)and x.name=='main')
