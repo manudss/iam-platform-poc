@@ -187,6 +187,15 @@ export class WorkflowReads {
     return branchContext.run({ branch: ref }, () => this.mail!.preview(tenant, { key, data, override }));
   }
 
+  async workflowMailTemplate(tenant:string,ref:string,key:string) {
+    if(!this.mail) throw new BadRequestException('mail templates unavailable');
+    return branchContext.run({branch:ref},()=>this.mail!.workflowTemplate(tenant,key));
+  }
+  async renderWorkflowMail(tenant:string,ref:string,key:string,revision:string,data:Record<string,unknown>) {
+    if(!this.mail) throw new BadRequestException('mail templates unavailable');
+    return branchContext.run({branch:ref},()=>this.mail!.renderWorkflow(tenant,key,revision,data));
+  }
+
   /** The branding provider id and its current settings on a ref. */
   async themeSettings(tenant: string, ref: string) {
     const reg = await this.branchRegistry(ref);

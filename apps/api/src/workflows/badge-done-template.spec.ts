@@ -32,11 +32,13 @@ function phase2Graph(rows: string) {
   return { nodes, edges: t.edges };
 }
 
-function world(opts: { hang?: 'publish' | 'mail' | 'unblock'; head2?: string; rows?: string; link?: boolean; blocked?: boolean; account?: string; runId?: string; links?: ReturnType<typeof linkStore>; secrets?: RunSecrets; blocks?: { kind: string; setBy: string }[]; blockAtUnblock?: boolean; preflight?: () => Promise<void>; settingsFor?: () => Promise<any>; graph?: (g: any) => void; onClaim?: () => void; onGenerate?: () => void; onSet?: () => void; beforePublishCheck?: () => void; onPublish?: () => void; connectionFor?: () => Promise<any> } = {}) {
+function world(opts: { templateMail?: boolean; templateChanged?:boolean; hang?: 'publish' | 'mail' | 'unblock'; head2?: string; rows?: string; link?: boolean; blocked?: boolean; account?: string; runId?: string; links?: ReturnType<typeof linkStore>; secrets?: RunSecrets; blocks?: { kind: string; setBy: string }[]; blockAtUnblock?: boolean; preflight?: () => Promise<void>; settingsFor?: () => Promise<any>; graph?: (g: any) => void; onClaim?: () => void; onGenerate?: () => void; onSet?: () => void; beforePublishCheck?: () => void; onPublish?: () => void; connectionFor?: () => Promise<any> } = {}) {
   const links = opts.links ?? linkStore(); const calls: string[] = []; const secrets = opts.secrets ?? new RunSecrets();
   const runId = opts.runId ?? 'run-b1';
   if (opts.link !== false && !opts.links) links.m.set(links.key('acme', { connectionId: 'jira-demo', project: 'KAN', issueKey: 'KAN-7' }), { account: opts.account ?? 'bao', phase1Run: 'run-a1', source: 'google', spreadsheetId: 'sheet-1', sheetId: 0, keyColumn: 'email', keyValue: 'bao@example.test', status: 'open' });
-  const input = structuredClone(phase2Graph(opts.rows ?? '1')); opts.graph?.(input);
+  const input = structuredClone(phase2Graph(opts.rows ?? '1'));
+  if(opts.templateMail) {const n=input.nodes.find((n:any)=>n.id==='mail')!;const c:any=n.config;n.type='lyam-send-template-mail';n.config={to:c.to,account:c.account,hours:c.hours,revision:c.revision,sourceHead:c.sourceHead,ownerRun:c.ownerRun,templateKey:'custom.badge',templateRevision:'a'.repeat(64),param_password:c.passwordRef,param_expiry:'derived'} as any;}
+  opts.graph?.(input);
   const { graph: g0, order } = validateGraph(input);
   const graph = substituteEventPayload(g0, { key: 'KAN-7', summary: 'Badge someone-else', status: 'Done', updated: 'x' });
   const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-done', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'jira', started_at: 'now', finished_at: null, test: false };
@@ -46,6 +48,7 @@ function world(opts: { hang?: 'publish' | 'mail' | 'unblock'; head2?: string; ro
   const hangNow = (what: string) => { state.hung = what; return new Promise<never>(() => {}); };
   const HEAD = 'abcdef0123456789', MAIN = 'main000111222333';
   const deps = {
+    reads: { workflowMailTemplate:async()=>({revision:opts.templateChanged?'b'.repeat(64):'a'.repeat(64),variables:[{name:'password',type:'temporary-password',required:true},{name:'expiry',type:'text',required:true}],effective:{subject:'Access',text:'{{password}} until {{expiry}}'}}),renderWorkflowMail:async(_t:any,_r:any,_k:any,_rev:any,data:any)=>({subject:'Access',text:data.password+' until '+data.expiry}) },
     store, secrets, log: { warn() {}, error() {} },
     versioning: { createBranch: async () => ({}), writeOn: async (_b: string, fn: any) => fn({ query: async (sql: string, args: any[]) => { if (sql.includes('information_schema.columns')) return [[{ column_name: 'login_enabled' }]]; if (sql.startsWith('update identities set login_enabled')) { state.loginEnabled = !!args[0]; calls.push('enable'); return [{ affectedRows: 1 }]; } if (sql.includes('dolt_status')) return [[{ n: 0 }]]; return [[]]; } }), defaultBranch: 'main' },
     authorOf: (a: string) => a, branchRun: async (_b: string, fn: any) => fn(),
@@ -271,4 +274,11 @@ describe('badge done: process crash and restart (the first engine is abandoned m
     assert.equal(w.row.status, 'failed'); assert.equal(w.steps.get('unblock')!.error, 'EXTERNAL_EFFECT_REVIEW_REQUIRED'); assert.equal(FakeMail.calls.length, 1, 'the mail is not sent again');
     assert.equal(w.calls.filter((c) => c === 'unblock').length, 1); assert.equal([...w.links.m.values()][0].status, 'claimed'); assert.equal(w.steps.get('done')!.status, 'skipped');
   }));
+});
+
+
+describe('badge done with versioned generic template mail',()=>{
+  it('preserves correlation, publication and durable acceptance before owned unblock',async()=>withMail(async()=>{const w=await settle(world({templateMail:true}));assert.equal(w.row.status,'completed',w.row.error);assert.equal(FakeMail.calls.length,1);assert.equal(w.steps.get('mail')!.output.accepted,true);assert.ok(w.calls.indexOf('publish')<w.calls.indexOf('unblock'));assert.ok(w.steps.get('mail')!.input.effectIntent.templateRevision);assert.ok(!JSON.stringify([...w.steps.values()]).includes(w.state.passwords[0]));}));
+  it('refuses stale template revision before ticket claim or credential creation',async()=>withMail(async()=>{const w=await settle(world({templateMail:true,templateChanged:true}));assert.equal(w.row.status,'failed');assert.deepEqual(w.calls,[]);assert.equal(FakeMail.calls.length,0);}));
+  it('does not resend or unblock after a crash during provider acceptance',async()=>withMail(async()=>{FakeMail.hang=true;const w=world({templateMail:true});w.engine.kick(w.row.id);for(let i=0;i<200&&!FakeMail.calls.length;i++)await new Promise(r=>setTimeout(r,20));assert.equal(FakeMail.calls.length,1);assert.equal(w.steps.get('mail')!.error,'EXTERNAL_EFFECT_REVIEW_REQUIRED');const engine=w.build(new RunSecrets());await engine.resume();await new Promise(r=>setTimeout(r,50));assert.equal(w.row.status,'failed');assert.equal(FakeMail.calls.length,1);assert.ok(!w.calls.includes('unblock'));}));
 });

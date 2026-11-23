@@ -174,6 +174,14 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
           <p class="hint">Editor tests always simulate external actions. An uncertain creation stops for review; retry and error-route continuation are blocked.</p>
           </section>
           }
+          @if(st.type==='lyam-send-template-mail') {
+            <section class="wb-managed" aria-label="Mail template parameters"><label>Mail template<select aria-label="Mail template" [ngModel]="st.config['templateKey']??''" (ngModelChange)="chooseMail(nid,$event)"><option value="">Choose a template</option>@for(t of mailTemplates();track t.key){@if(!t.layout){<option [value]="t.key">{{t.name}}</option>}}</select></label>
+            <p class="hint">Template and parameters are versioned. Review and Apply before real delivery. No secret values belong here.</p>
+            <a routerLink="/screens/mail-templates/templates" [queryParams]="{create:'1'}" target="_blank" rel="noopener">Create a template</a> · <a routerLink="/screens/mail-templates/templates" [queryParams]="{edit:st.config['templateKey']}" target="_blank" rel="noopener">Edit selected template</a>
+            <button class="secondary" (click)="refreshMails()">Refresh templates</button><button class="secondary" (click)="chooseMail(nid,$any(st.config['templateKey']))">Review current revision and reset parameters</button>
+            @for(f of mailFields(st);track f.key){<label>{{f.label}} @if(f.required){<b class="req">*</b>}<input [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key]??''" (ngModelChange)="setCfg(nid,f.key,$event)" /><span class="hint">{{f.help}}</span></label>}
+            </section>
+          }
           @for (f of actionFields(st.type); track f.key) {
             @switch (f.type) {
             @case ('text') {<label>{{f.label}} @if (f.required) {<b class="req">*</b>}<textarea rows="3" [attr.name]="'g-'+f.key" [ngModel]="st.config[f.key] ?? f.default ?? ''" (ngModelChange)="setCfg(nid, f.key, $event)"></textarea>@if (f.help) {<span class="hint">{{f.help}}</span>}</label>}
@@ -276,6 +284,12 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected readonly samples = SAMPLE_WORKFLOWS;
   protected events = signal<WfEvent[]>([]);
   protected blocks = signal<WfBlock[]>([]);
+  protected mailTemplates = signal<any[]>([]);
+  private readonly mailTemplateRefresh = effect(()=>{this.s.branchEpoch();void this.s.api.raw<any[]>('GET','/mail-templates').then(r=>{if(r.status<400)this.mailTemplates.set(r.data);}).catch(()=>this.mailTemplates.set([]));});
+  protected refreshMails() { void this.s.api.raw<any[]>('GET','/mail-templates').then(r=>{if(r.status<400)this.mailTemplates.set(r.data);}); }
+  protected selectedMail(st:NodeState) { return this.mailTemplates().find(t=>t.key===st.config['templateKey']); }
+  protected chooseMail(nid:string,key:string) { const t=this.mailTemplates().find(x=>x.key===key); if(!t)return;this.pushHistory();const st=this.state.get(nid)!;st.config={to:st.config['to']??'',templateKey:key,templateRevision:t.revision};this.stateVersion.update(v=>v+1); }
+  protected mailFields(st:NodeState):WfBlockField[] { const t=this.selectedMail(st);if(!t)return [];const fields:WfBlockField[]=t.variables.map((v:any)=>({key:'param_'+v.name,label:v.name+(v.type==='temporary-password'?' (secret reference)':''),type:'string',required:v.required!==false,help:v.type==='temporary-password'?'Opaque generated reference only. Never type a password.': 'Template parameter; placeholders allowed'}));if(t.variables.some((v:any)=>v.type==='temporary-password'))for(const [key,label] of [['account','Account'],['hours','Validity (hours)'],['revision','Credential revision'],['ownerRun','Run owning the block'],['sourceHead','Published head']])fields.push({key,label,type:'string',required:true});return fields; }
   protected connections = signal<WorkflowConnection[]>([]);
   protected managed = managedProvider;
   protected actionCategory(st:NodeState):StepCategory { return managedProvider(st.type) ? st.config['executionMode']==='real' ? 'real' : 'simulated' : this.typeOf(st.type).category; }
@@ -286,7 +300,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   private connectionEpoch=0;
   private readonly connectionRefresh = effect(() => { this.s.branchEpoch(); const epoch=++this.connectionEpoch;this.connections.set([]); this.realRequest.set(null); void clientOf(this.s).connections().then(r=>{if(epoch===this.connectionEpoch)this.connections.set(r.connections);}).catch(()=>{if(epoch===this.connectionEpoch)this.connections.set([]);}); });
   protected connectionsFor(type:string) { return this.connections().filter(c=>c.provider===managedProvider(type)); }
-  protected actionFields(type:string) { return (this.blockOf(type)?.fields ?? []).filter(f=>!managedProvider(type) || !['dryRun','source'].includes(f.key)); }
+  protected actionFields(type:string) { return (this.blockOf(type)?.fields ?? []).filter(f=>(type!=='lyam-send-template-mail'||!['templateKey','templateRevision'].includes(f.key)) && (!managedProvider(type) || !['dryRun','source'].includes(f.key))); }
   protected realConnection(st:NodeState) { return this.connectionsFor(st.type).find(c=>c.id===st.config['connectionId'] && (c.secretConfigured || c.provider==='http')); }
   protected simulate(id:string) { const st=this.state.get(id); if(!st)return; st.config=simulatedAction(st.config);this.refreshNode(id);this.stateVersion.update(v=>v+1); }
   protected realDialogKey(event:KeyboardEvent) {event.stopPropagation();if(event.key!=='Tab')return;const d=this.realDialog()?.nativeElement,buttons=d?.querySelectorAll('button');if(!d||!buttons?.length)return;const first=buttons[0],last=buttons[buttons.length-1];if(event.shiftKey&&d.ownerDocument.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&d.ownerDocument.activeElement===last){event.preventDefault();first.focus();}}

@@ -439,7 +439,7 @@ export function createWorkflowEngine(deps) {
     // workflow without the badge correlation is not made dependent on mail configuration.
     const graphNodes = run.graph?.nodes ?? [];
     const badgeMode = graphNodes.some(n => n.type === 'lyam-link-ticket') && graphNodes.some(n => n.type === 'lyam-create-user') ? 'request'
-      : graphNodes.some(n => n.type === 'lyam-resolve-ticket') && graphNodes.some(n => n.type === 'lyam-send-secret-mail') ? 'done' : undefined;
+      : graphNodes.some(n => n.type === 'lyam-resolve-ticket') && graphNodes.some(n => ['lyam-send-secret-mail','lyam-send-template-mail'].includes(n.type)) ? 'done' : undefined;
     const liveMailSettings = async () => {
       if (!deps.settingsFor) throw new Error('Mail policy cannot be read from main');
       return deps.settingsFor(run.tenant, deps.versioning.defaultBranch, 'workflow-connectors');
@@ -459,14 +459,25 @@ export function createWorkflowEngine(deps) {
         await deps.connectionFor(run.tenant, deps.versioning.defaultBranch, cfg.connectionId, n.type);
       }
       if (badgeMode === 'done') {
-        const mails = graphNodes.filter(n => n.type === 'lyam-send-secret-mail').map(n => projectConfig(n, ['account','to','ownerRun','subject','text','hours']));
+        const mails = [];
+        for(const n of graphNodes.filter(n=>['lyam-send-secret-mail','lyam-send-template-mail'].includes(n.type))) {
+          const m=projectConfig(n,['account','to','ownerRun','subject','text','hours','templateKey','templateRevision']);
+          if(n.type==='lyam-send-template-mail') {
+            if(!deps.reads?.workflowMailTemplate) throw new Error('Badge template preflight is unavailable');
+            const tpl=await deps.reads.workflowMailTemplate(run.tenant,deps.versioning.defaultBranch,m.templateKey);
+            const secret=tpl.variables.filter(v=>v.type==='temporary-password');
+            if(tpl.revision!==m.templateRevision || secret.length!==1 || !tpl.variables.some(v=>v.name==='expiry'&&v.type==='text') || !String(tpl.effective.text).includes('{{'+secret[0].name+'}}') || !String(tpl.effective.text).includes('{{expiry}}')) throw new Error('Badge template must be published, reviewed and include its password and recorded expiry');
+            m.subject=tpl.effective.subject;m.text='[[password]] [[expiry]]';m.templateMail=true;
+          }
+          mails.push(m);
+        }
         const setters = graphNodes.filter(n => n.type === 'lyam-set-temporary-password').map(n => projectConfig(n, ['subject','hours']));
         const unblocks = graphNodes.filter(n => n.type === 'lyam-unblock-account').map(n => projectConfig(n, ['subject','ownerRun','kind']));
-        if (!setters.length || !unblocks.length) throw new Error('Badge delivery requires its temporary-password and owned-unblock path');
+        if (!mails.length || !setters.length || !unblocks.length) throw new Error('Badge delivery requires its temporary-password and owned-unblock path');
         for (const m of mails) {
           if (m.account !== candidate.account || String(m.to).toLowerCase() !== String(candidate.email).toLowerCase() || m.ownerRun !== candidate.phase1Run)
             throw new Error('Badge delivery mail must target the correlated identity, its recorded email and creation-run block');
-          if (typeof m.subject !== 'string' || !m.subject || /[\r\n]|\{\{/.test(m.subject) || typeof m.text !== 'string' || !m.text.includes('[[password]]') || !m.text.includes('[[expiry]]'))
+          if (typeof m.subject !== 'string' || !m.subject || (/[\r\n]/.test(m.subject)||(!m.templateMail&&m.subject.includes('{{'))) || typeof m.text !== 'string' || !m.text.includes('[[password]]') || !m.text.includes('[[expiry]]'))
             throw new Error('Badge delivery mail content is not ready before ticket claim');
           if (!(Number(m.hours) > 0) || setters.some(s => s.subject !== candidate.account || Number(s.hours) !== Number(m.hours)))
             throw new Error('Badge delivery temporary-password target or validity does not match its mail');
@@ -527,7 +538,7 @@ export function createWorkflowEngine(deps) {
     say(`block "${block.label ?? node.type}" provided by the ${provider} plugin`);
     const author = deps.authorOf(`wf-${run.started_by}`);
     // The secret API a block gets depends on ITS type: only the generation block can create one, only set-temporary and the secret mail can resolve one (and only inside this run). No block ever receives a way to list them.
-    const secretUse = { 'lyam-set-temporary-password': 'set-temporary', 'lyam-apply-password-reset': 'set-temporary', 'lyam-send-secret-mail': 'mail' }[node.type];
+    const secretUse = { 'lyam-set-temporary-password': 'set-temporary', 'lyam-apply-password-reset': 'set-temporary', 'lyam-send-secret-mail': 'mail', 'lyam-send-template-mail':'mail' }[node.type];
     const secrets = deps.secrets ? {
       generate: () => { if (node.type !== 'lyam-generate-password') throw new Error('secret reference unavailable'); return deps.secrets.create(run.id, ['set-temporary', 'mail']); },
       reveal: ref => { if (!secretUse) throw new Error('secret reference unavailable'); return deps.secrets.reveal(run.id, ref, secretUse); },
