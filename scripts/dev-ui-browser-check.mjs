@@ -1,0 +1,78 @@
+// Real-browser check of the LOCAL dev stack (already running, docker compose dev override):
+// drives headless Chrome through the genuine console UI, the same path a developer follows.
+//   1. PKCE sign-in through the real authorize form (demo-alice, fictional),
+//   2. My applications must render without "Internal server error" (user-reported symptom),
+//   3. the Roles screen must open the personal branch WITHOUT any manually typed admin token:
+//      the "Enter the admin capability token" banner and a stuck "Branch unavailable" pill are failures.
+// Needs: CHROME_BIN, playwright-core resolvable (NODE_PATH), the dev stack listening on BASE.
+// Loopback only, fictional demo data. Usage: node scripts/dev-ui-browser-check.mjs [outDir]
+import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('playwright-core');
+const BASE = process.env.DEV_UI_BASE ?? 'http://127.0.0.1:4200';
+const out = process.argv[2] ?? join(tmpdir(), 'dev-ui-shots'); mkdirSync(out, { recursive: true });
+const chrome = process.env.CHROME_BIN;
+if (!chrome) { console.log('SKIPPED: CHROME_BIN is required'); process.exit(0); }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const b64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+const browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--no-sandbox', '--host-resolver-rules=MAP localhost 127.0.0.1'] });
+let failed = false;
+const fail = (name, why) => { failed = true; console.log('FAIL', name, why); };
+const ok = (name, extra = '') => console.log('PASS', name, extra);
+try {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const bannerHit = { at: null };
+  page.on('console', () => {});
+
+  // 1. real PKCE sign-in through the authorize form, landing on the console
+  const verifier = b64url(randomBytes(40));
+  const challenge = b64url(createHash('sha256').update(verifier).digest());
+  const state = b64url(randomBytes(40));
+  const q = new URLSearchParams({ response_type: 'code', client_id: 'demo-web', redirect_uri: 'http://localhost:4200/callback', state, code_challenge: challenge, code_challenge_method: 'S256' });
+  await page.goto(`${BASE}/core/authorize?${q}`);
+  await page.waitForSelector('input[name=password]', { timeout: 15000 });
+  await page.fill('input[name=username]', 'demo-alice');
+  await page.fill('input[name=password]', 'demo-only-not-a-secret');
+  await Promise.all([page.waitForURL(/localhost:4200\//, { timeout: 20000 }), page.click('button[type=submit]')]);
+  ok('browser sign-in', page.url().slice(0, 60));
+
+  // 2. My applications: no Internal server error, the workspace renders
+  await page.goto(`${BASE}/my-applications`);
+  await page.waitForSelector('text=My applications', { timeout: 20000 });
+  let sawError = false;
+  for (let i = 0; i < 30; i++) {
+    const body = await page.textContent('body');
+    if (/Internal server error/i.test(body)) { sawError = true; break; }
+    if (/Other applications|Favourites/i.test(body)) break; // list settled
+    await sleep(500);
+  }
+  await page.screenshot({ path: join(out, '1-my-applications.png'), fullPage: true });
+  if (sawError) fail('My applications in a real browser', '"Internal server error" shown');
+  else ok('My applications in a real browser', 'no server error, list rendered');
+
+  // 3. Roles screen: the personal branch must open without any typed admin token
+  const nav = page.locator('a[data-nav="/roles"]');
+  if ((await nav.count()) === 0) { fail('Roles screen without a typed token', 'no Roles nav entry (admin area not entered?)'); }
+  else {
+    await nav.first().click();
+    let banner = false;
+    for (let i = 0; i < 40; i++) {
+      const body = await page.textContent('body');
+      if (/Enter the admin capability token/i.test(body)) { banner = true; bannerHit.at = i * 0.5; break; }
+      await sleep(500);
+    }
+    await page.screenshot({ path: join(out, '2-roles.png'), fullPage: true });
+    const body = await page.textContent('body');
+    if (banner) fail('Roles screen without a typed token', `capability banner appeared after ~${bannerHit.at}s`);
+    else if (/Branch unavailable/i.test(body)) fail('Roles screen without a typed token', 'branch pill stuck on "Branch unavailable"');
+    else ok('Roles screen without a typed token', 'personal branch opened, no capability banner');
+  }
+} finally { await browser.close(); }
+if (failed) { console.log('DEV UI BROWSER CHECK FAILED'); process.exit(1); }
+console.log('DEV UI BROWSER CHECK PASSED');

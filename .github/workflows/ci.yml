@@ -249,6 +249,19 @@ jobs:
       - name: Verify the dev stack end to end
         if: needs.control_policy.outputs.dev_stack_check_required == 'true'
         run: node scripts/dev-stack-check.mjs
+      - name: Dev console in a real browser (sign-in, My applications, Roles without a typed token)
+        if: needs.control_policy.outputs.dev_stack_check_required == 'true'
+        run: |
+          mkdir /tmp/pw-dev && (cd /tmp/pw-dev && npm init -y >/dev/null && npm i playwright-core >/dev/null)
+          CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw-dev/node_modules node scripts/dev-ui-browser-check.mjs /tmp/dev-ui-shots
+      - name: Dev console browser screenshots (fictional data, no secrets)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-ui-screenshots
+          path: /tmp/dev-ui-shots
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Dev stack logs on failure
         if: ${{ failure() }}
         run: docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs --tail=150
