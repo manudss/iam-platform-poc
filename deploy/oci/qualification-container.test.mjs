@@ -29,5 +29,11 @@ async function run({rows=[{seq:1,commit:'abc'}],expected=[{seq:1,commit:'abc'}],
 }
 test('current reduced authenticated route is cross-checked exactly against independent journal',async()=>{const r=await run();assert.equal(r.code,0);assert.equal(JSON.parse(r.output[0]).journal.count,1);assert.ok(!r.calls.some(u=>u.includes('/activations/journal')));});
 test('older full route remains accepted with valid tenant/state',async()=>{assert.equal((await run({rows:[{tenant,seq:1,commit:'abc',state:'applied'}]})).code,0);});
-for(const [name,args]of Object.entries({missingExpected:{expected:null},missingChecksum:{checksum:null},missingRow:{rows:[]},wrongCommit:{rows:[{seq:1,commit:'wrong'}]},wrongSeq:{rows:[{seq:2,commit:'abc'}]},duplicate:{rows:[{seq:1,commit:'abc'},{seq:1,commit:'abc'}]},wrongTenant:{rows:[{tenant:'other',seq:1,commit:'abc',state:'applied'}]},wrongState:{rows:[{tenant,seq:1,commit:'abc',state:'bad'}]},refused:{status:403},sessionRefused:{session:403}}))test(name+' is UNKNOWN and emits no success archive',async()=>{const r=await run(args);assert.equal(r.code,1);assert.deepEqual(r.output,[]);assert.equal(r.errors.length,1);});
+for(const [name,args]of Object.entries({missingExpected:{expected:null},missingChecksum:{checksum:null},missingRow:{rows:[]},wrongCommit:{rows:[{seq:1,commit:'wrong'}]},wrongSeq:{rows:[{seq:2,commit:'abc'}]},duplicate:{rows:[{seq:1,commit:'abc'},{seq:1,commit:'abc'}]},wrongTenant:{rows:[{tenant:'other',seq:1,commit:'abc',state:'applied'}]},wrongState:{rows:[{tenant,seq:1,commit:'abc',state:'bad'}]},refused:{status:403},sessionRefused:{session:403}}))test(name+' is UNKNOWN and emits no success archive',async()=>{const r=await run(args);assert.equal(r.code,1);assert.deepEqual(r.output,[]);assert.equal(r.errors.length,2);assert.match(r.errors[0],/^LYAM_QUALIFICATION_DIAGNOSTIC /);});
 test('empty journal succeeds only when both independent and authenticated lists are empty',async()=>assert.equal((await run({rows:[],expected:[]})).code,0));
+
+test('diagnostic stage identifies auth/session/journal refusal without credential text',async()=>{
+ for(const [args,stage]of [[{session:403},'SESSION_VERIFY'],[{status:403},'ACTIVATION_HTTP'],[{rows:[]},'ACTIVATION_MATCH']]){
+  const r=await run(args);const code=JSON.parse(r.errors[0].slice('LYAM_QUALIFICATION_DIAGNOSTIC '.length));assert.equal(code.stage,stage);assert.ok(!JSON.stringify(r.errors).includes('fixture-only'));assert.ok(!JSON.stringify(r.errors).includes('signature'));
+ }
+});

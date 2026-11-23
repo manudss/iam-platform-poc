@@ -8,9 +8,33 @@ import urllib.parse
 import argparse,collections,hashlib,json,os,re,ssl,subprocess,sys,time,urllib.request,urllib.error
 from pathlib import Path
 
+DIAGNOSTIC_STAGES={'START','POLICY','MAINTENANCE','SOURCE','IMAGE','STABILITY','BEFORE','ACTIVATION_SQL','AUTH_FILE','SMOKE','ACTIVATION_STABILITY','CAPTURE','LEDGER','CREDENTIALS','POSTGRES','COVERAGE','EVIDENCE','COMPARE','VERIFIER','RECEIPT','EXCEPTION_INIT','EXCEPTION_SAVE','FLAGS'}
+CHILD_STAGES={'START','EDGE_HEALTH','AUTH_INPUT','OIDC_FORM','OIDC_LOGIN','OIDC_TOKEN','OIDC_CLAIMS','SESSION_VERIFY','ACTIVATION_HTTP','ACTIVATION_MATCH','NEGATIVE_REDIRECT','MIGRATION_LEDGER','DOLT_CAPTURE','BAO_CAPTURE'}
+diagnostic_stage='START';child_diagnostic=None;failure_diagnostic_path=None
+def stage(name):
+    global diagnostic_stage,child_diagnostic
+    if name not in DIAGNOSTIC_STAGES:raise ValueError('invalid diagnostic stage')
+    diagnostic_stage=name;child_diagnostic=None
+
+def child_code(stderr):
+    # Never echo arbitrary stderr, command arguments, paths, exception text or response bodies.
+    prefix='LYAM_QUALIFICATION_DIAGNOSTIC '
+    for line in stderr.splitlines():
+        if not line.startswith(prefix) or len(line)>256:continue
+        try:value=json.loads(line[len(prefix):])
+        except Exception:continue
+        if isinstance(value,dict) and set(value)=={'stage','http'} and value['stage'] in CHILD_STAGES and type(value['http']) is int and (value['http']==0 or 100<=value['http']<=599):return value
+    return None
+
+def diagnostic_code():
+    return {'stage':diagnostic_stage,**({'child':child_diagnostic} if child_diagnostic else {})}
+
 def cmd(args, input=None):
     r=subprocess.run(args,input=input,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
-    if r.returncode: raise ValueError('command failed, private diagnostic inspection required')
+    if r.returncode:
+        global child_diagnostic
+        child_diagnostic=child_code(r.stderr)
+        raise ValueError('command failed, private diagnostic inspection required')
     return r.stdout.strip()
 def digest(data):return hashlib.sha256(data).hexdigest()
 def private_json(path,value):
@@ -94,11 +118,17 @@ def main():
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
     parser.add_argument('--reviewed-activation161-manifest');parser.add_argument('--reviewed-activation161-manifest-sha256');parser.add_argument('--closed-exception-output')
     parser.add_argument('--receipt-file')
+    parser.add_argument('--failure-diagnostic-file')
     parser.add_argument('--isolated-loopback-test',action='store_true')
-    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args()
+    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();stage('FLAGS')
+    global failure_diagnostic_path
+    failure_diagnostic_path=a.failure_diagnostic_file
+    if failure_diagnostic_path and Path(failure_diagnostic_path).exists():raise ValueError('fresh diagnostic path required')
     exception_flags=[a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,a.closed_exception_output]
     if any(exception_flags) and (not all(exception_flags) or a.receipt_file or a.isolated_loopback_test or a.phase!='after'):raise ValueError('complete explicit closed exception flags required')
+    stage('POLICY')
     p=policy_load(a.policy,a.isolated_loopback_test)
+    stage('MAINTENANCE')
     if not Path(a.barrier_file).is_file():raise ValueError('maintenance barrier absent')
     for origin in p['origins']:
         try: response=urllib.request.urlopen(origin+'/healthz',timeout=15);status=response.status
@@ -107,56 +137,83 @@ def main():
     evidence=Path(a.evidence_dir)
     if a.phase=='before':evidence.mkdir(mode=0o700,parents=False,exist_ok=False)
     elif not evidence.is_dir():raise ValueError('preservation evidence missing')
+    stage('SOURCE')
     source=Path(__file__).with_name('qualification-container.mjs').read_text()
     exception=None
     if any([a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,a.closed_exception_output]):
         if not all([a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,a.closed_exception_output]) or a.receipt_file or a.isolated_loopback_test:raise ValueError('complete explicit closed exception flags required')
         spec=importlib.util.spec_from_file_location('activation161_exception',Path(__file__).with_name('activation161-exception.py'));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        stage('EXCEPTION_INIT')
         exception=module.ExceptionRun(a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,evidence/'before.json',a.policy,a.image,a.phase,a.closed_exception_output)
 
     if a.phase=='before':
         if cmd(['docker','inspect','-f','{{.State.Running}}',a.container])!='false':raise ValueError('application must be stopped for initial preservation capture')
         node=['docker','run','--rm','-i','--network',p['network'],'--env-file',a.env_file,'-v',a.data_dir+':/data:ro','--entrypoint','node',a.image,'--input-type=module','-e',source,'capture']
     else:
+        stage('IMAGE')
         inspect=json.loads(cmd(['docker','inspect',a.container]))[0]
         if inspect['Config']['Image']!=a.image or not inspect['State']['Running']:raise ValueError('image identity/running mismatch')
+        stage('STABILITY')
         restarts=inspect['RestartCount'];time.sleep(30)
         stable=json.loads(cmd(['docker','inspect',a.container]))[0]
         if stable['RestartCount']!=restarts or not stable['State']['Running']:raise ValueError('candidate is restarting')
         node=['docker','exec','-i',a.container,'node','--input-type=module','-e',source,'capture']
     if a.phase=='after':
+        stage('BEFORE')
         prior=json.loads((evidence/'before.json').read_text())
         legacy_rollback=prior['image']==a.image and prior.get('migrationLedger') is None
         smoke=['docker','exec','-i',a.container,'node','--input-type=module','-e',source,'smoke']
+        stage('ACTIVATION_SQL')
         journal_before=activation_journal(p)
+        stage('AUTH_FILE')
         auth=json.loads(Path(p['authFile']).read_text())
+        stage('SMOKE')
         smoke_result=json.loads(cmd(smoke,json.dumps({**p,'auth':auth,'reviewedLegacyRollback':legacy_rollback,'expectedActivationRows':journal_projection(journal_before),'expectedActivationChecksum':digest(json.dumps(journal_before,sort_keys=True,separators=(',',':')).encode())})))
+    stage('ACTIVATION_STABILITY')
     if a.phase=='after' and activation_journal(p)!=journal_before:raise ValueError('activation journal changed during smoke, repeat qualification after reconciliation')
+    stage('CAPTURE')
     state=json.loads(cmd(node,json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})))
+    stage('LEDGER')
     ledger=Path(a.data_dir)/'migrations/journal.json'
     state['migrationLedger']=json.loads(ledger.read_text()) if ledger.exists() else None
-    state['credentials']=credential_hashes(Path(a.data_dir),p);state['postgres']=exception.capture(cmd) if exception else postgres(p)
+    stage('CREDENTIALS')
+    state['credentials']=credential_hashes(Path(a.data_dir),p)
+    stage('POSTGRES')
+    state['postgres']=exception.capture(cmd) if exception else postgres(p)
     state['transportCoverage']='ISOLATED_LOOPBACK_NO_PUBLIC_TLS_PROOF' if a.isolated_loopback_test else 'TLS_EXPECTED_ORIGINS';state['image']=a.image;state['policyHash']=digest(Path(a.policy).read_bytes())
     if a.phase=='before':private_json(evidence/'before.json',state);print('Preservation snapshot captured privately; maintenance remains armed');return
+    stage('COVERAGE')
     before=json.loads((evidence/'before.json').read_text())
     if before['transportCoverage']!=state['transportCoverage']:raise ValueError('qualification coverage changed mid-update')
     if before['policyHash']!=state['policyHash']:raise ValueError('qualification policy changed mid-update')
     if exception:
+        stage('EXCEPTION_SAVE')
         exception.save(private_json,before,state,smoke_result,compare)
         print('Closed activation161 exception checks verified. No normal receipt, opening or queue permission.');return
+    stage('EVIDENCE')
     after_file=evidence/('after-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
     private_json(after_file,state)
     smoke_file=evidence/('smoke-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
     private_json(smoke_file,smoke_result)
+    stage('COMPARE')
     changes=compare(before,state,p)
     if changes:
         # Each target digest needs a separate reviewed verifier. It receives hash-only snapshots,
         # and must prove ALL declared transformations, including non-target preservation.
+        stage('VERIFIER')
         verifier=p.get('transformationVerifiers',{}).get(a.image)
         if not verifier or not Path(verifier).is_file() or not os.access(verifier,os.X_OK):raise ValueError('unexpected preservation changes; no digest-specific reviewed verifier')
         cmd([verifier,str(evidence/'before.json'),str(after_file)])
+    stage('RECEIPT')
     private_json(Path(a.receipt_file) if a.receipt_file else evidence/('qualified-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json'),{'before_path':str(evidence/'before.json'),'after_path':str(after_file),'smoke_path':str(smoke_file),'format':1,'result':'qualified','image':a.image,'policyHash':state['policyHash'],'before_sha256':digest((evidence/'before.json').read_bytes()),'after_sha256':digest(after_file.read_bytes()),'smoke_sha256':digest(smoke_file.read_bytes()),'transportCoverage':state['transportCoverage']})
     print('ISOLATED LOOPBACK ONLY: preservation/OIDC/journal checks passed, NO public TLS qualification, keep production paused' if a.isolated_loopback_test else 'Pre-opening preservation, migration, OIDC, journal and TLS checks passed; caller still owns barrier')
 if __name__=='__main__':
     try:main()
-    except Exception:print('Qualification failed or UNKNOWN. Keep maintenance armed and inspect private evidence.',file=sys.stderr);sys.exit(1)
+    except Exception as error:
+        allowed={'ValueError','KeyError','TypeError','FileNotFoundError','PermissionError','JSONDecodeError','TimeoutExpired','OSError'}
+        details={**diagnostic_code(),'class':type(error).__name__ if type(error).__name__ in allowed else 'OTHER','reason':'CHECK_FAILED_OR_UNKNOWN'}
+        if failure_diagnostic_path:
+            try:private_json(Path(failure_diagnostic_path),details)
+            except Exception:print('Private diagnostic write failed; keep original evidence.',file=sys.stderr)
+        print('LYAM_QUALIFICATION_DIAGNOSTIC '+json.dumps(diagnostic_code(),sort_keys=True),file=sys.stderr)
+        print('Qualification failed or UNKNOWN. Keep maintenance armed and inspect private evidence.',file=sys.stderr);sys.exit(1)

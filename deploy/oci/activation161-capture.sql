@@ -15,7 +15,7 @@ BEGIN
   sequences_json=sequences_json||jsonb_build_object(seq_record.sequence_schema||'.'||seq_record.sequence_name,captured_value);
  END LOOP;
  SELECT jsonb_build_object('pairs',(SELECT coalesce(jsonb_agg(p ORDER BY whole,legacy),'[]') FROM (SELECT encode(sha256(convert_to(to_jsonb(a)::text,'UTF8')),'hex') whole,encode(sha256(convert_to((to_jsonb(a)-'actor_id'-'actor_kind'-'applied_at')::text,'UTF8')),'hex') legacy,count(*) multiplicity FROM public.activations a GROUP BY 1,2) p),'row_count',count(*),'nonnull_new_columns',count(*) FILTER(WHERE actor_id IS NOT NULL OR actor_kind IS NOT NULL OR applied_at IS NOT NULL)) INTO projection FROM public.activations;
- INSERT INTO qualification_capture VALUES (jsonb_build_object('format',1,'transaction',jsonb_build_object('read_only',true,'isolation','repeatable read','snapshot',pg_current_snapshot()::text),'postgres',jsonb_build_object('rows',rows_json,'schema',schema_json,'sequenceDefinitions',defs_json,'sequences',sequences_json),'projection',projection));
+ INSERT INTO qualification_capture VALUES (jsonb_build_object('format',1,'transaction',jsonb_build_object('read_only',true,'isolation','repeatable read','snapshot',pg_current_snapshot()::text,'database',current_database()),'postgres',jsonb_build_object('rows',rows_json,'schema',schema_json,'sequenceDefinitions',defs_json,'sequences',sequences_json),'projection',projection));
 END $capture$;
 SELECT value FROM qualification_capture;
 COMMIT;

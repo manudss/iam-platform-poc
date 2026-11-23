@@ -67,4 +67,14 @@ class ActivationJournal(unittest.TestCase):
   self.assertIn('SELECT a.*',captured[0]);self.assertIn("tenant='a''b'",captured[0]);self.assertIn('ORDER BY seq',captured[0])
 
 
+class SafeDiagnostics(unittest.TestCase):
+ def test_child_codes_accept_only_closed_schema(self):
+  prefix='LYAM_QUALIFICATION_DIAGNOSTIC '
+  self.assertEqual(q.child_code(prefix+'{"stage":"SESSION_VERIFY","http":403}'),{'stage':'SESSION_VERIFY','http':403})
+  for body in ['{"stage":"SECRET_MARKER","http":403}','{"stage":"SMOKE","http":403}','{"stage":"OIDC_TOKEN","http":"secret"}','{"stage":"OIDC_TOKEN","http":403,"body":"secret"}','not-json']:
+   self.assertIsNone(q.child_code(prefix+body))
+ def test_exception_content_and_commands_never_enter_code(self):
+  q.stage('SMOKE');q.child_diagnostic=q.child_code('secret response and password')
+  self.assertEqual(q.diagnostic_code(),{'stage':'SMOKE'})
+
 if __name__=='__main__':unittest.main()

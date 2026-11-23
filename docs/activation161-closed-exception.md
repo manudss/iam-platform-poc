@@ -90,3 +90,29 @@ output path, both held locks, copied registry refusal, CLI partial/conflicting
 normal-receipt/loopback flags, and post-smoke activation change. PostgreSQL17.12
 local integration and the existing test suites remain green. No Docker/full
 stack/host qualification is claimed and no live policy/queue/gate was changed.
+
+## Catalog correction after the failed closed attempt
+
+The reviewed PG-only diagnostic found an exact metadata refusal: udt_catalog
+was fixture database postgres while the host database was lyam. No business type
+difference was reported in that diagnostic. This establishes the present
+verifier refusal, not a recovered historical stack trace from the opaque run.
+
+The verifier now derives the one database identity from legacy columns in the
+original BEFORE, requires the policy's selected DB and current_database()
+returned by the same live PG snapshot to equal it, and requires every legacy
+UDT catalog and every new column table/UDT catalog to agree. Only udt_catalog
+in a copy of the concrete expected fixture is contextualized. Other metadata,
+ordinals, type/schema, precision, defaults and nullability remain exact. A real
+PG17.12 test now uses a different database lyam_fixture rather than postgres.
+No consumed claim is reset. New code requires new reviewed pins and a new
+agreement/claim/output for any future attempt.
+
+Qualification now emits fixed stage codes, allowlisted child stage/HTTP codes,
+and no raw child stderr, credentials, argv or exception messages. An optional
+--failure-diagnostic-file writes a fresh exclusive0600 private JSON with fixed
+stage/class/reason; stdout/stderr must still be redirected to the operator's
+private0600 log. It never changes failure into success or relaxes comparisons.
+Node codes distinguish OIDC, session, activation projection, migration ledger,
+Dolt and Bao stages. JSON inputs before the Node catch remain outer SMOKE or
+CAPTURE failures, not guessed sub-stages.

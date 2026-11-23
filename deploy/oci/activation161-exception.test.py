@@ -6,11 +6,11 @@ H=lambda n:format(n,'064x')
 class ExceptionMode(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.d=Path(self.tmp.name);self.policy={'appendOnlyTables':['public.activations'],'pgContainer':'fictional','pgUser':'fixture','pgDatabase':'fixture'};self.policyfile=self.d/'policy.json';self.policyfile.write_text(json.dumps(self.policy));ph=ex.sha(self.policyfile.read_bytes())
-  expected=json.loads((ex.HERE/'activation161-column-metadata.json').read_text());template=copy.deepcopy(expected[0]);template.update(column_name='error',ordinal_position=7,table_catalog='fixture')
+  expected=json.loads((ex.HERE/'activation161-column-metadata.json').read_text());template=copy.deepcopy(expected[0]);template.update(column_name='error',ordinal_position=7,table_catalog='fixture',udt_catalog='fixture')
   self.b={'image':'old','policyHash':ph,'dolt':[1],'bao':{'x':'y'},'credentials':{'x':'y'},'postgres':{'schema':{'columns':[template],'constraints':[]},'rows':{'public.activations':{H(1):2,H(2):1},'public.other':{H(3):1}},'sequences':{'public.seq':{'last_value':3,'is_called':True}},'sequenceDefinitions':[]}}
   self.a=copy.deepcopy(self.b);self.a['image']=ex.IMAGE;self.a['postgres']['rows']['public.activations']={H(4):2,H(5):1}
-  for i,col in enumerate(expected,8):self.a['postgres']['schema']['columns'].append({**col,'ordinal_position':i,'table_catalog':'fixture'})
-  self.c={'format':1,'transaction':{'read_only':True,'isolation':'repeatable read','snapshot':'1:1:'},'postgres':self.a['postgres'],'projection':{'pairs':[{'whole':H(4),'legacy':H(1),'multiplicity':2},{'whole':H(5),'legacy':H(2),'multiplicity':1}],'row_count':3,'nonnull_new_columns':0}}
+  for i,col in enumerate(expected,8):self.a['postgres']['schema']['columns'].append({**col,'ordinal_position':i,'table_catalog':'fixture','udt_catalog':'fixture'})
+  self.c={'format':1,'transaction':{'read_only':True,'isolation':'repeatable read','snapshot':'1:1:','database':'fixture'},'postgres':self.a['postgres'],'projection':{'pairs':[{'whole':H(4),'legacy':H(1),'multiplicity':2},{'whole':H(5),'legacy':H(2),'multiplicity':1}],'row_count':3,'nonnull_new_columns':0}}
   self.before=self.d/'before.json';self.before.write_text(json.dumps(self.b));incident={'history':[{'sha':'b'*40}],'pending':{'sha':'a'*40,'digest':ex.IMAGE.split('@')[1],'parent':'b'*40},'failed':{'sha':'a'*40,'exit':4}};self.incident=self.d/'state.json';self.incident.write_text(json.dumps(incident));ex.STATE=self.incident;ex.UPDATE_LOCK=self.d/'update.lock';ex.PAUSE=self.d/'PAUSED';ex.UPDATE_LOCK.touch();ex.PAUSE.touch();Path(str(self.incident)+'.lock').touch()
   self.m={'format':1,'kind':'reviewed-activation161-closed','image':ex.IMAGE,'source_sha':'a'*40,'before_sha256':ex.sha(self.before.read_bytes()),'policy_file':str(self.policyfile),'policy_sha256':ph,'incident_file':str(self.incident),'incident_sha256':ex.sha(self.incident.read_bytes()),'original_incident':incident,'code_sha256':{n:ex.sha((ex.HERE/n).read_bytes())for n in ex.CODE},'authorization_ref':'operator reference to explicit one-run approval','evidence_refs':['reviewed incident'],'one_shot_claim':str(self.d/'consumed')}
   self.manifest=self.d/'manifest.json';self.manifest.write_text(json.dumps(self.m))
@@ -125,4 +125,24 @@ class ExceptionMode(unittest.TestCase):
   r.close()
   for path in [ex.UPDATE_LOCK,Path(str(ex.STATE)+'.lock')]:
    with open(path,'a')as f:fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
+ def test_authorized_database_catalog_not_fixture_name_and_catalog_tampering(self):
+  r=self.runobj();r.capture_value=self.c
+  self.assertTrue(r.verify(self.b,self.a,q.compare))
+  self.a['postgres']['schema']['columns'][1]['udt_catalog']='wrong-db'
+  with self.assertRaisesRegex(ValueError,'metadata'):r.verify(self.b,self.a,q.compare)
+  self.a['postgres']['schema']['columns'][1]['udt_catalog']='fixture';r.policy['pgDatabase']='other'
+  with self.assertRaisesRegex(ValueError,'authorized database'):r.verify(self.b,self.a,q.compare)
+ def test_catalog_context_and_strict_metadata_mutations(self):
+  for change in ['database','before_catalog','udt_name','datetime_precision','ordinal_position','column_default','is_nullable']:
+   self.tearDown();self.setUp();r=self.runobj();r.capture_value=self.c
+   if change=='database':self.c['transaction']['database']='other'
+   elif change=='before_catalog':self.b['postgres']['schema']['columns'][0]['table_catalog']='other'
+   elif change=='datetime_precision':self.a['postgres']['schema']['columns'][3][change]=3
+   else:self.a['postgres']['schema']['columns'][1][change]={'udt_name':'varchar','ordinal_position':77,'column_default':'now()','is_nullable':'NO'}[change]
+   with self.subTest(change=change),self.assertRaises(ValueError):r.verify(self.b,self.a,q.compare)
+ def test_coherent_third_database_catalog_accepted_from_before_and_live(self):
+  for obj in [self.b,self.a]:
+   for col in obj['postgres']['schema']['columns']:col.update(table_catalog='third_database',udt_catalog='third_database')
+  r=self.runobj();r.policy['pgDatabase']='third_database';self.c['transaction']['database']='third_database';r.capture_value=self.c
+  self.assertTrue(r.verify(self.b,self.a,q.compare))
 if __name__=='__main__':unittest.main()

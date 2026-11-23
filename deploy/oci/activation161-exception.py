@@ -70,11 +70,17 @@ class ExceptionRun:
   if remaining!=oldcols or len(added)!=3:raise ValueError('nonexact column delta')
   legacycols=[x for x in oldcols if x['table_schema']=='public' and x['table_name']=='activations']
   maxord=max(x['ordinal_position']for x in legacycols);catalogs={x['table_catalog']for x in legacycols}
+  if len(catalogs)!=1:raise ValueError('original database catalog mismatch')
+  database=next(iter(catalogs))
+  if not isinstance(database,str) or not database or c['transaction'].get('database')!=database or self.policy['pgDatabase']!=database or any(x.get('udt_catalog')!=database for x in legacycols):raise ValueError('authorized database catalog mismatch')
   for i,e in enumerate(expected,1):
    actual=next((x for x in added if x['column_name']==e['column_name']),None)
-   if not actual or actual['ordinal_position']!=maxord+i or actual['table_catalog']not in catalogs:raise ValueError('new column position/catalog mismatch')
+   if not actual or actual['ordinal_position']!=maxord+i or actual['table_catalog']!=database:raise ValueError('new column position/catalog mismatch')
    actual={k:v for k,v in actual.items()if k not in ['table_catalog','ordinal_position']}
-   if actual!=e:raise ValueError('new column metadata mismatch')
+   # Fixture metadata is concrete PG17.12; only DB identity is contextual.
+   # Require it explicitly, never omit or broadly ignore catalog fields.
+   wanted={**e,'udt_catalog':database}
+   if actual!=wanted:raise ValueError('new column metadata mismatch')
   schema=copy.deepcopy(new);schema['columns']=remaining
   if schema!=old:raise ValueError('other schema change')
   projection=c['projection'];whole={};legacy={}
