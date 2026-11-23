@@ -108,3 +108,11 @@ describe('native exports and custom API HTTP contracts, no live account',()=>{
   assert.throws(()=>full.validateCustomCall({url:{url:'/v4/spreadsheets?access_token=bad'}}));assert.throws(()=>full.validateCustomCall({url:{url:'/v4/spreadsheets'},queryParams:{key:'bad'}}));
  });
 });
+
+import{ActivepiecesSheetsController}from'./activepieces-sheets.controller.js';
+describe('native operational status read only',()=>{
+ it('returns only tenant-scoped safe status and recovery guidance, never invokes a provider',async()=>{
+  let tenant='';const ctrl=new ActivepiecesSheetsController({webhook:()=>{throw Error('must not run');}}as any,{}as any,{pieceStatuses:async(t:string)=>{tenant=t;return[{scope:'trigger:fixture',subscription:{status:'review'},locked:true,pending:2}];}}as any);
+  const result=await ctrl.status('tenant-fixture');assert.equal(tenant,'tenant-fixture');assert.equal(result.entries[0].pending,2);assert.match(result.recovery,/stop the former worker/);assert.equal(JSON.stringify(result).includes('token'),false);
+ });
+});

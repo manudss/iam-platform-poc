@@ -54,6 +54,10 @@ export function probeFor(c: WorkflowConnection, probes: Record<string, Connectio
   </section>
 } @empty { @if (!loading()) {<p class="hint">{{query() ? 'No connection matches your search.' : 'No connections yet. Add Google Sheets, Jira or HTTP to get started.'}}</p>} }
 </div>
+<section class="wfc-info" aria-labelledby="native-runtime-title"><h3 id="native-runtime-title">Native connector runtime</h3><button class="secondary" (click)="loadNativeStatus()">Refresh runtime status</button>
+@if(nativeStatusError()){<p class="hint" role="status">{{nativeStatusError()}}</p>}
+@for(entry of nativeStatus();track entry.scope){<p class="hint"><b>{{entry.scope}}</b> · {{entry.subscription?.status || 'Action state'}} · {{entry.locked ? 'Locked: running or needs crash reconciliation' : 'No retained lock'}} · {{entry.pending}} pending deliveries</p>}
+<p class="hint">For a stranded lock or uncertain subscription, stop the former worker and reconcile external effects and Google channels with your operator. Never clear a lock or retry automatically. Refresh is read-only; it does not poll Google or run workflows.</p></section>
 <p class="hint">A connection test reads service access only. It does not create a ticket, append a row or send a workflow action.</p>
 <div class="wfc-info"><b>Write-only credentials</b><p class="hint">Secret revisions live in OpenBao. Dolt versions connection metadata and references, never credentials. Without a secret store, credential storage and authenticated live use are blocked.</p>@if (!secretStoreConfigured()) {<p class="hint">OpenBao is not configured. Ask your operator to connect the secret store.</p>}</div>
 @if(formOpen()) {
@@ -85,13 +89,16 @@ export class WorkflowConnectionsPage  {
   protected visible = computed(() => visibleConnections(this.rows(), this.query()));
   private epoch = 0;
   private readonly dialog = viewChild<ElementRef<HTMLDialogElement>>('connectionDialog');
-  constructor() { effect(() => { this.s.branchEpoch(); this.closeForm(); this.probes.set({}); void this.load(); }); effect(() => { const dialog=this.dialog()?.nativeElement; if(dialog && !dialog.open) dialog.showModal(); }); }
+  constructor() { effect(() => { this.s.branchEpoch(); this.closeForm(); this.probes.set({}); this.nativeStatus.set([]);this.nativeStatusError.set('');void this.load(); }); effect(() => { const dialog=this.dialog()?.nativeElement; if(dialog && !dialog.open) dialog.showModal(); }); }
   protected async load() {
     const epoch = ++this.epoch; this.loading.set(true); this.rows.set([]); this.note.set('');
     try { const r = await clientOf(this.s).connections(); if (epoch !== this.epoch) return; this.rows.set(r.connections); this.secretStoreConfigured.set(r.secretStoreConfigured); }
     catch { if (epoch === this.epoch) this.note.set('Connections could not be loaded. Check your access and try again.'); }
     finally { if (epoch === this.epoch) this.loading.set(false); }
   }
+  protected nativeStatus=signal<{scope:string;subscription:{status?:string}|null;locked:boolean;pending:number}[]>([]);
+  protected nativeStatusError=signal('');
+  protected async loadNativeStatus(){const epoch=this.epoch;this.nativeStatusError.set('Loading runtime status...');try{const r=await this.s.api.raw<any>('GET','/activepieces-runtime-status');if(epoch!==this.epoch)return;if(r.status>=400)throw Error();this.nativeStatus.set(r.data.entries);this.nativeStatusError.set(r.data.entries.length?'':'No native runtime state yet.');}catch{if(epoch!==this.epoch)return;this.nativeStatusError.set('Runtime status unavailable. Check administrator access and retry.');}}
   protected probe(c: WorkflowConnection) { return probeFor(c, this.probes()); }
   protected status(c: WorkflowConnection) { return this.probe(c)?.status ?? c.status; }
   protected provider(c: WorkflowConnection) { return c.provider === 'google-sheets' ? 'Google Sheets' : c.provider === 'jira' ? 'Jira' : 'HTTP'; }

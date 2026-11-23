@@ -44,6 +44,11 @@ describe('connection metadata on real Dolt', {skip:!have && 'DOLT_BIN missing'},
     await two.pieceDelete('tenant-a','trigger:fictional','cursor');assert.equal(await one.pieceGet('tenant-a','trigger:fictional','cursor'),null);
   });
 
+  it('operational status omits native values, lock owner, webhook token and other tenants',async()=>{
+    const a=new WorkflowStore(versioning);await a.piecePut('tenant-a','trigger:status','lyam:subscription',{key:'new-worksheet',status:'review',lastRenew:7,token:'SECRET_CHANNEL',config:{secret:'SECRET_CONFIG'}});await a.piecePut('tenant-a','trigger:status','lyam:pending',[{data:'SECRET_PAYLOAD'}]);await a.pieceClaim('tenant-a','trigger:status','SECRET_OWNER');
+    const status=await a.pieceStatuses('tenant-a');const row=status.find(x=>x.scope==='trigger:status')!;assert.deepEqual(row,{scope:'trigger:status',subscription:{key:'new-worksheet',status:'review',lastRenew:7},locked:true,pending:1});assert.equal(JSON.stringify(status).includes('SECRET'),false);assert.equal((await a.pieceStatuses('tenant-b')).some(x=>x.scope==='trigger:status'),false);await a.pieceRelease('tenant-a','trigger:status','SECRET_OWNER');
+  });
+
   it('durable connector mutex rejects competing instances and releases only its owner',async()=>{
     const a=new WorkflowStore(versioning),b=new WorkflowStore(versioning);
     const results=await Promise.all([a.pieceClaim('tenant-a','trigger:lock-test','a'),b.pieceClaim('tenant-a','trigger:lock-test','b')]);assert.equal(results.filter(Boolean).length,1);
