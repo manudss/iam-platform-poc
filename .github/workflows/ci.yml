@@ -288,6 +288,23 @@ jobs:
         with: { node-version: 22 }
       - name: Windows PowerShell 5.1 launcher regression test
         run: node --test --test-name-pattern="dev.ps1" infra/dev/api-dev.test.mjs
+      - name: Diagnostic helper under the real PowerShell 5.1
+        # scripts/dev-api-errors.ps1 is handed to developers verbatim: prove its syntax, line
+        # selection and masking under the genuine 5.1 engine (only on a Windows runner) on a fixture.
+        run: |
+          @'
+          [Nest] 42 LOG [RouterExplorer] Mapped {/sso/acme-demo/launchpad, GET} route +0ms
+          [Nest] 42 ERROR [ExceptionsHandler] BoomException: synthetic connector failure
+          at AppConnectorService.liveApps (/repo/apps/api/src/connectors/app-connector.ts:10:11)
+          at LaunchpadController.build (/repo/apps/api/src/sso/launchpad.ts:52:25)
+          [Nest] 42 ERROR [ExceptionsHandler] upstream said token=sekrit99 authorization: Bearer abcdef123456789 password=hunter2hunter2
+          '@ | Set-Content -Encoding utf8 fixture-api.log
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-api-errors.ps1 -FixturePath fixture-api.log | Out-File -Encoding utf8 diag-out.txt
+          $out = Get-Content -Raw diag-out.txt
+          foreach ($need in 'synthetic connector failure','AppConnectorService.liveApps') { if ($out -notlike "*$need*") { throw "missing: $need" } }
+          foreach ($bad in 'abcdef123456789','sekrit99','hunter2hunter2') { if ($out -like "*$bad*") { throw "leaked: $bad" } }
+          if ($out -notlike '*upstream said*') { throw 'the error line itself was dropped' }
+          if ($out -like '*Mapped*launchpad*route*') { throw 'a non-error log line was kept' }
 
   compose:
     needs: control_policy
