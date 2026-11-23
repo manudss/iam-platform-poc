@@ -44,7 +44,7 @@ describe('WorkflowsIgaService.close: an approved exception covers ONLY the unres
     const store = {
       igaGetCampaign: async () => ({ id: 'camp-1', tenant: 'acme', kind: 'user-access', name: 'c', ref: 'main', scope: {}, status: 'open', created_by: 'x', created_at: '', closed_at: null, closed_by: null, evidence: null }),
       igaListItems: async () => items.map((i) => ({ ...i, identity: `id-of-${i.id}`, payload: {}, decided_by: null, decided_at: null, decision_reason: null })),
-      igaCloseCampaign: async () => undefined,
+      igaCloseCampaign: async () => true,
     };
     return new WorkflowsIgaService(store as never);
   };

@@ -180,6 +180,8 @@ describe('workflow blocks: IGA recertification socle', () => {
     // A campaign closed by ANY OTHER actor (another run, a human) is never silently adopted: the step still fails.
     const other = { ...iga, getCampaign: async () => ({ id: 'iga-1', status: 'closed', closed_by: 'iga-human', evidence: { digest: 'bbb222' } }) };
     await assert.rejects(run1('iga-close-campaign', mk({ iga: other as never, config: { campaignId: 'iga-1' } }).c as never), /already closed/);
+    const missing = { ...iga, getCampaign: async () => ({ status: 'closed', closed_by: 'workflow:run-1', evidence: null }) };
+    await assert.rejects(run1('iga-close-campaign', mk({ iga: missing as never, config: { campaignId: 'iga-1' } }).c as never), /already closed/);
     // Same crash boundary on the exception path: the approved exception close committed, then the process died.
     const tasks = { check: async () => ({ state: 'decided', task: { id: 'task-9', status: 'decided', decision: 'approved', decided_by: 'iga-two', justification: 'accepted risk', detail: { unresolved: [] } } }), request: async () => ({ id: 'task-9' }) };
     const outExc = await run1('iga-close-campaign', mk({ iga: iga as never, tasks: tasks as never, config: { campaignId: 'iga-1' }, resumeWait: { taskId: 'task-9', kind: 'iga-close-campaign' } }).c as never);

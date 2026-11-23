@@ -545,7 +545,7 @@ const igaCloseCampaign = {
                 const status = typeof e?.getStatus === 'function' ? e.getStatus() : e?.status;
                 if (status !== 409 || !/already closed/.test(e?.message ?? '')) throw e;
                 const campaign = await iga.getCampaign(ctx.tenant, c.campaignId);
-                if (campaign?.status === 'closed' && campaign?.closed_by === `workflow:${ctx.runId}`) {
+                if (campaign?.status === 'closed' && campaign?.closed_by === `workflow:${ctx.runId}` && campaign?.evidence && typeof campaign.evidence.digest === 'string' && campaign.evidence.digest) {
                     ctx.log(`campaign ${c.campaignId} was already closed by THIS run before the interruption: resuming with the committed evidence (digest ${String(campaign?.evidence?.digest).slice(0, 12)}...)`);
                     return { campaign: c.campaignId, status: 'closed', evidence: campaign.evidence, resumed: true };
                 }
