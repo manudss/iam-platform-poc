@@ -3,6 +3,7 @@
 Requires a reviewed independent policy and a candidate-specific transform verifier for
 any intended business/schema change. No successful default for unknown state.
 """
+import importlib.util
 import urllib.parse
 import argparse,collections,hashlib,json,os,re,ssl,subprocess,sys,time,urllib.request,urllib.error
 from pathlib import Path
@@ -91,6 +92,7 @@ def journal_projection(rows):return [{'seq':r['seq'],'commit':r['commit']} for r
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after'],required=True)
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
+    parser.add_argument('--reviewed-activation161-manifest');parser.add_argument('--reviewed-activation161-manifest-sha256');parser.add_argument('--closed-exception-output')
     parser.add_argument('--receipt-file')
     parser.add_argument('--isolated-loopback-test',action='store_true')
     parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
@@ -103,6 +105,12 @@ def main():
     if a.phase=='before':evidence.mkdir(mode=0o700,parents=False,exist_ok=False)
     elif not evidence.is_dir():raise ValueError('preservation evidence missing')
     source=Path(__file__).with_name('qualification-container.mjs').read_text()
+    exception=None
+    if any([a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,a.closed_exception_output]):
+        if not all([a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,a.closed_exception_output]) or a.receipt_file or a.isolated_loopback_test:raise ValueError('complete explicit closed exception flags required')
+        spec=importlib.util.spec_from_file_location('activation161_exception',Path(__file__).with_name('activation161-exception.py'));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        exception=module.ExceptionRun(a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,evidence/'before.json',a.policy,a.image,a.phase,a.closed_exception_output)
+
     if a.phase=='before':
         if cmd(['docker','inspect','-f','{{.State.Running}}',a.container])!='false':raise ValueError('application must be stopped for initial preservation capture')
         node=['docker','run','--rm','-i','--network',p['network'],'--env-file',a.env_file,'-v',a.data_dir+':/data:ro','--entrypoint','node',a.image,'--input-type=module','-e',source,'capture']
@@ -124,12 +132,15 @@ def main():
     state=json.loads(cmd(node,json.dumps({**p,'running':a.phase=='after','baoToken':Path(p['baoTokenFile']).read_text().strip()})))
     ledger=Path(a.data_dir)/'migrations/journal.json'
     state['migrationLedger']=json.loads(ledger.read_text()) if ledger.exists() else None
-    state['credentials']=credential_hashes(Path(a.data_dir),p);state['postgres']=postgres(p)
+    state['credentials']=credential_hashes(Path(a.data_dir),p);state['postgres']=exception.capture(cmd) if exception else postgres(p)
     state['transportCoverage']='ISOLATED_LOOPBACK_NO_PUBLIC_TLS_PROOF' if a.isolated_loopback_test else 'TLS_EXPECTED_ORIGINS';state['image']=a.image;state['policyHash']=digest(Path(a.policy).read_bytes())
     if a.phase=='before':private_json(evidence/'before.json',state);print('Preservation snapshot captured privately; maintenance remains armed');return
     before=json.loads((evidence/'before.json').read_text())
     if before['transportCoverage']!=state['transportCoverage']:raise ValueError('qualification coverage changed mid-update')
     if before['policyHash']!=state['policyHash']:raise ValueError('qualification policy changed mid-update')
+    if exception:
+        exception.save(private_json,before,state,smoke_result,compare)
+        print('Closed activation161 exception checks verified. No normal receipt, opening or queue permission.');return
     after_file=evidence/('after-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
     private_json(after_file,state)
     smoke_file=evidence/('smoke-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
