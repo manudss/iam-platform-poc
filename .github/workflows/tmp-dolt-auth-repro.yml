@@ -55,9 +55,9 @@ jobs:
         run: |
           set -eux
           mkdir -p "$RUNNER_TEMP/dolt-backup"
-          docker run --rm -v repro-dolt-auth:/var/lib/dolt:ro -v "$RUNNER_TEMP/dolt-backup:/backup" \
+          docker run --rm --entrypoint tar -v repro-dolt-auth:/var/lib/dolt:ro -v "$RUNNER_TEMP/dolt-backup:/backup" \
             dolthub/dolt-sql-server:latest \
-            tar czf /backup/dolt-data-backup.tgz -C /var/lib/dolt .
+            czf /backup/dolt-data-backup.tgz -C /var/lib/dolt .
           tar tzf "$RUNNER_TEMP/dolt-backup/dolt-data-backup.tgz" | tee /tmp/backup-listing.txt | head -5
           grep -q 'privileges.db' /tmp/backup-listing.txt   # the credential store is in the backup
       - name: "Volume-preserving repair attempt: align the stored root password while stopped"
