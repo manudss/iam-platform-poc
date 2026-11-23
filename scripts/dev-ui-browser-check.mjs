@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 const { chromium } = createRequire(import.meta.url)('playwright-core');
-const BASE = process.env.DEV_UI_BASE ?? 'http://127.0.0.1:4200';
+const BASE = process.env.DEV_UI_BASE ?? 'http://localhost:4200'; // the sign-in redirect_uri is localhost:4200; 127.0.0.1 is a DIFFERENT origin (own sessionStorage), which bounced the check to /login
 const out = process.argv[2] ?? join(tmpdir(), 'dev-ui-shots'); mkdirSync(out, { recursive: true });
 const chrome = process.env.CHROME_BIN;
 if (!chrome) { console.log('SKIPPED: CHROME_BIN is required'); process.exit(0); }
