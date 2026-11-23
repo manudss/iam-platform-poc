@@ -51,6 +51,11 @@ jobs:
           docker rm -f dolt2
           docker run --rm --entrypoint dolt -w /var/lib/dolt -v repro-dolt-auth:/var/lib/dolt \
             dolthub/dolt-sql-server:latest sql -q "SELECT User, Host FROM mysql.user;"
+      - name: "Strict read-only check: SELECT over a :ro mount of the datadir"
+        run: |
+          set -eux
+          docker run --rm --entrypoint dolt -w /var/lib/dolt -v repro-dolt-auth:/var/lib/dolt:ro \
+            dolthub/dolt-sql-server:latest sql -q "SELECT User, Host FROM mysql.user;"
       - name: "Backup before repair: archive the stopped server's data dir with its own image"
         run: |
           set -eux
