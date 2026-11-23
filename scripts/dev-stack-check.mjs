@@ -101,4 +101,12 @@ if (!res.ok) fail('seeded data with the signed-in token', `HTTP ${res.status}: $
 if (!body.includes('demo-bob')) fail('seeded data with the signed-in token', 'demo-bob missing from the assignments');
 ok('seeded data with the signed-in token', 'demo-bob present');
 
+// 6. the signed-in launchpad (My applications) answers, like the console's landing page
+const lp = await fetch(`${BASE}/api/sso/acme-demo/launchpad`, { headers: { authorization: `Bearer ${access}`, 'x-iam-branch': 'main' } });
+const lpBody = await lp.text();
+if (!lp.ok) fail('launchpad (My applications) with the signed-in token', `HTTP ${lp.status}: ${lpBody.slice(0, 300)}`);
+let lpJson; try { lpJson = JSON.parse(lpBody); } catch { fail('launchpad (My applications) with the signed-in token', 'non-JSON body'); }
+if (!Array.isArray(lpJson.apps)) fail('launchpad (My applications) with the signed-in token', 'apps is not an array');
+ok('launchpad (My applications) with the signed-in token', `${lpJson.apps.length} applications, inventory ${lpJson.inventory}`);
+
 console.log('DEV STACK CHECK PASSED');
