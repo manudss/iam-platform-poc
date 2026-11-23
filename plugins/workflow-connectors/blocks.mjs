@@ -5,7 +5,7 @@ import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { runPieceAction } from './adapter.mjs';
-import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, createGoogleColumn, findGoogleRows } from './sheets-api.mjs';
+import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, initializeGoogleEmail, createGoogleColumn, findGoogleRows } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
@@ -323,6 +323,35 @@ const sheetsAddRow = {
     const result = await writeGoogleRow(auth, c, values);
     ctx.log(`Google Sheets: row ${result?.row ?? '?'} appended (REAL external write, not reverted by the run branch, not idempotent)`);
     return { rowNumber: Number(result?.row ?? 0) || undefined };
+  },
+};
+
+const sheetsInitializeEmail = {
+  type: 'google-sheets-initialize-email', family: 'Google Sheets', label: 'Initialize candidate email (assisted demo)', simulated: false, category: 'real',
+  description: 'REAL external write for an assisted demo with no concurrent sheet edits. Matches exact source fields, refuses ambiguity, changed or foreign email and collisions, re-reads before/after writing. Google writes remain positional: this is not a lock or compare-and-swap. Uncertain writes stop for review. Computes nothing: pass the workflow-calculated email.',
+  fields: [...sheetSourceFields,
+    ...['nom','prenom','departement','role'].map(key=>({key,label:key,type:'string',required:['nom','prenom'].includes(key),help:'Exact source identity value from the trigger; missing optional values mean empty string.'})),
+    {key:'email',label:'Calculated email',type:'string',required:true},
+    {key:'requiredColumns',label:'Required unique headers (comma separated)',type:'string'},
+  ],
+  outputs:[{key:'email',description:'Recorded email, verified by readback'},{key:'initialized',description:'true only after successful checks'},{key:'written',description:'false if already initialized to the same address'}],
+  validate(cfg) {
+    const identity=Object.fromEntries(['nom','prenom','departement','role'].map(k=>{
+      const value=cfg[k]??'';
+      if(typeof value!=='string'||value.length>500||(['nom','prenom'].includes(k)&&!value.trim()))bad(k+': exact source string required');
+      return [k,value];
+    }));
+    const email=str(cfg.email,'email',254);if(!email.includes('{{')&&!/^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(email))bad('email: one calculated address required');
+    return {...sheetSource(cfg),...identity,email,requiredColumns:str(cfg.requiredColumns,'requiredColumns',1000,false)};
+  },
+  async run(ctx) {
+    if(ctx.test||ctx.dryRun){ctx.log('SIMULATION: candidate email initialization, nothing read or written');return {email:ctx.config.email,initialized:false,written:false,dryRun:true};}
+    if (['email','nom','prenom','departement','role'].some(k=>String(ctx.config[k]??'').includes('{{'))) bad('Unresolved candidate email initialization input');
+    const c=sheetsInitializeEmail.validate(ctx.config);
+    if(c.source!=='google')bad('Candidate email initialization requires a managed Google source in Real mode');
+    const auth=googleAuth(ctx.settings);if(!auth)bad('Configure a managed Google Sheets connection first');
+    const out=await initializeGoogleEmail(auth,c,{nom:c.nom,prenom:c.prenom,departement:c.departement,role:c.role,process:'OK',cree:'',ticket:'','badge-fait':''},c.email,c.requiredColumns.split(',').map(x=>x.trim()).filter(Boolean),ctx.markEffectPending);
+    ctx.log('Candidate email checked on the source sheet; no account or ticket created by this step');return out;
   },
 };
 
@@ -1129,7 +1158,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [...JIRA_BLOCKS,JSON_VALUES,...GOOGLE_SHEETS_BLOCKS,httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamSendTemplateMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [...JIRA_BLOCKS,JSON_VALUES,...GOOGLE_SHEETS_BLOCKS,httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsInitializeEmail, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamSendTemplateMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

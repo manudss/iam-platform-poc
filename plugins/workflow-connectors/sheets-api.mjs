@@ -81,3 +81,40 @@ export async function findGoogleRows(auth, source, columnName, searchValue, limi
     headerRow: 1, useHeaderNames: true,
   } }));
 }
+
+
+/** Assisted-demo initialization only: Google updates are positional, not conditional or locked.
+ * Re-read identity and the full source row before writing; stop on any drift or uncertain response.
+ */
+export async function initializeGoogleEmail(auth, source, expected, email, requiredColumns = [], markPending, run = runPieceAction) {
+  const identityKeys = ['nom','prenom','departement','role'];
+  const expectedKeys = Object.keys(expected);
+  const canonical = values => JSON.stringify(Object.entries(values).filter(([,v]) => v !== '' && v != null).map(([k,v]) => [k,String(v)]).sort(([a],[b]) => a.localeCompare(b)));
+  function select(snapshot) {
+    if (new Set(snapshot.map(r=>r.rowNumber)).size !== snapshot.length) throw new Error('Google Sheet returned duplicate row positions');
+    const header = snapshot.find(r => r.rowNumber === 1);
+    const names = Object.values(header?.values ?? {}).map(String);
+    if (new Set(names).size !== names.length) throw new Error('Google Sheet headers must be unique');
+    const needed = [...new Set([...expectedKeys, 'email', ...requiredColumns])];
+    const letters = Object.fromEntries(needed.map(name => [name, Object.keys(namedColumns(header, { [name]: 'check' }))[0]]));
+    const matches = snapshot.filter(r => r.rowNumber > 1 && identityKeys.every(k => String(r.values[letters[k]] ?? '') === expected[k]));
+    if (matches.length !== 1) throw new Error('Sheet source identity must match exactly one row');
+    const row = matches[0];
+    if (!expectedKeys.every(k=>String(row.values[letters[k]]??'')===expected[k])) throw new Error('Sheet source is no longer eligible for initialization');
+    const current = String(row.values[letters.email] ?? '');
+    if (current && current.toLowerCase() !== email.toLowerCase()) throw new Error('Sheet source email is already different; nothing overwritten');
+    if (snapshot.some(r => r.rowNumber > 1 && r.rowNumber !== row.rowNumber && String(r.values[letters.email] ?? '').trim().toLowerCase() === email.toLowerCase())) throw new Error('Calculated email already belongs to another sheet row');
+    return { header, row, current, emailLetter: letters.email };
+  }
+  const read = async () => select(await readGoogleRows(auth, source, false, run));
+  const first = await read(), second = await read();
+  if (canonical(first.header.values) !== canonical(second.header.values) || canonical(first.row.values) !== canonical(second.row.values)) throw new Error('Sheet source changed during initialization; reconcile before retry');
+  if (second.current) return { email: second.current, initialized: true, written: false };
+  if (typeof markPending !== 'function') throw new Error('Durable sheet effect tracking is unavailable');
+  await markPending({ kind: 'sheet-email-initialization' });
+  await run(PACKAGE, 'update_row', { auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, first_row_headers: true, as_string: true, values: { [second.emailLetter]: email }, row_id: second.row.rowNumber } });
+  const after = await read();
+  const wanted = { ...second.row.values, [second.emailLetter]: email };
+  if (canonical(after.header.values) !== canonical(second.header.values) || canonical(after.row.values) !== canonical(wanted) || after.current !== email) throw new Error('Sheet initialization readback differs; external effect needs review');
+  return { email: after.current, initialized: true, written: true };
+}
