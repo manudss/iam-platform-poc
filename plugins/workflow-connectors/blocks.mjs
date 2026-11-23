@@ -943,6 +943,74 @@ const lyamSendSecretMail = {
   },
 };
 
+// Generic template block. Values are flat config fields so the existing graph placeholder validator
+// sees every reference. Secrets travel only as run-owned references, never through the renderer bus.
+const lyamSendTemplateMail = {
+  type:'lyam-send-template-mail',family:'lyam',label:'Send a mail from a template',simulated:false,category:'real',
+  description:'Select a versioned mail template and fill its parameters. Template changes require review. Real delivery is immediate and non-repeatable; uncertain acceptance stops for review. Secret parameters accept opaque run references only and keep their account/publication guards.',
+  fields:[
+    {key:'to',label:'Recipient (one address)',type:'string',required:true},
+    {key:'templateKey',label:'Mail template',type:'string',required:true},
+    {key:'templateRevision',label:'Reviewed template revision',type:'string',required:true},
+  ],
+  outputs:[{key:'accepted',description:'Provider accepted the mail, not proof of inbox delivery'},{key:'messageId',description:'Provider message id'},{key:'to',description:'Recipient'}],
+  validate(cfg) {
+    const out={to:str(cfg.to,'template mail recipient',200),templateKey:str(cfg.templateKey,'mail template key',64),templateRevision:str(cfg.templateRevision,'mail template revision',64)};
+    if(!/^[a-f0-9]{64}$/.test(out.templateRevision)) bad('reviewed template revision required');
+    for(const [k,v] of Object.entries(cfg)) if(k.startsWith('param_')) {
+      if(!/^param_[a-z][a-zA-Z0-9_]{0,39}$/.test(k) || typeof v!=='string' || v.length>4000) bad('invalid template parameter');
+      out[k]=v;
+    }
+    for(const k of ['account','hours','revision','ownerRun','sourceHead','resetApprovalTaskId']) if(cfg[k]!==undefined) out[k]=str(cfg[k],k,100);
+    return out;
+  },
+  async run(ctx) {
+    const c=ctx.config;
+    if(!MAIL_RE.test(c.to)) bad('template mail: one email address required');
+    if(ctx.test || ctx.dryRun) {ctx.log('test run: would render the selected mail template; nothing sent and no secret read');return {accepted:false,messageId:null,to:c.to};}
+    if(!ctx.reads?.workflowMailTemplate || !ctx.reads?.renderWorkflowMail || !ctx.markEffectPending) bad('workflow template rendering unavailable');
+    // Published main is the delivery authority, never an unpublished draft from the editor branch.
+    const tpl=await ctx.reads.workflowMailTemplate(ctx.tenant,'main',c.templateKey);
+    if(tpl.revision!==c.templateRevision) bad('mail template changed or is not published; review its revision');
+    const data={}, refs=[];
+    for(const [k,v] of Object.entries(c)) if(k.startsWith('param_')) data[k.slice(6)]=v;
+    const secret=tpl.variables.filter(v=>v.type==='temporary-password');
+    if(secret.length>1) bad('only one secret parameter supported');
+    for(const v of tpl.variables.filter(v=>v.type!=='temporary-password')) if(String(data[v.name]??'').includes('secret:') || (secret.length&&String(data[v.name]??'').includes('[[password]]'))) bad('secret references require a secret-typed parameter');
+    for(const v of secret) {
+      const ref=data[v.name];
+      if(typeof ref!=='string' || !/^secret:[a-f0-9]{24}$/.test(ref)) bad('secret parameter requires an opaque generated reference');
+      refs.push(ref); data[v.name]='[[password]]';
+    }
+    let guard;
+    if(secret.length) {
+      if(!ctx.secrets || !c.account || !(Number(c.hours)>0 && Number(c.hours)<=720) || !c.revision || !c.sourceHead || !c.ownerRun) bad('secret parameter requires account, validity, revision, publication and owned block guards');
+      if(c.resetApprovalTaskId) await assertResetApproval(ctx,'lyam-send-template-mail',c.resetApprovalTaskId,c.account,c.hours,'later',c.revision);
+      guard=await verifySecretMailState(ctx,c);
+      // Reserved derived parameters never accept a caller-provided expiry.
+      if(tpl.variables.some(v=>v.name==='expiry')) data.expiry=new Date(guard.expiresAt).toISOString();
+      if(tpl.variables.some(v=>v.name==='hours')) data.hours=String(Number(c.hours));
+    }
+    let rendered;
+    try {rendered=await ctx.reads.renderWorkflowMail(ctx.tenant,'main',c.templateKey,c.templateRevision,data);} catch {bad('mail template rendering refused; nothing sent');}
+    if(!rendered?.subject || !rendered?.text || /[\r\n]/.test(rendered.subject) || rendered.subject.includes('[[password]]')) bad('invalid rendered mail');
+    if(secret.length && (!rendered.text.includes('[[password]]') || !String(tpl.effective?.text).includes('{{expiry}}'))) bad('secret template must include password and recorded expiry in its text');
+    const {apiKey,from}=await currentMailPolicy(ctx,c.to,'lyam-send-template-mail');
+    if(secret.length && rendered.html) bad('secret templates must render plain text only');
+    if(secret.length) {
+      const password=ctx.secrets.reveal(refs[0]);
+      rendered.text=rendered.text.split('[[password]]').join(password);
+
+    }
+    const idempotencyKey=`wf-template/${ctx.runId}/${ctx.nodeId ?? c.templateKey}`;
+    await ctx.markEffectPending({template:c.templateKey,templateRevision:c.templateRevision,idempotencyKey});
+    const result=await sendOneMail({apiKey,from,to:c.to,subject:rendered.subject,text:rendered.text,...(rendered.html?{html:rendered.html}:{}),idempotencyKey});
+    for(const ref of refs) ctx.secrets.drop(ref);
+    ctx.log('template mail accepted by provider; acceptance is not proof of delivery');
+    return {accepted:true,messageId:result.id,to:c.to,...(guard?{expiresAt:guard.expiresAt}:{})};
+  },
+};
+
 // ----------------------------------------------------- ticket > account > sheet row correlation (internal, durable) ----
 // The Jira summary and label are for readability only. The authority that links a Done ticket to an account and a sheet row is a record written by the creation workflow
 // in the server's own store, keyed by tenant + connection + project + issue key. The row is identified by a key column and value (never trusted as a row number: sorting moves rows).
@@ -1052,7 +1120,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamSendTemplateMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

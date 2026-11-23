@@ -26,8 +26,8 @@ export interface MailLayoutOverride { html?: string; vars?: Record<string, strin
  * Returns undefined when the key is not declared; THROWS when the slot refuses (bus down, faulted replacement):
  * the callers decide their degradation (the send paths fall back to the legacy raw send, explicitly logged).
  */
-export async function renderMail(reg: PluginRegistry, tenant: string, key: string, data: Record<string, unknown>, opts: { lang?: string; override?: MailOverride | null; layoutOverride?: MailLayoutOverride | null } = {}): Promise<NotifyRenderResult | undefined> {
-  const entry = mailTemplateDecl(key);
+export async function renderMail(reg: PluginRegistry, tenant: string, key: string, data: Record<string, unknown>, opts: { declaration?: MailTemplateDecl; lang?: string; override?: MailOverride | null; layoutOverride?: MailLayoutOverride | null } = {}): Promise<NotifyRenderResult | undefined> {
+  const entry = opts.declaration ? {decl:opts.declaration} : mailTemplateDecl(key);
   if (!entry || entry.decl.layout) return undefined;
   const layout = mailLayoutDecl()?.decl;
   const r = await reg.callSlot<NotifyRenderResult>(tenant, 'notify.templates', 'notify.render', {
@@ -41,7 +41,7 @@ export async function renderMail(reg: PluginRegistry, tenant: string, key: strin
 
 /** renderMail with the send paths' degradation: a renderer problem never blocks a send, it degrades to the
  * legacy raw payload and says so in the logs (the notifier's raw dump is the pre-templates behaviour). */
-export async function renderMailOrLegacy(reg: PluginRegistry, tenant: string, key: string, data: Record<string, unknown>, opts: { lang?: string; override?: MailOverride | null; layoutOverride?: MailLayoutOverride | null } = {}): Promise<NotifyRenderResult | undefined> {
+export async function renderMailOrLegacy(reg: PluginRegistry, tenant: string, key: string, data: Record<string, unknown>, opts: { declaration?: MailTemplateDecl; lang?: string; override?: MailOverride | null; layoutOverride?: MailLayoutOverride | null } = {}): Promise<NotifyRenderResult | undefined> {
   try { return await renderMail(reg, tenant, key, data, opts); }
   catch (e) { console.warn(`[mail] notify.render failed for ${key} (${(e as Error).message}): sending the legacy raw payload`); return undefined; }
 }

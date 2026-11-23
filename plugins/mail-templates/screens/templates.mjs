@@ -5,7 +5,7 @@
 // data per declared variable, live preview of the unsaved draft, save/restore; the layout gets its own editor).
 
 const css = `
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1em;margin-top:.8em}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:1em;margin-top:.8em}
 .card{border:1px solid var(--line);border-radius:8px;padding:.9em;display:flex;flex-direction:column;gap:.5em;cursor:pointer}
 .card.layout{border-color:var(--muted);background:var(--panel)}
 h3{margin:0;font-size:1em}.meta{color:var(--muted);font-size:.82em}
@@ -19,7 +19,7 @@ input[type=email]{max-width:16em}
 .msg{padding:.4em .6em;border-radius:4px}.bad{background:var(--bad-soft);color:var(--bad)}
 .hint{color:var(--muted);font-size:.85em}.lead{font-size:1.02em}
 /* editor */
-.editor{display:grid;grid-template-columns:minmax(320px,1fr) minmax(320px,1fr);gap:1em;margin-top:.8em}
+.editor{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1em;margin-top:.8em}
 @media(max-width:900px){.editor{grid-template-columns:1fr}}
 label.fl{display:flex;flex-direction:column;font-size:.85em;gap:.2em;margin-bottom:.6em}
 input[type=text],textarea{font:inherit;padding:.3em .45em;border:1px solid var(--field-line);border-radius:6px}
@@ -67,6 +67,7 @@ class MailTemplatesScreen extends HTMLElement {
       const r = await this.call('GET', '/mail-templates');
       if (this.fail(r)) return;
       this._items = Array.isArray(r.data) ? r.data : (r.data.items ?? []);
+      if(!this._linked){this._linked=true;const query=new URLSearchParams(location.search);if(query.get('create')==='1'){this._view='create';this.render();return;}if(query.get('edit')){await this.openEditor(query.get('edit'));return;}}
       if (this._view === 'gallery') { this.render(); this.say('', ''); }
       // Live previews render one card at a time through the API (the real renderer + this branch's overrides).
       for (const it of this._items.filter((x) => !x.layout)) {
@@ -89,7 +90,7 @@ class MailTemplatesScreen extends HTMLElement {
   async restore(key) {
     const r = await this.call('DELETE', `/mail-templates/${encodeURIComponent(key)}`);
     if (this.fail(r)) return;
-    this.say(`"${key}" restored to the plugin default. Saved on the working branch; live after Apply.`, '');
+    this.say(r.data.removed ? `"${key}" deleted on the working branch; live after Apply.` : `"${key}" restored to the plugin default. Saved on the working branch; live after Apply.`, '');
     this._view = 'gallery'; this._detail = null;
     await this.load();
   }
@@ -123,7 +124,7 @@ class MailTemplatesScreen extends HTMLElement {
     const d = this._detail; if (!d) return;
     const body = d.layout
       ? { html: this._draft.html, vars: this._draft.vars }
-      : { subject: this._draft.subject, text: this._draft.text, ...(this._draft.html ? { html: this._draft.html } : {}) };
+      : { ...(d.owned ? {name:d.name,description:d.description,variables:d.variables} : {}), subject: this._draft.subject, text: this._draft.text, ...(this._draft.html ? { html: this._draft.html } : {}) };
     const r = await this.call('PUT', `/mail-templates/${encodeURIComponent(d.key)}`, body);
     if (this.fail(r)) return;
     this.say(`"${d.key}" saved on the working branch; live after Apply.`, '');
@@ -133,6 +134,7 @@ class MailTemplatesScreen extends HTMLElement {
 
   // ---------- rendering ----------
   render() {
+    if (this._view === 'create') return this.renderCreate();
     if (this._view === 'edit' && this._detail) return this.renderEditor();
     const main = this._ctx.branch === 'main';
     const cards = this._items.map((it) => `
@@ -147,7 +149,7 @@ class MailTemplatesScreen extends HTMLElement {
            <iframe data-prev="${this.esc(it.key)}" title="Preview of ${this.esc(it.name)}" sandbox=""></iframe>`}
       <div class="row">
         <button data-edit="${this.esc(it.key)}" ${main ? 'disabled' : ''}>Edit</button>
-        ${it.customized ? `<button class="secondary" data-restore="${this.esc(it.key)}" ${main ? 'disabled' : ''}>Restore default</button>` : ''}
+        ${it.customized ? `<button class="secondary" data-restore="${this.esc(it.key)}" ${main ? 'disabled' : ''}>${it.owned ? 'Delete template' : 'Restore default'}</button>` : ''}
       </div>
     </section>`).join('');
     this.innerHTML = `<style>${css}</style>
@@ -155,11 +157,31 @@ class MailTemplatesScreen extends HTMLElement {
   <p role="status" class="msg" id="mt-note" hidden></p>
   <p role="alert" class="msg bad" id="mt-problem" hidden></p>
   ${main ? '<p class="hint">main is read only: choose a working branch to customize or restore a template.</p>' : ''}
+  <button id="mt-new" ${main ? 'disabled' : ''}>Create a mail template</button>
   <div class="grid">${cards || '<p class="hint">Loading…</p>'}</div>`;
+    this.querySelector('#mt-new')?.addEventListener('click',()=>{this._view='create';this.render();});
     for (const b of this.querySelectorAll('[data-edit]')) b.addEventListener('click', (ev) => { ev.stopPropagation(); void this.openEditor(b.getAttribute('data-edit')); });
     for (const b of this.querySelectorAll('[data-restore]')) b.addEventListener('click', (ev) => { ev.stopPropagation(); void this.restore(b.getAttribute('data-restore')); });
     for (const c of this.querySelectorAll('[data-open]')) c.addEventListener('click', () => { if (this._ctx.branch !== 'main') void this.openEditor(c.getAttribute('data-open')); });
     for (const k of Object.keys(this._previews)) this.paintPreview(k);
+  }
+
+  renderCreate() {
+    this.innerHTML=`<style>${css}</style><h3>Create a mail template</h3><p class="hint">Saved on the working branch. Review and Apply before real workflows can send it. Never enter a real password or secret here.</p>
+    <p role="alert" id="mt-problem" hidden></p><p id="mt-note" hidden></p>
+    <label class="fl">Key (custom.name)<input id="mt-key" type="text" value="custom."></label>
+    <label class="fl">Name<input id="mt-name" type="text" maxlength="80"></label>
+    <label class="fl">Parameters, one per line: name, type (text or temporary-password), required (yes or no)<textarea id="mt-parameters">person,text,yes</textarea></label>
+    <label class="fl">Subject<input id="mt-subject" type="text" maxlength="150"></label>
+    <label class="fl">Text, use {{parameter}} placeholders<textarea id="mt-text"></textarea></label>
+    <button id="mt-create">Create on this branch</button><button id="mt-cancel" class="secondary">Cancel</button>`;
+    this.querySelector('#mt-cancel').onclick=()=>{this._view='gallery';this.render();};
+    this.querySelector('#mt-create').onclick=async()=>{
+      const val=id=>this.querySelector(id).value;
+      const variables=val('#mt-parameters').split('\n').map(s=>s.trim()).filter(Boolean).map(s=>{const [name,type,required]=s.split(',').map(x=>x.trim());return {name,type,required:required!=='no'};});
+      const r=await this.call('POST','/mail-templates',{key:val('#mt-key'),name:val('#mt-name'),variables,subject:val('#mt-subject'),text:val('#mt-text')});
+      if(!this.fail(r)) {await this.load();await this.openEditor(r.data.key);}
+    };
   }
 
   renderEditor() {
@@ -177,8 +199,9 @@ class MailTemplatesScreen extends HTMLElement {
         <button role="tab" class="${this._tab === 'text' ? 'on' : ''}" data-tab="text">Text</button>
         <button role="tab" class="${this._tab === 'html' ? 'on' : ''}" data-tab="html">HTML</button></div>
       <textarea id="mt-body" spellcheck="false" ${this._tab === 'text' ? '' : ''}>${this.esc(this._tab === 'text' ? this._draft.text : this._draft.html)}</textarea>
+      ${d.owned ? `<label class="fl">Parameters (name,type,required yes/no)<textarea id="mt-parameters">${this.esc(d.variables.map(v=>[v.name,v.type,v.required?'yes':'no'].join(',')).join('\n'))}</textarea></label>` : ''}
       <div class="panel"><strong>Sample data (preview and tests)</strong>
-        <div class="vars">${(d.variables ?? []).map((v) => `<label class="fl">{{${this.esc(v.name)}}}<input type="text" data-var="${this.esc(v.name)}" value="${this.esc(this._data[v.name] ?? '')}"></label>`).join('')}</div></div>`;
+        <div class="vars">${(d.variables ?? []).map((v) => `<label class="fl">{{${this.esc(v.name)}}}<input type="text" data-var="${this.esc(v.name)}" ${v.type==='temporary-password' ? 'disabled' : ''} value="${v.type==='temporary-password' ? '[secret parameter]' : this.esc(this._data[v.name] ?? '')}"></label>`).join('')}</div></div>`;
     this.innerHTML = `<style>${css}</style>
   <p><button class="secondary" id="mt-back">← All templates</button></p>
   <div class="row"><h3 style="font-size:1.2em">${this.esc(d.name)}</h3>
@@ -191,14 +214,15 @@ class MailTemplatesScreen extends HTMLElement {
     <section>${left}
       <div class="row" style="margin-top:.6em">
         <button id="mt-save" ${main ? 'disabled' : ''}>Save on this branch</button>
-        ${d.customized ? `<button class="secondary" id="mt-restore" ${main ? 'disabled' : ''}>Restore default</button>` : ''}
-        ${!d.layout ? '<input type="email" id="mt-to" placeholder="Send a test to…" aria-label="Test recipient"><button class="secondary" id="mt-test">Send test</button>' : ''}
+        ${d.customized ? `<button class="secondary" id="mt-restore" ${main ? 'disabled' : ''}>${d.owned ? 'Delete template' : 'Restore default'}</button>` : ''}
+        ${!d.layout && !(d.variables??[]).some(v=>v.type==='temporary-password') ? '<input type="email" id="mt-to" placeholder="Send a test to…" aria-label="Test recipient"><button class="secondary" id="mt-test">Send test</button>' : ''}
       </div></section>
     <section><iframe class="big" id="mt-big" title="Live preview" sandbox=""></iframe></section>
   </div>
   ${main ? '<p class="hint">main is read only: choose a working branch to save.</p>' : ''}`;
     const q = (s) => this.querySelector(s);
     q('#mt-back')?.addEventListener('click', () => { this._view = 'gallery'; this._detail = null; this.render(); void this.load(); });
+    q('#mt-parameters')?.addEventListener('change',ev=>{d.variables=ev.target.value.split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{const [name,type,req]=line.split(',').map(x=>x.trim());return {name,type,required:req!=='no'};});this.renderEditor();});
     q('#mt-save')?.addEventListener('click', () => void this.save());
     q('#mt-restore')?.addEventListener('click', () => void this.restore(d.key));
     q('#mt-test')?.addEventListener('click', () => void this.sendTest(d.key, q('#mt-to')?.value.trim()));

@@ -8,7 +8,7 @@ export function isFrozenApprovedReset(graph: unknown): boolean {
   return nodes.some(raw => {
     const n = raw as { type?: string; config?: Record<string, unknown> };
     if (['lyam-propose-password-reset', 'lyam-apply-password-reset'].includes(n?.type ?? '')) return true;
-    if (!['lyam-publish-workspace', 'lyam-send-secret-mail'].includes(n?.type ?? '')) return false;
+    if (!['lyam-publish-workspace', 'lyam-send-secret-mail', 'lyam-send-template-mail'].includes(n?.type ?? '')) return false;
     return ['resetApprovalTaskId', 'resetSubject', 'resetHours', 'resetRevision'].some(k => String(n?.config?.[k] ?? '').trim() !== '');
   });
 }

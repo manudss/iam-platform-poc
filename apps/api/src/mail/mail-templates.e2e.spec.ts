@@ -1,0 +1,35 @@
+import 'reflect-metadata';
+import {describe,it,before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn,spawnSync,ChildProcess} from 'node:child_process';
+import {mkdtempSync,mkdirSync,rmSync,existsSync} from 'node:fs';
+import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {createConnection} from 'mysql2/promise';
+import {VersioningService} from '../versioning/versioning.service.js';
+import {DoltMailTemplateStore,MailTemplatesService} from './mail-templates.js';
+import {branchContext,currentBranch} from '../workspace/context.js';
+const bin=process.env.DOLT_BIN;
+describe('owned template persistence on real Dolt',{skip:!bin||!existsSync(bin)},()=>{
+ let dir:string,child:ChildProcess;const envBefore={...process.env};
+ before(async()=>{dir=mkdtempSync(join(tmpdir(),'mail-templates-dolt-'));const data=join(dir,'data'),home=join(dir,'home');mkdirSync(data);mkdirSync(home);const env={...process.env,HOME:home};for(const [k,v]of [['user.name','Fixture'],['user.email','fixture@example.invalid']])assert.equal(spawnSync(bin!,['config','--global','--add',k,v],{env}).status,0);assert.equal(spawnSync(bin!,['sql'],{cwd:data,env,input:"create database iam; use iam; create table seed (id int primary key); call dolt_add('-A'); call dolt_commit('-m','seed');"}).status,0);child=spawn(bin!,['sql-server','--host','127.0.0.1','--port','13471','--data-dir',data],{cwd:data,env,stdio:'ignore'});Object.assign(process.env,{DOLT_PORT:'13471',DOLT_DATABASE:'iam',IAM_WORKSPACE_MODE:'1'});for(let i=0;i<100;i++){try{const c=await createConnection({host:'127.0.0.1',port:13471,user:'root',database:'iam'});await c.end();return;}catch{await new Promise(r=>setTimeout(r,100));}}throw Error('Dolt did not start');});
+ after(async()=>{child?.kill();await new Promise(r=>setTimeout(r,500));if(dir)rmSync(dir,{recursive:true,force:true});for(const k of ['DOLT_PORT','DOLT_DATABASE','IAM_WORKSPACE_MODE']){if(envBefore[k]===undefined)delete process.env[k];else process.env[k]=envBefore[k];}});
+ it('persists schema envelope across service recreation, isolates tenants/branches, and reads published main only after merge',async()=>{
+  const v=new VersioningService();await v.createBranch('personal/fixture','main');
+  const store=()=>new DoltMailTemplateStore(v,currentBranch);let svc=new MailTemplatesService(store(),{} as any);
+  const body={key:'custom.welcome',name:'Welcome',variables:[{name:'person',type:'text',required:true}],subject:'Hi {{person}}',text:'Hello {{person}}'};
+  const first=await branchContext.run({branch:'personal/fixture'},()=>svc.create('fictional','admin',body));
+  svc=new MailTemplatesService(store(),{} as any);
+  assert.equal((await branchContext.run({branch:'personal/fixture'},()=>svc.detail('fictional',body.key))).revision,first.revision);
+  await assert.rejects(()=>branchContext.run({branch:'main'},()=>svc.detail('fictional',body.key)),/unknown/);
+  await assert.rejects(()=>branchContext.run({branch:'personal/fixture'},()=>svc.detail('other',body.key)),/unknown/);
+  await assert.rejects(()=>branchContext.run({branch:'main'},()=>svc.create('fictional','admin',{...body,key:'custom.refused'})),/read only/);
+  await v.at('main',async c=>{await c.query("call dolt_merge('personal/fixture')");});
+  assert.equal((await branchContext.run({branch:'main'},()=>svc.detail('fictional',body.key))).revision,first.revision);
+  await branchContext.run({branch:'personal/fixture'},()=>svc.put('fictional','admin',body.key,{subject:'Changed {{person}}',text:'Hello {{person}}'}));
+  assert.notEqual((await branchContext.run({branch:'personal/fixture'},()=>svc.detail('fictional',body.key))).revision,first.revision);
+  assert.equal((await branchContext.run({branch:'main'},()=>svc.detail('fictional',body.key))).revision,first.revision);
+  await branchContext.run({branch:'personal/fixture'},()=>svc.restore('fictional','admin',body.key));
+  await assert.rejects(()=>branchContext.run({branch:'personal/fixture'},()=>svc.detail('fictional',body.key)),/unknown/);
+  assert.equal((await branchContext.run({branch:'main'},()=>svc.detail('fictional',body.key))).revision,first.revision);
+ });
+});

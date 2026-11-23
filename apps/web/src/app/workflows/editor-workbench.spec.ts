@@ -104,4 +104,11 @@ describe('direction C editor workbench', () => {
     e.testView.set({ run: { started_at: '2026-11-11T07:00:00Z', finished_at: '2026-11-11T07:00:04.200Z' }, steps: [{ status: 'done' }, { status: 'running' }] });
     expect(e.testProgress()).toBe(50); expect(e.testDuration()).toBe('4.2 s');
   });
+  it('uses schema fields without password guards for ordinary templates and resets stale parameters on explicit revision review',()=>{
+    e.mailTemplates.set([{key:'custom.plain',revision:'a'.repeat(64),variables:[{name:'person',type:'text',required:true}]},{key:'custom.secret',revision:'b'.repeat(64),variables:[{name:'password',type:'temporary-password',required:true}]}]);
+    e.state.get('a').type='lyam-send-template-mail';e.state.get('a').config={to:'fixture@example.test',param_stale:'old'};
+    e.chooseMail('a','custom.plain');expect(e.mailFields(e.state.get('a')).map((f:any)=>f.key)).toEqual(['param_person']);expect(e.state.get('a').config.param_stale).toBeUndefined();
+    e.chooseMail('a','custom.secret');expect(e.mailFields(e.state.get('a')).map((f:any)=>f.key)).toContain('sourceHead');expect(e.state.get('a').config.templateRevision).toBe('b'.repeat(64));
+    e.undo();expect(e.state.get('a').config.templateKey).toBe('custom.plain');
+  });
 });

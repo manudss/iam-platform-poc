@@ -21,7 +21,7 @@ Production code: 44 points. Test code: 92 points.
 | ApplicationBus.emit | emitter | authn.reenrollment-requested | apps/api/src/workflows/engine.ts:136 |
 | callSlot (blocking hook) | caller | auth.webauthn | apps/api/src/authn/flow.service.ts:363 |
 | callSlot (blocking hook) | caller | notify.default | apps/api/src/authn/flow.service.ts:474 |
-| callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:185 |
+| callSlot (blocking hook) | caller | notify.default | apps/api/src/mail/mail-templates.ts:272 |
 | callSlot (blocking hook) | caller | notify.templates | apps/api/src/plugins/v1/mail-catalogue.ts:33 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:42 |
 | callSlot (blocking hook) | caller | directory.default | apps/api/src/profile/profile.service.ts:46 |
@@ -54,7 +54,7 @@ Production code: 44 points. Test code: 92 points.
 | plugin oidc/saml provider event hook | listener | - | plugins/oidc-provider/handlers.mjs:143 |
 | plugins.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:36 |
 | registry.emit (async hook) | emitter | notify.send | apps/api/src/effects/effects.service.ts:36 |
-| registry.emit (async hook) | emitter | notify.send | apps/api/src/mail/mail-templates.ts:186 |
+| registry.emit (async hook) | emitter | notify.send | apps/api/src/mail/mail-templates.ts:273 |
 
 ## Tests
 

@@ -8,12 +8,12 @@ const require = createRequire(new URL('./package.json', import.meta.url));
  * Throws a message without credentials. `client` is a test seam.
  */
 export const mailClient = { Ctor: null };
-export async function sendOneMail({ apiKey, from, to, subject, text, idempotencyKey }) {
+export async function sendOneMail({ apiKey, from, to, subject, text, html, idempotencyKey }) {
   if (!apiKey) throw new Error('RESEND_API_KEY is not set on the server');
   if (!idempotencyKey || idempotencyKey.length > 256) throw new Error('idempotency key required (1 to 256 characters)');
   const Ctor = mailClient.Ctor ?? require('resend').Resend;
   let r;
-  try { r = await new Ctor(apiKey).emails.send({ from, to, subject, text }, { idempotencyKey }); }
+  try { r = await new Ctor(apiKey).emails.send({ from, to, subject, text, ...(html ? {html} : {}) }, { idempotencyKey }); }
   catch { throw new Error('mail provider unreachable: outcome unknown, reconcile before any new send'); }
   if (r?.error) throw new Error(`mail provider refused (${String(r.error.name ?? 'error')})`);
   const id = r?.data?.id;
