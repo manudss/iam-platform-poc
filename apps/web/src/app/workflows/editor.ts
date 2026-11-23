@@ -1,14 +1,15 @@
 import { Component, ElementRef, OnDestroy, OnInit, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { Connection, Edge, MiniMapComponent, Node, Vflow, VflowComponent } from 'ngx-vflow';
+import { Connection, Edge, Node, Vflow, VflowComponent } from 'ngx-vflow';
 import { Session } from '../session';
 import {
   RunView, StepCategory, StepType, STEP_TYPES, TRIGGER_NODE_ID, WfBlock, WfBlockField, WfEdge, WfEvent,
   WfNodeComponent, WfNodeData, WfTrigger, WfTriggerNodeComponent, WfTriggerNodeData,
   anchorViewport, categoryLabel, categoryOf, clientOf, rectsWithin, SAMPLE_WORKFLOWS,
 } from './wf-model';
-import { ValidationIssue, autoLayout, defaultLabel, edgeLabelChoices, outgoingLabels, validateGraph } from './graph-utils';
+import { ValidationIssue, autoLayout, wrappedLayout, defaultLabel, edgeLabelChoices, outgoingLabels, validateGraph } from './graph-utils';
 import { WbTabs, WbTabsBar } from './workbench-tabs';
 import { managedProvider, editedAction, simulatedAction } from './execution-policy';
 import { parseTs, WorkflowConnection } from './wf-model';
@@ -27,7 +28,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 // canvas with minimap / zoom / insert-on-link, right config drawer (Settings / Input / Output), bottom
 // status bar with live validation, and a test bar that runs the graph on a disposable branch. ----
 
-@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrls: ['../pages.css', './editor-workbench.css'], styles: [
+@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, WbTabsBar], styleUrls: ['../pages.css', './editor-workbench.css'], styles: [
   '.wb-managed {border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);padding:.8rem;margin:.8rem 0;} .wb-mode {display:flex;gap:.4rem;margin:.6rem 0;} .wb-mode .on {background:var(--acc2-soft);color:var(--acc2);border-color:var(--acc2);} .wb-real-dialog {box-sizing:border-box;width:min(520px,calc(100% - 2rem));max-height:90dvh;overflow:auto;padding:1.4rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);color:var(--ink);} .wb-real-dialog::backdrop {background:var(--scrim);} .wb-real-note {padding:.8rem;border:1px solid var(--warn-line);background:var(--warn-soft);color:var(--ink);border-radius:var(--radius);}',
   '.wb-active { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 600; } .wb-active.paused { color: var(--bad); }',
   '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
@@ -56,7 +57,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
     <button class="secondary" (click)="redo()" [disabled]="!redoStack.length" title="Redo (Ctrl+Shift+Z)">↻</button>
     <button class="secondary" (click)="copySelection()" [disabled]="!selectedIds().length" title="Copy selection (Ctrl+C)">Copy</button>
     <button class="secondary" (click)="paste()" [disabled]="!clipboard.nodes.length" title="Paste (Ctrl+V)">Paste</button>
-    <button class="secondary" (click)="doAutoLayout()" title="Re-arrange the graph left to right">Auto-layout</button>
+    <button class="secondary" (click)="doAutoLayout()" title="Arrange the graph in rows of up to three columns">Auto-layout</button>
     <button class="secondary" (click)="exportDef()" title="Download the definition as JSON">Export</button>
     <label class="btn secondary wb-import" title="Load a definition JSON into the canvas">Import<input type="file" accept="application/json" (change)="importDef($event)" hidden /></label>
     @if (id !== 'new') {<button class="secondary" (click)="duplicateWorkflow()" [disabled]="busy()">Duplicate</button>}
@@ -92,7 +93,6 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
             <button class="wb-link-chip" [class.main]="!edgeLabelOf(ctx.edge)" [style.color]="branchStyle(edgeLabelOf(ctx.edge)).color" [attr.aria-label]="'Edit '+branchStyle(edgeLabelOf(ctx.edge)).text+' link from '+ctx.edge.source+' to '+ctx.edge.target" (click)="activeEdge.set(activeEdge()===ctx.edge.id ? '' : ctx.edge.id)">{{edgeLabelOf(ctx.edge) ? branchStyle(edgeLabelOf(ctx.edge)).text : '⋯'}}</button>
           </div>
         </ng-template>
-        <mini-map position="bottom-left" [maskColor]="'var(--panel)'" [strokeColor]="'var(--line)'" [scaleOnHover]="false" />
       </vflow>
       <select class="wb-step-jump" aria-label="Jump to step" (change)="jumpStep($any($event.target).value)"><option value="">Jump to step…</option>@for(n of stepOptions();track n.id){<option [value]="n.id">{{n.name}}</option>}</select>
       <button class="wb-trigger-edit secondary" (click)="openTrigger()" [attr.aria-expanded]="triggerSelected()">ϟ {{triggerEvent() ? triggerLabel() : 'Manual start'}} · Edit</button>
@@ -464,6 +464,10 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       else v.fitView({ padding: 0.14, duration: 120 }); // last-resort best effort, same as the old behavior
       return;
     }
+    // A long one-column graph cannot fit above minZoom. Anchor immediately on mobile rather
+    // than retrying a mathematically impossible fit and leaving the trigger offscreen.
+    const anchor = readable && canvas.clientWidth < 500 ? anchorViewport(this.allNodes(), 0.85, 80) : null;
+    if (anchor) { v.viewportTo({ ...anchor, zoom:0.85 }); return; }
     v.fitView({ padding: 0.14, duration: 120 });
     this.verifyFraming(attempt, performance.now(), readable);
   }
@@ -510,16 +514,41 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
   protected testDuration() { const r = this.testView()?.run; if (!r?.started_at || !r.finished_at) return ''; const ms = parseTs(r.finished_at) - parseTs(r.started_at); return Number.isFinite(ms) ? `${Math.max(0, ms / 1000).toFixed(1)} s` : ''; }
   private readonly selectionPanel = effect(() => { if (this.selectedNode()) { this.triggerSelected.set(false); this.mobilePanel.set('settings'); } });
 
+  private routeSub?: Subscription;
+  private drafts = new Map<string, { snapshot: Snapshot; name:string; description:string; tags:string; active:boolean; event:string; cron:string; match:Record<string,string>; config:Record<string,unknown>; saved:string }>();
+  private routeReady = false;
+  private loadEpoch = 0;
   ngOnInit() {
-    this.id = this.route.snapshot.paramMap.get('id') ?? 'new';
+    this.routeSub = this.route.paramMap.subscribe(params => {
+      const id = params.get('id') ?? 'new';
+      if (this.routeReady && (this.savedDefinition || this.id === 'new') && this.dirty()) this.drafts.set(`${this.s.branch()}/${this.id}`, {
+        snapshot: this.snapshot(), name:this.name, description:this.description, tags:this.tags, active:this.active,
+        event:this.triggerEvent(), cron:this.cronExpr, match:{...this.match()}, config:{...this.triggerCfg()}, saved:this.savedDefinition,
+      });
+      this.routeReady = true;
+      this.id = id;
+      this.undoStack = []; this.redoStack = []; this.state.clear();
+      this.vfNodes.set([]); this.vfEdges.set([]); this.stateVersion.update(v => v + 1);
+      this.name = ''; this.description = ''; this.tags = ''; this.active = true; this.seq = 0;
+      this.triggerSelected.set(false); this.triggerEvent.set(''); this.match.set({}); this.triggerCfg.set({});
+      this.activeEdge.set(''); this.pendingPort.set(null); this.insertEdge.set(null);
+      this.testView.set(null); this.testRunning.set(false); this.testError.set(''); this.testOpen.set(false); clearInterval(this.testTimer);
+      this.note.set(''); this.savedDefinition = '';
+      const epoch = ++this.loadEpoch;
+      const draft = this.drafts.get(`${this.s.branch()}/${id}`);
+      if (draft) {
+        this.restore(draft.snapshot); this.name=draft.name; this.description=draft.description; this.tags=draft.tags; this.active=draft.active;
+        this.triggerEvent.set(draft.event); this.cronExpr=draft.cron; this.match.set({...draft.match}); this.triggerCfg.set({...draft.config});
+        this.savedDefinition=draft.saved; this.tabs.open('workflow',id,this.name); this.busy.set(false); this.fitCanvas();
+      } else if (id !== 'new') void this.load(id, epoch);
+      else { this.busy.set(false); this.tabs.open('workflow', 'new', 'New workflow'); }
+    });
     void clientOf(this.s).events().then((r) => this.events.set(r.events)).catch(() => this.events.set([]));
     void clientOf(this.s).blocks().then((r) => this.blocks.set(r.blocks)).catch(() => this.blocks.set([]));
-    if (this.id !== 'new') void this.load();
-    else this.tabs.open('workflow', 'new', 'New workflow');
     this.keyHandler = (ev: KeyboardEvent) => this.onKey(ev);
     window.addEventListener('keydown', this.keyHandler);
   }
-  ngOnDestroy() { window.removeEventListener('keydown', this.keyHandler); clearInterval(this.testTimer); }
+  ngOnDestroy() { this.routeSub?.unsubscribe(); this.loadEpoch++; window.removeEventListener('keydown', this.keyHandler); clearInterval(this.testTimer); }
   private keyHandler!: (ev: KeyboardEvent) => void;
   private onKey(ev: KeyboardEvent) {
     if(ev.key==='Escape'){this.activeEdge.set('');this.pendingPort.set(null);}
@@ -552,7 +581,7 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     if (!label) return null;
     return {
       id: TRIGGER_NODE_ID, type: WfTriggerNodeComponent,
-      data: signal<WfTriggerNodeData>({ name: label }),
+      data: signal<WfTriggerNodeData>({ name: label, open: () => this.openTrigger() }),
       point: signal({ x: 20, y: 60 }),
       selected: signal(false),
     } as Node;
@@ -716,9 +745,15 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       [...this.state.entries()].map(([id, st]) => ({ id, type: st.type, name: st.name, config: st.config })),
       this.vfEdges().map((e) => ({ from: e.source, to: e.target })),
     );
-    if(typeof window!=='undefined'&&window.innerWidth<700){let y=220;for(const n of this.vfNodes()){const st=this.state.get(n.id)!;const ports=workflowPorts(n.id,st.type,outgoingLabels(st.type,st.config),this.vfEdges().map(e=>({id:e.id,source:e.source,target:e.target,label:edgeLabelOf(e)})),{});n.point.set({x:40,y});y+=160+Math.max(ports.inputs.length,ports.outputs.length)*52;}return;}
-    const layerY=new Map<number,number>();
-    for (const n of this.vfNodes()) { const p=pos.get(n.id);if(!p)continue;const y=layerY.get(p.x)??40;const st=this.state.get(n.id)!;const ports=workflowPorts(n.id,st.type,outgoingLabels(st.type,st.config),this.vfEdges().map(e=>({id:e.id,source:e.source,target:e.target,label:edgeLabelOf(e)})),{});n.point.set({x:320+p.x*1.45,y});layerY.set(p.x,y+140+Math.max(ports.inputs.length,ports.outputs.length)*36); }
+    const heights = new Map<string, number>();
+    const links = this.vfEdges().map(e => ({id:e.id,source:e.source,target:e.target,label:edgeLabelOf(e)}));
+    for (const n of this.vfNodes()) {
+      const st = this.state.get(n.id)!;
+      const ports = workflowPorts(n.id, st.type, outgoingLabels(st.type,st.config), links, {});
+      heights.set(n.id, 160 + Math.max(ports.inputs.length, ports.outputs.length) * 52);
+    }
+    const positions = wrappedLayout(pos, heights, typeof window !== 'undefined' && window.innerWidth < 700 ? 1 : 3);
+    for (const n of this.vfNodes()) { const p = positions.get(n.id); if (p) n.point.set(p); }
   }
   protected zoom(factor: number) { const v = this.vflow(); if (v) v.zoomTo(Math.min(1.8, Math.max(0.3, v.viewport().zoom * factor))); }
 
@@ -822,9 +857,11 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     this.fitCanvas();
   }
 
-  private async load() {
+  private async load(id = this.id, epoch = ++this.loadEpoch) {
+    this.busy.set(true);
     try {
-      const { definition } = await clientOf(this.s).get(this.id);
+      const { definition } = await clientOf(this.s).get(id);
+      if (epoch !== this.loadEpoch || id !== this.id) return;
       this.name = definition.name; this.description = definition.description;
       this.tags = ((definition as { tags?: string[] }).tags ?? []).join(', ');
       this.active = definition.active !== false;
@@ -841,7 +878,8 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
       this.arrangeNodes();
       this.savedDefinition = this.definitionStamp();
       this.fitCanvas();
-    } catch (e) { this.note.set((e as Error).message); }
+    } catch (e) { if (epoch === this.loadEpoch) this.note.set((e as Error).message); }
+    finally { if (epoch === this.loadEpoch) this.busy.set(false); }
   }
 
   /** Tags as the API expects them: lowercase, comma/space separated, deduped (validation server-side). */
@@ -872,20 +910,27 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
     } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
   }
   protected async save() {
+    const id = this.id, epoch = this.loadEpoch, branch = this.s.branch(), name = this.name;
+    const savingStamp = this.definitionStamp();
     this.busy.set(true);
     try {
-      const c = clientOf(this.s);
-      const trigger = this.triggerPayload();
-      const savingStamp = this.definitionStamp();
-      if (this.id === 'new') {
-        const r = await c.create(this.name, this.description, this.graph(), trigger, this.active, this.tagList());
-        this.tabs.replace({ kind: 'workflow', id: 'new', label: 'New workflow' }, { kind: 'workflow', id: r.definition.id, label: this.name || r.definition.id });
+      const c = clientOf(this.s), trigger = this.triggerPayload();
+      if (id === 'new') {
+        const r = await c.create(name, this.description, this.graph(), trigger, this.active, this.tagList());
+        this.tabs.replace({kind:'workflow',id:'new',label:'New workflow'},{kind:'workflow',id:r.definition.id,label:name || r.definition.id});
+        if (epoch !== this.loadEpoch || branch !== this.s.branch()) return;
         this.id = r.definition.id;
         this.note.set('Workflow saved.'); void this.router.navigateByUrl(`/workflows/edit/${r.definition.id}`);
+      } else {
+        await c.update(id, name, this.description, this.graph(), trigger, this.active, this.tagList());
+        this.tabs.rename('workflow', id, name || id);
+        if (epoch !== this.loadEpoch || branch !== this.s.branch()) return;
+        this.note.set('Workflow saved.');
       }
-      else { await c.update(this.id, this.name, this.description, this.graph(), trigger, this.active, this.tagList()); this.tabs.rename('workflow', this.id, this.name || this.id); this.note.set('Workflow saved.'); }
+      this.drafts.delete(`${branch}/${id}`);
       this.savedDefinition = savingStamp;
-    } catch (e) { this.note.set((e as Error).message); } finally { this.busy.set(false); }
+    } catch (e) { if (epoch === this.loadEpoch) this.note.set((e as Error).message); }
+    finally { if (epoch === this.loadEpoch) this.busy.set(false); }
   }
 
   // ---- Duplicate / export / import ----
@@ -948,21 +993,24 @@ export class WorkflowEditPage implements OnInit, OnDestroy {
 
   }
   protected async runTest() {
+    const epoch = this.loadEpoch;
     let payload: Record<string, unknown> = {};
     try { payload = this.testPayload.trim() ? JSON.parse(this.testPayload) : {}; } catch { this.testError.set('The payload is not valid JSON.'); return; }
     this.testError.set(''); this.testRunning.set(true);
     try {
       const v = await clientOf(this.s).testRun(this.graph(), this.triggerPayload(), payload);
+      if (epoch !== this.loadEpoch) return;
       this.testView.set(v); this.refreshTestTints();
       clearInterval(this.testTimer);
-      this.testTimer = setInterval(() => void this.pollTest(v.run.id), 700);
-    } catch (e) { this.testError.set((e as Error).message); this.testRunning.set(false); }
+      this.testTimer = setInterval(() => void this.pollTest(v.run.id, epoch), 700);
+    } catch (e) { if (epoch === this.loadEpoch) { this.testError.set((e as Error).message); this.testRunning.set(false); } }
   }
-  private async pollTest(id: string) {
+  private async pollTest(id: string, epoch = this.loadEpoch) {
     try {
       const v = await clientOf(this.s).run(id);
+      if (epoch !== this.loadEpoch) return;
       this.testView.set(v); this.refreshTestTints();
       if (v.run.status !== 'running' && v.run.status !== 'queued') { clearInterval(this.testTimer); this.testRunning.set(false); }
-    } catch { clearInterval(this.testTimer); this.testRunning.set(false); }
+    } catch { if (epoch === this.loadEpoch) { clearInterval(this.testTimer); this.testRunning.set(false); } }
   }
 }
