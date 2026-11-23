@@ -52,6 +52,9 @@ services:
       IAM_BUS_NATS_USER: api-host
       IAM_BUS_NATS_PASSWORD: api-host-dev   # local dev user of conf/nats-local.conf
       IAM_WORKSPACE_MODE: "1"
+      # Seed the fictional demo (organizations, people, application gallery) on an EMPTY data set so a
+      # fresh local install shows a living project; a no-op once organizations exist. Fictional data only.
+      IAM_DEMO_DATA_SEED: "1"
       IAM_PLUGIN_STORE: dolt
       IAM_DIRECTORY_AUTH: "1"
       IAM_CREDENTIAL_FILE: /var/lib/lyam-dev/credentials.json

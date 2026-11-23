@@ -265,7 +265,10 @@ jobs:
           if-no-files-found: ignore
       - name: Dev stack logs on failure
         if: ${{ failure() }}
-        run: docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs --tail=150
+        run: |
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs --tail=150
+          echo '===== persisted API log (survives watch-mode restarts, holds the first-boot seed output) ====='
+          docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec -T app sh -c 'tail -300 /var/lib/lyam-dev/api.log 2>/dev/null || echo no-persisted-api-log' || true
       - name: Tear down
         if: ${{ always() }}
         run: docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down -v

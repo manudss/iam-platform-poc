@@ -6,6 +6,7 @@
 //  3. compiles the API, starts it, then recompiles and restarts it when apps/api/src or plugins change.
 // File watching POLLS: bind mounts from Windows/macOS deliver no fs events inside a container.
 import { spawn } from 'node:child_process';
+import { createWriteStream, mkdirSync } from 'node:fs';
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +18,7 @@ const WATCHED = [join(API, 'src'), join(REPO, 'plugins')];
 const IGNORED_NAMES = new Set(['node_modules', 'dist', '.git', '.angular', 'target', 'signature.json']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (msg) => console.log(`[api-dev] ${msg}`);
+const API_LOG = process.env.DEV_API_LOG || '/var/lib/lyam-dev/api.log';
 
 /** Newest mtime (ms) under the given roots; ignored directories/files above are skipped. 0 when empty. */
 export function latestMtimeMs(roots) {
@@ -141,7 +143,16 @@ async function main() {
       continue;
     }
     log('starting the API on :3000');
-    const child = spawn('node', ['dist/main.js'], { cwd: API, stdio: 'inherit', env: process.env });
+    // Tee the API output to a persistent log: watch-mode restarts wipe the container's own log tail,
+    // which is exactly where the first boot (migrations, demo seed) had printed its diagnostics.
+    const child = spawn('node', ['dist/main.js'], { cwd: API, stdio: ['inherit', 'pipe', 'pipe'], env: process.env });
+    try {
+      mkdirSync(dirname(API_LOG), { recursive: true });
+      const file = createWriteStream(API_LOG, { flags: 'a' });
+      child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
+      child.stdout.pipe(file, { end: false }); child.stderr.pipe(file, { end: false });
+      child.once('exit', () => file.end());
+    } catch { child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr); }
     current = child;
     const why = await waitForChangeOrExit(WATCHED, since, child);
     current = null;
