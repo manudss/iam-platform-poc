@@ -34,7 +34,8 @@ try {
   // 1. real PKCE sign-in, started from the console's own login page: the console generates and stores
   // the state + verifier, so driving /core/authorize directly would fail the callback's state check.
   await page.goto(`${BASE}/login`);
-  await Promise.all([page.waitForURL(/\/core\/authorize\//, { timeout: 20000 }), page.click('button:has-text("Sign in")')]);
+  // The authorize URL carries its query string directly (/core/authorize?...), no trailing slash.
+  await Promise.all([page.waitForURL(/\/core\/authorize\?/, { timeout: 20000 }), page.click('button:has-text("Sign in")')]);
   await page.waitForSelector('input[name=password]', { timeout: 15000 });
   await page.fill('input[name=username]', 'demo-alice');
   await page.fill('input[name=password]', 'demo-only-not-a-secret');
