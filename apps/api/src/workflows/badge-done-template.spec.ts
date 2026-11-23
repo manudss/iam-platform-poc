@@ -279,6 +279,16 @@ describe('badge done: process crash and restart (the first engine is abandoned m
 
 describe('badge done with versioned generic template mail',()=>{
   it('preserves correlation, publication and durable acceptance before owned unblock',async()=>withMail(async()=>{const w=await settle(world({templateMail:true}));assert.equal(w.row.status,'completed',w.row.error);assert.equal(FakeMail.calls.length,1);assert.equal(w.steps.get('mail')!.output.accepted,true);assert.ok(w.calls.indexOf('publish')<w.calls.indexOf('unblock'));assert.ok(w.steps.get('mail')!.input.effectIntent.templateRevision);assert.ok(!JSON.stringify([...w.steps.values()]).includes(w.state.passwords[0]));}));
+  it('phase2 preflight and final template delivery accept exact domains and recheck revocation before side effects',async()=>withMail(async()=>{
+    const legacy=await settle(world({settingsFor:async()=>({mailAllowedDomains:'EXAMPLE.TEST'})}));
+    assert.equal(legacy.row.status,'completed',legacy.row.error);assert.equal(FakeMail.calls.length,1);FakeMail.calls=[];
+    const w=await settle(world({templateMail:true,settingsFor:async()=>({mailAllowedDomains:'EXAMPLE.TEST'})}));
+    assert.equal(w.row.status,'completed',w.row.error);assert.equal(FakeMail.calls.length,1);
+    let allow=true;const revoked=await settle(world({templateMail:true,settingsFor:async()=>({mailAllowedDomains:allow?'example.test':''}),onGenerate:()=>{allow=false;}}));
+    assert.equal(revoked.row.status,'failed');assert.ok(!revoked.calls.includes('setTemporary'));assert.ok(!revoked.calls.includes('publish'));assert.ok(!revoked.calls.includes('unblock'));assert.equal(FakeMail.calls.length,1);
+    const denied=await settle(world({templateMail:true,settingsFor:async()=>({mailAllowedDomains:'dss.name'})}));
+    assert.equal(denied.row.status,'failed');assert.deepEqual(denied.calls,[]);assert.equal(FakeMail.calls.length,1);
+  }));
   it('refuses stale template revision before ticket claim or credential creation',async()=>withMail(async()=>{const w=await settle(world({templateMail:true,templateChanged:true}));assert.equal(w.row.status,'failed');assert.deepEqual(w.calls,[]);assert.equal(FakeMail.calls.length,0);}));
   it('refuses a mismatched password reference before claiming or changing the credential',async()=>withMail(async()=>{const w=await settle(world({templateMail:true,graph:g=>g.nodes.find((n:any)=>n.id==='mail').config.param_password='{{steps.set.passwordRef}}'}));assert.equal(w.row.status,'failed');assert.deepEqual(w.calls,[]);assert.equal(FakeMail.calls.length,0);}));
   it('does not resend or unblock after a crash during provider acceptance',async()=>withMail(async()=>{FakeMail.hang=true;const w=world({templateMail:true});w.engine.kick(w.row.id);for(let i=0;i<200&&!FakeMail.calls.length;i++)await new Promise(r=>setTimeout(r,20));assert.equal(FakeMail.calls.length,1);assert.equal(w.steps.get('mail')!.error,'EXTERNAL_EFFECT_REVIEW_REQUIRED');const engine=w.build(new RunSecrets());await engine.resume();await new Promise(r=>setTimeout(r,50));assert.equal(w.row.status,'failed');assert.equal(FakeMail.calls.length,1);assert.ok(!w.calls.includes('unblock'));}));

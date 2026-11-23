@@ -34,7 +34,15 @@
       "type": "string",
       "label": "Mail block: allowed recipients",
       "default": "",
-      "help": "Exact e-mail addresses (comma separated) the lyam-send-mail block may write to. Empty refuses every send. Set only to addresses the owner approved.",
+      "help": "Exact e-mail addresses (comma separated) allowed for workflow mail, including badge preflight. Combined with allowed domains. Both empty refuses every send. Set only destinations the owner approved.",
+      "group": "Mail"
+    },
+    {
+      "key": "mailAllowedDomains",
+      "type": "string",
+      "label": "Mail block: allowed recipient domains",
+      "default": "",
+      "help": "Exact domain names, comma separated, for example dss.name. Allows every single address at that domain without filtering account identities. No @, wildcard, URL or implicit subdomain. Combined with exact allowed recipients; both empty refuses every send. Read from main at runtime. Set only domains the owner approved.",
       "group": "Mail"
     },
     {

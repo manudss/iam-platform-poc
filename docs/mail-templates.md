@@ -120,3 +120,29 @@ owned-unblock edge stays unchanged. Never activate or execute a migrated graph a
 
 Tests use fictional local data and fake provider calls. The persistence test exercises real Dolt branch and
 tenant isolation, service recreation, deletion and main publication, not an external email delivery.
+
+### Recipient domains for workflow mail
+
+The workflow-connectors settings read from **main at runtime** now accept `mailAllowedDomains`,
+a comma-separated list of exact domain names, for example `dss.name`. This allows all single
+addresses at that domain, with no list of account identities. It does not replace the workflow's
+email calculation or the secret-mail check against the account's current recorded email.
+
+`mailAllowedRecipients` remains supported unchanged. An address is allowed if it matches either
+an existing exact address or an exact configured domain, case-insensitively. Both settings default
+to empty, which refuses delivery. There is no data migration and no domain is enabled by deploying
+this feature. Adding a domain is an explicit administrator policy change on the review/publication
+path, not an instruction to send mail or activate a workflow.
+
+Domains must be ASCII DNS names without `@`, wildcards, URLs, ports or paths. Subdomains are not
+included automatically. Invalid domain configuration fails closed, even if an exact address also
+matches. Domain-authorized recipients use a single unquoted dot-atom localpart; lists, display names,
+control characters, Unicode lookalikes and domain suffix tricks are refused. Existing exact-address
+grants retain their earlier address contract for compatibility.
+
+The same policy is used by badge phase1 preflight before account creation, phase2 preflight before
+ticket claim/credential changes, legacy ordinary/secret mail and generic template mail. Revocation
+on main is rechecked at the existing boundaries, including before final delivery. Publication,
+credential expiry/revision, owned-block checks, durable effect intent, idempotency and stopping for
+uncertain provider acceptance are unchanged. Different approved test accounts can use different
+runs; an uncertain run is never retried merely to obtain another mail.

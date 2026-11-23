@@ -28,6 +28,26 @@ describe('lyam-send-mail block', () => {
     await block().run(base({settings:{},liveMailSettings:async()=>({mailAllowedRecipients:'owner@example.test'})}) as any);
     assert.equal(Fake.calls.length,1);
   }));
+  it('allows every localpart of an explicitly configured exact domain, retaining exact-address compatibility', async () => withKey(async () => {
+    for (const to of ['camille.martin@dss.name','other.person@dss.name','Demo+test@DSS.NAME']) {
+      await block().run(base({config:{to,subject:'Fixture',text:'Fictional'},settings:{},liveMailSettings:async()=>({mailAllowedDomains:' DSS.NAME '})}) as any);
+    }
+    await block().run(base({liveMailSettings:async()=>({mailAllowedRecipients:'owner@example.test',mailAllowedDomains:'dss.name'})}) as any);
+    assert.equal(Fake.calls.length,4);
+  }));
+  it('domain policy refuses subdomains, lookalikes, multiple addresses and malformed policy before provider calls', async () => withKey(async () => {
+    for(const to of ['a@sub.dss.name','a@dss.name.evil','a@evildss.name','a@dss-name.test','a@example.test','a@dѕs.name','a@dss.name.','a@dss.name,b@dss.name','a@dss.name; b@dss.name','A <a@dss.name>','a@dss.name\r\nBcc:b@dss.name','a..b@dss.name','"a"@dss.name']) {
+      await assert.rejects(()=>block().run(base({config:{to,subject:'Fixture',text:'Fictional'},liveMailSettings:async()=>({mailAllowedDomains:'dss.name'})}) as any));
+    }
+    for(const mailAllowedDomains of ['@dss.name','*.dss.name','https://dss.name','dss.name/','dss..name','-dss.name','dss.name,*.evil.test']) {
+      await assert.rejects(()=>block().run(base({liveMailSettings:async()=>({mailAllowedRecipients:'owner@example.test',mailAllowedDomains})}) as any),/exact domain names/);
+    }
+    assert.equal(Fake.calls.length,0);
+  }));
+  it('reads domain policy live and fails closed after revocation despite a stale branch grant', async()=>withKey(async()=>{
+    await assert.rejects(()=>block().run(base({config:{to:'camille.martin@dss.name',subject:'Fixture',text:'Fictional'},settings:{mailAllowedDomains:'dss.name'},liveMailSettings:async()=>({})}) as any),/allowed recipients/);
+    assert.equal(Fake.calls.length,0);
+  }));
   it('a test run only logs and calls nothing, even with a key', async () => withKey(async () => {
     const lines: string[] = [];
     const out = await block().run(base({ test: true, log: (l: string) => lines.push(l) }) as any);

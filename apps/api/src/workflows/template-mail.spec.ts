@@ -16,6 +16,14 @@ function fixture(secret=false){
 const withMail=async(fn:()=>Promise<void>)=>{const old=process.env.RESEND_API_KEY;process.env.RESEND_API_KEY='fixture-not-real';api.mailClient.Ctor=Fake;Fake.calls=[];Fake.mode='ok';try{await fn();}finally{api.mailClient.Ctor=null;if(old===undefined)delete process.env.RESEND_API_KEY;else process.env.RESEND_API_KEY=old;}};
 describe('generic template mail safety',()=>{
  it('sends ordinary text/html without imposing temporary-password account guards',async()=>withMail(async()=>{const {c,history}=fixture();delete c.users;delete c.accounts;delete c.workspace;const out:any=await block().run(c);assert.equal(out.accepted,true);assert.equal(Fake.calls[0].text,'Hello Alice');assert.equal(Fake.calls[0].html,'<p>Hello Alice</p>');assert.equal(history[0].template,'custom.welcome');}));
+ it('ordinary and secret templates use the same exact-domain policy without changing recipient resolution or secret guards',async()=>withMail(async()=>{
+  for(const secret of [false,true]) {
+   const {c}=fixture(secret);c.config.to='camille.martin@dss.name';c.users.emailOf=async()=>c.config.to;c.liveMailSettings=async()=>({mailAllowedDomains:'DSS.NAME'});
+   assert.equal((await block().run(c))!.accepted,true);
+   c.liveMailSettings=async()=>({});await assert.rejects(()=>block().run(c),/allowed recipients/);
+  }
+  assert.equal(Fake.calls.length,2);assert.ok(Fake.calls.every(x=>x.to==='camille.martin@dss.name'));
+ }));
  it('fails closed on changed revision, rendering refusal, unknown recipient and secret reference in plain data',async()=>withMail(async()=>{
   for(const change of [(f:any)=>f.tpl.revision='b'.repeat(64),(f:any)=>f.c.reads.renderWorkflowMail=async()=>{throw Error('bad template');},(f:any)=>f.c.liveMailSettings=async()=>({}),(f:any)=>f.c.config.param_person='secret:'+'a'.repeat(24)]){const f=fixture();change(f);await assert.rejects(()=>block().run(f.c));}assert.equal(Fake.calls.length,0);
  }));
