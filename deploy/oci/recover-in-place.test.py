@@ -15,7 +15,7 @@ class Recovery(unittest.TestCase):
   self.calls.append(args);after=self.d/'after.json';smoke=self.d/'smoke.json';after.write_text(json.dumps({'image':self.image,'policyHash':'p'}));smoke.write_text(json.dumps({'journal':{'count':1},'ledger':'valid'}));receipt={'format':1,'result':'qualified','transportCoverage':'TLS_EXPECTED_ORIGINS','image':self.image,'policyHash':'p'}
   for k,p in [('before',self.before),('after',after),('smoke',smoke)]:receipt[k+'_path']=str(p);receipt[k+'_sha256']=self.pin(p)['sha256']
   (self.d/'success.json').write_text(json.dumps(receipt));return SimpleNamespace(returncode=0)
- def recover(self,**kw):return r.recover(self.m,run=kw.get('run',self.qualify),is_dead=kw.get('dead',lambda p:True),front=kw.get('front',lambda o:503 if self.barrier.exists() else 200),observe=lambda *a:None,record=kw.get('record',lambda *a:self.calls.append('record')))
+ def recover(self,**kw):return r.recover(self.m,run=kw.get('run',self.qualify),is_dead=kw.get('dead',lambda p:True),front=kw.get('front',lambda o:503 if self.barrier.exists() else 200),observe=lambda *a:None,verify=lambda *a:None,record=kw.get('record',lambda *a:self.calls.append('record')))
  def test_success_qualifies_before_opening_retains_pause_and_requests_separate_resume(self):
   out=self.recover();self.assertTrue(out['opened']);self.assertTrue(out['queue_resume_required']);self.assertTrue(self.pause.exists());self.assertFalse(self.barrier.exists());self.assertEqual(self.calls[-1],'record')
  def test_qualification_exit_nonzero_never_opens(self):
@@ -42,4 +42,8 @@ class Recovery(unittest.TestCase):
   def interrupt(*a):raise KeyboardInterrupt('fixture interrupt')
   with self.assertRaises(KeyboardInterrupt):self.recover(record=interrupt)
   self.assertTrue(self.barrier.exists());self.assertTrue(self.pause.exists())
+ def test_wrong_pending_target_stops_before_qualification_or_open(self):
+  self.m['queue_manifest']['target']['digest']='sha256:'+'f'*64
+  with self.assertRaisesRegex(ValueError,'exact failed'):self.recover()
+  self.assertTrue(self.barrier.exists());self.assertEqual(self.calls,[])
 if __name__=='__main__':unittest.main()

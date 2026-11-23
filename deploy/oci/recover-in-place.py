@@ -17,7 +17,7 @@ def checked_file(spec):
  p=Path(spec['path'])
  if not p.is_absolute() or not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest()!=spec['sha256']:raise ValueError('pinned file mismatch')
  return p
-def recover(m,run=subprocess.run,is_dead=dead,front=probe,observe=queue.observe_running,record=queue.record_reviewed_in_place):
+def recover(m,run=subprocess.run,is_dead=dead,front=probe,observe=queue.observe_running,record=queue.record_reviewed_in_place,verify=queue.verify_source_chain):
  # Called only under both exclusive locks by main. Tests use fictional isolated files.
  if m.get('format')!=1 or m.get('kind')!='reviewed-in-place-opening':raise ValueError('reviewed opening manifest required')
  queue.reference(m.get('authorization_ref'));queue.references(m.get('evidence_refs'))
@@ -29,7 +29,15 @@ def recover(m,run=subprocess.run,is_dead=dead,front=probe,observe=queue.observe_
  if not match or int(match[1])!=m['former_pid'] or not is_dead(m['former_pid']):raise ValueError('former owner not proven dead')
  barrier=Path(m['barrier_file'])
  if barrier.is_symlink() or barrier.read_text().rstrip('\n')!=token:raise ValueError('foreign barrier')
- target=review['target'];observe(m['container'],target)
+ target=review['target']
+ pending=state.get('pending');failed=state.get('failed')
+ if not pending or not failed or state.get('resume_required') or review.get('original_unresolved')!={'pending':pending,'failed':failed}:raise ValueError('exact unresolved original incident required')
+ if failed.get('sha')!=pending.get('sha') or failed.get('digest',pending.get('digest'))!=pending.get('digest') or pending.get('parent')!=state['history'][-1]['sha']:raise ValueError('inconsistent failed incident')
+ if any(target.get(k)!=pending.get(k) for k in ['sha','digest']):raise ValueError('exact failed pending target required')
+ chain=review.get('chain')
+ if not isinstance(chain,list) or len(chain)!=1 or any(chain[0].get(k)!=v for k,v in {'sha':pending['sha'],'parent':pending['parent'],'outcome':'delivered'}.items()):raise ValueError('singleton delivered chain required')
+ verify(m['repository'],state['history'][-1]['sha'],chain)
+ observe(m['container'],target)
  origins=m['origins']
  if not isinstance(origins,list) or not origins or any(not re.fullmatch(r'https://[a-zA-Z0-9.-]+(?::[0-9]+)?',o) for o in origins):raise ValueError('explicit TLS origins required')
  if any(front(o)!=503 for o in origins):raise ValueError('maintenance not proven')
