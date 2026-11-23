@@ -258,6 +258,30 @@ const lyamAwaitRun = readBlock('lyam-await-run', 'Wait for a sub-workflow run', 
     }
 });
 
+// A separate block preserves the historical bounded polling contract of lyam-await-run.
+const lyamJoinChildRun = {
+    type: 'lyam-join-child-run', family: 'lyam', label: 'Wait durably for a child run', simulated: false, category: 'computed',
+    description: 'Parks this run durably until its own direct child completes. The deadline is recorded once in the step wait state and survives application restart. Failed, canceled, missing, foreign or timed-out children fail the step. No child is canceled or restarted by this block. The scheduler checks waiting children on its normal tick.',
+    fields: [
+        { key: 'runId', label: 'Direct child run id', type: 'string', required: true },
+        { key: 'timeoutHours', label: 'Deadline in hours (up to 720)', type: 'number', default: 24 },
+    ],
+    outputs: [{ key: 'id', description: 'Child run id' }, { key: 'status', description: 'completed' }, { key: 'finished', description: 'true only for a completed child' }],
+    validate(cfg) {
+        const hours = Number(cfg.timeoutHours ?? 24);
+        if (!Number.isFinite(hours) || hours <= 0 || hours > 720) bad('lyam-join-child-run.timeoutHours: more than 0 and at most 720');
+        return { runId: str(cfg.runId, 'lyam-join-child-run.runId', 48), timeoutHours: hours };
+    },
+    async run(ctx) {
+        const c = ctx.config;
+        if (ctx.test || ctx.dryRun) return { id: c.runId, status: 'test', finished: false };
+        const result = await need(ctx.runs, 'lyam-join-child-run').joinChild(ctx.tenant, ctx.runId, c.runId, c.timeoutHours, ctx.resumeWait);
+        if (result.wait) throw new WorkflowSuspend(result.wait);
+        ctx.log(`child run ${result.id}: completed`);
+        return result;
+    },
+};
+
 // ---- P0: lifecycle and role writes (run branch, reviewed like every other change) -----------------------
 
 const writeBlock = (type, label, description, fields, validate, run) => ({ type, family: 'lyam', label, simulated: false, category: 'real', description, fields, validate, run });
@@ -1415,7 +1439,7 @@ export const LYAM_ADMIN_BLOCKS = [
     lyamGrantAssignment, lyamRevokeAssignment,
     lyamReadDiff, lyamRequestPublish,
     // P1
-    lyamCreateOrganization, lyamAssignOrganization, lyamCreateApplication, lyamCheckAccountBlocks, lyamStartWorkflow, lyamReadRun, lyamAwaitRun,
+    lyamCreateOrganization, lyamAssignOrganization, lyamCreateApplication, lyamCheckAccountBlocks, lyamStartWorkflow, lyamReadRun, lyamAwaitRun, lyamJoinChildRun,
     // P2
     lyamValidatePolicy, lyamProposePolicyChange, lyamReadPluginStates, lyamProposePluginChange, lyamListDelegations, lyamRevokeDelegationRequest, lyamProposeAgentAccess,
     // Completion of the brief's partial families
