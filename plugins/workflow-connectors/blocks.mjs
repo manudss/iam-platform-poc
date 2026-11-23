@@ -2,7 +2,7 @@ import { safeHttp, withinConnection } from './http-transport.mjs';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { runPieceAction } from './adapter.mjs';
-import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, initializeGoogleEmail, createGoogleColumn, findGoogleRows } from './sheets-api.mjs';
+import { serviceAccountAuth, readGoogleRows, writeGoogleRow, preflightGoogleRow, writeGoogleRowByKey, updateGoogleCellChecked, createGoogleColumn, findGoogleRows } from './sheets-api.mjs';
 import { demoSheet, DEMO_SHEET_COLUMNS } from './demo-sheet.mjs';
 import { readDoneIssues } from './jira-api.mjs';
 import { sendOneMail } from './mail-api.mjs';
@@ -255,18 +255,47 @@ const sheetsUpdate = {
     { key: 'rowNumber', label: 'Row number (legacy positional mode)', type: 'string', help: 'Use keyColumn + keyValue instead for rows that may have moved since the trigger.' },
     { key: 'keyColumn', label: 'Stable unique key column', type: 'string' },
     { key: 'keyValue', label: 'Stable unique key value', type: 'string', help: 'Re-resolved immediately before each write; never falls back to row number when absent or ambiguous.' },
+    {key:'checked',label:'Verify selection, preconditions and readback',type:'boolean',default:false,help:'Required for controlled multi-field selection. Durable uncertain-effect stop. Still positional, not a lock: do not edit/sort during processing.'},
+    ...['match','check'].flatMap(kind=>Array.from({length:4},(_,i)=>[{key:kind+'Column'+(i+1),label:(kind==='match'?'Match':'Precondition')+' column '+(i+1),type:'string'},{key:kind+'Value'+(i+1),label:(kind==='match'?'Match':'Expected')+' value '+(i+1),type:'string',help:'Exact string; blank means empty cell. Flat fields safely accept trigger placeholders.'}]).flat()),
+    {key:'requireExpected',label:'Refuse a different existing target value',type:'boolean',default:false},
+    {key:'expectedValue',label:'Expected target value (empty allowed)',type:'string',help:'Already equal to the new value is also accepted without rewriting.'},
+    {key:'uniqueValue',label:'Require target value unique in this column',type:'boolean',default:false},
+    {key:'requiredColumns',label:'Required unique headers (comma separated)',type:'string'},
     { key: 'column', label: 'Column', type: 'string', required: true },
     { key: 'value', label: 'Value', type: 'string', required: true },
   ],
-  outputs: [{ key: 'updated', description: 'true when the cell was written' }],
+  outputs: [{key:'updated',description:'true after update (and readback in checked mode)'},{key:'value',description:'Verified cell value in checked mode'},{key:'written',description:'Checked mode: false if already equal, true if written'}],
   validate(cfg) {
-    const keyColumn = str(cfg.keyColumn, 'keyColumn', 60, false), keyValue = str(cfg.keyValue, 'keyValue', 200, !!keyColumn);
-    if (!keyColumn && keyValue) bad('keyColumn is required with keyValue');
-    return { ...sheetSource(cfg, false), rowNumber: str(cfg.rowNumber, 'rowNumber', 40, !keyColumn), keyColumn, keyValue, column: str(cfg.column, 'column', 60), value: str(cfg.value, 'value', 200) };
+    const keyColumn=str(cfg.keyColumn,'keyColumn',60,false),keyValue=str(cfg.keyValue,'keyValue',500,!!keyColumn);
+    if(!keyColumn&&keyValue)bad('keyColumn is required with keyValue');
+    const out={...sheetSource(cfg,false),keyColumn,keyValue,checked:bool(cfg.checked,false),column:str(cfg.column,'column',60),value:str(cfg.value,'value',500),requireExpected:bool(cfg.requireExpected,false),expectedValue:str(cfg.expectedValue,'expectedValue',500,false),uniqueValue:bool(cfg.uniqueValue,false),requiredColumns:str(cfg.requiredColumns,'requiredColumns',1000,false)};
+    for(const kind of ['match','check']){
+      const columns=new Set();
+      for(let i=1;i<=4;i++){
+        const col=str(cfg[kind+'Column'+i],kind+'Column'+i,60,false),val=str(cfg[kind+'Value'+i],kind+'Value'+i,500,false);
+        if(val&&!col)bad(kind+' column required with value');if(col&&columns.has(col))bad('Duplicate '+kind+' column');if(col)columns.add(col);
+        out[kind+'Column'+i]=col;out[kind+'Value'+i]=val;
+      }
+    }
+    const multi=[1,2,3,4].some(i=>out['matchColumn'+i]);
+    if((multi||[1,2,3,4].some(i=>out['checkColumn'+i])||out.requireExpected||out.uniqueValue||out.requiredColumns)&&!out.checked)bad('Guarded selection and conditions require checked mode');
+    if(multi&&keyColumn)bad('Choose stable key or multi-field selection, not both');
+    if(out.checked&&!multi&&!keyColumn)bad('Checked mode requires a stable key or multi-field selector');
+    if(out.checked&&out.source!=='google')bad('Checked mode requires a managed Google source');
+    out.rowNumber=str(cfg.rowNumber,'rowNumber',40,!keyColumn&&!multi);
+    return out;
   },
   async run(ctx) {
     const c = ctx.config;
     if (ctx.dryRun) { ctx.log('SIMULATION: Google Sheets update, no call or sheet mutation'); return { updated: false, dryRun: true }; }
+    if(c.checked){
+      const cfg=sheetsUpdate.validate(c);
+      if(Object.values(cfg).some(v=>typeof v==='string'&&v.includes('{{')))bad('Unresolved checked sheet input');
+      const pairs=kind=>Object.fromEntries([1,2,3,4].filter(i=>cfg[kind+'Column'+i]).map(i=>[cfg[kind+'Column'+i],cfg[kind+'Value'+i]]));
+      const matches=cfg.keyColumn?{[cfg.keyColumn]:cfg.keyValue}:pairs('match');
+      const auth=googleAuth(ctx.settings);if(!auth)bad('Configure a managed Google Sheets connection first');
+      return updateGoogleCellChecked(auth,cfg,{matches,checks:pairs('check'),column:cfg.column,value:cfg.value,requireExpected:cfg.requireExpected,expectedValue:cfg.expectedValue,uniqueValue:cfg.uniqueValue,requiredColumns:cfg.requiredColumns.split(',').map(x=>x.trim()).filter(Boolean)},ctx.markEffectPending);
+    }
     const demoMatches = c.source === 'demo-sheet' && c.keyColumn ? demoSheet.rows().filter(r => String(r.values[c.keyColumn] ?? '') === c.keyValue) : [];
     if (c.source === 'demo-sheet' && c.keyColumn && demoMatches.length !== 1) bad('sheet key must match exactly one row');
     const rowNumber = c.source === 'demo-sheet' && c.keyColumn ? demoMatches[0].rowNumber : Number(c.rowNumber);
@@ -320,35 +349,6 @@ const sheetsAddRow = {
     const result = await writeGoogleRow(auth, c, values);
     ctx.log(`Google Sheets: row ${result?.row ?? '?'} appended (REAL external write, not reverted by the run branch, not idempotent)`);
     return { rowNumber: Number(result?.row ?? 0) || undefined };
-  },
-};
-
-const sheetsInitializeEmail = {
-  type: 'google-sheets-initialize-email', family: 'Google Sheets', label: 'Initialize candidate email (assisted demo)', simulated: false, category: 'real',
-  description: 'REAL external write for an assisted demo with no concurrent sheet edits. Matches exact source fields, refuses ambiguity, changed or foreign email and collisions, re-reads before/after writing. Google writes remain positional: this is not a lock or compare-and-swap. Uncertain writes stop for review. Computes nothing: pass the workflow-calculated email.',
-  fields: [...sheetSourceFields,
-    ...['nom','prenom','departement','role'].map(key=>({key,label:key,type:'string',required:['nom','prenom'].includes(key),help:'Exact source identity value from the trigger; missing optional values mean empty string.'})),
-    {key:'email',label:'Calculated email',type:'string',required:true},
-    {key:'requiredColumns',label:'Required unique headers (comma separated)',type:'string'},
-  ],
-  outputs:[{key:'email',description:'Recorded email, verified by readback'},{key:'initialized',description:'true only after successful checks'},{key:'written',description:'false if already initialized to the same address'}],
-  validate(cfg) {
-    const identity=Object.fromEntries(['nom','prenom','departement','role'].map(k=>{
-      const value=cfg[k]??'';
-      if(typeof value!=='string'||value.length>500||(['nom','prenom'].includes(k)&&!value.trim()))bad(k+': exact source string required');
-      return [k,value];
-    }));
-    const email=str(cfg.email,'email',254);if(!email.includes('{{')&&!/^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(email))bad('email: one calculated address required');
-    return {...sheetSource(cfg),...identity,email,requiredColumns:str(cfg.requiredColumns,'requiredColumns',1000,false)};
-  },
-  async run(ctx) {
-    if(ctx.test||ctx.dryRun){ctx.log('SIMULATION: candidate email initialization, nothing read or written');return {email:ctx.config.email,initialized:false,written:false,dryRun:true};}
-    if (['email','nom','prenom','departement','role'].some(k=>String(ctx.config[k]??'').includes('{{'))) bad('Unresolved candidate email initialization input');
-    const c=sheetsInitializeEmail.validate(ctx.config);
-    if(c.source!=='google')bad('Candidate email initialization requires a managed Google source in Real mode');
-    const auth=googleAuth(ctx.settings);if(!auth)bad('Configure a managed Google Sheets connection first');
-    const out=await initializeGoogleEmail(auth,c,{nom:c.nom,prenom:c.prenom,departement:c.departement,role:c.role,process:'OK',cree:'',ticket:'','badge-fait':''},c.email,c.requiredColumns.split(',').map(x=>x.trim()).filter(Boolean),ctx.markEffectPending);
-    ctx.log('Candidate email checked on the source sheet; no account or ticket created by this step');return out;
   },
 };
 
@@ -1155,7 +1155,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsInitializeEmail, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamSendTemplateMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamSendTemplateMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {

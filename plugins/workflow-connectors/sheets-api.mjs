@@ -83,38 +83,36 @@ export async function findGoogleRows(auth, source, columnName, searchValue, limi
 }
 
 
-/** Assisted-demo initialization only: Google updates are positional, not conditional or locked.
- * Re-read identity and the full source row before writing; stop on any drift or uncertain response.
- */
-export async function initializeGoogleEmail(auth, source, expected, email, requiredColumns = [], markPending, run = runPieceAction) {
-  const identityKeys = ['nom','prenom','departement','role'];
-  const expectedKeys = Object.keys(expected);
+/** Generic guarded single-cell update. The underlying Activepieces action remains positional,
+ * so an assisted no-edit window is required; this is not a lock or compare-and-swap. */
+export async function updateGoogleCellChecked(auth, source, options, markPending, run = runPieceAction) {
+  const { matches, checks = {}, column, value, requiredColumns = [], uniqueValue = false, requireExpected = false, expectedValue = '' } = options;
+  if (!matches || !Object.keys(matches).length || !Object.values(matches).some(v=>v!=='')) throw new Error('A nonempty source selector is required');
   const canonical = values => JSON.stringify(Object.entries(values).filter(([,v]) => v !== '' && v != null).map(([k,v]) => [k,String(v)]).sort(([a],[b]) => a.localeCompare(b)));
-  function select(snapshot) {
+  function select(snapshot, afterWrite = false) {
     if (new Set(snapshot.map(r=>r.rowNumber)).size !== snapshot.length) throw new Error('Google Sheet returned duplicate row positions');
     const header = snapshot.find(r => r.rowNumber === 1);
     const names = Object.values(header?.values ?? {}).map(String);
     if (new Set(names).size !== names.length) throw new Error('Google Sheet headers must be unique');
-    const needed = [...new Set([...expectedKeys, 'email', ...requiredColumns])];
+    const needed = [...new Set([...Object.keys(matches), ...Object.keys(checks), column, ...requiredColumns])];
     const letters = Object.fromEntries(needed.map(name => [name, Object.keys(namedColumns(header, { [name]: 'check' }))[0]]));
-    const matches = snapshot.filter(r => r.rowNumber > 1 && identityKeys.every(k => String(r.values[letters[k]] ?? '') === expected[k]));
-    if (matches.length !== 1) throw new Error('Sheet source identity must match exactly one row');
-    const row = matches[0];
-    if (!expectedKeys.every(k=>String(row.values[letters[k]]??'')===expected[k])) throw new Error('Sheet source is no longer eligible for initialization');
-    const current = String(row.values[letters.email] ?? '');
-    if (current && current.toLowerCase() !== email.toLowerCase()) throw new Error('Sheet source email is already different; nothing overwritten');
-    if (snapshot.some(r => r.rowNumber > 1 && r.rowNumber !== row.rowNumber && String(r.values[letters.email] ?? '').trim().toLowerCase() === email.toLowerCase())) throw new Error('Calculated email already belongs to another sheet row');
-    return { header, row, current, emailLetter: letters.email };
+    const wanted = afterWrite && column in matches ? {...matches,[column]:value} : matches;
+    const found = snapshot.filter(r=>r.rowNumber>1 && Object.entries(wanted).every(([k,v])=>String(r.values[letters[k]]??'')===v));
+    if(found.length!==1) throw new Error('Sheet selector must match exactly one row');
+    const row=found[0], current=String(row.values[letters[column]]??'');
+    if(!Object.entries(checks).every(([k,v])=>String(row.values[letters[k]]??'')===(k===column&&(afterWrite||current===value)?value:v))) throw new Error('Sheet source precondition failed');
+    if(!afterWrite && requireExpected && current!==expectedValue && current!==value) throw new Error('Sheet target differs from the expected value; nothing overwritten');
+    if(uniqueValue && snapshot.some(r=>r.rowNumber>1 && r.rowNumber!==row.rowNumber && String(r.values[letters[column]]??'').trim().toLowerCase()===value.toLowerCase())) throw new Error('Target value already belongs to another sheet row');
+    return {header,row,current,letter:letters[column]};
   }
-  const read = async () => select(await readGoogleRows(auth, source, false, run));
-  const first = await read(), second = await read();
-  if (canonical(first.header.values) !== canonical(second.header.values) || canonical(first.row.values) !== canonical(second.row.values)) throw new Error('Sheet source changed during initialization; reconcile before retry');
-  if (second.current) return { email: second.current, initialized: true, written: false };
-  if (typeof markPending !== 'function') throw new Error('Durable sheet effect tracking is unavailable');
-  await markPending({ kind: 'sheet-email-initialization' });
-  await run(PACKAGE, 'update_row', { auth, propsValue: { spreadsheetId: source.spreadsheetId, sheetId: source.sheetId, includeTeamDrives: false, first_row_headers: true, as_string: true, values: { [second.emailLetter]: email }, row_id: second.row.rowNumber } });
-  const after = await read();
-  const wanted = { ...second.row.values, [second.emailLetter]: email };
-  if (canonical(after.header.values) !== canonical(second.header.values) || canonical(after.row.values) !== canonical(wanted) || after.current !== email) throw new Error('Sheet initialization readback differs; external effect needs review');
-  return { email: after.current, initialized: true, written: true };
+  const read=async(after=false)=>select(await readGoogleRows(auth,source,false,run),after);
+  const first=await read(), second=await read();
+  if(canonical(first.header.values)!==canonical(second.header.values)||canonical(first.row.values)!==canonical(second.row.values)) throw new Error('Sheet source changed before write');
+  if(second.current===value)return {value:second.current,updated:true,written:false};
+  if(typeof markPending!=='function')throw new Error('Durable sheet effect tracking is unavailable');
+  await markPending({kind:'sheet-cell-update'});
+  await run(PACKAGE,'update_row',{auth,propsValue:{spreadsheetId:source.spreadsheetId,sheetId:source.sheetId,includeTeamDrives:false,first_row_headers:true,as_string:true,values:{[second.letter]:value},row_id:second.row.rowNumber}});
+  const after=await read(true), wanted={...second.row.values,[second.letter]:value};
+  if(canonical(after.header.values)!==canonical(second.header.values)||canonical(after.row.values)!==canonical(wanted)||after.current!==value)throw new Error('Sheet update readback differs; external effect needs review');
+  return {value:after.current,updated:true,written:true};
 }
