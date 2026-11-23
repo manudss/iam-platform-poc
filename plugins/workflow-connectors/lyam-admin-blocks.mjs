@@ -288,7 +288,7 @@ const lyamUpdateUser = writeBlock('lyam-update-user', 'Update a user', 'REAL wri
 const lyamSetLoginEnabled = writeBlock('lyam-set-login-enabled', 'Enable or disable a login', 'REAL write ON THE RUN BRANCH: sets the login_enabled flag of an account (the account blocks of lyam-block-account act immediately; a login flag is versioned data and is reviewed like every other change).', [
     { key: 'id', label: 'User id', type: 'string', required: true },
     { key: 'enabled', label: 'Login enabled', type: 'select', options: ['yes', 'no'], default: 'yes', required: true },
-], (cfg) => ({ id: userId(cfg.id, 'lyam-set-login-enabled.id'), enabled: str(cfg.enabled, 'enabled', 3) === 'yes' }), async (ctx) => {
+], (cfg) => ({ id: userId(cfg.id, 'lyam-set-login-enabled.id'), enabled: typeof cfg.enabled === 'boolean' ? cfg.enabled : str(cfg.enabled, 'enabled', 3) === 'yes' }), async (ctx) => {
     const c = ctx.config;
     if (ctx.test || ctx.dryRun) { ctx.log(`test run: would set login_enabled=${c.enabled} for "${c.id}" on the run branch`); return { id: c.id, enabled: c.enabled, updated: false }; }
     await ctx.branchWrite(async (db) => {

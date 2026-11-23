@@ -14,6 +14,8 @@ import { WorkflowEngine } from '../workflows/engine.js';
 import { BlockStore } from '../accounts/block-store.js';
 import { canSignIn } from '../accounts/blocks.js';
 import { branchContext } from '../workspace/context.js';
+import { externalBlock } from '../workflows/model.js';
+import { OFFICIAL_TEMPLATES } from '../workflows/templates-catalog.js';
 import { WorkspacePublisher } from '../workspace/workspace-publisher.js';
 // UsersService temporary password, first access and credential revision on a REAL Dolt, with a credential file in a temp dir. Fictional accounts only. Skipped when DOLT_BIN is missing (CI provides it).
 const bin = process.env.DOLT_BIN ?? '', have = existsSync(bin);
@@ -87,6 +89,35 @@ describe('UsersService temporary password on real Dolt', { skip: !have && 'DOLT_
     assert.equal(await rev('fict-a'), r1);
     assert.equal(await svc.authenticate('acme-demo', 'fict-a', TEMP + '3'), true);
     const st = await svc.firstAccessState('acme-demo', 'fict-a'); assert.equal(st.required && st.revision, r1);
+  });
+  it('official badge templates must make a newly disabled account usable after temporary credential publication', async () => {
+    const phase1 = OFFICIAL_TEMPLATES.find(t => t.id === 'badge-request-from-sheet')!;
+    const phase2 = OFFICIAL_TEMPLATES.find(t => t.id === 'badge-done-temporary-password')!;
+    const id = 'fict-badge-login';
+    await v.createBranch('run-badge-create', 'main');
+    process.env.IAM_WORKSPACE_MODE = '1';
+    const commit = async (c: any) => { const [r] = await c.query('select * from dolt_status'); if (r.length) { await c.query("call dolt_add('-A')"); await c.query("call dolt_commit('-m','fictional badge fixture')"); } };
+    try {
+      const create = phase1.nodes.find(n => n.type === 'lyam-create-user')!;
+      await externalBlock(create.type)!.run({ tenant: 'acme-demo', runId: 'badge-create', nodeId: create.id, config: { identity: id, displayName: 'Fictional Badge', email: 'fixture@example.invalid' }, outputs: {}, settings: {}, dryRun: false, log() {}, branchWrite: (fn: any) => branchContext.run({ branch: 'run-badge-create' }, () => v.writeOn('run-badge-create', async c => { await fn(c); await commit(c); })) } as any);
+      await v.lock(() => v.at('main', async c => { await c.query("call dolt_merge('run-badge-create')"); }));
+      assert.equal(!!(await svc.list('main')).find(x => x.id === id)!.login_enabled, false);
+      await v.createBranch('run-badge-done', 'main');
+      await branchContext.run({ branch: 'run-badge-done' }, () => svc.setTemporaryPassword('acme-demo', 'workflow:badge-done', id, TEMP + 'Badge', 24));
+      // The unmodified official graph leaves this account disabled: this assertion was red before the fix.
+      // This is selected-block integration, not the whole engine/provider journey.
+      for (const node of phase2.nodes.filter(n => n.type === 'lyam-set-login-enabled')) {
+        await externalBlock(node.type)!.run({ config: externalBlock(node.type)!.validate({ ...node.config, id }), dryRun: false, log() {}, branchWrite: (fn: any) => branchContext.run({ branch: 'run-badge-done' }, () => v.writeOn('run-badge-done', async c => { await fn(c); await commit(c); })) } as any);
+      }
+      await v.lock(() => v.at('main', async c => { await c.query("call dolt_merge('run-badge-done')"); }));
+      assert.equal(await svc.authenticate('acme-demo', id, TEMP + 'Badge'), true, 'badge-done publication must leave directory login enabled, not merely a valid credential');
+      assert.equal((await svc.firstAccessState('acme-demo', id)).required, true);
+      const first = await svc.firstAccessState('acme-demo', id); assert.equal(first.required, true);
+      assert.deepEqual(await svc.completeFirstAccess('acme-demo', id, NEXT + 'Badge', first.required ? first.revision : ''), { ok: true });
+      assert.equal(await svc.authenticate('acme-demo', id, TEMP + 'Badge'), false);
+      assert.equal(await svc.authenticate('acme-demo', id, NEXT + 'Badge'), true);
+      assert.deepEqual(await svc.firstAccessState('acme-demo', id), { required: false });
+    } finally { delete process.env.IAM_WORKSPACE_MODE; }
   });
   it('block and temporary password written concurrently both hold; the unblock lifts only blocks its own run set and survives a concurrent lift', async () => {
     const blocks = new BlockStore(join(dir, 'blocks', 'b.json'));

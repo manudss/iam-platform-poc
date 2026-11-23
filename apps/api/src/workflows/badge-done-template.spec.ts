@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateGraph, substituteEventPayload } from './model.js';
+import { externalBlock, validateGraph, substituteEventPayload } from './model.js';
 import { OFFICIAL_TEMPLATES } from './templates-catalog.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { RunSecrets } from './run-secrets.js';
@@ -42,12 +42,12 @@ function world(opts: { hang?: 'publish' | 'mail' | 'unblock'; head2?: string; ro
   const row: any = { id: runId, tenant: 'acme', definition_id: 'wf-done', name: 't', graph, branch: null, base_branch: null, status: 'queued', error: null, started_by: 'jira', started_at: 'now', finished_at: null, test: false };
   const steps = new Map<string, any>(); for (const id of order) steps.set(id, { run_id: runId, node_id: id, status: 'pending', simulated: false, attempts: 0, error: null, log: [], input: null, output: null, started_at: null, finished_at: null });
   const store = { getRunById: async (id: string) => (id === runId ? row : null), updateRun: async (_i: string, p: any) => { Object.assign(row, p); }, transitionRun: async (_i: string, p: any, from: string[]) => { if (!from.includes(row.status as string)) return false; Object.assign(row, p); return true; }, runningRuns: async () => (row.status === 'running' ? [row] : []), step: async (_r: string, n: string) => steps.get(n) ?? null, steps: async () => [...steps.values()], patchStep: async (_r: string, n: string, p: any) => { Object.assign(steps.get(n), p); if (n === 'gen' && p.status === 'done') opts.onGenerate?.(); } };
-  const state = { email: 'bao@example.test', fa: null as any, blocks: opts.blocks ?? (opts.blocked === false ? [] : [{ kind: 'suspended', setBy: 'workflow:run-a1' }]), passwords: [] as string[], hung: '' as string, headCalls: 0, publishHeads: [] as string[] };
+  const state = { email: 'bao@example.test', fa: null as any, blocks: opts.blocks ?? (opts.blocked === false ? [] : [{ kind: 'suspended', setBy: 'workflow:run-a1' }]), loginEnabled: false, passwords: [] as string[], hung: '' as string, headCalls: 0, publishHeads: [] as string[] };
   const hangNow = (what: string) => { state.hung = what; return new Promise<never>(() => {}); };
   const HEAD = 'abcdef0123456789', MAIN = 'main000111222333';
   const deps = {
     store, secrets, log: { warn() {}, error() {} },
-    versioning: { createBranch: async () => ({}), writeOn: async (_b: string, fn: any) => fn({ query: async () => [[]] }), defaultBranch: 'main' },
+    versioning: { createBranch: async () => ({}), writeOn: async (_b: string, fn: any) => fn({ query: async (sql: string, args: any[]) => { if (sql.includes('information_schema.columns')) return [[{ column_name: 'login_enabled' }]]; if (sql.startsWith('update identities set login_enabled')) { state.loginEnabled = !!args[0]; calls.push('enable'); return [{ affectedRows: 1 }]; } if (sql.includes('dolt_status')) return [[{ n: 0 }]]; return [[]]; } }), defaultBranch: 'main' },
     authorOf: (a: string) => a, branchRun: async (_b: string, fn: any) => fn(),
     settingsFor: opts.settingsFor ?? (async () => ({ mailAllowedRecipients: 'bao@example.test' })),
     connectionFor: opts.connectionFor,
@@ -82,8 +82,19 @@ describe('badge templates: structure', () => {
     const { order } = validateGraph({ nodes: tpl('badge-done-temporary-password').nodes, edges: tpl('badge-done-temporary-password').edges });
     const at = (id: string) => order.indexOf(id);
     assert.ok(at('resolve') < at('find') && at('find') < at('one') && at('one') < at('gen'));
-    assert.ok(at('gen') < at('set') && at('set') < at('publish') && at('publish') < at('mail') && at('mail') < at('unblock') && at('unblock') < at('mark') && at('mark') < at('done'));
+    assert.ok(at('gen') < at('set') && at('set') < at('enable') && at('enable') < at('publish') && at('publish') < at('mail') && at('mail') < at('unblock') && at('unblock') < at('mark') && at('mark') < at('done'));
     const e = tpl('badge-done-temporary-password').edges; assert.ok(e.some((x: any) => x.from === 'one' && x.to === 'stop' && x.label === 'false'));
+  });
+  it('login enablement is explicit, versioned, and validation survives a graph round trip', () => {
+    const node = tpl('badge-done-temporary-password').nodes.find(n => n.id === 'enable')!;
+    assert.equal(node.type, 'lyam-set-login-enabled');
+    assert.deepEqual(node.config, { id: '{{steps.resolve.account}}', enabled: 'yes' });
+    const b = externalBlock(node.type)!;
+    for (const enabled of ['yes', 'no']) {
+      const once = b.validate({ id: 'fictional.badge', enabled });
+      assert.deepEqual(b.validate(once), once);
+      assert.equal(once.enabled, enabled === 'yes');
+    }
   });
   it('phase 1 creates, publishes and blocks the account before the ticket, and records the link before marking the row', () => {
     const { order } = validateGraph({ nodes: tpl('badge-request-from-sheet').nodes, edges: tpl('badge-request-from-sheet').edges }); const at = (id: string) => order.indexOf(id);
@@ -164,23 +175,24 @@ describe('badge done: early feasibility and late revocation', () => {
   }));
   it('revocation after temporary write refuses publication, retaining the block and claimed link', async () => withMail(async () => {
     let allowed = true; const w = world({ settingsFor: async () => ({ mailAllowedRecipients: allowed ? 'bao@example.test' : '' }), onSet: () => { allowed = false; } });
-    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary']); assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1); assert.equal([...w.links.m.values()][0].status, 'claimed');
+    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary', 'enable']); assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1); assert.equal([...w.links.m.values()][0].status, 'claimed');
   }));
   it('revocation while waiting for the publication queue is rechecked before the merge', async () => withMail(async () => {
     let allowed = true; const w = world({ settingsFor: async () => ({ mailAllowedRecipients: allowed ? 'bao@example.test' : '' }), beforePublishCheck: () => { allowed = false; } });
-    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary']); assert.equal(FakeMail.calls.length, 0);
+    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary', 'enable']); assert.equal(FakeMail.calls.length, 0);
   }));
   it('revocation after publication is still refused at final mail, with no unblock or completion', async () => withMail(async () => {
     let allowed = true; const w = world({ settingsFor: async () => ({ mailAllowedRecipients: allowed ? 'bao@example.test' : '' }), onPublish: () => { allowed = false; } });
-    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary', 'publish']); assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1);
+    await settle(w); assert.equal(w.row.status, 'failed'); assert.deepEqual(w.calls, ['claim', 'setTemporary', 'enable', 'publish']); assert.equal(FakeMail.calls.length, 0); assert.equal(w.state.blocks.length, 1);
   }));
 });
 
 describe('badge done on the real engine', () => {
-  it('nominal: claim, set, publish, mail, unblock, mark, complete in that order; the password reaches only the user service and the mail; the link ends done', async () => withMail(async () => {
+  it('nominal: claim, set, enable, publish, mail, unblock, mark, complete in that order; the password reaches only the user service and the mail; the link ends done', async () => withMail(async () => {
     const w = await settle(world());
     assert.equal(w.row.status, 'completed', JSON.stringify([w.row.error, [...w.steps.values()].map((s: any) => [s.node_id, s.status, s.error])]));
-    assert.deepEqual(w.calls, ['claim', 'setTemporary', 'publish', 'unblock', 'complete']);
+    assert.deepEqual(w.calls, ['claim', 'setTemporary', 'enable', 'publish', 'unblock', 'complete']);
+    assert.equal(w.state.loginEnabled, true);
     assert.equal(FakeMail.calls.length, 1);
     const [pw] = w.state.passwords; assert.ok(FakeMail.calls[0].payload.text.includes(pw));
     assert.equal(FakeMail.calls[0].payload.to, 'bao@example.test');
