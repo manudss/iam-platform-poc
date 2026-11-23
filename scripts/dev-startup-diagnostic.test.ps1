@@ -91,6 +91,7 @@ upstream said token=sekrit99 authorization: Bearer abcdef123456789 password=hunt
   if ([System.IO.File]::ReadAllText((Join-Path $fx1 'apps/api/src/main.ts')) -notlike '*edited after the patch*') { Fail 'restore overwrote a file changed after the patch' }
   if (-not (Test-Path (Join-Path $fx1 '.startup-diagnostic-backup/main.ts.orig'))) { Fail 'refused restore must keep the backup' }
   if ((Get-FileHash (Join-Path $fx1 'infra/docker-compose.dev.yml')).Hash -eq $composePatchedHash) { Fail 'untouched compose was not restored' }
+  if (Test-Path (Join-Path $fx1 '.startup-diagnostic-backup/docker-compose.dev.yml.orig')) { Fail 'a successful restore must consume the compose backup' }
 
   # 5) clean restore is byte-exact
   $fx2 = New-Fixture 'fx2'
@@ -102,6 +103,9 @@ upstream said token=sekrit99 authorization: Bearer abcdef123456789 password=hunt
   if ($r.Code -ne 0) { Fail ('clean restore exit=' + $r.Code + ' output: ' + $r.Output) }
   if ((Get-FileHash (Join-Path $fx2 'apps/api/src/main.ts')).Hash -ne $mainBefore) { Fail 'main.ts restore not byte-exact' }
   if ((Get-FileHash (Join-Path $fx2 'infra/docker-compose.dev.yml')).Hash -ne $compBefore) { Fail 'compose restore not byte-exact' }
+  if (Test-Path (Join-Path $fx2 '.startup-diagnostic-backup/main.ts.orig')) { Fail 'clean restore must consume the main.ts backup' }
+  if (Test-Path (Join-Path $fx2 '.startup-diagnostic-backup/docker-compose.dev.yml.orig')) { Fail 'clean restore must consume the compose backup' }
+  if (Test-Path (Join-Path $fx2 '.startup-diagnostic-backup/state.txt')) { Fail 'clean restore must clear the state file' }
 
   # 6) unexpected compose format aborts EVERYTHING (main.ts untouched too)
   $fx3 = New-Fixture 'fx3'
@@ -125,6 +129,23 @@ upstream said token=sekrit99 authorization: Bearer abcdef123456789 password=hunt
   [System.IO.File]::WriteAllText((Join-Path $fx5 'infra/docker-compose.dev.yml'), "environment:`n  IAM_WORKSPACE_MODE: `"1`"", (New-Object System.Text.UTF8Encoding($false)))
   $r = Invoke-Diag @('-FixtureRoot', $fx5)
   if ($r.Code -ne 0) { Fail ('seedless compose apply exit=' + $r.Code) }
+
+  # 9) cycle: apply -> restore -> legitimate edit -> apply again -> the new backup holds the
+  #    EDITED file (a stale backup from the first cycle would silently revert the edit)
+  $fx6 = New-Fixture 'fx6'
+  $r = Invoke-Diag @('-FixtureRoot', $fx6)
+  if ($r.Code -ne 0) { Fail ('fx6 apply exit=' + $r.Code) }
+  $r = Invoke-Diag @('-FixtureRoot', $fx6, '-Restore')
+  if ($r.Code -ne 0) { Fail ('fx6 restore exit=' + $r.Code) }
+  [System.IO.File]::AppendAllText((Join-Path $fx6 'apps/api/src/main.ts'), '// legitimate edit between cycles')
+  $r = Invoke-Diag @('-FixtureRoot', $fx6)
+  if ($r.Code -ne 0) { Fail ('fx6 re-apply exit=' + $r.Code + ' output: ' + $r.Output) }
+  $bak2 = [System.IO.File]::ReadAllText((Join-Path $fx6 '.startup-diagnostic-backup/main.ts.orig'))
+  if ($bak2 -notlike '*legitimate edit between cycles*') { Fail 'second-cycle backup is stale: it would revert the legitimate edit' }
+  if ($bak2 -like '*instanceof Error*') { Fail 'second-cycle backup captured the PATCHED file' }
+  $r = Invoke-Diag @('-FixtureRoot', $fx6, '-Restore')
+  if ($r.Code -ne 0) { Fail ('fx6 second restore exit=' + $r.Code) }
+  if ([System.IO.File]::ReadAllText((Join-Path $fx6 'apps/api/src/main.ts')) -notlike '*legitimate edit between cycles*') { Fail 'second-cycle restore lost the legitimate edit' }
 
   Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
   Note 'STARTUP DIAGNOSTIC SELF-TEST PASSED'

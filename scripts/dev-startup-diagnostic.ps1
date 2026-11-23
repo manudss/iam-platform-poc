@@ -9,6 +9,8 @@
 #   -Collect : copies the persisted API log out of the stack (running, stopped or removed),
 #              keeps the last "startup failed" block, masks secrets best-effort, and writes
 #              startup-diagnostic.txt to send back. Temporary copies are deleted right away.
+#   A successful restore CONSUMES the backup (deleted), so the next apply saves the current
+#   state fresh - a stale backup can never overwrite newer changes in a later patch/restore cycle.
 #   -Restore : puts the original files back from the backups, but ONLY when the current file
 #              still matches the recorded post-patch hash; otherwise it refuses and keeps the
 #              backup, so changes made after the patch are never overwritten. Never runs git
@@ -88,6 +90,18 @@ function Set-State([string]$name, [string]$sha) {
   [System.IO.File]::WriteAllLines($stateFile, $lines, $utf8NoBom)
 }
 
+function Clear-State([string]$name) {
+  $h = Read-State
+  $h.Remove($name)
+  if ($h.Count -eq 0) {
+    if (Test-Path -LiteralPath $stateFile) { Remove-Item -LiteralPath $stateFile -Force }
+  } else {
+    $lines = @()
+    foreach ($k in $h.Keys) { $lines += ($k + '=' + $h[$k]) }
+    [System.IO.File]::WriteAllLines($stateFile, $lines, $utf8NoBom)
+  }
+}
+
 # Classifies a file WITHOUT touching it: 'patch' (exact expected content), 'done' (already in
 # the target state), 'absent-ok' (compose without any seed line = provably inactive), else
 # 'unexpected'/'missing' -> the caller aborts everything before any write.
@@ -128,7 +142,9 @@ if ($Restore) {
       continue
     }
     [System.IO.File]::WriteAllBytes($f, [System.IO.File]::ReadAllBytes($bak))
-    Write-Host ('restored: ' + $f)
+    Remove-Item -LiteralPath $bak -Force
+    Clear-State $name
+    Write-Host ('restored: ' + $f + ' (backup consomme : un futur patch re-sauvegardera l etat du moment)')
     $restored = $true
   }
   if ($refused) { exit 1 }
