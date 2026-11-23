@@ -133,11 +133,11 @@ describe('candidate email initialization via installed piece (intercepted Google
   nock('https://oauth2.googleapis.com').persist().post('/token').reply(200,{access_token:'FICTIONAL',token_type:'Bearer',expires_in:3600});
   nock('https://www.googleapis.com').persist().post('/oauth2/v4/token').reply(200,{access_token:'FICTIONAL',token_type:'Bearer',expires_in:3600});
   const model=loadPluginModule('workflows-iga','model.mjs') as any;
-  const graph=model.substituteEventPayload({nodes:[{id:'init',type:'google-sheets-initialize-email',config:{...source,nom:'{{event.nom}}',prenom:'{{event.prenom}}',departement:'{{event.departement}}',role:'',email:'camille.martin@dss.name'}}],edges:[]},{nom,prenom,departement});
-  const block=externalBlock('google-sheets-initialize-email')!;
-  const config=block.validate(graph.nodes[0].config);assert.equal(config.nom,nom);assert.equal(config.prenom,prenom);assert.equal(config.departement,departement);
+  const graph=model.substituteEventPayload({nodes:[{id:'init',type:'google-sheets-update',config:{...source,checked:true,matchColumn1:'nom',matchValue1:'{{event.nom}}',matchColumn2:'prenom',matchValue2:'{{event.prenom}}',matchColumn3:'departement',matchValue3:'{{event.departement}}',matchColumn4:'role',matchValue4:'',checkColumn1:'process',checkValue1:'OK',checkColumn2:'cree',checkValue2:'',checkColumn3:'ticket',checkValue3:'',checkColumn4:'badge-fait',checkValue4:'',column:'email',value:'camille.martin@dss.name',uniqueValue:true,requireExpected:true}}],edges:[]},{nom,prenom,departement});
+  const block=externalBlock('google-sheets-update')!;
+  const config=block.validate(graph.nodes[0].config);assert.equal(config.matchValue1,nom);assert.equal(config.matchValue2,prenom);assert.equal(config.matchValue3,departement);
   const out=await block.run({config,settings:{googleServiceAccount:secret},dryRun:false,log(){},markEffectPending:async()=>{marked=true;}} as any);
-  assert.deepEqual(out,{email:'camille.martin@dss.name',initialized:true,written:true});assert.equal(writes,1);
+  assert.deepEqual(out,{value:'camille.martin@dss.name',updated:true,written:true});assert.equal(writes,1);
   const again=await block.run({config,settings:{googleServiceAccount:secret},dryRun:false,log(){},markEffectPending:async()=>{throw Error('no second intent');}} as any);assert.equal(again!.written,false);assert.equal(writes,1);
  });
 });
