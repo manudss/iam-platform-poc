@@ -68,7 +68,11 @@ runtime state uses the same durable mutex per definition/node. The mutex does
 not expire: after a process crash, calls stop rather than overlap an uncertain
 provider call. Before releasing a stranded `lyam:lock`, an operator must stop
 the former worker and reconcile provider effects and subscription channels.
-There is not yet an in-app recovery/status panel. Do not call this production
-ready until that panel, lifecycle fault tests and delivery routing are verified.
+The Connections page exposes a read-only runtime status panel: subscription
+status, retained mutex and pending delivery count, with operator recovery guidance.
+It never exposes webhook tokens, native state, payloads or lock owners and has no
+unsafe clear/retry button. Recovery remains an operator procedure, not an
+automatic unlock. Live callback delivery and representative account effects
+still require qualification before a production-ready verdict.
 The last reviewed state of this branch has no live credentials, registration,
 workflow activation or Google changes performed by the development task.
