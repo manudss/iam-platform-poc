@@ -30,5 +30,5 @@ for (const c of candidates) {
   }
 }
 if (!connected) {
-  console.log('No candidate credential was accepted. Next read-only step: stop the dolt service and read the stored accounts directly (docker compose ... stop dolt, then docker compose ... run --rm --entrypoint dolt dolt sql -q "SELECT User, Host FROM mysql.user").');
+  console.log('No candidate credential was accepted. Do NOT reset anything: the next step is an offline, read-only listing of the stored accounts, using the exact image and data volume of the existing dolt container (credentials and data preserved). Use only the verified sequence for that step.');
 }
