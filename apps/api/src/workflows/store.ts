@@ -597,9 +597,12 @@ export class WorkflowStore {
       if (sets.length) await m.query(`update iga_items set ${sets.join(', ')} where id = ?`, [...vals, id]);
     } finally { await m.end(); }
   }
-  async igaCloseCampaign(id: string, actor: string, at: string, evidence: Record<string, unknown>): Promise<void> {
+  async igaCloseCampaign(id: string, actor: string, at: string, evidence: Record<string, unknown>): Promise<boolean> {
     const m = await this.meta();
-    try { await m.query("update iga_campaigns set status = 'closed', closed_by = ?, closed_at = ?, evidence = ? where id = ?", [actor, at, JSON.stringify(evidence), id]); } finally { await m.end(); }
+    try {
+      const [r] = await m.query("update iga_campaigns set status = 'closed', closed_by = ?, closed_at = ?, evidence = ? where id = ? and status = 'open'", [actor, at, JSON.stringify(evidence), id]);
+      return (r as { affectedRows: number }).affectedRows === 1;
+    } finally { await m.end(); }
   }
 
   /** Every open task past its deadline and not yet reminded, across ALL tenants (the cron scan is

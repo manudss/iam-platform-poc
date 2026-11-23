@@ -558,13 +558,39 @@ const igaCloseCampaign = {
     async run(ctx) {
         const c = ctx.config;
         const iga = need(ctx.iga, 'iga-close-campaign');
+        // Crash boundary: the close can COMMIT (campaign closed, evidence stored) while the step result is never
+        // recorded; the resumed run then calls close again and gets 409 "already closed". Accept ONLY this run's
+        // own committed close (closed_by = this run) and complete with the stored evidence: no second effect, and
+        // a closure by ANY other actor still fails the step instead of being silently adopted.
+        const closeIdempotent = async (input) => {
+            try {
+                return await iga.close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, input);
+            } catch (e) {
+                const status = typeof e?.getStatus === 'function' ? e.getStatus() : e?.status;
+                if (status !== 409 || !/already closed/.test(e?.message ?? '')) throw e;
+                const campaign = await iga.getCampaign(ctx.tenant, c.campaignId);
+                if (campaign?.status === 'closed' && campaign?.closed_by === `workflow:${ctx.runId}` && campaign?.evidence && typeof campaign.evidence.digest === 'string' && campaign.evidence.digest) {
+                    const proof = campaign.evidence;
+                    if (proof.digestFormat === 'sha256-json-sorted-keys-v1') {
+                        const canonical = v => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}` : JSON.stringify(v);
+                        if (proof.campaign !== c.campaignId || proof.closedBy !== `workflow:${ctx.runId}` || createHash('sha256').update(canonical({ ...proof, digest: null })).digest('hex') !== proof.digest)
+                            throw new Error('IGA evidence integrity check failed: reconcile the stored close');
+                    } else if (proof.digestFormat) throw new Error('Unsupported IGA evidence digest format');
+                    // Legacy evidence has no format. Preserve it byte-for-byte; its historical naive JSON
+                    // digest cannot reliably be recalculated after SQL reordered the keys. No rewrite.
+                    ctx.log(`campaign ${c.campaignId} was already closed by THIS run before the interruption: resuming with the committed evidence (digest ${String(campaign?.evidence?.digest).slice(0, 12)}...)`);
+                    return { campaign: c.campaignId, status: 'closed', evidence: campaign.evidence, resumed: true };
+                }
+                throw e;
+            }
+        };
         if (ctx.resumeWait?.taskId) {
             const chk = await need(ctx.tasks, 'iga-close-campaign').check(ctx.tenant, ctx.resumeWait.taskId);
             const t = chk.task;
             if (chk.state === 'decided' && t?.decision === 'approved') {
                 const approvedUnresolved = Array.isArray(t?.detail?.unresolved) ? t.detail.unresolved.map((u) => u?.item).filter(Boolean) : [];
-                const r = await iga.close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, { exception: { by: t.decided_by, justification: t.justification, approvedUnresolved } });
-                ctx.log(`campaign ${c.campaignId} closed with a human exception authorized by ${t.decided_by} (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
+                const r = await closeIdempotent({ exception: { by: t.decided_by, justification: t.justification, approvedUnresolved } });
+                if (!r.resumed) ctx.log(`campaign ${c.campaignId} closed with a human exception authorized by ${t.decided_by} (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
                 return r;
             }
             if (t?.status === 'canceled') bad('iga-close-campaign: the closure exception task was canceled');
@@ -573,8 +599,8 @@ const igaCloseCampaign = {
         }
         if (ctx.test || ctx.dryRun) { ctx.log(`test run: would close campaign ${c.campaignId}`); return { campaign: c.campaignId, status: 'test' }; }
         try {
-            const r = await iga.close(ctx.tenant, `workflow:${ctx.runId}`, c.campaignId, {});
-            ctx.log(`campaign ${c.campaignId} closed (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
+            const r = await closeIdempotent({});
+            if (!r.resumed) ctx.log(`campaign ${c.campaignId} closed (digest ${String(r.evidence?.digest).slice(0, 12)}...)`);
             return r;
         } catch (e) {
             const status = typeof e?.getStatus === 'function' ? e.getStatus() : e?.status;
