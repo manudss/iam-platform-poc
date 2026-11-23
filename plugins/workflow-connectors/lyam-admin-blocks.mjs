@@ -593,10 +593,10 @@ const igaReadOverdue = readBlock('iga-read-overdue', 'IGA: read the late reviews
     return r;
 });
 
-const igaReassignReviews = writeBlock('iga-reassign-review', 'IGA: replace an absent validator', 'REAL: moves the OPEN review tasks of a campaign from one decider to another (an absent validator). Only a run started by an admin or an IGA pool member may do it, and the replacement must be a member of the admin or IGA pool ("iga", "admin" or a pool id). Decided tasks and closed campaigns are untouched; a task about the new decider is refused and reported, never silently skipped. The deadline is kept. A test run only logs it.', [
+const igaReassignReviews = writeBlock('iga-reassign-review', 'IGA: replace an absent validator', 'REAL: moves the OPEN review tasks of a campaign from one decider to another (an absent validator). Only a run started by an admin or an IGA pool member may do it, and the replacement must be an active member of the admin or IGA pool ("iga", "admin" or a pool id), or "manager" to explicitly re-read and assign each reviewed person\'s current active manager on main. It does not grant admin rights to that manager. Decided tasks and closed campaigns are untouched; a task about the new decider is refused and reported, never silently skipped. The deadline is kept. A test run only logs it.', [
     { key: 'campaignId', label: 'Campaign id', type: 'string', required: true },
     { key: 'from', label: 'Absent validator (user id)', type: 'string', required: true },
-    { key: 'to', label: 'Replacement (user id, "iga" or "admin")', type: 'string', required: true },
+    { key: 'to', label: 'Replacement (pool user id, "iga", "admin" or "manager")', type: 'string', required: true },
     { key: 'reason', label: 'Reason (kept on the task)', type: 'string' },
 ], (cfg) => ({ campaignId: str(cfg.campaignId, 'iga-reassign-review.campaignId', 48), from: userId(cfg.from, 'iga-reassign-review.from'), to: str(cfg.to, 'iga-reassign-review.to', 64), reason: str(cfg.reason, 'iga-reassign-review.reason', 200, false) || 'validator absent' }), async (ctx) => {
     const c = ctx.config;
