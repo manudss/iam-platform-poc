@@ -2,7 +2,7 @@ import { Component, ElementRef, OnDestroy, OnInit, computed, effect, inject, sig
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { FormsModule } from '@angular/forms';
-import { Connection, Edge, MiniMapComponent, Node, Vflow, VflowComponent } from 'ngx-vflow';
+import { Connection, Edge, Node, Vflow, VflowComponent } from 'ngx-vflow';
 import { Session } from '../session';
 import {
   RunView, StepCategory, StepType, STEP_TYPES, TRIGGER_NODE_ID, WfBlock, WfBlockField, WfEdge, WfEvent,
@@ -28,7 +28,7 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
 // canvas with minimap / zoom / insert-on-link, right config drawer (Settings / Input / Output), bottom
 // status bar with live validation, and a test bar that runs the graph on a disposable branch. ----
 
-@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, MiniMapComponent, WbTabsBar], styleUrls: ['../pages.css', './editor-workbench.css'], styles: [
+@Component({ selector: 'app-workflow-edit', imports: [FormsModule, RouterLink, Vflow, WbTabsBar], styleUrls: ['../pages.css', './editor-workbench.css'], styles: [
   '.wb-managed {border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);padding:.8rem;margin:.8rem 0;} .wb-mode {display:flex;gap:.4rem;margin:.6rem 0;} .wb-mode .on {background:var(--acc2-soft);color:var(--acc2);border-color:var(--acc2);} .wb-real-dialog {box-sizing:border-box;width:min(520px,calc(100% - 2rem));max-height:90dvh;overflow:auto;padding:1.4rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);color:var(--ink);} .wb-real-dialog::backdrop {background:var(--scrim);} .wb-real-note {padding:.8rem;border:1px solid var(--warn-line);background:var(--warn-soft);color:var(--ink);border-radius:var(--radius);}',
   '.wb-active { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-weight: 600; } .wb-active.paused { color: var(--bad); }',
   '.ph-popup { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 6px 18px var(--shadow-color); overflow: hidden; }',
@@ -93,7 +93,6 @@ interface Snapshot { nodes: SnapshotNode[]; edges: WfEdge[] }
             <button class="wb-link-chip" [class.main]="!edgeLabelOf(ctx.edge)" [style.color]="branchStyle(edgeLabelOf(ctx.edge)).color" [attr.aria-label]="'Edit '+branchStyle(edgeLabelOf(ctx.edge)).text+' link from '+ctx.edge.source+' to '+ctx.edge.target" (click)="activeEdge.set(activeEdge()===ctx.edge.id ? '' : ctx.edge.id)">{{edgeLabelOf(ctx.edge) ? branchStyle(edgeLabelOf(ctx.edge)).text : '⋯'}}</button>
           </div>
         </ng-template>
-        <mini-map position="bottom-left" [maskColor]="'var(--panel)'" [strokeColor]="'var(--line)'" [scaleOnHover]="false" />
       </vflow>
       <select class="wb-step-jump" aria-label="Jump to step" (change)="jumpStep($any($event.target).value)"><option value="">Jump to step…</option>@for(n of stepOptions();track n.id){<option [value]="n.id">{{n.name}}</option>}</select>
       <button class="wb-trigger-edit secondary" (click)="openTrigger()" [attr.aria-expanded]="triggerSelected()">ϟ {{triggerEvent() ? triggerLabel() : 'Manual start'}} · Edit</button>

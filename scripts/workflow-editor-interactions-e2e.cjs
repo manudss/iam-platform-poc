@@ -31,7 +31,9 @@ assert.equal(await page.locator('select[name=wfTrigger]').inputValue(),'user.cre
 await page.getByRole('button',{name:'Done',exact:true}).click();if(mobile)await page.getByRole('button',{name:'Back to canvas',exact:true}).click();
 const positions=await page.evaluate(()=>{const e=ng.getComponent(document.querySelector('app-workflow-edit'));return e.vfNodes().map(n=>n.point());});
 assert.equal(new Set(positions.map(p=>p.x)).size,mobile?1:3);assert.ok(new Set(positions.map(p=>p.y)).size>=4,'long chain wraps');
+assert.equal(await page.locator('vflow svg svg').count(),0,'no minimap overlay obscures graph steps');
 await page.screenshot({path:path.join(out,`${mobile?'mobile':'desktop'}-${theme}-wrapped.png`),fullPage:true});
+await page.getByRole('combobox',{name:'Jump to step',exact:true}).selectOption('step9');await page.locator('.wf-node').filter({hasText:'Step 9'}).click();await page.getByRole('heading',{name:'Step 9',exact:true}).waitFor();if(mobile)await page.getByRole('button',{name:'Back to canvas',exact:true}).click();
 await page.getByRole('textbox',{name:'Workflow name',exact:true}).fill('Unsaved first draft');
 await page.getByRole('tab',{name:'Second workflow Close Second workflow',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.wb-name')?.value==='Second workflow');
 assert.equal(new URL(page.url()).pathname,'/workflows/edit/two');assert.equal(await page.locator('.wf-node:not(.wf-trigger)').count(),2);
