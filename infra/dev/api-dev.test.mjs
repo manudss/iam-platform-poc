@@ -62,10 +62,10 @@ import { createServer } from 'node:net';
 const REPO = join(__dirname, '..', '..');
 const PORTS = [4200, 3000, 8081, 3307, 5433, 7233, 4222, 8200];
 
-function stubbedDocker(log) {
+function stubbedDocker(log, exitCode = 0) {
   const bin = mkdtempSync(join(tmpdir(), 'dev-sh-docker-'));
   const stub = join(bin, 'docker');
-  writeFileSync(stub, '#!/bin/sh\necho "$@" >> "$STUB_LOG"\nexit 0\n');
+  writeFileSync(stub, `#!/bin/sh\necho "$@" >> "$STUB_LOG"\necho "stub: daemon unreachable" >&2\nexit ${exitCode}\n`);
   chmodSync(stub, 0o755);
   return { PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log };
 }
@@ -116,3 +116,25 @@ test('dev.sh up refuses a busy published port with a clear message, and starts o
   assert.equal(up2.status, 0, `free ports let the stack start: ${up2.stderr}`);
   assert.match(readFileSync(log2, 'utf8'), /compose .* up --build/, 'up reaches compose up --build');
 });
+
+// Non-regression for scripts/dev.ps1: the engine wait loop must survive a failing native `docker`
+// (Windows PowerShell 5.1 turns native stderr redirection under $ErrorActionPreference='Stop' into
+// a terminating NativeCommandError) and land on the guided message instead. Runs under any pwsh;
+// skipped when none is available (GitHub's runners ship one).
+test('dev.ps1 waits out a stopped Docker engine and fails with the guided message', async (t) => {
+  if (!which('pwsh')) { t.skip('pwsh not available on this machine'); return; }
+  const log = join(make(), 'docker.log');
+  const r = spawnSync('pwsh', ['-NoProfile', '-File', 'scripts/dev.ps1', '-DockerStartTimeoutSeconds', '2'], {
+    cwd: REPO, env: { ...process.env, ...stubbedDocker(log, 1) }, encoding: 'utf8', timeout: 60_000,
+  });
+  const out = `${r.stdout}\n${r.stderr}`;
+  assert.equal(r.status, 1, `expected a clean guided failure: ${out}`);
+  assert.match(out, /Docker engine is not running/, 'the guided message is shown');
+  assert.doesNotMatch(out, /NativeCommandError|not recognized as the name of a cmdlet/, 'no engine-level crash');
+  assert.match(readFileSync(log, 'utf8'), /version/, 'the loop really probed the engine');
+});
+
+function which(cmd) {
+  const r = spawnSync('sh', ['-c', `command -v ${cmd}`], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : null;
+}

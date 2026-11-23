@@ -16,7 +16,9 @@
 #>
 param(
   [switch]$Down,
-  [switch]$Volumes
+  [switch]$Volumes,
+  # Engine wait budget in seconds (lowered by the tests; 120 s default covers a Docker Desktop start).
+  [int]$DockerStartTimeoutSeconds = 120
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
@@ -33,11 +35,19 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
   exit 1
 }
 
-# Docker Desktop can be installed but not started yet: wait for the engine (up to 2 minutes).
+# Docker Desktop can be installed but not started yet: wait for the engine.
 $ready = $false
-foreach ($i in 1..24) {
-  docker version --format '{{.Server.Version}}' 2>$null | Out-Null
-  if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+$tries = [Math]::Ceiling($DockerStartTimeoutSeconds / 5)
+foreach ($i in 1..$tries) {
+  # Windows PowerShell 5.1 quirk: with $ErrorActionPreference = 'Stop', redirecting the stderr of a
+  # NATIVE command (2>$null) throws a terminating NativeCommandError instead of letting us poll.
+  # Probe with 'Continue' inside a try/catch, then restore 'Stop'.
+  try {
+    $ErrorActionPreference = 'Continue'
+    docker version --format '{{.Server.Version}}' 2>$null | Out-Null
+    $engineUp = ($LASTEXITCODE -eq 0)
+  } catch { $engineUp = $false } finally { $ErrorActionPreference = 'Stop' }
+  if ($engineUp) { $ready = $true; break }
   if ($i -eq 1) { Write-Host 'Waiting for the Docker engine (start Docker Desktop if it is not running)...' }
   Start-Sleep -Seconds 5
 }
