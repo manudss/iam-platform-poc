@@ -241,6 +241,8 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
       - name: Dev runner unit tests (watcher and install stamp)
         run: node --test infra/dev/api-dev.test.mjs
+      - name: Local console-edge injection unit tests (Vite proxyReq contract)
+        run: node --test apps/web/proxy.docker.test.cjs
       - run: cp .env.example .env
       - name: Build and start the dev stack
         run: docker compose --env-file .env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build

@@ -109,11 +109,25 @@ let lpJson; try { lpJson = JSON.parse(lpBody); } catch { fail('launchpad (My app
 if (!Array.isArray(lpJson.apps)) fail('launchpad (My applications) with the signed-in token', 'apps is not an array');
 ok('launchpad (My applications) with the signed-in token', `${lpJson.apps.length} applications, inventory ${lpJson.inventory}`);
 
-// 7. the local console edge attaches the admin capability server-side (hosted-demo model): an
-// administration route answers through the proxy WITHOUT any x-api-admin-token header.
-const adm = await fetch(`${BASE}/api/tenants/acme-demo/versioning/branches`, { headers: { authorization: `Bearer ${access}`, 'x-iam-branch': 'main' } });
+// 7. the local console edge attaches the admin capability server-side (hosted-demo model): the exact
+// calls of the Roles / working-branch screen succeed through the proxy WITHOUT any x-api-admin-token
+// header - and a cross-site mutation (foreign Origin) still gets none.
+const admH = { authorization: `Bearer ${access}`, 'x-iam-branch': 'main' };
+const acc = await fetch(`${BASE}/api/tenants/acme-demo/me/access`, { headers: admH });
+if (!acc.ok) fail('local console edge: me/access', `HTTP ${acc.status}`);
+const accBody = await acc.json().catch(() => ({}));
+if (accBody.admin !== true) fail('local console edge: me/access', 'admin flag is not true without the attached capability');
+ok('local console edge: me/access', 'administrator recognised without a manual token');
+const pers = await fetch(`${BASE}/api/tenants/acme-demo/workspace/personal`, { method: 'POST', headers: { ...admH, 'content-type': 'application/json' } });
+const persBody = await pers.text();
+if (!pers.ok) fail('local console edge: open the personal branch (Roles screen call)', `HTTP ${pers.status}: ${persBody.slice(0, 300)}`);
+ok('local console edge: open the personal branch (Roles screen call)', 'personal branch opened without a manual token');
+const adm = await fetch(`${BASE}/api/tenants/acme-demo/versioning/branches`, { headers: admH });
 const admBody = await adm.text();
-if (!adm.ok) fail('admin capability attached by the local console edge', `HTTP ${adm.status}: ${admBody.slice(0, 300)}`);
-ok('admin capability attached by the local console edge', 'versioning/branches answered without a manual token');
+if (!adm.ok) fail('local console edge: versioning/branches', `HTTP ${adm.status}: ${admBody.slice(0, 300)}`);
+ok('local console edge: versioning/branches', 'answered without a manual token');
+const csrf = await fetch(`${BASE}/api/tenants/acme-demo/workspace/personal`, { method: 'POST', headers: { ...admH, 'content-type': 'application/json', origin: 'http://evil.example' } });
+if (csrf.status !== 403) fail('local console edge: cross-site mutation gets no capability', `expected 403, got HTTP ${csrf.status}`);
+ok('local console edge: cross-site mutation gets no capability', 'foreign Origin refused with 403');
 
 console.log('DEV STACK CHECK PASSED');
