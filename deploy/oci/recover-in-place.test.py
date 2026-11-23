@@ -46,4 +46,24 @@ class Recovery(unittest.TestCase):
   self.m['queue_manifest']['target']['digest']='sha256:'+'f'*64
   with self.assertRaisesRegex(ValueError,'exact failed'):self.recover()
   self.assertTrue(self.barrier.exists());self.assertEqual(self.calls,[])
+ def test_interrupt_after_unlink_before_next_statement_rearms(self):
+  from unittest.mock import patch
+  original=Path.unlink;barrier=self.barrier
+  def interrupted(path,*args,**kw):
+   out=original(path,*args,**kw)
+   if path==barrier:raise KeyboardInterrupt('signal immediately after unlink syscall')
+   return out
+  with patch.object(Path,'unlink',interrupted):
+   with self.assertRaises(KeyboardInterrupt):self.recover()
+  self.assertEqual(self.barrier.read_text().strip(),self.token);self.assertNotIn('record',self.calls)
+ def test_foreign_marker_appearing_after_unlink_is_not_overwritten(self):
+  from unittest.mock import patch
+  original=Path.unlink;barrier=self.barrier
+  def interrupted(path,*args,**kw):
+   out=original(path,*args,**kw)
+   if path==barrier:path.write_text('foreign-owner');raise KeyboardInterrupt('foreign gate appeared')
+   return out
+  with patch.object(Path,'unlink',interrupted):
+   with self.assertRaises(KeyboardInterrupt):self.recover()
+  self.assertEqual(self.barrier.read_text(),'foreign-owner')
 if __name__=='__main__':unittest.main()

@@ -61,7 +61,9 @@ def recover(m,run=subprocess.run,is_dead=dead,front=probe,observe=queue.observe_
  if barrier.is_symlink() or barrier.read_text().rstrip('\n')!=token or not is_dead(m['former_pid']):raise ValueError('barrier ownership changed')
  removed=False
  try:
-  barrier.unlink();removed=True
+  # Arm recovery BEFORE unlink: a signal after the syscall cannot skip rearming.
+  removed=True
+  barrier.unlink()
   if any(front(o)!=200 for o in origins):raise ValueError('TLS opening probe failed')
   record(state_path,review,m['repository'],m['container'])
  except BaseException:
