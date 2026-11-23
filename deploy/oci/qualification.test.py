@@ -60,5 +60,11 @@ class ActivationJournal(unittest.TestCase):
    with self.subTest(rows=rows):
     with self.assertRaises(ValueError):self.read(rows)
  def test_empty_verified_only_from_exact_sql_array(self):self.assertEqual(self.read([]),[])
+ def test_query_preserves_all_columns_and_quotes_tenant(self):
+  captured=[]
+  q.query=lambda p,sql:captured.append(sql) or []
+  q.activation_journal({'tenant':"a'b"})
+  self.assertIn('SELECT a.*',captured[0]);self.assertIn("tenant='a''b'",captured[0]);self.assertIn('ORDER BY seq',captured[0])
+
 
 if __name__=='__main__':unittest.main()

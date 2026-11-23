@@ -27,3 +27,10 @@ activation, restart services or authorize any of those actions. The deployment
 operator must inspect the preserved incident evidence and obtain the user's
 approval before any recovery. No previous failed candidate is reclassified as
 qualified by changing these scripts.
+
+Local evidence for the reviewed change: 80 OCI Node tests,17 Python tests, API
+TypeScript build and17 activation/admin-boundary tests pass without skips. The
+actual generated journal SQL also ran on isolated local PostgreSQL with two
+tenants and returned only the target tenant with its native columns. This is not
+an isolated full deployment qualification or proof that the blocked host can
+open. Remote CI is separate.

@@ -78,7 +78,7 @@ def policy_load(path, isolated_loopback=False):
 def activation_journal(p):
     # Independent privileged read uses the already-required PostgreSQL qualification account.
     # It does not grant a low-assurance web session access to the administrator journal.
-    rows=query(p,"SELECT coalesce(json_agg(x ORDER BY seq),'[]') FROM (SELECT tenant,seq,commit_hash AS \"commit\",state,error,request_id AS \"requestId\" FROM public.activations WHERE tenant="+lit(p['tenant'])+") x")
+    rows=query(p,"SELECT coalesce(json_agg(x ORDER BY seq),'[]') FROM (SELECT a.*,commit_hash AS \"commit\",request_id AS \"requestId\" FROM public.activations a WHERE tenant="+lit(p['tenant'])+") x")
     if not isinstance(rows,list):raise ValueError('activation journal unknown')
     last=0
     for r in rows:
