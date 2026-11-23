@@ -117,3 +117,27 @@ describe('Find Rows and Create Column installed piece contracts', () => {
     assert.ok(insert.isDone() && write.isDone());
   });
 });
+
+
+describe('candidate email initialization via installed piece (intercepted Google, not live)',()=>{
+ it('flat identity with quotes and backslashes writes only email and reads it back',async()=>{
+  nock.disableNetConnect();
+  const hdr=['nom','prenom','departement','role','process','cree','ticket','badge-fait','email'];
+  const nom='Martin "Test"',prenom='Camille\\Demo',departement=' IT ',role='';
+  const values=[nom,prenom,departement,role,'OK','','','',''];let writes=0,marked=false;
+  nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional-contract-sheet').reply(200,{sheets:[{properties:{sheetId:7,title:'Candidates'}}]});
+  nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(function(uri:string){const range=decodeURIComponent(uri.split('/values/')[1]);return [200,{values:range.includes('A1:ZZZ1')?[hdr]:range.includes('A2:ZZZ')?[values]:[hdr,values]}];});
+  nock('https://sheets.googleapis.com').put(/\/values\//).query(true).reply((_uri:string,body:any)=>{assert.ok(marked);writes++;assert.deepEqual(body.values,[[null,null,null,null,null,null,null,null,'camille.martin@dss.name']]);values[8]='camille.martin@dss.name';return [200,{updatedCells:1,updatedRange:'Candidates!I2'}];});
+  const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048,privateKeyEncoding:{type:'pkcs8',format:'pem'},publicKeyEncoding:{type:'spki',format:'pem'}});
+  const secret=JSON.stringify({type:'service_account',client_email:'fixture@fictional.iam.gserviceaccount.com',private_key:privateKey,token_uri:'https://oauth2.googleapis.com/token'});
+  nock('https://oauth2.googleapis.com').persist().post('/token').reply(200,{access_token:'FICTIONAL',token_type:'Bearer',expires_in:3600});
+  nock('https://www.googleapis.com').persist().post('/oauth2/v4/token').reply(200,{access_token:'FICTIONAL',token_type:'Bearer',expires_in:3600});
+  const model=loadPluginModule('workflows-iga','model.mjs') as any;
+  const graph=model.substituteEventPayload({nodes:[{id:'init',type:'google-sheets-initialize-email',config:{...source,nom:'{{event.nom}}',prenom:'{{event.prenom}}',departement:'{{event.departement}}',role:'',email:'camille.martin@dss.name'}}],edges:[]},{nom,prenom,departement});
+  const block=externalBlock('google-sheets-initialize-email')!;
+  const config=block.validate(graph.nodes[0].config);assert.equal(config.nom,nom);assert.equal(config.prenom,prenom);assert.equal(config.departement,departement);
+  const out=await block.run({config,settings:{googleServiceAccount:secret},dryRun:false,log(){},markEffectPending:async()=>{marked=true;}} as any);
+  assert.deepEqual(out,{email:'camille.martin@dss.name',initialized:true,written:true});assert.equal(writes,1);
+  const again=await block.run({config,settings:{googleServiceAccount:secret},dryRun:false,log(){},markEffectPending:async()=>{throw Error('no second intent');}} as any);assert.equal(again!.written,false);assert.equal(writes,1);
+ });
+});

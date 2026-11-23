@@ -119,3 +119,46 @@ Never treat this public demo token as suitable for production. No Google/Jira cr
 
 Editor additions: block search, duplicate a step (without links), read-only definition JSON,
 and per-step outputs in the run view. Placeholder examples are reference chips, not automatic field insertion.
+
+### Assisted-demo source email initialization
+
+`google-sheets-initialize-email` is a separate managed Google Sheets block for the
+single-editor assisted demo. It does not create an account, ticket, or mail.
+The workflow calculates the address upstream; this block records it before
+email-based preflight, account creation, ticket correlation and later keyed writes.
+
+Inputs:
+- `email`: the calculated address, for example `camille.martin@dss.name`.
+- `nom`, `prenom`, `departement`, `role`: flat exact trigger strings. The first
+  two are required; absent optional fields mean empty string. No interpolated
+  JSON is parsed. The fresh row must also have `process=OK` and empty `cree`,
+  `ticket`, `badge-fait`. Hyphenated or empty status fields need not appear in
+  the trigger payload. They are always checked against the source sheet.
+- `requiredColumns`: optional comma-separated additional unique headers.
+- Standard managed connection, Real confirmation and bound sheet configuration.
+
+Two fresh raw reads require unique headers, exactly one source match, no
+foreign email and no other row with the calculated email (case-insensitive).
+The second read must have identical headers and full source values. A source
+that moved before that read is resolved again. An existing identical email
+returns `initialized=true, written=false` without writing. Otherwise only the
+email cell is set, then the source identity, full row and email are read back.
+Only verified success returns `initialized=true, written=true`.
+Use the returned `email`, not the initially empty trigger email, throughout
+account preflight, creation, link, trace and subsequent sheet updates.
+
+This is **not atomic, not a row lock and not compare-and-swap**. Google updates
+remain positional, including a race after the last read. Before demo processing,
+the operator must stop sorting or editing the sheet until the candidate is done.
+The declared single-editor demo scope is not a technical guarantee. Do not
+use this block for concurrent-editor production processing.
+
+The engine saves an external-effect review marker immediately before the write,
+not before the reads. A write failure, lost response, readback mismatch or crash
+before persisted step completion stops the run for review. Retry and error routes
+cannot bypass that marker. Inspect the provider result and downstream state
+before a deliberate recovery; a fresh invocation can recognize the existing
+same email without a second write only while the exact eligibility snapshot
+still matches. This is not automatic recovery or proof that an old account or
+ticket can be adopted. Simulation makes no provider calls and reports
+`initialized=false, written=false`.
