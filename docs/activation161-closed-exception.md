@@ -63,3 +63,30 @@ Existing80 Node,17 qualification,36 queue,12 recovery,3 offline tests pass.
 No Docker/full stack is available here. The real PG test does not prove OIDC,
 Docker identity, TLS, host permissions or production recovery. Existing operator
 projection evidence is separate and preserved. No live policy or host changed.
+
+## Final review corrections
+
+The mode uses fixed real host registry `/opt/lyam/deploy-queue/state.json`, its
+existing `.lock`, existing `/opt/lyam/.update.lock` and retained external pause.
+A copied incident_file is refused. Both locks are acquired nonblocking before
+incident validation and held through the complete process attempt. Exact full
+registry bytes/hash, pending/failed/exit/resume state and target are rechecked.
+Test fixtures replace module constants only inside tests, not through CLI/env.
+These fixed paths must match the reviewed deployment setup, otherwise fail and
+review the code rather than redirecting to a convenient copy.
+
+Actual orchestration order is smoke, second activation journal check, capture
+Dolt/Bao, final PostgreSQL transaction, preservation verification/save. It was
+already post-smoke, now guarded by an order regression test. A simulated
+smoke-appended activation is rejected by final exact legacy multiset equality.
+The equality between capture.postgres and after.postgres is only internal
+artifact consistency, NOT independent proof: provenance comes from the pinned
+SQL executed in that session, operator review and immutable hashes. Writes after
+that snapshot are not covered, and cross-system atomicity is not claimed.
+
+16 exception tests now include actual mutations of policy/incident/helper/
+metadata/manifest/source/digest after capture, consumed claim with a fresh
+output path, both held locks, copied registry refusal, CLI partial/conflicting
+normal-receipt/loopback flags, and post-smoke activation change. PostgreSQL17.12
+local integration and the existing test suites remain green. No Docker/full
+stack/host qualification is claimed and no live policy/queue/gate was changed.

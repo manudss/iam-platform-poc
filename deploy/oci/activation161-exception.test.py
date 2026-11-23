@@ -11,13 +11,17 @@ class ExceptionMode(unittest.TestCase):
   self.a=copy.deepcopy(self.b);self.a['image']=ex.IMAGE;self.a['postgres']['rows']['public.activations']={H(4):2,H(5):1}
   for i,col in enumerate(expected,8):self.a['postgres']['schema']['columns'].append({**col,'ordinal_position':i,'table_catalog':'fixture'})
   self.c={'format':1,'transaction':{'read_only':True,'isolation':'repeatable read','snapshot':'1:1:'},'postgres':self.a['postgres'],'projection':{'pairs':[{'whole':H(4),'legacy':H(1),'multiplicity':2},{'whole':H(5),'legacy':H(2),'multiplicity':1}],'row_count':3,'nonnull_new_columns':0}}
-  self.before=self.d/'before.json';self.before.write_text(json.dumps(self.b));incident={'history':[{'sha':'b'*40}],'pending':{'sha':'a'*40,'digest':ex.IMAGE.split('@')[1],'parent':'b'*40},'failed':{'sha':'a'*40,'exit':4}};self.incident=self.d/'incident.json';self.incident.write_text(json.dumps(incident))
+  self.before=self.d/'before.json';self.before.write_text(json.dumps(self.b));incident={'history':[{'sha':'b'*40}],'pending':{'sha':'a'*40,'digest':ex.IMAGE.split('@')[1],'parent':'b'*40},'failed':{'sha':'a'*40,'exit':4}};self.incident=self.d/'state.json';self.incident.write_text(json.dumps(incident));ex.STATE=self.incident;ex.UPDATE_LOCK=self.d/'update.lock';ex.PAUSE=self.d/'PAUSED';ex.UPDATE_LOCK.touch();ex.PAUSE.touch();Path(str(self.incident)+'.lock').touch()
   self.m={'format':1,'kind':'reviewed-activation161-closed','image':ex.IMAGE,'source_sha':'a'*40,'before_sha256':ex.sha(self.before.read_bytes()),'policy_file':str(self.policyfile),'policy_sha256':ph,'incident_file':str(self.incident),'incident_sha256':ex.sha(self.incident.read_bytes()),'original_incident':incident,'code_sha256':{n:ex.sha((ex.HERE/n).read_bytes())for n in ex.CODE},'authorization_ref':'operator reference to explicit one-run approval','evidence_refs':['reviewed incident'],'one_shot_claim':str(self.d/'consumed')}
   self.manifest=self.d/'manifest.json';self.manifest.write_text(json.dumps(self.m))
- def tearDown(self):self.tmp.cleanup()
- def runobj(self):return ex.ExceptionRun(self.manifest,ex.sha(self.manifest.read_bytes()),self.before,self.policyfile,ex.IMAGE,'after',self.d/'result')
+ def tearDown(self):
+  for r in getattr(self,'runs',[]):r.close()
+  self.tmp.cleanup()
+ def runobj(self,output=None):
+  r=ex.ExceptionRun(self.manifest,ex.sha(self.manifest.read_bytes()),self.before,self.policyfile,ex.IMAGE,'after',output or self.d/'result');self.runs=getattr(self,'runs',[])+[r];return r
  def test_positive_exact_multiset_and_incompatible_receipt(self):
   r=self.runobj();self.assertEqual(r.capture(lambda *a,**k:json.dumps(self.c)),self.a['postgres']);r.save(q.private_json,self.b,self.a,{'journal':{'count':3},'ledger':[]},q.compare);out=json.loads((self.d/'result/closed-exception-result.json').read_text());self.assertNotEqual(out['format'],1);self.assertNotEqual(out['result'],'qualified');self.assertFalse(out['queue_compatible']);self.assertEqual((self.d/'result/capture.json').stat().st_mode&0o777,0o600)
+  r.close()
   with self.assertRaises(ValueError):self.runobj()
  def test_readonly_missing_wrong_snapshot_and_collector_failure_refuse(self):
   r=self.runobj()
@@ -28,7 +32,7 @@ class ExceptionMode(unittest.TestCase):
  def test_negative_mutations_fail(self):
   cases=[lambda:self.a['postgres']['schema']['columns'].append({'extra':1}),lambda:self.a['postgres']['schema']['columns'][1].update(is_nullable='NO'),lambda:self.a['postgres']['schema']['columns'][1].update(data_type='integer'),lambda:self.c['projection'].update(nonnull_new_columns=1),lambda:self.c['projection']['pairs'][0].update(legacy=H(99)),lambda:self.c['projection']['pairs'][0].update(multiplicity=1),lambda:self.c['projection']['pairs'].append({'whole':H(4),'legacy':H(1),'multiplicity':1}),lambda:self.a['postgres']['rows']['public.other'].update({H(9):1}),lambda:self.a['postgres']['sequences']['public.seq'].update(last_value=1),lambda:self.a.update(image='wrong'),lambda:self.a.update(bao={}),lambda:self.a.update(dolt=[]),lambda:self.a.update(credentials={})]
   for mutate in cases:
-   self.tmp.cleanup();self.setUp();r=self.runobj();r.capture_value=self.c;mutate()
+   self.tearDown();self.setUp();r=self.runobj();r.capture_value=self.c;mutate()
    with self.subTest(mutation=mutate),self.assertRaises((ValueError,KeyError)):r.verify(self.b,self.a,q.compare)
    self.tearDown()
  def test_after_other_run_or_projection_other_snapshot_refuses(self):
@@ -50,7 +54,7 @@ class ExceptionMode(unittest.TestCase):
   r=self.runobj();self.manifest.write_text('{}')
   with self.assertRaises(ValueError):r.recheck()
   # A pin to a collector different from the actual versioned SQL is rejected before a run.
-  self.tmp.cleanup();self.setUp();self.m['code_sha256']['activation161-capture.sql']='0'*64;self.manifest.write_text(json.dumps(self.m))
+  self.tearDown();self.setUp();self.m['code_sha256']['activation161-capture.sql']='0'*64;self.manifest.write_text(json.dumps(self.m))
   with self.assertRaises(ValueError):self.runobj()
  def test_exact_duplicate_row_multiplicity_missing_extra_and_new_nonnull_refuse(self):
   r=self.runobj();r.capture_value=copy.deepcopy(self.c);r.capture_value['projection']['pairs'][0]['multiplicity']=3
@@ -60,4 +64,61 @@ class ExceptionMode(unittest.TestCase):
  def test_exception_only_after_and_no_implicit_manifest(self):
   for phase,image,manifest_hash in [('before',ex.IMAGE,ex.sha(self.manifest.read_bytes())),('after','other',ex.sha(self.manifest.read_bytes())),('after',ex.IMAGE,'0'*64)]:
    with self.assertRaises(ValueError):ex.ExceptionRun(self.manifest,manifest_hash,self.before,self.policyfile,image,phase,self.d/'result')
+ def test_locks_and_real_registry_cannot_be_bypassed(self):
+  import fcntl
+  with open(ex.UPDATE_LOCK,'a')as held:
+   fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   with self.assertRaises(BlockingIOError):self.runobj()
+  copied=self.d/'copy.json';copied.write_bytes(self.incident.read_bytes());self.m['incident_file']=str(copied);self.manifest.write_text(json.dumps(self.m))
+  with self.assertRaises(ValueError):self.runobj()
+ def test_claim_reuse_with_fresh_output_refuses(self):
+  r=self.runobj();r.close()
+  with self.assertRaises(FileExistsError):self.runobj(self.d/'new-output')
+ def test_all_actual_pin_mutations_after_capture_refuse(self):
+  from unittest.mock import patch
+  original_here=ex.HERE
+  for name in ['policy','incident','helper','metadata','manifest','source','digest']:
+   self.tearDown();self.setUp();code=self.d/'code';code.mkdir()
+   for filename in ex.CODE:(code/filename).write_bytes((original_here/filename).read_bytes())
+   with patch.object(ex,'HERE',code):
+    r=self.runobj();r.capture_value=copy.deepcopy(self.c)
+    if name=='policy':self.policyfile.write_text('{}')
+    elif name=='incident':self.incident.write_text('{}')
+    elif name=='helper':(code/'qualification-container.mjs').write_text('changed')
+    elif name=='metadata':(code/'activation161-column-metadata.json').write_text('[]')
+    elif name=='manifest':self.manifest.write_text('{}')
+    else:
+     self.m['source_sha' if name=='source' else 'image']='changed';self.manifest.write_text(json.dumps(self.m))
+    with self.subTest(pin=name),self.assertRaises(ValueError):r.verify(self.b,self.a,q.compare)
+ def test_smoke_appended_activation_fails_final_postsmoke_projection(self):
+  r=self.runobj();r.capture_value=copy.deepcopy(self.c);r.capture_value['projection']['pairs'].append({'whole':H(88),'legacy':H(99),'multiplicity':1});r.capture_value['projection']['row_count']=4;r.capture_value['postgres']['rows']['public.activations'][H(88)]=1
+  final=copy.deepcopy(self.a);final['postgres']=r.capture_value['postgres']
+  with self.assertRaises(ValueError):r.verify(self.b,final,q.compare)
+ def test_cli_conflicting_and_partial_flags_refuse(self):
+  import subprocess,sys
+  base=[sys.executable,str(ex.HERE/'qualification.py'),'--phase','after']
+  for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:base+=['--'+name,str(ex.PAUSE if name=='barrier-file' else self.d)]
+  policy=self.d/'cli-policy.json';policy.write_text(json.dumps({'format':1,'origins':[],'issuer':'x','tenant':'t','pgContainer':'x','pgUser':'x','pgDatabase':'x','network':'x','authFile':'x','baoMetadataRoots':[],'baoAddress':'x','baoTokenFile':'x','credentialFiles':[],'appendOnlyTables':[]}))
+  # All three manifest fields are supplied for conflict cases. Missing policy proves flag refusal precedes external work.
+  for extra in [['--reviewed-activation161-manifest','x'],['--reviewed-activation161-manifest','x','--reviewed-activation161-manifest-sha256','x','--closed-exception-output','x','--receipt-file','x'],['--reviewed-activation161-manifest','x','--reviewed-activation161-manifest-sha256','x','--closed-exception-output','x','--isolated-loopback-test']]:
+   out=subprocess.run(base+['--policy',str(policy)]+extra,capture_output=True,text=True);self.assertEqual(out.returncode,1);self.assertFalse((self.d/'closed-exception-result.json').exists())
+ def test_production_order_smoke_then_final_capture_then_save(self):
+  import ast
+  tree=ast.parse((ex.HERE/'qualification.py').read_text());fn=next(x for x in tree.body if isinstance(x,ast.FunctionDef)and x.name=='main')
+  smoke=[];capture=[];save=[]
+  for node in ast.walk(fn):
+   if isinstance(node,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='smoke_result' for t in node.targets):smoke.append(node.lineno)
+   if isinstance(node,ast.Call)and isinstance(node.func,ast.Attribute)and isinstance(node.func.value,ast.Name)and node.func.value.id=='exception':
+    if node.func.attr=='capture':capture.append(node.lineno)
+    if node.func.attr=='save':save.append(node.lineno)
+  self.assertEqual(len(smoke),1);self.assertEqual(len(capture),1);self.assertEqual(len(save),1);self.assertLess(smoke[0],capture[0]);self.assertLess(capture[0],save[0])
+ def test_locks_remain_held_until_attempt_process_close(self):
+  import fcntl
+  r=self.runobj();r.capture(lambda *a,**k:json.dumps(self.c))
+  for path in [ex.UPDATE_LOCK,Path(str(ex.STATE)+'.lock')]:
+   with open(path,'a')as f:
+    with self.assertRaises(BlockingIOError):fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
+  r.close()
+  for path in [ex.UPDATE_LOCK,Path(str(ex.STATE)+'.lock')]:
+   with open(path,'a')as f:fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
 if __name__=='__main__':unittest.main()

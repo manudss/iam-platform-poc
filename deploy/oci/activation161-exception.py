@@ -1,8 +1,11 @@
 """Explicit closed-qualification exception. No queue, gate, policy or updater effects."""
-import json,hashlib,copy,importlib.util,os
+import json,hashlib,copy,importlib.util,os,fcntl,atexit
 from pathlib import Path
 IMAGE='ghcr.io/manudss/iam-platform-poc@sha256:455e2556b74fb2abc9e55f0868144ecc1daa3d9a4743c36ffce400845544a273'
 HERE=Path(__file__).resolve().parent
+STATE=Path('/opt/lyam/deploy-queue/state.json')
+UPDATE_LOCK=Path('/opt/lyam/.update.lock')
+PAUSE=Path('/opt/lyam/UPDATE_PAUSED')
 NAMES=['actor_id','actor_kind','applied_at']
 CODE=['qualification.py','qualification-container.mjs','activation161-exception.py','activation161-capture.sql','activation161-column-metadata.json']
 def sha(raw):return hashlib.sha256(raw).hexdigest()
@@ -13,10 +16,12 @@ def pins(manifest,original):
  if set(manifest['code_sha256'])!=set(CODE):raise ValueError('complete code pins required')
  for name in CODE:
   if sha((HERE/name).read_bytes())!=manifest['code_sha256'][name]:raise ValueError('code changed')
- incident,ih=read(manifest['incident_file'])
+ if Path(manifest['incident_file'])!=STATE or STATE.is_symlink() or not PAUSE.is_file():raise ValueError('real registry and external pause required')
+ incident,ih=read(STATE)
  if ih!=manifest['incident_sha256'] or incident!=manifest['original_incident']:raise ValueError('incident changed')
  if incident.get('pending',{}).get('digest')!=IMAGE.split('@')[1] or incident.get('failed',{}).get('sha')!=incident.get('pending',{}).get('sha'):raise ValueError('wrong incident target')
  if incident.get('failed',{}).get('digest',incident['pending']['digest'])!=incident['pending']['digest'] or incident['pending'].get('parent')!=incident.get('history',[{}])[-1].get('sha'):raise ValueError('inconsistent failed pending parent/digest')
+ if incident.get('resume_required',False)is not False or type(incident.get('failed',{}).get('exit'))is not int or incident['failed']['exit']==0:raise ValueError('exact unresolved failed state required')
  if incident['pending']['sha']!=manifest['source_sha']:raise ValueError('wrong source')
  return True
 class ExceptionRun:
@@ -24,6 +29,14 @@ class ExceptionRun:
   self.manifest_path=Path(path);self.manifest,self.manifest_sha=read(path);m=self.manifest;self.before=Path(before);self.output=Path(output)
   if phase!='after' or image!=IMAGE or m.get('format')!=1 or m.get('kind')!='reviewed-activation161-closed' or self.manifest_sha!=expected_sha or m.get('image')!=IMAGE:raise ValueError('explicit exact exception manifest required')
   if not isinstance(m.get('authorization_ref'),str) or not m['authorization_ref'].strip() or not isinstance(m.get('evidence_refs'),list) or not m['evidence_refs'] or any(not isinstance(x,str)or not x.strip() for x in m['evidence_refs']) or Path(policy_path)!=Path(m['policy_file']):raise ValueError('reviewed authority/policy binding required')
+  self.locks=[]
+  try:
+   for lockpath in [Path(str(STATE)+'.lock'),UPDATE_LOCK]:
+    if not lockpath.is_file() or lockpath.is_symlink():raise ValueError('existing real queue/updater locks required')
+    f=open(lockpath,'a');self.locks.append(f);fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
+  except BaseException:
+   self.close();raise
+  atexit.register(self.close)
   # An exclusive consumed agreement prevents automatic retries even after a failed attempt.
   pins(m,self.before)
   if self.output.exists():raise ValueError('fresh private exception directory required')
@@ -33,7 +46,11 @@ class ExceptionRun:
   fd=os.open(claim,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
   with os.fdopen(fd,'w')as f:f.write(self.manifest_sha+'\n');f.flush();os.fsync(f.fileno())
   self.policy,_=read(policy_path);self.capture_value=None
+ def close(self):
+  for f in getattr(self,'locks',[]):
+   if not f.closed:f.close()
  def recheck(self):
+  if any(f.closed for f in self.locks):raise ValueError('incident locks lost')
   if read(self.manifest_path)[1]!=self.manifest_sha:raise ValueError('manifest changed')
   return pins(self.manifest,self.before)
  def capture(self,runner):

@@ -95,7 +95,10 @@ def main():
     parser.add_argument('--reviewed-activation161-manifest');parser.add_argument('--reviewed-activation161-manifest-sha256');parser.add_argument('--closed-exception-output')
     parser.add_argument('--receipt-file')
     parser.add_argument('--isolated-loopback-test',action='store_true')
-    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
+    parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args()
+    exception_flags=[a.reviewed_activation161_manifest,a.reviewed_activation161_manifest_sha256,a.closed_exception_output]
+    if any(exception_flags) and (not all(exception_flags) or a.receipt_file or a.isolated_loopback_test or a.phase!='after'):raise ValueError('complete explicit closed exception flags required')
+    p=policy_load(a.policy,a.isolated_loopback_test)
     if not Path(a.barrier_file).is_file():raise ValueError('maintenance barrier absent')
     for origin in p['origins']:
         try: response=urllib.request.urlopen(origin+'/healthz',timeout=15);status=response.status
