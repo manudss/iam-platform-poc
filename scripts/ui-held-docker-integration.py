@@ -159,6 +159,16 @@ def main():
   stage='collect-after-evidence'
   after=next(evidence.glob('after-*'));smoke=next(evidence.glob('smoke-*'))
   stage='integrity-binding'
+  # Report only fixed roles and numeric metadata, never the actual paths or bytes.
+  ancestry=[]
+  audited={'env':env,'config':Path(c['config']),'policy':pol,'implementation':Path(e['LYAM_CLOSED_IMPLEMENTATION']),'preflight':Path(e['LYAM_CLOSED_PREFLIGHT']),'launcher':Path(e['LYAM_CLOSED_LAUNCHER'])}
+  audited.update({'controller-'+name:binroot/name for name in ['update.sh','closed-recovery-integrity.py','closed-recovery-call.py']})
+  audited.update({'qualifier-'+name:binroot/name for name in ['qualification.py','qualification-container.mjs']})
+  for role,path in audited.items():
+   for depth,item in enumerate([path]+list(path.parents)):
+    st=item.lstat()
+    if st.st_uid!=0 or st.st_gid!=0 or st.st_mode&0o022 or item.is_symlink():ancestry.append({'role':role,'depth':depth,'uid':st.st_uid,'gid':st.st_gid,'mode':oct(st.st_mode&0o777),'symlink':item.is_symlink()})
+  result['integrityUnprotectedRoles']=ancestry
   integrity=module(binroot/'closed-recovery-integrity.py','integrity').verify(str(env))
   receipt=root/'receipt';fields={**integrity,'state':'CLOSED_QUALIFIED','held':'true','public_status':'503','image':c['image'],'launch_proof':c['proof'],'launch_proof_sha256':digest(c['proof']),'gate_sha256':digest(gate),'ops_sha256':digest(ops)};receipt.write_text(''.join(k+'='+v+'\n' for k,v in fields.items()));receipt.chmod(0o600)
   opening={k:spec(p) for k,p in {'env':env,'closed_receipt':receipt,'integrity':binroot/'closed-recovery-integrity.py','launch_proof':Path(c['proof']),'policy':pol,'qualifier':binroot/'qualification.py','before':evidence/'before.json','after':after,'smoke':smoke}.items()}
