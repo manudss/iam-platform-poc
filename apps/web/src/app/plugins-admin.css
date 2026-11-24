@@ -29,10 +29,10 @@ button.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad
 .fam { display: flex; align-items: baseline; gap: .7rem; margin: 1.1rem 0 .5rem; }
 .fam h2 { margin: 0; font-size: 1rem; }
 .fam .count { color: var(--muted); font-size: .82rem; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: .8rem; }
-.pcard { position: relative; border: 1px solid var(--line); border-radius: .7rem; background: var(--card); padding: .9rem 1rem; display: flex; flex-direction: column; gap: .5rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr)); gap: .8rem; }
+.pcard { min-width: 0; overflow-wrap: anywhere; position: relative; border: 1px solid var(--line); border-radius: .7rem; background: var(--card); padding: .9rem 1rem; display: flex; flex-direction: column; gap: .5rem; }
 .pcard.faulted { border-color: var(--bad); }
-.pcard .state { position: absolute; top: .7rem; right: .7rem; }
+.pcard .state { align-self: flex-end; }
 .pcard .head { display: flex; gap: .6rem; align-items: center; }
 .pcard .head .mono { width: 2rem; height: 2rem; border-radius: .5rem; background: var(--accent-soft); color: var(--accent-dark); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex: none; }
 .pcard.faulted .head .mono { background: var(--bad-soft); color: var(--bad); }
@@ -54,7 +54,7 @@ button.danger:hover:not(:disabled) { background: var(--bad); color: var(--on-bad
 button.ghost { background: transparent; color: var(--link); border-color: var(--field-line); }
 button.ghost:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
 @media (max-width: 70rem) {
-  .gallery-wrap { flex-direction: column; }
+  .gallery-wrap { flex-direction: column; align-items: stretch; }
   .pending { width: 100%; position: static; }
 }
 @media (max-width: 40rem) {
@@ -62,7 +62,7 @@ button.ghost:hover:not(:disabled) { background: var(--accent-soft); border-color
   .toolbar { flex-direction: column; align-items: stretch; }
   .toolbar .search { max-width: none; }
   .toolbar .spacer { display: none; }
-  .cards { grid-template-columns: 1fr; }
+  .cards { grid-template-columns: minmax(0, 1fr); }
   .drawer { width: 100vw; border-left: none; }
   .modal { width: calc(100vw - 1rem); }
 }
@@ -109,7 +109,7 @@ button.ghost:hover:not(:disabled) { background: var(--accent-soft); border-color
 .toolbar label.filter { margin: 0; flex-direction: row; }
 .toolbar select { width: auto; }
 .toolbar input[type=checkbox] { width: auto; margin: 0; }
-.pcard .head { padding-right: 6.5rem; }
+.pcard .head > div { min-width: 0; }
 .pend-line { margin-bottom: .35rem; }
 .msg:empty { display: none; }
 .confirm-label b { display: inline; }
