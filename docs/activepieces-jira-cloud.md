@@ -91,9 +91,17 @@ Custom API calls are restricted to the bound Jira API root, refuse redirects,
 authentication headers, method override headers and query authentication.
 All supplied FILE values are native JSON {filename,base64}; they are bounded by
 the existing config limits, not fetched from arbitrary user URLs by the adapter.
-Native attachment download paths follow redirects and one legacy action uses a
-provider-returned content URL. Their credential/redirect behavior still needs
-focused review before the full catalogue can be called qualified.
+Installed upstream attachment paths request redirects, and one action uses a
+provider-returned content URL. No leak was observed: this was a code-level risk.
+A scoped AsyncLocalStorage transport guard now checks every native Jira fetch,
+including property resolution and trigger lifecycle, against the bound API root,
+and forces manual redirects then refuses every 3xx. Foreign content/CDN URLs are
+therefore refused, not downloaded. Unrelated concurrent requests are unchanged.
+These are intentional compatibility limits. This process-wide wrapper and async
+scope isolation need independent review; no complete-catalogue safety claim is
+made from two transport fixtures. Native package upgrades must requalify that
+its HTTP paths still pass through fetch; any replacement of the guard fails
+closed at native entry.
 
 Evidence: exhaustive action/lifecycle dispatch uses doubles; representative
 installed-package HTTP-intercepted tests cover baseline/category epoch/repeats,
