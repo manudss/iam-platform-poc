@@ -171,7 +171,7 @@ class Interface(unittest.TestCase):
     def dispatch(self,entry):
         src=(HERE/'qualification.py').read_text();i=src.index("        entry=p.get('transformationVerifiers'");j=src.index("    print('ISOLATED LOOPBACK ONLY")
         import textwrap,os;block=textwrap.dedent(src[i:j]).replace('p.get(\'transformationVerifiers\',{}).get(a.image)','ENTRY')
-        calls=[];ns={'ENTRY':entry,'changes':['DOLT:x','DOLT:y'],'Path':Path,'os':os,'json':json,'sys':sys,'evidence':Path('/ev'),'after_file':Path('/af'),'cmd':lambda c:calls.append(c)}
+        calls=[];ns={'stage':lambda value:None,'ENTRY':entry,'changes':['DOLT:x','DOLT:y'],'Path':Path,'os':os,'json':json,'sys':sys,'evidence':Path('/ev'),'after_file':Path('/af'),'cmd':lambda c:calls.append(c)}
         wrapped='def f():\n'+textwrap.indent(block,'    ')
         exec(wrapped,ns);ns['f']();return calls
     def test_legacy_string_gets_two_arguments_and_versioned_object_three(self):
