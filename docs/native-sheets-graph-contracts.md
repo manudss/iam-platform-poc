@@ -91,3 +91,22 @@ State/secret/file services and uncertain-effect stops are Lyam services, not
 Activepieces guarantees. Old spreadsheet-scoped credentials are not broadened
 by naming an account-scoped action. New scope needs an operator-managed credential
 update and reviewed metadata publication. No secret is included in these examples.
+
+## Qualified native self-write filter contract (fixture transport)
+
+Installed New or Updated Row exposes `trigger_column`. Set it to `E` only AFTER
+freshly verifying the real headers and the user's intended process-column rule.
+Its native cursor hashes only that column for each positional row. A native
+lifecycle test enables the actual trigger, changes E to OK (one row event), then
+writes H email, I ticket, F cree and G badge-fait while E stays OK (zero events,
+including repeated notifications). A later change of E emits a new event.
+This is native column-change filtering, not an invented host semantic dedup.
+
+It prevents the demonstrated intermediate self-write loop ONLY while the watched
+E value and row layout stay unchanged. Concurrent edits of E, sorting/insertion,
+a new channel baseline, or new activations require independent handling and live
+qualification. A paused/assisted one-event demonstration is not an unattended
+reusable workflow verdict. Historical real headers supplied by the coordinator
+are A nom, B prenom, C departement, D role, E process, F cree, G badge-fait,
+H email, I ticket. These are leads to revalidate live, never permission to write
+I=OK. Earlier generic I=OK input above is illustrative only, not a demo update.
