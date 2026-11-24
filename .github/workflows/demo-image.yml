@@ -28,7 +28,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, reopened, synchronize]
+    types: [opened, reopened, synchronize, ready_for_review]
   workflow_dispatch:
     inputs:
       ref:
@@ -49,6 +49,7 @@ jobs:
     name: Build + push ghcr.io/${{ github.repository }}
     outputs:
       digest: ${{ steps.build.outputs.digest }}
+      sha: ${{ steps.t.outputs.sha }}
     # Fork PRs get no packages:write token and no secrets: skip, their image is
     # built after a maintainer pushes the branch to this repo.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -157,3 +158,95 @@ jobs:
           path: /tmp/closed-helper-proof
           if-no-files-found: warn
           retention-days: 7
+
+  delivery_regressions:
+    name: Delivery contract regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Fail-closed verdict and candidate deployment-control regressions
+        run: |
+          python3 scripts/delivery-contract.test.py
+          find deploy/oci -maxdepth 1 -name '*.test.py' -print0 | sort -z | xargs -0 -n 1 python3
+
+  delivery_fresh:
+    name: Delivery fresh exact candidate
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      DELIVERY_SHA: ${{ needs.build.outputs.sha }}
+      DELIVERY_IMAGE: ghcr.io/${{ github.repository }}@${{ needs.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          fetch-depth: 0
+      - name: Real candidate image and synthetic services
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "$DELIVERY_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario fresh --delivery-extension scripts/delivery-docker-integration.py --out /tmp/delivery-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: delivery-fresh
+          path: /tmp/delivery-proof
+          if-no-files-found: error
+          retention-days: 3
+
+  delivery_upgrade:
+    name: Delivery upgrade real updater and queue
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      DELIVERY_SHA: ${{ needs.build.outputs.sha }}
+      DELIVERY_IMAGE: ghcr.io/${{ github.repository }}@${{ needs.build.outputs.digest }}
+      DELIVERY_BASELINE: ghcr.io/manudss/iam-platform-poc@sha256:310f5b0e20e75a0dbfc5874ae8a45cbe30a44647c3cb5d3e52e9f597d8ab06cc
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          fetch-depth: 0
+      - name: Real persistent old dataset through candidate update.sh and ordered queue
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "$DELIVERY_IMAGE" --baseline-image "$DELIVERY_BASELINE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario upgrade --delivery-extension scripts/delivery-docker-integration.py --out /tmp/delivery-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: delivery-upgrade
+          path: /tmp/delivery-proof
+          if-no-files-found: error
+          retention-days: 3
+
+  delivery_contract:
+    name: Delivery contract
+    if: always()
+    needs: [build, delivery_regressions, delivery_fresh, delivery_upgrade]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: delivery-*
+          path: /tmp/delivery-receipts
+      - name: Require every exact job and every exact evidence receipt
+        env:
+          DELIVERY_NEEDS: ${{ toJSON(needs) }}
+          DELIVERY_SHA: ${{ needs.build.outputs.sha }}
+          DELIVERY_DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          printf '%s' "$DELIVERY_NEEDS" > /tmp/delivery-needs.json
+          python3 scripts/delivery-contract.py --needs /tmp/delivery-needs.json --receipts /tmp/delivery-receipts --sha "$DELIVERY_SHA" --digest "$DELIVERY_DIGEST" --out /tmp/delivery-verdict.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: delivery-verdict
+          path: /tmp/delivery-verdict.json
+          if-no-files-found: error
+          retention-days: 3

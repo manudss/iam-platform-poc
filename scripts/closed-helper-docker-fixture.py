@@ -24,8 +24,11 @@ def failure_details(stderr):
  if code:result['commandFailure']={'category':code[1],'returnCode':int(code[2]),'reason':code[3]}
  return result
 
+def a_delivery_command(args):
+ return len(args)>1 and args[0]=='python3' and pathlib.Path(args[1]).name=='delivery-docker-integration.py'
+
 def call(args,check=True):
- p=subprocess.run(args,text=True,capture_output=True,timeout=300)
+ p=subprocess.run(args,text=True,capture_output=True,timeout=1200 if a_delivery_command(args) else 300)
  if check and p.returncode:
   COMMAND_DIAGNOSTIC.update(returnCode=p.returncode,**failure_details(p.stderr))
   raise RuntimeError('fixture command failed: '+args[0]+' '+args[1]+' (private output withheld)')
@@ -70,6 +73,9 @@ def assert_postapp(r4,r6,launch,summary):
 def main():
  p=argparse.ArgumentParser()
  for arg in ['image','helper','preflight','launcher','out']:p.add_argument('--'+arg,required=True)
+ p.add_argument('--delivery-extension')
+ p.add_argument('--delivery-scenario', choices=['fresh','upgrade'])
+ p.add_argument('--baseline-image')
  p.add_argument('--pg-image',default='postgres@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73')
  p.add_argument('--bao-image',default='openbao/openbao@sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315')
  p.add_argument('--ipv6-mode',choices=['active','inactive'],default='active')
@@ -78,6 +84,8 @@ def main():
  if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted' or not os.environ.get('GITHUB_RUN_ID','').isdigit():raise ValueError('disposable GitHub hosted Actions root runner required')
  if pathlib.Path('/opt/lyam').exists() or 'lyam-net' in d('network','ls','--format','{{.Name}}').splitlines() or any(x.startswith('lyam') for x in d('ps','-a','--format','{{.Names}}').splitlines()):raise ValueError('production marker present; fixture forbidden')
  if not re.fullmatch(r'ghcr\.io/manudss/iam-platform-poc@sha256:[0-9a-f]{64}',a.image):raise ValueError('pushed exact digest required, never local tag alias')
+ if a.baseline_image and not re.fullmatch(r'ghcr\.io/manudss/iam-platform-poc@sha256:[0-9a-f]{64}',a.baseline_image):raise ValueError('exact baseline digest required')
+ if bool(a.delivery_extension)!=bool(a.delivery_scenario):raise ValueError('delivery scenario and extension required together')
  if not re.fullmatch(r'postgres@sha256:[0-9a-f]{64}',a.pg_image) or not re.fullmatch(r'openbao/openbao@sha256:[0-9a-f]{64}',a.bao_image):raise ValueError('reviewed companion digests required')
  out=pathlib.Path(a.out).resolve();out.mkdir(parents=True,exist_ok=True)
  prefix='closed-ci-'+str(os.getpid());network=prefix+'-net';pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app'
@@ -93,6 +101,7 @@ def main():
    text=pathlib.Path(source).read_text().replace('/opt/lyam/bin/closed-recovery-helper.py',str(impl))
    dest=root/('closed-'+mode);dest.write_text(text);dest.chmod(0o700);wrappers[mode]=dest
   d('pull',a.image)
+  if a.baseline_image:d('pull',a.baseline_image)
   # Real disposable companions, no provider integrations, no public ports or persistent secrets.
   netargs=['network','create']
   if a.ipv6_mode=='active':netargs+=['--ipv6','--subnet','fd42:6c79:'+format(os.getpid()%65535,'x')+'::/64']
@@ -106,7 +115,7 @@ def main():
   else:raise RuntimeError('synthetic companions unavailable')
   stage='seed-and-offline-inventory'
   # Create fictional dataset with network none and hold, then stop cold. Never use production data.
-  containers.append(seed);d('run','-d','--name',seed,'--network','none','-v',str(data)+':/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',a.image)
+  containers.append(seed);d('run','-d','--name',seed,'--network','none','-v',str(data)+':/data','-e','IAM_AUTOMATION_HOLD=1','-e','IAM_DEMO_SEED_MODE=auto',a.baseline_image or a.image)
   wait(seed,3000,'/health');d('stop',seed)
   im=json.loads(d('image','inspect',a.image))[0];pgip=inspect(pg)['NetworkSettings']['Networks'][network]['IPAddress'];baoip=inspect(bao)['NetworkSettings']['Networks'][network]['IPAddress'];gateway=ipv4_gateway(json.loads(d('network','inspect',network))[0]['IPAM']['Config'])
   gateway_family=ipaddress.ip_address(gateway).version
@@ -119,6 +128,12 @@ def main():
   conf=root/'config.json';conf.write_text(json.dumps(config));conf.chmod(0o600)
   env=root/'app.env';env.write_text('\n'.join(['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never','LYAM_DOCKER_NETWORK='+network,'LYAM_CLOSED_CONFIG='+str(conf),'LYAM_CLOSED_IMPLEMENTATION='+str(impl),'LYAM_CLOSED_PREFLIGHT='+str(wrappers['preflight']),'LYAM_CLOSED_LAUNCHER='+str(wrappers['launcher']),'IAM_PG_URL=postgres://lyam@pg:5432/lyam','IAM_BAO_ADDR=http://bao:8200','IAM_BAO_TOKEN=synthetic-ci-only','IAM_PUBLIC_ORIGIN=http://localhost:8080'])+'\n');env.chmod(0o600)
   args=['--image',a.image,'--container',app,'--env-file',str(env),'--data-dir',str(data),'--port','18089']
+  if a.delivery_scenario=='upgrade':
+   d('rename',seed,app);containers.remove(seed);containers.append(app)
+   context={'scenario':'upgrade','root':str(root),'out':str(out),'config':str(conf),'env':str(env),'proof':str(root/'upgrade-proof.json'),'image':a.image,'baselineImage':a.baseline_image,'app':app,'pg':pg,'bao':bao,'network':network,'data':str(data),'wrappers':{k:str(v) for k,v in wrappers.items()}}
+   context_path=root/'delivery-context.json';context_path.write_text(json.dumps(context));context_path.chmod(0o600)
+   stage='real-delivery-upgrade';call(['python3',a.delivery_extension,str(context_path)])
+   return
   stage='negative-ledger'
   goodconfig=conf.read_text();wrong={**config,'ledgerSHA256':'0'*64};conf.write_text(json.dumps(wrong))
   refused=call([str(wrappers['preflight']),*args],False)
@@ -157,6 +172,11 @@ def main():
   live=json.loads(call([str(impl),'--mode','postcheck','--proof-file',str(proofpath),*args]).stdout)
   def ipv6shape(x):return {'interfaces':x['interfaces'],'addresses':sorted(x['addresses'].splitlines()),'routes':sorted(' '.join(l.split()[:5]+l.split()[-1:]) for l in x['routes'].splitlines())}
   if ipv6shape(postipv6)!=ipv6shape(launch['ipv6State']):raise ValueError('IPv6 state changed after AppModule')
+  if a.delivery_extension:
+   context={'scenario':'fresh','root':str(root),'out':str(out),'config':str(conf),'env':str(env),'proof':str(proofpath),'image':a.image,'app':app,'pg':pg,'bao':bao,'network':network,'data':str(data),'wrappers':{k:str(v) for k,v in wrappers.items()}}
+   context_path=root/'delivery-context.json';context_path.write_text(json.dumps(context));context_path.chmod(0o600)
+   call(['python3',a.delivery_extension,str(context_path)])
+   return
   # Restart must return to inert FIFO, never run app or retain a release signal.
   stage='restart-inert'
   d('stop',app);d('start',app);time.sleep(2)
@@ -181,5 +201,16 @@ def main():
  finally:
   for name in reversed(containers):call(['docker','rm','-f',name],False)
   if created_network:call(['docker','network','rm',network],False)
+  if a.delivery_scenario:
+   cleanup={'containersAbsent':all(call(['docker','inspect',n],False).returncode!=0 for n in containers),'networkAbsent':call(['docker','network','inspect',network],False).returncode!=0}
+   intermediate=out/'delivery-intermediate.json'
+   record=json.loads(intermediate.read_text()) if intermediate.exists() else {'format':1,'scenario':a.delivery_scenario,'passed':False,'sha':os.environ.get('DELIVERY_SHA',''),'digest':a.image.split('@')[1],'checks':{},'evidence':{}}
+   record['cleanup']=cleanup
+   clean=all(cleanup.values()) and record.get('frontCleanup') is True
+   record['checks']['cleanup']=clean
+   record['passed']=record.get('passed') is True and clean
+   if intermediate.exists():record['evidence']['actualRun']=sha(intermediate.read_bytes())
+   (out/'delivery-receipt.json').write_text(json.dumps(record,indent=2))
+   if not clean:raise RuntimeError('delivery fixture cleanup incomplete')
   shutil.rmtree(root)
 if __name__=='__main__':main()
