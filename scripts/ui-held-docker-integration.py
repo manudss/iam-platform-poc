@@ -129,11 +129,22 @@ def main():
    if command(['docker','exec',c['app'],'node','-e',"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],False).returncode==0:break
    time.sleep(2)
   else:raise RuntimeError('held app health timeout')
+  # API readiness precedes SSR and edge startup; wait for the actual smoke entrypoint.
+  stage='synthetic-edge-readiness'
+  for _ in range(120):
+   if command(['docker','exec',c['app'],'node','-e',"fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],False).returncode==0:break
+   time.sleep(2)
+  else:raise RuntimeError('synthetic edge health timeout')
   # The public activation GET may create its SQL schema on first access. Warm the
   # complete real synthetic smoke before baseline, never ignore schema differences.
   stage='synthetic-prebaseline-warm-smoke'
   warm=subprocess.run(['docker','exec','-i',c['app'],'node','--input-type=module','-e',(binroot/'qualification-container.mjs').read_text(),'smoke'],input=json.dumps({**policy,'auth':json.loads(auth.read_text())}),capture_output=True,text=True,timeout=180)
-  if warm.returncode:raise RuntimeError('prebaseline synthetic smoke refused')
+  if warm.returncode:
+   import re
+   allowed=module(binroot/'qualification.py','warm_diagnostic').CHILD_STAGES
+   codes=re.findall(r'^QUALIFICATION_DIAG_V1:([a-z][a-z0-9-]{0,47})$',warm.stderr,re.M)
+   result['warmSmokeFixedStage']=codes[-1] if codes and codes[-1] in allowed else 'unclassified'
+   raise RuntimeError('prebaseline synthetic smoke refused')
   # Establish cold baseline with same exact image and current synthetic PG/Bao.
   stage='qualification-before';docker('stop',c['app'])
   evidence=root/'evidence'
