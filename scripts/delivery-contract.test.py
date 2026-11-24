@@ -132,6 +132,10 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         r=m.queue_failure_diagnostic(good+'\n'+bad,{})
         self.assertEqual(r['qualificationDiagnostics'],[{'exceptionType':'ValueError','sourceLines':[12,124]}])
         self.assertNotIn('private',json.dumps(r))
+        pres='PRESERVATION_DIAG_V1 '+json.dumps({'categories':['dolt','postgres-rows']})
+        self.assertEqual(m.queue_failure_diagnostic(pres,{})['preservationCategories'],['dolt','postgres-rows'])
+        badpres='PRESERVATION_DIAG_V1 '+json.dumps({'categories':['postgres-rows:private']})
+        self.assertNotIn('preservationCategories',m.queue_failure_diagnostic(badpres,{}))
     def test_unknown_stays_unknown(self):
         spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

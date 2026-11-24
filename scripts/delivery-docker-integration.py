@@ -116,6 +116,12 @@ def queue_failure_diagnostic(stderr, state):
         except (ValueError,TypeError):pass
     result={'updaterExit':code if type(code) is int else None,'categories':markers or ['unclassified']}
     if diag:result['qualificationDiagnostics']=diag[-4:]
+    allowed={'dolt','bao','credentials','postgres-schema','postgres-tables','postgres-append-preservation','postgres-rows','postgres-sequences','postgres-sequence-rewind'}
+    for raw in re.findall(r'^PRESERVATION_DIAG_V1 (\{[^\n]{1,600}\})$',stderr,re.M):
+        try:
+            v=json.loads(raw)
+            if set(v)=={'categories'} and isinstance(v['categories'],list) and 0<len(v['categories'])<=len(allowed) and all(type(c) is str and c in allowed for c in v['categories']):result['preservationCategories']=sorted(set(v['categories']))
+        except (ValueError,TypeError):pass
     return result
 
 
