@@ -539,6 +539,20 @@ def main():
         plan=json.load(sys.stdin);deploy(path,plan,a.updater)
         print('ordered deployment plan confirmed')
 
+def failure_diagnostic(error):
+    """Bounded enums and line numbers, never exception messages, paths or private values."""
+    import traceback
+    allowed={'ordered-queue','held-update-host','held-update-durable','reviewed-ui-held'}
+    kind=type(error).__name__
+    if kind not in {'ValueError','RuntimeError','FileNotFoundError','PermissionError','TypeError','KeyError','TimeoutError','TimeoutExpired','JSONDecodeError'}:kind='Other'
+    frames=[]
+    for frame in traceback.extract_tb(error.__traceback__):
+        module=Path(frame.filename).stem
+        if module in allowed and 0<frame.lineno<1000000:frames.append({'module':module,'line':frame.lineno})
+    return {'exceptionType':kind,'sourceFrames':frames[-16:]}
+
 if __name__=='__main__':
     try: main()
-    except Exception as e: print('OCI ordered queue refused: '+str(e),file=sys.stderr);sys.exit(1)
+    except Exception as e:
+        print('QUEUE_DIAG_V1 '+json.dumps(failure_diagnostic(e),sort_keys=True),file=sys.stderr)
+        print('OCI ordered queue refused: '+str(e),file=sys.stderr);sys.exit(1)

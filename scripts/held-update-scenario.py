@@ -279,6 +279,12 @@ def run(x):
                 rec['failurePhase']=phase if re.fullmatch(r'[a-z0-9-]{1,100}',phase) else 'unknown'
                 rec['sourceFrames']=[{'module':m,'line':int(n)} for m,n in re.findall(r'File "[^"\n]*/(held-update-host|ordered-queue|held-update-durable|reviewed-ui-held)\.py", line ([0-9]{1,6})',log)][-16:]
                 rec['exceptionTypes']=re.findall(r'^(ValueError|RuntimeError|FileNotFoundError|PermissionError|TypeError|KeyError|TimeoutError):',log,re.M)[-4:]
+                for raw in re.findall(r'^QUEUE_DIAG_V1 (\{[^\n]{1,2000}\})$',log,re.M):
+                    try:
+                        diag=json.loads(raw)
+                        if set(diag)=={'exceptionType','sourceFrames'} and diag['exceptionType'] in {'ValueError','RuntimeError','FileNotFoundError','PermissionError','TypeError','KeyError','TimeoutError','TimeoutExpired','JSONDecodeError','Other'} and isinstance(diag['sourceFrames'],list) and len(diag['sourceFrames'])<=16 and all(set(f)=={'module','line'} and f['module'] in {'ordered-queue','held-update-host','held-update-durable','reviewed-ui-held'} and type(f['line']) is int and 0<f['line']<1000000 for f in diag['sourceFrames']):
+                            rec['queueDiagnostic']=diag
+                    except (ValueError,TypeError,KeyError):pass
                 report['scenarios'][name]=rec
                 (ev/('scenario-%s.json'%name)).write_text(json.dumps(rec,indent=2,sort_keys=True))
                 raise RuntimeError('clean-run-contract-failed')
