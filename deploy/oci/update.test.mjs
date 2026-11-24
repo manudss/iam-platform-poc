@@ -460,3 +460,35 @@ test('closed receipt pre-existing or invalid parent refuses before stop',()=>{
 test('closed receipt write failure stops candidate without rollback',()=>{
  const f=closedSetup();const check=join(f.dir,'closed-check.sh');writeFileSync(check,readFileSync(check,'utf8').replace('[ "$2" = after ] && [ -f', '[ "$2" = after ] && mkdir "'+join(f.dir,'closed-receipt')+'"\n[ "$2" = after ] && [ -f'));const r=closedRun(f);assert.equal(r.status,4);assertClosed(f,r);assert.match(r.calls,/docker stop lyam/);assert.doesNotMatch(readFileSync(join(f.stub,'runs'),'utf8'),new RegExp(OLD));
 });
+
+test('closed readback validates archive bytes before swap and retains all prior generations even KEEP zero',()=>{
+ const f=closedSetup({pg:true,keep:0});const backups=join(f.dir,'backups');mkdirSync(backups);
+ for(const name of ['lyam-data-old.tar.gz','lyam-bao-old.tar.gz','lyam-recovery-old.tar.gz','lyam-pg-postmortem-old.sql.gz'])writeFileSync(join(backups,name),'old evidence');
+ const tar=join(f.dir,'bin','tar');writeFileSync(tar,'#!/bin/sh\ncase "$1" in -tzf) echo "readback tar $2" >> "$STUB_DIR/calls";; esac\nexec /usr/bin/tar "$@"\n');chmodSync(tar,0o755);
+ const r=closedRun(f);assert.equal(r.status,10,r.stderr);assertClosed(f,r);
+ const readback=r.calls.lastIndexOf('readback tar');const preflight=r.calls.lastIndexOf('preflight');const swap=r.calls.indexOf('docker rm -f lyam');assert.ok(readback>0&&readback<preflight&&preflight<swap,r.calls);assert.equal((r.calls.match(/^preflight$/gm)||[]).length,2);
+ for(const name of ['lyam-data-old.tar.gz','lyam-bao-old.tar.gz','lyam-recovery-old.tar.gz','lyam-pg-postmortem-old.sql.gz'])assert.equal(readFileSync(join(backups,name),'utf8'),'old evidence');
+ const receipt=readFileSync(join(f.dir,'closed-receipt'),'utf8');assert.match(receipt,/backup_readback_proof=/);assert.match(receipt,/backup_readback_sha256=[a-f0-9]{64}/);
+ const proof=readdirSync(backups).find(n=>n.startsWith('closed-backup-readback-'));assert.ok(proof);assert.match(readFileSync(join(backups,proof),'utf8'),/restore_tested=false\npruning=disabled/);
+});
+
+test('closed corrupted data recovery Bao and PG archives refuse exact readback reason before any swap',()=>{
+ for(const family of ['data','recovery','bao','pg']){
+  const f=closedSetup({pg:family==='pg'});
+  if(family==='bao'){
+   const bao=join(f.dir,'bao'),keys=join(f.dir,'bao-keys');mkdirSync(bao);mkdirSync(keys);writeFileSync(join(bao,'storage'),'synthetic');writeFileSync(join(keys,'key'),'synthetic');writeFileSync(join(f.dir,'bao.hcl'),'synthetic');
+   writeFileSync(f.env,readFileSync(f.env,'utf8')+`LYAM_BACKUP_BAO_DIR=${bao}\nLYAM_BACKUP_BAO_CONTAINER=bao\nLYAM_BACKUP_BAO_KEYS_DIR=${keys}\nLYAM_BAO_CONFIG_FILE=${join(f.dir,'bao.hcl')}\nLYAM_BAO_POLICY_FILE=${join(f.dir,'bao-policy.hcl')}\nLYAM_STACK_FILES=${join(f.dir,'lyam-gate.caddy')}\n`);
+  }
+  if(family==='pg'){
+   const gzip=join(f.dir,'bin','gzip');writeFileSync(gzip,'#!/bin/sh\nif [ "$1" = -f ]; then /usr/bin/gzip "$@" || exit $?; printf corrupt > "$2.gz"; exit 0; fi\nexec /usr/bin/gzip "$@"\n');chmodSync(gzip,0o755);
+  } else {
+   const tar=join(f.dir,'bin','tar');writeFileSync(tar,'#!/bin/sh\n/usr/bin/tar "$@" || exit $?\ncase "$*" in *lyam-'+family+'-*) if [ "$1" != -tzf ]; then for arg; do case "$arg" in *lyam-'+family+'-*.tar.gz) printf corrupt > "$arg";; esac; done; fi;; esac\n');chmodSync(tar,0o755);
+  }
+  const r=closedRun(f);assert.equal(r.status,4,`${family}: ${r.stderr}`);assertClosed(f,r);assert.doesNotMatch(r.calls,/docker rm|docker run|docker start lyam/);assert.match(r.stderr,family==='pg'?/closed PostgreSQL dump readback failed; no candidate swap/:/closed backup archive readback failed; no candidate swap/);assert.ok(readdirSync(join(f.dir,'backups')).some(n=>n.startsWith('lyam-'+family+'-')));
+ }
+});
+
+test('closed post-backup preflight failure preserves archives and refuses before docker rm',()=>{
+ const f=closedSetup();const preflight=join(f.dir,'preflight.sh');writeFileSync(preflight,'#!/bin/sh\necho preflight >> "$STUB_DIR/calls"\nif [ -f "$STUB_DIR/preflight-once" ]; then exit 1; fi\ntouch "$STUB_DIR/preflight-once"\n');
+ const r=closedRun(f);assert.equal(r.status,4,r.stderr);assertClosed(f,r);assert.match(r.stderr,/closed post-backup exact image\/ledger\/companion preflight failed; no candidate swap/);assert.doesNotMatch(r.calls,/docker rm|docker run/);assert.ok(readdirSync(join(f.dir,'backups')).some(n=>n.startsWith('lyam-recovery-')));
+});

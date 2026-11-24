@@ -101,5 +101,18 @@ class DeliveryVerdict(unittest.TestCase):
         self.assertFalse(self.passed())
 
 
+class HeldQueueFixture(unittest.TestCase):
+    def test_actual_format3_refusals_do_not_mutate_state_or_run_updater(self):
+        source=Path(__file__).resolve().parents[1]
+        spec=importlib.util.spec_from_file_location('delivery_fixture',source/'scripts/delivery-docker-integration.py')
+        fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
+        queue=fixture.load_module(source/'deploy/oci/ordered-queue.py','held_fixture_queue')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);base='a'*40;digest='sha256:'+'b'*64
+            state={'format':2,'history':[{'sha':base,'digest':digest}], 'recovery_fence':base,'resume_required':True,'recoveries':[{'target':{'sha':base}}]}
+            plan={'format':1,'base':base,'entries':[{'sha':'c'*40,'parent':base,'digest':'sha256:'+'d'*64}]}
+            fixture.verify_held_queue_refusals(queue,root,source/'deploy/oci',state,plan,root/'never-updater')
+            self.assertEqual(json.loads((root/'held-queue.json').read_text())['history'][-1]['sha'],base)
+
 if __name__ == '__main__':
     unittest.main()

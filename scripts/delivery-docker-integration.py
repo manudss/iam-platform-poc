@@ -50,6 +50,35 @@ def health(app):
     raise RuntimeError('candidate-edge-health-timeout')
 
 
+def verify_held_queue_refusals(qmodule,root,bindir,guarded_state,plan,wrapper):
+    held=root/'held-queue.json'
+    held_state=json.loads(json.dumps(guarded_state));held_state['format']=3
+    held_state['history'][-1]['mode']='ui-open-automation-held'
+    held.write_text(json.dumps(held_state));held_original=held.read_bytes()
+    if qmodule.load(held)!=held_state:raise RuntimeError('held-fixture-invalid')
+    attempted=[]
+    try:qmodule.deploy(held,plan,str(wrapper),runner=lambda *a,**k:attempted.append(True))
+    except ValueError as error:
+        if str(error)!='prior deployment unresolved, operator review required':raise
+    else:raise RuntimeError('held-deploy-not-refused')
+    resume={'format':1,'kind':'reviewed-resume','state_fingerprint':qmodule.fingerprint(held_state),
+            'expected_delivered':{k:held_state['history'][-1][k] for k in ['sha','digest']},
+            'authorization_ref':'synthetic-refusal-only','evidence_refs':['synthetic-fixture']}
+    try:qmodule.resume_reviewed(held,resume,'fixture',observe=lambda *a:attempted.append(True))
+    except ValueError as error:
+        if str(error)!='held UI is not full automation delivery; generic resume forbidden':raise
+    else:raise RuntimeError('held-resume-not-refused')
+    held_status=run(['python3',str(bindir/'ordered-queue.py'),'status','--state',str(held),'--pause-file',str(root/'absent-pause')],False)
+    if held_status.returncode==0 or 'deployment queue blocked or paused' not in held_status.stderr:raise RuntimeError('held-status-not-refused')
+    if attempted or held.read_bytes()!=held_original:raise RuntimeError('held-queue-mutated')
+    unsupported=root/'unsupported-queue.json'
+    unsupported.write_text(json.dumps({**guarded_state,'format':4}))
+    try:qmodule.load(unsupported)
+    except ValueError as error:
+        if str(error)!='uninitialized or corrupt deployment history':raise
+    else:raise RuntimeError('unknown-format-not-refused')
+
+
 def main():
     if os.geteuid() != 0 or os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
         raise RuntimeError('disposable-runner-required')
@@ -249,18 +278,13 @@ raise SystemExit(r.returncode)
             except ValueError as error:refusal=str(error)
             if refusal!='prior deployment unresolved, operator review required':raise RuntimeError('wrong-queue-guard-refusal')
             if attempted or guarded.read_bytes()!=original:raise RuntimeError('guarded-queue-mutated')
-            unsupported=root/'unsupported-queue.json'
-            unsupported.write_text(json.dumps({**guarded_state,'format':3}))
-            try:qmodule.load(unsupported)
-            except ValueError as error:
-                if str(error)!='uninitialized or corrupt deployment history':raise
-            else:raise RuntimeError('format3-support-needs-explicit-scenario')
+            verify_held_queue_refusals(qmodule,root,bindir,guarded_state,plan,wrapper)
             pause=root/'PAUSE';pause.write_text('synthetic-guard\n')
             paused=run(['python3',str(bindir/'ordered-queue.py'),'drain','--state',str(queue),'--pause-file',str(pause),'--updater',str(wrapper)],False,input=json.dumps(plan))
             if paused.returncode==0 or 'deployment paused; no pending entry written' not in paused.stderr or json.loads(queue.read_text())!=state:raise RuntimeError('paused-queue-was-not-refused')
             pause.unlink() # Fixture-owned pause scenario finished; normal scenario has separate state.
             result['checks']['guardedQueueRefusal']=True
-            result['guardedQueueCoverage']={'format2ResumeRequiredRefusal':refusal,'format3Status':'unsupported-format-rejected-not-resume-proof','pauseExit':paused.returncode,'queueUnchanged':json.loads(queue.read_text())==state,'productionStateNotReplayed':True}
+            result['guardedQueueCoverage']={'format2ResumeRequiredRefusal':refusal,'format3Status':'ui-held-deploy-resume-status-refused-state-unchanged','pauseExit':paused.returncode,'queueUnchanged':json.loads(queue.read_text())==state,'productionStateNotReplayed':True}
             q = run(['python3', str(bindir / 'ordered-queue.py'), 'drain', '--state', str(queue),
                      '--pause-file', str(root / 'PAUSE'), '--updater', str(wrapper)], False, input=json.dumps(plan))
             result['queueExit'] = q.returncode
@@ -339,7 +363,7 @@ raise SystemExit(r.returncode)
             result['incidentReceiptConsumer'] = {'applicable':consumer.is_file()}
             if consumer.is_file():
                 parser = load_module(consumer, 'candidate_receipt_consumer')
-                parser.receipt_fields(receipt.read_text())
+                parser.receipt_fields(receipt.read_bytes())
                 result['incidentReceiptConsumer']['passed']=True
         result['passed'] = True
     except Exception as error:
@@ -348,7 +372,9 @@ raise SystemExit(r.returncode)
         result['errorType'] = type(error).__name__
         result['commandFailure']=COMMAND_FAILURE
         if str(error) in {'candidate-qualifier-smoke-refused', 'candidate-receipt-consumer-absent',
-                          'real-closed-updater-refused', 'real-queue-update-refused', 'candidate-ui-document-refused'}:
+                          'real-closed-updater-refused', 'real-queue-update-refused', 'candidate-ui-document-refused',
+                          'held-fixture-invalid', 'held-deploy-not-refused', 'held-resume-not-refused',
+                          'held-status-not-refused', 'held-queue-mutated', 'unknown-format-not-refused'}:
             result['reason'] = str(error)
         raise
     finally:
