@@ -73,8 +73,23 @@ def start(folder,engagement,py,du_path,du,poll=2):
    raise cleaning from original
   raise
 
+def independent_cgroup_state(cg):
+ base=Path('/sys/fs/cgroup')/cg.lstrip('/')
+ try:base.stat()
+ except FileNotFoundError:return 'gone'
+ def bad(error):raise error
+ populated=False
+ for folder,dirs,files in os.walk(base,onerror=bad,followlinks=False):
+  here=Path(folder)
+  if here.is_symlink() or any((here/d).is_symlink() for d in dirs):raise RuntimeError('cgroup-symlink-refused')
+  if (here/'cgroup.procs').read_text().strip():populated=True
+  events=dict(line.split() for line in (here/'cgroup.events').read_text().splitlines())
+  if events.get('populated') not in ('0','1'):raise RuntimeError('cgroup-events-unknown')
+  if events['populated']=='1':populated=True
+ return 'populated' if populated else 'empty'
+
 def cleanup(units,known,du,folder=None):
- errors=[];before={}
+ errors=[];before={};stops={};proof={};preproof={}
  for unit in units:
   try:
    p=du.unit_properties(unit)
@@ -82,29 +97,46 @@ def cleanup(units,known,du,folder=None):
    if not (known.get(unit) or {}).get('cgroup') and p['ControlGroup']:
     known[unit]={'identity':du.identity(int(p['MainPID'])) if int(p['MainPID'])>0 else None,'cgroup':p['ControlGroup']}
   except Exception:before[unit]={'properties':'unavailable'}
+ for unit in units:
+  old=known.get(unit) or {};preproof[unit]={}
+  try:preproof[unit]['originalMainState']=du.state_of(old['identity'])
+  except Exception:preproof[unit]['originalMainState']='unknown'
+  try:
+   cg=old['cgroup']
+   if not cg or not cg.startswith('/') or '..' in cg.split('/') or not cg.endswith('/'+unit):raise RuntimeError('cgroup-not-bound')
+   preproof[unit]['originalCgroupState']=independent_cgroup_state(cg)
+  except Exception:preproof[unit]['originalCgroupState']='unknown'
  # Preserve terminal contract state before stopping, including GC. No inference from GC to cleanup success.
  # Every unit gets an independent stop attempt, even if its peer is gone or stopping fails.
  for unit in units:
   try:
-   if command(['systemctl','stop',unit],False).returncode:errors.append('stop-refused')
+   result=command(['systemctl','stop',unit],False)
+   expected='Failed to stop '+unit+': Unit '+unit+' not loaded.'
+   stops[unit]={'returnCode':result.returncode,'exactUnitNotLoaded':result.stderr.strip()==expected}
+   if result.returncode:errors.append('stop-refused')
   except Exception:errors.append('stop-exception')
  for unit in units:
   old=known.get(unit) or {};ident=old.get('identity');cg=old.get('cgroup')
   if ident is None:errors.append('identity-not-captured')
   else:
    try:
-    if du.state_of(ident)!='absent':errors.append('main-not-confirmed-absent')
+    state=du.state_of(ident);proof.setdefault(unit,{})['originalMainState']=state
+    if state!='absent':errors.append('main-not-confirmed-absent')
    except Exception:errors.append('identity-unverifiable')
   if not cg or not cg.startswith('/') or '..' in cg.split('/') or not cg.endswith('/'+unit):errors.append('cgroup-not-captured');continue
-  base=Path('/sys/fs/cgroup')/cg.lstrip('/')
   try:
-   try:base.stat();present=True
-   except FileNotFoundError:present=False
-   if present:
-    for procs in base.rglob('cgroup.procs'):
-     if procs.read_text().strip():errors.append('cgroup-not-empty')
+   cstate=independent_cgroup_state(cg)
+   proof.setdefault(unit,{})['originalCgroupState']=cstate
+   if cstate not in ('empty','gone'):errors.append('cgroup-not-empty')
   except Exception:errors.append('cgroup-unverifiable')
- if folder is not None:(Path(folder)/'systemd-cleanup.json').write_text(json.dumps({'preCleanup':before,'errors':sorted(set(errors)),'passed':not errors}))
+ if folder is not None:
+  try:
+   bindings=json.loads((Path(folder)/'unit-bindings.json').read_text());record=json.loads((Path(folder)/'worker-unit-start.json').read_text());e=bindings['worker']
+   expected={k:e[k] for k in ['unit','invocationID','pid','starttime','boot_id','controlGroup']};expected['engagementID']=bindings['engagementID'];expected['start']=record['start']
+   proof['workerStartRecordMatchesBinding']=record==expected and type(record['start']) is int and record['start']>0
+   proof['workerStartMatchesPreCleanupManager']=str(record['start'])==before[e['unit']]['ExecMainStartTimestampMonotonic']
+  except Exception:proof['workerStartRecordMatchesBinding']=False;proof['workerStartMatchesPreCleanupManager']=False
+ if folder is not None:(Path(folder)/'systemd-cleanup.json').write_text(json.dumps({'preCleanup':before,'preCleanupBoundProcessAndCgroupProof':preproof,'cgroupProbe':'independent-harness-procs-and-events-recursive','stopResults':stops,'boundProcessAndCgroupProof':proof,'errors':sorted(set(errors)),'passed':not errors}))
  if errors:raise RuntimeError('systemd-cleanup-incomplete:'+','.join(sorted(set(errors))))
 
 def stop(handles):

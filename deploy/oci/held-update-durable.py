@@ -133,6 +133,9 @@ def temporal_ok(folder,p,e,engagement):
  if not f.exists():return False
  rec=read(f);st,ex=p['ExecMainStartTimestampMonotonic'],p['ExecMainExitTimestampMonotonic']
  return st.isdigit() and ex.isdigit() and int(st)>0 and rec==worker_record(st,e,engagement) and int(ex)>=int(st)   # the whole record (engagement, unit, invocation, pid, starttime, boot, cgroup) must match, not only the number
+def r_checked_again(unit,before):
+ """True when the manager's record changed since it was read (and the cgroup scanned): a terminal claim must survive a fresh re-read."""
+ return unit_properties(unit)!=before
 def verify_units(folder,role,spec):
  """Differentiated check. The calling role's own unit must be active/running and exact. The watchdog always requires itself exact.
  The worker unit is launched with RemainAfterExit=yes so the manager keeps its record (InvocationID, ControlGroup, Result, ExecMain*) after the
@@ -146,8 +149,12 @@ def verify_units(folder,role,spec):
  status={};exit_status=None
  for r in ('worker','watchdog'):
   e=b[r];p=unit_properties(e['unit'])
+  if r=='worker':worker_props=p
   if r=='worker' and role=='watchdog' and p['InvocationID']=='' and p['ControlGroup']=='' and p['ActiveState'] in ('inactive','failed') and p['MainPID']=='0':raise UnitRecordLost('unit record no longer held by the manager')
-  if not e['unit'].endswith('-'+r+'.service') or not e['invocationID'] or p['InvocationID']!=e['invocationID'] or p['ControlGroup']!=e['controlGroup']:raise ValueError('unit identity differs from binding')
+  # A retained TERMINAL worker may have lost its manager-side ControlGroup (cgroup removed after exit) while the invocation record is retained.
+  # That is accepted only for the worker seen from the watchdog in an exited/failed state with MainPID 0; running units must match the bound cgroup exactly.
+  cg_retired=(r=='worker' and role=='watchdog' and p['ControlGroup']=='' and p['MainPID']=='0' and (p['ActiveState'],p['SubState']) in (('active','exited'),('failed','failed')))
+  if not e['unit'].endswith('-'+r+'.service') or not e['invocationID'] or p['InvocationID']!=e['invocationID'] or (p['ControlGroup']!=e['controlGroup'] and not cg_retired):raise ValueError('unit identity differs from binding')
   if p['User'] not in ('root','') or p['Restart']!='no' or p['KillMode']!='control-group' or any(p[k]!='infinity' for k in ('RuntimeMaxUSec','TimeoutStartUSec','TimeoutStopUSec')) or p['UMask']!='0077':raise ValueError('unit properties differ from the reviewed contract')
   if p['RemainAfterExit']!=('yes' if r=='worker' else 'no'):raise ValueError('unit retention differs from the reviewed contract')
   if not p['StandardOutput'].startswith('append') or not p['StandardError'].startswith('append'):raise ValueError('unit output not append-only')
@@ -161,6 +168,7 @@ def verify_units(folder,role,spec):
    elif p['ActiveState']=='failed' and p['SubState']=='failed' and FAILED_TUPLES.get(p['Result']) and p['ExecMainCode']==FAILED_TUPLES[p['Result']][0] and 1<=int(p['ExecMainStatus'])<=FAILED_TUPLES[p['Result']][1]:status[r]='failed'   # coherent terminal tuple only; timeout/watchdog/resources are not proof of end
    else:raise ValueError('unit state not acceptable for '+r)
   else:raise ValueError('unit state not acceptable for '+r)
+ if status['worker']!='active' and r_checked_again(b['worker']['unit'],worker_props):raise ValueError('unit record drifted between the cgroup scan and the manager re-read')
  if status['watchdog']!='active':raise ValueError('watchdog unit must be active')
  me=b[role]
  if os.environ.get('INVOCATION_ID')!=me['invocationID'] or os.getpid()!=me['pid']:raise ValueError('this process is not the bound unit main process')

@@ -168,6 +168,45 @@ class D(unittest.TestCase):
    import shutil as _sh;_sh.rmtree(cgd/'child');(cgd/'cgroup.events').unlink()
    (cgd/'cgroup.procs').write_text('');import shutil;shutil.rmtree(cgd);self.assertEqual(V()['_worker_status'],'exited')   # cgroup gone: accepted only with the retained manager record
    cgd.mkdir();(cgd/'cgroup.procs').write_text('')
+   # manager-side ControlGroup retired after exit (real run 45480617922): the invocation record is retained, only the cgroup is empty
+   retired={**ex,'ControlGroup':''}
+   put(retired,wd);r=V();self.assertEqual((r['_worker_status'],r['_worker_exit']),('exited',0))              # bound path empty => accepted
+   put({**ex,'ActiveState':'failed','SubState':'failed','Result':'exit-code','ExecMainStatus':'3','ControlGroup':''},wd);self.assertEqual(V()['_worker_status'],'failed')
+   import shutil as _s;_s.rmtree(cgd);put(retired,wd);self.assertEqual(V()['_worker_status'],'exited');cgd.mkdir();(cgd/'cgroup.procs').write_text('')   # bound path certainly gone => accepted
+   (cgd/'cgroup.procs').write_text('9\n');put(retired,wd)
+   with self.assertRaises(ValueError,msg='retired manager cgroup but bound path populated'):V()
+   (cgd/'cgroup.procs').write_text('');(cgd/'kid').mkdir();(cgd/'kid'/'cgroup.procs').write_text('5\n')
+   with self.assertRaises(ValueError,msg='retired manager cgroup but a live descendant of the bound path'):V()
+   _s.rmtree(cgd/'kid');(cgd/'cgroup.procs').chmod(0)
+   try:
+    if os.geteuid()!=0:
+     with self.assertRaises(ValueError,msg='bound path unreadable is unknown, not ended'):V()
+   finally:(cgd/'cgroup.procs').chmod(0o644)
+   for name,w in (('running with empty cgroup',{**ex,'ControlGroup':'','ActiveState':'active','SubState':'running','MainPID':str(dead['pid'])}),('other non-empty cgroup',{**ex,'ControlGroup':'/other'}),
+                  ('retired cgroup but empty invocation (lost record is a different category)',{**ex,'ControlGroup':'','InvocationID':''}),('retired cgroup, other invocation',{**ex,'ControlGroup':'','InvocationID':'x'*32}),
+                  ('retired cgroup but MainPID set',{**ex,'ControlGroup':'','MainPID':'5'}),('retired cgroup but inactive/dead',{**ex,'ControlGroup':'','ActiveState':'inactive','SubState':'dead'}),
+                  ('retired cgroup, start stamp drift',{**ex,'ControlGroup':'','ExecMainStartTimestampMonotonic':'1001'}),('retired cgroup, exit before start',{**ex,'ControlGroup':'','ExecMainExitTimestampMonotonic':'1'}),
+                  ('retired cgroup, ExecMainPID other',{**ex,'ControlGroup':'','ExecMainPID':'1'})):
+    put(w,wd)
+    with self.assertRaises(ValueError,msg=name):V()
+   put({**ex,'InvocationID':'','ControlGroup':'','ActiveState':'inactive','SubState':'dead','ExecMainPID':'0'},wd)
+   with self.assertRaises(du.UnitRecordLost):V()                                                               # lost record stays its own report-only category
+   put({**ex,'ControlGroup':''},wd);(self.f/'worker-unit-start.json').rename(self.f/'keep2.json')
+   with self.assertRaises(ValueError,msg='retired cgroup without the recorded running start'):V()
+   (self.f/'keep2.json').rename(self.f/'worker-unit-start.json')
+   # drift between the cgroup scan and the manager re-read
+   real=du.unit_properties;calls=[0]
+   def drifting(unit):
+    p=real(unit)
+    if unit==wu:
+     calls[0]+=1
+     if calls[0]>=2:p=dict(p,ControlGroup='/w',ExecMainExitTimestampMonotonic='2001')
+    return p
+   put(retired,wd);du.unit_properties=drifting
+   try:
+    with self.assertRaises(ValueError,msg='manager record changed after the cgroup scan'):V()
+   finally:du.unit_properties=real
+   put(retired,wd);self.assertEqual(V()['_worker_status'],'exited')
    bind({'pid':os.getpid(),'starttime':me['starttime'],'boot_id':me['boot_id']});put(ex,wd)
    with self.assertRaises(ValueError,msg='bound pid still alive while unit says exited'):V()
    bind();put(ex,wd)
