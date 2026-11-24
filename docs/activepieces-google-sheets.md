@@ -143,3 +143,13 @@ a display value. Run-detail/list responses omit that internal graph; pending
 steps have no input, executed steps record their resolved input. Dry-run preview
 decodes literals without evaluating step placeholders. Definitions are unchanged.
 Raw operational DB backups retain encoded graph bytes for exact recovery.
+
+## Retained native state and trigger edits
+Configuration changes, retirement to manual, deletion/recreation and disable/re-enable
+(including the tenant plugin) retain a review tombstone. Old cursors, pending events
+and batch envelopes are preserved, never reused in a changed graph or automatically
+purged. Residual state without a subscription also blocks activation. Provider is
+in the fingerprint, so legacy fingerprints require review. This is an intentional
+product limitation: no automatic reactivation/unlock is provided. Operators must
+reconcile provider channels, cursors and pending deliveries before deliberate
+recovery. A review tombstone does not prove the remote channel has stopped.

@@ -10,7 +10,7 @@ import {BranchRegistries} from '../plugins/v1/branch-registries.js';
 import {branchContext,workspaceMode} from '../workspace/context.js';
 import {dataReady} from '../migrations/readiness.js';
 const piece=()=>loadPluginModule('workflow-connectors','google-sheets-full.mjs') as any;
-interface State {fingerprint:string;key:string;config:Record<string,unknown>;token:string;lastRenew:number;status:'enabling'|'active'|'review'|'disabling';}
+interface State {fingerprint:string;key:string;config:Record<string,unknown>;token:string;lastRenew:number;status:'enabling'|'active'|'review'|'disabling';reviewReason?:string;}
 /** Persist native trigger cursors, pending delivery and subscription intent before effects.
  * Crashed/uncertain subscriptions stop for review, never blindly register a second channel. */
 @Injectable()
@@ -73,18 +73,26 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
     if(defs.some(d=>d.tenant===orphan.tenant&&d.id===id&&this.key(d)))continue;
     const state=orphan.state as State;if(state.status!=='active')continue;
     const d={tenant:orphan.tenant,id} as DefinitionRow;
-    try{await this.locked(d.tenant,id,async()=>{const kv=this.kv(d.tenant,id);await kv.put('lyam:subscription',{...state,status:'disabling'});await this.invoke(d,state,'onDisable');await kv.delete('lyam:subscription');});}catch{this.log.warn('Deleted native trigger subscription requires review');}
+    try{await this.locked(d.tenant,id,async()=>{const kv=this.kv(d.tenant,id);await kv.put('lyam:subscription',{...state,status:'review',reviewReason:'Native trigger retired or changed; preserve subscription and durable state for operator reconciliation'});});}catch{this.log.warn('Deleted native trigger subscription requires review');}
   }
   for(const d of defs){if(!this.key(d))continue;try{await this.locked(d.tenant,d.id,async()=>{
    const kv=this.kv(d.tenant,d.id),prior=await kv.get('lyam:subscription') as State|null;
-   const key=this.key(d),config=d.trigger!.config??{},fingerprint=createHash('sha256').update(JSON.stringify([key,config])).digest('hex');
+   const key=this.key(d),config=d.trigger!.config??{},fingerprint=createHash('sha256').update(JSON.stringify(['google-sheets',key,config])).digest('hex');
    const active=d.active!==false&&await this.enabled(d.tenant);
-   if(prior&&(prior.fingerprint!==fingerprint||!active)){
+   if(prior&&prior.fingerprint!==fingerprint){
+    // Native cursors and pending envelopes share this definition's durable scope.
+    // Reusing it for a changed provider/config would reinterpret old events and
+    // cursors. Preserve everything, including the former subscription, for review.
+    if(prior.status==='active')await kv.put('lyam:subscription',{...prior,status:'review',reviewReason:'Trigger configuration changed; preserve prior subscription, cursors and pending events for operator reconciliation'});
+    return;
+   }
+   if(prior&&!active){
     if(prior.status!=='active')return;
-    await kv.put('lyam:subscription',{...prior,status:'disabling'});await this.invoke(d,prior,'onDisable');await kv.delete('lyam:subscription');return;
+    await kv.put('lyam:subscription',{...prior,status:'disabling'});await this.invoke(d,prior,'onDisable');await kv.put('lyam:subscription',{...prior,status:'review',reviewReason:'Native trigger retired or changed; preserve subscription and durable state for operator reconciliation'});return;
    }
    if(!active)return;
    let state=prior;
+   if(!state&&await this.store.pieceHasTriggerState(d.tenant,this.scope(d.id))){await kv.put('lyam:subscription',{key,config,fingerprint,token:'',lastRenew:0,status:'review',reviewReason:'Native trigger retired or changed; preserve subscription and durable state for operator reconciliation'});return;}
    if(!state){state={key,config,fingerprint,token:randomBytes(24).toString('hex'),lastRenew:Date.now(),status:'enabling'};await kv.put('lyam:subscription',state);try{await this.invoke(d,state,'onEnable');state.status='active';await kv.put('lyam:subscription',state);}catch{await kv.put('lyam:subscription',{...state,status:'review'});throw Error('Subscription setup requires review');}}
    if(state.status!=='active')return;
    await this.recoverEnvelope(d);await this.drain(d);
@@ -98,7 +106,7 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
   const d=await this.store.getDefinition(tenant,id,this.store.liveRef);if(!d||d.active===false||!this.key(d)||!await this.enabled(tenant))throw new NotFoundException('Unknown notification subscription');
   const state=await this.kv(tenant,id).get('lyam:subscription') as State|null;
   const a=Buffer.from(state?.token??''),b=Buffer.from(token);if(!state||state.status!=='active'||a.length!==b.length||!timingSafeEqual(a,b))throw new NotFoundException('Unknown notification subscription');
-  const fingerprint=createHash('sha256').update(JSON.stringify([this.key(d),d.trigger?.config??{}])).digest('hex');if(fingerprint!==state.fingerprint)throw new NotFoundException('Unknown notification subscription');
+  const fingerprint=createHash('sha256').update(JSON.stringify(['google-sheets',this.key(d),d.trigger?.config??{}])).digest('hex');if(fingerprint!==state.fingerprint)throw new NotFoundException('Unknown notification subscription');
   const watch=await this.kv(tenant,id).get(state.key) as any;
   if(!watch||watch.id!==headers['x-goog-channel-id']||watch.resourceId!==headers['x-goog-resource-id'])throw new NotFoundException('Unknown notification subscription');
   const safeHeaders=Object.fromEntries(['x-goog-channel-id','x-goog-resource-id','x-goog-resource-state','x-goog-changed','x-goog-message-number'].map(k=>[k,String(headers[k]??'').slice(0,500)]));

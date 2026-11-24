@@ -26,6 +26,13 @@ describe('connection metadata on real Dolt', {skip:!have && 'DOLT_BIN missing'},
     await versioning.createBranch('connections-edit','main');
   });
   after(async()=>{process_?.kill();await new Promise(r=>setTimeout(r,500));if(dir)rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200});for(const k of Object.keys(saved)){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}});
+  it('residual native state is checked by actual tenant and scope keys, excluding only lock',async()=>{
+    const a=new WorkflowStore(versioning),tenant='tenant-residual',scope='trigger:review';
+    assert.equal(await a.pieceHasTriggerState(tenant,scope),false);
+    await a.piecePut(tenant,scope,'lyam:lock',{owner:'fixture'});assert.equal(await a.pieceHasTriggerState(tenant,scope),false);
+    await a.piecePut('other-tenant',scope,'cursor',{});await a.piecePut(tenant,'trigger:other','cursor',{});assert.equal(await a.pieceHasTriggerState(tenant,scope),false);
+    for(const key of ['cursor','lyam:pending','lyam:batch-envelope','lyam:subscription']){await a.piecePut(tenant,scope,key,{});assert.equal(await a.pieceHasTriggerState(tenant,scope),true,key);await a.pieceDelete(tenant,scope,key);assert.equal(await a.pieceHasTriggerState(tenant,scope),false,key);}
+  });
   it('versions metadata on a working branch without plaintext credentials, cross-tenant leaks or a dirty main',async()=>{
     process.env.IAM_WORKSPACE_MODE='1';
     const body={name:'Jira',provider:'jira',config:{instanceUrl:'https://team.atlassian.net',email:'tester@example.invalid'},secret:'FICTIONAL-TEST-SECRET'};
