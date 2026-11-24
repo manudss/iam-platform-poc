@@ -1,6 +1,6 @@
 import { RevealPassword } from './reveal-password';
 import { Brand, Branding } from './branding';
-import { Component, signal } from '@angular/core';
+import { afterNextRender, Component, inject, Injector, signal } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ThemeSwitch } from './theme-switch';
@@ -110,7 +110,8 @@ export class SignupPage {
     this.fieldErrs.set(fe);
     this.focusErr();
   }
-  private focusErr() { if (typeof document !== 'undefined') setTimeout(() => document.getElementById('su-error')?.focus()); }
+  private readonly injector = inject(Injector);
+  private focusErr() { afterNextRender(() => document.getElementById('su-error')?.focus(), { injector: this.injector }); }
   protected async send() {
     if (this.busy()) return;
     this.busy.set(true); this.errTitle.set(''); this.issues.set([]); this.fieldErrs.set({});
@@ -131,7 +132,7 @@ export class SignupPage {
     } catch {
       this.pw = '';
       this.errTitle.set('Your request could not be sent.'); this.issues.set([{ text: 'Check your connection and try again.' }]);
-      if (typeof document !== 'undefined') setTimeout(() => document.getElementById('su-error')?.focus());
+      this.focusErr();
     } finally { this.busy.set(false); }
   }
   protected async confirm() {
