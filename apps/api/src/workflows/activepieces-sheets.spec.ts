@@ -16,6 +16,10 @@ describe('complete installed Google Sheets catalogue, no live Google',()=>{
   for(const[key,a]of Object.entries(p._actions)as any){const b=externalBlock(full.sheetBlockType(key))!;assert.ok(b,key);assert.deepEqual(b.fields.map(x=>x.key),Object.entries(a.props).filter(([,p]:any)=>p.type!=='MARKDOWN').map(([k])=>k));const config=b.validate(cfg(a));assert.deepEqual(await b.run({config,dryRun:true,settings:new Proxy({},{get(){throw Error('no credential read');}})}as any),{confirmed:false,dryRun:true});validateGraph({nodes:[{id:'test',name:'Test',type:b.type,config}],edges:[]});}
   for(const[key,e]of Object.entries(full.GOOGLE_SHEETS_EVENTS)as any){assert.equal(validateTrigger({event:key,config:{connectionId:'conn-test',...cfg(p._triggers[e.activepiecesTrigger])}})!.event,key);}
  });
+ it('native runtime parser preserves literal braces and Unicode instead of rejecting data',async()=>{
+  assert.equal(full.sheetProps({v:{type:'SHORT_TEXT',required:true}},{v:'literal{{steps.missing.result}}\uE000'},true).v,'literal{{steps.missing.result}}\uE000');
+  const action=full.SHEETS_ACTIONS.update_row,old=action.run;let seen:any;action.run=async(ctx:any)=>{seen=ctx.propsValue;return{saved:true};};try{const block=externalBlock(full.sheetBlockType('update_row'))!;await block.run({config:{...cfg(action),values:'{"A":"literal{{braces}}\uE000"}'},settings,pieceRuntime:{...runtime,withLock:async(fn:any)=>fn()},markEffectPending:async()=>{}}as any);assert.equal(seen.values.A,'literal{{braces}}\uE000');}finally{action.run=old;}
+ });
  it('an upstream native read uses its installed implementation and exact output shape',async()=>{
   nock.disableNetConnect();nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Source'}}]});nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(function(uri:string){return [200,{values:decodeURIComponent(uri).includes('A1:ZZZ1')?[['name']]:[['Camille']]}];});
   // OAuth fixture goes directly through the installed action, not a fake implementation.
