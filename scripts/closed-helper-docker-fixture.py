@@ -110,15 +110,15 @@ def main():
   if a.delivery_scenario:netargs+=['--internal']
   if a.ipv6_mode=='active':netargs+=['--ipv6','--subnet','fd42:6c79:'+format(os.getpid()%65535,'x')+'::/64']
   d(*netargs,network);created_network=True
-  containers.append(pg);d('run','-d','--name',pg,'--network',network,'-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',a.pg_image)
-  containers.append(bao);d('run','-d','--name',bao,'--network',network,'--cap-add','IPC_LOCK','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-ci-only',a.bao_image,'server','-dev','-dev-listen-address=0.0.0.0:8200')
+  containers.append(pg);d('run','-d','--name',pg,'--network',network,'--network-alias','pg','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',a.pg_image)
+  containers.append(bao);d('run','-d','--name',bao,'--network',network,'--network-alias','bao','--cap-add','IPC_LOCK','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-ci-only',a.bao_image,'server','-dev','-dev-listen-address=0.0.0.0:8200')
   if a.delivery_scenario:
    # Replace only the fixture-owned dev Bao with a durable real server.
    d('rm','-f',bao)
    baostore=root/'bao-storage';baostore.mkdir(mode=0o777);baostore.chmod(0o777)
    baokeys=root/'bao-keys';baokeys.mkdir(mode=0o700)
    baoconfig=pathlib.Path(__file__).resolve().parents[1]/'deploy/oci/companions/bao.hcl'
-   d('run','-d','--name',bao,'--network',network,'--cap-add','IPC_LOCK','-v',str(baostore)+':/bao/file','-v',str(baoconfig)+':/bao/config/bao.hcl:ro',a.bao_image,'server','-config=/bao/config/bao.hcl')
+   d('run','-d','--name',bao,'--network',network,'--network-alias','bao','--cap-add','IPC_LOCK','-v',str(baostore)+':/bao/file','-v',str(baoconfig)+':/bao/config/bao.hcl:ro',a.bao_image,'server','-config=/bao/config/bao.hcl')
    for _ in range(60):
     status=call(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',bao,'bao','status'],False)
     if status.returncode in [0,2]:break

@@ -148,8 +148,6 @@ raise SystemExit(r.returncode)
         auth.chmod(0o600)
         configpath = Path(c['config'])
         config = json.loads(configpath.read_text())
-        settings['IAM_PG_URL'] = 'postgres://lyam@' + config['pgIP'] + ':5432/lyam'
-        settings['IAM_BAO_ADDR'] = 'http://' + config['baoIP'] + ':8200'
         policy = {'format': 1, 'origins': [origin], 'issuer': origin + '/core', 'tenant': 'acme-demo',
                   'network': c['network'], 'pgContainer': c['pg'], 'pgUser': 'lyam', 'pgDatabase': 'lyam',
                   'baoAddress': 'http://' + config['baoIP'] + ':8200', 'baoTokenFile': str(token),
@@ -207,6 +205,8 @@ raise SystemExit(r.returncode)
             queue = root / 'queue.json'
             base = json.loads(docker('image','inspect',current))[0]['Config']['Labels']['org.opencontainers.image.revision']
             if len(base)!=40:raise RuntimeError('baseline-source-label-invalid')
+            candidate_parent=run(['git','-C',str(source),'rev-parse','HEAD^1']).stdout.strip()
+            if candidate_parent!=base:raise RuntimeError('historical-baseline-is-not-candidate-first-parent-review-baseline')
             result['baselineSha']=base
             result['baselineDigest']=current.split('@')[1]
             state = {'format': 1, 'history': [{'sha': base, 'digest': current.split('@')[1]}]}
