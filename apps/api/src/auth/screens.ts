@@ -47,6 +47,7 @@ export function screensFor(method: string, path: string): Screen[] {
     case 'policies': case 'policy-studio': return ['policies'];
     case 'plugins': return ['plugins'];
     case 'mcp': case 'mcp-grants': case 'mcp-sessions': case 'mcp-upstreams': return ['mcp'];
+    case 'ai': return ['mcp']; // the AI assistant is part of the AI access screen
     case 'bus': case 'event-bus': return ['event-bus'];
     case 'workflow-connections': case 'workflows': case 'temporal': case 'activation-workflows': return ['workflows'];
     case 'branding': return ['customisation'];
