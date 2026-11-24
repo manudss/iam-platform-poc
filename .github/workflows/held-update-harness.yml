@@ -64,6 +64,9 @@ jobs:
           HELD_FIXTURE_JSON: /root/held-fixture.json
         run: |
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA,HELD_FIXTURE_JSON,NODE_PATH unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/closed-helper-docker-fixture.py --image "ghcr.io/${{ github.repository }}@${{ steps.fx.outputs.digest0 }}" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario held-update --delivery-extension scripts/delivery-docker-integration.py --out /tmp/held-update-proof
+      - name: Publish only the bounded diagnostic for the unprivileged artifact uploader
+        if: always()
+        run: sudo python3 scripts/held-update-progress.py --publish-diagnostic /tmp/held-update-proof
       - uses: actions/upload-artifact@v4
         if: always()
         with:

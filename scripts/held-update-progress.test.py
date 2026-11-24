@@ -58,7 +58,33 @@ class Progress(unittest.TestCase):
    p.safe('one-clean','scenario-start',bad)
    p.safe('one-clean','scenario-complete')
    self.assertEqual(json.loads((Path(t)/'held-progress.json').read_text())['diagnosticFailures'],1)
+ def test_publication_changes_only_valid_diagnostic_not_private_files(self):
+  with tempfile.TemporaryDirectory() as t:
+   root=Path(t);private=root/'manifest.json';private.write_text('private');private.chmod(0o600)
+   m.Progress(t).write('one-clean','scenario-complete')
+   self.assertTrue(m.publish_diagnostic(t));self.assertEqual((root/'held-progress.json').stat().st_mode&0o777,0o644)
+   self.assertEqual(private.stat().st_mode&0o777,0o600)
+ def test_publication_refuses_symlink_hardlink_and_unbounded_data(self):
+  for kind in ('symlink','hardlink','extra','fifo'):
+   with self.subTest(kind=kind),tempfile.TemporaryDirectory() as t:
+    root=Path(t);target=root/'private';target.write_text('private');target.chmod(0o600);path=root/'held-progress.json'
+    if kind=='symlink':path.symlink_to(target)
+    elif kind=='hardlink':os.link(target,path)
+    elif kind=='fifo':os.mkfifo(path)
+    else:path.write_text(json.dumps({'secret':'not-a-diagnostic'}));path.chmod(0o600)
+    with self.assertRaises((ValueError,OSError)):m.publish_diagnostic(t)
+    self.assertEqual(target.stat().st_mode&0o777,0o600)
+ def test_publication_refuses_duplicate_fields_without_chmod(self):
+  with tempfile.TemporaryDirectory() as t:
+   root=Path(t);m.Progress(t).write('one-clean','scenario-complete');path=root/'held-progress.json'
+   valid=path.read_text();path.write_text('{"scenario":"fictional-private-marker",'+valid[1:])
+   with self.assertRaises(ValueError):m.publish_diagnostic(t)
+   self.assertEqual(path.stat().st_mode&0o777,0o600)
+ def test_publication_allows_missing_best_effort_progress(self):
+  with tempfile.TemporaryDirectory() as t:self.assertFalse(m.publish_diagnostic(t))
  def test_progress_is_whitelisted_for_always_artifact_upload(self):
   text=Path(__file__).resolve().parents[1].joinpath('.github/workflows/held-update-harness.yml').read_text()
   self.assertIn('if: always()',text);self.assertIn('/tmp/held-update-proof/held-progress.json',text)
+  self.assertIn('run: sudo python3 scripts/held-update-progress.py --publish-diagnostic /tmp/held-update-proof',text)
+  self.assertLess(text.index('--publish-diagnostic'),text.index('- uses: actions/upload-artifact@v4'))
 if __name__=='__main__':unittest.main()
