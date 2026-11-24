@@ -32,7 +32,7 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    dolt(['config','--global','--add','user.name','migration-test']);dolt(['config','--global','--add','user.email','migration@example.invalid']);
    const prepared=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','empty'],{env,encoding:'utf8'});assert.equal(prepared.status,0,prepared.stderr);
    await start();
-   const journal=new MigrationJournal(home,readManifest(root).versions);assert.equal(journal.read()?.entries.length,2);assert.equal(journal.read()?.pending,undefined);
+   const journal=new MigrationJournal(home,readManifest(root).versions);assert.equal(journal.read()?.entries.length,3);assert.equal(journal.read()?.pending,undefined);
    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT count(*) AS n FROM policy_rules WHERE id='screen-account-blocks'"]),/\b1\b/);
    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT message FROM dolt_log WHERE message LIKE 'migration 0002%'"]),/migration 0002/);
    await stop(api);await stop(server);
@@ -48,7 +48,7 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    assert.equal(dolt(['--use-db=iam','sql','-r','json','-q',"SELECT name, hash FROM dolt_branches ORDER BY name"]),state);
    assert.equal(dolt(['--use-db=iam/personal/keep','sql','-r','json','-q',"SELECT DOLT_HASHOF_DB('WORKING') AS root"]),dirty);
    assert.match(dolt(['--use-db=iam','sql','-q',"SELECT display_name FROM identities WHERE id='demo-alice'"]),/Customized Alice/);
-   assert.equal(journal.read()?.entries.length,2);
+   assert.equal(journal.read()?.entries.length,3);
    // An existing tenant: baseline 0001 adopted (not seeded), a customised policy, no account-blocks rule yet. Boot adds the rule on main only.
    const legacy=async(customScreenRule:boolean)=>{
     dolt(['--use-db=iam','sql','-q',`DELETE FROM policy_rules WHERE id='screen-account-blocks'; UPDATE policy_rules SET cedar=CONCAT(cedar,'\n// tenant edit') WHERE set_name='default' AND id=(SELECT id FROM (SELECT id FROM policy_rules WHERE set_name='default' ORDER BY id LIMIT 1) x);`+(customScreenRule?`INSERT INTO policy_rules (set_name,id,cedar) VALUES ('default','tenant-own-blocks','permit(principal, action, resource == Screen::"account-blocks");');`:'')+` CALL DOLT_ADD('-A'); CALL DOLT_COMMIT('-m','tenant policy customisation');`]);
@@ -59,7 +59,7 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
     await start();await stop(api);await stop(server);
     assert.equal(dolt(['--use-db=iam','sql','-r','json','-q',"SELECT id, cedar FROM policy_rules WHERE id<>'screen-account-blocks' ORDER BY id"]),others,'tenant policy rows are untouched');
     assert.match(dolt(['--use-db=iam','sql','-q',"SELECT cedar FROM policy_rules WHERE set_name='default' AND cedar LIKE '%tenant edit%'"]),/tenant edit/);
-    assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2);
+    assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,3);
     return Number(JSON.parse(dolt(['--use-db=iam','sql','-r','json','-q',"SELECT count(*) AS n FROM policy_rules WHERE id='screen-account-blocks'"])).rows[0].n);
    };
    assert.equal(await legacy(false),1,'a customised tenant without the rule receives it, nothing else changes');
@@ -76,7 +76,7 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    env.IAM_MIGRATION_BOOT_ID='sixth';
    const prep6=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});assert.equal(prep6.status,0,prep6.stderr);
    await start();await stop(api);await stop(server);
-   assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2);
+   assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,3);
    // Crash after the journal started: every image refuses to start, and the cold backup taken before the update restores service. Isolated temp home, nothing live.
    dolt(['--use-db=iam','sql','-q',"DELETE FROM policy_rules WHERE id='screen-account-blocks'; CALL DOLT_ADD('-A'); CALL DOLT_COMMIT('-m','pre-update state');"]);
    rmSync(join(home,'migrations','journal.json'));new MigrationJournal(home,readManifest(root).versions).adopt('c'.repeat(64));
@@ -90,7 +90,7 @@ describe('full versioned baseline and no-reseed reboot', {skip:!(bin&&testBusBin
    env.IAM_MIGRATION_BOOT_ID='eighth';
    const prep8=spawnSync(process.execPath,['dist/migrations/cli.js','prepare','populated'],{env,encoding:'utf8'});assert.equal(prep8.status,0,prep8.stderr);
    await start();await stop(api);await stop(server);
-   assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,2,'restored backup boots and 0002 runs once');
+   assert.equal(new MigrationJournal(home,readManifest(root).versions).read()?.entries.length,3,'restored backup boots and 0002 runs once');
    rmSync(cold,{recursive:true,force:true});
   }catch(e){console.error('migration phase:',new MigrationJournal(home,readManifest(root).versions).read());console.error(readFileSync(join(home,'api.log'),'utf8'));throw e;}finally{const keepAlive=setInterval(()=>{},100);try{await stop(api);await stop(server);await bus.close();}finally{clearInterval(keepAlive);}spawnSync('pkill',['-f',home]);await sleep(500);rmSync(home,{recursive:true,force:true,maxRetries:20,retryDelay:300});}
  });

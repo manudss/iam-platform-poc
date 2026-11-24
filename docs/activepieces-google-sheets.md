@@ -76,3 +76,38 @@ automatic unlock. Live callback delivery and representative account effects
 still require qualification before a production-ready verdict.
 The last reviewed state of this branch has no live credentials, registration,
 workflow activation or Google changes performed by the development task.
+
+## Storage migration and delivery limits
+
+Migration0003 creates workflow_piece_state in the operational meta DB before
+native runtime writes. Runtime writes no longer create this table lazily.
+Existing migration0001/0002 files/checksums are unchanged. Rollback must retain
+this additive operational table, exports and uncertain-effect state, never drop
+or reset it. A prior binary ignores the extra table, but rolling back while a
+new worker owns a mutex/subscription is unsafe: stop/reconcile the worker first.
+Qualification must explicitly review this intended additive Dolt metadata
+change, not accept a generic preservation exception.
+
+Verified webhooks are durably coalesced to one notification slot per definition
+before acknowledgement; the slot carries channel/resource/message-number and
+allowed change headers, no body/token. At most1000 slots per tenant, guarded by
+a shared per-tenant quota-row write in the same Dolt transaction. Conflicts or
+quota exhaustion fail rather than acknowledge lost work. Under its mutex the
+scheduler performs at most one full native refetch per pass and deletes only
+the exact slot value read before collection. A replacement during collection
+survives. Native cursors and pending event envelope preserve delivery recovery.
+A collection failure retains the slot and sets visible review status.
+
+The scheduler ticks every60seconds, in addition to the upstream documented
+Google delay up to3minutes. This is not a sub-minute arrival guarantee. Google
+message numbers identify notifications, not an assumed sort order. Coalescence
+is appropriate because native run refetches the current sheet; transient
+intermediate cell values between refetches are not a change-event log.
+
+New exported file bytes expire after7days; downloads refuse expired entries and
+scheduler cleanup deletes only explicitly expired file scopes. Legacy exports
+without expiry are retained. Trigger/action state, cursors, locks, pending work
+and uncertain subscriptions have no automatic expiry: an operator must reconcile
+them, never purge a lock as retention housekeeping. Account scope is an explicit
+user-intent/configuration gate, not a narrower Google OAuth permission boundary.
+The service account's actual grants remain authoritative.

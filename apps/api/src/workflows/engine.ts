@@ -171,8 +171,8 @@ export class WorkflowEngine implements OnModuleInit {
     const scope='action:'+definition+':'+node;
     return {
       withLock:async(fn:()=>Promise<unknown>)=>{const owner=crypto.randomUUID();if(!await this.store.pieceClaim(tenant,scope,owner))throw Error('Native action state is busy or needs crash reconciliation');try{return await fn();}finally{await this.store.pieceRelease(tenant,scope,owner);}},
-      store:{get:(key:string)=>this.store.pieceGet(tenant,scope,key),put:(key:string,value:unknown)=>this.store.piecePut(tenant,scope,key,value),delete:(key:string)=>this.store.pieceDelete(tenant,scope,key)},
-      files:{write:async({fileName,data}:{fileName:string,data:Buffer})=>{if(data.length>8_000_000)throw Error('connector export exceeds 8MB');const id=crypto.randomUUID();await this.store.piecePut(tenant,'file:'+run,id,{name:fileName,data:data.toString('base64')});return '/tenants/'+encodeURIComponent(tenant)+'/workflow-runs/'+encodeURIComponent(run)+'/connector-files/'+id;}},
+      store:{get:(key:string)=>{if(key.startsWith('lyam:'))throw Error('Reserved host state key');return this.store.pieceGet(tenant,scope,key);},put:(key:string,value:unknown)=>{if(key.startsWith('lyam:'))throw Error('Reserved host state key');return this.store.piecePut(tenant,scope,key,value);},delete:(key:string)=>{if(key.startsWith('lyam:'))throw Error('Reserved host state key');return this.store.pieceDelete(tenant,scope,key);}},
+      files:{write:async({fileName,data}:{fileName:string,data:Buffer})=>{if(data.length>8_000_000)throw Error('connector export exceeds 8MB');const id=crypto.randomUUID();await this.store.piecePut(tenant,'file:'+run,id,{name:fileName,data:data.toString('base64'),expiresAt:Date.now()+7*86400_000});return '/tenants/'+encodeURIComponent(tenant)+'/workflow-runs/'+encodeURIComponent(run)+'/connector-files/'+id;}},
       run:{id:run},project:{id:tenant},flow:{id:definition,version:{id:run}},step:{name:node},
     };
   }
