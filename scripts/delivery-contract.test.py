@@ -136,6 +136,11 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         self.assertEqual(m.queue_failure_diagnostic(pres,{})['preservationCategories'],['dolt','postgres-rows'])
         badpres='PRESERVATION_DIAG_V1 '+json.dumps({'categories':['postgres-rows:private']})
         self.assertNotIn('preservationCategories',m.queue_failure_diagnostic(badpres,{}))
+    def test_transform_refusal_is_bounded(self):
+        spec=importlib.util.spec_from_file_location('diag5',Path(__file__).with_name('delivery-docker-integration.py'))
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        self.assertEqual(m.queue_failure_diagnostic('TRANSFORM_DIAG_V1 schema-objects-changed',{})['transformationRefusal'],'schema-objects-changed')
+        self.assertNotIn('transformationRefusal',m.queue_failure_diagnostic('TRANSFORM_DIAG_V1 private value /path',{}))
     def test_unknown_stays_unknown(self):
         spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

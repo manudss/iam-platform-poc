@@ -122,6 +122,8 @@ def queue_failure_diagnostic(stderr, state):
             v=json.loads(raw)
             if set(v)=={'categories'} and isinstance(v['categories'],list) and 0<len(v['categories'])<=len(allowed) and all(type(c) is str and c in allowed for c in v['categories']):result['preservationCategories']=sorted(set(v['categories']))
         except (ValueError,TypeError):pass
+    refused=re.findall(r'^TRANSFORM_DIAG_V1 ([a-z][a-z-]{0,63})$',stderr,re.M)
+    if refused:result['transformationRefusal']=refused[-1]
     return result
 
 
