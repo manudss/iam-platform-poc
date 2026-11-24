@@ -150,7 +150,8 @@ describe('AI assistant (real Dolt + real core): chat on the branch-confined MCP 
     script = [{ calls: [{ name: 'list_users', args: {} }] }, { text: 'I found the users.' }];
     const m = await userSays('List the users');
     assert.equal(m.at(-1)!.parts.at(-1)!.text, 'I found the users.');
-    assert.ok(toolTexts(m).some((t) => /demo-alice/.test(t) && /untrusted-tool-result/.test(t)), 'the tool result carries real data, fenced as untrusted');
+    assert.ok(toolTexts(m).some((t) => /demo-alice/.test(t)), 'the stored tool result carries the real data');
+    assert.ok(JSON.stringify(modelSeen.at(-1)!.body.messages).includes('untrusted-tool-result'), 'the model receives the tool result fenced as untrusted');
     const tools = modelSeen.at(-2)!.body.tools.map((t: { function: { name: string } }) => t.function.name);
     for (const forbidden of ['approve_pull_request', 'merge_pull_request', 'apply', 'merge']) assert.ok(!tools.includes(forbidden), forbidden);
     assert.ok(tools.includes('list_users') && tools.includes('submit_pull_request'));

@@ -24,7 +24,7 @@ jobs:
       - name: Plugin dependencies and signature
         run: |
           (cd apps/api && npm ci)
-          node scripts/plugin-deps.mjs
+          npm ci && node scripts/plugin-deps.mjs
           node scripts/plugin-dev-setup.mjs
       - name: Screen bundle is up to date
         run: (cd scripts/ai-assistant-ui && npm ci && npm run check)
