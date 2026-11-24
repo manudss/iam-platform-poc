@@ -76,6 +76,19 @@ class ExactActivations(unittest.TestCase):
   del after['postgres']['rows']['public.activations']
   with self.assertRaisesRegex(ValueError,'activation journal'):q.exact_held_activations(before,after)
 
+
+ def test_held_activation_rows_exact_for_all_states_and_mutations(self):
+  prior=baseline()
+  prior['postgres']['rows']['public.activations']={'pending-hash':1,'failed-hash':1,'applied-hash':1}
+  q.exact_held_activations(prior,copy.deepcopy(prior))
+  for kind in ['add','delete','modify','absent']:
+   after=copy.deepcopy(prior);rows=after['postgres']['rows']['public.activations']
+   if kind=='add':rows['new-hash']=1
+   if kind=='delete':del rows['pending-hash']
+   if kind=='modify':del rows['failed-hash'];rows['modified-failed-hash']=1
+   if kind=='absent':del after['postgres']['rows']['public.activations']
+   with self.assertRaisesRegex(ValueError,'activation journal'):q.exact_held_activations(prior,after)
+
 class ClosedRuntime(unittest.TestCase):
  def test_launcher_omitting_runtime_guards_is_rejected(self):
   good={'Config':{'Env':['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never']},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapDrop':['ALL'],'CapAdd':None,'Privileged':False,'SecurityOpt':['no-new-privileges:true']}}
@@ -105,6 +118,61 @@ class HeldSmoke(unittest.TestCase):
     r=subprocess.run(['node',str(file)],capture_output=True,text=True,env={**os.environ,'IAM_AUTOMATION_HOLD':'1','CASE':case})
     self.assertEqual(r.returncode==0,case=='ok',(case,r.stderr))
     if case!='ok':self.assertEqual(r.stderr.strip(),'QUALIFICATION_DIAG_V1:'+('smoke-hold' if case=='missing' else 'smoke-workflows-after'))
+ def test_actual_controller_projection_nonempty_and_malformed_rows(self):
+  import re,subprocess,os
+  controller=Path(__file__).resolve().parents[2]/'apps/api/src/activation/activation.controller.ts'
+  text=controller.read_text()
+  method=re.search(r"async list\(@Param\('tenant'\) tenant: string\) \{(.*?)\n  \}",text,re.S)
+  self.assertIsNotNone(method,'must exercise actual controller projection')
+  source=Path(__file__).with_name('qualification-container.mjs').read_text()
+  original=Path(__file__).read_text()
+  prefix_text=original[original.index('  prefix=')+2:original.index('  body=source')]
+  scope={};exec(prefix_text,scope);prefix=scope['prefix']
+  projection="async function apiList(tenant){"+method.group(1)+"}"
+  prefix+=projection+"""
+  const base=[{tenant:'fixture',state:'applied',seq:1,commit:'first'},{tenant:'fixture',state:'recorded',seq:2,commit:'second'}];
+  const input=structuredClone(base);
+  if(process.env.CASE==='empty')input.length=0;
+  if(process.env.CASE==='duplicate')input[1].seq=1;
+  if(process.env.CASE==='reverse')input.reverse();
+  if(process.env.CASE==='unsafe')input[1].seq=Number.MAX_SAFE_INTEGER+1;
+  if(process.env.CASE==='missing')delete input[1].seq;
+  if(process.env.CASE==='stringseq')input[1].seq='2';
+  if(process.env.CASE==='negative')input[0].seq=-1;
+  if(process.env.CASE==='emptycommit')input[1].commit='';
+  if(process.env.CASE==='absentcommit')delete input[1].commit;
+  if(process.env.CASE==='unexpected')input[1].extra='not-public';
+  if(process.env.CASE==='badcommit')input[1].commit=42;
+  const receiver={svc:{list:async()=>input}};
+  const projected=await apiList.call(receiver);
+  if(projected.some(row=>Object.keys(row).sort().join(',')!=='commit,seq'))throw Error('not actual public projection');
+  const oldJson=json;
+  json=async url=>{if(String(url).endsWith('/activations')){if(process.env.CASE==='non200')throw Error('non-200 or non-JSON response');if(process.env.CASE==='unexpected')projected[1].extra='unexpected';return process.env.CASE==='notarray'?{}:projected;}return oldJson(url);};
+  """
+  # The existing harness declares json as const; make only that harness binding mutable.
+  prefix=prefix.replace('const json=async','let json=async')
+  body=source[source.index('async function smoke()'):source.index('\ntry{',source.index('async function smoke()'))]
+  with tempfile.TemporaryDirectory() as d:
+   file=Path(d)/'projection.mjs';file.write_text(prefix+body+"\ntry{await smoke();}catch{console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);process.exitCode=1;}")
+   for case in ['ok','empty','duplicate','reverse','unsafe','missing','stringseq','negative','emptycommit','absentcommit','badcommit','notarray','non200','unexpected']:
+    # Do not trigger the older hold/drift harness's CASE=missing branch here.
+    runprefix=prefix.replace("process.env.CASE==='missing'?'no captured hold'","false?'no captured hold'")
+    file.write_text(runprefix+body+"\ntry{await smoke();}catch{console.error('QUALIFICATION_DIAG_V1:'+diagnosticStage);process.exitCode=1;}")
+    r=subprocess.run(['node',str(file)],capture_output=True,text=True,env={**os.environ,'IAM_AUTOMATION_HOLD':'1','CASE':case})
+    self.assertEqual(r.returncode==0,case in ['ok','empty'],(case,r.stderr))
+    if case not in ['ok','empty']:self.assertEqual(r.stderr.strip(),'QUALIFICATION_DIAG_V1:'+('smoke-activations' if case=='non200' else 'smoke-activations-validation'))
+
+
+class PublicJsonTransport(unittest.TestCase):
+ def test_real_json_helper_refuses_non200_content_type_and_malformed_json(self):
+  source=Path(__file__).with_name('qualification-container.mjs').read_text()
+  helper=source[source.index('const json=async'):source.index('async function bao()')]
+  prefix="let diagnosticStage='smoke-activations';globalThis.fetch=async()=>process.env.CASE==='status'?new Response('{}',{status:403,headers:{'content-type':'application/json'}}):process.env.CASE==='type'?new Response('{}',{headers:{'content-type':'text/plain'}}):new Response('invalid-json',{headers:{'content-type':'application/json'}});"
+  with tempfile.TemporaryDirectory() as d:
+   file=Path(d)/'transport.mjs';file.write_text(prefix+helper+"try{await json('http://fixture.invalid',{},true);process.exitCode=1;}catch{console.error(diagnosticStage);}")
+   import os
+   for case in ['status','type','json']:
+    r=subprocess.run(['node',str(file)],capture_output=True,text=True,env={**os.environ,'CASE':case});self.assertEqual(r.returncode,0,(case,r.stderr));self.assertEqual(r.stderr.strip(),'smoke-activations-parse' if case=='json' else 'smoke-activations')
 
 class Diagnostic(unittest.TestCase):
  def test_allowlist_only(self):

@@ -6,9 +6,10 @@ import {createHash,randomBytes} from 'node:crypto';
 const hash=x=>createHash('sha256').update(x).digest('hex');
 let diagnosticStage='init';
 const [mode]=process.argv.slice(1);let raw='';for await(const chunk of process.stdin){raw+=chunk;if(raw.length>262144)throw Error('input bound');}const p=JSON.parse(raw);
-const json=async(url,options={})=>{
+const json=async(url,options={},activationDiagnostic=false)=>{
  const r=await fetch(url,{...options,redirect:'manual',signal:AbortSignal.timeout(15000)});
  if(r.status!==200||!/^application\/json(?:;|$)/i.test(r.headers.get('content-type')??''))throw Error('non-200 or non-JSON response');
+ if(activationDiagnostic)diagnosticStage='smoke-activations-parse';
  return r.json();
 };
 async function bao(){
@@ -76,9 +77,12 @@ async function smoke(){
   diagnosticStage='smoke-oidc-session';
   const session=await fetch(local+'/core/session/extend',{method:'POST',headers:{authorization:'Bearer '+issued.id_token}});if(![200,409].includes(session.status))throw Error('session token verification failed');
   diagnosticStage='smoke-activations';
-  const rows=await json(local+'/api/tenants/'+encodeURIComponent(p.tenant)+'/activations',{headers:{authorization:'Bearer '+issued.id_token}});
+  // This authenticated tenant-scoped endpoint intentionally projects only seq and commit.
+  // Full activation row preservation is checked independently against PostgreSQL.
+  const rows=await json(local+'/api/tenants/'+encodeURIComponent(p.tenant)+'/activations',{headers:{authorization:'Bearer '+issued.id_token}},true);
+  diagnosticStage='smoke-activations-validation';
   if(!Array.isArray(rows))throw Error('journal unknown');let seq=0;
-  for(const row of rows){if(row.tenant!==p.tenant||!Number.isSafeInteger(row.seq)||row.seq<=seq||typeof row.commit!=='string'||!row.commit||!['pending','recorded','applied','failed'].includes(row.state))throw Error('journal schema invalid');seq=row.seq;}
+  for(const row of rows){if(!row||typeof row!=='object'||Array.isArray(row)||Object.keys(row).sort().join(',')!=='commit,seq'||!Number.isSafeInteger(row.seq)||row.seq<=seq||typeof row.commit!=='string'||!row.commit)throw Error('journal schema invalid');seq=row.seq;}
   journal={count:rows.length,checksum:hash(JSON.stringify(rows))};
  }
  diagnosticStage='smoke-negative-redirect';
