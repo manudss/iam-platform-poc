@@ -58,14 +58,13 @@ jobs:
           HELD_FIXTURE_JSON: /root/held-fixture.json
         run: |
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,DELIVERY_SHA,HELD_FIXTURE_JSON,NODE_PATH,HELD_SYSTEMD_MODE unshare --mount --propagation private python3 scripts/delivery-private-opt.py -- python3 scripts/systemd-held-fixture.py --image "ghcr.io/${{ github.repository }}@${{ steps.fx.outputs.digest0 }}" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode inactive --delivery-scenario held-update --delivery-extension scripts/systemd-held-extension.py --out /tmp/held-update-proof
+      - name: Export only bounded top-level evidence, never private receipts
+        if: always()
+        run: |
+          sudo python3 scripts/systemd-held-export.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: held-update-proof
-          path: |
-            /tmp/held-update-proof/execution-evidence.json
-            /tmp/held-update-proof/delivery-receipt.json
-            /tmp/held-update-proof/closed-helper-fixture-failure.json
-            /tmp/held-update-proof/held-update/*.json
-            /tmp/held-update-proof/**/systemd-cleanup.json
+          path: /tmp/systemd-export/evidence/*.json
           if-no-files-found: warn
