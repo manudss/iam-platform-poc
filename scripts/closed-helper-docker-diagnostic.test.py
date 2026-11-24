@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import importlib.util,unittest
+import importlib.util,subprocess,unittest
 from pathlib import Path
 from types import SimpleNamespace
 spec=importlib.util.spec_from_file_location('fixture',Path(__file__).with_name('closed-helper-docker-fixture.py'));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -10,6 +10,11 @@ class Diagnostic(unittest.TestCase):
    with self.subTest(want=want):
     p=SimpleNamespace(returncode=1,stderr=text,stdout='sensitive-name');r=m.docker_setup_failure(['docker','run','--env','secret'],p)
     self.assertEqual(r,{'category':'DOCKER_RUN_SETUP','reason':want,'returnCode':1,'stdoutPresent':True,'stderrPresent':True})
+ def test_timeout_fields_bounded_no_command_or_path(self):
+  e=subprocess.TimeoutExpired(['python3','private-ext','private-path'],1200)
+  self.assertEqual(m.timeout_details(e,'private-ext','private-path'),{'expired':True,'seconds':1200,'deliveryExtension':True})
+  self.assertFalse(m.timeout_details(e,'other','private-path')['deliveryExtension'])
+  self.assertEqual(m.timeout_details(RuntimeError('secret'),None,None),{'expired':False,'seconds':None,'deliveryExtension':False})
  def test_other_command_never_inspected(self):
   p=SimpleNamespace(returncode=1,stderr='no space left on device',stdout='')
   for args in [[],['docker'],['docker','exec','private'],['python3','private']]:self.assertIsNone(m.docker_setup_failure(args,p))

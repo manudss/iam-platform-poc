@@ -45,6 +45,7 @@ jobs:
         run: |
           python3 deploy/oci/held-update.test.py
           python3 deploy/oci/held-update-durable.test.py
+          python3 scripts/held-update-progress.test.py
           python3 deploy/oci/ordered-queue.test.py
           node --test deploy/oci/update.test.mjs
       - name: Build four distinct real fixture images and the first-parent repo
@@ -71,5 +72,6 @@ jobs:
             /tmp/held-update-proof/execution-evidence.json
             /tmp/held-update-proof/delivery-receipt.json
             /tmp/held-update-proof/closed-helper-fixture-failure.json
+            /tmp/held-update-proof/held-progress.json
             /tmp/held-update-proof/held-update/*.json
           if-no-files-found: warn

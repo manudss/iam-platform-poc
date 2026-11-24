@@ -32,6 +32,9 @@ def docker_setup_failure(args,p):
  reason=next((code for code,needles in groups if any(n in text for n in needles)),'UNCLASSIFIED')
  return {'category':'DOCKER_RUN_SETUP','reason':reason,'returnCode':p.returncode,'stdoutPresent':bool(p.stdout),'stderrPresent':bool(p.stderr)}
 
+def timeout_details(error,extension,context):
+ return {'expired':isinstance(error,subprocess.TimeoutExpired),'seconds':error.timeout if isinstance(error,subprocess.TimeoutExpired) and type(error.timeout) in (int,float) else None,'deliveryExtension':bool(isinstance(error,subprocess.TimeoutExpired) and extension and error.cmd==['python3',extension,str(context)])}
+
 def a_delivery_command(args):
  return len(args)>1 and args[0]=='python3' and pathlib.Path(args[1]).name=='delivery-docker-integration.py'
 
@@ -230,7 +233,8 @@ def main():
     state=inspect(name)['State']
     states.append({'running':state['Running'],'exitCode':state['ExitCode'],'status':state['Status'],'oomKilled':state.get('OOMKilled')})
    except Exception:states.append({'unavailable':True})
-  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'gatewayFamily':gateway_family,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
+  timeout_summary=timeout_details(error,a.delivery_extension,root/'delivery-context.json')
+  (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'timeout':timeout_summary,'ipv6Mode':a.ipv6_mode,'gatewayFamily':gateway_family,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
   raise
  finally:
   for name in reversed(containers):call(['docker','rm','-f',name],False)

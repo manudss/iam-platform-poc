@@ -37,6 +37,7 @@ def run(x):
     q = load_module(bindir / 'ordered-queue.py', 'held_queue')
     ev = out / 'held-update'; ev.mkdir(exist_ok=True); report = {'scenarios': {}, 'prequalification': {}}
     result['heldUpdate'] = report
+    progress=load_module(source/'scripts/held-update-progress.py','held_progress').Progress(out)
     wrappers = {k: Path(v) for k, v in c['wrappers'].items()}
     args = ['--image', c['image'], '--container', app, '--env-file', str(env), '--data-dir', c['data'], '--port', '18089']
     pol, policy, configpath, config = x['pol'], x['policy'], x['configpath'], x['config']
@@ -171,6 +172,7 @@ def run(x):
         return manifest, chain
 
     def supervise(name, n, kill_phase=None, kill_mode='group'):
+        progress.safe(name,'scenario-start')
         manifest, chain = build(n); folder = root / ('sup-' + name); shutil.rmtree(folder, ignore_errors=True); folder.mkdir(mode=0o700)
         engagement='held-' + name + '-' + os.environ.get('GITHUB_RUN_ID', '0')
         manifest['engagement_id']=engagement
@@ -189,6 +191,8 @@ def run(x):
             return subprocess.Popen([py, '-c', code], stdout=open(folder / (role + '.launcher.log'), 'xb'), stderr=subprocess.STDOUT)
         sampler = Sampler(origin); sampler.start()
         wd = unit('watchdog'); wk = unit('worker')
+        progress_du=load_module(bindir/'held-update-durable.py','progress_identity')
+        progress_worker=progress_du.identity(wk.pid)
         t0 = time.monotonic()
         while not (folder / 'WATCH_READY').exists() or not (folder / 'worker-identity.json').exists():
             if time.monotonic() - t0 > 120: raise RuntimeError('supervision-not-ready')
@@ -244,12 +248,19 @@ def run(x):
                         rec={'childAliveMeasured':True,'fd8LockIdentity':True,'lockContentionMeasured':True,'rearmExit':refused.returncode,'stateUnchanged':True,'watchdogObserveOnly':True,'injection':'real-updater-SIGSTOP-then-queue-SIGKILL'}
                         (ev/('scenario-%s.json'%name)).write_text(json.dumps(rec,indent=2));report['scenarios'][name]=rec
                     finally:
+                        progress.safe(name,'before-continue',lambda:du.state_of(ident),lambda:progress_du.state_of(progress_worker))
                         if du.state_of(ident)=='alive':os.kill(ident['pid'],signal.SIGCONT)
+                        progress.safe(name,'after-continue',lambda:du.state_of(ident),lambda:progress_du.state_of(progress_worker))
+                    progress.safe(name,'before-worker-wait',lambda:du.state_of(ident),lambda:progress_du.state_of(progress_worker))
                     wk.wait(timeout=120)
+                    progress.safe(name,'after-worker-wait',lambda:du.state_of(ident),lambda:progress_du.state_of(progress_worker))
+                    progress.safe(name,'before-child-wait',lambda:du.state_of(ident),lambda:progress_du.state_of(progress_worker))
                     end=time.monotonic()+1000
                     while du.state_of(ident)=='alive' and time.monotonic()<end:time.sleep(.2)
                     if du.state_of(ident)!='absent':raise RuntimeError('orphan-child-not-finished')
+                    progress.safe(name,'after-child-wait',lambda:du.state_of(ident),lambda:progress_du.state_of(progress_worker))
                     sampler.stop.set();sampler.join(5)
+                    progress.safe(name,'scenario-complete',lambda:du.state_of(ident),lambda:progress_du.state_of(progress_worker))
                     return
                 (os.killpg if kill_mode == 'group' else os.kill)(qi['pid'], signal.SIGKILL); killed = ph
             time.sleep(0.1)
@@ -305,6 +316,7 @@ def run(x):
                 if s != 503: raise RuntimeError('origin-not-503-after-rearm')
         (ev / ('scenario-%s.json' % name)).write_text(json.dumps(rec, indent=2, sort_keys=True))
         report['scenarios'][name] = rec
+        progress.safe(name,'scenario-complete')
 
     supervise('one-clean', 1)
     supervise('three-clean', 3)
@@ -313,4 +325,5 @@ def run(x):
     supervise('three-kill-opening', 3, 'opening')
     supervise('one-orphan-updater', 1, 'closed-step-0-updater-spawned', 'orphan')
     if not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
+    progress.safe('one-orphan-updater','all-scenarios-complete')
     result['checks']['heldUpdateChain'] = True
