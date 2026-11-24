@@ -59,6 +59,21 @@ describe('signup page', () => {
     expect(btn.textContent).toContain('Create account');
   });
 
+  it('focuses the error after DOM rendering even when timers run before the next render', async () => {
+    const h = await page();
+    const el = h.routeNativeElement as HTMLElement;
+    vi.useFakeTimers();
+    try {
+      const component = h.routeDebugElement!.componentInstance as { showError(status: number, data: unknown, test: boolean): void };
+      component.showError(429, {}, false);
+      expect(el.querySelector('#su-error')).toBeNull();
+      vi.runAllTimers(); // A slow render must not consume the only chance to focus.
+      h.detectChanges();
+      expect(el.querySelector('#su-error')?.textContent).toContain('Too many requests.');
+      expect(document.activeElement).toBe(el.querySelector('#su-error'));
+    } finally { vi.useRealTimers(); }
+  });
+
   it('maps a refusal by rate limit to a clear message', async () => {
     const post = deferred();
     const h = await page(post);
