@@ -46,7 +46,7 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
   const kv=this.kv(d.tenant,d.id);const before=await kv.get('lyam:batch') as number??0;
   // Store updates are staged until events and native cursors are durably recorded together in one envelope.
   const staged:Record<string,unknown>={},deleted=new Set<string>();const ctx=await this.context(d,state),native=ctx.runtime.store;
-  const runtime={store:{get:async(k:string)=>deleted.has(k)?null:k in staged?staged[k]:native.get(k),put:async(k:string,v:unknown)=>{deleted.delete(k);staged[k]=v;},delete:async(k:string)=>{delete staged[k];deleted.add(k);}}};
+  const runtime={store:{get:async(k:string)=>{if(k.startsWith('lyam:'))throw Error('Reserved host state key');return deleted.has(k)?null:k in staged?staged[k]:native.get(k);},put:async(k:string,v:unknown)=>{if(k.startsWith('lyam:'))throw Error('Reserved host state key');deleted.delete(k);staged[k]=v;},delete:async(k:string)=>{if(k.startsWith('lyam:'))throw Error('Reserved host state key');delete staged[k];deleted.add(k);}}};
   const events=await piece().runSheetsTrigger(state.key,'run',{...ctx,runtime,payload});
   if(!Array.isArray(events))throw Error('Invalid native trigger result');
   if(events.some((e:unknown)=>JSON.stringify(e).length>1_000_000))throw Error('Native event exceeds 1MB storage limit');
@@ -54,6 +54,7 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
   await kv.put('lyam:batch-envelope',{batch,staged,deleted:[...deleted],pending});
   await this.recoverEnvelope(d);await this.drain(d);
  }
+ private async drainInbox(d:DefinitionRow,state:State){for(const item of await this.store.pieceInbox(d.tenant,this.scope(d.id))){const entry=item.value as {fingerprint:string,headers:Record<string,string>};if(entry.fingerprint===state.fingerprint)await this.collect(d,state,{headers:entry.headers,body:{}});await this.kv(d.tenant,d.id).delete(item.key);}}
  private async recoverEnvelope(d:DefinitionRow){const kv=this.kv(d.tenant,d.id),e=await kv.get('lyam:batch-envelope') as any;if(!e)return;for(const[k,v]of Object.entries(e.staged))await kv.put(k,v);for(const k of e.deleted??[])await kv.delete(k);await kv.put('lyam:batch',e.batch);await kv.put('lyam:pending',e.pending);await kv.delete('lyam:batch-envelope');}
  private async locked<T>(tenant:string,id:string,fn:()=>Promise<T>){const k=tenant+':'+id;if(this.busy.has(k))throw Error('Native trigger is busy');this.busy.add(k);const owner=randomUUID();let claimed=false;try{claimed=await this.store.pieceClaim(tenant,this.scope(id),owner);if(!claimed)throw Error('Native trigger is busy or requires crash reconciliation');return await fn();}finally{if(claimed)await this.store.pieceRelease(tenant,this.scope(id),owner);this.busy.delete(k);}}
  async tick(){if(!dataReady())return;await branchContext.run({branch:this.store.liveRef},async()=>{
@@ -80,16 +81,21 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
    await this.recoverEnvelope(d);await this.drain(d);
    const native=piece().SHEETS_TRIGGERS[key];
    if(native.type==='POLLING')await this.collect(d,state);
-   else if(Date.now()-state.lastRenew>12*3600_000){await kv.put('lyam:subscription',{...state,status:'enabling'});await this.invoke(d,state,'onRenew');await kv.put('lyam:subscription',{...state,lastRenew:Date.now()});}
+   else {await this.drainInbox(d,state);}
+   if(native.type!=='POLLING'&&Date.now()-state.lastRenew>12*3600_000){await kv.put('lyam:subscription',{...state,status:'enabling'});await this.invoke(d,state,'onRenew');await kv.put('lyam:subscription',{...state,lastRenew:Date.now()});}
   });}catch{this.log.warn('Native Google Sheets trigger check failed; inspect connection/subscription state');}}
  });}
- async webhook(tenant:string,id:string,token:string,headers:Record<string,string>,body:unknown){return branchContext.run({branch:this.store.liveRef},()=>this.locked(tenant,id,async()=>{
+ async webhook(tenant:string,id:string,token:string,headers:Record<string,string>,_body:unknown){return branchContext.run({branch:this.store.liveRef},async()=>{
   const d=await this.store.getDefinition(tenant,id,this.store.liveRef);if(!d||d.active===false||!this.key(d)||!await this.enabled(tenant))throw Error('Unknown native trigger');
   const state=await this.kv(tenant,id).get('lyam:subscription') as State|null;
   const a=Buffer.from(state?.token??''),b=Buffer.from(token);if(!state||state.status!=='active'||a.length!==b.length||!timingSafeEqual(a,b))throw Error('Unknown native trigger');
   const fingerprint=createHash('sha256').update(JSON.stringify([this.key(d),d.trigger?.config??{}])).digest('hex');if(fingerprint!==state.fingerprint)throw Error('Subscription changed');
   const watch=await this.kv(tenant,id).get(state.key) as any;
   if(!watch||watch.id!==headers['x-goog-channel-id']||watch.resourceId!==headers['x-goog-resource-id'])throw Error('Unknown notification channel');
-  await this.collect(d,state,{headers,body});return {received:true};
- }));}
+  const safeHeaders=Object.fromEntries(['x-goog-channel-id','x-goog-resource-id','x-goog-resource-state','x-goog-changed'].map(k=>[k,String(headers[k]??'').slice(0,500)]));
+  // Durable individual inbox entry before ACK. A busy worker never drops a valid
+  // notification. The scheduler refetches provider state under the same mutex.
+  await this.kv(tenant,id).put('lyam:inbox:'+randomUUID(),{fingerprint,headers:safeHeaders});
+  return {received:true,queued:true};
+ });}
 }

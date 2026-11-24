@@ -38,7 +38,7 @@ import{ActivepiecesSheetsService}from'./activepieces-sheets.js';
 describe('native trigger runtime with persisted fixtures, not live Google',()=>{
  function harness(key='new-worksheet'){
   const memory=new Map<string,unknown>();const d:any={id:'wf-fictional',tenant:'t',active:true,trigger:{event:Object.entries(full.GOOGLE_SHEETS_EVENTS).find(([,e]:any)=>e.activepiecesTrigger===key)![0],config:{connectionId:'conn-test',spreadsheetId:'fictional'}}};
-  const store:any={liveRef:'main',pieceClaim:async()=>true,pieceRelease:async()=>{},pieceGet:async(t:string,s:string,k:string)=>memory.get(t+s+k)??null,piecePut:async(t:string,s:string,k:string,v:unknown)=>{memory.set(t+s+k,structuredClone(v));},pieceDelete:async(t:string,s:string,k:string)=>{memory.delete(t+s+k);},getDefinition:async()=>d,listAllDefinitions:async()=>[d],pieceSubscriptions:async()=>[]};
+  const store:any={liveRef:'main',pieceClaim:async()=>true,pieceRelease:async()=>{},pieceGet:async(t:string,s:string,k:string)=>memory.get(t+s+k)??null,piecePut:async(t:string,s:string,k:string,v:unknown)=>{memory.set(t+s+k,structuredClone(v));},pieceDelete:async(t:string,s:string,k:string)=>{memory.delete(t+s+k);},getDefinition:async()=>d,listAllDefinitions:async()=>[d],pieceSubscriptions:async()=>[],pieceInbox:async(t:string,scope:string)=>[...memory.entries()].filter(([k])=>k.startsWith(t+scope+'lyam:inbox:')).map(([k,value])=>({key:k.slice((t+scope).length),value}))};
   const runs:any[]=[];const service:any=new ActivepiecesSheetsService(store,{resolve:async()=>({settings})}as any,{start:async(...args:any[])=>{runs.push(args);return{};}}as any,{isActive:()=>true}as any,{}as any);
   const state:any={key,config:d.trigger.config,fingerprint:'fictional',token:'fixture-token',lastRenew:Date.now(),status:'active'};return{service,memory,d,state,runs,store};
  }
@@ -62,6 +62,11 @@ describe('native trigger runtime with persisted fixtures, not live Google',()=>{
  });
  it('durable mutex rejection prevents native execution and releases no foreign owner',async()=>{
   const h=harness();let release=0;h.store.pieceClaim=async()=>false;h.store.pieceRelease=async()=>{release++;};await assert.rejects(()=>h.service.locked('t','wf-fictional',()=>{throw Error('must not execute');}),/crash reconciliation/);assert.equal(release,0);
+ });
+ it('verified webhook is durably queued even while a worker lock is busy, then drained after restart',async()=>{
+  const h=harness('googlesheets_new_row_added');h.state.fingerprint=(await import('node:crypto')).createHash('sha256').update(JSON.stringify([h.state.key,h.d.trigger.config])).digest('hex');await h.store.piecePut('t','trigger:wf-fictional','lyam:subscription',h.state);await h.store.piecePut('t','trigger:wf-fictional',h.state.key,{id:'channel',resourceId:'resource'});h.store.pieceClaim=async()=>false;
+  assert.deepEqual(await h.service.webhook('t',h.d.id,'fixture-token',{'x-goog-channel-id':'channel','x-goog-resource-id':'resource','x-goog-resource-state':'update'},{}),{received:true,queued:true});assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,1);
+  let collect=0;h.service.collect=async()=>{collect++;};await h.service.drainInbox(h.d,h.state);assert.equal(collect,1);assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,0);
  });
  it('installed polling trigger consumes persistent cursor and emits only new worksheet objects',async()=>{
   nock.disableNetConnect();nock('https://sheets.googleapis.com').get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Existing'}},{properties:{sheetId:4,title:'New'}}]});
