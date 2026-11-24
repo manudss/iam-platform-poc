@@ -119,6 +119,19 @@ def ipv6_inactive(ipv6state):
 def ipv6_shape(x):
     return {'interfaces':x['interfaces'],'addresses':sorted(x['addresses'].splitlines()),'routes':sorted(' '.join(l.split()[:5]+l.split()[-1:]) for l in x['routes'].splitlines())}
 
+def stable_ipv6(read,sleep=time.sleep):
+    previous=None;equal=0
+    for _ in range(20):
+        state=read()
+        flags=[int(line.split()[4],16) for line in state['addresses'].splitlines() if line.strip()]
+        if any(flag&0x08 for flag in flags):raise ValueError('IPv6 duplicate address detection failed')
+        shape=ipv6_shape(state)
+        if not any(flag&(0x40|0x04) for flag in flags) and shape==previous:equal+=1
+        else:equal=0
+        if equal>=2:return state
+        previous=shape;sleep(0.5)
+    raise ValueError('IPv6 state did not stabilize before release')
+
 def verify_live(proof,c,a):
     x=inspect(a.container);pid=x['State']['Pid']
     if x['Id']!=proof['containerID'] or not x['State']['Running'] or os.stat('/proc/'+str(pid)+'/ns/net').st_ino!=proof['namespaceInode'] or x['Image']!=c['imageID']:raise ValueError('live identity changed')
@@ -188,7 +201,8 @@ def launch(a,c):
                 if len(rows)!=1 or int(rows[0][0])<1 or rejects(tool)<=before:raise ValueError('dedicated negative probe has no policy evidence')
                 return one
             finally:nscmd(tool,'-D','OUTPUT',*rule)
-        ipv6state=json.loads(call(['docker','exec',cid,'node','-e',"const f=require('fs');const dirs=f.readdirSync('/proc/sys/net/ipv6/conf').filter(x=>!['all','default','lo'].includes(x));console.log(JSON.stringify({interfaces:dirs.map(name=>({name,disabled:f.readFileSync('/proc/sys/net/ipv6/conf/'+name+'/disable_ipv6','utf8').trim()})),addresses:f.readFileSync('/proc/net/if_inet6','utf8'),routes:f.readFileSync('/proc/net/ipv6_route','utf8')}))"]))
+        def read_ipv6():return json.loads(call(['docker','exec',cid,'node','-e',"const f=require('fs');const dirs=f.readdirSync('/proc/sys/net/ipv6/conf').filter(x=>!['all','default','lo'].includes(x));console.log(JSON.stringify({interfaces:dirs.map(name=>({name,disabled:f.readFileSync('/proc/sys/net/ipv6/conf/'+name+'/disable_ipv6','utf8').trim()})),addresses:f.readFileSync('/proc/net/if_inet6','utf8'),routes:f.readFileSync('/proc/net/ipv6_route','utf8')}))"]))
+        ipv6state=stable_ipv6(read_ipv6)
         ipv6disabled=ipv6_inactive(ipv6state)
         for generation in range(3):
             result={}
@@ -211,6 +225,7 @@ def launch(a,c):
         identity()
         if not pathlib.Path(a.env_file).is_file():raise ValueError('environment disappeared')
         envfile(a.env_file)
+        if ipv6_shape(read_ipv6())!=ipv6_shape(ipv6state):raise ValueError('IPv6 state changed before release')
         # Recheck companions and policy before authorizing the first application instruction.
         companions(c)
         if nscmd('iptables','-S')!=exact4 or nscmd('ip6tables','-S')!=exact6:raise ValueError('policy changed before release')

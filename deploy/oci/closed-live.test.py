@@ -14,6 +14,14 @@ class Live(unittest.TestCase):
    return json.dumps({**state,'interfaces':[{'name':'eth0','disabled':'0'}]} if change=='ipv6' else state)
   status='CapEff: 0000000000000000\nCapBnd: 0000000000000000\nNoNewPrivs: '+('0' if change=='caps' else '1')
   with patch.object(h,'inspect',return_value=x),patch.object(h.os,'stat',return_value=types.SimpleNamespace(st_ino=11)),patch.object(h,'call',side_effect=call),patch.object(h.pathlib.Path,'read_text',return_value=status):return h.verify_live(proof,{'imageID':'imageid'},types.SimpleNamespace(container='name'))
+ def test_stabilization_waits_for_tentative(self):
+  from unittest.mock import Mock
+  base={'interfaces':[{'name':'eth0','disabled':'0'}],'addresses':'fe80 02 40 20 80 eth0','routes':'route stable'}
+  pending={**base,'addresses':'fe80 02 40 20 c0 eth0'}
+  read=Mock(side_effect=[pending,base,base,base]);self.assertEqual(h.stable_ipv6(read,lambda _:None),base)
+  self.assertEqual(read.call_count,4)
+  self.assertRaises(ValueError,h.stable_ipv6,lambda:pending,lambda _:None)
+  self.assertRaises(ValueError,h.stable_ipv6,lambda:{**base,'addresses':'fe80 02 40 20 88 eth0'},lambda _:None)
  def test_live(self):self.assertTrue(self.go()['liveVerified'])
  def test_identity_changed(self):self.assertRaises(ValueError,self.go,'identity')
  def test_rules_changed(self):self.assertRaises(ValueError,self.go,'rules')

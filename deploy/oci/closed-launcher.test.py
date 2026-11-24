@@ -4,7 +4,7 @@ from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('helper',str(__import__('pathlib').Path(__file__).with_name('closed-recovery-helper.py')));h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
 class LaunchTests(unittest.TestCase):
  def go(self,fail=None):
-  trace=[];rules={'iptables':[],'ip6tables':[]};pol={'iptables':'ACCEPT','ip6tables':'ACCEPT'};counts={'iptables':0,'ip6tables':0};probecount={};stopped=[];released=[]
+  trace=[];rules={'iptables':[],'ip6tables':[]};pol={'iptables':'ACCEPT','ip6tables':'ACCEPT'};counts={'iptables':0,'ip6tables':0};probecount={};stopped=[];released=[];ipv6reads=[]
   c={'imageID':'imgid','network':'net','gateway':'172.21.0.1','hostProbePort':443,'externalProbeIP':'198.18.0.1','ipv6ProbeIP':'fd00::1'}
   a=types.SimpleNamespace(image='image',container='candidate',port=18080,data_dir='/data',env_file='/tmp/env')
   info={'Id':'cid','State':{'Running':True,'Pid':123},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapAdd':None,'Privileged':False},'NetworkSettings':{'Networks':{'net':{'IPAddress':'172.21.0.4'}}}}
@@ -34,7 +34,9 @@ class LaunchTests(unittest.TestCase):
    if args[:3]==['docker','exec','cid']:
     if args[3]=='sh':released.append(True);return ''
     code=args[5]
-    if 'ipv6/conf' in code:return json.dumps({'interfaces':[{'name':'eth0','disabled':'0'}],'addresses':'','routes':''})
+    if 'ipv6/conf' in code:
+     ipv6reads.append(True)
+     return json.dumps({'interfaces':[{'name':'eth0','disabled':'0'}],'addresses':'','routes':'changed route' if fail=='ipv6-drift' and len(ipv6reads)>3 else ''})
     if 'CapEff' in code:return 'CapEff: 0000000000000000\nCapBnd: 0000000000000000\nNoNewPrivs: '+('0' if fail=='caps' else '1')+'\n'
     if 'createServer' in code:
      if fail!='own-counter':counts['iptables']+=1
@@ -55,12 +57,13 @@ class LaunchTests(unittest.TestCase):
     trace.append(args);return 'save'
    return fake(args,**kw)
   try:
-   with patch.object(h,'preflight',return_value={'ok':True}),patch.object(h,'companions',return_value={'pg':('172.21.0.3',5432),'bao':('172.21.0.2',8200)}),patch.object(h,'inspect_exists',return_value=False),patch.object(h,'inspect',return_value=info),patch.object(h.os,'stat',return_value=types.SimpleNamespace(st_ino=111)),patch.object(h,'call',side_effect=fake2),patch.object(h.pathlib.Path,'is_file',return_value=True),patch.object(h,'envfile'):
+   with patch.object(h.time,'sleep'),patch.object(h,'preflight',return_value={'ok':True}),patch.object(h,'companions',return_value={'pg':('172.21.0.3',5432),'bao':('172.21.0.2',8200)}),patch.object(h,'inspect_exists',return_value=False),patch.object(h,'inspect',return_value=info),patch.object(h.os,'stat',return_value=types.SimpleNamespace(st_ino=111)),patch.object(h,'call',side_effect=fake2),patch.object(h.pathlib.Path,'is_file',return_value=True),patch.object(h,'envfile'):
     result=h.launch(a,c)
    if fail:self.fail('expected launch refusal for '+fail)
    return trace,stopped,released,result
   except AssertionError:raise
-  except Exception:
+  except Exception as error:
+   if fail=='ipv6-drift':self.assertEqual(str(error),'IPv6 state changed before release')
    if fail:
     self.assertTrue(stopped);self.assertFalse(released);return
    raise
@@ -83,4 +86,5 @@ class LaunchTests(unittest.TestCase):
  def test_counter_failure(self):self.go('counter')
  def test_own_connect_failure(self):self.go('own-connect')
  def test_own_counter_failure(self):self.go('own-counter')
+ def test_ipv6_drift_before_release(self):self.go('ipv6-drift')
 if __name__=='__main__':unittest.main()
