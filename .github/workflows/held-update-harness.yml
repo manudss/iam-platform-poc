@@ -44,7 +44,6 @@ jobs:
         run: |
           set -eu
           export DOCKER_CONFIG="$HOME/.docker"
-          sudo mkdir -p /root && sudo chmod 700 /root
           sudo --preserve-env=DOCKER_CONFIG python3 scripts/held-update-fixture-build.py --base "ghcr.io/${{ github.repository }}@$(echo '${{ inputs.base_digest || 'sha256:29c7af7a349a79b9432a077d32ed681a25a8443f9d84b74db3c82aa98e38a7e1' }}' | sed 's/.*@//')" --repo /root/held-fixture-repo --out /root/held-fixture.json --tag-prefix "held-fixture-${{ github.run_id }}-${{ github.run_attempt }}"
           echo "sha0=$(sudo jq -r '.images[0].sha' /root/held-fixture.json)" >> "$GITHUB_OUTPUT"
           echo "digest0=$(sudo jq -r '.images[0].digest' /root/held-fixture.json)" >> "$GITHUB_OUTPUT"

@@ -51,11 +51,27 @@ def run(x):
         configpath.write_text(json.dumps(config))
 
     # ---- pristine copy of the cold baseline dataset, then every scenario restarts from it (never reused across scenarios)
-    docker('stop', app); pristine = root / 'data-pristine'; runp(['cp', '-a', c['data'], str(pristine)])
+    docker('stop', app)
+    # Quiescent synthetic checkpoint of all three stores, never only a data-dir copy.
+    pristine = root / 'data-pristine'; runp(['cp', '-a', c['data'], str(pristine)])
+    pg_dump=root/'pristine-pg.sql'
+    with pg_dump.open('wb') as f:
+        subprocess.run(['docker','exec',c['pg'],'pg_dump','-U','lyam','-d','lyam','--clean','--if-exists'],stdout=f,stderr=subprocess.PIPE,check=True)
+    pg_dump.chmod(0o600)
+    docker('stop',c['bao']); bao_pristine=root/'bao-pristine'
+    runp(['cp','-a',str(root/'bao-storage'),str(bao_pristine)])
+    docker('start',c['bao'])
+    runp(['python3',str(root/'bao-unseal.py'),str(root/'bao-keys/init.json'),c['bao']])
+    report['checkpoint']={'stores':['data','postgres','bao'],'appStopped':True,'baoColdCopy':True,'pgDumpSHA256':sh256(pg_dump)}
     def reset_baseline():
         runp(['docker', 'rm', '-f', app], False)
         for g in [gates / 'MAINTENANCE', gates / 'OPS-MAINTENANCE']: g.unlink(missing_ok=True)
         shutil.rmtree(c['data'], ignore_errors=True); runp(['cp', '-a', str(pristine), c['data']])
+        with pg_dump.open('rb') as f:
+            subprocess.run(['docker','exec','-i',c['pg'],'psql','-X','-U','lyam','-d','lyam','-v','ON_ERROR_STOP=1'],stdin=f,stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True)
+        docker('stop',c['bao']);shutil.rmtree(root/'bao-storage')
+        runp(['cp','-a',str(bao_pristine),str(root/'bao-storage')]);docker('start',c['bao'])
+        runp(['python3',str(root/'bao-unseal.py'),str(root/'bao-keys/init.json'),c['bao']])
         shutil.rmtree(root / 'backups', ignore_errors=True); shutil.rmtree(queue_dir, ignore_errors=True); queue_dir.mkdir(mode=0o700)
         pause.write_text('harness pause\n'); lock.write_text(''); arm_config()
         runp([str(wrappers['preflight']), *args]); runp([str(wrappers['launcher']), *args])
@@ -138,10 +154,14 @@ def run(x):
             if time.monotonic() - t0 > 120: raise RuntimeError('supervision-not-ready')
             time.sleep(0.2)
         (folder / 'GO').write_text('operator-go-harness\n')
-        opening_seen = None; killed = None; deadline = time.monotonic() + 3000
+        closed_seen = None; opening_seen = None; killed = None; deadline = time.monotonic() + 3000
         while time.monotonic() < deadline and not (folder / 'watchdog-result.json').exists():
             try: st = jread(state_path); ph = (st.get('opening_intent') or {}).get('phase')
             except Exception: ph = None
+            if closed_seen is None and (gates/'OPS-MAINTENANCE').is_file():
+                try: urllib.request.urlopen(origin+'/healthz',timeout=3)
+                except urllib.error.HTTPError as e:
+                    if e.code==503:closed_seen=time.monotonic()
             if ph == 'opening' and opening_seen is None: opening_seen = time.monotonic()
             if kill_phase and ph == kill_phase and killed is None and (folder / 'queue-identity.json').exists():
                 qi = jread(folder / 'queue-identity.json')
@@ -152,7 +172,9 @@ def run(x):
             except subprocess.TimeoutExpired: p.kill(); raise RuntimeError('supervision-process-did-not-exit')
         sampler.stop.set(); sampler.join(5)
         wres = jread(folder / 'watchdog-result.json'); st = jread(state_path); rec = {'watchdog': {k: wres.get(k) for k in ['action', 'needs_operator']}, 'killed_at_phase': killed, 'statuses': sampler.statuses(), 'worker_exit': jread(folder / 'worker-result.json')['exit'] if (folder / 'worker-result.json').exists() else None}
-        first200 = sampler.first_200()
+        report.setdefault('initialStatuses',{})[name]=sorted({v for t,v in sampler.rows if closed_seen is None or t<closed_seen})
+        first200 = next((t for t,status in sampler.rows if closed_seen is not None and t>=closed_seen and status==200),None)
+        if closed_seen is None:raise RuntimeError('closure-marker-not-proved')
         if kill_phase is None:
             if wres['action'] != 'completed' or st['history'][-1]['sha'] != chain[-1]['sha'] or opening_seen is None or first200 is None or first200 < opening_seen: raise RuntimeError('clean-run-contract-failed')
             if [h['mode'] for h in st['history'][-n:]] != ['closed-qualified-held'] * (n - 1) + ['ui-open-automation-held']: raise RuntimeError('history-modes-wrong')
@@ -164,6 +186,7 @@ def run(x):
             if wres['action'] not in ('interrupted-rearm-permitted',): raise RuntimeError('unexpected-watchdog-category')
             if wres['recovery']['exit'] != 0:
                 rec['rearm'] = 'refused-report-only'
+                if kill_mode!='queue':raise RuntimeError('required-recovery-not-measured')
             else:
                 rec['rearm'] = 'measured-closed'; s = None
                 try: urllib.request.build_opener(urllib.request.ProxyHandler({})).open(origin + '/healthz', timeout=10)
@@ -178,4 +201,5 @@ def run(x):
     supervise('three-kill-closed-step-1-qualified', 3, 'closed-step-1-qualified')
     supervise('three-kill-opening', 3, 'opening')
     supervise('one-kill-queue-only-closed-step-0-running', 1, 'closed-step-0-running', 'queue')
+    if not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
     result['checks']['heldUpdateChain'] = True
