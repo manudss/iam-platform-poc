@@ -59,11 +59,11 @@ Branch protection is a separate action after check registration and validation.
 This change never merges a PR, publishes latest, deploys production, unpauses
 updates, or changes production data.
 
-The internal Docker network provides a test-service egress boundary. It is not
-proof that a candidate's own firewall would block egress on an ordinary network.
-The separate helper policy fixture retains its explicit probe assertions; the
-internal-network delivery scenarios cannot establish that distinction alone.
-Host-to-published-port TLS must pass in the actual runner, not be assumed.
+The fixture uses an ordinary Docker bridge so the helper can prove its own
+REJECT counters on routed negative probes. A separate DOCKER-USER host rule
+blocks forwarding from that bridge to other networks, while allowing its
+synthetic companions. The host rule is removed during cleanup. Host-bound
+published-port TLS must pass in the actual runner, not be assumed.
 Queue and backup contents remain private; their hashes in privateEvidenceHashes
 are audit fingerprints, not independently downloaded evidence verification.
 The aggregate rehashes the uploaded execution summary and script inventory and

@@ -15,9 +15,13 @@ import urllib.request
 from pathlib import Path
 
 
+COMMAND_FAILURE={}
+
 def run(args, check=True, **kwargs):
     result = subprocess.run(args, text=True, capture_output=True, timeout=1000, **kwargs)
     if check and result.returncode:
+        # Caller records only fixed command categories and numeric exit status.
+        COMMAND_FAILURE.update(returnCode=result.returncode,role='docker' if args[0]=='docker' else 'other')
         raise RuntimeError('delivery-subprocess-failed')
     return result
 
@@ -109,6 +113,7 @@ https://delivery.localhost:18443 {
         docker('run', '-d', '--name', caddy, '--network', 'host',
                '-v', str(caddyfile) + ':/etc/caddy/Caddyfile:ro',
                '-v', str(tls) + ':/tls:ro', '-v', str(gates) + ':/gates:ro', 'caddy:2.10.2-alpine')
+        stage='configure-synthetic-environment'
         env = Path(c['env'])
         settings = dict(line.split('=', 1) for line in env.read_text().splitlines() if '=' in line)
         settings.update({'IAM_PUBLIC_ORIGIN': origin, 'LYAM_CONTAINER': c['app'],
@@ -141,6 +146,7 @@ raise SystemExit(r.returncode)
         token = root / 'bao-token'
         token.write_text(settings['IAM_BAO_TOKEN'])
         token.chmod(0o600)
+        stage='synthetic-bao-metadata'
         docker('exec', '-e', 'BAO_ADDR=http://127.0.0.1:8200', '-e', 'BAO_TOKEN=' + settings['IAM_BAO_TOKEN'],
                c['bao'], 'bao', 'kv', 'put', 'secret/iam/delivery-contract', 'value=synthetic')
         auth = root / 'auth.json'
@@ -160,13 +166,16 @@ raise SystemExit(r.returncode)
         pol.chmod(0o600)
         env.write_text(''.join(k + '=' + v + '\n' for k, v in settings.items()))
         # Reconfigure the running fresh image, or start the actual old image on its original volume.
+        stage='restart-baseline-with-companions'
         docker('rm', '-f', c['app'])
         current = c.get('baselineImage') or c['image']
         docker('run', '-d', '--name', c['app'], '--network', c['network'], '--restart', 'no',
                '-p', '127.0.0.1:18089:8080', '-v', c['data'] + ':/data', '--env-file', str(env),
                '-e', 'IAM_DEMO_SEED_MODE=never', current)
+        stage='baseline-edge-health'
         health(c['app'])
         # Ensure TLS is genuinely verified, with no ignore-certificate option.
+        stage='trusted-tls-published-front'
         for _ in range(30):
             try:
                 if urllib.request.urlopen(origin + '/healthz', timeout=5).status == 200:
@@ -323,6 +332,7 @@ raise SystemExit(r.returncode)
         result['stage'] = stage
         # Only our fixed errors, not external stderr, paths, tokens, or environment.
         result['errorType'] = type(error).__name__
+        result['commandFailure']=COMMAND_FAILURE
         if str(error) in {'candidate-qualifier-smoke-refused', 'candidate-receipt-consumer-absent',
                           'real-closed-updater-refused', 'real-queue-update-refused', 'candidate-ui-document-refused'}:
             result['reason'] = str(error)

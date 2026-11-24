@@ -107,9 +107,13 @@ def main():
    if candidate.get('Config',{}).get('Labels',{}).get('org.opencontainers.image.revision')!=os.environ.get('DELIVERY_SHA'):raise ValueError('candidate image source label mismatch')
   # Real disposable companions, no provider integrations, no public ports or persistent secrets.
   netargs=['network','create']
-  if a.delivery_scenario:netargs+=['--internal']
   if a.ipv6_mode=='active':netargs+=['--ipv6','--subnet','fd42:6c79:'+format(os.getpid()%65535,'x')+'::/64']
   d(*netargs,network);created_network=True
+  if a.delivery_scenario:
+   bridge='br-'+json.loads(d('network','inspect',network))[0]['Id'][:12]
+   # Preserve a real route for the helper's own REJECT counters, while an
+   # additional host boundary prevents fixture peers reaching external services.
+   call(['iptables','-I','DOCKER-USER','1','-i',bridge,'!','-o',bridge,'-j','REJECT'])
   containers.append(pg);d('run','-d','--name',pg,'--network',network,'--network-alias','pg','-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',a.pg_image)
   containers.append(bao);d('run','-d','--name',bao,'--network',network,'--network-alias','bao','--cap-add','IPC_LOCK','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-ci-only',a.bao_image,'server','-dev','-dev-listen-address=0.0.0.0:8200')
   if a.delivery_scenario:
@@ -220,13 +224,15 @@ def main():
   raise
  finally:
   for name in reversed(containers):call(['docker','rm','-f',name],False)
-  if created_network:call(['docker','network','rm',network],False)
+  if created_network:
+   if a.delivery_scenario:call(['iptables','-D','DOCKER-USER','-i',bridge,'!','-o',bridge,'-j','REJECT'],False)
+   call(['docker','network','rm',network],False)
   if a.delivery_scenario:
    cleanup={'containersAbsent':all(call(['docker','inspect',n],False).returncode!=0 for n in containers),'networkAbsent':call(['docker','network','inspect',network],False).returncode!=0}
    intermediate=out/'delivery-intermediate.json'
    record=json.loads(intermediate.read_text()) if intermediate.exists() else {'format':1,'scenario':a.delivery_scenario,'passed':False,'sha':os.environ.get('DELIVERY_SHA',''),'digest':a.image.split('@')[1],'checks':{},'evidence':{}}
    record['cleanup']=cleanup
-   clean=all(cleanup.values()) and record.get('frontCleanup') is True
+   clean=all(cleanup.values()) and (record.get('frontCleanup') is True or not intermediate.exists())
    record['checks']['cleanup']=clean
    record['passed']=record.get('passed') is True and clean
    if intermediate.exists():
