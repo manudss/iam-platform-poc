@@ -1,3 +1,4 @@
+import{JIRA_BLOCKS,JIRA_EVENTS}from'./jira-cloud-full.mjs';
 import {JSON_VALUES} from './json-values.mjs';
 import {GOOGLE_SHEETS_BLOCKS,GOOGLE_SHEETS_EVENTS} from './google-sheets-full.mjs';
 import { safeHttp, withinConnection } from './http-transport.mjs';
@@ -1128,7 +1129,7 @@ const lyamCompleteTicket = {
   },
 };
 
-export const BLOCKS = [JSON_VALUES,...GOOGLE_SHEETS_BLOCKS,httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamSendTemplateMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
+export const BLOCKS = [...JIRA_BLOCKS,JSON_VALUES,...GOOGLE_SHEETS_BLOCKS,httpRequest, textTransform, sheetsRead, sheetsUpdate, sheetsAddRow, jiraCreateIssue, jiraSearchIssues, jiraGetIssue, jiraAddComment, jiraTransitionIssue, jiraUpdateIssue, sheetsCreateColumn, sheetsFindRows, lyamCreateUser, lyamBlockAccount, lyamUnblockAccount, lyamSecuritySetting, lyamSendMail, lyamSendTemplateMail, lyamPublishWorkspace, lyamGeneratePassword, lyamSetTemporaryPassword, lyamSendSecretMail, lyamLinkTicket, lyamResolveTicket, lyamCompleteTicket, ...LYAM_ADMIN_BLOCKS];
 
 // ----------------------------------------------------------------------------- Start triggers ----
 export const TRIGGER_EVENTS = {
@@ -1192,4 +1193,4 @@ TRIGGER_EVENTS['jira.issue-done'] = {
 
 export const DEMO_SHEET_INFO = { columns: DEMO_SHEET_COLUMNS };
 
-Object.assign(TRIGGER_EVENTS,GOOGLE_SHEETS_EVENTS);
+Object.assign(TRIGGER_EVENTS,GOOGLE_SHEETS_EVENTS,JIRA_EVENTS);

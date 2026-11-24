@@ -16,6 +16,9 @@ export class ActivepiecesSheetsController{
  @Post('activepieces-sheets/:definition/:token')
  async hook(@Param('tenant')t:string,@Param('definition')d:string,@Param('token')token:string,@Req()req:any,@Body()body:unknown){try{return await this.service.webhook(t,d,token,req.headers,body);}catch(e){if(e instanceof NotFoundException)throw e;throw new ServiceUnavailableException('Notification not accepted; storage unavailable or inbox full');}}
  @UseGuards(AuthGuard,AdminGuard,WorkflowsEnabledGuard)
+ @Post('activepieces-jira-properties')
+ async jiraProperties(@Param('tenant')t:string,@Body()body:any){const resolved=await this.connections.resolve(t,currentBranch(),String(body.connectionId),'jira');const p=loadPluginModule('workflow-connectors','jira-cloud-full.mjs')as any;return{property:await p.resolveJiraProperty(String(body.action),String(body.property),{settings:resolved.settings,config:body.config??{}})};}
+ @UseGuards(AuthGuard,AdminGuard,WorkflowsEnabledGuard)
  @Post('activepieces-sheets-properties')
  async properties(@Param('tenant')t:string,@Body()body:any){
   const resolved=await this.connections.resolve(t,currentBranch(),String(body.connectionId),'google-sheets');

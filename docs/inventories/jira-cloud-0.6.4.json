@@ -1,0 +1,1583 @@
+{
+  "package": "@activepieces/piece-jira-cloud",
+  "version": "0.6.4",
+  "actions": [
+    {
+      "key": "create_issue",
+      "name": "Create Issue",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueTypeId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueFields": {
+          "type": "DYNAMIC",
+          "required": true
+        },
+        "adfFields": {
+          "type": "MULTI_SELECT_DROPDOWN",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "update_issue",
+      "name": "Update Issue",
+      "props": {
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "statusId": {
+          "type": "DROPDOWN",
+          "required": false
+        },
+        "issueFields": {
+          "type": "DYNAMIC",
+          "required": true
+        },
+        "adfFields": {
+          "type": "MULTI_SELECT_DROPDOWN",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "find-user",
+      "name": "Find User",
+      "props": {
+        "keyword": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "search_issues",
+      "name": "Search Issues",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": true,
+          "default": "type = story and created > '2023-12-13 14:00'"
+        },
+        "fields": {
+          "type": "ARRAY",
+          "required": false
+        },
+        "mapNames": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": true,
+          "default": 50
+        },
+        "sanitizeJql": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "assign_issue",
+      "name": "Assign Issue",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "assignee": {
+          "type": "DROPDOWN",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "add_issue_attachment",
+      "name": "Add Attachment to Issue",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "attachment": {
+          "type": "FILE",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get-issue-attachment",
+      "name": "Get Issue Attachment",
+      "props": {
+        "attachmentId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "add-watcher-to-issue",
+      "name": "Add Watcher to Issue",
+      "props": {
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "userId": {
+          "type": "DROPDOWN",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "add_issue_comment",
+      "name": "Add Issue Comment",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "comment": {
+          "type": "LONG_TEXT",
+          "required": true
+        },
+        "isADF": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "key": "update_issue_comment",
+      "name": "Update Issue Comment",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "commentId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "comment": {
+          "type": "LONG_TEXT",
+          "required": true
+        },
+        "isADF": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "key": "link-issues",
+      "name": "Link Issues",
+      "props": {
+        "firstIssueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueLinkTypeId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "secondIssueId": {
+          "type": "DROPDOWN",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "list_issue_comments",
+      "name": "List Issue Comments",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "orderBy": {
+          "type": "STATIC_DROPDOWN",
+          "required": true,
+          "default": "-created"
+        },
+        "limit": {
+          "type": "NUMBER",
+          "required": true,
+          "default": 10
+        }
+      }
+    },
+    {
+      "key": "delete_issue_comment",
+      "name": "Delete Issue Comment",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "commentId": {
+          "type": "DROPDOWN",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "markdownToJiraFormat",
+      "name": "Markdown to Jira Format",
+      "props": {
+        "markdown": {
+          "type": "LONG_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_issue",
+      "name": "Get Issue",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "expand": {
+          "type": "STATIC_MULTI_SELECT_DROPDOWN",
+          "required": false
+        },
+        "mapNames": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "mapTransitions": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "key": "transition_issue",
+      "name": "Transition Issue",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "issueId": {
+          "type": "DROPDOWN",
+          "required": true
+        },
+        "transitionId": {
+          "type": "DROPDOWN",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "add_comment",
+      "name": "Add Comment",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "comment": {
+          "type": "LONG_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "add_watcher",
+      "name": "Add Watcher",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "accountId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "add_worklog",
+      "name": "Add Worklog",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "timeSpent": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "started": {
+          "type": "DATE_TIME",
+          "required": false
+        },
+        "comment": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "adjustEstimate": {
+          "type": "STATIC_DROPDOWN",
+          "required": false
+        },
+        "newEstimate": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "reduceBy": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "assign_issue_to_user",
+      "name": "Assign Issue to User",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "accountId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "bulk_create_issues",
+      "name": "Bulk Create Issues",
+      "props": {
+        "projectIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "issues": {
+          "type": "JSON",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "bulk_get_issues",
+      "name": "Bulk Get Issues",
+      "props": {
+        "issueIdsOrKeys": {
+          "type": "ARRAY",
+          "required": true
+        },
+        "fields": {
+          "type": "ARRAY",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "count_issues",
+      "name": "Count Issues",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "create_board",
+      "name": "Create Board",
+      "props": {
+        "name": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "type": {
+          "type": "STATIC_DROPDOWN",
+          "required": true
+        },
+        "filterId": {
+          "type": "NUMBER",
+          "required": true
+        },
+        "projectKeyOrId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "create_issue_link",
+      "name": "Create Issue Link",
+      "props": {
+        "linkTypeName": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "outwardIssueKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "inwardIssueKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "comment": {
+          "type": "LONG_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "create_issue_with_fields",
+      "name": "Create Issue with Fields",
+      "props": {
+        "projectIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "issueTypeId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "summary": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "description": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "assigneeAccountId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "priorityId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "labels": {
+          "type": "ARRAY",
+          "required": false
+        },
+        "parentKey": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "dueDate": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "fields": {
+          "type": "JSON",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "create_sprint",
+      "name": "Create Sprint",
+      "props": {
+        "name": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "originBoardId": {
+          "type": "NUMBER",
+          "required": true
+        },
+        "startDate": {
+          "type": "DATE_TIME",
+          "required": false
+        },
+        "endDate": {
+          "type": "DATE_TIME",
+          "required": false
+        },
+        "goal": {
+          "type": "LONG_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "delete_attachment",
+      "name": "Delete Attachment",
+      "props": {
+        "attachmentId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "delete_comment",
+      "name": "Delete Comment",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "commentId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "delete_issue",
+      "name": "Delete Issue",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "deleteSubtasks": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "key": "delete_worklog",
+      "name": "Delete Worklog",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "worklogId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "adjustEstimate": {
+          "type": "STATIC_DROPDOWN",
+          "required": false
+        },
+        "newEstimate": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "increaseBy": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "download_attachment",
+      "name": "Download Attachment",
+      "props": {
+        "attachmentId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "edit_issue",
+      "name": "Edit Issue",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "summary": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "description": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "assigneeAccountId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "priorityId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "labels": {
+          "type": "ARRAY",
+          "required": false
+        },
+        "parentKey": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "dueDate": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "issueTypeId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "fields": {
+          "type": "JSON",
+          "required": false
+        },
+        "notifyUsers": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "fetch_issue",
+      "name": "Fetch Issue",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "fields": {
+          "type": "ARRAY",
+          "required": false
+        },
+        "expand": {
+          "type": "STATIC_MULTI_SELECT_DROPDOWN",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "find_users",
+      "name": "Find Users",
+      "props": {
+        "query": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "includeInactive": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "get_comment",
+      "name": "Get Comment",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "commentId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_current_user",
+      "name": "Get Current User",
+      "props": {}
+    },
+    {
+      "key": "get_favorite_filters",
+      "name": "Get Favorite Filters",
+      "props": {}
+    },
+    {
+      "key": "get_fields",
+      "name": "Get Fields",
+      "props": {
+        "nameContains": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "customOnly": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "key": "get_filter",
+      "name": "Get Filter",
+      "props": {
+        "filterId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_issue_edit_metadata",
+      "name": "Get Issue Edit Metadata",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_issue_link_types",
+      "name": "Get Issue Link Types",
+      "props": {}
+    },
+    {
+      "key": "get_issue_resolutions",
+      "name": "Get Issue Resolutions",
+      "props": {
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "get_issue_transitions",
+      "name": "Get Issue Transitions",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "includeFields": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "key": "get_issue_type_create_fields",
+      "name": "Get Issue Type Create Fields",
+      "props": {
+        "projectIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "issueTypeId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 100
+        }
+      }
+    },
+    {
+      "key": "get_issue_types",
+      "name": "Get Issue Types",
+      "props": {
+        "projectIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_issue_votes",
+      "name": "Get Issue Votes",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_issue_watchers",
+      "name": "Get Issue Watchers",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_jql_field_suggestions",
+      "name": "Get JQL Field Suggestions",
+      "props": {
+        "fieldName": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "fieldValue": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "get_jql_reference_data",
+      "name": "Get JQL Reference Data",
+      "props": {
+        "fieldNameContains": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "get_my_permissions",
+      "name": "Get My Permissions",
+      "props": {
+        "permissions": {
+          "type": "ARRAY",
+          "required": true
+        },
+        "projectKey": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "issueKey": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "get_permitted_projects",
+      "name": "Get Permitted Projects",
+      "props": {
+        "permissions": {
+          "type": "ARRAY",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_priorities",
+      "name": "Get Priorities",
+      "props": {
+        "projectId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "get_project_components",
+      "name": "Get Project Components",
+      "props": {
+        "projectIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "query": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "get_project_versions",
+      "name": "Get Project Versions",
+      "props": {
+        "projectIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "query": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "status": {
+          "type": "STATIC_MULTI_SELECT_DROPDOWN",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "get_project",
+      "name": "Get Project",
+      "props": {
+        "projectIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_recent_projects",
+      "name": "Get Recent Projects",
+      "props": {}
+    },
+    {
+      "key": "get_remote_issue_links",
+      "name": "Get Remote Issue Links",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_sprint",
+      "name": "Get Sprint",
+      "props": {
+        "sprintId": {
+          "type": "NUMBER",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_statuses",
+      "name": "Get Statuses",
+      "props": {
+        "nameContains": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "get_user_groups",
+      "name": "Get User Groups",
+      "props": {
+        "accountId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "get_worklogs",
+      "name": "Get Worklogs",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "startedAfter": {
+          "type": "DATE_TIME",
+          "required": false
+        },
+        "startedBefore": {
+          "type": "DATE_TIME",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "list_boards",
+      "name": "List Boards",
+      "props": {
+        "name": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "type": {
+          "type": "STATIC_DROPDOWN",
+          "required": false
+        },
+        "projectKeyOrId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "list_comments",
+      "name": "List Comments",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "orderBy": {
+          "type": "STATIC_DROPDOWN",
+          "required": false,
+          "default": "created"
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "list_projects",
+      "name": "List Projects",
+      "props": {
+        "query": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "typeKey": {
+          "type": "STATIC_DROPDOWN",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "list_sprints",
+      "name": "List Sprints",
+      "props": {
+        "boardId": {
+          "type": "NUMBER",
+          "required": true
+        },
+        "state": {
+          "type": "STATIC_MULTI_SELECT_DROPDOWN",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "move_issues_to_sprint",
+      "name": "Move Issues to Sprint",
+      "props": {
+        "sprintId": {
+          "type": "NUMBER",
+          "required": true
+        },
+        "issues": {
+          "type": "ARRAY",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "parse_jql",
+      "name": "Parse JQL",
+      "props": {
+        "queries": {
+          "type": "ARRAY",
+          "required": true
+        },
+        "validation": {
+          "type": "STATIC_DROPDOWN",
+          "required": false,
+          "default": "strict"
+        }
+      }
+    },
+    {
+      "key": "remove_watcher",
+      "name": "Remove Watcher",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "accountId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "search_dashboards",
+      "name": "Search Dashboards",
+      "props": {
+        "dashboardName": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "ownerAccountId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "search_filters",
+      "name": "Search Filters",
+      "props": {
+        "filterName": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "ownerAccountId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "startAt": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 0
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        }
+      }
+    },
+    {
+      "key": "search_issues_by_jql",
+      "name": "Search Issues by JQL",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": true
+        },
+        "fields": {
+          "type": "ARRAY",
+          "required": false
+        },
+        "maxResults": {
+          "type": "NUMBER",
+          "required": false,
+          "default": 50
+        },
+        "nextPageToken": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "send_issue_notification",
+      "name": "Send Issue Notification",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "subject": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "textBody": {
+          "type": "LONG_TEXT",
+          "required": true
+        },
+        "htmlBody": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "notifyReporter": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "notifyAssignee": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "notifyWatchers": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "notifyVoters": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "userAccountIds": {
+          "type": "ARRAY",
+          "required": false
+        },
+        "groupIds": {
+          "type": "ARRAY",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "transition_issue_status",
+      "name": "Transition Issue Status",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "transitionId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "resolutionId": {
+          "type": "SHORT_TEXT",
+          "required": false
+        },
+        "comment": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "fields": {
+          "type": "JSON",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "update_comment",
+      "name": "Update Comment",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "commentId": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "comment": {
+          "type": "LONG_TEXT",
+          "required": true
+        },
+        "notifyUsers": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "upload_attachment",
+      "name": "Upload Attachment",
+      "props": {
+        "issueIdOrKey": {
+          "type": "SHORT_TEXT",
+          "required": true
+        },
+        "file": {
+          "type": "FILE",
+          "required": true
+        },
+        "fileName": {
+          "type": "SHORT_TEXT",
+          "required": false
+        }
+      }
+    },
+    {
+      "key": "custom_api_call",
+      "name": "Custom API Call",
+      "props": {
+        "url": {
+          "type": "DYNAMIC",
+          "required": true
+        },
+        "method": {
+          "type": "STATIC_DROPDOWN",
+          "required": true,
+          "default": "GET"
+        },
+        "headers": {
+          "type": "OBJECT",
+          "required": false
+        },
+        "queryParams": {
+          "type": "OBJECT",
+          "required": false
+        },
+        "body_type": {
+          "type": "DROPDOWN",
+          "required": false,
+          "default": "none"
+        },
+        "body": {
+          "type": "DYNAMIC",
+          "required": false
+        },
+        "response_is_binary": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "failsafe": {
+          "type": "CHECKBOX",
+          "required": false
+        },
+        "timeout": {
+          "type": "NUMBER",
+          "required": false
+        },
+        "followRedirects": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    }
+  ],
+  "triggers": [
+    {
+      "key": "new_issue",
+      "name": "New Issue",
+      "type": "POLLING",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "sanitizeJql": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "updated_issue",
+      "name": "Updated Issue",
+      "type": "POLLING",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "sanitizeJql": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        }
+      }
+    },
+    {
+      "key": "updated_issue_status",
+      "name": "Updated Issue Status",
+      "type": "POLLING",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "sanitizeJql": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "new_comment",
+      "name": "New Comment",
+      "type": "POLLING",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "sanitizeJql": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "issue_assigned",
+      "name": "Issue Assigned",
+      "type": "POLLING",
+      "props": {
+        "assignedToMe": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": false
+        },
+        "assignee": {
+          "type": "DROPDOWN",
+          "required": false
+        },
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "sanitizeJql": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "new_attachment",
+      "name": "New Attachment on Issue",
+      "type": "POLLING",
+      "props": {
+        "jql": {
+          "type": "LONG_TEXT",
+          "required": false
+        },
+        "sanitizeJql": {
+          "type": "CHECKBOX",
+          "required": false,
+          "default": true
+        }
+      }
+    },
+    {
+      "key": "new_issue_type",
+      "name": "New Issue Type",
+      "type": "POLLING",
+      "props": {
+        "projectId": {
+          "type": "DROPDOWN",
+          "required": true
+        }
+      }
+    },
+    {
+      "key": "new_project",
+      "name": "New Project",
+      "type": "POLLING",
+      "props": {}
+    },
+    {
+      "key": "new_priority",
+      "name": "New Priority",
+      "type": "POLLING",
+      "props": {}
+    }
+  ]
+}
