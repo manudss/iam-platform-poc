@@ -2,7 +2,7 @@
 """Durable ordered deployment journal. Root-owned, preinstalled operator trust boundary.
 Never fetched from an unqualified commit by an automatic deploy. No network credentials.
 """
-import hashlib, argparse, fcntl, json, os, re, subprocess, sys, tempfile, datetime
+import time, hashlib, argparse, fcntl, json, os, re, subprocess, sys, tempfile, datetime
 from pathlib import Path
 SHA = re.compile(r'^[a-f0-9]{40}$')
 DIGEST = re.compile(r'^sha256:[a-f0-9]{64}$')
@@ -303,14 +303,45 @@ def bound_module(spec,filename,name):
     module_spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
     return module
 
-def held_update(path,manifest,repository,container,make_host,lock_fd,verify=verify_source_chain,observe=observe_running,controller=None,qualify=verify_qualification_receipt):
+HOOK_PHASES=re.compile(r'closed-step-\d{1,3}-(running|qualified)|ops-gate-created|opening')
+HOOK_PROTECT=lambda st:not(st.st_uid or st.st_gid or st.st_mode&0o022)   # isolated runner dir must be root-owned, not group/world writable; tests may replace
+PRODUCTION_STATE='/opt/lyam/deploy-queue/state.json'
+def phase_hook_from(manifest,state_path):
+    """Test-only deterministic suspension point, inert by default. Enabled ONLY by a 'phase_hook' key inside the reviewed, hash-bound manifest
+    (never by environment or argv), and only for a non-production state path whose hook directory is protected and holds a sentinel that binds
+    the state path and engagement. After a phase is durably persisted it writes <dir>/<phase>.reached (exclusive) and waits for <dir>/<phase>.release;
+    a missing release within the timeout RAISES (the fixture fails, the phase is never silently skipped). Returns a callable or None."""
+    cfg=manifest.get('phase_hook')
+    if cfg is None:return None
+    if not isinstance(cfg,dict) or set(cfg)!={'dir','phases','timeout'} or type(cfg['timeout']) not in (int,float) or not 1<=cfg['timeout']<=120 or not isinstance(cfg['phases'],list) or not cfg['phases'] or not all(isinstance(x,str) and HOOK_PHASES.fullmatch(x) for x in cfg['phases']):
+        raise ValueError('invalid phase_hook')
+    if str(Path(state_path).absolute())==PRODUCTION_STATE:raise ValueError('phase_hook refused on the production state path')
+    d=Path(cfg['dir'])
+    if not d.is_absolute() or d.is_symlink() or not d.is_dir() or d.resolve()!=d or not HOOK_PROTECT(d.lstat()):raise ValueError('phase_hook directory must be absolute, real and protected')
+    sent=d/'ISOLATED_HARNESS'
+    want=hashlib.sha256(('%s\n%s'%(Path(state_path).absolute(),manifest.get('engagement_id'))).encode()).hexdigest()
+    if sent.is_symlink() or not sent.is_file() or not HOOK_PROTECT(sent.lstat()) or sent.read_text().strip()!=want:raise ValueError('phase_hook sentinel must bind this state path and engagement')
+    phases=set(cfg['phases']);timeout=float(cfg['timeout'])
+    def hook(phase):
+        if phase not in phases:return
+        flag=d/(phase+'.reached');fd=os.open(flag,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'w') as f:f.write(json.dumps({'pid':os.getpid(),'phase':phase}));f.flush();os.fsync(f.fileno())
+        end=time.monotonic()+timeout;rel=d/(phase+'.release')
+        while not rel.exists():
+            if time.monotonic()>end:raise ValueError('phase_hook release timeout at '+phase)
+            time.sleep(.05)
+    return hook
+
+def held_update(path,manifest,repository,container,make_host,lock_fd,verify=verify_source_chain,observe=observe_running,controller=None,qualify=verify_qualification_receipt,hook=None):
     """Sequential closed steps (one successor each, backup/qualification per step), accesses stay
     closed between steps, then ONE reviewed UIHELD opening. History records each successor with its
     true mode. Interruption or failure retains the intent; nothing is replayed or rolled back."""
     import copy
+    if not isinstance(manifest.get('engagement_id'),str) or not re.fullmatch(r'[A-Za-z0-9._-]{8,64}',manifest['engagement_id']):raise ValueError('bounded engagement_id required in the reviewed manifest')
     state=load(path);chain=check_held_update(state,manifest,pause_present=True)
     base=state['history'][-1]['sha'];verify(repository,base,chain)
     for e in chain:qualify(e.get('qualification'),e)  # prior CI qualification of EACH commit; distinct from the real closed qualification per step
+    hook=hook or phase_hook_from(manifest,path)   # configuration refusals happen BEFORE any intent or gate exists
     host=make_host(manifest);host.preflight(container,state['history'][-1])
     c=controller or opening_controller(manifest)
     original_state=copy.deepcopy(state)
@@ -320,15 +351,16 @@ def held_update(path,manifest,repository,container,make_host,lock_fd,verify=veri
     state['opening_intent']=intent;state['format']=3;atomic(path,state)
     def persist(phase):
         intent['phase']=phase;intent['gates']=host.snapshot_gates();atomic(path,state)
+        if hook:hook(phase)   # after durable persistence; inert unless the reviewed manifest enables it in an isolated context
     try:
         intent['phase']='ops-gate-planned';atomic(path,state)  # exact bytes durable BEFORE creation
         host.create_ops_gate();persist('ops-gate-created')
         adopt=None
         for i,entry in enumerate(chain):
             persist('closed-step-%d-running'%i)
-            fields,receipt_path=host.closed_step(entry,adopt,i,lock_fd)
+            fields,receipt_path=(host.closed_step(entry,adopt,i,lock_fd,len(chain)) if getattr(host,'step_configs',None) is not None else host.closed_step(entry,adopt,i,lock_fd))
             obs=observe(container,entry)
-            intent['steps'].append({'sha':entry['sha'],'parent':entry['parent'],'digest':entry['digest'],'receipt':fields,'receipt_path':receipt_path,'observed_running':obs})
+            intent['steps'].append({'sha':entry['sha'],'parent':entry['parent'],'digest':entry['digest'],'receipt':fields,'receipt_path':receipt_path,'observed_running':obs,'config':(host.installed_configs[-1] if getattr(host,'step_configs',None) is not None else None)})
             adopt=(fields,receipt_path);persist('closed-step-%d-qualified'%i)
         persist('opening')
         last=intent['steps'][-1]
@@ -467,7 +499,7 @@ def main():
                     if Path(env.get('LYAM_LOCK_FILE','/opt/lyam/.update.lock'))!=Path(a.update_lock) or Path(env.get('LYAM_PAUSE_FILE','/opt/lyam/UPDATE_PAUSED'))!=pause:raise ValueError('configured lock/pause mismatch')
                     if manifest.get('updater',{}).get('path')!=str(Path(a.updater).absolute()):raise ValueError('updater path must equal the reviewed updater binding')
                     hm=bound_module(manifest.get('held_host'),'held-update-host.py','held host')
-                    held_update(path,manifest,a.repository,a.container,lambda m:hm.Host(m['opening_static']['env']['path'],a.updater,m['receipt_dir'],a.update_lock,updater_sha256=m.get('updater',{}).get('sha256')),updater_lock.fileno(),controller=controller)
+                    held_update(path,manifest,a.repository,a.container,lambda m:hm.Host(m['opening_static']['env']['path'],a.updater,m['receipt_dir'],a.update_lock,updater_sha256=m.get('updater',{}).get('sha256'),step_configs=m.get('step_configs')),updater_lock.fileno(),controller=controller)
                     print('Held update journaled: all successors qualified closed, one UI-held opening; pause, resume barrier and hold retained')
                 elif a.command=='rearm-held-update':
                     rearm_held_update(path)

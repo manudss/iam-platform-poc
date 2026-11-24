@@ -15,7 +15,7 @@ if cmd=='held-update-reviewed':
  sys.stdin.read();mode=os.environ.get('FAKE_MODE','hang')
  put({'format':3,'history':[],'opening_intent':{'phase':'closed-step-0-running','queue':ident(),'gates':[]}})
  if mode=='hang':time.sleep(600)
- if mode=='ok':put({'format':3,'history':[{'sha':'T','digest':'sha256:'+'a'*64,'mode':'ui-open-automation-held','automation_held':True}],'recovery_fence':'T','resume_required':True,'recoveries':[{'kind':'reviewed-held-update','target':{'sha':'T','digest':'sha256:'+'a'*64}}],'opening_audits':[{'phase':'ui-open-automation-held','target':{'sha':'T'},'proof':{'automation_held':True,'pause_retained':True}}]});sys.exit(0)
+ if mode=='ok':put({'format':3,'history':[{'sha':'T','digest':'sha256:'+'a'*64,'mode':'ui-open-automation-held','automation_held':True}],'recovery_fence':'T','resume_required':True,'recoveries':[{'kind':'reviewed-held-update','manifest':{'engagement_id':'eng-00000001'},'target':{'sha':'T','digest':'sha256:'+'a'*64}}],'opening_audits':[{'phase':'ui-open-automation-held','manifest':{'engagement_id':'eng-00000001'},'target':{'sha':'T'},'proof':{'automation_held':True,'pause_retained':True}}]});sys.exit(0)
  if mode=='fail':put({'format':3,'history':[],'opening_intent':{'phase':'failed-access-rearmed','queue':ident(),'gates':[]}});sys.exit(3)
 if cmd=='rearm-held-update':
  s=json.load(open(st));s['opening_intent']['phase']='interrupted-access-rearmed';put(s);open(st+'.rearmed','a').write('x')
@@ -23,7 +23,7 @@ if cmd=='rearm-held-update':
 class D(unittest.TestCase):
  def setUp(self):
   self.t=tempfile.TemporaryDirectory();d=self.d=Path(self.t.name);self.f=d/'f';self.f.mkdir()
-  for n,c in [('queue.py',FAKE),('upd.sh','#!/bin/sh\n'),('man.json','{}')]:(d/n).write_text(c)
+  for n,c in [('queue.py',FAKE),('upd.sh','#!/bin/sh\n'),('man.json','{"engagement_id":"eng-00000001"}')]:(d/n).write_text(c)
   self.state=d/'state.json';self.state.write_text(json.dumps({'format':3,'history':[]}));(d/'pause').write_text('p');(d/'lock').write_text('');(d/'state.json.lock').write_text('')
   fs={str(d/'queue.py'):None,str(d/'upd.sh'):None,str(d/'man.json'):None,PY:None,str(SELF):None}
   self.spec={'kind':'reviewed-held-update-supervision','queue':str(d/'queue.py'),'state':str(self.state),'pause':str(d/'pause'),'lock':str(d/'lock'),'repository':'r','container':'c','updater':str(d/'upd.sh'),'manifest':str(d/'man.json'),'python':PY,'engagement_id':'eng-00000001','target_sha':'T','target_digest':'sha256:'+'a'*64,'self':str(SELF),
@@ -57,8 +57,12 @@ class D(unittest.TestCase):
   (f/'STARTED').write_text('{}');self.assertEqual(du.decision(f,sp,st),'await-intent')
   (f/'STARTED').write_text('{"engagement_id":"eng-00000001"}')
   (f/'worker-result.json').write_text('{"exit":0}');self.assertEqual(du.decision(f,sp,st),'completed-audit-mismatch-report-only')
-  good={'format':3,'history':[{'sha':'T','digest':sp['target_digest'],'mode':'ui-open-automation-held','automation_held':True}],'recovery_fence':'T','resume_required':True,'recoveries':[{'kind':'reviewed-held-update','target':{'sha':'T','digest':sp['target_digest']}}],'opening_audits':[{'phase':'ui-open-automation-held','target':{'sha':'T'},'proof':{'automation_held':True,'pause_retained':True}}]}
+  good={'format':3,'history':[{'sha':'T','digest':sp['target_digest'],'mode':'ui-open-automation-held','automation_held':True}],'recovery_fence':'T','resume_required':True,'recoveries':[{'kind':'reviewed-held-update','manifest':{'engagement_id':'eng-00000001'},'target':{'sha':'T','digest':sp['target_digest']}}],'opening_audits':[{'phase':'ui-open-automation-held','manifest':{'engagement_id':'eng-00000001'},'target':{'sha':'T'},'proof':{'automation_held':True,'pause_retained':True}}]}
   self.assertEqual(du.decision(f,sp,good),'completed')
+  old={'engagement_id':'eng-00000001','old':1}
+  self.assertEqual(du.decision(f,sp,{**good,'recoveries':[{**good['recoveries'][0],'manifest':old}]}),'completed-audit-mismatch-report-only','older recovery for the same target')
+  self.assertEqual(du.decision(f,sp,{**good,'opening_audits':[{**good['opening_audits'][0],'manifest':old}]}),'completed-audit-mismatch-report-only','older opening audit for the same target')
+  self.assertEqual(du.decision(f,sp,{**good,'opening_audits':[{k:v for k,v in good['opening_audits'][0].items() if k!='manifest'}]}),'completed-audit-mismatch-report-only','audit without engagement link')
   self.assertEqual(du.decision(f,sp,{**good,'recovery_fence':'X'}),'completed-audit-mismatch-report-only','a coincident fence is not proof')
   (f/'STARTED').write_text('{"engagement_id":"other-eng"}');self.assertEqual(du.decision(f,sp,good),'completed-audit-mismatch-report-only','another engagement')
   (f/'STARTED').write_text('{"engagement_id":"eng-00000001"}')
@@ -104,11 +108,48 @@ class D(unittest.TestCase):
    put(props);os.environ['INVOCATION_ID']='other'
    with self.assertRaisesRegex(ValueError,'bound unit main process'):du.verify_units(self.f,'worker',self.spec)
   finally:os.environ.pop('INVOCATION_ID',None);du.SYSTEMCTL='/usr/bin/systemctl'
+ def test_units_worker_ended_vs_ambiguous(self):
+  fake=self.d/'systemctl2';fake.write_text('#!/bin/sh\ncat "$FAKE_DIR/$3"\n');fake.chmod(0o755);du.SYSTEMCTL=str(fake)
+  me=du.identity(os.getpid());inv='i'*32;winv='w'*32;os.environ['INVOCATION_ID']=inv
+  ch=subprocess.Popen(['sleep','60']);dead=du.identity(ch.pid);ch.kill();ch.wait()
+  wu='lyam-durable-held-eng-00000001-worker.service';du_='lyam-durable-held-eng-00000001-watchdog.service'
+  def bind(wid):
+   (self.f/'unit-bindings.json').write_text(json.dumps({'kind':'held-update','engagementID':'eng-00000001','worker':{'unit':wu,'invocationID':winv,'pid':dead['pid'],'starttime':dead['starttime'],'boot_id':dead['boot_id'],'controlGroup':'/w'},'watchdog':{'unit':du_,'invocationID':inv,'pid':os.getpid(),'starttime':me['starttime'],'boot_id':me['boot_id'],'controlGroup':'/d'}}))
+  base={'User':'root','UMask':'0077','Restart':'no','KillMode':'control-group','RuntimeMaxUSec':'infinity','TimeoutStartUSec':'infinity','TimeoutStopUSec':'infinity','StandardOutput':'append','StandardError':'append'}
+  wd={**base,'InvocationID':inv,'MainPID':str(os.getpid()),'ControlGroup':'/d','ActiveState':'active'}
+  wk={**base,'InvocationID':winv,'MainPID':'0','ControlGroup':'/w','ActiveState':'inactive'}
+  dd=self.d/'show';dd.mkdir();os.environ['FAKE_DIR']=str(dd)
+  def put(w,k):
+   (dd/wu).write_text(''.join('%s=%s\n'%kv for kv in w.items()));(dd/du_).write_text(''.join('%s=%s\n'%kv for kv in k.items()))
+  try:
+   bind(0);put(wk,wd)
+   self.assertEqual(du.verify_units(self.f,'watchdog',self.spec)['_worker_status'],'ended')       # nominal end
+   put({**wk,'ActiveState':'failed'},wd);self.assertEqual(du.verify_units(self.f,'watchdog',self.spec)['_worker_status'],'ended')   # killed
+   for name,w,k in [('other invocation',{**wk,'InvocationID':'x'*32},wd),('ended but MainPID set',{**wk,'MainPID':'5'},wd),('inactive watchdog',wk,{**wd,'ActiveState':'inactive','MainPID':'0'}),('props drift on ended worker',{**wk,'Restart':'always'},wd),('active worker not matching pid',{**wk,'ActiveState':'active','MainPID':'1'},wd)]:
+    put(w,k)
+    with self.assertRaises(ValueError,msg=name):du.verify_units(self.f,'watchdog',self.spec)
+   put(wk,wd);ent=json.loads((self.f/'unit-bindings.json').read_text());ent['worker']['pid']=os.getpid();ent['worker']['starttime']=me['starttime'];ent['worker']['boot_id']=me['boot_id']
+   (self.f/'unit-bindings.json').write_text(json.dumps(ent))
+   with self.assertRaises(ValueError,msg='bound pid still alive while unit inactive'):du.verify_units(self.f,'watchdog',self.spec)
+   bind(0);put(wk,wd)
+   with self.assertRaises(ValueError,msg='worker role never accepts ended'):du.verify_units(self.f,'worker',self.spec)
+  finally:os.environ.pop('INVOCATION_ID',None);os.environ.pop('FAKE_DIR',None);du.SYSTEMCTL='/usr/bin/systemctl'
  def test_launcher_commands_are_exact_and_independent(self):
   c=du.launcher_commands('/f','eng-00000001','/usr/bin/python3.12','/x/held-update-durable.py')
   self.assertEqual([x[1] for x in c],['--unit=lyam-durable-held-eng-00000001-watchdog.service','--unit=lyam-durable-held-eng-00000001-worker.service'])
   for x in c:
    s=' '.join(x);self.assertIn('RuntimeMaxSec=infinity',s);self.assertIn('Restart=no',s);self.assertNotIn('BindsTo',s);self.assertNotIn('PartOf',s);self.assertIn('StandardOutput=append:/f/',s)
+ def test_heartbeat_requires_wall_and_monotonic_advance(self):
+  hb=self.f/'heartbeat.json';n=[0]
+  def w(m,wl):hb.write_text(json.dumps({'alive':True,'monotone':m,'wall':wl}))
+  real=time.sleep
+  def fake(x):
+   n[0]+=1;w(time.monotonic(),time.time()-(0 if self.mode=='ok' else 0)) if self.mode!='frozen' else w(time.monotonic(),self.frozen)
+  self.frozen=time.time();self.mode='frozen';w(time.monotonic(),self.frozen);du.time=type('T',(),{'sleep':staticmethod(fake),'monotonic':staticmethod(time.monotonic),'time':staticmethod(time.time)})
+  try:
+   self.assertFalse(du.heartbeat_fresh(self.f,1),'wall frozen')
+   self.mode='ok';self.assertTrue(du.heartbeat_fresh(self.f,1))
+  finally:du.time=time
  def test_poll_validated(self):
   with self.assertRaises(ValueError):du.main(['watchdog','--folder',str(self.f),'--poll','0'])
  def test_spec_binding_refuses_changed_file(self):

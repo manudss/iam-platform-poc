@@ -8,7 +8,7 @@ def held_state():
 def manifest(state,*nums):
  chain=[];p=S(2)
  for n in nums: chain.append({'sha':S(n),'parent':p,'digest':D(n)});p=S(n)
- return {'format':1,'kind':'reviewed-held-update','state_fingerprint':q.fingerprint(state),'expected_delivered':{'sha':S(2),'digest':D(2)},'authorization_ref':'operator claim','evidence_refs':['e'],'chain':chain,'target':chain[-1]}
+ return {'format':1,'kind':'reviewed-held-update','engagement_id':'eng-test-0001','state_fingerprint':q.fingerprint(state),'expected_delivered':{'sha':S(2),'digest':D(2)},'authorization_ref':'operator claim','evidence_refs':['e'],'chain':chain,'target':chain[-1]}
 class HeldUpdate(unittest.TestCase):
  def setUp(self):self.s=held_state()
  def ok(self,m,**kw):return q.check_held_update(self.s,m,pause_present=kw.get('pause',True))
@@ -94,6 +94,61 @@ class Run(unittest.TestCase):
  def go(self,*nums,host=None,ctl=None,log=None):
   log=log if log is not None else [];m=manifest(self.s,*nums)
   return q.held_update(self.path,m,'repo','lyam',lambda m:host or Host(log),3,verify=lambda *a:None,observe=lambda c,t:{'sha':t['sha']},controller=ctl or Ctl(),qualify=lambda p,e:None),log
+ def test_engagement_id_reaches_recovery_and_audit_and_is_required(self):
+  st,_=self.go(3)
+  self.assertEqual(st['recoveries'][-1]['manifest']['engagement_id'],'eng-test-0001');self.assertEqual(st['opening_audits'][-1]['manifest']['engagement_id'],'eng-test-0001')
+  m=manifest(self.s,3);del m['engagement_id']
+  with self.assertRaisesRegex(ValueError,'engagement_id'):q.held_update(self.path,m,'repo','lyam',lambda m:Host([]),3,verify=lambda *a:None,observe=lambda c,t:{'sha':t['sha']},controller=Ctl(),qualify=lambda p,e:None)
+  self.assertNotIn('opening_intent',q.load(self.path))
+ def hookdir(self,m,phases=('closed-step-0-qualified',),timeout=2,sentinel=True,state=None):
+  import hashlib,tempfile
+  d=Path(tempfile.mkdtemp());self.addCleanup(lambda:__import__('shutil').rmtree(d,ignore_errors=True));q.HOOK_PROTECT=lambda st:True
+  self.addCleanup(lambda:setattr(q,'HOOK_PROTECT',lambda st:not(st.st_uid or st.st_gid or st.st_mode&0o022)))
+  if sentinel:(d/'ISOLATED_HARNESS').write_text(hashlib.sha256(('%s\n%s'%(Path(state or self.path).absolute(),m['engagement_id'])).encode()).hexdigest())
+  m['phase_hook']={'dir':str(d),'phases':list(phases),'timeout':timeout};return d
+ def run_with(self,m,log=None):
+  return q.held_update(self.path,m,'repo','lyam',lambda mm:Host(log if log is not None else []),3,verify=lambda *a:None,observe=lambda c,t:{'sha':t['sha']},controller=Ctl(),qualify=lambda p,e:None)
+ def test_phase_hook_inert_by_default_and_env_cannot_enable(self):
+  import os;os.environ['LYAM_PHASE_HOOK']='1';os.environ['LYAM_PHASE_HOOK_DIR']='/tmp'
+  try:st,_=self.go(3)
+  finally:os.environ.pop('LYAM_PHASE_HOOK');os.environ.pop('LYAM_PHASE_HOOK_DIR')
+  self.assertEqual(st['history'][-1]['sha'],S(3))
+ def test_phase_hook_reached_then_release_then_completes(self):
+  import threading,time
+  m=manifest(self.s,3);d=self.hookdir(m);out={}
+  t=threading.Thread(target=lambda:out.update(st=self.run_with(m)));t.start()
+  for _ in range(100):
+   if (d/'closed-step-0-qualified.reached').exists():break
+   time.sleep(.02)
+  self.assertTrue((d/'closed-step-0-qualified.reached').exists());self.assertEqual(q.load(self.path)['opening_intent']['phase'],'closed-step-0-qualified','phase is durable when the hook holds')
+  self.assertTrue(t.is_alive());(d/'closed-step-0-qualified.release').write_text('1');t.join(10)
+  self.assertEqual(out['st']['history'][-1]['sha'],S(3))
+ def test_phase_hook_timeout_fails_never_passes(self):
+  m=manifest(self.s,3);d=self.hookdir(m,timeout=1)
+  with self.assertRaisesRegex(ValueError,'release timeout'):self.run_with(m)
+  self.assertTrue((d/'closed-step-0-qualified.reached').exists())
+  self.assertNotEqual(q.load(self.path)['history'][-1]['sha'],S(3))
+ def test_phase_hook_refusals(self):
+  m=manifest(self.s,3);self.hookdir(m,sentinel=False)
+  with self.assertRaisesRegex(ValueError,'sentinel'):self.run_with(m)
+  m=manifest(self.s,3);self.hookdir(m,state=Path('/elsewhere/state.json'))
+  with self.assertRaisesRegex(ValueError,'sentinel'):self.run_with(m)      # sentinel bound to another state path
+  for bad in ({'dir':'/tmp','phases':['rm -rf'],'timeout':2},{'dir':'/tmp','phases':['opening'],'timeout':999},{'dir':'rel','phases':['opening'],'timeout':2},{'dir':'/tmp','phases':['opening'],'timeout':2,'x':1}):
+   m=manifest(self.s,3);m['phase_hook']=bad
+   with self.assertRaises(ValueError):self.run_with(m)
+  m=manifest(self.s,3);self.hookdir(m);self.assertIsNone(q.phase_hook_from({k:v for k,v in m.items() if k!='phase_hook'},self.path))
+  import unittest.mock as um
+  with self.assertRaisesRegex(ValueError,'production'):q.phase_hook_from(m,q.PRODUCTION_STATE)
+  self.assertNotIn('opening_intent',{k:v for k,v in q.load(self.path).items() if k=='opening_intent' and v and v.get('phase')=='held-update-prepared'} )
+ def test_phase_hook_holds_a_real_process_killable_at_the_phase(self):
+  import subprocess,sys,time,os,signal
+  m=manifest(self.s,3);d=self.hookdir(m,phases=('opening',),timeout=30)
+  code="import importlib.util,json,sys;s=importlib.util.spec_from_file_location('q',%r);q=importlib.util.module_from_spec(s);s.loader.exec_module(q);q.HOOK_PROTECT=lambda st:True;q.phase_hook_from(json.loads(sys.argv[1]),%r)('opening')"%(str(Path(q.__file__)),str(self.path))
+  p=subprocess.Popen([sys.executable,'-c',code,json.dumps(m)])
+  for _ in range(150):
+   if (d/'opening.reached').exists():break
+   time.sleep(.02)
+  self.assertTrue((d/'opening.reached').exists());self.assertIsNone(p.poll());p.send_signal(signal.SIGKILL);self.assertEqual(p.wait(),-signal.SIGKILL)
  def test_one_commit_success(self):
   st,log=self.go(3)
   self.assertEqual([h['sha'] for h in st['history']],[S(1),S(2),S(3)]);self.assertEqual(st['history'][-1]['mode'],'ui-open-automation-held')
@@ -175,6 +230,58 @@ class RealHost(unittest.TestCase):
   u=self.updater(rc,receipt);h=hm.Host(str(self.env),str(u),str(self.d/'r'),updater_sha256=hashlib.sha256(u.read_bytes()).hexdigest(),inspect=lambda c:GOOD)
   if plan:h.plan_ops_gate('tok');h.create_ops_gate()
   return h
+ def stepcfg(self,n=2,mut=None):
+  OFF={'/app/a':'a'*64};base={'manifestSHA256':'9'*64,'offlineFileSHA256':{'/app/a':'8'*64},'image':'ghcr.io/manudss/iam-platform-poc@'+D(1),'imageID':'sha256:'+'1'*64,'network':'n','ledgerSHA256':'0'*64,'implementationSHA256':'0'*64}
+  dst=self.d/'helper.json';dst.write_text(json.dumps(base));dst.chmod(0o640);steps=[]
+  for i in range(n):
+   c={**base,'image':'ghcr.io/manudss/iam-platform-poc@'+D(3+i),'imageID':'sha256:'+format(3+i,'064x'),'ledgerSHA256':format(i+9,'064x'),'manifestSHA256':format(i+20,'064x'),'offlineFileSHA256':{'/app/a':format(i+30,'064x')}}
+   if mut:c=mut(i,c)
+   p=self.d/('step%d.json'%i);p.write_text(json.dumps(c));steps.append({'path':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'imageID':'sha256:'+format(3+i,'064x'),'manifestSHA256':c['manifestSHA256'],'offlineFileSHA256':c['offlineFileSHA256']})
+  self.env.write_text(''.join(l+'\n' for l in self.env.read_text().splitlines() if not l.startswith('LYAM_CLOSED_CONFIG='))+'LYAM_CLOSED_CONFIG=%s\n'%dst)
+  return dst,{'install_to':str(dst),'steps':steps}
+ def test_step_config_installed_per_step_hash_bound(self):
+  dst,sc=self.stepcfg();h=self.host(plan=True);h.step_configs=sc
+  r0=h.install_step_config({'sha':S(3),'digest':D(3)},0,2);self.assertEqual(json.loads(dst.read_text())['image'],'ghcr.io/manudss/iam-platform-poc@'+D(3));self.assertEqual(stat.S_IMODE(dst.stat().st_mode),0o640)
+  r1=h.install_step_config({'sha':S(4),'digest':D(4)},1,2);self.assertEqual(json.loads(dst.read_text())['imageID'],'sha256:'+format(4,'064x'));self.assertEqual([r0['step'],r1['step']],[0,1]);self.assertEqual(h.installed_configs,[r0,r1])
+  self.assertEqual(list(self.d.glob('*.tmp')),[])
+ def test_step_config_refusals(self):
+  e={'sha':S(3),'digest':D(3)}
+  dst,sc=self.stepcfg();h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'every chain step'):h.install_step_config(e,0,3)
+  with self.assertRaisesRegex(ValueError,'exact step image'):h.install_step_config({'sha':S(9),'digest':D(9)},0,2)
+  Path(sc['steps'][0]['path']).write_text('{}')
+  with self.assertRaisesRegex(ValueError,'hash'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg(mut=lambda i,c:{**c,'network':'other'});h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'only image and binding'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg(mut=lambda i,c:{**c,'extra':1});h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'only image and binding'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg();sc['steps'][0]['imageID']='sha256:'+'f'*64;h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'exact step image'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg();sc['steps'][0]['manifestSHA256']='7'*64;h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'reviewed candidate bindings'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg();sc['steps'][0]['offlineFileSHA256']={'/app/a':'6'*64};h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'reviewed candidate bindings'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg();other=self.d/'other.json';other.write_text(dst.read_text());sc['install_to']=str(other);h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'LYAM_CLOSED_CONFIG'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg();h=self.host();h.step_configs=sc;os.environ['LYAM_CLOSED_CONFIG']='/elsewhere'
+  try:
+   with self.assertRaisesRegex(ValueError,'ambient'):h.install_step_config(e,0,2)
+  finally:os.environ.pop('LYAM_CLOSED_CONFIG')
+  dst,sc=self.stepcfg();h=self.host();h.step_configs={**sc,'extra':1}
+  with self.assertRaisesRegex(ValueError,'every chain step'):h.install_step_config(e,0,2)
+  dst,sc=self.stepcfg();sc['install_to']=sc['steps'][0]['path'];h=self.host();h.step_configs=sc
+  with self.assertRaisesRegex(ValueError,'LYAM_CLOSED_CONFIG'):h.install_step_config(e,0,2)
+ def test_closed_step_installs_config_before_updater_and_refusal_stops_before_updater(self):
+  dst,sc=self.stepcfg();h=self.host(plan=True);h.step_configs=sc
+  fd=os.open(self.d/'lock',os.O_RDWR);import fcntl;fcntl.flock(fd,fcntl.LOCK_EX)
+  f0,p0=h.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2);self.assertEqual(json.loads(dst.read_text())['image'],'ghcr.io/manudss/iam-platform-poc@'+D(3))
+  before=(self.d/'args').read_text() if (self.d/'args').exists() else ''
+  for n in ['OPS','FRONT']:
+   if (self.d/'gates'/n).exists():(self.d/'gates'/n).unlink()
+  h2=self.host(plan=True);h2.step_configs=self.stepcfg(mut=lambda i,c:{**c,'network':'z'})[1]
+  with self.assertRaisesRegex(ValueError,'only image'):h2.closed_step({'sha':S(3),'digest':D(3)},None,0,fd,2)
+  self.assertEqual((self.d/'args').read_text() if (self.d/'args').exists() else '',before,'the updater is not invoked when the config refuses')
+  os.close(fd)
  def test_preflight_requires_absent_gates_and_hold(self):
   h=self.host();h.preflight();(self.d/'gates'/'FRONT').write_text('x')
   with self.assertRaisesRegex(ValueError,'both gates absent'):h.preflight()

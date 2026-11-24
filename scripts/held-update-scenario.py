@@ -43,8 +43,25 @@ def run(x):
     pause, lock = root / 'PAUSE', root / 'update.lock'
     queue_dir = root / 'queue'; state_path = queue_dir / 'state.json'
 
-    def arm_config():
+    # Every fixture image is derived from the same product bytes. Verify that explicitly;
+    # this harness does not claim migration history between different product versions.
+    target_configs={}
+    for i,img in enumerate(images):
+        ref='ghcr.io/manudss/iam-platform-poc@'+img['digest']
+        image=json.loads(docker('image','inspect',ref))[0]
+        cid=docker('create','--network','none','--entrypoint','/bin/true',ref)
+        try:
+            hashes={}
+            for n,path in enumerate(['/app/migration-source/data/migrations/manifest.json',*config['offlineFileSHA256']]):
+                dest=root/('step-inventory-%d-%d'%(i,n));docker('cp',cid+':'+path,str(dest));hashes[path]=sh256(dest)
+            if hashes['/app/migration-source/data/migrations/manifest.json']!=config['manifestSHA256'] or any(hashes[k]!=v for k,v in config['offlineFileSHA256'].items()):
+                raise RuntimeError('fixture-product-bytes-not-identical')
+        finally:docker('rm',cid)
+        target_configs[i]={'image':ref,'imageID':image['Id'],'manifestSHA256':hashes['/app/migration-source/data/migrations/manifest.json'],'offlineFileSHA256':{k:hashes[k] for k in config['offlineFileSHA256']}}
+
+    def arm_config(i=0):
         policy['requireAutomationHold'] = True; pol.write_text(json.dumps(policy))
+        config.update(target_configs[i])
         config['ledgerSHA256'] = sh256(Path(c['data']) / 'migrations/journal.json')
         config['controllerSHA256'] = {n: sh256(bindir / n) for n in ['update.sh', 'closed-recovery-integrity.py', 'closed-recovery-call.py']}
         config['qualificationSHA256'] = {str(p): sh256(p) for p in [bindir / 'qualification.py', bindir / 'qualification-container.mjs', pol]}
@@ -81,7 +98,7 @@ def run(x):
     # ---- 1. REAL pre-qualification of each successor image on an isolated copy (never a fabricated JSON)
     def prequalify(i):
         img = images[i]; ref = 'ghcr.io/manudss/iam-platform-poc@' + img['digest']
-        reset_baseline(); (gates / 'OPS-MAINTENANCE').write_text('synthetic-ops-prequal\n')
+        reset_baseline(); arm_config(i); (gates / 'OPS-MAINTENANCE').write_text('synthetic-ops-prequal\n')
         rec = ev / ('prequal-%d' % i); rec.mkdir(mode=0o700, exist_ok=True)
         receipt = root / ('prequal-%d.receipt' % i)
         r = runp(['python3', str(bindir / 'closed-recovery-call.py'), '--updater', str(bindir / 'update.sh'), '--image', ref, '--env-file', str(env), '--receipt', str(receipt)], False)
@@ -134,13 +151,25 @@ def run(x):
                     'authorization_ref': 'ci-harness-synthetic-attestation-not-user-authority', 'evidence_refs': ['ci-harness-synthetic'], 'chain': chain, 'target': chain[-1],
                     'updater': {'path': str(bindir / 'update.sh'), 'sha256': sh256(bindir / 'update.sh')}, 'held_host': {'path': str(bindir / 'held-update-host.py'), 'sha256': sh256(bindir / 'held-update-host.py')},
                     'opening_static': static, 'receipt_dir': str(receipts), 'opening_controller': {'path': str(bindir / 'reviewed-ui-held.py'), 'sha256': sh256(bindir / 'reviewed-ui-held.py')}}
+        configs=[]
+        for i in range(1,n+1):
+            cp=root/('reviewed-step-%d.json'%i)
+            cp.write_text(json.dumps({**config,**target_configs[i]}));cp.chmod(0o600)
+            configs.append({'path':str(cp),'sha256':sh256(cp),**{k:target_configs[i][k] for k in ['imageID','manifestSHA256','offlineFileSHA256']}})
+        manifest['step_configs']={'install_to':str(configpath),'steps':configs}
         return manifest, chain
 
     def supervise(name, n, kill_phase=None, kill_mode='group'):
         manifest, chain = build(n); folder = root / ('sup-' + name); shutil.rmtree(folder, ignore_errors=True); folder.mkdir(mode=0o700)
+        engagement='held-' + name + '-' + os.environ.get('GITHUB_RUN_ID', '0')
+        manifest['engagement_id']=engagement
+        if kill_phase:
+            hd=folder/'hooks';hd.mkdir(mode=0o700)
+            sent=hd/'ISOLATED_HARNESS';sent.write_text(hashlib.sha256(('%s\n%s'%(state_path.absolute(),engagement)).encode()).hexdigest());sent.chmod(0o600)
+            manifest['phase_hook']={'dir':str(hd),'phases':[kill_phase],'timeout':120}
         mp = folder / 'manifest.json'; mp.write_text(json.dumps(manifest)); mp.chmod(0o600)
         du_path = bindir / 'held-update-durable.py'; py = os.path.realpath(sys.executable)
-        spec = {'kind': 'reviewed-held-update-supervision', 'engagement_id': 'held-' + name + '-' + os.environ.get('GITHUB_RUN_ID', '0'), 'queue': str(bindir / 'ordered-queue.py'), 'state': str(state_path), 'pause': str(pause), 'lock': str(lock),
+        spec = {'kind': 'reviewed-held-update-supervision', 'engagement_id': engagement, 'queue': str(bindir / 'ordered-queue.py'), 'state': str(state_path), 'pause': str(pause), 'lock': str(lock),
                 'repository': repo, 'container': app, 'updater': str(bindir / 'update.sh'), 'manifest': str(mp), 'python': py, 'target_sha': chain[-1]['sha'], 'target_digest': chain[-1]['digest'], 'self': str(du_path),
                 'fileSHA256': {p: sh256(p) for p in [str(bindir / 'ordered-queue.py'), str(bindir / 'update.sh'), str(mp), py, str(du_path)]}}
         (folder / 'supervision-spec.json').write_text(json.dumps(spec)); os.chmod(folder / 'supervision-spec.json', 0o600)
@@ -163,8 +192,10 @@ def run(x):
                 except urllib.error.HTTPError as e:
                     if e.code==503:closed_seen=time.monotonic()
             if ph == 'opening' and opening_seen is None: opening_seen = time.monotonic()
-            if kill_phase and ph == kill_phase and killed is None and (folder / 'queue-identity.json').exists():
+            if kill_phase and ph == kill_phase and killed is None and (folder/'hooks'/(kill_phase+'.reached')).is_file() and (folder / 'queue-identity.json').exists():
                 qi = jread(folder / 'queue-identity.json')
+                marker=jread(folder/'hooks'/(kill_phase+'.reached'))
+                if marker!={'pid':qi['pid'],'phase':kill_phase}:raise RuntimeError('phase-marker-identity-mismatch')
                 (os.killpg if kill_mode == 'group' else os.kill)(qi['pid'], signal.SIGKILL); killed = ph
             time.sleep(0.1)
         for p in (wk, wd):

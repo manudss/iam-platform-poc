@@ -68,8 +68,8 @@ def gate_record(p):
 
 class Host:
  """env: updater env file. updater: path of the installed update.sh. receipt_dir: protected root dir."""
- def __init__(self,env_file,updater,receipt_dir,lock_file=None,run=subprocess.run,updater_sha256=None,inspect=None):
-  self.env_file=env_file;self.updater=updater;self.receipt_dir=Path(receipt_dir);self.run=run;self.updater_sha256=updater_sha256;self.inspect=inspect or self._docker_inspect;self.ops_record=None;self.step_gates=[]
+ def __init__(self,env_file,updater,receipt_dir,lock_file=None,run=subprocess.run,updater_sha256=None,inspect=None,step_configs=None):
+  self.env_file=env_file;self.updater=updater;self.receipt_dir=Path(receipt_dir);self.run=run;self.updater_sha256=updater_sha256;self.inspect=inspect or self._docker_inspect;self.ops_record=None;self.step_gates=[];self.step_configs=step_configs;self.installed_configs=[]
   self.env=env_settings(env_file)
   self.front=Path(self.env.get('LYAM_FRONT_BARRIER_FILE','/var/lib/lyam-front-gate/MAINTENANCE'))
   self.ops=Path(self.env.get('LYAM_OPS_BARRIER_FILE',str(self.front.parent/'OPS-MAINTENANCE')))
@@ -133,10 +133,48 @@ class Host:
    cf=gate_record(self.front)
    if hashlib.sha256(bytes.fromhex(cf['bytes_hex'])).hexdigest()!=previous['gate_sha256']:raise ValueError('front gate changed since previous receipt')
    if self.step_gates and any(cf[k]!=self.step_gates[-1][k] for k in ['mode','uid','gid']):raise ValueError('front gate owner/mode changed between steps')
- def closed_step(self,entry,adopt,index,lock_fd):
+ CONFIG_VARIABLE={'image','imageID','ledgerSHA256','controllerSHA256','qualificationSHA256','implementationSHA256','manifestSHA256','offlineFileSHA256'}
+ def install_step_config(self,entry,index,chain_len):
+  """Per-step helper configuration, hash-bound by the reviewed manifest. The helper config frozen at the baseline names the baseline image,
+  while the controller requires the exact step candidate. The manifest therefore lists, for EVERY step, a protected prebuilt config file with
+  its sha256 and the expected imageID; the host verifies it, requires that ONLY the variable keys differ from the config currently installed
+  (image, imageID and the SHA bindings), that image equals this step's exact digest ref, and replaces the single reviewed install path atomically.
+  No free mutation: absent list means no change (legacy callers keep their old behaviour); a wrong length, path, hash or content refuses."""
+  sc=self.step_configs
+  if sc is None:return None
+  if not isinstance(sc,dict) or set(sc)!={'install_to','steps'} or not isinstance(sc['steps'],list) or len(sc['steps'])!=chain_len:raise ValueError('step_configs must list every chain step')
+  st=sc['steps'][index]
+  if not isinstance(st,dict) or set(st)!={'path','sha256','imageID','manifestSHA256','offlineFileSHA256'} or not re.fullmatch(r'[0-9a-f]{64}',str(st['sha256'])) or not re.fullmatch(r'sha256:[0-9a-f]{64}',str(st['imageID'])) or not re.fullmatch(r'[0-9a-f]{64}',str(st['manifestSHA256'])) or not isinstance(st['offlineFileSHA256'],dict) or not st['offlineFileSHA256'] or not all(isinstance(k,str) and k.startswith('/') and re.fullmatch(r'[0-9a-f]{64}',str(v)) for k,v in st['offlineFileSHA256'].items()):raise ValueError('invalid step config entry')
+  consumed=self.env.get('LYAM_CLOSED_CONFIG')
+  if not consumed or str(Path(sc['install_to']))!=consumed:raise ValueError('install_to must be the LYAM_CLOSED_CONFIG path consumed by the helper')
+  if os.environ.get('LYAM_CLOSED_CONFIG') not in (None,consumed):raise ValueError('ambient LYAM_CLOSED_CONFIG would override the reviewed config path')
+  dst=PROTECT(sc['install_to']);src=PROTECT(st['path'])
+  if src==dst or not src.is_file() or not dst.is_file():raise ValueError('distinct regular step config and installed config required')
+  raw=src.read_bytes()
+  if hashlib.sha256(raw).hexdigest()!=st['sha256']:raise ValueError('step config hash mismatch')
+  new=json.loads(raw);cur=json.loads(dst.read_bytes())
+  ref='ghcr.io/manudss/iam-platform-poc@'+entry['digest']
+  if new.get('image')!=ref or new.get('imageID')!=st['imageID']:raise ValueError('step config does not name this exact step image')
+  if new.get('manifestSHA256')!=st['manifestSHA256'] or new.get('offlineFileSHA256')!=st['offlineFileSHA256']:raise ValueError('step config manifest/offline hashes differ from the reviewed candidate bindings')
+  if set(new)!=set(cur) or any(new[k]!=cur[k] for k in cur if k not in self.CONFIG_VARIABLE):raise ValueError('step config may change only image and binding keys')
+  mode=stat.S_IMODE(dst.stat().st_mode);tmp=dst.with_name(dst.name+'.step-%d.tmp'%index)
+  fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+  try:
+   with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+   os.chmod(tmp,mode)
+   if os.geteuid()==0:os.chown(tmp,dst.stat().st_uid,dst.stat().st_gid)
+   os.replace(tmp,dst);fsync_path(dst.parent)
+  except BaseException:
+   try:tmp.unlink()
+   except OSError:pass
+   raise
+  if hashlib.sha256(dst.read_bytes()).hexdigest()!=st['sha256']:raise ValueError('installed step config differs after replace')
+  rec={'step':index,'sha256':st['sha256'],'installed_to':str(dst),'image':ref};self.installed_configs.append(rec);return rec
+ def closed_step(self,entry,adopt,index,lock_fd,chain_len=None):
   """adopt: (previous_fields, previous_receipt_path) or None."""
   image='ghcr.io/manudss/iam-platform-poc@'+entry['digest']
   self.check_updater();self.check_continuity(adopt[0] if adopt else None)
+  if self.step_configs is not None:self.install_step_config(entry,index,chain_len)   # before the helper reads its config, after the gates/updater checks
   receipt=self.receipt_dir/('held-step-%d-%s.receipt'%(index,entry['sha']))
   if receipt.exists():raise ValueError('receipt must be fresh')
   args=['sh',self.updater,'--image',image,'--env-file',self.env_file,'--closed-recovery','--closed-receipt',str(receipt),'--inherit-lock-fd','8']

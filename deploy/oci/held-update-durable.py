@@ -52,6 +52,7 @@ def check_spec(folder,ancestry=True):
  need={'kind','engagement_id','queue','state','pause','lock','repository','container','updater','manifest','python','target_sha','target_digest','fileSHA256','self'}
  if spec.get('kind')!='reviewed-held-update-supervision' or set(spec)!=need:raise ValueError('exact supervision spec required')
  if not re.fullmatch(r'[A-Za-z0-9._-]{8,64}',str(spec['engagement_id'])) or not re.fullmatch(r'sha256:[0-9a-f]{64}',str(spec['target_digest'])):raise ValueError('engagement id and target digest required')
+ if read(spec['manifest']).get('engagement_id')!=spec['engagement_id']:raise ValueError('manifest engagement_id must equal the spec engagement_id')
  for p,want in spec['fileSHA256'].items():
   pp=Path(p)
   if not pp.is_absolute() or pp.is_symlink() or not pp.is_file() or pp.resolve()!=pp:raise ValueError('absolute regular non-symlink binding required')
@@ -70,7 +71,8 @@ def heartbeat_fresh(folder,poll):
  """Advancing watchdog heartbeat (two distinct values, recent) is required before the single GO."""
  hb=lambda:read(folder/'heartbeat.json')
  a=hb();time.sleep(poll*1.2+.2);b=hb()
- return b['monotone']>a['monotone'] and time.monotonic()-b['monotone']<poll*3 and b.get('alive') is True
+ return (b['monotone']>a['monotone'] and time.monotonic()-b['monotone']<poll*3 and b.get('alive') is True
+  and type(a.get('wall')) is float and type(b.get('wall')) is float and b['wall']>a['wall'] and 0<=time.time()-b['wall']<poll*3)   # wall AND monotonic advance
 
 
 # ---- real systemd unit bindings (production). Tests set REQUIRE_UNITS=False explicitly for pure-process tests.
@@ -86,19 +88,29 @@ def unit_properties(unit):
  if set(props)<set(SHOW):raise ValueError('incomplete unit properties')
  return props
 def verify_units(folder,role,spec):
- """Both units must match the durable binding (invocation, MainPID, starttime, boot, cgroup) and the reviewed properties.
- Any ambiguity raises: callers treat it as identity-unknown, never as permission to rearm."""
+ """Differentiated check. The calling role's own unit must be active and exact. The watchdog always requires itself exact.
+ The worker unit seen from the watchdog may be: active and exact, or ended: same InvocationID as bound, not active,
+ MainPID 0, bound pid/starttime/boot confirmed absent. A reused pid, other boot, other invocation or any ambiguity raises
+ (callers treat it as identity-unknown, never as permission to rearm). Returns the bindings; the worker status is in ['_worker_status']."""
  folder=Path(folder);b=read(folder/'unit-bindings.json')
  if b.get('kind')!='held-update' or b.get('engagementID')!=spec['engagement_id'] or set(b)!={'kind','engagementID','worker','watchdog'}:raise ValueError('held-update unit binding required')
+ status={}
  for r in ('worker','watchdog'):
   e=b[r];p=unit_properties(e['unit'])
-  if not e['unit'].endswith('-'+r+'.service') or p['InvocationID']!=e['invocationID'] or not e['invocationID'] or str(e['pid'])!=p['MainPID'] or int(p['MainPID'])<=0 or p['ControlGroup']!=e['controlGroup'] or p['ActiveState']!='active':raise ValueError('unit identity differs from binding')
+  if not e['unit'].endswith('-'+r+'.service') or not e['invocationID'] or p['InvocationID']!=e['invocationID'] or p['ControlGroup']!=e['controlGroup']:raise ValueError('unit identity differs from binding')
   if p['User'] not in ('root','') or p['Restart']!='no' or p['KillMode']!='control-group' or any(p[k]!='infinity' for k in ('RuntimeMaxUSec','TimeoutStartUSec','TimeoutStopUSec')) or p['UMask']!='0077':raise ValueError('unit properties differ from the reviewed contract')
   if not p['StandardOutput'].startswith('append') or not p['StandardError'].startswith('append'):raise ValueError('unit output not append-only')
   o=state_of({'pid':e['pid'],'starttime':e['starttime'],'boot_id':e['boot_id']})
-  if o!='alive':raise ValueError('unit main process identity not alive/exact')
+  if p['ActiveState']=='active':
+   if str(e['pid'])!=p['MainPID'] or int(p['MainPID'])<=0 or o!='alive':raise ValueError('unit main process identity not alive/exact')
+   status[r]='active'
+  elif r=='worker' and role=='watchdog' and p['ActiveState'] in ('inactive','failed') and p['MainPID']=='0' and o=='absent':
+   status[r]='ended'
+  else:raise ValueError('unit state not acceptable for '+r)
+ if status['watchdog']!='active':raise ValueError('watchdog unit must be active')
  me=b[role]
  if os.environ.get('INVOCATION_ID')!=me['invocationID'] or os.getpid()!=me['pid']:raise ValueError('this process is not the bound unit main process')
+ b['_worker_status']=status['worker']
  return b
 def await_units(folder,role,spec,timeout=600):
  folder=Path(folder);e=time.time()+timeout
@@ -140,10 +152,12 @@ def final_audit_ok(folder,spec,state):
  held-update with the exact target SHA+digest, history ends in ui-open-automation-held, HOLD retained via state, pause and resume barrier."""
  try:
   if read(Path(folder)/'STARTED').get('engagement_id')!=spec['engagement_id']:return False
+  man=read(spec['manifest'])   # the exact bound manifest: its engagement id and full content must reappear in intent-derived audits
+  if man.get('engagement_id')!=spec['engagement_id']:return False
   rec=(state.get('recoveries') or [{}])[-1];aud=(state.get('opening_audits') or [{}])[-1];h=state['history'][-1]
   tgt={'sha':spec['target_sha'],'digest':spec['target_digest']}
   return (state.get('opening_intent') is None and state.get('recovery_fence')==spec['target_sha'] and state.get('resume_required') is True and Path(spec['pause']).is_file()
-   and rec.get('kind')=='reviewed-held-update' and (rec.get('target') or {}).get('sha')==tgt['sha'] and (rec.get('target') or {}).get('digest')==tgt['digest']
+   and rec.get('kind')=='reviewed-held-update' and rec.get('manifest')==man and aud.get('manifest')==man and (rec.get('target') or {}).get('sha')==tgt['sha'] and (rec.get('target') or {}).get('digest')==tgt['digest']
    and h.get('sha')==tgt['sha'] and h.get('digest')==tgt['digest'] and h.get('mode')=='ui-open-automation-held' and h.get('automation_held') is True
    and aud.get('phase')=='ui-open-automation-held' and (aud.get('target') or {}).get('sha')==tgt['sha'] and (aud.get('proof') or {}).get('automation_held') is True and (aud.get('proof') or {}).get('pause_retained') is True)
  except Exception:return False
@@ -191,7 +205,7 @@ def watchdog(folder,spec,recover=recovery,poll=5):
    try:action=decision(folder,spec,read(spec['state']))
    except Exception:action='state-unreadable'
   with open(folder/'heartbeat.json.tmp','w') as f:
-   os.chmod(f.name,0o600);json.dump({'alive':True,'monotone':time.monotonic(),'category':action},f);f.flush();os.fsync(f.fileno())
+   os.chmod(f.name,0o600);json.dump({'alive':True,'monotone':time.monotonic(),'wall':time.time(),'category':action},f);f.flush();os.fsync(f.fileno())
   os.replace(folder/'heartbeat.json.tmp',folder/'heartbeat.json')
   if not ready:atomic(folder/'WATCH_READY',{'at':time.time()});ready=True   # only after the first heartbeat exists
   with open(folder/'watchdog-events.jsonl','a') as f:os.chmod(f.name,0o600);f.write(json.dumps({'monotone':time.monotonic(),'wall':time.time(),'action':action})+'\n');f.flush();os.fsync(f.fileno())
