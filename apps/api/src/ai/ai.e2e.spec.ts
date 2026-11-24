@@ -97,7 +97,7 @@ describe('AI assistant (real Dolt + real core): chat on the branch-confined MCP 
   it('is off until the plugins are enabled: the API answers 503, not a default', async () => {
     assert.equal((await fetch(url('models'), { headers: H() })).status, 503);
     const reg = app.get(PluginRegistry);
-    for (const id of ['mcp-gateway', 'ai-assistant']) { await reg.install('acme-demo', id, {}); await reg.enable('acme-demo', id, {}); }
+    for (const id of ['mcp-gateway', 'ai-assistant']) { await reg.install('acme-demo', id, {}); await reg.enable('acme-demo', id, { uiComponents: true }); }
     assert.equal((await fetch(url('models'), { headers: H() })).status, 200);
   });
 
