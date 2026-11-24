@@ -367,7 +367,7 @@ raise SystemExit(r.returncode)
                 declared=policy['transformationVerifiers'].get(c['image'])
                 if not declared or declared.get('interface')!='categories-v1':raise RuntimeError('measured-preservation-diff')
                 run([declared['path'],str(evidence_dir/'before.json'),str(after_paths[0]),','.join(sorted({k.split(':',1)[0] for k in changes}))])
-                result['checks']['declaredTransformationVerified']=True
+                result['declaredTransformationVerified']=True
             if not after.get('migrationLedger') or not smoke:raise RuntimeError('missing-ledger-or-smoke-proof')
             if urllib.request.urlopen(origin+'/healthz',timeout=10).status!=200 or (gates/'MAINTENANCE').exists():raise RuntimeError('measured-final-front-not-open')
             result['measurements']={'preservationChanges':changes,'beforeSHA256':sha(evidence_dir/'before.json'),

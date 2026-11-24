@@ -145,6 +145,10 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         self.assertEqual(m.queue_failure_diagnostic('DOLT_STATUS_DIAG_V1 '+json.dumps(d),{})['doltStatusCounts'],d)
         for bad in [{'before':[0]*19,'after':[0]*20},{'before':['secret']*20,'after':[0]*20},{'before':[True]*20,'after':[0]*20},{'before':[-1]*20,'after':[0]*20}]:
             self.assertNotIn('doltStatusCounts',m.queue_failure_diagnostic('DOLT_STATUS_DIAG_V1 '+json.dumps(bad),{}))
+    def test_transformation_metadata_is_not_an_extra_contract_check(self):
+        source=Path(__file__).with_name('delivery-docker-integration.py').read_text()
+        self.assertNotIn("result['checks']['declaredTransformationVerified']",source)
+        self.assertIn("result['declaredTransformationVerified']=True",source)
     def test_unknown_stays_unknown(self):
         spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
