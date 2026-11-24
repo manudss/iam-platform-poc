@@ -80,6 +80,22 @@ class Progress(unittest.TestCase):
    valid=path.read_text();path.write_text('{"scenario":"fictional-private-marker",'+valid[1:])
    with self.assertRaises(ValueError):m.publish_diagnostic(t)
    self.assertEqual(path.stat().st_mode&0o777,0o600)
+ def test_timeline_retains_bounded_phase_durations_and_publishes(self):
+  with tempfile.TemporaryDirectory() as t:
+   p=m.Progress(t)
+   for i in range(140):p.safe('fixture-setup','prequal-1-start')
+   value=json.loads((Path(t)/'held-progress.json').read_text())
+   self.assertEqual(len(value['timeline']),128);self.assertEqual(value['timeline'][-1]['sequence'],140)
+   self.assertTrue(m.publish_diagnostic(t))
+ def test_timeline_rejects_extra_data_or_duplicate_keys_without_chmod(self):
+  for mode in ('extra','duplicate'):
+   with self.subTest(mode=mode),tempfile.TemporaryDirectory() as t:
+    m.Progress(t).write('one-clean','scenario-complete');path=Path(t)/'held-progress.json'
+    if mode=='extra':
+     data=json.loads(path.read_text());data['timeline'][0]['private']='fictional-marker';path.write_text(json.dumps(data))
+    else:path.write_text(path.read_text().replace('"childState": "not-measured"','"childState": "fictional-marker", "childState": "not-measured"',1))
+    with self.assertRaises(ValueError):m.publish_diagnostic(t)
+    self.assertEqual(path.stat().st_mode&0o777,0o600)
  def test_publication_allows_missing_best_effort_progress(self):
   with tempfile.TemporaryDirectory() as t:self.assertFalse(m.publish_diagnostic(t))
  def test_progress_is_whitelisted_for_always_artifact_upload(self):

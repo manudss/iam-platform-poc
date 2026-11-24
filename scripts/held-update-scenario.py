@@ -46,6 +46,7 @@ def run(x):
 
     # Every fixture image is derived from the same product bytes. Verify that explicitly;
     # this harness does not claim migration history between different product versions.
+    progress.safe('fixture-setup','inventory-start')
     target_configs={}
     for i,img in enumerate(images):
         ref='ghcr.io/manudss/iam-platform-poc@'+img['digest']
@@ -59,6 +60,8 @@ def run(x):
                 raise RuntimeError('fixture-product-bytes-not-identical')
         finally:docker('rm',cid)
         target_configs[i]={'image':ref,'imageID':image['Id'],'manifestSHA256':hashes['/app/migration-source/data/migrations/manifest.json'],'offlineFileSHA256':{k:hashes[k] for k in config['offlineFileSHA256']}}
+
+    progress.safe('fixture-setup','inventory-complete')
 
     def arm_config(i=0):
         policy['requireAutomationHold'] = True; pol.write_text(json.dumps(policy))
@@ -76,6 +79,7 @@ def run(x):
         raise RuntimeError('fixture-bao-unseal-timeout')
 
     # ---- pristine copy of the cold baseline dataset, then every scenario restarts from it (never reused across scenarios)
+    progress.safe('fixture-setup','checkpoint-start')
     docker('stop', app)
     # Quiescent synthetic checkpoint of all three stores, never only a data-dir copy.
     pristine = root / 'data-pristine'; runp(['cp', '-a', c['data'], str(pristine)])
@@ -106,9 +110,11 @@ def run(x):
         runp([str(wrappers['preflight']), *args]); runp([str(wrappers['launcher']), *args])
         x['health'](app)
     reset_baseline()
+    progress.safe('fixture-setup','checkpoint-complete')
 
     # ---- 1. REAL pre-qualification of each successor image on an isolated copy (never a fabricated JSON)
     def prequalify(i):
+        progress.safe('fixture-setup','prequal-%d-start'%i)
         img = images[i]; ref = 'ghcr.io/manudss/iam-platform-poc@' + img['digest']
         reset_baseline(); arm_config(i); (gates / 'OPS-MAINTENANCE').write_text('synthetic-ops-prequal\n')
         rec = ev / ('prequal-%d' % i); rec.mkdir(mode=0o700, exist_ok=True)
@@ -138,6 +144,7 @@ def run(x):
         for k in ['before', 'after', 'smoke']:
             dst = rec / (k + '.json'); shutil.copyfile(rows[k]['path'], dst); os.chmod(dst, 0o600); qual[k] = {'path': str(dst), 'sha256': sh256(dst)}
         report['prequalification'][str(i)] = {'digest': img['digest'], 'updater_exit': r.returncode, 'receipt_sha256': sh256(pp), 'index_sha256': fields['evidence_index_sha256']}
+        progress.safe('fixture-setup','prequal-%d-complete'%i)
         return qual
     qualifications = {i: prequalify(i) for i in (1, 2, 3)}
     # tamper / missing negatives on the real verifier
@@ -173,7 +180,7 @@ def run(x):
 
     def supervise(name, n, kill_phase=None, kill_mode='group'):
         progress.safe(name,'scenario-start')
-        manifest, chain = build(n); folder = root / ('sup-' + name); shutil.rmtree(folder, ignore_errors=True); folder.mkdir(mode=0o700)
+        manifest, chain = build(n); progress.safe(name,'baseline-ready'); folder = root / ('sup-' + name); shutil.rmtree(folder, ignore_errors=True); folder.mkdir(mode=0o700)
         engagement='held-' + name + '-' + os.environ.get('GITHUB_RUN_ID', '0')
         manifest['engagement_id']=engagement
         if kill_phase:
@@ -197,11 +204,16 @@ def run(x):
         while not (folder / 'WATCH_READY').exists() or not (folder / 'worker-identity.json').exists():
             if time.monotonic() - t0 > 120: raise RuntimeError('supervision-not-ready')
             time.sleep(0.2)
+        progress.safe(name,'supervision-ready')
         (folder / 'GO').write_text('operator-go-harness\n')
+        progress.safe(name,'go-sent')
+        observed_phases=set()
         closed_seen = None; opening_seen = None; killed = None; deadline = time.monotonic() + 3000
         while time.monotonic() < deadline and not (folder / 'watchdog-result.json').exists():
             try: st = jread(state_path); ph = (st.get('opening_intent') or {}).get('phase')
             except Exception: ph = None
+            if ph in {'closed-step-0-running','closed-step-0-qualified','closed-step-1-running','closed-step-1-qualified','closed-step-2-running','closed-step-2-qualified','opening'} and ph not in observed_phases:
+                progress.safe(name,ph);observed_phases.add(ph)
             if closed_seen is None and (gates/'OPS-MAINTENANCE').is_file():
                 try: urllib.request.urlopen(origin+'/healthz',timeout=3)
                 except urllib.error.HTTPError as e:
@@ -264,6 +276,7 @@ def run(x):
                     return
                 (os.killpg if kill_mode == 'group' else os.kill)(qi['pid'], signal.SIGKILL); killed = ph
             time.sleep(0.1)
+        progress.safe(name,'watchdog-result')
         for p in (wk, wd):
             try: p.wait(timeout=120)
             except subprocess.TimeoutExpired: p.kill(); raise RuntimeError('supervision-process-did-not-exit')
