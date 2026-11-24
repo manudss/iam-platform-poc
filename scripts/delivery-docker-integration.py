@@ -233,6 +233,14 @@ raise SystemExit(r.returncode)
         if c['scenario'] != 'held-update': docker('run', '-d', '--name', c['app'], '--network', c['network'], '--restart', 'no',
                '-p', '127.0.0.1:18089:8080', '-v', c['data'] + ':/data', '--env-file', str(env),
                '-e', 'IAM_DEMO_SEED_MODE=never', current)
+        if c['scenario']=='held-update':
+            # The initial closed helper boot predates the fixture TLS origin/env.
+            # Relaunch through the real confinement helper, never a plain docker run.
+            docker('stop',c['app']);docker('rm',c['app'])
+            config['ledgerSHA256']=sha(Path(c['data'])/'migrations/journal.json')
+            configpath.write_text(json.dumps(config))
+            helper_args=['--image',c['image'],'--container',c['app'],'--env-file',str(env),'--data-dir',c['data'],'--port','18089']
+            run([c['wrappers']['preflight'],*helper_args]);run([c['wrappers']['launcher'],*helper_args])
         stage='baseline-edge-health'
         health(c['app'])
         # Ensure TLS is genuinely verified, with no ignore-certificate option.
@@ -259,6 +267,8 @@ raise SystemExit(r.returncode)
                        'expected origin/form refused':'oidc-form-refused'}
         matches=[code for literal,code in smoke_reasons.items() if literal in warm.stderr]
         result['prebaselineSmokeReason']=matches[-1] if matches else 'unclassified'
+        known_stages={'smoke-hold','smoke-health','smoke-workflows-before','smoke-auth-input','smoke-oidc-form','smoke-oidc-login','smoke-oidc-token','smoke-oidc-session','smoke-activations','smoke-activations-validation','smoke-negative-redirect','smoke-workflows-after','smoke-ledger'}
+        result['prebaselineSmokeStage']=next((stage for stage in known_stages if 'QUALIFICATION_DIAG_V1:'+stage+'\n' in warm.stderr),'unclassified')
 
         if warm.returncode:
             raise RuntimeError('candidate-qualifier-smoke-refused')
