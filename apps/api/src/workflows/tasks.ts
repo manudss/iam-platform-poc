@@ -1,3 +1,5 @@
+import { automationHeld } from '../automation/hold.js';
+import { assertAutomationAllowed } from '../automation/hold.js';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
@@ -99,6 +101,7 @@ export class WorkflowTasksService {
 
   /** Creates (or returns, idempotent by run step) the task a waiting block asks for. */
   async request(a: TaskRequest): Promise<TaskRow> {
+    assertAutomationAllowed();
     // A re-run of the same waiting step reuses its task: never a second task for the same run step+kind.
     const existing = (await this.store.listTasks(a.tenant, { runId: a.runId })).find((t) => t.node_id === a.nodeId && t.kind === a.kind && t.status !== 'canceled');
     if (existing) return existing;
@@ -139,6 +142,7 @@ export class WorkflowTasksService {
 
   /** Durable single use of a decided task: the first (run:node) consumer wins, the same consumer asking again is idempotent, any other is refused. */
   async consume(tenant: string, taskId: string, consumer: string): Promise<void> {
+    assertAutomationAllowed();
     const t = await this.store.getTask(taskId);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'decided') throw new ConflictException(`this task is ${t.status}, not decided`);
@@ -148,6 +152,7 @@ export class WorkflowTasksService {
   }
   /** Records the effect of the consumer (revision written). Refused for any other consumer or a second time. */
   async markApplied(tenant: string, taskId: string, consumer: string, revision: string): Promise<void> {
+    assertAutomationAllowed();
     const t = await this.store.getTask(taskId);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (!(await this.store.markTaskApplied(taskId, String(consumer).slice(0, 120), String(revision).slice(0, 80)))) throw new ConflictException('the effect of this approval could not be recorded for this consumer');
@@ -185,6 +190,7 @@ export class WorkflowTasksService {
 
   /** Decision by an authenticated person. Returns the decided task and kicks the waiting run. */
   async decide(tenant: string, id: string, actor: string, decision: unknown, justification: unknown): Promise<TaskRow> {
+    assertAutomationAllowed();
     const t = await this.store.getTask(id);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
@@ -232,6 +238,7 @@ export class WorkflowTasksService {
 
   /** Delegation: the current decider (or an admin) names a replacement decider. */
   async delegate(tenant: string, id: string, actor: string, to: unknown): Promise<TaskRow> {
+    assertAutomationAllowed();
     const t = await this.store.getTask(id);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
@@ -267,6 +274,7 @@ export class WorkflowTasksService {
 
   /** Replaces the decider of an OPEN task from a workflow/IGA step (an absent validator). AUTHORITY: the person who started the workflow must be an admin or an IGA pool member (the right to run a workflow is not the right to move reviews), and the new decider must be a member of the admin/IGA pool or the reviewed person's current active manager, selected explicitly by the manager keyword. A free arbitrary id is not a replacement authority. The task stays open, keeps its deadline and records who it was taken from. Refused when the new decider is the person the task is about. */
   async reassignOpen(tenant: string, id: string, to: unknown, by: string, reason: string, startedBy?: string): Promise<TaskRow> {
+    assertAutomationAllowed();
     const t = await this.store.getTask(id);
     if (!t || t.tenant !== tenant) throw new NotFoundException('unknown task');
     if (t.status !== 'open') throw new ConflictException(`this task is already ${t.status}`);
@@ -318,6 +326,7 @@ export class WorkflowTasksService {
 
   /** Deadline scan (called by the cron tick and on resume checks): overdue tasks escalate once. */
   async scanOverdue(): Promise<number> {
+    if (automationHeld) return 0;
     const open = await this.store.listDueTasks(now());
     let n = 0;
     for (const t of open.filter((x) => x.status === 'open')) {
@@ -368,6 +377,7 @@ export class WorkflowTasksService {
   /** The system settles a wait that external state made moot (a pull request merged or closed BEFORE the
    *  approval was decided): canceled with the reason recorded - the audit row stays, nothing is destroyed. */
   async settleSystem(tenant: string, taskId: string, actor: string, note: unknown): Promise<boolean> {
+    assertAutomationAllowed();
     const t = await this.store.getTask(taskId);
     if (!t || t.tenant !== tenant || t.status !== 'open') return false;
     const ok = await this.store.settleTask(taskId, actor, String(note ?? '').slice(0, 500), now());
@@ -377,6 +387,7 @@ export class WorkflowTasksService {
 
   /** A canceled run cancels its open tasks: no orphan approvals that can never resume anything. */
   async cancelForRun(tenant: string, runId: string): Promise<number> {
+    assertAutomationAllowed();
     const t = await this.store.getRun(tenant, runId);
     if (!t) return 0;
     return this.store.cancelTasksForRun(runId, now());

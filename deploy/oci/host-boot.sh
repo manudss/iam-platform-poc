@@ -10,6 +10,9 @@
 # boot with deploy/oci/lyam-boot.service.
 set -eu
 
+for arg in "$@"; do
+  [ "$arg" != --closed-recovery ] || { echo 'closed recovery is manual and not accepted by host-boot' >&2; exit 1; }
+done
 ENV_FILE="${1:-/opt/lyam/lyam.env}"
 getconf() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | tail -n 1; }
 CONTAINER="$(getconf LYAM_CONTAINER)"; CONTAINER="${CONTAINER:-lyam}"

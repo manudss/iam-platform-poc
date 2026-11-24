@@ -1,3 +1,4 @@
+import { automationHeld } from '../automation/hold.js';
 import { safeReason } from './log-safe.js';
 import { dataReady } from '../migrations/readiness.js';
 import { WorkflowConnections } from './connections.js';
@@ -29,6 +30,7 @@ export class WorkflowSheetPollerService implements OnModuleInit, OnModuleDestroy
   constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries, @Optional() private readonly connections?: WorkflowConnections) {}
 
   onModuleInit() {
+    if (automationHeld) return;
     this.timer = setInterval(() => void this.tick(), 60_000);
     this.timer.unref?.();
     this.first = setTimeout(() => void this.tick(), 12_000);
@@ -37,7 +39,7 @@ export class WorkflowSheetPollerService implements OnModuleInit, OnModuleDestroy
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); if (this.first) clearTimeout(this.first); }
 
   async tick() {
-    if (!dataReady()) return;
+    if (automationHeld || !dataReady()) return;
     if (this.busy) return;
     this.busy = true;
     try { await branchContext.run({ branch: this.store.liveRef }, () => this.scan()); }

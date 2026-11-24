@@ -46,6 +46,8 @@
 # IAM_BAO_TOKEN, ...) are passed to the container with docker --env-file. Updater settings:
 #   LYAM_CONTAINER           container name (default lyam)
 #   LYAM_DATA_DIR            host data dir mounted at /data (default /opt/lyam/data)
+#   --closed-recovery: explicit manual recovery only, requires pause + separate OPS barrier,
+#     injects hold=1, never opens front and never boots the old image on failure.
 #   LYAM_BACKUP_DIR          backup destination (default /opt/lyam/backups)
 #   LYAM_PORT                host loopback port published to the container's 8080 (default 8080)
 #   The updater proves a FRONT GATE through the public origin BEFORE anything changes: it
@@ -105,10 +107,14 @@ log() { echo "[update $(date -u +%H:%M:%S)] $*"; }
 fail() { code="$1"; shift; log "FATAL: $*" >&2; exit "$code"; }
 
 REQUIRE_QUALIFICATION=0
+CLOSED_RECOVERY=0
 IMAGE=""
+CLOSED_RECEIPT=""
 ENV_FILE="/opt/lyam/lyam.env"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --closed-receipt) CLOSED_RECEIPT="$2"; shift 2 ;;
+    --closed-recovery) CLOSED_RECOVERY=1; REQUIRE_QUALIFICATION=1; shift ;;
     --require-qualification) REQUIRE_QUALIFICATION=1; shift ;;
     --image) IMAGE="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
@@ -142,6 +148,41 @@ RECOVERY_FILES="$(getconf LYAM_RECOVERY_FILES)"
 HOOK="$(getconf LYAM_PRE_UPDATE_HOOK)"
 PAUSE_FILE="$(getconf LYAM_PAUSE_FILE)"; PAUSE_FILE="${PAUSE_FILE:-/opt/lyam/UPDATE_PAUSED}"
 POST_CHECK="$(getconf LYAM_POST_UPDATE_CHECK)"
+CLOSED_LAUNCHER="$(getconf LYAM_CLOSED_LAUNCHER)"
+CLOSED_PREFLIGHT="$(getconf LYAM_CLOSED_PREFLIGHT)"
+CLOSED_IMPLEMENTATION="$(getconf LYAM_CLOSED_IMPLEMENTATION)"
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  [ -n "$CLOSED_RECEIPT" ] && [ ! -e "$CLOSED_RECEIPT" ] || fail 1 "closed recovery requires a fresh explicit receipt path"
+  [ -n "$CLOSED_LAUNCHER" ] && [ -x "$CLOSED_LAUNCHER" ] && [ -n "$CLOSED_PREFLIGHT" ] && [ -x "$CLOSED_PREFLIGHT" ] \
+    || fail 1 "closed recovery requires reviewed confined launcher and exact migration preflight"
+fi
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  CLOSED_INTEGRITY="$(dirname "$0")/closed-recovery-integrity.py"
+  for controller in "$0" "$CLOSED_INTEGRITY" "$(dirname "$0")/closed-recovery-call.py"; do
+    [ -f "$controller" ] && [ ! -L "$controller" ] || fail 1 "controller must be regular"
+    secured="$(readlink -f "$controller")"
+    while :; do
+      [ "$(stat -c '%u:%g' "$secured")" = 0:0 ] || fail 1 "controller must be root-owned"
+      mode="$(stat -c '%a' "$secured")"; [ "$((0$mode & 022))" = 0 ] || fail 1 "controller path writable by others"
+      [ "$secured" != / ] || break
+      secured="$(dirname "$secured")"
+    done
+  done
+  case "$CLOSED_RECEIPT" in /*) ;; *) fail 1 "receipt path must be absolute";; esac
+  receipt_parent="$(dirname "$CLOSED_RECEIPT")"
+  while :; do
+    [ -d "$receipt_parent" ] && [ "$(stat -c '%u:%g' "$receipt_parent")" = 0:0 ] || fail 1 "receipt requires protected root directory"
+    mode="$(stat -c '%a' "$receipt_parent")"; [ "$((0$mode & 022))" = 0 ] || fail 1 "receipt parent writable by others"
+    [ "$receipt_parent" != / ] || break
+    receipt_parent="$(dirname "$receipt_parent")"
+  done
+  INTEGRITY_PROOF="$(python3 "$CLOSED_INTEGRITY" "$ENV_FILE")" || fail 1 "closed helper integrity failed before execution"
+  LAUNCHER_HASH="$(printf '%s\n' "$INTEGRITY_PROOF" | sed -n 's/^launcher_sha256=//p')"
+  PREFLIGHT_HASH="$(printf '%s\n' "$INTEGRITY_PROOF" | sed -n 's/^preflight_sha256=//p')"
+  IMPLEMENTATION_HASH="$(printf '%s\n' "$INTEGRITY_PROOF" | sed -n 's/^implementation_sha256=//p')"
+fi
+CLOSED_CHECK_ARGS=""
+[ "$CLOSED_RECOVERY" = 1 ] && CLOSED_CHECK_ARGS="--require-automation-hold"
 LOCK_FILE="$(getconf LYAM_LOCK_FILE)"; LOCK_FILE="${LOCK_FILE:-/opt/lyam/.update.lock}"
 
 # Automatic queue requires a qualified checker, before stopping anything.
@@ -154,7 +195,15 @@ fi
 command -v docker >/dev/null 2>&1 || fail 1 "docker not found on this host"
 docker info >/dev/null 2>&1 || fail 1 "docker is not accessible to this user (run with sudo, or add the user to the docker group)"
 [ -r "$ENV_FILE" ] || fail 1 "env file $ENV_FILE missing or unreadable (run with sudo: it is root-owned 0600)"
-[ ! -e "$PAUSE_FILE" ] || fail 1 "updates are paused by $PAUSE_FILE (remove it to resume)"
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  [ -f "$PAUSE_FILE" ] || fail 1 "closed recovery requires the existing update pause"
+  if grep '^IAM_AUTOMATION_HOLD=' "$ENV_FILE" | grep -v '^IAM_AUTOMATION_HOLD=1$' >/dev/null; then fail 1 "closed recovery refuses conflicting IAM_AUTOMATION_HOLD configuration"; fi
+else
+  [ ! -e "$PAUSE_FILE" ] || fail 1 "updates are paused by $PAUSE_FILE (remove it to resume)"
+fi
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  echo "$IMAGE" | grep -Eq '@sha256:[0-9a-f]{64}$' || fail 1 "closed recovery requires an immutable digest"
+fi
 echo "$IMAGE" | grep -Eq ':[0-9a-f]{40}$|@sha256:[0-9a-f]{64}$' \
   || fail 1 "image ref must be immutable (full commit-sha tag or @sha256: digest), got: $IMAGE"
 [ -d "$DATA_DIR/dolt/.dolt" ] \
@@ -210,6 +259,11 @@ done
 # gate refuses the update (someone else's maintenance is not ours to lift). The marker file
 # itself is 0644 (its content is a non-secret token) so any front identity can stat/read it.
 BARRIER_FILE="$(getconf LYAM_FRONT_BARRIER_FILE)"; BARRIER_FILE="${BARRIER_FILE:-/var/lib/lyam-front-gate/MAINTENANCE}"
+OPS_BARRIER_FILE="$(getconf LYAM_OPS_BARRIER_FILE)"; OPS_BARRIER_FILE="${OPS_BARRIER_FILE:-$(dirname "$BARRIER_FILE")/OPS-MAINTENANCE}"
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  [ "$OPS_BARRIER_FILE" != "$BARRIER_FILE" ] && [ -f "$OPS_BARRIER_FILE" ] || fail 1 "closed recovery requires a separate existing OPS maintenance barrier"
+  OPS_BARRIER_HASH="$(sha256sum "$OPS_BARRIER_FILE" | cut -d' ' -f1)"
+fi
 GATE_TOKEN="lyam-update:$$:$(date -u +%Y%m%dT%H%M%SZ)"
 BARRIER_ACTIVE=0
 front_probe() { curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "$ORIGIN/healthz" 2>/dev/null || true; }
@@ -240,19 +294,40 @@ barrier_rearm() {
 # again. If either step fails the gate is RE-ARMED - the service stays behind maintenance
 # rather than exposed in an unverified state.
 gate_lift() {
+  if [ "$CLOSED_RECOVERY" = 1 ]; then
+    python3 "$CLOSED_INTEGRITY" "$ENV_FILE" >/dev/null || return 1
+    LIVE_PROOF="$("$CLOSED_IMPLEMENTATION" --mode postcheck --proof-file "$CLOSED_LAUNCH_PROOF" --image "$IMAGE" --container "$CONTAINER" --env-file "$ENV_FILE" --data-dir "$DATA_DIR" --port "$PORT")" || return 1
+    printf '%s' "$LIVE_PROOF" | python3 -c 'import json,sys; assert json.load(sys.stdin)["liveVerified"] is True' || return 1
+  fi
   # ALL paths, rollback included, are checked while the front is STILL gated.
   if [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; then
     actual_image="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null)" || return 1
     [ -n "$actual_image" ] || return 1
     "$POST_CHECK" --phase after --container "$CONTAINER" --image "$QUALIFICATION_EXPECTED_IMAGE" --env-file "$ENV_FILE" \
       --data-dir "$DATA_DIR" --backup-dir "$BACKUP_DIR" --barrier-file "$BARRIER_FILE" \
-      --target-image "$IMAGE" --evidence-dir "$QUALIFICATION_EVIDENCE" || { log 'pre-opening qualification failed or UNKNOWN; gate remains armed'; return 1; }
+      --target-image "$IMAGE" --evidence-dir "$QUALIFICATION_EVIDENCE" ${CLOSED_CHECK_ARGS:-} || { log 'pre-opening qualification failed or UNKNOWN; gate remains armed'; return 1; }
+  fi
+  if [ "$CLOSED_RECOVERY" = 1 ]; then
+    [ -f "$PAUSE_FILE" ] && [ -f "$OPS_BARRIER_FILE" ] && [ "$(sha256sum "$OPS_BARRIER_FILE" | cut -d' ' -f1)" = "$OPS_BARRIER_HASH" ] \
+      && [ "$(cat "$BARRIER_FILE" 2>/dev/null)" = "$GATE_TOKEN" ] && barrier_verify || return 1
+    log "closed recovery qualified: maintenance and update pause remain armed; NOT open for users"
+    return 0
   fi
   if barrier_remove && front_verify; then return 0; fi
   barrier_rearm || log "WARNING: maintenance could not be re-armed at $BARRIER_FILE"
   return 1
 }
 # An interruption mid-update leaves the state unknown: keep the gate UP (fail closed).
+closed_exit() {
+  rc=$?
+  trap - 0
+  if [ "$CLOSED_RECOVERY" = 1 ] && [ "$BARRIER_ACTIVE" = 1 ] && [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then
+    docker stop "$CONTAINER" >/dev/null 2>&1 || true
+    log "closed recovery failed: application stopped; preserve backups, pause and maintenance; no implicit restore or previous-image boot" >&2
+  fi
+  exit "$rc"
+}
+trap closed_exit 0
 trap 'log "interrupted: the maintenance gate stays UP at $BARRIER_FILE - verify the service state manually"; exit 4' INT TERM
 
 # One run at a time: the pipeline and a manual run must never interleave stops/backups/swaps.
@@ -262,6 +337,12 @@ command -v flock >/dev/null 2>&1 && { flock -n 9 || fail 1 "another update is ru
 
 log "pulling $IMAGE"
 docker pull "$IMAGE" >/dev/null
+
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  python3 "$CLOSED_INTEGRITY" "$ENV_FILE" >/dev/null || fail 1 "closed code changed before preflight"
+  "$CLOSED_PREFLIGHT" --image "$IMAGE" --container "$CONTAINER" --env-file "$ENV_FILE" --data-dir "$DATA_DIR" --port "$PORT" \
+    || fail 1 "closed recovery exact image/migration/ledger preflight failed; no container stopped"
+fi
 
 MODES="$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "io.lyam.seed-modes"}}' 2>/dev/null || true)"
 case " $MODES " in
@@ -283,6 +364,14 @@ run_container() {
   img="$1"; port="$2"
   # on-failure, never unless-stopped: an unmanaged auto-restart at host boot would start the
   # app BEFORE the companions are ready, short-circuiting the systemd/host-boot.sh ordering.
+  if [ "$CLOSED_RECOVERY" = 1 ]; then
+    python3 "$CLOSED_INTEGRITY" "$ENV_FILE" >/dev/null || return 1
+    CLOSED_LAUNCH_PROOF="$BACKUP_DIR/closed-launch-$TS.json"
+    [ ! -e "$CLOSED_LAUNCH_PROOF" ] || return 1
+    (umask 077; set -C; "$CLOSED_LAUNCHER" --image "$img" --container "$CONTAINER" --env-file "$ENV_FILE" --data-dir "$DATA_DIR" --port "$port" > "$CLOSED_LAUNCH_PROOF") || return 1
+    CLOSED_LAUNCH_HASH="$(sha256sum "$CLOSED_LAUNCH_PROOF" | cut -d' ' -f1)"
+    return 0
+  fi
   set -- -d --name "$CONTAINER" --restart on-failure \
     -p "127.0.0.1:$port:8080" -v "$DATA_DIR:/data" \
     --env-file "$ENV_FILE" -e IAM_DEMO_SEED_MODE=never
@@ -295,6 +384,11 @@ health() {
   # above is what guarantees a not-yet-healthy version is never published on the public port.
   waited=0
   while :; do
+    if [ "$CLOSED_RECOVERY" = 1 ]; then
+      docker exec "$CONTAINER" node -e "const fs=require('node:fs');const m=/automation hold: (\\{[^\\n]+\\})/.exec(fs.readFileSync('/data/api.log','utf8'));if(process.env.IAM_AUTOMATION_HOLD!=='1'||!m||JSON.parse(m[1]).held!==true)process.exit(1);fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1));" >/dev/null 2>&1 && return 0
+      [ "$waited" -lt "$HEALTH_TIMEOUT" ] || return 1
+      sleep 5; waited=$((waited + 5)); continue
+    fi
     if docker exec "$CONTAINER" node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
       return 0
     fi
@@ -328,6 +422,12 @@ restart_previous() {
   health
 }
 
+closed_abort() {
+  [ "$CLOSED_RECOVERY" = 1 ] || return 0
+  docker stop "$CONTAINER" >/dev/null 2>&1 || true
+  fail 4 "$1; closed recovery stops here, maintenance and pause retained, NO automatic previous-image boot or rollback"
+}
+
 # --- cold backup (front gated, container stopped: consistent files) ---------------------------
 # The front gate goes up BEFORE anything changes: visitors get a clean 503 from Caddy for the
 # whole window (including on reused connections), the gate is proven through the public origin,
@@ -345,6 +445,11 @@ if [ -n "$PREVIOUS" ]; then
   docker stop "$CONTAINER" >/dev/null
 fi
 
+if [ "$CLOSED_RECOVERY" = 1 ]; then
+  [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = false ] \
+    || fail 4 "closed recovery requires a proven stopped container before preservation capture"
+fi
+
 # Capture read-only preservation evidence while the application is PROVEN stopped.
 # The checker itself validates every TLS origin remains behind maintenance.
 if [ "$REQUIRE_QUALIFICATION" = 1 ] || [ -n "$POST_CHECK" ]; then
@@ -360,6 +465,7 @@ fi
 if [ -n "$HOOK" ]; then
   log "running pre-update hook"
   if ! sh -c "$HOOK"; then
+    closed_abort "pre-update hook failed"
     restart_previous || fail 4 "pre-update hook failed AND the previous container could not be restarted healthy - the maintenance gate stays UP - manual intervention"
     gate_lift || fail 4 "pre-update hook failed; the previous container was restarted BUT the front could not be proven open - maintenance re-armed at $BARRIER_FILE, diagnose the front manually"
     fail 2 "pre-update hook failed; update aborted, previous container restarted, front re-opened"
@@ -367,6 +473,7 @@ if [ -n "$HOOK" ]; then
 fi
 
 abort_preservation() {
+  closed_abort "$1"
   restart_previous || fail 4 "$1 AND the previous container could not be restarted healthy - the maintenance gate stays UP - manual intervention"
   gate_lift || fail 4 "$1; the previous container was restarted BUT the front could not be proven open - maintenance re-armed at $BARRIER_FILE, diagnose the front manually"
   fail 2 "$1; update aborted, previous container restarted, front re-opened"
@@ -535,6 +642,10 @@ prune 'lyam-data-*.tar.gz'; prune 'lyam-pg-*.sql.gz'; prune 'lyam-bao-*.tar.gz';
 # is the one that serves when the gate lifts.
 QUALIFICATION_EXPECTED_IMAGE="$IMAGE"
 log "starting $CONTAINER from $IMAGE (seed mode: never)"
+if [ "$CLOSED_RECOVERY" = 1 ] && [ -n "$PREVIOUS" ]; then
+  (umask 077; set -C; docker inspect "$CONTAINER" > "$BACKUP_DIR/previous-container-$TS.inspect.json") || fail 4 "cannot retain previous container inspect"
+  (umask 077; set -C; docker logs "$CONTAINER" > "$BACKUP_DIR/previous-container-$TS.logs" 2>&1) || fail 4 "cannot retain previous container logs"
+fi
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 CREATE_OK=1
 run_container "$IMAGE" "$PORT" || CREATE_OK=0
@@ -542,11 +653,18 @@ if [ "$CREATE_OK" = 1 ] && bao_ready && health; then
   # The gate lifts ONLY here, and a failed lift RE-ARMS it: no blind rollback of this
   # version's possible writes, no exposed-but-unverified service either.
   gate_lift || fail 4 "the new version is healthy BUT the front could not be proven open (gate removal or 200-probe failed) - maintenance re-armed at $BARRIER_FILE, the service stays behind it; NO blind rollback (visitor writes may already exist on this version): diagnose the front path manually"
+  if [ "$CLOSED_RECOVERY" = 1 ]; then
+    ( umask 077; set -C; printf '%s\n' "$INTEGRITY_PROOF" 'state=CLOSED_QUALIFIED' "image=$IMAGE" 'held=true' 'public_status=503' "ops_sha256=$OPS_BARRIER_HASH" "gate_sha256=$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" "launcher_sha256=$LAUNCHER_HASH" "preflight_sha256=$PREFLIGHT_HASH" "implementation_sha256=$IMPLEMENTATION_HASH" "launch_proof=$CLOSED_LAUNCH_PROOF" "launch_proof_sha256=$CLOSED_LAUNCH_HASH" "ipv6_disabled_proved=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["ipv6DisabledProved"]).lower())' "$CLOSED_LAUNCH_PROOF")" "ipv6_state_sha256=$(python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1]))["ipv6State"],sort_keys=True).encode()).hexdigest())' "$CLOSED_LAUNCH_PROOF")" > "$CLOSED_RECEIPT" ) || fail 4 "cannot write fresh closed receipt"
+    log "closed-qualified: $CONTAINER runs $IMAGE under hold, backup $DATA_BACKUP; no public opening"
+    exit 10
+  fi
   log "healthy: $CONTAINER now runs $IMAGE; the front serves it (proven through $ORIGIN); data preserved (backup $DATA_BACKUP)"
   exit 0
 fi
 [ "$CREATE_OK" = 1 ] || log "the new container could not be created"
 [ "$CREATE_OK" = 0 ] || log "the new image never became healthy within ${HEALTH_TIMEOUT}s"
+
+closed_abort "candidate creation or health failed"
 
 # --- compensation: data AND image together -----------------------------------------------------
 # The failed version may have migrated the Dolt schema or plugin state at boot: an old image

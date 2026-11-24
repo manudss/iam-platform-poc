@@ -1,3 +1,4 @@
+import { automationHeld, assertAutomationAllowed } from '../automation/hold.js';
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import type { WorkflowIntake } from './intake.js';
 import { WorkflowConnections, connectionProvider } from './connections.js';
@@ -280,6 +281,7 @@ export class WorkflowEngine implements OnModuleInit {
         return { id: r.id, definitionId: r.definition_id, name: r.name, status: r.status, error: r.error, startedBy: r.started_by, startedAt: r.started_at, finishedAt: r.finished_at, steps: steps.map((s) => ({ step: s.node_id, status: s.status, output: s.output })) };
       },
       start: async (tenant: string, workflowId: string, input: Record<string, unknown>, startedBy: string) => {
+        assertAutomationAllowed();
         const d = await store.getDefinition(tenant, workflowId, currentBranch() ?? 'main');
         if (!d) throw new BadRequestException(`lyam-start-workflow: unknown workflow "${workflowId}" on this ref`);
         if (!d.active) throw new BadRequestException(`lyam-start-workflow: the workflow "${workflowId}" is disabled`);
@@ -387,6 +389,7 @@ export class WorkflowEngine implements OnModuleInit {
 
   /** The engine of the plugin serving the workflows.engine slot for this run. */
   private async engineFor(run: RunRow): Promise<WorkflowEngineApi> {
+    assertAutomationAllowed();
     // This core-owned barrier applies BEFORE provider resolution, including a replacement engine,
     // boot recovery and retries of old queued runs. It cannot be overridden by plugin grants/settings.
     if (!run.test && isFrozenApprovedReset(run.graph)) return {
@@ -403,6 +406,7 @@ export class WorkflowEngine implements OnModuleInit {
    * run whose provider cannot be resolved at boot is retried with backoff, then left with an explicit
    * reconciliable error: never silently stuck in 'running', never blindly replayed. */
   async onModuleInit() {
+    if (automationHeld) return;
     if (!dataReady()) { void awaitDataReady().then(() => this.onModuleInit()).catch(() => this.log.error('resume refused after data migrations')); return; }
     let runs: RunRow[] = [];
     try { runs = await this.store.runningRuns(); } catch (e) { this.log.warn(`resume scan failed: ${(e as Error).message}`); return; }
@@ -415,6 +419,7 @@ export class WorkflowEngine implements OnModuleInit {
    * Boot already kicks every waiting run; this scan handles children finishing after boot in another engine.
    * The run's normal CAS and step state retain the single-run execution behavior. */
   async scanChildWaits() {
+    if (automationHeld) return;
     for (const parent of await this.store.runningRuns()) {
       if (parent.status !== 'waiting') continue;
       for (const step of await this.store.steps(parent.id)) {
@@ -442,6 +447,7 @@ export class WorkflowEngine implements OnModuleInit {
     });
   }
   private async resumeWithRetry(run: RunRow, firstError: string) {
+    if (automationHeld) return;
     const delays = (process.env.WF_RESUME_RETRY_DELAYS_MS ?? '5000,30000,120000').split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n) && n > 0);
     let last = firstError;
     for (const d of delays) {
@@ -469,6 +475,7 @@ export class WorkflowEngine implements OnModuleInit {
   forget(runId: string) { void this.delegate(runId, (e) => e.forget(runId)); }
 
   private async delegate(runId: string, op: (e: WorkflowEngineApi) => void, strict = false) {
+    if (automationHeld) { if (strict) assertAutomationAllowed(); return; }
     try {
       const run = await this.store.getRunById(runId);
       if (!run) throw new Error(`run ${runId} not found`);

@@ -174,3 +174,5 @@ test('a front that never comes up stops the boot before the app', () => {
   assert.match(r.stderr, /front .* never came up/);
   assert.doesNotMatch(r.calls, /docker start lyam|update\.sh/);
 });
+
+test('host boot refuses closed recovery flag before starting companions',()=>{for(const args of [['--closed-recovery'],['a','b','--closed-recovery']]){const r=spawnSync('sh',[boot,...args],{encoding:'utf8'});assert.notEqual(r.status,0);assert.match(r.stderr,/manual/);}});

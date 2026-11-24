@@ -32,7 +32,8 @@ concurrency:
 jobs:
   deploy:
     name: Deploy the fresh GHCR image to the production demo
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # Closed recovery: hard suspension, including manual dispatch. Resume by reviewed edit only.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

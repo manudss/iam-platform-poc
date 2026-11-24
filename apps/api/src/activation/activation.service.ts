@@ -1,3 +1,4 @@
+import { automationHeld } from '../automation/hold.js';
 import { dataReady } from '../migrations/readiness.js';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import pg from 'pg';
@@ -206,13 +207,14 @@ export class ActivationService implements OnModuleInit, OnModuleDestroy {
 
   /** Background loop, only when IAM_RECONCILE_INTERVAL_MS (>= 200) is set: tick() = reconcile every tenant. */
   onModuleInit() {
+    if (automationHeld) return;
     const ms = Number(process.env.IAM_RECONCILE_INTERVAL_MS ?? 0);
     if (ms >= 200) { this.timer = setInterval(() => void this.tick().catch(() => undefined), ms); this.timer.unref(); }
   }
 
   /** One pass: reconcile each tenant that has activations (PostgreSQL journal only). Never overlaps itself. */
   async tick(): Promise<{ reconciled: string[] }> {
-    if (!dataReady()) return { reconciled: [] };
+    if (automationHeld || !dataReady()) return { reconciled: [] };
     if (this.ticking || !(await this.resolveUrl())) return { reconciled: [] };
     this.ticking = true;
     try {

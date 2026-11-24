@@ -10,7 +10,7 @@ name: Demo image (GHCR)
 # Tags (ghcr.io/<owner>/<repo>):
 #   <full commit sha>   immutable tag, the one previews and the demo deploy
 #   pr-<N>              moving tag on pull requests (convenience)
-#   latest              moving tag on pushes to main only
+#   latest              FROZEN during closed recovery, no publication until separate reviewed change
 #
 # Triggers: every push to main and every (same-repo) PR head, so the image for a
 # PR head normally exists BEFORE anyone comments /preview; workflow_dispatch
@@ -71,9 +71,9 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             TAGS="${TAGS},ghcr.io/${REPO}:pr-${{ github.event.pull_request.number }}"
           fi
-          if [ -z "${{ inputs.sha }}" ] && [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAGS="${TAGS},ghcr.io/${REPO}:latest"
-          fi
+          # Closed recovery: never move an existing Render-consumed image tag.
+          # Exact SHA tags and digest output still support OCI and qualification.
+          # Resuming latest publication requires a separate reviewed change.
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
           echo "version=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
@@ -128,4 +128,32 @@ jobs:
         with:
           name: oci-image-${{ inputs.sha }}
           path: image-receipt.json
+          retention-days: 7
+
+  closed_helper_qualification:
+    name: Confined helper qualification (synthetic only)
+    needs: build
+    if: inputs.sha == '' && github.event_name == 'pull_request' && github.head_ref == 'fix/closed-recovery-qualification' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        ipv6: [active, inactive]
+    permissions: { contents: read, packages: read }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Real helper against exact pushed digest
+        env:
+          CLOSED_IMAGE: ghcr.io/manudss/iam-platform-poc@${{ needs.build.outputs.digest }}
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID python3 scripts/closed-helper-docker-fixture.py --image "$CLOSED_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode ${{ matrix.ipv6 }} --out /tmp/closed-helper-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: closed-helper-docker-proof-${{ matrix.ipv6 }}
+          path: /tmp/closed-helper-proof
+          if-no-files-found: warn
           retention-days: 7

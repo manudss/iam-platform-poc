@@ -1,3 +1,4 @@
+import { assertAutomationAllowed } from '../automation/hold.js';
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { PluginRegistry } from '../plugins/v1/registry.js';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -13,6 +14,7 @@ export class WorkflowsEnabledGuard implements CanActivate {
   constructor(private readonly reg: PluginRegistry, @Optional() private readonly branches?: BranchRegistries) {}
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(String(req.method ?? '').toUpperCase())) assertAutomationAllowed();
     const tenant = String(req.params?.tenant ?? '');
     const registry = workspaceMode() && this.branches ? await this.branches.get(currentBranch(false)) : this.reg;
     if (!registry.isActive(tenant, 'workflows-iga'))

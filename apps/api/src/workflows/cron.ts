@@ -1,3 +1,4 @@
+import { automationHeld } from '../automation/hold.js';
 import { dataReady } from '../migrations/readiness.js';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { PluginRegistry } from '../plugins/v1/registry.js';
@@ -22,6 +23,7 @@ export class WorkflowCronService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly store: WorkflowStore, private readonly wf: WorkflowsService, private readonly reg: PluginRegistry, @Optional() private readonly tasks?: WorkflowTasksService, @Optional() private readonly engine?: WorkflowEngine) {}
 
   onModuleInit() {
+    if (automationHeld) return;
     const tickMs = Number(process.env.WF_CRON_TICK_MS ?? 20000);
     this.timer = setInterval(() => void this.tick(), tickMs);
     this.timer.unref?.();
@@ -35,7 +37,7 @@ export class WorkflowCronService implements OnModuleInit, OnModuleDestroy {
   }
 
   async tick(): Promise<void> {
-    if (!dataReady()) return;
+    if (automationHeld || !dataReady()) return;
     if (this.ticking) return; // a slow tick (cold Dolt) never overlaps the next one
     this.ticking = true;
     try {

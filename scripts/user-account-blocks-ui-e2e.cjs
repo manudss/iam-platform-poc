@@ -3,6 +3,7 @@ const {chromium}=require('playwright-core');
 const {pathToFileURL}=require('node:url');
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const root=path.resolve(__dirname,'../apps/web/dist/web/browser'),out=path.resolve(process.argv[2]||'/tmp/user-account-block-shots');fs.mkdirSync(out,{recursive:true});
+assert.ok(fs.existsSync(path.join(root,'index.csr.html'))||fs.existsSync(path.join(root,'index.html')),'Built Angular fixture missing: run npm run build in apps/web before user-account-blocks-ui-e2e');
 const server=http.createServer((req,res)=>{
  let f=path.join(root,req.url.split('?')[0]);
  if(!path.extname(f))f=path.join(root,'index.csr.html');
@@ -42,7 +43,7 @@ try{for(const mobile of [false,true])for(const dark of [false,true]){
  else if(p.includes('branding')){await route.fulfill({status:404,json:{}});return;}
  await route.fulfill({json:j});});
  const shot=async n=>{if(n==='filtered')await page.getByLabel('Active block type filter').scrollIntoViewIfNeeded();await page.screenshot({path:`${out}/${mobile?'mobile':'desktop'}-${dark?'dark':'light'}-${n}.png`,fullPage:false});};
- await page.goto('http://127.0.0.1:14218/users');await page.locator('#user-open-alice').waitFor();await page.locator('td.live-account-state').first().getByText('Blocked',{exact:true}).waitFor();
+ const entry=await page.goto('http://127.0.0.1:14218/users');assert.equal(entry.status(),200,'fixture document must load');try{await page.locator('#user-open-alice').waitFor();}catch(e){console.error('entry diagnostic',page.url(),await page.locator('body').innerText(),JSON.stringify(errors));await shot('entry-failure');throw e;}await page.locator('td.live-account-state').first().getByText('Blocked',{exact:true}).waitFor();
  if(mobile)await page.addStyleTag({content:alternateCss});await page.evaluate(dark=>{document.documentElement.dataset.theme=dark?'dark':'light';},dark);
  assert.match(await page.locator('tr',{has:page.locator('#user-open-alice')}).innerText(),/Suspended[\s\S]*Awaiting approval/);
  assert.match(await page.locator('tr',{has:page.locator('#user-open-bob')}).innerText(),/Not blocked/);

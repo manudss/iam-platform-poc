@@ -1,3 +1,4 @@
+import { automationHeld, assertAutomationAllowed } from '../automation/hold.js';
 import { ForbiddenException, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { AppEvent, ApplicationBus, APP_EVENT_KINDS } from '../events/application-bus.service.js';
 import { PluginRegistry } from '../plugins/v1/registry.js';
@@ -29,11 +30,13 @@ export class WorkflowTriggersService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    if (automationHeld) return;
     // Step 3: over the bus, this service consumes its own durable address (at-least-once; the run guards absorb a duplicate).
     this.events.consumeOnBus('workflow-triggers', APP_EVENT_KINDS, (e) => this.dispatch(e));
   }
 
   private async dispatch(e: AppEvent) {
+    assertAutomationAllowed();
     const registry = workspaceMode() && this.branches ? await this.branches.get(e.branch) : this.reg;
     if (!registry.isActive(e.tenant, 'workflows-iga')) { this.log.log(`${e.type} on ${e.branch}: workflows-iga disabled there, no run started`); return; }
     const defs = (await this.store.listDefinitions(e.tenant, this.store.liveRef)).filter((d) => {

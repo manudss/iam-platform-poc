@@ -1,3 +1,4 @@
+import { assertAutomationAllowed } from '../automation/hold.js';
 import { loadPluginModule } from '../plugins/v1/loader.js';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
@@ -98,6 +99,7 @@ export class WorkflowConnections {
   async list(tenant: string) { return { connections: (await this.store.listConnections(tenant, currentBranch())).map(c => this.public(c)), secretStoreConfigured: this.secrets.enabled }; }
   private public(c: WorkflowConnection) { const { secretRef, tenant, ...rest } = c; return { ...rest, secretConfigured: !!secretRef, status: secretRef || c.provider === 'http' ? 'Needs test' : 'Not configured' }; }
   async save(tenant: string, id: string | undefined, body: Record<string, unknown>) {
+    assertAutomationAllowed();
     const ref = currentBranch(true), clean = validateConnection(body);
     const cid = id ? connectionId(id) : `conn-${randomUUID().slice(0, 18)}`;
     const previous = id ? await this.store.getConnection(tenant, cid, ref) : null;
@@ -115,9 +117,10 @@ export class WorkflowConnections {
     await this.store.putConnection(connection, ref);
     return { connection: this.public(connection) };
   }
-  async remove(tenant: string, id: string) { const cid = connectionId(id); if (!await this.store.deleteConnection(tenant, cid, currentBranch(true))) throw new NotFoundException('unknown connection'); return { deleted: cid }; }
+  async remove(tenant: string, id: string) { assertAutomationAllowed(); const cid = connectionId(id); if (!await this.store.deleteConnection(tenant, cid, currentBranch(true))) throw new NotFoundException('unknown connection'); return { deleted: cid }; }
   /** Explicit operator action: read-only probe, no remote response data or secret in the response. */
   async test(tenant: string, id: string) {
+    assertAutomationAllowed();
     requireRealEnabled();
     const ref = currentBranch(), c = await this.store.getConnection(tenant, connectionId(id), ref);
     if (!c) throw new NotFoundException('unknown connection');
@@ -126,6 +129,7 @@ export class WorkflowConnections {
   }
   /** Tests unsaved form values in memory only. An optional existing id supplies its unchanged secret. */
   async testDraft(tenant: string, body: Record<string, unknown>) {
+    assertAutomationAllowed();
     const {existingId, ...input} = body;
     const clean = validateConnection(input);
     requireRealEnabled();
@@ -165,6 +169,7 @@ export class WorkflowConnections {
     } catch (e) { return this.probeFailed(classifyProbeError(e)); }
   }
   async resolve(tenant: string, ref: string, id: string, provider: ConnectionProvider) {
+    assertAutomationAllowed();
     requireRealEnabled();
     const c = await this.store.getConnection(tenant, connectionId(id), ref);
     if (!c || c.tenant !== tenant || c.id !== id || c.provider !== provider) throw new NotFoundException('connection missing or wrong provider');

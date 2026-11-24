@@ -75,11 +75,24 @@ def policy_load(path, isolated_loopback=False):
     if not all(isinstance(p[k],list) for k in ['baoMetadataRoots','credentialFiles','appendOnlyTables']):raise ValueError('policy coverage invalid')
     return p
 
+def exact_held_activations(before,after):
+    prior=before['postgres']['rows'].get('public.activations')
+    current=after['postgres']['rows'].get('public.activations')
+    if prior is None or current is None or prior!=current:raise ValueError('closed recovery activation journal changed or unknown')
+
+def closed_runtime(inspect):
+    env=inspect['Config'].get('Env',[]);host=inspect['HostConfig']
+    if 'IAM_AUTOMATION_HOLD=1' not in env or 'IAM_DEMO_SEED_MODE=never' not in env or host['RestartPolicy']['Name'] not in ['no','none']:raise ValueError('closed recovery hold/seed/restart mismatch')
+    if 'ALL' not in (host.get('CapDrop') or []) or host.get('CapAdd') or host.get('Privileged') or not any(x.startswith('no-new-privileges') for x in host.get('SecurityOpt',[])):raise ValueError('closed recovery capabilities mismatch')
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--phase',choices=['before','after'],required=True)
     for name in ['container','image','env-file','data-dir','backup-dir','barrier-file','target-image','evidence-dir']:parser.add_argument('--'+name,required=True)
     parser.add_argument('--isolated-loopback-test',action='store_true')
+    parser.add_argument('--require-automation-hold',action='store_true')
     parser.add_argument('--policy',default='/opt/lyam/qualification.json');a=parser.parse_args();p=policy_load(a.policy,a.isolated_loopback_test)
+    if a.require_automation_hold:
+        p['requireAutomationHold']=True
     if not Path(a.barrier_file).is_file():raise ValueError('maintenance barrier absent')
     for origin in p['origins']:
         try: response=urllib.request.urlopen(origin+'/healthz',timeout=15);status=response.status
@@ -95,6 +108,8 @@ def main():
     else:
         inspect=json.loads(cmd(['docker','inspect',a.container]))[0]
         if inspect['Config']['Image']!=a.image or not inspect['State']['Running']:raise ValueError('image identity/running mismatch')
+        if p.get('requireAutomationHold') is True:
+            closed_runtime(inspect)
         restarts=inspect['RestartCount'];time.sleep(30)
         stable=json.loads(cmd(['docker','inspect',a.container]))[0]
         if stable['RestartCount']!=restarts or not stable['State']['Running']:raise ValueError('candidate is restarting')
@@ -117,6 +132,7 @@ def main():
     after_file=evidence/('after-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json')
     private_json(after_file,state)
     private_json(evidence/('smoke-'+digest(a.image.encode())[:16]+'-'+str(time.time_ns())+'.json'),smoke_result)
+    if p.get('requireAutomationHold') is True:exact_held_activations(before,state)
     changes=compare(before,state,p)
     if changes:
         # Each target digest needs a separate reviewed verifier. It receives hash-only snapshots,

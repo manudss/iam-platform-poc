@@ -31,6 +31,8 @@ jobs:
       gallery_preferences_required: ${{ steps.plan.outputs.gallery_preferences_required }}
       dev_stack_check_required: ${{ steps.plan.outputs.dev_stack_check_required }}
       dev_ui_browser_check_required: ${{ steps.plan.outputs.dev_ui_browser_check_required }}
+      automation_hold_required: ${{ steps.plan.outputs.automation_hold_required }}
+      render_state_required: ${{ steps.plan.outputs.render_state_required }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -155,9 +157,11 @@ jobs:
           path: /tmp/ui-shots
           retention-days: 7
           if-no-files-found: ignore
+      - name: Build browser fixtures independently of previous API test outcomes
+        if: ${{ !cancelled() }}
+        run: (cd apps/web && npm run build)
       - name: Branding browser end-to-end (production SSR, real Dolt and Apply)
         run: |
-          (cd apps/web && npm run build)
           CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/branding-e2e.mjs /tmp/branding-shots
       - name: Profile reliability regression (real bundle, light/dark desktop/mobile)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/profile-priorities-ui-e2e.cjs /tmp/profile-priorities-shots
@@ -222,6 +226,11 @@ jobs:
         run: |
           python3 deploy/oci/ordered-queue.test.py
           python3 deploy/oci/qualification.test.py
+          python3 deploy/oci/closed-recovery-integrity.test.py
+          python3 deploy/oci/closed-recovery-helper.test.py
+          python3 deploy/oci/closed-launcher.test.py
+          python3 deploy/oci/closed-live.test.py
+          python3 deploy/oci/closed-fixture.test.py
           node --check deploy/oci/qualification-container.mjs
           node --test scripts/oci-plan.test.mjs
       - name: Seed guard and persistent updater contracts (stubbed docker, fail-closed)
@@ -404,6 +413,21 @@ jobs:
         with:
           name: gallery-screenshots
           path: /tmp/gallery-shots
+          if-no-files-found: ignore
+      - name: Isolated automation hold and synthetic backlog qualification
+        if: needs.control_policy.outputs.automation_hold_required == 'true'
+        run: node scripts/automation-hold-container-check.mjs iam-demo:ci /tmp/automation-hold-proof
+      - name: Clean isolated qualification resources
+        if: always()
+        run: |
+          docker ps -aq --filter name=hold-proof- | xargs -r docker rm -f
+          docker volume ls -q --filter name=hold-proof- | xargs -r docker volume rm
+      - name: Automation hold qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-hold-container-proof
+          path: /tmp/automation-hold-proof
           if-no-files-found: ignore
       - name: Container logs on failure
         if: failure()

@@ -1,3 +1,4 @@
+import{loadSafePiece,assertNativeTls}from'./safe-piece-loader.mjs';
 import { createRequire } from 'node:module';
 /**
  * Activepieces adapter (SPIKE): runs ONE action of a real @activepieces/piece-* npm package outside the
@@ -17,13 +18,16 @@ const require = createRequire(new URL('./package.json', import.meta.url));
 
 // Static requires (one per piece package): scripts/plugin-deps.mjs scans for them and the controlled
 // shared install only provides packages that are declared AND statically imported.
+// Statically declared dependencies, never invoked: loading routes through reviewed bytes below.
+const dependencyInventory = [()=>require('@activepieces/piece-http'),()=>require('@activepieces/piece-text-helper'),()=>require('@activepieces/piece-jira-cloud'),()=>require('@activepieces/piece-google-sheets')];
 const PIECES = {
-  '@activepieces/piece-http': () => require('@activepieces/piece-http'),
-  '@activepieces/piece-text-helper': () => require('@activepieces/piece-text-helper'),
-  '@activepieces/piece-jira-cloud': () => require('@activepieces/piece-jira-cloud'),
-  '@activepieces/piece-google-sheets': () => require('@activepieces/piece-google-sheets'),
+  '@activepieces/piece-http': () => loadSafePiece(require,'@activepieces/piece-http'),
+  '@activepieces/piece-text-helper': () => loadSafePiece(require,'@activepieces/piece-text-helper'),
+  '@activepieces/piece-jira-cloud': () => loadSafePiece(require,'@activepieces/piece-jira-cloud'),
+  '@activepieces/piece-google-sheets': () => loadSafePiece(require,'@activepieces/piece-google-sheets'),
 };
 
+assertNativeTls();
 const loaded = new Map();
 function piece(pkg) {
   if (!PIECES[pkg]) throw new Error(`${pkg}: not one of the adapter's declared pieces (${Object.keys(PIECES).join(', ')})`);
@@ -46,6 +50,7 @@ export function pieceAction(pkg, actionName) {
 
 /** Runs the action with a minimal engine context. `auth` is passed verbatim (shape is per piece). */
 export async function runPieceAction(pkg, actionName, { auth, propsValue }) {
+  assertNativeTls();
   const action = pieceAction(pkg, actionName);
   const memory = new Map();
   const context = {
