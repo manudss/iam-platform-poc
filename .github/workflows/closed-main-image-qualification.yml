@@ -1,0 +1,31 @@
+name: Exact merged recovery image qualification
+on:
+  pull_request:
+    branches: [main]
+    paths: [.github/workflows/closed-main-image-qualification.yml]
+permissions: {contents: read, packages: read}
+jobs:
+  closed_image:
+    if: github.head_ref == 'test/qualify-main-image170' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        ipv6: [active, inactive]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 07dbc9ba49c4a1a2b02fa53bb04eb50a5f68e441
+      - name: Synthetic exact final image, no production access
+        env:
+          CLOSED_IMAGE: ghcr.io/manudss/iam-platform-poc@sha256:310f5b0e20e75a0dbfc5874ae8a45cbe30a44647c3cb5d3e52e9f597d8ab06cc
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID python3 scripts/closed-helper-docker-fixture.py --image "$CLOSED_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode ${{ matrix.ipv6 }} --out /tmp/closed-helper-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merged-main-closed-helper-${{ matrix.ipv6 }}
+          path: /tmp/closed-helper-proof
+          if-no-files-found: error
+          retention-days: 7
