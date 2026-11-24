@@ -17,6 +17,7 @@ def module(path,name):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
 def trace_and_kill(args,manifest,gate,when,diagnostic):
+ # when=None observes actual completed unlinks without injecting a signal.
  # Linux x86_64 ptrace observes the real controller's unlink syscall return.
  # No monkeypatch or replacement controller, no change to reviewed source.
  # Trace controller process and children because qualifier subprocesses also run.
@@ -33,10 +34,13 @@ def trace_and_kill(args,manifest,gate,when,diagnostic):
    diagnostic.update({'ptraceRequest':req,'errno':ctypes.get_errno()});raise RuntimeError('ptrace fixture failure')
   return val
  # Queue runs in this root subprocess; forked tracer child starts stopped before exec.
- readfd,writefd=os.pipe();pid=os.fork()
+ readfd,writefd=os.pipe()
+ import tempfile,re
+ errorfile=tempfile.TemporaryFile()
+ pid=os.fork()
  if pid==0:
   os.close(writefd);os.dup2(readfd,0);os.close(readfd)
-  dev=os.open('/dev/null',os.O_WRONLY);os.dup2(dev,1);os.dup2(dev,2)
+  dev=os.open('/dev/null',os.O_WRONLY);os.dup2(dev,1);os.dup2(errorfile.fileno(),2)
   libc.ptrace(0,0,0,0);os.kill(os.getpid(),signal.SIGSTOP);os.execvp(args[0],args)
  os.close(readfd);os.write(writefd,json.dumps(manifest).encode());os.close(writefd)
  diagnostic['stage']='initial-stop'
@@ -71,13 +75,35 @@ def trace_and_kill(args,manifest,gate,when,diagnostic):
    else:
     if selected and regs.rax==0:
      deleted+=1;diagnostic['completedGateUnlinks']=deleted
-     if deleted==when:
+     if when is not None and deleted==when:
       os.kill(pid,signal.SIGKILL);os.waitpid(pid,0);stopped=True;break
  finally:
   if not stopped:
    try:os.kill(pid,signal.SIGKILL);os.waitpid(pid,0)
    except ProcessLookupError:pass
- if not stopped:raise RuntimeError('actual controller crash point not reached')
+ if not stopped:
+  errorfile.seek(0);raw=errorfile.read(65536).decode('utf-8','replace')
+  # Only source-derived fixed exception literals become codes, no raw output.
+  allowed={}
+  import ast
+  for role,path in [('queue',Path(args[1])),('controller',Path(args[1]).parent/'reviewed-ui-held.py'),('integrity',Path(args[1]).parent/'closed-recovery-integrity.py'),('qualifier',Path(args[1]).parent/'qualification.py')]:
+   tree=ast.parse(path.read_text())
+   for node in ast.walk(tree):
+    if isinstance(node,ast.Raise) and isinstance(node.exc,ast.Call) and node.exc.args and isinstance(node.exc.args[0],ast.Constant) and isinstance(node.exc.args[0].value,str):
+     literal=node.exc.args[0].value;allowed[literal]=role+'-line-'+str(node.lineno)
+  matches=[code for literal,code in allowed.items() if (': '+literal+'\n') in raw]
+  diagnostic['fixedFailureCode']=matches[-1] if matches else 'unclassified'
+  failure=re.search(r"Command (.+) returned non-zero exit status ([0-9]+)\.",raw)
+  if failure:
+   diagnostic['subprocessExitCode']=int(failure.group(2));diagnostic['subprocessRole']='other'
+   command_text=failure.group(1)
+   diagnostic['subprocessRole']='qualifier' if 'qualification.py' in command_text else 'helper' if any(name in command_text for name in ['closed-recovery-helper.py','closed-preflight.sh','closed-launcher.sh']) else 'docker' if re.search(r"(?:^|[\s\[\"'])docker(?:[\s\"',]|$)",command_text) else 'other'
+  errorfile.close()
+  if when is None:
+   diagnostic['observedOnly']=True
+   return diagnostic
+  raise RuntimeError('actual controller crash point not reached')
+ errorfile.close()
  return {'actualControllerSIGKILL':True,'unlinkCompleted':when,'accessUntilManualRearmPossible':when==2}
 
 def main():
@@ -221,13 +247,34 @@ def main():
   stage='render-auth-exact-image';browserout=out/'ui';browserout.mkdir(exist_ok=True)
   command(['node',str(src/'scripts/ui-held-browser-proof.cjs'),origins[0],str(browserout),str(cert)])
   result['renderedAuthenticatedExactImage']=True
+  # Independent probe uses a copied evidence directory, never adds after/smoke
+  # files to the controller's exact-one evidence inventory.
+  def probe_after(label):
+   import tempfile,re
+   with tempfile.TemporaryDirectory(prefix='qualifier-probe-',dir=root) as directory:
+    copied=Path(directory)/'evidence';shutil.copytree(evidence,copied)
+    args_copy=list(qualargs);args_copy[args_copy.index('--evidence-dir')+1]=str(copied)
+    attempt=command([str(binroot/'qualification.py'),'--phase','after',*args_copy],False)
+    qm=module(binroot/'qualification.py','probe_diagnostic')
+    found=re.findall(r'^QUALIFICATION_DIAG_V1:([a-z][a-z0-9-]{0,47})(?:/([a-z][a-z0-9-]{0,47}))?$',attempt.stderr,re.M)
+    item={'exitCode':attempt.returncode,'stage':'unclassified','childStage':'unclassified'}
+    if found:
+     parent,child=found[-1]
+     import ast
+     tree=ast.parse((binroot/'qualification.py').read_text())
+     allowed_stages={n.args[0].value for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='stage' and n.args and isinstance(n.args[0],ast.Constant)}
+     if parent in allowed_stages:item['stage']=parent
+     if child in qm.CHILD_STAGES:item['childStage']=child
+    result.setdefault('isolatedQualifierProbes',{})[label]=item
   stage='caught-real-ui-failure-rearms'
   for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
+  probe_after('caught-failure')
   badui=gates/'INVALID_UI';badui.write_text('fixture invalid UI');badui.chmod(0o644)
   failedstate=root/'queue-caught-failure.json';q.atomic(failedstate,history)
-  attempt=command(queueargs(failedstate,'open-reviewed-ui-held'),False,input=json.dumps(manifest(history)))
+  result['caughtFailureUnlinkObservation']={}
+  attempt=trace_and_kill(queueargs(failedstate,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],None,result['caughtFailureUnlinkObservation'])
   failed=q.load(failedstate)
-  if not attempt.returncode or failed['history']!=history['history'] or failed.get('opening_intent',{}).get('phase')!='failed-access-rearmed':raise RuntimeError('caught failure not safely rearmed')
+  if attempt.get('queueExitCode')!=1 or attempt.get('completedGateUnlinks')!=2 or failed['history']!=history['history'] or failed.get('opening_intent',{}).get('phase')!='failed-access-rearmed':raise RuntimeError('caught failure not safely rearmed')
   if any(p.read_text()!='synthetic fixture gate\n' or p.stat().st_mode&0o777!=0o644 or p.stat().st_uid!=0 or p.stat().st_gid!=0 for p in [gate,ops]):raise RuntimeError('caught failure gate bytes/mode')
   u.check_origins(origins,503);badui.unlink();result['caughtFailureAutomaticRearm']=True
   # Fresh fixture queue state per crash scenario; do not clear an interrupted intent.
@@ -235,6 +282,7 @@ def main():
   for when in [1,2]:
    for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
    stage='real-controller-sigkill-'+str(when);state=root/('queue-kill-'+str(when)+'.json');q.atomic(state,history)
+   probe_after('sigkill-'+str(when))
    result['crashDiagnostic']={}
    crash=trace_and_kill(queueargs(state,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],when,result['crashDiagnostic'])
    stage='sigkill-'+str(when)+'-evidence-intent-history-gates'
