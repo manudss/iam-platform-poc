@@ -32,6 +32,11 @@ def wait(name,port,path,seconds=220):
   if not inspect(name)['State']['Running']:raise RuntimeError('fixture process died')
   time.sleep(2)
  raise RuntimeError('fixture health timeout')
+def assert_fixture_ancestry(root):
+ for path in [root]+list(root.parents):
+  st=path.stat()
+  if st.st_uid!=0 or st.st_mode&0o022:raise ValueError('fixture root ancestry must already be root-owned and non-writable to non-root')
+
 def companions_ready(pg,bao,diagnostics=None):
  # Dev server listens without TLS. Never let the CLI default select HTTPS.
  pgcheck=call(['docker','exec',pg,'pg_isready','-U','lyam'],False)
@@ -58,7 +63,9 @@ def main():
  if not re.fullmatch(r'postgres@sha256:[0-9a-f]{64}',a.pg_image) or not re.fullmatch(r'openbao/openbao@sha256:[0-9a-f]{64}',a.bao_image):raise ValueError('reviewed companion digests required')
  out=pathlib.Path(a.out).resolve();out.mkdir(parents=True,exist_ok=True)
  prefix='closed-ci-'+str(os.getpid());network=prefix+'-net';pg=prefix+'-pg';bao=prefix+'-bao';seed=prefix+'-seed';app=prefix+'-app'
- root=pathlib.Path('/opt')/prefix;root.mkdir(mode=0o700);data=root/'data';data.mkdir(mode=0o700)
+ root=pathlib.Path('/root')/prefix
+ assert_fixture_ancestry(root.parent) # Fail before creating resources; never repair shared ancestors.
+ root.mkdir(mode=0o700);assert_fixture_ancestry(root);data=root/'data';data.mkdir(mode=0o700)
  containers=[];created_network=False;stage='setup';readiness={};negative={}
  try:
   # Checked-in helper is copied, not changed. Wrappers are rebound only to this fixture root.

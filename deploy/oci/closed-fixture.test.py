@@ -15,6 +15,12 @@ class PostApp(unittest.TestCase):
   with patch.object(f,'HELPER_ERRORS',{'ValueError: ledger changed from reviewed source'}):
    self.assertEqual(f.failure_code('trace\nValueError: ledger changed from reviewed source\n'),'ValueError: ledger changed from reviewed source')
    self.assertEqual(f.failure_code('ValueError: private arbitrary content'),'unclassified-subprocess-failure')
+ def test_fixture_ancestry(self):
+  root=__import__('pathlib').Path('/root/fixture')
+  for uid,mode,ok in [(0,0o700,True),(0,0o755,True),(1001,0o755,False),(0,0o775,False),(0,0o777,False)]:
+   with patch('pathlib.Path.stat',return_value=SimpleNamespace(st_uid=uid,st_mode=mode)):
+    if ok:f.assert_fixture_ancestry(root)
+    else:self.assertRaises(ValueError,f.assert_fixture_ancestry,root)
  def test_postapp(self):
   launch={'policy4Exact':'four','policy6Exact':'six'};summary={'pid1Status':['CapEff: 0000000000000000','CapBnd: 0000000000000000','NoNewPrivs: 1']};f.assert_postapp('four','six',launch,summary)
   for a,b in [('changed','six'),('four','changed')]:self.assertRaises(ValueError,f.assert_postapp,a,b,launch,summary)
