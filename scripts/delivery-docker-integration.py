@@ -363,7 +363,7 @@ raise SystemExit(r.returncode)
             result['incidentReceiptConsumer'] = {'applicable':consumer.is_file()}
             if consumer.is_file():
                 parser = load_module(consumer, 'candidate_receipt_consumer')
-                parser.receipt_fields(receipt.read_text())
+                parser.receipt_fields(receipt.read_bytes())
                 result['incidentReceiptConsumer']['passed']=True
         result['passed'] = True
     except Exception as error:
