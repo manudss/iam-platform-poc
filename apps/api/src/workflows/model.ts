@@ -75,6 +75,7 @@ interface WfModelModule {
   LOGIC_FIELDS: Record<string, WfBlockField[]>;
   placeholderKeys: (value: unknown) => string[];
   stepPlaceholderRefs: (value: unknown) => { node: string; key: string }[];
+  eventConfigForDisplay: (node: WfNode) => WfNode['config'];
   substituteStepOutputs: (node: WfNode, outputs: Record<string, Record<string, unknown>>) => WfNode;
   validateStepPlaceholders: (graph: WfGraph, order: string[]) => void;
   validateTrigger: (input: unknown) => WfTrigger | null;
@@ -108,6 +109,7 @@ export const STEP_TYPES = plugin.STEP_TYPES;
 export const WF_EVENTS = plugin.WF_EVENTS;
 export const placeholderKeys = plugin.placeholderKeys;
 export const stepPlaceholderRefs = plugin.stepPlaceholderRefs;
+export const eventConfigForDisplay = plugin.eventConfigForDisplay;
 export const substituteStepOutputs = plugin.substituteStepOutputs;
 export const validateStepPlaceholders = plugin.validateStepPlaceholders;
 export const validateTrigger = plugin.validateTrigger;

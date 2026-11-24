@@ -99,7 +99,7 @@ reactivation. Never clear a mutex or auto-resume the queue as rollback cleanup.
 Verified webhooks are durably coalesced to one notification slot per definition
 before acknowledgement; the slot carries channel/resource/message-number and
 allowed change headers, no body/token. At most1000 slots per tenant, guarded by
-a shared per-tenant quota-row write in the same Dolt transaction. Conflicts or
+an autocommitted durable per-tenant mutex (scope inbox-quota). A crashed enqueue owner leaves that mutex for operator reconciliation; it is visible in runtime status and never expires automatically. Concurrent attempts fail503 rather than overlap. Conflicts or
 quota exhaustion fail rather than acknowledge acceptance. At quota a new
 notification is NOT durably stored and may be lost if Google does not retry.
 A persistent per-definition review status records rejection when storage is available. An HTTP failure is not a delivery guarantee. Operators must monitor callback
@@ -128,3 +128,18 @@ Proof scope: the crash test injects an exception between collection and inbox
 delete using doubles. It is not an operating-system process kill or live Google
 crash/restart test. Native event recursion is limited to Sheets configs; other
 blocks retain top-level-only event substitution (nested objects are unchanged).
+
+Google Drive push reference checked:
+https://developers.google.com/workspace/drive/api/guides/push
+The current official guide lists success 200/201/202/204/102 and describes
+exponential-backoff retries for 500/502/503/504 with its API client-library
+condition. This receiver sends 503 for storage/quota/transaction failures and
+404 only for rejected subscription credentials/parameters. Actual retry timing
+and delivery remain unqualified for this deployment, never a lossless promise.
+File cleanup is hourly (downloads still check expiry on each request).
+
+Persisted run graphs carry reversible event encoding until step resolution, not
+a display value. Run-detail/list responses omit that internal graph; pending
+steps have no input, executed steps record their resolved input. Dry-run preview
+decodes literals without evaluating step placeholders. Definitions are unchanged.
+Raw operational DB backups retain encoded graph bytes for exact recovery.

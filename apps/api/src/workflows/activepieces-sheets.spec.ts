@@ -232,3 +232,22 @@ describe('storage migration refuses wrong primary key',()=>{
   await verify.call(fake(base)as any);for(const key of [['scope_id','tenant','state_key'],['tenant','scope_id'],[]])await assert.rejects(()=>verify.call(fake(key)as any),/primary key/);assert.equal(ended,4);
  });
 });
+
+describe('single-pass external engine and presentation',()=>{
+ it('does not reinterpret decoded event placeholders at the external block call or audit input',async()=>{
+  const type=full.sheetBlockType('update_row'),action=adapter.piece('@activepieces/piece-google-sheets')._actions.update_row;const literal='event\uE0001{{steps.secret.result}}';
+  const graph=JSON.parse(JSON.stringify(validateGraph(substituteEventPayload({nodes:[{id:'n',name:'Update',type,config:{...cfg(action),values:'{"A":"{{event.data}}"}'}}],edges:[]},{data:literal})).graph));
+  const {eventConfigForDisplay}=await import('./model.js');assert.deepEqual(JSON.parse(String(eventConfigForDisplay(graph.nodes[0]).values)),{A:literal});
+  const row:any={id:'run-single',tenant:'t',definition_id:'d',name:'fixture',graph,status:'queued',branch:null,test:false};const step:any={node_id:'n',status:'pending',attempts:0,log:[],input:null,output:null};let received:any;
+  const block=externalBlock(type)as any,old=block.run;block.run=async(ctx:any)=>{received=ctx.config;return{confirmed:false};};
+  const store:any={getRunById:async()=>row,runningRuns:async()=>[],transitionRun:async(_id:any,p:any,from:any)=>{if(!from.includes(row.status))return false;Object.assign(row,p);return true;},updateRun:async(_id:any,p:any)=>Object.assign(row,p),steps:async()=>[step],step:async()=>step,patchStep:async(_id:any,_node:any,p:any)=>Object.assign(step,p)};
+  try{const {createWorkflowEngine}=loadPluginModule('workflows-iga','engine.mjs')as any;const engine=createWorkflowEngine({store,versioning:{defaultBranch:'main'},authorOf:()=> 'fixture',branchRun:async(_b:any,fn:any)=>fn(),settingsFor:async()=>({}),log:{warn(){},error(){}}});engine.kick(row.id);for(let i=0;i<200&&!['failed','completed'].includes(row.status);i++)await new Promise(r=>setTimeout(r,10));assert.equal(row.status,'completed',row.error);assert.deepEqual(JSON.parse(received.values),{A:literal});assert.deepEqual(JSON.parse(step.input.values),{A:literal});}finally{block.run=old;}
+ });
+});
+
+describe('native callback HTTP failure classification',()=>{
+ it('keeps invalid subscriptions404 but returns503 for transient storage, quota and conflict failures',async()=>{
+  const {ActivepiecesSheetsController}=await import('./activepieces-sheets.controller.js');const{NotFoundException}=await import('@nestjs/common');
+  for(const error of [new Error('quota'),new Error('database unavailable'),new Error('conflict'),new NotFoundException('invalid')]){const controller=new ActivepiecesSheetsController({webhook:async()=>{throw error;}}as any,{}as any,{}as any);await assert.rejects(()=>controller.hook('t','d','token',{headers:{}},{}),(e:any)=>e.getStatus()===(error instanceof NotFoundException?404:503));}
+ });
+});
