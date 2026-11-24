@@ -22,7 +22,7 @@ describe('connection metadata on real Dolt', {skip:!have && 'DOLT_BIN missing'},
     for(let i=0;i<100;i++){if(spawnSync(bin,['--host','127.0.0.1','--port','14377','--no-tls','-u','root','sql','-q','select 1'],{env}).status===0)break;await new Promise(r=>setTimeout(r,100));}
     for(const k of ['DOLT_PORT','DOLT_DATABASE','IAM_WORKSPACE_MODE'])saved[k]=process.env[k];Object.assign(process.env,{DOLT_PORT:'14377',DOLT_DATABASE:'iam'});delete process.env.IAM_WORKSPACE_MODE;
     versioning=new VersioningService();const store=new WorkflowStore(versioning);const secrets=new Map<string,any>();service=new WorkflowConnections(store,{enabled:true,put:async(p:string,d:any)=>{secrets.set(p,d);},get:async(p:string)=>secrets.get(p)} as any);
-    await service.list('tenant-a');await store.preparePieceStorage(); // startup migration commits only tables, never credentials/content
+    await service.list('tenant-a');await store.preparePieceStorage();await store.verifyPieceStorage(); // startup migration commits only tables, never credentials/content
     await versioning.createBranch('connections-edit','main');
   });
   after(async()=>{process_?.kill();await new Promise(r=>setTimeout(r,500));if(dir)rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200});for(const k of Object.keys(saved)){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}});

@@ -71,6 +71,9 @@ describe('native trigger runtime with persisted fixtures, not live Google',()=>{
  it('two coalesced notifications collect once and a notification arriving during collection survives exact deletion',async()=>{
   const h=harness();const scope='trigger:wf-fictional';await h.store.pieceEnqueue('t',scope,{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'1'}});await h.store.pieceEnqueue('t',scope,{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'2'}});let calls=0;h.service.collect=async()=>{calls++;await h.store.pieceEnqueue('t',scope,{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'3'}});};await h.service.drainInbox(h.d,h.state);assert.equal(calls,1);assert.equal((await h.store.pieceInbox('t',scope)).length,1);h.service.collect=async()=>{calls++;};await h.service.drainInbox(h.d,h.state);assert.equal(calls,2);assert.equal((await h.store.pieceInbox('t',scope)).length,0);
  });
+ it('inbox rejection refuses acknowledgement and exposes a recoverable review reason',async()=>{
+  const h=harness('googlesheets_new_row_added');h.state.fingerprint=(await import('node:crypto')).createHash('sha256').update(JSON.stringify([h.state.key,h.d.trigger.config])).digest('hex');await h.store.piecePut('t','trigger:wf-fictional','lyam:subscription',h.state);await h.store.piecePut('t','trigger:wf-fictional',h.state.key,{id:'channel',resourceId:'resource'});h.store.pieceEnqueue=async()=>{throw Error('quota');};await assert.rejects(()=>h.service.webhook('t',h.d.id,'fixture-token',{'x-goog-channel-id':'channel','x-goog-resource-id':'resource','x-goog-message-number':'1'},{}),/quota/);assert.equal((await h.store.pieceGet('t','trigger:wf-fictional','lyam:delivery-status')as any).reason,'Inbox storage failed; notification not accepted');
+ });
  it('failed inbox collect retains notification and exposes review state without advancing delivery',async()=>{
   const h=harness();await h.store.pieceEnqueue('t','trigger:wf-fictional',{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'1'}});h.service.collect=async()=>{throw Error('poison row');};await assert.rejects(()=>h.service.drainInbox(h.d,h.state),/review/);assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,1);assert.equal((await h.store.pieceGet('t','trigger:wf-fictional','lyam:delivery-status')as any).status,'review');
  });
@@ -187,6 +190,19 @@ describe('native JSON placeholders and busy-lock safety regressions',()=>{
   const type=full.sheetBlockType('update_row');assert.throws(()=>substituteEventPayload({nodes:[{id:'n',type,config:{values:'{"A":{{event.data}}}'}}],edges:[]}as any,{data:'"x","I":"bad"'}));
   const graph:any={nodes:[{id:'n',type,config:{values:'{"A":"{{event.data}}"}'}}],edges:[]};const first=substituteEventPayload(graph,{data:'{{steps.secret.result}}'});const final=substituteStepOutputs(first.nodes[0],{secret:{result:'DO_NOT_READ'}});assert.deepEqual(JSON.parse(String(final.config.values)),{A:'{{steps.secret.result}}'});
  });
+ it('preserves arbitrary braces and Unicode event strings exactly after the step pass',()=>{
+  const type=full.sheetBlockType('update_row');for(const value of ['plain{{braces}}','{{steps.secret.result}}','{{','}}','{{{{','unicode\uE000marker','\uE0000\uE0001{{x}}','quoted " braces{{x}}\nline']){
+   const graph:any={nodes:[{id:'n',type,config:{values:'{"A":"{{event.data}}"}'}}],edges:[]};const first=substituteEventPayload(graph,{data:value});const final=substituteStepOutputs(first.nodes[0],{secret:{result:'DO_NOT_READ'}});assert.deepEqual(JSON.parse(String(final.config.values)),{A:value});
+  }
+ });
+ it('protects nested native event values without changing literal config or step output Unicode',()=>{
+  const type=full.sheetBlockType('update_row');const literal='literal\uE0000\uE0001{{other}}';
+  const data={x:['{{steps.secret.result}}','\uE0001{{braces}}']};const graph:any={nodes:[{id:'n',type,config:{obj:'{"A":"{{event.data}}","B":"{{steps.read.result}}"}',literal}}],edges:[]};const first=substituteEventPayload(graph,{data}as any);const final=substituteStepOutputs(first.nodes[0],{read:{result:'\uE0001{{no-reparse}}'},secret:{result:'BAD'}});assert.deepEqual(JSON.parse(String(final.config.obj)),{A:data,B:'\uE0001{{no-reparse}}'});assert.equal(final.config.literal,literal);
+  assert.equal(substituteStepOutputs({id:'n',type,config:{literal}}as any,{}).config.literal,literal);
+ });
+ it('keeps nonnative event recursion top-level only and preserves nested literals',()=>{
+  const nested={v:'\uE0001{{event.data}}'};const graph:any={nodes:[{id:'n',type:'http-request',config:{nested,top:'{{event.data}}'}}],edges:[]};const first=substituteEventPayload(graph,{data:'{{steps.secret.result}}'});assert.deepEqual(first.nodes[0].config.nested,nested);const final=substituteStepOutputs(first.nodes[0],{secret:{result:'BAD'}});assert.equal(final.config.top,'{{steps.secret.result}}');assert.deepEqual(final.config.nested,nested);
+ });
  it('literal nonnative HTTP/Jira/mail JSON stays byte exact including large numbers and spacing',()=>{
   for(const type of ['http-request','jira-create-issue','lyam-send-mail']){const input=' {"id":9007199254740993123, "spaces" : true}';const node:any={id:'n',type,config:{body:input}};assert.equal(substituteStepOutputs(node,{}).config.body,input);assert.equal(substituteEventPayload({nodes:[node],edges:[]},{data:'x'}).nodes[0].config.body,input);}
  });
@@ -194,4 +210,22 @@ describe('native JSON placeholders and busy-lock safety regressions',()=>{
   const b=externalBlock(full.sheetBlockType('delete_row'))!;let marks=0,calls=0;const action=full.SHEETS_ACTIONS.delete_row,old=action.run;action.run=async()=>{calls++;};try{await assert.rejects(()=>b.run({config:b.validate({spreadsheetId:'fictional',sheetId:'0',rowId:2}),settings,dryRun:false,pieceRuntime:{...runtime,withLock:async()=>{throw Error('busy');}},markEffectPending:async()=>{marks++;}}as any),/busy/);assert.equal(marks,0);assert.equal(calls,0);}finally{action.run=old;}
  });
  it('custom read requests cannot smuggle method override headers',()=>{for(const header of ['X-HTTP-Method-Override','X-Method-Override','X-HTTP-Method'])assert.throws(()=>full.validateCustomCall({url:{url:'/v4/spreadsheets/fictional'},method:'GET',headers:{[header]:'DELETE'}}));});
+});
+
+import{WorkflowEngine}from'./engine.js';
+import{WorkflowsController}from'./workflows.controller.js';
+describe('native private export and action-store boundary',()=>{
+ it('sets seven-day expiry, refuses expired downloads, isolates tenant and guards every host-key operation',async()=>{
+  let saved:any;const now=Date.now(),store:any={piecePut:async(...a:any[])=>{saved=a;},getRunById:async()=>({tenant:'t'}),pieceGet:async()=>saved[3]};
+  const runtime=(WorkflowEngine.prototype as any).pieceRuntime.call({store},'t','d','run','n');for(const method of ['get','put','delete'])assert.throws(()=>runtime.store[method]('lyam:lock',{}),/Reserved/);
+  await runtime.files.write({fileName:'test.csv',data:Buffer.from('fixture')});assert.ok(saved[3].expiresAt>=now+7*86400_000&&saved[3].expiresAt<=Date.now()+7*86400_000);
+  const controller=new WorkflowsController({}as any,store),sent:any[]=[];const response:any={setHeader(){},send(v:any){sent.push(v);}};await controller.connectorFile('t','run','f',response);assert.equal(sent[0].toString(),'fixture');await assert.rejects(()=>controller.connectorFile('other','run','f',response));saved[3].expiresAt=Date.now()-1;await assert.rejects(()=>controller.connectorFile('t','run','f',response));assert.equal(sent.length,1);
+ });
+});
+
+describe('storage migration refuses wrong primary key',()=>{
+ it('checks ordered unique composite key, not just columns',async()=>{
+  const verify=(await import('./store.js')).WorkflowStore.prototype.verifyPieceStorage;let ended=0;const base=['tenant','scope_id','state_key'];const fake=(key:string[])=>({meta:async()=>({end:async()=>{ended++;},query:async(q:string)=>[q.startsWith('SHOW COLUMNS')?[...base,'value_json'].map(Field=>({Field})):key.map((Column_name,i)=>({Column_name,Key_name:'PRIMARY',Seq_in_index:i+1,Non_unique:0}))]})});
+  await verify.call(fake(base)as any);for(const key of [['scope_id','tenant','state_key'],['tenant','scope_id'],[]])await assert.rejects(()=>verify.call(fake(key)as any),/primary key/);assert.equal(ended,4);
+ });
 });
