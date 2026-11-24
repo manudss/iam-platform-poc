@@ -11,7 +11,7 @@ SCENARIOS = ('fresh', 'upgrade')
 CHECKS = {
     'fresh': {'boot', 'migrationLedger', 'oidc', 'uiDocument', 'cleanup'},
     'upgrade': {'realUpdater', 'realQueue', 'preservation', 'migrationLedger',
-                'oidc', 'realReceipt', 'receiptConsumer', 'gate', 'cleanup'},
+                'oidc', 'backupReadback', 'realReceipt', 'receiptConsumer', 'gate', 'cleanup'},
 }
 
 

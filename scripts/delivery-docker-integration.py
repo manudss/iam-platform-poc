@@ -101,7 +101,7 @@ https://delivery.localhost:18443 {
               'limitations': ['Synthetic data only', 'Not production qualification',
                               'No production availability or automatic rollback claim',
                               'UI document check is not a visual desktop/mobile review',
-                              'Bao uses a synthetic dev server; durable Bao archive/restore not yet exercised']}
+                              'Bao durable cold backup readback is checked; semantic fresh-stack restore remains unproved']}
     stage = 'tls-front'
     try:
         docker('run', '-d', '--name', caddy, '--network', 'host',
@@ -120,13 +120,26 @@ https://delivery.localhost:18443 {
                          'LYAM_COMPOSE_FILE': str(source / 'deploy/oci/companions/docker-compose.yml'),
                          'LYAM_COMPOSE_ENV_FILE': str(root / 'companions.env'),
                          'LYAM_STACK_FILES': str(caddyfile) + ' ' + str(bindir / 'host-boot.sh')})
+        unseal = root / 'bao-unseal.py'
+        unseal.write_text('''import json,subprocess,sys
+from pathlib import Path
+value=json.loads(Path(sys.argv[1]).read_text())
+r=subprocess.run(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',sys.argv[2],'bao','operator','unseal',value['unseal_keys_b64'][0]],capture_output=True)
+raise SystemExit(r.returncode)
+''')
+        settings.update({'LYAM_BACKUP_BAO_DIR':str(root/'bao-storage'),
+                         'LYAM_BACKUP_BAO_CONTAINER':c['bao'],
+                         'LYAM_BACKUP_BAO_KEYS_DIR':str(root/'bao-keys'),
+                         'LYAM_BAO_CONFIG_FILE':str(source/'deploy/oci/companions/bao.hcl'),
+                         'LYAM_BAO_POLICY_FILE':str(source/'deploy/oci/companions/bao-policy.hcl'),
+                         'LYAM_BAO_UNSEAL_CMD':'python3 '+str(unseal)+' '+str(root/'bao-keys/init.json')+' '+c['bao']})
         # Include actual companion definitions, not invented empty placeholder files.
         (root / 'companions.env').write_text('PG_PASSWORD=synthetic-ci-only\n')
         (root / 'companions.env').chmod(0o600)
         token = root / 'bao-token'
-        token.write_text('synthetic-ci-only')
+        token.write_text(settings['IAM_BAO_TOKEN'])
         token.chmod(0o600)
-        docker('exec', '-e', 'BAO_ADDR=http://127.0.0.1:8200', '-e', 'BAO_TOKEN=synthetic-ci-only',
+        docker('exec', '-e', 'BAO_ADDR=http://127.0.0.1:8200', '-e', 'BAO_TOKEN=' + settings['IAM_BAO_TOKEN'],
                c['bao'], 'bao', 'kv', 'put', 'secret/iam/delivery-contract', 'value=synthetic')
         auth = root / 'auth.json'
         auth.write_text(json.dumps({'username': 'demo-alice', 'password': 'demo-only-not-a-secret'}))
@@ -168,6 +181,15 @@ https://delivery.localhost:18443 {
                     (bindir / 'qualification-container.mjs').read_text(), 'smoke'], False,
                    input=json.dumps({**policy, 'auth': json.loads(auth.read_text())}))
         result['prebaselineSmokeExit'] = warm.returncode
+        # Fixed known source literals become bounded enum diagnostics, never raw output.
+        smoke_reasons={'journal schema invalid':'journal-contract-mismatch',
+                       'real OIDC login failed':'oidc-login-refused',
+                       'migration ledger incomplete':'migration-ledger-incomplete',
+                       'workflow state changed during held smoke':'held-workflow-state-changed',
+                       'expected origin/form refused':'oidc-form-refused'}
+        matches=[code for literal,code in smoke_reasons.items() if literal in warm.stderr]
+        result['prebaselineSmokeReason']=matches[-1] if matches else 'unclassified'
+
         if warm.returncode:
             raise RuntimeError('candidate-qualifier-smoke-refused')
         if c['scenario'] == 'fresh':
@@ -199,6 +221,25 @@ https://delivery.localhost:18443 {
             if delivered['history'][-1]['sha'] != result['sha'] or delivered.get('pending') or delivered.get('failed'):
                 raise RuntimeError('queue-delivery-not-confirmed')
             result['checks'].update(realUpdater=True, realQueue=True, preservation=True, migrationLedger=True, oidc=True, gate=True)
+            stage = 'real-backup-readback'
+            backups=root/'backups'
+            archives={kind:sorted(backups.glob(pattern)) for kind,pattern in [('data','lyam-data-*.tar.gz'),('bao','lyam-bao-*.tar.gz'),('recovery','lyam-recovery-*.tar.gz'),('pg','lyam-pg-*.sql.gz')]}
+            if any(not paths for paths in archives.values()):raise RuntimeError('backup-kind-missing')
+            import gzip,tarfile
+            for kind,paths in archives.items():
+                for archive in paths:
+                    if kind=='pg':
+                        with gzip.open(archive,'rb') as stream:
+                            while stream.read(1024*1024):pass
+                    else:
+                        with tarfile.open(archive,'r:gz') as tar:
+                            if not tar.getmembers():raise RuntimeError('empty-backup-archive')
+                            for member in tar:
+                                if member.isfile():
+                                    with tar.extractfile(member) as stream:
+                                        while stream.read(1024*1024):pass
+                    result['evidence']['backup-'+kind]=sha(archive)
+            result['checks']['backupReadback']=True
             stage = 'real-closed-updater-receipt'
             (root / 'PAUSE').touch()
             (gates / 'OPS-MAINTENANCE').write_text('synthetic-ops\n')

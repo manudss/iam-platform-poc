@@ -108,6 +108,22 @@ def main():
   d(*netargs,network);created_network=True
   containers.append(pg);d('run','-d','--name',pg,'--network',network,'-e','POSTGRES_HOST_AUTH_METHOD=trust','-e','POSTGRES_USER=lyam','-e','POSTGRES_DB=lyam',a.pg_image)
   containers.append(bao);d('run','-d','--name',bao,'--network',network,'--cap-add','IPC_LOCK','-e','BAO_DEV_ROOT_TOKEN_ID=synthetic-ci-only',a.bao_image,'server','-dev','-dev-listen-address=0.0.0.0:8200')
+  if a.delivery_scenario:
+   # Replace only the fixture-owned dev Bao with a durable real server.
+   d('rm','-f',bao)
+   baostore=root/'bao-storage';baostore.mkdir(mode=0o777);baostore.chmod(0o777)
+   baokeys=root/'bao-keys';baokeys.mkdir(mode=0o700)
+   baoconfig=pathlib.Path(__file__).resolve().parents[1]/'deploy/oci/companions/bao.hcl'
+   d('run','-d','--name',bao,'--network',network,'--cap-add','IPC_LOCK','-v',str(baostore)+':/bao/file','-v',str(baoconfig)+':/bao/config/bao.hcl:ro',a.bao_image,'server','-config=/bao/config/bao.hcl')
+   for _ in range(60):
+    status=call(['docker','exec','-e','BAO_ADDR=http://127.0.0.1:8200',bao,'bao','status'],False)
+    if status.returncode in [0,2]:break
+    time.sleep(1)
+   else:raise RuntimeError('durable Bao listener unavailable')
+   initialized=json.loads(d('exec','-e','BAO_ADDR=http://127.0.0.1:8200',bao,'bao','operator','init','-key-shares=1','-key-threshold=1','-format=json'))
+   keyfile=baokeys/'init.json';keyfile.write_text(json.dumps(initialized));keyfile.chmod(0o600)
+   d('exec','-e','BAO_ADDR=http://127.0.0.1:8200',bao,'bao','operator','unseal',initialized['unseal_keys_b64'][0])
+   d('exec','-e','BAO_ADDR=http://127.0.0.1:8200','-e','BAO_TOKEN='+initialized['root_token'],bao,'bao','secrets','enable','-path=secret','-version=2','kv')
   stage='companion-readiness'
   for _ in range(60):
    if companions_ready(pg,bao,readiness):break
@@ -126,7 +142,7 @@ def main():
    dest=root/('offline-'+str(i));d('cp',cid+':'+path,str(dest));hashes[path]=sha(dest.read_bytes())
   config={'image':a.image,'imageID':im['Id'],'network':network,'pgContainer':pg,'pgIP':pgip,'baoContainer':bao,'baoIP':baoip,'gateway':gateway,'hostProbePort':443,'externalProbeIP':'1.1.1.1','ipv6ProbeIP':'2606:4700:4700::1111','ledgerSHA256':sha((data/'migrations/journal.json').read_bytes()),'manifestSHA256':hashes[paths[0]],'offlineFileSHA256':{p:h for p,h in hashes.items() if p!=paths[0]},'implementationSHA256':sha(impl.read_bytes()),'helperSHA256':{'LYAM_CLOSED_PREFLIGHT':sha(wrappers['preflight'].read_bytes()),'LYAM_CLOSED_LAUNCHER':sha(wrappers['launcher'].read_bytes())}}
   conf=root/'config.json';conf.write_text(json.dumps(config));conf.chmod(0o600)
-  env=root/'app.env';env.write_text('\n'.join(['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never','LYAM_DOCKER_NETWORK='+network,'LYAM_CLOSED_CONFIG='+str(conf),'LYAM_CLOSED_IMPLEMENTATION='+str(impl),'LYAM_CLOSED_PREFLIGHT='+str(wrappers['preflight']),'LYAM_CLOSED_LAUNCHER='+str(wrappers['launcher']),'IAM_PG_URL=postgres://lyam@pg:5432/lyam','IAM_BAO_ADDR=http://bao:8200','IAM_BAO_TOKEN=synthetic-ci-only','IAM_PUBLIC_ORIGIN=http://localhost:8080'])+'\n');env.chmod(0o600)
+  env=root/'app.env';env.write_text('\n'.join(['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never','LYAM_DOCKER_NETWORK='+network,'LYAM_CLOSED_CONFIG='+str(conf),'LYAM_CLOSED_IMPLEMENTATION='+str(impl),'LYAM_CLOSED_PREFLIGHT='+str(wrappers['preflight']),'LYAM_CLOSED_LAUNCHER='+str(wrappers['launcher']),'IAM_PG_URL=postgres://lyam@pg:5432/lyam','IAM_BAO_ADDR=http://bao:8200','IAM_BAO_TOKEN='+(initialized['root_token'] if a.delivery_scenario else 'synthetic-ci-only'),'IAM_PUBLIC_ORIGIN=http://localhost:8080'])+'\n');env.chmod(0o600)
   args=['--image',a.image,'--container',app,'--env-file',str(env),'--data-dir',str(data),'--port','18089']
   if a.delivery_scenario=='upgrade':
    d('rename',seed,app);containers.remove(seed);containers.append(app)

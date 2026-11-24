@@ -28,9 +28,9 @@ proof of a product problem. Reports must distinguish these cases.
 
 The fixed image 310 is the initial old-data baseline only, never the candidate.
 It must be reviewed and advanced deliberately as deployment support changes.
-The synthetic Bao currently runs in dev mode. Metadata preservation is checked,
-but durable Bao archive/restore and semantic restore rehearsal are NOT yet
-covered. UI HTML is not a visual desktop/mobile review. Neither limitation is
+Synthetic Bao runs with the real durable server configuration. Cold backup
+readback of Dolt, PG, Bao and recovery bundle is checked. Semantic restore
+rehearsal on a fresh stack is NOT yet covered. UI HTML is not a visual desktop/mobile review. Neither limitation is
 a production qualification, availability guarantee, or rollback guarantee.
 
 Root-owned fixture paths use a private mount namespace rather than chmod of
