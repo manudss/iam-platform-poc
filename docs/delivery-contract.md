@@ -71,3 +71,9 @@ The aggregate rehashes the uploaded execution summary and script inventory and
 requires receipt/summary fields to match. This is an anti-omission contract,
 not protection against a malicious PR rewriting both tests and tested code.
 Review and protected checks are still required.
+
+The actual closed updater receipt has a dedicated wire-format regression guard:
+only launcher_sha256, preflight_sha256 and implementation_sha256 repeat, each
+exactly twice with identical lowercase hex64 values. Every other key occurs
+once. Negative tests cover other duplicates, divergent values and wrong counts.
+The real output bytes are checked without importing the incident opening code.

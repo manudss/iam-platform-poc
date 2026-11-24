@@ -325,6 +325,10 @@ raise SystemExit(r.returncode)
             if receipt.exists():
                 result['evidence']['actualUpdaterReceipt'] = sha(receipt)
                 # Synthetic hashes only, but keep raw receipt private; the artifact records hash + multiplicities.
+                wire=load_module(source/'scripts/delivery-receipt.py','delivery_wire_contract')
+                fields=wire.validate_actual_receipt(receipt.read_bytes())
+                if fields.get('state')!='CLOSED_QUALIFIED' or fields.get('image')!=c['image'] or fields.get('held')!='true' or fields.get('public_status')!='503':raise RuntimeError('actual-receipt-fields-mismatch')
+                result['receiptWireContract']='exact-helper-triplet-twice-identical-other-fields-once'
                 names = [line.partition('=')[0] for line in receipt.read_text().splitlines()]
                 result['receiptKeyCounts'] = {k: names.count(k) for k in set(names)}
             if closed.returncode != 10:
