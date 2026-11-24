@@ -124,6 +124,14 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('diag3',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
         self.assertEqual(m.queue_failure_diagnostic('[update] pre-opening qualification failed or UNKNOWN; private detail',{'failed':{'exit':4}}),{'updaterExit':4,'categories':['qualification-before-open-refused']})
+    def test_qualification_diagnostic_is_bounded(self):
+        spec=importlib.util.spec_from_file_location('diag4',Path(__file__).with_name('delivery-docker-integration.py'))
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        good='QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':'ValueError','sourceLines':[12,124]})
+        bad='QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':'private-token','sourceLines':[12]})
+        r=m.queue_failure_diagnostic(good+'\n'+bad,{})
+        self.assertEqual(r['qualificationDiagnostics'],[{'exceptionType':'ValueError','sourceLines':[12,124]}])
+        self.assertNotIn('private',json.dumps(r))
     def test_unknown_stays_unknown(self):
         spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

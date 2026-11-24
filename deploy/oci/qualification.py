@@ -157,6 +157,13 @@ def main():
     print('ISOLATED LOOPBACK ONLY: preservation/OIDC/journal checks passed, NO public TLS qualification, keep production paused' if a.isolated_loopback_test else 'Pre-opening preservation, migration, OIDC, journal and TLS checks passed; caller still owns barrier')
 if __name__=='__main__':
     try:main()
-    except Exception:
+    except Exception as error:
         print('QUALIFICATION_DIAG_V1:'+STAGE+(('/'+CHILD_STAGE) if CHILD_STAGE else ''),file=sys.stderr)
+        import traceback
+        # Diagnostic enums and source line numbers only. Private messages and subprocess output never leave.
+        frames=traceback.extract_tb(error.__traceback__)
+        lines=[f.lineno for f in frames if Path(f.filename).name=='qualification.py'][-8:]
+        kind=type(error).__name__
+        if kind not in {'ValueError','RuntimeError','TimeoutExpired','FileNotFoundError','PermissionError','KeyError','TypeError','JSONDecodeError'}:kind='Other'
+        print('QUALIFICATION_DIAG_V1 '+json.dumps({'exceptionType':kind,'sourceLines':lines},sort_keys=True),file=sys.stderr)
         print('Qualification failed or UNKNOWN. Keep maintenance armed and inspect private evidence.',file=sys.stderr);sys.exit(1)

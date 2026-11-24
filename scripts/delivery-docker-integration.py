@@ -107,7 +107,16 @@ def queue_failure_diagnostic(stderr, state):
     markers=sorted({code for needle,code in vocabulary.items() if needle in stderr})
     # Bound numeric code from queue journal, not a parsed arbitrary external string.
     code=state.get('failed',{}).get('exit')
-    return {'updaterExit':code if type(code) is int else None,'categories':markers or ['unclassified']}
+    diag=[]
+    import re
+    for raw in re.findall(r'^QUALIFICATION_DIAG_V1 (\{[^\n]{1,600}\})$',stderr,re.M):
+        try:
+            v=json.loads(raw)
+            if set(v)=={'exceptionType','sourceLines'} and v['exceptionType'] in {'ValueError','RuntimeError','TimeoutExpired','FileNotFoundError','PermissionError','KeyError','TypeError','JSONDecodeError','Other'} and isinstance(v['sourceLines'],list) and len(v['sourceLines'])<=8 and all(type(n) is int and 0<n<1000000 for n in v['sourceLines']):diag.append(v)
+        except (ValueError,TypeError):pass
+    result={'updaterExit':code if type(code) is int else None,'categories':markers or ['unclassified']}
+    if diag:result['qualificationDiagnostics']=diag[-4:]
+    return result
 
 
 def main():
