@@ -92,6 +92,13 @@ def queue_failure_diagnostic(stderr, state):
         'post-update qualification failed': 'qualification-after-refused',
         'the pg dump is corrupt': 'pg-backup-corrupt',
         'the pg dump header is missing': 'pg-backup-header-missing',
+        'pre-opening qualification failed': 'qualification-before-open-refused',
+        'pg state capture failed': 'pg-state-capture-refused',
+        'pg backup failed': 'pg-backup-refused',
+        'data backup failed': 'data-backup-refused',
+        'OpenBao did not become ready/unsealed': 'bao-readiness-refused',
+        'bao backup failed': 'bao-backup-refused',
+        'recovery bundle failed': 'recovery-bundle-refused',
         'preservation changed': 'preservation-diff',
         'expected origin/form refused': 'oidc-form-refused',
         'real OIDC login failed': 'oidc-login-refused',
@@ -314,7 +321,7 @@ raise SystemExit(r.returncode)
             result['queueExit'] = q.returncode
             result['evidence']['queueState'] = sha(queue)
             if q.returncode:
-                result['queueFailure']=queue_failure_diagnostic(q.stderr,json.loads(queue.read_text()))
+                result['queueFailure']=queue_failure_diagnostic(q.stdout+'\n'+q.stderr,json.loads(queue.read_text()))
                 raise RuntimeError('real-queue-update-refused')
             delivered = json.loads(queue.read_text())
             if delivered['history'][-1]['sha'] != result['sha'] or delivered.get('pending') or delivered.get('failed'):

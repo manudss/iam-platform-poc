@@ -120,6 +120,10 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         r=m.queue_failure_diagnostic('private-token-value pre-update hook failed /private/path',{'failed':{'exit':2}})
         self.assertEqual(r,{'updaterExit':2,'categories':['pre-update-hook-refused']})
         self.assertNotIn('private',json.dumps(r))
+    def test_qualification_stdout_is_classified_without_copying_it(self):
+        spec=importlib.util.spec_from_file_location('diag3',Path(__file__).with_name('delivery-docker-integration.py'))
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        self.assertEqual(m.queue_failure_diagnostic('[update] pre-opening qualification failed or UNKNOWN; private detail',{'failed':{'exit':4}}),{'updaterExit':4,'categories':['qualification-before-open-refused']})
     def test_unknown_stays_unknown(self):
         spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
