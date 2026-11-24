@@ -108,6 +108,8 @@ fail() { code="$1"; shift; log "FATAL: $*" >&2; exit "$code"; }
 
 REQUIRE_QUALIFICATION=0
 CLOSED_RECOVERY=0
+INHERIT_LOCK_FD=
+ADOPT_RECEIPT=
 IMAGE=""
 CLOSED_RECEIPT=""
 ENV_FILE="/opt/lyam/lyam.env"
@@ -116,6 +118,8 @@ while [ $# -gt 0 ]; do
     --closed-receipt) CLOSED_RECEIPT="$2"; shift 2 ;;
     --closed-recovery) CLOSED_RECOVERY=1; REQUIRE_QUALIFICATION=1; shift ;;
     --require-qualification) REQUIRE_QUALIFICATION=1; shift ;;
+    --adopt-front-gate-receipt) ADOPT_RECEIPT="$2"; shift 2 ;;
+    --inherit-lock-fd) INHERIT_LOCK_FD="$2"; shift 2 ;;
     --image) IMAGE="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
     *) fail 1 "unknown argument: $1" ;;
@@ -332,8 +336,23 @@ trap 'log "interrupted: the maintenance gate stays UP at $BARRIER_FILE - verify 
 
 # One run at a time: the pipeline and a manual run must never interleave stops/backups/swaps.
 mkdir -p "$(dirname "$LOCK_FILE")"
+if [ -n "$INHERIT_LOCK_FD" ]; then
+  # The ordered-queue caller (reviewed, same lock) already holds this exact lock on fd 8. Proof:
+  # fd 8 is open, regular, not a symlink path, same dev:inode as LOCK_FILE; an INDEPENDENT open is
+  # refused with EWOULDBLOCK (flock -E 75, any other failure is not proof of contention) and fd 8
+  # itself can take LOCK_EX|LOCK_NB (it is the owning open file description). Never unlocked here.
+  [ "$CLOSED_RECOVERY" = 1 ] && [ "$INHERIT_LOCK_FD" = 8 ] || fail 1 "inherited lock fd is only for closed recovery on fd 8"
+  command -v flock >/dev/null 2>&1 || fail 1 "inherited lock requires flock"
+  [ -e /proc/self/fd/8 ] && [ -f "$LOCK_FILE" ] && [ ! -L "$LOCK_FILE" ] || fail 1 "inherited lock fd or lock file is not a regular open file"
+  [ "$(stat -L -c '%d:%i' /proc/self/fd/8 2>/dev/null)" = "$(stat -c '%d:%i' "$LOCK_FILE" 2>/dev/null)" ] \
+    || fail 1 "inherited lock fd is not the configured update lock"
+  fresh_rc=0; ( exec 7>"$LOCK_FILE" || exit 1; flock -E 75 -n 7 ) || fresh_rc=$?
+  [ "$fresh_rc" = 75 ] || fail 1 "inherited update lock is not actually held by another open file description (rc $fresh_rc)"
+  flock -n 8 || fail 1 "inherited fd does not own the update lock"
+else
 exec 9>"$LOCK_FILE"
 command -v flock >/dev/null 2>&1 && { flock -n 9 || fail 1 "another update is running (lock $LOCK_FILE)"; }
+fi
 
 log "pulling $IMAGE"
 docker pull "$IMAGE" >/dev/null
@@ -433,12 +452,34 @@ closed_abort() {
 # whole window (including on reused connections), the gate is proven through the public origin,
 # and an unprovable gate refuses the update before any state change.
 log "front gate: enabling maintenance at the real front ($ORIGIN answers 503 until the end)"
-barrier_rc=0; barrier_add || barrier_rc=$?
+barrier_rc=0
+if [ -n "$ADOPT_RECEIPT" ]; then
+  # Chained closed step of the SAME reviewed held update. Adopt the previous step's front gate only if
+  # the previous CLOSED_QUALIFIED receipt (regular, root-owned, protected path) names this exact gate
+  # bytes AND the OPS barrier bytes still present: OPS continuity is part of the adoption proof.
+  [ "$CLOSED_RECOVERY" = 1 ] && [ -f "$ADOPT_RECEIPT" ] && [ ! -L "$ADOPT_RECEIPT" ] || fail 1 "gate adoption needs a regular previous closed receipt in closed recovery"
+  secured="$(readlink -f "$ADOPT_RECEIPT")"
+  while :; do
+    [ "$(stat -c '%u:%g' "$secured")" = 0:0 ] || fail 1 "adopted receipt must be root-owned"
+    mode="$(stat -c '%a' "$secured")"; [ "$((0$mode & 022))" = 0 ] || fail 1 "adopted receipt path writable by others"
+    [ "$secured" != / ] || break
+    secured="$(dirname "$secured")"
+  done
+  adopt_field() { sed -n "s/^$1=//p" "$ADOPT_RECEIPT" | tail -n 1; }
+  [ "$(adopt_field state)" = CLOSED_QUALIFIED ] && [ "$(adopt_field held)" = true ] && [ "$(adopt_field public_status)" = 503 ] \
+    || fail 1 "adopted receipt is not a held CLOSED_QUALIFIED receipt"
+  [ -f "$BARRIER_FILE" ] && [ ! -L "$BARRIER_FILE" ] && [ "$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" = "$(adopt_field gate_sha256)" ] \
+    || fail 1 "front gate to adopt is absent or not the exact previous step gate"
+  [ "$(adopt_field ops_sha256)" = "$OPS_BARRIER_HASH" ] || fail 1 "OPS barrier changed since the adopted receipt"
+  GATE_TOKEN="$(cat "$BARRIER_FILE")"; BARRIER_ACTIVE=1; barrier_verify || barrier_rc=1
+else
+  barrier_add || barrier_rc=$?
+fi
 [ "$barrier_rc" -ne 2 ] \
   || fail 1 "a maintenance gate this run does NOT own is already in place at $BARRIER_FILE - refusing to update over someone else's maintenance"
 [ "$barrier_rc" -eq 0 ] \
   || { barrier_remove; fail 1 "the front gate could not be proven through $ORIGIN (expected 503 while gated) - refusing to update: the front is NOT protected"; }
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
+TS="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$BACKUP_DIR"
 if [ -n "$PREVIOUS" ]; then
   log "stopping $CONTAINER (running $PREVIOUS)"
@@ -681,7 +722,13 @@ if [ "$CREATE_OK" = 1 ] && bao_ready && health; then
   # version's possible writes, no exposed-but-unverified service either.
   gate_lift || fail 4 "the new version is healthy BUT the front could not be proven open (gate removal or 200-probe failed) - maintenance re-armed at $BARRIER_FILE, the service stays behind it; NO blind rollback (visitor writes may already exist on this version): diagnose the front path manually"
   if [ "$CLOSED_RECOVERY" = 1 ]; then
-    ( umask 077; set -C; printf '%s\n' "$INTEGRITY_PROOF" 'state=CLOSED_QUALIFIED' "image=$IMAGE" "backup_readback_proof=$CLOSED_BACKUP_PROOF" "backup_readback_sha256=$(sha256sum "$CLOSED_BACKUP_PROOF" | cut -d' ' -f1)" 'held=true' 'public_status=503' "ops_sha256=$OPS_BARRIER_HASH" "gate_sha256=$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" "launcher_sha256=$LAUNCHER_HASH" "preflight_sha256=$PREFLIGHT_HASH" "implementation_sha256=$IMPLEMENTATION_HASH" "launch_proof=$CLOSED_LAUNCH_PROOF" "launch_proof_sha256=$CLOSED_LAUNCH_HASH" "ipv6_disabled_proved=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["ipv6DisabledProved"]).lower())' "$CLOSED_LAUNCH_PROOF")" "ipv6_state_sha256=$(python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1]))["ipv6State"],sort_keys=True).encode()).hexdigest())' "$CLOSED_LAUNCH_PROOF")" > "$CLOSED_RECEIPT" ) || fail 4 "cannot write fresh closed receipt"
+    EVIDENCE_INDEX="$CLOSED_RECEIPT.evidence"
+    ( umask 077; set -C
+      for role in before after smoke; do
+        set -- "$QUALIFICATION_EVIDENCE"/$role*; [ "$#" = 1 ] && [ -f "$1" ] || exit 1
+        printf '%s %s %s\n' "$role" "$(sha256sum "$1" | cut -d' ' -f1)" "$1"
+      done > "$EVIDENCE_INDEX" ) || fail 4 "cannot write exact qualification evidence index"
+    ( umask 077; set -C; printf '%s\n' "$INTEGRITY_PROOF" 'state=CLOSED_QUALIFIED' "image=$IMAGE" "backup_readback_proof=$CLOSED_BACKUP_PROOF" "backup_readback_sha256=$(sha256sum "$CLOSED_BACKUP_PROOF" | cut -d' ' -f1)" 'held=true' 'public_status=503' "ops_sha256=$OPS_BARRIER_HASH" "gate_sha256=$(sha256sum "$BARRIER_FILE" | cut -d' ' -f1)" "launcher_sha256=$LAUNCHER_HASH" "preflight_sha256=$PREFLIGHT_HASH" "implementation_sha256=$IMPLEMENTATION_HASH" "launch_proof=$CLOSED_LAUNCH_PROOF" "launch_proof_sha256=$CLOSED_LAUNCH_HASH" "qualification_evidence=$QUALIFICATION_EVIDENCE" "evidence_index=$EVIDENCE_INDEX" "evidence_index_sha256=$(sha256sum "$EVIDENCE_INDEX" | cut -d' ' -f1)" "ipv6_disabled_proved=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["ipv6DisabledProved"]).lower())' "$CLOSED_LAUNCH_PROOF")" "ipv6_state_sha256=$(python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.dumps(json.load(open(sys.argv[1]))["ipv6State"],sort_keys=True).encode()).hexdigest())' "$CLOSED_LAUNCH_PROOF")" > "$CLOSED_RECEIPT" ) || fail 4 "cannot write fresh closed receipt"
     log "closed-qualified: $CONTAINER runs $IMAGE under hold, backup $DATA_BACKUP; no public opening"
     exit 10
   fi

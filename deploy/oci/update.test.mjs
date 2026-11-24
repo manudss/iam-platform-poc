@@ -405,7 +405,7 @@ case "$1" in *closed-recovery-integrity.py)
  for pair in 'launcher_sha256 LYAM_CLOSED_LAUNCHER' 'preflight_sha256 LYAM_CLOSED_PREFLIGHT' 'implementation_sha256 LYAM_CLOSED_IMPLEMENTATION'; do set -- $pair; path=$(sed -n "s/^$2=//p" "${f.env}"); printf '%s=' "$1"; sha256sum "$path" | cut -d' ' -f1; done;; *) exec /usr/bin/python3 "$@";; esac
 `);chmodSync(py,0o755);
  const checker=join(f.dir,'closed-check.sh');
- writeFileSync(checker,'#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] && [ -f "$STUB_DIR/OPS-MAINTENANCE" ] || exit 99\necho "$*" >> "$STUB_DIR/closed-checks"\n[ "$2" = after ] && [ -f "$STUB_DIR/post-fail" ] && exit 1\nexit 0\n');chmodSync(checker,0o755);
+ writeFileSync(checker,'#!/bin/sh\nall="$*"; while [ $# -gt 0 ]; do [ "$1" = --evidence-dir ] && ev="$2"; [ "$1" = --phase ] && ph="$2"; shift; done; mkdir -p "$ev"; echo "{}" > "$ev/$ph.json"; [ "$ph" = after ] && echo "{}" > "$ev/smoke.json"\nset -- x "$ph"\n[ -f "$STUB_DIR/MAINTENANCE" ] && [ -f "$STUB_DIR/OPS-MAINTENANCE" ] || exit 99\necho "$all" >> "$STUB_DIR/closed-checks"\n[ "$2" = after ] && [ -f "$STUB_DIR/post-fail" ] && exit 1\nexit 0\n');chmodSync(checker,0o755);
  const preflight=join(f.dir,'preflight.sh'),launcher=join(f.dir,'launcher.sh');
  writeFileSync(preflight,'#!/bin/sh\necho preflight >> "$STUB_DIR/calls"\n[ ! -f "$STUB_DIR/preflight-fail" ]\n');chmodSync(preflight,0o755);
  writeFileSync(launcher,`#!/bin/sh
@@ -491,4 +491,88 @@ test('closed corrupted data recovery Bao and PG archives refuse exact readback r
 test('closed post-backup preflight failure preserves archives and refuses before docker rm',()=>{
  const f=closedSetup();const preflight=join(f.dir,'preflight.sh');writeFileSync(preflight,'#!/bin/sh\necho preflight >> "$STUB_DIR/calls"\nif [ -f "$STUB_DIR/preflight-once" ]; then exit 1; fi\ntouch "$STUB_DIR/preflight-once"\n');
  const r=closedRun(f);assert.equal(r.status,4,r.stderr);assertClosed(f,r);assert.match(r.stderr,/closed post-backup exact image\/ledger\/companion preflight failed; no candidate swap/);assert.doesNotMatch(r.calls,/docker rm|docker run/);assert.ok(readdirSync(join(f.dir,'backups')).some(n=>n.startsWith('lyam-recovery-')));
+});
+
+function lockedRun(f,extra,hold=true){
+ const receipt=join(f.dir,'chain-receipt-'+Math.random().toString(36).slice(2));
+ const lock=join(f.dir,'.update.lock');
+ const args=['--image',CLOSED,'--env-file',f.env,'--closed-recovery','--closed-receipt',receipt,...extra];
+ const script=hold?'exec 8>"$LOCK"; flock -n 8 || exit 97; sh "$UPD" "$@"':'exec 8>"$LOCK"; sh "$UPD" "$@"';
+ const r=spawnSync('sh',['-c',script,'x',...args],{encoding:'utf8',env:{PATH:`${dirname(f.env)}/bin:/usr/bin:/bin`,STUB_DIR:f.stub,LOCK:lock,UPD:updater}});
+ const calls=join(f.stub,'calls');return {...r,receipt,calls:existsSync(calls)?readFileSync(calls,'utf8'):''};
+}
+test('inherited update lock is accepted only when held on fd 8 by the caller, and the receipt binds the qualification evidence',()=>{
+ const f=closedSetup({extraEnv:['LYAM_LOCK_FILE='+'LOCKPLACEHOLDER']});
+ writeFileSync(f.env,readFileSync(f.env,'utf8').replace('LOCKPLACEHOLDER',join(f.dir,'.update.lock')));
+ const held=lockedRun(f,['--inherit-lock-fd','8']);assert.equal(held.status,10,held.stderr);
+ assert.match(readFileSync(held.receipt,'utf8'),/^qualification_evidence=.*qualification-/m);
+});
+test('inherited update lock guards: not held, wrong fd, outside closed recovery, and no flag while held',()=>{
+ const f=closedSetup();writeFileSync(f.env,readFileSync(f.env,'utf8')+'LYAM_LOCK_FILE='+join(f.dir,'.update.lock')+'\n');
+ const notHeld=lockedRun(f,['--inherit-lock-fd','8'],false);assert.equal(notHeld.status,1);assert.match(notHeld.stderr,/not actually held/);assert.doesNotMatch(notHeld.calls,/docker stop|docker run/);
+ const wrong=lockedRun(f,['--inherit-lock-fd','9']);assert.equal(wrong.status,1);assert.match(wrong.stderr,/fd 8/);
+ const without=lockedRun(f,[]);assert.equal(without.status,1);assert.match(without.stderr,/another update is running/);assert.doesNotMatch(without.calls,/docker stop|docker run/);
+});
+test('adopting a previous closed step front gate needs its authentic receipt, exact gate bytes and unchanged OPS; step names never collide',()=>{
+ const f=closedSetup();writeFileSync(f.env,readFileSync(f.env,'utf8')+'LYAM_LOCK_FILE='+join(f.dir,'.update.lock')+'\n');
+ const noReceipt=lockedRun(f,['--inherit-lock-fd','8','--adopt-front-gate-receipt',join(f.dir,'absent')]);assert.equal(noReceipt.status,1);assert.match(noReceipt.stderr,/regular previous closed receipt/);assert.doesNotMatch(noReceipt.calls,/docker stop|docker run/);
+ const first=lockedRun(f,['--inherit-lock-fd','8']);assert.equal(first.status,10,first.stderr);
+ const gate=readFileSync(join(f.stub,'MAINTENANCE'),'utf8');
+ const second=lockedRun(f,['--inherit-lock-fd','8','--adopt-front-gate-receipt',first.receipt]);assert.equal(second.status,10,second.stderr);
+ assert.equal(readFileSync(join(f.stub,'MAINTENANCE'),'utf8'),gate,'adopted gate stays byte-identical');
+ // gate bytes changed behind the receipt
+ writeFileSync(join(f.stub,'MAINTENANCE'),'foreign');
+ const stops=r=>(r.calls.match(/docker (stop|run)/g)||[]).length;const baseline=stops(second);
+ const foreign=lockedRun(f,['--inherit-lock-fd','8','--adopt-front-gate-receipt',second.receipt]);assert.equal(foreign.status,1);assert.match(foreign.stderr,/exact previous step gate/);assert.equal(stops(foreign),baseline,'no stop/run on refusal');
+ writeFileSync(join(f.stub,'MAINTENANCE'),gate);
+ // OPS replaced between steps: its new hash must NOT become the truth
+ writeFileSync(join(f.stub,'OPS-MAINTENANCE'),'replaced-ops');
+ const ops=lockedRun(f,['--inherit-lock-fd','8','--adopt-front-gate-receipt',second.receipt]);assert.equal(ops.status,1);assert.match(ops.stderr,/OPS barrier changed/);assert.equal(stops(ops),baseline);
+ writeFileSync(join(f.stub,'OPS-MAINTENANCE'),'operator-owned-original');
+ // a non-held or tampered receipt is not an adoption proof
+ const bad=join(f.dir,'bad-receipt');writeFileSync(bad,readFileSync(second.receipt,'utf8').replace('CLOSED_QUALIFIED','OTHER'));
+ const tampered=lockedRun(f,['--inherit-lock-fd','8','--adopt-front-gate-receipt',bad]);assert.equal(tampered.status,1);assert.match(tampered.stderr,/held CLOSED_QUALIFIED/);assert.equal(stops(tampered),baseline);
+ const without=lockedRun(f,['--inherit-lock-fd','8']);assert.equal(without.status,1);assert.match(without.stderr,/does NOT own/);assert.equal(stops(without),baseline);
+});
+
+// Real multi-process flock proofs for the inherited lock (no mock of flock).
+function lockProbe(f,script){
+ const lock=join(f.dir,'.update.lock');
+ const r=spawnSync('sh',['-c',script,'x'],{encoding:'utf8',env:{PATH:`${dirname(f.env)}/bin:/usr/bin:/bin`,STUB_DIR:f.stub,LOCK:lock,UPD:updater,ENVF:f.env,IMG:CLOSED,RCPT:join(f.dir,'probe-receipt-'+Math.random().toString(36).slice(2))}});
+ const calls=join(f.stub,'calls');return {...r,calls:existsSync(calls)?readFileSync(calls,'utf8'):''};
+}
+const probeArgs='sh "$UPD" --image "$IMG" --env-file "$ENVF" --closed-recovery --closed-receipt "$RCPT" --inherit-lock-fd 8';
+test('inherited lock: a third process holds the lock while fd 8 is a distinct unlocked open of the same inode',()=>{
+ const f=closedSetup();writeFileSync(f.env,readFileSync(f.env,'utf8')+'LYAM_LOCK_FILE='+join(f.dir,'.update.lock')+'\n');
+ const r=lockProbe(f,'touch "$LOCK"; (exec 6>"$LOCK"; flock -n 6; sleep 5) & sleep 0.3; exec 8>"$LOCK"; '+probeArgs+'; rc=$?; kill %1 2>/dev/null; exit $rc');
+ assert.equal(r.status,1);assert.match(r.stderr,/does not own|not actually held/);assert.doesNotMatch(r.calls,/docker stop|docker run/);
+});
+test('inherited lock: free lock with unlocked fd 8, closed fd 8 and symlinked lock path all refuse before any stop',()=>{
+ const f=closedSetup();writeFileSync(f.env,readFileSync(f.env,'utf8')+'LYAM_LOCK_FILE='+join(f.dir,'.update.lock')+'\n');
+ const free=lockProbe(f,'exec 8>"$LOCK"; '+probeArgs);assert.equal(free.status,1);assert.match(free.stderr,/not actually held/);
+ const closed=lockProbe(f,'touch "$LOCK"; '+probeArgs+' 8>&-');assert.equal(closed.status,1);
+ const link=lockProbe(f,'rm -f "$LOCK"; touch "$LOCK.real"; ln -s "$LOCK.real" "$LOCK"; exec 8>"$LOCK"; flock -n 8; '+probeArgs);assert.equal(link.status,1);assert.match(link.stderr,/regular open file/);
+ for(const r of [free,closed,link])assert.doesNotMatch(r.calls,/docker stop|docker run/);
+});
+test('inherited lock: parent killed after the child starts leaves the lock unavailable only while a holder lives',()=>{
+ const f=closedSetup();writeFileSync(f.env,readFileSync(f.env,'utf8')+'LYAM_LOCK_FILE='+join(f.dir,'.update.lock')+'\n');
+ const r=lockProbe(f,'exec 8>"$LOCK"; flock -n 8; '+probeArgs+'; rc=$?; exec 8>&-; flock -n "$LOCK" true && echo released; exit $rc');
+ assert.equal(r.status,10,r.stderr);assert.match(r.stdout,/released/);
+});
+
+// The inherited-lock proof block of update.sh, extracted verbatim and run with the REAL stat/flock.
+function lockBlock(){const s=readFileSync(updater,'utf8');const a=s.indexOf('if [ -n "$INHERIT_LOCK_FD" ]; then');const b=s.indexOf('\nelse\nexec 9>"$LOCK_FILE"',a);return s.slice(a,b)+'\nfi\n';}
+function runLockBlock(body){
+ const dir=mkdtempSync(join(tmpdir(),'lockblock-'));const lock=join(dir,'lock');writeFileSync(lock,'');
+ const script='fail(){ echo "FAIL: $2" >&2; exit "$1"; }\nCLOSED_RECOVERY=1; INHERIT_LOCK_FD=8; LOCK_FILE="$L"\n'+body.replaceAll('@BLOCK@',lockBlock())+'\necho PROOF_OK\n';
+ const r=spawnSync('sh',['-c',script,'x'],{encoding:'utf8',env:{PATH:'/usr/bin:/bin',L:lock,D:dir}});rmSync(dir,{recursive:true,force:true});return r;
+}
+test('inherited lock proof with real stat/flock: owner accepted, others refused',()=>{
+ const owner=runLockBlock('exec 8>"$L"; flock -n 8; @BLOCK@');assert.equal(owner.status,0,owner.stderr);assert.match(owner.stdout,/PROOF_OK/);
+ const unlocked=runLockBlock('exec 8>"$L"; @BLOCK@');assert.equal(unlocked.status,1);assert.match(unlocked.stderr,/not actually held/);
+ const third=runLockBlock('(exec 6>"$L"; flock -n 6; sleep 3) & sleep 0.3; exec 8>"$L"; @BLOCK@; kill %1 2>/dev/null');assert.equal(third.status,1);assert.match(third.stderr,/does not own/);
+ const otherInode=runLockBlock('exec 8>"$D/other"; flock -n 8; (exec 6>"$L"; flock -n 6; sleep 3) & sleep 0.3; @BLOCK@; kill %1 2>/dev/null');assert.equal(otherInode.status,1);assert.match(otherInode.stderr,/not the configured update lock/);
+ const replaced=runLockBlock('exec 8>"$L"; flock -n 8; rm "$L"; : > "$L"; @BLOCK@');assert.equal(replaced.status,1);
+ const closed=runLockBlock('@BLOCK@');assert.equal(closed.status,1);
+ for(const r of [unlocked,third,otherInode,replaced,closed])assert.doesNotMatch(r.stdout,/PROOF_OK/);
 });
