@@ -49,6 +49,26 @@ describe('shared provider scheduler durable fixture',()=>{
 });
 
 describe('scoped Jira transport, no network beyond interceptors',()=>{
+ it('custom API remains API3-only while native transport permits API2 and agile',()=>{
+  for(const path of ['/rest/api/2/issue/KAN-1','/rest/agile/1.0/board'])assert.throws(()=>full.validateJiraCustomCall({url:{url:auth.props.instanceUrl+path}},settings),/destination refused/);
+ });
+ it('base validation is independent from fetch destination validation',()=>{
+  const transport=loadPluginModule('workflow-connectors','jira-transport.mjs')as any;
+  for(const base of ['http://fictional.atlassian.net','https://foreign.invalid','https://api.atlassian.com/ex/jira/other','https://fictional.atlassian.net/path','https://fictional.atlassian.net:8443','https://user:pass@fictional.atlassian.net'])assert.throws(()=>transport.jiraTransportRoot({...settings,jiraInstanceUrl:base}),/connection destination refused/);
+  assert.equal(transport.jiraTransportRoot(settings).origin,auth.props.instanceUrl);
+ });
+ it('fetch always receives redirect manual, independent from 3xx response rejection',async()=>{
+  const{mkdtempSync,readFileSync,writeFileSync,rmSync}=await import('node:fs'),{tmpdir}=await import('node:os'),{join,resolve}=await import('node:path'),{pathToFileURL}=await import('node:url'),{spawnSync}=await import('node:child_process');
+  const dir=mkdtempSync(join(tmpdir(),'jira-redirect-options-'));
+  try{
+   let source=readFileSync(resolve('../../plugins/workflow-connectors/jira-transport.mjs'),'utf8');
+   source=source.replace("from'./jira-api.mjs'","from "+JSON.stringify(pathToFileURL(resolve('../../plugins/workflow-connectors/jira-api.mjs')).href));
+   const file=join(dir,'transport.mjs');writeFileSync(file,source);
+   const code=`import assert from'node:assert/strict';let count=0;globalThis.fetch=async(input,init)=>{count++;assert.equal(init.redirect,'manual');return{status:200};};const{withJiraTransport}=await import(${JSON.stringify(pathToFileURL(file).href)});await withJiraTransport(${JSON.stringify(settings)},()=>fetch('${auth.props.instanceUrl}/rest/api/3/myself',{redirect:'follow'}));assert.equal(count,1);`;
+   const child=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8'});assert.equal(child.status,0,child.stderr);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+ });
+
  it('refuses same-path foreign host, port, HTTP, gateway cloud drift and encoded separators before fetch',async()=>{
   nock.disableNetConnect();
   const transport=loadPluginModule('workflow-connectors','jira-transport.mjs')as any;
