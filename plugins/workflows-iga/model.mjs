@@ -525,7 +525,8 @@ export function validateGraph(input) {
             throw new BadRequestException(`unknown step type "${type}"`);
         const name = str(n.name, `step "${id}" name`, 80);
         const cfg = configFor(type, n.config ?? {});
-        const node = { id, type: type, name, config: cfg };
+        // Carries only interpolation encoding, never an authority or validation bypass.
+        const node = { id, type: type, name, config: cfg,...(n.eventInterpolationEscaped===true?{eventInterpolationEscaped:true}:{}) };
         byId.set(id, node);
         clean.push(node);
     }

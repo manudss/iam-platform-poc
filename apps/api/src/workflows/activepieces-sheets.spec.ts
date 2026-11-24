@@ -203,6 +203,9 @@ describe('native JSON placeholders and busy-lock safety regressions',()=>{
  it('keeps nonnative event recursion top-level only and preserves nested literals',()=>{
   const nested={v:'\uE0001{{event.data}}'};const graph:any={nodes:[{id:'n',type:'http-request',config:{nested,top:'{{event.data}}'}}],edges:[]};const first=substituteEventPayload(graph,{data:'{{steps.secret.result}}'});assert.deepEqual(first.nodes[0].config.nested,nested);const final=substituteStepOutputs(first.nodes[0],{secret:{result:'BAD'}});assert.equal(final.config.top,'{{steps.secret.result}}');assert.deepEqual(final.config.nested,nested);
  });
+ it('retains reversible event encoding across validation and persisted run graph',()=>{
+  const key='update_row',action=adapter.piece('@activepieces/piece-google-sheets')._actions[key],type=full.sheetBlockType(key);const value='literal\uE0001{{steps.secret.result}}';const graph:any={nodes:[{id:'n',name:'Native update',type,config:{...cfg(action),values:'{"A":"{{event.data}}"}'}}],edges:[]};const resolved=substituteEventPayload(graph,{data:value});const checked=validateGraph(resolved).graph;const persisted=JSON.parse(JSON.stringify(checked));const final=substituteStepOutputs(persisted.nodes[0],{secret:{result:'BAD'}});assert.deepEqual(JSON.parse(String(final.config.values)),{A:value});
+ });
  it('literal nonnative HTTP/Jira/mail JSON stays byte exact including large numbers and spacing',()=>{
   for(const type of ['http-request','jira-create-issue','lyam-send-mail']){const input=' {"id":9007199254740993123, "spaces" : true}';const node:any={id:'n',type,config:{body:input}};assert.equal(substituteStepOutputs(node,{}).config.body,input);assert.equal(substituteEventPayload({nodes:[node],edges:[]},{data:'x'}).nodes[0].config.body,input);}
  });
