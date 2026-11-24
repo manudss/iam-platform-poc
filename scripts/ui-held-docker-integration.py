@@ -112,6 +112,12 @@ def main():
  if Path('/opt/lyam').exists():raise RuntimeError('production path exists')
  owned=Path('/opt/lyam');owned.mkdir(mode=0o700);gates=root/'gates';gates.mkdir(mode=0o755);binroot=root/'bin';binroot.mkdir(mode=0o700)
  caddy='ui-held-caddy-'+str(os.getpid());certroot=root/'tls';certroot.mkdir();stage='setup';result={'passed':False,'image':c['image'],'scope':'synthetic exact-image integration only','limitations':['not production qualification','SIGKILL can leave access open until manual rearm','no automatic retry or intent reset']}
+ class FixtureDeadline(BaseException):pass
+ started=time.monotonic()
+ def deadline(signum,frame):
+  result['budgetExceededAtStage']=stage;result['stage']='budget-exceeded';result['elapsedSeconds']=round(time.monotonic()-started,3)
+  raise FixtureDeadline('fixed internal fixture deadline')
+ signal.signal(signal.SIGALRM,deadline);signal.alarm(900)
  try:
   for name in ['ordered-queue.py','reviewed-ui-held.py','closed-recovery-integrity.py','closed-recovery-call.py','update.sh','qualification.py','qualification-container.mjs']:
    shutil.copyfile(src/'deploy/oci'/name,binroot/name);(binroot/name).chmod(0o700)
@@ -214,6 +220,14 @@ def main():
   history={'format':2,'history':[{'sha':base,'digest':'sha256:'+'1'*64}],'recoveries':[{'target':{'sha':base}}],'recovery_fence':base,'resume_required':True,'syntheticFixture':True}
   def manifest(state):return {'format':1,'kind':'reviewed-ui-held-after-fence','state_fingerprint':q.fingerprint(state),'expected_delivered':state['history'][-1],'authorization_ref':'synthetic fixture only, no operational authorization','evidence_refs':['disposable synthetic evidence'],'target':target,'chain':[{'sha':targetsha,'parent':base,'outcome':'ui-open-automation-held'}],'opening_controller':spec(binroot/'reviewed-ui-held.py'),'opening':opening}
   def queueargs(state,verb):return ['python3',str(binroot/'ordered-queue.py'),verb,'--state',str(state),'--repository',str(src),'--container',c['app'],'--pause-file',str(root/'PAUSE'),'--update-lock',str(root/'update.lock')]
+  def checkpoint():
+   result['lastCheckpointStage']=stage
+   result['elapsedSeconds']=round(time.monotonic()-started,3)
+   result.setdefault('stageEnteredSeconds',{})[stage]=result['elapsedSeconds']
+   temporary=out/'ui-held-checkpoint.tmp'
+   with temporary.open('w') as stream:
+    stream.write(json.dumps(result,indent=2));stream.flush();os.fsync(stream.fileno())
+   temporary.replace(out/'ui-held-checkpoint.json')
   # Independent probe uses a copied evidence directory, never adds after/smoke
   # files to the controller's exact-one evidence inventory.
   def probe_after(label):
@@ -240,9 +254,12 @@ def main():
      categories=sorted({value if value in fixed else value.split(':',1)[0] if value.split(':',1)[0] in {'postgres-rows','postgres-append-preservation','postgres-sequence-rewind'} else 'other' for value in changes})
      item['changeCategories']=categories
     result.setdefault('isolatedQualifierProbes',{})[label]=item
+    checkpoint()
   stage='initial-active-preservation-probe'
+  checkpoint()
   probe_after('initial-before-any-opening')
   stage='caught-real-ui-failure-rearms'
+  checkpoint()
   for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
   probe_after('caught-failure')
   badui=gates/'INVALID_UI';badui.write_text('fixture invalid UI');badui.chmod(0o644)
@@ -258,24 +275,31 @@ def main():
   for when in [1,2]:
    for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
    stage='real-controller-sigkill-'+str(when);state=root/('queue-kill-'+str(when)+'.json');q.atomic(state,history)
+   checkpoint()
    probe_after('sigkill-'+str(when))
    result['crashDiagnostic']={}
    crash=trace_and_kill(queueargs(state,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],when,result['crashDiagnostic'])
    stage='sigkill-'+str(when)+'-evidence-intent-history-gates'
+   checkpoint()
    saved=q.load(state)
    result['crashDiagnostic'].update({'intentPresent':bool(saved.get('opening_intent')),'historyUnchanged':saved['history']==history['history'],'gateAbsenceCountCorrect':sum(not p.exists() for p in [gate,ops])==when})
    if not saved.get('opening_intent') or saved['history']!=history['history'] or sum(not p.exists() for p in [gate,ops])!=when:raise RuntimeError('crash evidence mismatch')
    stage='sigkill-'+str(when)+'-rearm-command'
+   checkpoint()
    command(queueargs(state,'rearm-interrupted-opening'))
    stage='sigkill-'+str(when)+'-rearm-state'
+   checkpoint()
    if q.load(state)['opening_intent']['phase']!='interrupted-access-rearmed' or any(p.read_text()!='synthetic fixture gate\n' or p.stat().st_mode&0o777!=0o644 or p.stat().st_uid!=0 or p.stat().st_gid!=0 for p in [gate,ops]):raise RuntimeError('real rearm failed')
    stage='sigkill-'+str(when)+'-rearm-503'
+   checkpoint()
    u.check_origins(origins,503);crash['manualRearmVerified503']=True;result['interruptions'].append(crash)
   stage='successful-real-opening';state=root/'queue-success.json';q.atomic(state,history);m=manifest(history)
+  checkpoint()
   command(queueargs(state,'open-reviewed-ui-held'),input=json.dumps(m));s=q.load(state)
   if s['history'][-1].get('mode')!='ui-open-automation-held' or not s['resume_required'] or gate.exists() or ops.exists():raise RuntimeError('held UI result not distinct')
   result['success']={'actualQueueAndController':True,'tlsOrigins':len(origins),'htmlLogin':True,'held':True,'pauseRetained':(root/'PAUSE').exists(),'resumeRequired':s['resume_required']}
   stage='ui-document-negative-transport'
+  checkpoint()
   import http.server,ssl,threading
   negative={'mode':'missing-root'}
   class BadDocument(http.server.BaseHTTPRequestHandler):
@@ -302,6 +326,7 @@ def main():
   result['realTLSInvalidUIDocumentsRefused']=['missing-root','content-type','redirect','oversize']
   # Real browser on exact image. Only synthetic test credentials, never save tokens.
   stage='render-auth-exact-image';browserout=out/'ui';browserout.mkdir(exist_ok=True)
+  checkpoint()
   command(['node',str(src/'scripts/ui-held-browser-proof.cjs'),origins[0],str(browserout),str(cert)])
   result['renderedAuthenticatedExactImage']=True
   # Manual fixture closure only, not controller rearm evidence.
@@ -311,12 +336,16 @@ def main():
   result['passed']=True;result['controllerSHA256']=digest(binroot/'reviewed-ui-held.py');result['qualifierSHA256']=digest(binroot/'qualification.py');result['qualifierContainerSHA256']=digest(binroot/'qualification-container.mjs')
   if result['controllerSHA256']!=expected['reviewed-ui-held.py'] or result['qualifierSHA256']!=expected['qualification.py'] or result['qualifierContainerSHA256']!=expected['qualification-container.mjs']:raise RuntimeError('result source hash mismatch')
  except Exception as error:
-  result['stage']=stage;result['errorType']=type(error).__name__
+  result['stage']='budget-exceeded' if result.get('budgetExceededAtStage') else stage;result['errorType']=type(error).__name__
   reasons={'malformed/duplicate environment':'INTEGRITY_ENV_FORMAT','absolute regular non-symlink required':'INTEGRITY_REGULAR_FILE','root-owned protected code ancestry required':'INTEGRITY_ANCESTRY','private configuration required':'INTEGRITY_PRIVATE_MODE','controller hash differs from review':'INTEGRITY_CONTROLLER_HASH','qualification hash differs from review':'INTEGRITY_QUALIFIER_HASH','qualification entrypoint not reviewed':'INTEGRITY_ENTRYPOINT','qualification source and default policy must both be reviewed':'INTEGRITY_POLICY_INVENTORY','helper hash differs from review':'INTEGRITY_WRAPPER_HASH','implementation hash differs from review':'INTEGRITY_IMPLEMENTATION_HASH'}
   if stage=='integrity-binding':result['fixedReason']=reasons.get(str(error),'UNCLASSIFIED_INTEGRITY_FAILURE')
   # Never publish exception strings, subprocess output, env, tokens, data or raw receipts.
   raise RuntimeError('isolated held UI integration failed at fixed stage') from None
  finally:
+  signal.alarm(0)
   (out/'ui-held-integration-result.json').write_text(json.dumps(result,indent=2))
-  command(['docker','rm','-f',caddy],False);shutil.rmtree(owned)
+  removed=subprocess.run(['docker','rm','-f',caddy],capture_output=True,timeout=20)
+  present=subprocess.run(['docker','inspect',caddy],capture_output=True,timeout=10)
+  (out/'synthetic-caddy-cleanup.json').write_text(json.dumps({'removalExit':removed.returncode,'absent':present.returncode!=0}))
+  shutil.rmtree(owned)
 if __name__=='__main__':main()

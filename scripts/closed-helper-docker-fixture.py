@@ -24,8 +24,22 @@ def failure_details(stderr):
  if code:result['commandFailure']={'category':code[1],'returnCode':int(code[2]),'reason':code[3]}
  return result
 
-def call(args,check=True):
- p=subprocess.run(args,text=True,capture_output=True,timeout=300)
+def call(args,check=True,timeout=300):
+ if timeout==1200:
+  import signal
+  child=subprocess.Popen(args,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+  try:
+   stdout,stderr=child.communicate(timeout=timeout)
+   p=subprocess.CompletedProcess(args,child.returncode,stdout,stderr)
+  except subprocess.TimeoutExpired:
+   os.killpg(child.pid,signal.SIGKILL);child.communicate(timeout=10)
+   cleanup=subprocess.run(['docker','rm','-f','ui-held-caddy-'+str(child.pid)],capture_output=True,text=True,timeout=20)
+   absent=subprocess.run(['docker','inspect','ui-held-caddy-'+str(child.pid)],capture_output=True,text=True,timeout=10)
+   try:os.killpg(child.pid,0);group_absent=False
+   except ProcessLookupError:group_absent=True
+   COMMAND_DIAGNOSTIC.update(extensionTimedOut=True,extensionChildReaped=child.poll() is not None,extensionProcessGroupAbsent=group_absent,syntheticCaddyRemovalExit=cleanup.returncode,syntheticCaddyAbsent=absent.returncode!=0)
+   raise
+ else:p=subprocess.run(args,text=True,capture_output=True,timeout=timeout)
  if check and p.returncode:
   COMMAND_DIAGNOSTIC.update(returnCode=p.returncode,**failure_details(p.stderr))
   raise RuntimeError('fixture command failed: '+args[0]+' '+args[1]+' (private output withheld)')
@@ -162,7 +176,7 @@ def main():
    stage='ui-held-integration-extension'
    context=root/'ui-held-context.json'
    context.write_text(json.dumps({'root':str(root),'out':str(out),'config':str(conf),'env':str(env),'proof':str(proofpath),'image':a.image,'app':app,'pg':pg,'bao':bao,'network':network,'data':str(data),'wrappers':{k:str(v) for k,v in wrappers.items()}}));context.chmod(0o600)
-   call(['python3',a.ui_held_extension,str(context)])
+   call(['python3',a.ui_held_extension,str(context)],timeout=1200)
   # Restart must return to inert FIFO, never run app or retain a release signal.
   stage='restart-inert'
   d('stop',app);d('start',app);time.sleep(2)
@@ -182,10 +196,18 @@ def main():
     state=inspect(name)['State']
     states.append({'running':state['Running'],'exitCode':state['ExitCode'],'status':state['Status'],'oomKilled':state.get('OOMKilled')})
    except Exception:states.append({'unavailable':True})
+  checkpoint=out/'ui-held-checkpoint.json'
+  if checkpoint.is_file():
+   last=json.loads(checkpoint.read_text());COMMAND_DIAGNOSTIC.update(lastCheckpointStage=last.get('lastCheckpointStage'),elapsedSeconds=last.get('elapsedSeconds'),stageEnteredSeconds=last.get('stageEnteredSeconds',{}))
   (out/'closed-helper-fixture-failure.json').write_text(json.dumps({'passed':False,'stage':stage,'errorType':type(error).__name__,'ipv6Mode':a.ipv6_mode,'gatewayFamily':gateway_family,'readiness':readiness,'command':COMMAND_DIAGNOSTIC,'negativeCases':negative,'syntheticContainerStates':states},indent=2))
   raise
  finally:
-  for name in reversed(containers):call(['docker','rm','-f',name],False)
-  if created_network:call(['docker','network','rm',network],False)
+  cleanup=[]
+  for name in reversed(containers):
+   removed=call(['docker','rm','-f',name],False,timeout=20)
+   present=call(['docker','inspect',name],False,timeout=10)
+   cleanup.append({'removalExit':removed.returncode,'absent':present.returncode!=0})
+  network_exit=call(['docker','network','rm',network],False,timeout=20).returncode if created_network else None
+  (out/'synthetic-cleanup-result.json').write_text(json.dumps({'containers':cleanup,'allContainersAbsent':all(item['absent'] for item in cleanup),'networkRemovalExit':network_exit},indent=2))
   shutil.rmtree(root)
 if __name__=='__main__':main()
