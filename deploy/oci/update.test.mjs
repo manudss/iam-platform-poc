@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const updater = join(here, 'update.sh');
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const NEW = `ghcr.io/example/lyam:${SHA}`;
+const CLOSED=`ghcr.io/example/lyam@sha256:${'b'.repeat(64)}`;
 const OLD = 'ghcr.io/example/lyam:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 const DOCKER_STUB = `#!/bin/sh
@@ -394,4 +395,68 @@ test('mandatory post-check succeeds before marker removal and receives actual im
   writeFileSync(env,readFileSync(env,'utf8')+`LYAM_POST_UPDATE_CHECK=${hook}\n`);
   const r=run(env,'--image',NEW,'--env-file',env,'--require-qualification');
   assert.equal(r.status,0,r.stderr);assert.ok(!existsSync(join(stub,'MAINTENANCE')));assert.match(readFileSync(join(stub,'post-args'),'utf8'),/--image ghcr/);
+});
+
+function closedSetup(options={}) {
+ const f=setup({pause:true,...options});writeFileSync(join(f.stub,'images'),readFileSync(join(f.stub,'images'),'utf8')+CLOSED+'\n');writeFileSync(join(f.stub,'labels',CLOSED.replaceAll(/[ /:@]/g,'_')),'auto never');writeFileSync(join(f.stub,'healthy'),readFileSync(join(f.stub,'healthy'),'utf8')+(options.health===false?'':CLOSED+'\n'));if(options.runFail)writeFileSync(join(f.stub,'run-fail'),CLOSED);
+ const stat=join(f.dir,'bin','stat');writeFileSync(stat,'#!/bin/sh\n[ "$2" = %u:%g ] && echo 0:0 || echo 700\n');chmodSync(stat,0o755);
+ const py=join(f.dir,'bin','python3');writeFileSync(py,`#!/bin/sh
+case "$1" in *closed-recovery-integrity.py)
+ for pair in 'launcher_sha256 LYAM_CLOSED_LAUNCHER' 'preflight_sha256 LYAM_CLOSED_PREFLIGHT' 'implementation_sha256 LYAM_CLOSED_IMPLEMENTATION'; do set -- $pair; path=$(sed -n "s/^$2=//p" "${f.env}"); printf '%s=' "$1"; sha256sum "$path" | cut -d' ' -f1; done;; *) exec /usr/bin/python3 "$@";; esac
+`);chmodSync(py,0o755);
+ const checker=join(f.dir,'closed-check.sh');
+ writeFileSync(checker,'#!/bin/sh\n[ -f "$STUB_DIR/MAINTENANCE" ] && [ -f "$STUB_DIR/OPS-MAINTENANCE" ] || exit 99\necho "$*" >> "$STUB_DIR/closed-checks"\n[ "$2" = after ] && [ -f "$STUB_DIR/post-fail" ] && exit 1\nexit 0\n');chmodSync(checker,0o755);
+ const preflight=join(f.dir,'preflight.sh'),launcher=join(f.dir,'launcher.sh');
+ writeFileSync(preflight,'#!/bin/sh\necho preflight >> "$STUB_DIR/calls"\n[ ! -f "$STUB_DIR/preflight-fail" ]\n');chmodSync(preflight,0o755);
+ writeFileSync(launcher,`#!/bin/sh
+[ "$1" = --mode ] && { echo '{"liveVerified":true}'; exit 0; }
+while [ $# -gt 0 ]; do case "$1" in --image) image="$2";; --container) container="$2";; --env-file) envfile="$2";; --data-dir) data="$2";; --port) port="$2";; *) exit 1;; esac; shift 2; done
+docker run -d --name "$container" --restart no --env-file "$envfile" -e IAM_DEMO_SEED_MODE=never -e IAM_AUTOMATION_HOLD=1 --cap-drop ALL --security-opt no-new-privileges "$image" >/dev/null || exit $?
+printf '%s\\n' '{"ipv6DisabledProved":true,"ipv6State":{"interfaces":[]}}'
+`);chmodSync(launcher,0o755);
+ writeFileSync(f.env,readFileSync(f.env,'utf8')+'LYAM_PAUSE_FILE='+join(f.dir,'UPDATE_PAUSED')+'\nLYAM_FRONT_BARRIER_FILE='+join(f.stub,'MAINTENANCE')+'\nLYAM_OPS_BARRIER_FILE='+join(f.stub,'OPS-MAINTENANCE')+'\nLYAM_CLOSED_IMPLEMENTATION='+launcher+'\nLYAM_CLOSED_LAUNCHER='+launcher+'\nLYAM_CLOSED_PREFLIGHT='+preflight+'\n');
+ writeFileSync(join(f.stub,'OPS-MAINTENANCE'),'operator-owned-original');writeFileSync(f.env,readFileSync(f.env,'utf8')+'LYAM_POST_UPDATE_CHECK='+checker+'\n');return f;
+}
+function closedRun(f){return run(f.env,'--image',CLOSED,'--env-file',f.env,'--closed-recovery','--closed-receipt',join(f.dir,'closed-receipt'));}
+function assertClosed(f,r){assert.ok(existsSync(join(f.stub,'MAINTENANCE')));assert.equal(readFileSync(join(f.stub,'OPS-MAINTENANCE'),'utf8'),'operator-owned-original');assert.ok(existsSync(join(f.dir,'UPDATE_PAUSED')));assert.doesNotMatch(r.calls,/DROP DATABASE|CREATE DATABASE/);}
+test('closed recovery preserves both gates and pause, forces hold and cold backup, then qualifies without opening',()=>{
+ const f=closedSetup();const r=closedRun(f);assert.equal(r.status,10,r.stderr);assertClosed(f,r);assert.match(r.stdout,/closed-qualified/);assert.equal((r.calls.match(/docker stop lyam/g)||[]).length,1,'exit10 must not stop healthy candidate');assert.match(readFileSync(join(f.stub,'run-args'),'utf8'),/--restart no/);assert.match(readFileSync(join(f.stub,'run-args'),'utf8'),/-e IAM_DEMO_SEED_MODE=never -e IAM_AUTOMATION_HOLD=1/);
+ assert.ok(r.calls.indexOf('docker stop lyam')<r.calls.indexOf('docker run'));assert.match(readFileSync(join(f.stub,'closed-checks'),'utf8'),/--phase before[\s\S]*--phase after/);assert.match(readFileSync(join(f.stub,'closed-checks'),'utf8'),/--require-automation-hold/);assert.match(r.calls,/3000\/health/);
+});
+test('closed recovery requires OPS, pause and mandatory postcheck before any stop',()=>{
+ for(const missing of ['OPS-MAINTENANCE','pause','checker']){const f=closedSetup();if(missing==='pause')rmSync(join(f.dir,'UPDATE_PAUSED'));else if(missing==='checker')writeFileSync(f.env,readFileSync(f.env,'utf8').replace(/^LYAM_POST_UPDATE_CHECK=.*\n/m,''));else rmSync(join(f.stub,missing));const r=closedRun(f);assert.equal(r.status,1,r.stderr);assert.doesNotMatch(r.calls,/docker stop|docker run/);}
+});
+test('closed recovery postcheck failure stops candidate and never rolls back or opens',()=>{
+ const f=closedSetup();writeFileSync(join(f.stub,'post-fail'),'1');const r=closedRun(f);assert.equal(r.status,4);assertClosed(f,r);assert.doesNotMatch(readFileSync(join(f.stub,'runs'),'utf8'),new RegExp(OLD));assert.match(r.calls,/docker stop lyam/);
+});
+test('closed recovery health or backup failure never boots old image nor restores state',()=>{
+ for(const options of [{health:false},{pg:true,pgFail:true},{runFail:true}]){const f=closedSetup(options);const r=closedRun(f);assert.equal(r.status,4,r.stderr);assertClosed(f,r);const runs=existsSync(join(f.stub,'runs'))?readFileSync(join(f.stub,'runs'),'utf8'):'';assert.ok(!runs.includes(OLD));assert.doesNotMatch(r.stdout,/rolling back|restoring/);}
+});
+
+test('closed recovery rejects empty, zero or false hold in env before any stop',()=>{
+ for(const value of ['', '0','false']){const f=closedSetup({extraEnv:['IAM_AUTOMATION_HOLD='+value]});const r=closedRun(f);assert.equal(r.status,1);assert.doesNotMatch(r.calls,/docker stop|docker run/);}
+});
+
+test('closed preflight failure leaves old container untouched and has no backup',()=>{const f=closedSetup();writeFileSync(join(f.stub,'preflight-fail'),'1');const r=closedRun(f);assert.equal(r.status,1);assert.doesNotMatch(r.calls,/docker stop|docker run/);assert.ok(!existsSync(join(f.dir,'backups')));});
+test('closed hook failure leaves data intact with no previous-image boot',()=>{const f=closedSetup({extraEnv:['LYAM_PRE_UPDATE_HOOK=false']});writeFileSync(join(f.data,'sentinel'),'retained');const r=closedRun(f);assert.equal(r.status,4);assertClosed(f,r);assert.equal(readFileSync(join(f.data,'sentinel'),'utf8'),'retained');assert.ok(!existsSync(join(f.stub,'runs')));});
+
+test('manual caller captures exit10 under errexit and rejects anomalous ordinary success',()=>{
+ const f=closedSetup({extraEnv:['IAM_AUTOMATION_HOLD=1']});
+ // Stub only the independent public-origin check, execute the actual caller body and updater.
+ const src=readFileSync(join(here,'closed-recovery-call.py'),'utf8');const py=join(f.dir,'manual-caller-test.py');writeFileSync(py,src.replace('updater=root_owned(a.updater)', 'updater=Path(a.updater)').replace(' root_owned(__file__)', ' pass').replace("integrity=root_owned(updater.parent/'closed-recovery-integrity.py')","integrity=updater.parent/'closed-recovery-integrity.py'").replaceAll('if st.st_uid!=0 or st.st_gid!=0 or st.st_mode&0o022:', 'if False:').replace("try:status=urllib.request.urlopen(origin+'/healthz',timeout=15).status","try:status=503"));
+ const execute=updaterPath=>spawnSync('sh',['-ec','python3 "$1" --updater "$2" --image "$3" --env-file "$4" --receipt "$5"; rc=$?; exit "$rc"','caller',py,updaterPath,CLOSED,f.env,join(f.dir,'manual-receipt')],{encoding:'utf8',env:{PATH:dirname(f.env)+'/bin:/usr/bin:/bin',STUB_DIR:f.stub}});
+ const r=execute(updater);assert.equal(r.status,10,r.stderr);assert.match(r.stdout,/NOT open/);
+ const goodReceipt=join(f.dir,'manual-receipt');const updater2=join(f.dir,'receipt-mismatch.sh');writeFileSync(updater2,'#!/bin/sh\nsed -i s/CLOSED_QUALIFIED/WRONG/ '+goodReceipt+'\nexit 10\n');const badProof=execute(updater2);assert.equal(badProof.status,4);assert.match(readFileSync(join(f.stub,'calls'),'utf8'),/docker stop lyam/);
+ const f2=join(f.dir,'fake-success.sh');writeFileSync(f2,'#!/bin/sh\nexit 0\n');const bad=execute(f2);assert.equal(bad.status,4);assert.match(bad.stderr,/failed/);
+});
+
+test('closed recovery data archive and recovery bundle errors retain data and never restore or boot old image',()=>{
+ for(const kind of ['lyam-data-','lyam-recovery-']){const f=closedSetup();writeFileSync(join(f.data,'sentinel'),'preserved');const tar=join(f.dir,'bin','tar');writeFileSync(tar,'#!/bin/sh\ncase "$*" in *'+kind+'*) exit 1;; esac\nexec /usr/bin/tar "$@"\n');chmodSync(tar,0o755);const r=closedRun(f);assert.equal(r.status,4,r.stderr);assertClosed(f,r);assert.equal(readFileSync(join(f.data,'sentinel'),'utf8'),'preserved');assert.ok(!existsSync(join(f.stub,'runs')));assert.doesNotMatch(r.stdout,/rolling back|restoring/);}
+});
+
+test('closed receipt pre-existing or invalid parent refuses before stop',()=>{
+ for(const directory of [false,true]){const f=closedSetup();const receipt=join(f.dir,'closed-receipt');if(directory)mkdirSync(receipt);else writeFileSync(receipt,'retained');const r=closedRun(f);assert.equal(r.status,1);assert.doesNotMatch(r.calls,/docker stop|docker run/);}
+});
+test('closed receipt write failure stops candidate without rollback',()=>{
+ const f=closedSetup();const check=join(f.dir,'closed-check.sh');writeFileSync(check,readFileSync(check,'utf8').replace('[ "$2" = after ] && [ -f', '[ "$2" = after ] && mkdir "'+join(f.dir,'closed-receipt')+'"\n[ "$2" = after ] && [ -f'));const r=closedRun(f);assert.equal(r.status,4);assertClosed(f,r);assert.match(r.calls,/docker stop lyam/);assert.doesNotMatch(readFileSync(join(f.stub,'runs'),'utf8'),new RegExp(OLD));
 });

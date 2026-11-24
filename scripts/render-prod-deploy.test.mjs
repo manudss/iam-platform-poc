@@ -2,6 +2,7 @@
 // no secrets). Run: node --test scripts/render-prod-deploy.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 
 let importCounter = 0;
 const BASE_ENV = { RENDER_API_KEY: 'test-key', PROD_POLL_MS: '1' };
@@ -24,7 +25,9 @@ const liveDeploy = () => json200([{ deploy: { id: 'dep-1', status: 'live', creat
 async function load(env = {}) {
   for (const k of Object.keys(process.env)) if (k.startsWith('RENDER_') || k.startsWith('PROD_') || k === 'DRY_RUN') delete process.env[k];
   Object.assign(process.env, BASE_ENV, env);
-  return import(`./render-prod-deploy.mjs?case=${importCounter++}`);
+  // Exercise dormant delivery logic only in an in-memory mutant, never weaken the shipped guard.
+  const source=readFileSync(new URL('./render-prod-deploy.mjs',import.meta.url),'utf8').replace('CLOSED_RECOVERY_DEPLOY_SUSPENDED = true','CLOSED_RECOVERY_DEPLOY_SUSPENDED = false');
+  return import('data:text/javascript;base64,'+Buffer.from(source+'\n// case '+importCounter++).toString('base64'));
 }
 const deploys = (calls) => calls.filter((c) => c.method === 'POST' && /\/deploys$/.test(c.url));
 
@@ -80,7 +83,21 @@ test('DRY_RUN: prints the plan, no network', async () => {
   assert.equal(r.deployed, true);
 });
 
-test('missing RENDER_API_KEY (not dry): throws at load', async () => {
+test('missing RENDER_API_KEY (not dry): throws on attempted resume', async () => {
   for (const k of Object.keys(process.env)) if (k.startsWith('RENDER_') || k.startsWith('PROD_') || k === 'DRY_RUN') delete process.env[k];
-  await assert.rejects(import(`./render-prod-deploy.mjs?case=${importCounter++}`), /RENDER_API_KEY missing/);
+  const m=await load({RENDER_API_KEY:''});
+  await assert.rejects(m.run(),/RENDER_API_KEY missing/);
+});
+
+test('shipped closed-recovery suspension cannot contact Render, even with key and DRY_RUN',async()=>{
+ for(const dry of ['0','1']){
+  Object.assign(process.env,BASE_ENV,{DRY_RUN:dry});
+  const calls=mockFetch(()=>{throw Error('network must not be called')});
+  const m=await import(`./render-prod-deploy.mjs?closed=${dry}`);
+  assert.equal(m.CLOSED_RECOVERY_DEPLOY_SUSPENDED,true);
+  assert.deepEqual(await m.run(),{deployed:false,reason:'closed-recovery-suspended'});
+  assert.equal(calls.length,0);
+ }
+ const yaml=readFileSync(new URL('../.github/workflows/demo-deploy.yml',import.meta.url),'utf8');
+ assert.match(yaml,/if: \$\{\{ false \}\}/);
 });

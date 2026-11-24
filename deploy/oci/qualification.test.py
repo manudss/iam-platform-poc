@@ -1,7 +1,7 @@
 import importlib.util,tempfile,unittest,copy,json
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('qual',Path(__file__).with_name('qualification.py'));q=importlib.util.module_from_spec(spec);spec.loader.exec_module(q)
-def baseline():return {'dolt':[{'branch':'personal/kept','root':'root'}],'bao':{'all/plugin':'hash'},'credentials':{'credentials.json':'hash'},'postgres':{'rows':{'public.business':{'row1':1},'public.audit':{'row1':1}},'schema':{'columns':[]},'sequenceDefinitions':[],'sequences':{'public.audit_id':{'last_value':1,'is_called':True}}}}
+def baseline():return {'dolt':[{'branch':'personal/kept','root':'root'}],'bao':{'all/plugin':'hash'},'credentials':{'credentials.json':'hash'},'postgres':{'rows':{'public.business':{'row1':1},'public.audit':{'row1':1},'public.activations':{'held':1}},'schema':{'columns':[]},'sequenceDefinitions':[],'sequences':{'public.audit_id':{'last_value':1,'is_called':True}}}}
 class Preserve(unittest.TestCase):
  def setUp(self):self.p={'appendOnlyTables':['public.audit']};self.before=baseline();self.after=copy.deepcopy(self.before)
  def test_identical(self):self.assertEqual(q.compare(self.before,self.after,self.p),[])
@@ -44,4 +44,64 @@ class Preserve(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    file=Path(d)/'private.json';q.private_json(file,{'ok':True});self.assertEqual(file.stat().st_mode&0o777,0o600)
    with self.assertRaises(FileExistsError):q.private_json(file,{})
+class AfterFixture(unittest.TestCase):
+ def test_actual_after_orchestration_keeps_strict_preservation(self):
+  from unittest.mock import patch
+  import sys
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);evidence=root/'evidence';evidence.mkdir();(root/'barrier').touch();(root/'auth').write_text('{}');(root/'token').write_text('synthetic-only');(root/'data').mkdir()
+   policy={'format':1,'origins':['https://fixture.invalid'],'issuer':'https://fixture.invalid','tenant':'fictional','pgContainer':'pg','pgUser':'u','pgDatabase':'db','network':'none','authFile':str(root/'auth'),'baoMetadataRoots':['synthetic'],'baoAddress':'http://bao','baoTokenFile':str(root/'token'),'credentialFiles':['credentials.json'],'appendOnlyTables':['public.audit']}
+   pol=root/'policy';pol.write_text(json.dumps(policy));prior=baseline();prior.update({'image':'old-image','migrationLedger':None,'transportCoverage':'TLS_EXPECTED_ORIGINS','policyHash':q.digest(pol.read_bytes())});(evidence/'before.json').write_text(json.dumps(prior))
+   info={'Config':{'Image':'new-image','Env':['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never']},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapDrop':['ALL'],'SecurityOpt':['no-new-privileges:true']},'State':{'Running':True},'RestartCount':0}
+   def io(args,input=None):
+    if args[:2]==['docker','inspect']:return json.dumps([info])
+    if args[-1]=='smoke':return '{}'
+    if args[-1]=='capture':return json.dumps({'dolt':prior['dolt'],'bao':prior['bao']})
+    raise AssertionError('unexpected IO')
+   argv=['qualification','--phase','after','--container','candidate','--image','new-image','--env-file','unused','--data-dir',str(root/'data'),'--backup-dir',str(root),'--barrier-file',str(root/'barrier'),'--target-image','new-image','--evidence-dir',str(evidence),'--policy',str(pol),'--require-automation-hold']
+   with patch.object(sys,'argv',argv),patch.object(q,'cmd',side_effect=io),patch.object(q,'postgres',return_value=prior['postgres']),patch.object(q,'credential_hashes',return_value=prior['credentials']),patch.object(q.time,'sleep'),patch.object(q.urllib.request,'urlopen',return_value=type('Response',(),{'status':503})()):
+    q.main()
+    changed=copy.deepcopy(prior['postgres']);changed['rows']['public.business']={}
+    with patch.object(q,'postgres',return_value=changed):
+     with self.assertRaisesRegex(ValueError,'unexpected preservation'):q.main()
+
+class ExactActivations(unittest.TestCase):
+ def test_held_exact_vs_ordinary_append(self):
+  before=baseline();after=copy.deepcopy(before);p={'appendOnlyTables':['public.audit','public.activations']}
+  q.exact_held_activations(before,after)
+  after['postgres']['rows']['public.activations']['new']=1
+  self.assertEqual(q.compare(before,after,p),[])
+  with self.assertRaisesRegex(ValueError,'activation journal'):q.exact_held_activations(before,after)
+  del after['postgres']['rows']['public.activations']
+  with self.assertRaisesRegex(ValueError,'activation journal'):q.exact_held_activations(before,after)
+
+class ClosedRuntime(unittest.TestCase):
+ def test_launcher_omitting_runtime_guards_is_rejected(self):
+  good={'Config':{'Env':['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never']},'HostConfig':{'RestartPolicy':{'Name':'no'},'CapDrop':['ALL'],'CapAdd':None,'Privileged':False,'SecurityOpt':['no-new-privileges:true']}}
+  q.closed_runtime(good)
+  for key,value in [('CapDrop',[]),('SecurityOpt',[]),('CapAdd',['NET_ADMIN']),('Privileged',True),('RestartPolicy',{'Name':'on-failure'})]:
+   mutated=copy.deepcopy(good);mutated['HostConfig'][key]=value
+   with self.assertRaises(ValueError,msg=key):q.closed_runtime(mutated)
+  for missing in ['IAM_AUTOMATION_HOLD=1','IAM_DEMO_SEED_MODE=never']:
+   mutated=copy.deepcopy(good);mutated['Config']['Env'].remove(missing)
+   with self.assertRaises(ValueError,msg=missing):q.closed_runtime(mutated)
+
+class HeldSmoke(unittest.TestCase):
+ def test_actual_smoke_refuses_missing_capture_or_workflow_drift(self):
+  import subprocess,os
+  source=Path(__file__).with_name('qualification-container.mjs').read_text()
+  prefix="""import{createHash,randomBytes}from'node:crypto';const hash=x=>createHash('sha256').update(x).digest('hex');let captures=0;async function workflowHashes(){captures++;return {workflow:process.env.CASE==='drift'&&captures>1?'changed':'retained'};}
+  const p={requireAutomationHold:true,auth:{username:'fictional',password:'fictional'},origins:['https://fixture.invalid'],issuer:'https://fixture.invalid/core',tenant:'acme-demo'};
+  const readFileSync=path=>path.endsWith('api.log')?(process.env.CASE==='missing'?'no captured hold':'[startup] automation hold: {\"held\":true}') : JSON.stringify(path.includes('manifest')?{versions:[{id:'0001',checksum:'same'}]}:{format:1,entries:[{id:'0001',checksum:'same'}]});const existsSync=()=>true;
+  const claims=Buffer.from(JSON.stringify({iss:p.issuer,aud:'demo-web'})).toString('base64url');let state='';globalThis.fetch=async(url,opts={})=>{if(String(url).includes('/authorize?')){const u=new URL(url);state=u.searchParams.get('state');if(u.searchParams.get('redirect_uri').includes('example.invalid'))return new Response('unknown client');return new Response('<input name=\"username\"><input name=\"chain\" value=\"password-only\">');}if(String(url).endsWith('/authorize/login'))return new Response('',{status:302,headers:{location:p.origins[0]+'/callback?code=fixture&state='+state}});return new Response('{}',{status:200,headers:{'content-type':'application/json'}});};
+  const originalFetch=globalThis.fetch;globalThis.fetch=async(...args)=>{const r=await originalFetch(...args);r.headers.getSetCookie=()=>[];return r;};
+  const json=async(url)=>String(url).endsWith('/token')?{id_token:'x.'+claims+'.x'}:[];
+  """
+  body=source[source.index('async function smoke()'):source.index('\ntry{',source.index('async function smoke()'))]
+  with tempfile.TemporaryDirectory() as d:
+   file=Path(d)/'smoke.mjs';file.write_text(prefix+body+"\ntry{await smoke();}catch(e){console.error(e.message);process.exitCode=1;}")
+   for case in ['ok','missing','drift']:
+    r=subprocess.run(['node',str(file)],capture_output=True,text=True,env={**os.environ,'IAM_AUTOMATION_HOLD':'1','CASE':case})
+    self.assertEqual(r.returncode==0,case=='ok',(case,r.stderr))
+
 if __name__=='__main__':unittest.main()

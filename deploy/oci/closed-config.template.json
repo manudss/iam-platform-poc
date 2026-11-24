@@ -1,0 +1,37 @@
+{
+  "_controllerNote": "Controller hashes are separate from helper hashes and include updater, integrity verifier and caller. All are independently reviewed installed files.",
+  "_status": "TEMPLATE ONLY. Not executable approval. Replace every REVIEW value from exact final image and source evidence.",
+  "image": "ghcr.io/manudss/iam-platform-poc@sha256:REVIEW_FINAL_DIGEST",
+  "imageID": "sha256:REVIEW_FINAL_IMAGE_ID",
+  "network": "lyam-net",
+  "pgContainer": "pg",
+  "pgIP": "172.21.0.3",
+  "baoContainer": "bao",
+  "baoIP": "172.21.0.2",
+  "gateway": "172.21.0.1",
+  "hostProbePort": 443,
+  "externalProbeIP": "1.1.1.1",
+  "ipv6ProbeIP": "2606:4700:4700::1111",
+  "ledgerSHA256": "256177070103dbd7c0e8c3b92f6205664e366f6f33786e95d9f5a7f72a31212c",
+  "manifestSHA256": "REVIEW_EXTRACTED_FINAL_MANIFEST_SHA256",
+  "implementationSHA256": "REVIEW_INSTALLED_HELPER_SHA256",
+  "helperSHA256": {
+    "LYAM_CLOSED_PREFLIGHT": "REVIEW_PREFLIGHT_WRAPPER_SHA256",
+    "LYAM_CLOSED_LAUNCHER": "REVIEW_LAUNCHER_WRAPPER_SHA256"
+  },
+  "offlineFileSHA256": {
+    "/usr/local/bin/docker-entrypoint.sh": "REVIEW_FINAL_ENTRYPOINT_SHA256",
+    "/app/demo/start.sh": "REVIEW_FINAL_START_SHA256",
+    "/REVIEW/ACTUAL/INSTALLED/BUNDLE/PATH": "REVIEW_INVENTORY_IN_IMAGE_NOT_ASSUMED_SOURCE_PATH"
+  },
+  "controllerSHA256": {
+    "update.sh": "REVIEW_INSTALLED_CONTROLLER_SHA256",
+    "closed-recovery-integrity.py": "REVIEW_INSTALLED_CONTROLLER_SHA256",
+    "closed-recovery-call.py": "REVIEW_INSTALLED_CONTROLLER_SHA256"
+  },
+  "qualificationSHA256": {
+    "/opt/lyam/bin/qualification.py": "REVIEW_SHA256",
+    "/opt/lyam/bin/qualification-container.mjs": "REVIEW_SHA256",
+    "/opt/lyam/qualification.json": "REVIEW_SHA256"
+  }
+}

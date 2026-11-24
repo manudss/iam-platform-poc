@@ -25,7 +25,6 @@ import { pathToFileURL } from 'node:url';
 //      PROD_POLL_MS / PROD_WAIT_MAX_MS (watch tuning), DRY_RUN=1 to print the plan.
 const e = process.env;
 const DRY = e.DRY_RUN === '1';
-if (!DRY && !e.RENDER_API_KEY) throw new Error('RENDER_API_KEY missing');
 
 const RENDER = 'https://api.render.com/v1';
 const SVC_NAME = e.PROD_SERVICE_NAME ?? 'iam-poc';
@@ -63,7 +62,13 @@ function isImageBacked(s) {
 
 // Deploys and watches. Returns { deployed, reason } ; throws on a FAILED deploy or
 // a watch timeout (the Actions run must go red), never on the git-backed skip.
+export const CLOSED_RECOVERY_DEPLOY_SUSPENDED = true;
 async function run() {
+  if (CLOSED_RECOVERY_DEPLOY_SUSPENDED) {
+    console.log('skipped: production Render delivery suspended for closed recovery; explicit reviewed change required to resume');
+    return { deployed: false, reason: 'closed-recovery-suspended' };
+  }
+  if (!DRY && !e.RENDER_API_KEY) throw new Error('RENDER_API_KEY missing');
   const s = await findService(SVC_NAME);
   if (!s) throw new Error(`service ${SVC_NAME} introuvable sur Render`);
   if (!isImageBacked(s)) {

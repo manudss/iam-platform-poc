@@ -129,3 +129,31 @@ jobs:
           name: oci-image-${{ inputs.sha }}
           path: image-receipt.json
           retention-days: 7
+
+  closed_helper_qualification:
+    name: Confined helper qualification (synthetic only)
+    needs: build
+    if: inputs.sha == '' && github.event_name == 'pull_request' && github.head_ref == 'fix/closed-recovery-qualification' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        ipv6: [active, inactive]
+    permissions: { contents: read, packages: read }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Real helper against exact pushed digest
+        env:
+          CLOSED_IMAGE: ghcr.io/manudss/iam-platform-poc@${{ needs.build.outputs.digest }}
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID python3 scripts/closed-helper-docker-fixture.py --image "$CLOSED_IMAGE" --helper deploy/oci/closed-recovery-helper.py --preflight deploy/oci/closed-preflight.sh --launcher deploy/oci/closed-launcher.sh --ipv6-mode ${{ matrix.ipv6 }} --out /tmp/closed-helper-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: closed-helper-docker-proof-${{ matrix.ipv6 }}
+          path: /tmp/closed-helper-proof
+          if-no-files-found: warn
+          retention-days: 7

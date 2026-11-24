@@ -29,8 +29,12 @@ const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function start(name,volume,held,seed='never'){
  containers.push(name);
  const args=['run','-d','--network','none','--memory','512m','--name',name,'-v',`${volume}:/data`,'-e',`IAM_DEMO_SEED_MODE=${seed}`];
- if(held)args.push('-e','IAM_AUTOMATION_HOLD=1');args.push(image);docker(args);
- const info=JSON.parse(docker(['inspect',name]).stdout)[0];assert.equal(info.HostConfig.NetworkMode,'none');assert.ok(!info.HostConfig.PortBindings||Object.keys(info.HostConfig.PortBindings).length===0);
+ if(held)args.push('-e','IAM_AUTOMATION_HOLD=1');
+ const fifo='/tmp/lyam-closed-start.fifo';const guard='set -eu; rm -f '+fifo+'; mkfifo -m 600 '+fifo+'; read -r permit < '+fifo+'; [ "$permit" = start-held ]; rm -f '+fifo+'; exec sh /app/demo/start.sh';
+ args.push('--restart','no','--cap-drop','ALL','--security-opt','no-new-privileges:true','--entrypoint','sh',image,'-c',guard);docker(args);
+ let fifoReady=false;for(let i=0;i<50;i++){if(docker(['exec',name,'sh','-c','test -p '+fifo],{allowFailure:true}).status===0){fifoReady=true;break;}await pause(100);}assert.ok(fifoReady,'fresh FIFO must exist before release');
+ docker(['exec',name,'sh','-c','printf "%s\\n" start-held > '+fifo]);
+ const info=JSON.parse(docker(['inspect',name]).stdout)[0];assert.equal(info.HostConfig.NetworkMode,'none');assert.equal(info.HostConfig.RestartPolicy.Name,'no');assert.ok(info.HostConfig.CapDrop.includes('ALL'));assert.ok(info.HostConfig.SecurityOpt.some(x=>x.startsWith('no-new-privileges')));assert.ok(!info.HostConfig.PortBindings||Object.keys(info.HostConfig.PortBindings).length===0);
  for(let i=0;i<90;i++){
   const r=docker(['exec',name,'node','-e',"fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],{allowFailure:true});
   if(r.status===0){const edge=docker(['exec',name,'node','-e',"fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"],{allowFailure:true});if(edge.status===0)return;}await pause(2000);
@@ -111,12 +115,17 @@ const params=new URLSearchParams({response_type:'code',client_id:'demo-web',redi
 const auth=await fetch('http://127.0.0.1:8080/core/authorize?'+params);assert.equal(auth.status,200);assert.match(await auth.text(),/authorize\/login/);
 const login=await fetch('http://127.0.0.1:8080/core/authorize/login',{method:'POST',redirect:'manual',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...Object.fromEntries(params),username:'demo-alice',password:'demo-only-not-a-secret'})});assert.equal(login.status,302);const redirectUrl=new URL(login.headers.get('location'),'http://localhost:8080');assert.equal(redirectUrl.searchParams.get('state'),'synthetic-proof-state');const code=redirectUrl.searchParams.get('code');assert.ok(code);
 const tokenReply=await fetch('http://127.0.0.1:8080/core/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code,code_verifier:verifier,redirect_uri:redirect,client_id:'demo-web'})});assert.equal(tokenReply.status,200);const tokens=await tokenReply.json();const bearer=tokens.id_token||tokens.access_token;assert.ok(bearer);
+const extended=await fetch('http://127.0.0.1:8080/core/session/extend',{method:'POST',headers:{authorization:'Bearer '+bearer}});assert.ok([200,409].includes(extended.status),'smoke session verification must pass');
 const headers={authorization:'Bearer '+bearer,'x-api-admin-token':apiEnv.IAM_API_ADMIN_TOKEN,'x-iam-branch':'main','content-type':'application/json'};
 assert.equal((await fetch('http://127.0.0.1:3000/tenants/acme-demo/workflows/proof-cron/runs',{method:'POST',headers})).status,503);
 assert.equal((await fetch('http://127.0.0.1:3000/tenants/acme-demo/workflow-runs',{headers})).status,200);
 assert.equal((await fetch('http://127.0.0.1:3000/health')).status,200);
-console.log(JSON.stringify({health:200,webhook:hook.status,capturedHold:true,authenticatedRunWrite:503,runRead:200}));
+const activations=await fetch('http://127.0.0.1:3000/tenants/acme-demo/activations',{headers});assert.equal(activations.status,200);assert.ok(Array.isArray(await activations.json()));
+console.log(JSON.stringify({health:200,webhook:hook.status,capturedHold:true,authenticatedRunWrite:503,runRead:200,sessionExtend:extended.status,activationRead:200}));
 `);save('held-probes.json',probes);
+ const qualifiedSource=readFileSync('deploy/oci/qualification-container.mjs','utf8');
+ const heldState=()=>JSON.parse(docker(['exec','-i',heldName,'node','--input-type=module','-e',qualifiedSource,'held-state-check'],{input:'{}'}).stdout);
+ const qualifiedBefore=heldState();save('qualification-real-workflow-hashes-before.json',qualifiedBefore);
  await pause(25000);const after=JSON.parse(exec(heldName,snapshot));save('held-after.json',after);
  save('held-probes-table-changes.json',Object.keys({...before.tableHashes,...after.tableHashes}).filter(t=>before.tableHashes[t]!==after.tableHashes[t]));
  for(const key of ['workflow_runs','workflow_steps','workflow_tasks','workflow_store_meta','definitions','coreVersion'])assert.deepEqual(after[key],before[key],`held ${key} changed`);
@@ -125,6 +134,7 @@ console.log(JSON.stringify({health:200,webhook:hook.status,capturedHold:true,aut
   const generated=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-keyout',join(certDir,'key.pem'),'-out',join(certDir,'cert.pem'),'-days','1','-nodes','-subj','/CN=localhost'],{encoding:'utf8'});assert.equal(generated.status,0,generated.stderr);
   const tls=exec(heldName,`import assert from 'node:assert/strict';import{createServer}from'node:https';await import('/app/api/dist/security/tls-policy.js');const server=createServer({key:${JSON.stringify(readFileSync(join(certDir,'key.pem'),'utf8'))},cert:${JSON.stringify(readFileSync(join(certDir,'cert.pem'),'utf8'))}},(_q,r)=>r.end('unexpected'));await new Promise(r=>server.listen(0,'127.0.0.1',r));try{await assert.rejects(()=>fetch('https://127.0.0.1:'+server.address().port),e=>/CERT|SELF_SIGNED/.test(String(e.cause?.code)));console.log('PASS self-signed rejected by separate Node process defaults; dist TLS guard imported, native packages not loaded, application process policy not proved');}finally{await new Promise(r=>server.close(r));}`);save('held-tls.log',tls);
  }finally{rmSync(certDir,{recursive:true,force:true});}
+ const qualifiedAfter=heldState();assert.deepEqual(qualifiedAfter,qualifiedBefore,'real qualification SQL hashes/log hold changed');save('qualification-real-workflow-hashes-after.json',qualifiedAfter);
  save('held-api-summary.json',logSummary(heldName));
  docker(['stop','-t','20',heldName]);
  await start(`${prefix}-unheld`,copy,false);

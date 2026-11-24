@@ -25,6 +25,15 @@ class Queue(unittest.TestCase):
   with self.assertRaises(RuntimeError):q.deploy(self.path,plan(1,2,3),'update',lambda *a,**k:SimpleNamespace(returncode=3))
   self.assertEqual(len(q.load(self.path)['history']),1)
   with self.assertRaises(ValueError):q.deploy(self.path,plan(1,2,3),'update',self.runok)
+ def test_closed_code10_is_failed_not_delivery_and_flag_never_transmitted(self):
+  def closed(args,**kw):
+   self.assertNotIn('--closed-recovery',args);self.calls.append(args);return SimpleNamespace(returncode=10)
+  with self.assertRaises(RuntimeError):q.deploy(self.path,plan(1,2,3),'update',closed)
+  state=q.load(self.path);self.assertEqual(len(state['history']),1);self.assertEqual(state['failed']['exit'],10);self.assertEqual(len(self.calls),1)
+ def test_closed_flag_not_accepted_by_queue_cli(self):
+  import subprocess
+  r=subprocess.run(['python3',str(Path(__file__).with_name('ordered-queue.py')),'status','--closed-recovery'],capture_output=True,text=True)
+  self.assertNotEqual(r.returncode,0);self.assertIn('unrecognized arguments',r.stderr)
  def test_crash_pending_blocks(self):
   def crash(*a,**kw):raise RuntimeError('crash after update could have succeeded')
   with self.assertRaises(RuntimeError):q.deploy(self.path,plan(1,2),'update',crash)

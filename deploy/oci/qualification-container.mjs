@@ -38,9 +38,16 @@ function dolt(){
   const rows=query(db+'/'+b.name,"SELECT DOLT_HASHOF_DB('WORKING') AS root");if(!rows[0]?.root)throw Error('Dolt working root unknown');return {database:db,branch:b.name,head:b.hash,root:rows[0].root};
  }));
 }
+async function workflowHashes(){
+ const {createRequire}=await import('node:module');const require=createRequire('/app/api/package.json');const{createConnection}=require('mysql2/promise');
+ const c=await createConnection({host:'127.0.0.1',port:3307,user:'root',database:'iam_meta',dateStrings:true});const result={};
+ try{for(const db of ['iam','iam_meta']){const[tables]=await c.query('SHOW TABLES FROM '+db);for(const row of tables){const name=String(Object.values(row)[0]);if(!/^workflow_[a-z_]+$/.test(name))continue;const[rows]=await c.query('SELECT * FROM '+db+'.'+name);result[db+'.'+name]=hash(JSON.stringify(rows.map(r=>JSON.stringify(r)).sort()));}}return result;}finally{await c.end();}
+}
 async function smoke(){
  const local='http://127.0.0.1:8080';
+ if(p.requireAutomationHold===true){const log=readFileSync('/data/api.log','utf8');const match=/automation hold: (\{[^\n]+\})/.exec(log);if(!match||JSON.parse(match[1]).held!==true||process.env.IAM_AUTOMATION_HOLD!=='1')throw Error('captured automation hold absent');if(!(await fetch('http://127.0.0.1:3000/health')).ok)throw Error('API health failed');}
  if(!(await fetch(local+'/healthz')).ok)throw Error('edge health failed');
+ const workflowBefore=p.requireAutomationHold===true?await workflowHashes():null;
  const credentials=p.auth;
  if(typeof credentials.username!=='string'||typeof credentials.password!=='string')throw Error('auth input missing');
  let journal;
@@ -66,15 +73,22 @@ async function smoke(){
  }
  const negative=await fetch(local+'/core/authorize?'+new URLSearchParams({client_id:'demo-web',redirect_uri:'https://example.invalid/callback',response_type:'code',state:'negative',code_challenge:'A'.repeat(43),code_challenge_method:'S256'}));
  if(!/unknown client/i.test(await negative.text()))throw Error('negative redirect check failed');
+ if(workflowBefore&&JSON.stringify(await workflowHashes())!==JSON.stringify(workflowBefore))throw Error('workflow state changed during held smoke');
  if(p.reviewedLegacyRollback===true&&!existsSync('/data/migrations/journal.json')&&!existsSync('/app/migration-source/data/migrations/manifest.json'))return {journal,ledger:'legacy-rollback-no-migration-ledger'};
  const ledger=JSON.parse(readFileSync('/data/migrations/journal.json','utf8'));
  if(ledger.format!==1||ledger.pending||!Array.isArray(ledger.entries)||!ledger.entries.length)throw Error('migration ledger incomplete');
  const expected=JSON.parse(readFileSync('/app/migration-source/data/migrations/manifest.json','utf8'));
  if(expected.versions.length!==ledger.entries.length||expected.versions.some((v,i)=>v.id!==ledger.entries[i].id||v.checksum!==ledger.entries[i].checksum))throw Error('migration history mismatch');
- return {journal,ledger:ledger.entries.map(e=>({id:e.id,checksum:e.checksum}))};
+ return {journal,held:p.requireAutomationHold===true,workflowPreserved:workflowBefore!==null,ledger:ledger.entries.map(e=>({id:e.id,checksum:e.checksum}))};
 }
 try{
  if(mode==='capture')console.log(JSON.stringify({dolt:dolt(),bao:await bao()}));
+ else if(mode==='held-state-check'){
+  const log=readFileSync('/data/api.log','utf8');const captured=/automation hold: (\{[^\n]+\})/.exec(log);
+  if(process.env.IAM_AUTOMATION_HOLD!=='1'||!captured||JSON.parse(captured[1]).held!==true)throw Error('captured hold required');
+  const hashes=await workflowHashes();if(!Object.keys(hashes).length)throw Error('workflow coverage empty');
+  console.log(JSON.stringify({held:true,hashes}));
+ }
  else if(mode==='smoke')console.log(JSON.stringify(await smoke()));
  else throw Error('invalid mode');
 }catch{console.error('Qualification UNKNOWN or failed. Preserve private evidence and keep maintenance armed.');process.exitCode=1;}

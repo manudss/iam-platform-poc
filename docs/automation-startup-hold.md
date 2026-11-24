@@ -74,3 +74,65 @@ A bounded Nest HTTP fixture exercises actual workflow, tasks, connections and we
 The probes require the captured hold startup log, public webhook 503, real fictional-user PKCE sign-in, authenticated run-write 503 and run-list/health 200. A separate copy of the same stopped synthetic volume boots without hold and must show changed run state, cron marker and local core version. Direct API launch must reject invalid hold/TLS environment values with its own nonzero exit. A self-signed local server must be rejected by a separate Node process using its default TLS verification, with the dist environment guard imported. This does not prove the API process or native-piece TLS policy. This does not load native pieces, enumerate NATS consumers, inject an event-bus delivery, exercise PostgreSQL/Effects or qualify a production backlog. Provider delivery and UI are not proved. Image networking prevents external egress, not local writes. The harness has not been executed until a matching CI artifact records its result; source review and syntax checks alone are not a pass.
 
 The harness runs after the existing Gallery checks so its first failure cannot skip them. Its unheld witness polls for run, cron-marker and core-version changes for at most90 seconds rather than relying on a fixed delay. Only structured startup/cron summaries are exported, after an in-container check against API environment secrets and bearer/JWT patterns; raw API logs are never copied to artifacts. Expected added CI time is6 to10 minutes, not measured locally; the existing45-minute job timeout is unchanged.
+
+## Closed recovery preparation, separate from opening
+
+The manual `update.sh --closed-recovery` path returns 10 only for CLOSED_QUALIFIED. It requires an existing update pause, an independent unchanged OPS maintenance marker, its own maintenance marker, a fresh explicit receipt, a mandatory preservation checker, and reviewed preflight and confined-launch helpers. Missing or conflicting conditions refuse before stopping the old container. The helpers must validate the exact image digest, migration manifest and existing final ledger before any application boot. They must never run migration prepare or the previous application to discover compatibility.
+
+This mode never removes either gate or the pause. Every error after gating stops the application and preserves evidence without automatic old-image boot or destructive Dolt/PostgreSQL/Bao restore. Return 10 must not trigger the error-stop trap. Normal updater behavior is unchanged. The queue and host-boot never pass or accept the manual flag. A queue unexpectedly receiving return 10 records failed and does not advance delivery.
+
+Use the actual manual caller `python3 deploy/oci/closed-recovery-call.py --updater /reviewed/update.sh --image EXACT_DIGEST --env-file /private/lyam.env --receipt /private/FRESH_RECEIPT`. Under an errexit shell capture safely with `rc=0; python3 ... || rc=$?`, then require exactly 10. Return 0 is not a closed-recovery success. The caller checks receipt identity, persistent host hold=1, public 503, real API health and captured held=true. It never resumes the queue or opens the service. This is an invocation contract, not authorization to run it.
+
+Before preparation, the operator must persist IAM_AUTOMATION_HOLD=1 and seed mode never in the private host environment, separately from repository code. A confined candidate has restart=no, all capabilities dropped, no-new-privileges and an inert entrypoint on every container start. A reviewed helper installs and tests IPv4/IPv6 namespace policy before releasing its one-use startup gate. A later stop/start returns to inert waiting, never to application startup without new confinement checks. Local namespace/socket fixture results are not Docker or production-image proof. Real namespace identity, rules, companion reachability, blocked external/DNS traffic and runtime capabilities must be recorded before release and rechecked after API startup.
+
+The held smoke still exercises real PKCE, session extension, activations and migration-ledger validation. It additionally requires captured hold and API health, and hashes all workflow tables before and after the smoke. Audit/session writes remain subject to the original exact preservation policy and any independently reviewed image-specific verifier, not a broad ignore list. The CI harness exercises session extension and activations with the existing workflow snapshots. No new head is qualified until its CI and artifacts pass.
+
+Integration must add one coherent merge commit containing TLS, hold and closed-recovery changes to main. Do not put an intermediate TLS-only first-parent commit on main, because the deployment queue considers every first-parent commit. Preserve the qualification-control introduction commits and block unintended OCI and Render delivery before merging. The final merged SHA and immutable image, not a draft branch SHA, are the operator's inputs. Opening user access, lifting hold and resuming workflow effects are separate decisions.
+
+### Recovery delivery suspension and failed-candidate evidence
+
+The recovery integration deliberately suspends the production Render Actions job
+with a constant false condition. The production delivery script also returns
+`closed-recovery-suspended` before any network or credential use. Resume requires
+an explicit reviewed code change after the suspension is closed. Existing queued
+or running Actions jobs are not canceled by a future file change. Check image and
+production delivery runs immediately before and after integration. Native Render
+service source and auto-deploy settings must be observed separately; a workflow
+guard does not disable native Git-backed auto-deploy.
+
+A failed closed candidate is stopped and kept as evidence. The confined launcher
+requires its container name to be absent. A second attempt can therefore be
+blocked until an operator explicitly decides how to retain or remove the failed
+candidate. Neither the caller nor the launcher removes it automatically.
+
+`LYAM_CLOSED_IMPLEMENTATION` must name the installed Python helper, in addition
+to launcher/preflight paths and the private reviewed `LYAM_CLOSED_CONFIG`. The
+independent integrity check verifies all three hashes against that configuration
+before any helper executes. Each path and ancestor must be owned by root and not
+writable by group or others. The private receipt records all three hashes, which
+the caller compares to its own pre-execution verification. Fixture-generated
+hashes demonstrate consistency only, not operator review of production content.
+
+The Docker helper fixture is a separate proof from the PKCE/held-AppModule
+harness. The former uses the pushed immutable GHCR digest and complete confined
+launcher on synthetic data and synthetic PG/Bao. The latter uses network none
+and the same cap-drop, no-new-privileges, restart-no and FIFO guard. Neither uses
+production data or authorizes opening, restoring state, lifting hold or advancing
+the deployment queue. The final production configuration still needs the exact
+image's reviewed manifest, start script, entrypoint and installed native bundles.
+
+The temporary `render_state` CI job is recovery-branch-only and must be removed
+before the final merge. Its exact SHA must be reviewed before each run with the
+existing Render key. UNKNOWN, a Git-backed service, autoDeploy not explicitly no,
+an unpinned image, or active deploys are not a clearance. A green observation
+requires image runtime, no repository/branch source, autoDeploy no, an immutable
+GHCR digest and no active deploys. Metadata is printed in the public CI log;
+keys, headers, environment variables and response bodies are never exported.
+
+The prior app container's inspect and logs are saved privately before it is
+removed to free the candidate name. Those files may contain secrets and must not
+be attached to a public artifact. The updater's launch proof and receipt are
+private, root-controlled files. Live helper verification runs after held API
+health and before preservation qualification, then again in the independent
+caller. The receipt binds the IPv6 classification and raw-state hash to the
+launch proof. No automatic destructive rollback follows a closed failure.
