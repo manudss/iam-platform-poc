@@ -1,3 +1,4 @@
+import {automationHeld,assertAutomationAllowed} from '../automation/hold.js';
 import {Injectable,Logger,OnModuleInit,OnModuleDestroy} from '@nestjs/common';
 import{NotFoundException}from'@nestjs/common';
 import {createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
@@ -17,7 +18,7 @@ interface State {fingerprint:string;key:string;config:Record<string,unknown>;tok
 export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
  private nextFilePrune=0;private timer?:NodeJS.Timeout;private busy=new Set<string>();private log=new Logger('activepieces-sheets');
  constructor(private store:WorkflowStore,private connections:WorkflowConnections,private wf:WorkflowsService,private reg:PluginRegistry,private branches:BranchRegistries){}
- onModuleInit(){this.timer=setInterval(()=>void this.tick().catch(()=>this.log.warn('Native trigger scheduler unavailable')),60_000);this.timer.unref();}
+ onModuleInit(){if(automationHeld)return;this.timer=setInterval(()=>void this.tick().catch(()=>this.log.warn('Native trigger scheduler unavailable')),60_000);this.timer.unref();}
  onModuleDestroy(){if(this.timer)clearInterval(this.timer);}
  private scope(id:string){return 'trigger:'+id;}
  private kv(tenant:string,id:string){const scope=this.scope(id);return {get:(k:string)=>this.store.pieceGet(tenant,scope,k),put:(k:string,v:unknown)=>this.store.piecePut(tenant,scope,k,v),delete:(k:string)=>this.store.pieceDelete(tenant,scope,k)};}
@@ -65,7 +66,7 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
  }
  private async recoverEnvelope(d:DefinitionRow){const kv=this.kv(d.tenant,d.id),e=await kv.get('lyam:batch-envelope') as any;if(!e)return;for(const[k,v]of Object.entries(e.staged))await kv.put(k,v);for(const k of e.deleted??[])await kv.delete(k);await kv.put('lyam:batch',e.batch);await kv.put('lyam:pending',e.pending);await kv.delete('lyam:batch-envelope');}
  private async locked<T>(tenant:string,id:string,fn:()=>Promise<T>){const k=tenant+':'+id;if(this.busy.has(k))throw Error('Native trigger is busy');this.busy.add(k);const owner=randomUUID();let claimed=false;try{claimed=await this.store.pieceClaim(tenant,this.scope(id),owner);if(!claimed)throw Error('Native trigger is busy or requires crash reconciliation');return await fn();}finally{if(claimed)await this.store.pieceRelease(tenant,this.scope(id),owner);this.busy.delete(k);}}
- async tick(){if(!dataReady())return;await branchContext.run({branch:this.store.liveRef},async()=>{
+ async tick(){if(automationHeld||!dataReady())return;await branchContext.run({branch:this.store.liveRef},async()=>{
   if(Date.now()>=this.nextFilePrune){await this.store.prunePieceFiles();this.nextFilePrune=Date.now()+3600_000;}
   const defs=await this.store.listAllDefinitions(this.store.liveRef);
   for(const orphan of await this.store.pieceSubscriptions()){
@@ -102,7 +103,7 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
    if(native.type!=='POLLING'&&Date.now()-state.lastRenew>12*3600_000){await kv.put('lyam:subscription',{...state,status:'enabling'});await this.invoke(d,state,'onRenew');await kv.put('lyam:subscription',{...state,lastRenew:Date.now()});}
   });}catch{this.log.warn('Native Google Sheets trigger check failed; inspect connection/subscription state');}}
  });}
- async webhook(tenant:string,id:string,token:string,headers:Record<string,string>,_body:unknown){return branchContext.run({branch:this.store.liveRef},async()=>{
+ async webhook(tenant:string,id:string,token:string,headers:Record<string,string>,_body:unknown){assertAutomationAllowed();return branchContext.run({branch:this.store.liveRef},async()=>{
   const d=await this.store.getDefinition(tenant,id,this.store.liveRef);if(!d||d.active===false||!this.key(d)||!await this.enabled(tenant))throw new NotFoundException('Unknown notification subscription');
   const state=await this.kv(tenant,id).get('lyam:subscription') as State|null;
   const a=Buffer.from(state?.token??''),b=Buffer.from(token);if(!state||state.status!=='active'||a.length!==b.length||!timingSafeEqual(a,b))throw new NotFoundException('Unknown notification subscription');
