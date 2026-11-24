@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import{it}from'node:test';import assert from'node:assert/strict';import{mkdtempSync,readFileSync,rmSync}from'node:fs';import{tmpdir}from'node:os';import{join}from'node:path';import{spawnSync}from'node:child_process';import{createServer,get}from'node:https';import type{AddressInfo}from'node:net';import nock from'nock';import{loadPluginModule}from'../plugins/v1/loader.js';
+import{it}from'node:test';import assert from'node:assert/strict';import{mkdtempSync,readFileSync,rmSync,writeFileSync}from'node:fs';import{tmpdir}from'node:os';import{join}from'node:path';import{createHash}from'node:crypto';import{createRequire}from'node:module';import{pathToFileURL}from'node:url';import{spawnSync}from'node:child_process';import{createServer,get}from'node:https';import type{AddressInfo}from'node:net';import nock from'nock';import{loadPluginModule}from'../plugins/v1/loader.js';
 const adapter=loadPluginModule('workflow-connectors','adapter.mjs')as any,loader=loadPluginModule('workflow-connectors','safe-piece-loader.mjs')as any;
 it('all native packages preserve TLS rejection during parallel requests and afterward, and modified bytes fail closed',async()=>{
  const before=process.env.NODE_TLS_REJECT_UNAUTHORIZED;assert.notEqual(before,'0');const dir=mkdtempSync(join(tmpdir(),'native-tls-'));const generated=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-keyout',join(dir,'key.pem'),'-out',join(dir,'cert.pem'),'-days','1','-nodes','-subj','/CN=localhost']);assert.equal(generated.status,0);
@@ -20,4 +20,16 @@ it('refuses changed versions, occurrence drift, residual TLS controls and disabl
 
 it('keeps optional HTML dependency unloaded and explicitly refuses native HTML extraction',async()=>{
  await assert.rejects(()=>adapter.runPieceAction('@activepieces/piece-text-helper','extract_from_html',{propsValue:{html:'<title>test</title>',target:'title',extractionType:'text',returnMultiple:false}}),/HTML parsing unavailable/);
+});
+
+it('isolates occurrence validation from hash, rejects preloaded originals and checks lockfile versions',async()=>{
+ const root=join(process.cwd(),'../..'),req=createRequire(join(root,'plugins/workflow-connectors/package.json')),pkg='@activepieces/piece-http',entry=req.resolve(pkg),bytes=readFileSync(entry),needle='process.env.NODE_TLS_REJECT_UNAUTHORIZED="0";',extra=Buffer.concat([bytes,Buffer.from(needle)]),digest=createHash('sha256').update(extra).digest('hex');const dir=mkdtempSync(join(tmpdir(),'tls-occurrence-'));
+ try{const original=readFileSync(join(root,'plugins/workflow-connectors/safe-piece-loader.mjs'),'utf8');const pinned=original.replace('7e6833d5d1c41ec07f8d70e1b5a2df18b2782d56a7c44f0a9c88a9194b7581ff',digest);writeFileSync(join(dir,'loader.mjs'),pinned);writeFileSync(join(dir,'bundle.js'),extra);const code=`import{neutralizePieceSource}from ${JSON.stringify(pathToFileURL(join(dir,'loader.mjs')).href)};import{readFileSync}from'node:fs';neutralizePieceSource('${pkg}',readFileSync(${JSON.stringify(join(dir,'bundle.js'))}),'0.13.2')`;const result=spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8'});assert.notEqual(result.status,0);assert.match(result.stderr,/occurrence mismatch/);
+  const preload=`import{createRequire}from'node:module';const r=createRequire(${JSON.stringify(join(root,'plugins/workflow-connectors/package.json'))});r('${pkg}');const{loadSafePiece}=await import(${JSON.stringify(pathToFileURL(join(root,'plugins/workflow-connectors/safe-piece-loader.mjs')).href)});loadSafePiece(r,'${pkg}');`;const preloaded=spawnSync(process.execPath,['--input-type=module','-e',preload],{encoding:'utf8'});assert.notEqual(preloaded.status,0);assert.match(preloaded.stderr,/loaded outside/);
+  const lock=JSON.parse(readFileSync(join(root,'package-lock.json'),'utf8'));for(const[name,version]of Object.entries({'piece-http':'0.13.2','piece-google-sheets':'0.19.5','piece-jira-cloud':'0.6.4','piece-text-helper':'0.6.7'}))assert.equal(lock.packages['node_modules/@activepieces/'+name].version,version);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+it('API TLS policy module refuses disabled verification before application startup',()=>{
+ const result=spawnSync(process.execPath,['--input-type=module','-e',`await import(${JSON.stringify(pathToFileURL(join(process.cwd(),'dist/security/tls-policy.js')).href)})`],{env:{...process.env,NODE_TLS_REJECT_UNAUTHORIZED:'0'},encoding:'utf8'});assert.notEqual(result.status,0);assert.match(result.stderr,/API requires enabled TLS/);
+ const main=readFileSync(join(process.cwd(),'src/main.ts'),'utf8');assert.match(main.split('\n')[0],/security\/tls-policy/);assert.match(main,/async function bootstrap\(\) \{\s*assertTlsVerification\(\);/);
 });
