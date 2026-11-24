@@ -1,36 +1,47 @@
 # AI assistant (plugin `ai-assistant`)
 
-An admin chat that drives the IAM through the same MCP tool surface as external agents (see [mcp.md](mcp.md), [mcp-gateway.md](mcp-gateway.md)). The assistant never gets more power than an MCP session: it works on its own branch `ai/mcp-...`, every tool call goes through Cedar, and a human reviews and merges. The plugin is **off by default**: enable it in Plugins (it asks for the UI grant for its screen).
+A chat in the console (Extensions > AI assistant) with a model that can use the platform tools. It is built on the Vercel AI SDK and the **existing MCP server**: it is not a new kind of access.
+
+## What the SDK provides, and what is ours
+
+| Part | Provided by | Notes |
+| --- | --- | --- |
+| Model calls, streaming, the tool loop, step limit | `ai` (AI SDK 7), `@ai-sdk/openai-compatible`, `@ai-sdk/anthropic`, `@ai-sdk/google` | Apache-2.0 |
+| Tools | `@ai-sdk/mcp` client on the existing endpoint `POST /tenants/:tenant/mcp` | the same tools, Cedar checks, branch confinement and activity trace as an external MCP client |
+| Approval of changes | SDK `toolApproval` + `experimental_toolApprovalSecret` | approval requests are HMAC-signed, so a client cannot forge one |
+| Chat client in the browser | the SDK chat classes (`AbstractChat`, `DefaultChatTransport`) bundled into the plugin screen | NOT the `@ai-sdk/angular` package: a plugin screen is one self-contained `.mjs` loaded from a blob URL, so the SDK UI code is bundled in (`scripts/ai-assistant-ui`) |
+| Ours | model registry (keys sealed at rest), the network guard, one MCP session per conversation, server-side history, caps, the screen | |
+
+## Rights
+
+No new rights layer. A conversation is an ordinary MCP session of the signed-in administrator (own branch cut from main, 8 hours). What runs is decided by the existing rights: the screen right (show and use the chat, admin only) and the MCP server rights (Cedar read/write/lifecycle per call). The SDK approval step asks the person before any tool that is not a read; with "approve writes on its branch" a conversation skips that for branch writes only. No tool can merge or apply: a human publishes.
 
 ## Models
 
-- **Local model** (built in, id `local`, never stored): any OpenAI-compatible server on a local host. Default target is Ollama. Start it with `docker compose -f infra/docker-compose.yml --profile ai up -d ollama`, pull a model that supports tool calls (for example `ollama pull qwen2.5:7b`), then set `IAM_AI_LOCAL_URL=http://localhost:11434/v1` and `IAM_AI_LOCAL_MODEL=qwen2.5:7b` for the API.
-- **External models**, added by the admin in the screen: OpenAI-compatible (OpenAI, Mistral, Gemini through its OpenAI endpoint, any gateway) or Anthropic. Agentic use needs a model with tool calls. The screen has presets and tells where to get a key.
-- Remote models need an `https` URL on a public host and an explicit "data sharing" acknowledgement: conversation content and tool results leave the platform. API keys are sealed (AES-GCM) with `IAM_AI_KEY_SECRET` and never returned by the API.
+- Local: set `IAM_AI_LOCAL_URL` (OpenAI-compatible, e.g. Ollama `http://ollama:11434/v1`) and `IAM_AI_LOCAL_MODEL`. `docker compose --profile ollama up` starts Ollama. Use a model that supports tool calls (the CI proof uses `qwen2.5:3b`).
+- External (added by an administrator): OpenAI-compatible endpoints (OpenAI, Mistral, LiteLLM, OpenRouter, Azure, agent gateways), Anthropic, Google Gemini (kind `google`). The API key is sealed at rest and never returned. An external model receives the data the tools return: the screen asks for an explicit acknowledgement.
 
-| Variable | Purpose |
+## Environment
+
+| Variable | Meaning |
 | --- | --- |
-| `IAM_AI_LOCAL_URL`, `IAM_AI_LOCAL_MODEL` | built-in local model |
-| `IAM_AI_LOCAL_ENDPOINTS` | exact `host:port` list allowed over plain http without DNS check (default `localhost:11434,127.0.0.1:11434,ollama:11434`, plus the origin of `IAM_AI_LOCAL_URL`). Only the operator sets it: an admin cannot point a model at another local port or path |
-| `IAM_AI_ALLOWED_HOSTS` | optional allowlist for remote hosts |
-| `IAM_AI_KEY_SECRET` | key sealing secret, 16+ characters, **required** to store an external key (no default value; without it the API refuses the key) |
-| `IAM_AI_LOCAL_MAX_TOKENS` | output cap for the local model |
+| `IAM_AI_KEY_SECRET` | required, 16+ characters: seals model keys and the conversations' MCP tokens, signs approval requests. POC grade: use a secret manager in production |
+| `IAM_AI_LOCAL_URL`, `IAM_AI_LOCAL_MODEL`, `IAM_AI_LOCAL_MAX_TOKENS` | the built-in local model |
+| `IAM_AI_LOCAL_ENDPOINTS` | operator list of `host:port` allowed over plain http (default `localhost:11434,127.0.0.1:11434,ollama:11434`) |
+| `IAM_AI_ALLOWED_HOSTS` | optional allowlist of remote model hosts |
+| `IAM_API_INTERNAL_URL` | where the API reaches its own MCP endpoint (default `http://127.0.0.1:$API_PORT`); never taken from a request header |
 
-## Safety model
+## Safety
 
-1. Confinement: the conversation owns one MCP session (branch `ai/mcp-...`, 8h). Nothing reaches the base branch without a human merge.
-2. Allowlist of tools, and **confirmation for every non-read tool** (write, lifecycle, proxy). The admin approves or declines each pending call in the chat. Auto-approve covers only plain writes on the branch.
-3. Tool results are untrusted data: wrapped, truncated, never executed as instructions.
-4. Limits: 8 steps and 12 tool calls per turn; one running turn per conversation; conversations are owner-scoped; admin only.
-5. Redirects refused, timeouts, errors redacted (keys never echoed).
+- Everything the assistant changes is on its own branch; publishing stays human.
+- Tool output is data: cut, fenced as untrusted, and it cannot add tools, skip approval or raise a limit. The confinement does not depend on the model obeying a prompt.
+- The client sends only its last message; history lives on the server. A user message is text only; an assistant message is accepted only as answers to approval requests the server stored.
+- Model endpoints: https only for remote hosts, every DNS answer must be public, and the connection is pinned to the checked address (TLS still validates the host name), redirects refused. This reduces SSRF, it does not replace egress filtering: restrict outbound traffic and set `IAM_AI_ALLOWED_HOSTS`.
+- Limits: 8 steps per turn, 80 tool calls and 400 messages per conversation, one turn at a time.
 
-Tests, all in CI: `apps/api/src/ai/ai-assistant.spec.ts` (URL rules, providers on fake HTTP, agent loop, injection, limits), `ai.e2e.spec.ts` (real Dolt and core: confirmation, branch confinement, poisoned tool output), `ai-screen.spec.ts` (headless Chrome, light/dark, desktop/mobile via `scripts/ai-assistant-screen-check.mjs`). `scripts/ai-local-model-smoke.mjs` (workflow `ai-local-model`, not a required check) starts Ollama with `qwen2.5:3b` on a CI runner and checks that a real model calls a read tool, is paused on a write tool, and that a denial leaves it unexecuted.
+## Tests
 
-The injection test exists before the plugin can be enabled.
-
-## Limits
-
-No streaming. Sessions last 8h. Reserved ranges (multicast, 198.18/15, 192.0.0/24, NAT64, 6to4) are refused too. Remote hosts are resolved before each call and refused if any answer is private, loopback, link-local or mapped; the connection then goes to the address that passed the check (pinned lookup, TLS still verifies the host name, no redirect), so a DNS answer changing between check and connect is not followed. `IAM_AI_ALLOWED_HOSTS` plus an egress rule remain advisable in production. The per-turn limits reset with each user message, so a conversation is also capped (80 tool calls, 400 messages). Key sealing is POC grade (AES-GCM with one shared secret, no rotation). The MCP spec version is not upgraded here.
+Unit (providers against fake endpoints, chat turn against a real MCP server with a scripted model, DNS and pinning), end to end (real Dolt and core, scripted model: read, approval, refusal, forged approval, injection, privacy, revocation), screen (headless Chrome), and an Ollama workflow that runs a real small model (`.github/workflows/ai-local-model.yml`).
 
 ## Option studied, not enabled: GitHub Copilot SDK
 
