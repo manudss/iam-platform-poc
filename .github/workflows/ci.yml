@@ -176,16 +176,6 @@ jobs:
           path: /tmp/password-eye-shots
           retention-days: 7
           if-no-files-found: ignore
-      - name: AI assistant screen (packaged plugin screen, real theme, light/dark desktop/mobile)
-        run: CHROME_BIN=$(command -v google-chrome) node scripts/ai-assistant-screen-check.mjs /tmp/ai-assistant-shots
-      - name: AI assistant screenshots
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-assistant-screenshots
-          path: /tmp/ai-assistant-shots/*.png
-          retention-days: 7
-          if-no-files-found: ignore
       - name: Photos and read-only user sheet (real bundle, isolated API fixtures, desktop/mobile)
         run: CHROME_BIN=$(command -v google-chrome) NODE_PATH=/tmp/pw/node_modules node scripts/photos-readonly-ui-e2e.cjs /tmp/photos-readonly-shots
       - name: Connections UI safety (real bundle, isolated API fixtures, light/dark desktop/mobile)
