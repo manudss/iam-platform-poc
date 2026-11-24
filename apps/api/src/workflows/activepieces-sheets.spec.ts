@@ -81,6 +81,15 @@ describe('native lifecycle and dynamic property contracts, intercepted transport
   const stop=nock('https://www.googleapis.com').post('/drive/v3/channels/stop',{id:'native-channel',resourceId:'native-resource'}).reply(204);
   await t.onDisable(ctx);assert.ok(stop.isDone());
  });
+ it('native trigger_column E ignores its own email/ticket/intermediate/final marker writes',async()=>{
+  nock.disableNetConnect();const t=adapter.piece('@activepieces/piece-google-sheets')._triggers['google-sheets-new-or-updated-row'];let rows=[['nom','prenom','departement','role','process','cree','badge-fait','email','ticket'],['Nom','Camille','IT','Member','','','','','']];
+  nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Source'}}]});nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(()=>[200,{values:rows}]);
+  nock('https://www.googleapis.com').post('/drive/v3/files/fictional/watch').query(true).reply(200,{id:'channel',resourceId:'resource'});
+  const mem=new Map<string,any>(),ctx:any={auth:{type:'OAUTH2',access_token:'FICTIONAL'},propsValue:{spreadsheetId:'fictional',sheetId:0,trigger_column:'E'},webhookUrl:'https://fixture.invalid/hook',store:{get:async(k:string)=>mem.get(k),put:async(k:string,v:any)=>{mem.set(k,v);}},payload:{headers:{'x-goog-resource-state':'update','x-goog-changed':'content'}}};
+  await t.onEnable(ctx);rows[1][4]='OK';const events=await t.run(ctx);assert.equal(events.length,1);assert.equal(events[0].row,2);assert.equal(events[0].values.E,'OK');
+  rows[1][7]='camille@example.invalid';assert.deepEqual(await t.run(ctx),[]);rows[1][8]='DEMO-1';assert.deepEqual(await t.run(ctx),[]);rows[1][5]='ok';rows[1][6]='ok';assert.deepEqual(await t.run(ctx),[]);assert.deepEqual(await t.run(ctx),[]);
+  rows[1][4]='CHANGED';assert.equal((await t.run(ctx)).length,1);
+ });
  it('dynamic fields use the upstream resolver with native auth context and column-letter keys',async()=>{
   nock.disableNetConnect();nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Source'}}]});nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(200,{values:[['Name','Email']]});
   const p=adapter.piece('@activepieces/piece-google-sheets'),out=await p._actions.insert_row.props.values.props({auth:{type:'OAUTH2',access_token:'FICTIONAL'},spreadsheetId:'fictional',sheetId:0,first_row_headers:true},{});assert.deepEqual(Object.keys(out),['A','B']);assert.equal(out.B.displayName,'Email');

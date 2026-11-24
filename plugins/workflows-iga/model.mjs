@@ -103,7 +103,7 @@ export function stepPlaceholderRefs(value) {
  * A missing step or key refuses the step with a clear error. Objects are injected as JSON. */
 export function substituteStepOutputs(node, outputs) {
     const forbidden=new Set(['__proto__','prototype','constructor']);
-    const resolve=(id,path)=>{let value=outputs[id];for(const key of path.split('.')){if(forbidden.has(key)||value===null||value===undefined||!Object.prototype.hasOwnProperty.call(Object(value),key))throw new BadRequestException(`step "${node.id}": upstream path cannot resolve`);value=value[key];}if(value===undefined)throw new BadRequestException(`step "${node.id}": upstream value missing`);return value;};
+    const resolve=(id,path)=>{let value=outputs[id];for(const key of path.split('.')){if(forbidden.has(key)||value===null||value===undefined||!Object.prototype.hasOwnProperty.call(Object(value),key))throw new BadRequestException(`step "${node.id}": upstream path cannot resolve: no key "${path}" in the output`);value=value[key];}if(value===undefined)throw new BadRequestException(`step "${node.id}": upstream value missing`);return value;};
     const visit=(value,typed=false)=>{
       if(Array.isArray(value))return value.map(x=>visit(x,true));
       if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>{if(forbidden.has(k))throw new BadRequestException('unsafe config property');return[k,visit(v,true)];}));
