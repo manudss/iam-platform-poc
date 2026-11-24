@@ -1,16 +1,16 @@
 // Synthetic runner browser proof only. No production origin or credentials.
 const fs=require('fs');
-let fixedStage='browser-import',proofPage,proofOut,networkFailed=0,httpErrors=0,proofOrigin,resourceSummary={},hydrationReclicks=0;
+let fixedStage='browser-import',proofPage,proofOut,networkFailed=0,httpErrors=0,proofOrigin,resourceSummary={},hydrationReclicks=0,finalApplications={};
 const safeNames=new Set(['Error','TimeoutError','TypeError','ReferenceError','SyntaxError']);
 function resource(request,status,failed){
- let sameOrigin=false,expectedDecorativeAbort=false;
- try{const u=new URL(request.url());sameOrigin=u.origin===proofOrigin;expectedDecorativeAbort=failed&&u.origin==='https://picsum.photos'}catch{}
+ let sameOrigin=false,expectedDecorativeAbort=false,endpoint='other';
+ try{const u=new URL(request.url());sameOrigin=u.origin===proofOrigin;if(sameOrigin){endpoint=u.pathname==='/session/bootstrap'?'session-bootstrap':u.pathname.endsWith('/launchpad')?'launchpad':u.pathname.endsWith('/me/access')?'access':'other'}expectedDecorativeAbort=failed&&u.origin==='https://picsum.photos'}catch{}
  const known=new Set(['document','stylesheet','image','media','font','script','texttrack','xhr','fetch','eventsource','websocket','manifest','other']);
  const resourceType=known.has(request.resourceType())?request.resourceType():'other';
- const item={resourceType,status,sameOrigin,failed,expectedDecorativeAbort};const key=JSON.stringify(item);
+ const item={resourceType,status,sameOrigin,endpoint,phase:fixedStage,failed,expectedDecorativeAbort};const key=JSON.stringify(item);
  if(!resourceSummary[key])resourceSummary[key]={...item,count:0};resourceSummary[key].count++;
 }
-function counters(){return {networkIdleRequired:false,networkFailed,httpErrors,resources:Object.values(resourceSummary),hydrationReclicks}}
+function counters(){return {networkIdleRequired:false,networkFailed,httpErrors,resources:Object.values(resourceSummary),hydrationReclicks,finalApplications}}
 function diagnostic(error){
  let route='other';
  try{const p=new URL(proofPage.url()).pathname;route=p==='/login'?'login':(p==='/my-applications'||p==='/callback'||p.startsWith('/core/'))?'auth':'other'}catch{}
@@ -48,6 +48,12 @@ function diagnostic(error){
    fixedStage=name+'-credential-submit';await page.locator('button[type="submit"],input[type="submit"]').first().click();
    fixedStage=name+'-authenticated-route';await page.waitForURL('**/my-applications',{timeout:45000});await page.waitForFunction(()=>document.querySelector('nav')&&document.body.innerText.includes('My applications'));
    if(await page.locator('input[name="password"]').count())throw Error('authentication not complete');
+   fixedStage=name+'-applications-loaded';
+   finalApplications[name]='timeout';
+   await page.waitForFunction(()=>!Array.from(document.querySelectorAll('app-launchpad .lp-empty')).some(e=>e.textContent.includes('Loading applications')),{},{timeout:45000});
+   if(await page.locator('app-launchpad #lp-problem').count()){finalApplications[name]='error';throw Error('applications load failed')}
+   await page.waitForSelector('app-launchpad [data-app],app-launchpad #lp-empty');
+   finalApplications[name]=await page.locator('app-launchpad [data-app]').count()?'loaded':'empty';
    // No tokens, cookies, raw URLs, page text or request contents are exported.
    await page.screenshot({path:out+'/'+name+'-authenticated.png',fullPage:true});
    await context.close();

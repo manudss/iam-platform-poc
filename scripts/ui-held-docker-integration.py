@@ -16,11 +16,12 @@ def docker(*args):return command(['docker',*args]).stdout.strip()
 def module(path,name):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 
-def trace_and_kill(args,manifest,gate,when):
+def trace_and_kill(args,manifest,gate,when,diagnostic):
  # Linux x86_64 ptrace observes the real controller's unlink syscall return.
  # No monkeypatch or replacement controller, no change to reviewed source.
  # Trace controller process and children because qualifier subprocesses also run.
  if platform.machine()!='x86_64':raise RuntimeError('x86_64 fixture required')
+ diagnostic.update({'stage':'ptrace-init','syscallStops':0,'unlinkEntries':0,'selectedGateEntries':0,'completedGateUnlinks':0,'gateBasenameSeen':False})
  libc=ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True)
  libc.ptrace.restype=ctypes.c_long
  class Regs(ctypes.Structure):
@@ -28,7 +29,8 @@ def trace_and_kill(args,manifest,gate,when):
  def ptrace(req,pid,addr=0,data=0):
   ctypes.set_errno(0)
   val=libc.ptrace(req,pid,ctypes.c_void_p(addr),ctypes.c_void_p(data))
-  if val==-1 and ctypes.get_errno():raise RuntimeError('ptrace fixture failure')
+  if val==-1 and ctypes.get_errno():
+   diagnostic.update({'ptraceRequest':req,'errno':ctypes.get_errno()});raise RuntimeError('ptrace fixture failure')
   return val
  # Queue runs in this root subprocess; forked tracer child starts stopped before exec.
  readfd,writefd=os.pipe();pid=os.fork()
@@ -37,29 +39,38 @@ def trace_and_kill(args,manifest,gate,when):
   dev=os.open('/dev/null',os.O_WRONLY);os.dup2(dev,1);os.dup2(dev,2)
   libc.ptrace(0,0,0,0);os.kill(os.getpid(),signal.SIGSTOP);os.execvp(args[0],args)
  os.close(readfd);os.write(writefd,json.dumps(manifest).encode());os.close(writefd)
+ diagnostic['stage']='initial-stop'
  os.waitpid(pid,0);ptrace(0x4200,pid,0,1) # TRACESYSGOOD; do not trace children or capture their inputs.
+ diagnostic['stage']='syscall-tracing'
  stopped=False;entry=True;selected=False;deleted=0
  try:
   while True:
    ptrace(24,pid,0,0) # PTRACE_SYSCALL
    _,status=os.waitpid(pid,0)
-   if os.WIFEXITED(status) or os.WIFSIGNALED(status):break
+   if os.WIFEXITED(status) or os.WIFSIGNALED(status):
+    diagnostic['queueExitCode']=os.WEXITSTATUS(status) if os.WIFEXITED(status) else None
+    diagnostic['queueSignal']=os.WTERMSIG(status) if os.WIFSIGNALED(status) else None
+    break
    if os.WSTOPSIG(status)!=(signal.SIGTRAP|0x80):continue
+   diagnostic['syscallStops']+=1
    regs=Regs();ptrace(12,pid,0,ctypes.addressof(regs))
    entry=regs.rax==((1<<64)-38) # x86 syscall-entry ENOSYS sentinel
    if entry:
     selected=False
     if regs.orig_rax in [87,263]: # unlink / unlinkat
+     diagnostic['unlinkEntries']+=1
      addr=regs.rdi if regs.orig_rax==87 else regs.rsi
      raw=bytearray()
      for off in range(0,4096,8):
       v=ptrace(2,pid,addr+off,0)&((1<<64)-1);part=v.to_bytes(8,'little');raw.extend(part)
       if 0 in part:break
      path=bytes(raw).split(b'\0')[0].decode()
+     if Path(path).name in {Path(item).name for item in gate}:diagnostic['gateBasenameSeen']=True
      selected=path in gate
+     if selected:diagnostic['selectedGateEntries']+=1
    else:
     if selected and regs.rax==0:
-     deleted+=1
+     deleted+=1;diagnostic['completedGateUnlinks']=deleted
      if deleted==when:
       os.kill(pid,signal.SIGKILL);os.waitpid(pid,0);stopped=True;break
  finally:
@@ -224,11 +235,17 @@ def main():
   for when in [1,2]:
    for p in [gate,ops]:p.write_text('synthetic fixture gate\n');p.chmod(0o644)
    stage='real-controller-sigkill-'+str(when);state=root/('queue-kill-'+str(when)+'.json');q.atomic(state,history)
-   crash=trace_and_kill(queueargs(state,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],when)
+   result['crashDiagnostic']={}
+   crash=trace_and_kill(queueargs(state,'open-reviewed-ui-held'),manifest(history),[str(gate),str(ops)],when,result['crashDiagnostic'])
+   stage='sigkill-'+str(when)+'-evidence-intent-history-gates'
    saved=q.load(state)
+   result['crashDiagnostic'].update({'intentPresent':bool(saved.get('opening_intent')),'historyUnchanged':saved['history']==history['history'],'gateAbsenceCountCorrect':sum(not p.exists() for p in [gate,ops])==when})
    if not saved.get('opening_intent') or saved['history']!=history['history'] or sum(not p.exists() for p in [gate,ops])!=when:raise RuntimeError('crash evidence mismatch')
+   stage='sigkill-'+str(when)+'-rearm-command'
    command(queueargs(state,'rearm-interrupted-opening'))
+   stage='sigkill-'+str(when)+'-rearm-state'
    if q.load(state)['opening_intent']['phase']!='interrupted-access-rearmed' or any(p.read_text()!='synthetic fixture gate\n' or p.stat().st_mode&0o777!=0o644 or p.stat().st_uid!=0 or p.stat().st_gid!=0 for p in [gate,ops]):raise RuntimeError('real rearm failed')
+   stage='sigkill-'+str(when)+'-rearm-503'
    u.check_origins(origins,503);crash['manualRearmVerified503']=True;result['interruptions'].append(crash)
   result['passed']=True;result['controllerSHA256']=digest(binroot/'reviewed-ui-held.py');result['qualifierSHA256']=digest(binroot/'qualification.py');result['qualifierContainerSHA256']=digest(binroot/'qualification-container.mjs')
   if result['controllerSHA256']!=expected['reviewed-ui-held.py'] or result['qualifierSHA256']!=expected['qualification.py'] or result['qualifierContainerSHA256']!=expected['qualification-container.mjs']:raise RuntimeError('result source hash mismatch')
