@@ -138,3 +138,9 @@ even after two edits or deletion/recreation of the same definition ID. Residual
 state without a subscription also blocks re-enable. Provider is part of the
 fingerprint; legacy fingerprints therefore require review rather than automatic
 reinterpretation. There is no automatic tombstone/cursor/pending purge.
+
+Product limitation: disabling/re-enabling a native trigger or its tenant plugin
+is a review boundary, not a supported automatic lifecycle cycle while durable
+state is retained. The runtime screen states this. No automatic reactivation,
+state purge or unlock endpoint is provided. Operator reconciliation is required
+for all retained subscriptions/cursors/events before any deliberate recovery.
