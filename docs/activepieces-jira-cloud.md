@@ -119,3 +119,14 @@ sanitation+pagination, create metadata/ADF, transitions and uncertainty. No live
 Jira account, actual project metadata, workflow transitions, real scope, provider
 rate limits or full badge workflow has been qualified. No provider effects,
 connection changes, activation, merge or deployment were performed.
+
+## Trigger edits are review boundaries
+Changing native trigger provider or configuration while a durable subscription
+exists now retains its former state as review. No automatic teardown, re-enable,
+old event delivery into the edited graph or cursor reuse occurs. Pending events,
+batch envelope and native cursor remain preserved for operator reconciliation.
+This intentionally blocks edits until the former provider subscription and data
+are reconciled. Disabling an unchanged trigger still invokes its own provider's
+onDisable once; an uncertain response retains disabling. No automatic recovery
+is authorized. A review state does not itself stop an already registered remote
+provider channel, so the operator must reconcile it before claiming removal.
