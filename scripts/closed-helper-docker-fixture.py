@@ -42,6 +42,9 @@ def wait(name,port,path,seconds=220):
   if not inspect(name)['State']['Running']:raise RuntimeError('fixture process died')
   time.sleep(2)
  raise RuntimeError('fixture health timeout')
+def node_app_process(argv):
+ return bool(argv) and pathlib.PurePosixPath(argv[0]).name=='node' and any(x in ['dist/main.js','/app/api/dist/main.js'] for x in argv[1:])
+
 def ipv4_gateway(ipam):
  gateways=[x['Gateway'] for x in ipam if x.get('Gateway') and ipaddress.ip_address(x['Gateway']).version==4]
  if len(gateways)!=1:raise ValueError('fixture requires exactly one IPv4 gateway')
@@ -147,14 +150,20 @@ def main():
   summary=json.loads(d('exec',app,'node','-e',"const f=require('fs');let log=f.readFileSync('/data/api.log','utf8');let m=/automation hold: (\\{[^\\n]+\\})/.exec(log);if(!m||!JSON.parse(m[1]).held)process.exit(1);let p=f.readdirSync('/proc').filter(x=>/^\\d+$/.test(x)&&x!==String(process.pid)).find(x=>{try{return f.readFileSync('/proc/'+x+'/cmdline','utf8').includes('dist/main.js')}catch{return false}});if(!p)process.exit(2);let e=f.readFileSync('/proc/'+p+'/environ','utf8').split('\\0');if(!e.includes('IAM_AUTOMATION_HOLD=1')||e.some(x=>x.startsWith('NODE_TLS_REJECT_UNAUTHORIZED=')))process.exit(3);console.log(JSON.stringify({held:true,apiProcessPresent:true,tlsOverrideAbsent:true,pid1Status:f.readFileSync('/proc/1/status','utf8').split('\\n').filter(x=>/^(CapEff|CapBnd|NoNewPrivs):/.test(x))}))"))
   if not summary['held']:raise ValueError('API not held')
   assert_postapp(r4,r6,launch,summary)
-  live=json.loads(call([str(impl),'--mode','postcheck','--proof-file',str(proofpath),*args]).stdout)
+  # Preserve synthetic evidence even if the mandatory live comparison refuses.
+  (out/'intermediate-launch-and-app.json').write_text(json.dumps({'finalPassed':False,'launch':launch,'appModule':summary,'postAppRules4':r4,'postAppRules6':r6},indent=2))
   postipv6=json.loads(d('exec',app,'node','-e',"const f=require('fs');const dirs=f.readdirSync('/proc/sys/net/ipv6/conf').filter(x=>!['all','default','lo'].includes(x));console.log(JSON.stringify({interfaces:dirs.map(name=>({name,disabled:f.readFileSync('/proc/sys/net/ipv6/conf/'+name+'/disable_ipv6','utf8').trim()})),addresses:f.readFileSync('/proc/net/if_inet6','utf8'),routes:f.readFileSync('/proc/net/ipv6_route','utf8')}))"))
+  (out/'synthetic-ipv6-before-after.json').write_text(json.dumps({'before':launch['ipv6State'],'after':postipv6},indent=2))
+  live=json.loads(call([str(impl),'--mode','postcheck','--proof-file',str(proofpath),*args]).stdout)
   def ipv6shape(x):return {'interfaces':x['interfaces'],'addresses':sorted(x['addresses'].splitlines()),'routes':sorted(' '.join(l.split()[:5]+l.split()[-1:]) for l in x['routes'].splitlines())}
   if ipv6shape(postipv6)!=ipv6shape(launch['ipv6State']):raise ValueError('IPv6 state changed after AppModule')
   # Restart must return to inert FIFO, never run app or retain a release signal.
   stage='restart-inert'
   d('stop',app);d('start',app);time.sleep(2)
-  inert=call(['docker','exec',app,'node','-e',"const f=require('fs');if(!f.statSync('/tmp/lyam-closed-start.fifo').isFIFO())process.exit(1);const live=f.readdirSync('/proc').filter(p=>p!==String(process.pid)).some(p=>{try{return f.readFileSync('/proc/'+p+'/cmdline','utf8').includes('dist/main.js')}catch{return false}});if(live)process.exit(2)"],False)
+  inert=call(['docker','exec',app,'node','-e',"const f=require('fs');let fifo=false;try{fifo=f.statSync('/tmp/lyam-closed-start.fifo').isFIFO()}catch{}const processes=f.readdirSync('/proc').filter(p=>/^[0-9]+$/.test(p)&&p!==String(process.pid)).flatMap(p=>{try{const raw=f.readFileSync('/proc/'+p+'/cmdline','utf8');const a=raw.split('\\0');const node=a[0].split('/').pop()==='node';const app=node&&a.slice(1).some(x=>['dist/main.js','/app/api/dist/main.js'].includes(x));const old=raw.includes('dist/main.js');const state=/^State:\\s+(\\w)/m.exec(f.readFileSync('/proc/'+p+'/status','utf8'))?.[1]||'unknown';return [{pid:Number(p),node,app,oldSubstringMatch:old,inline:node&&a.includes('-e'),shell:['sh','bash'].includes(a[0].split('/').pop()),state}]}catch(e){return e.code==='ENOENT'?[]:[{pid:Number(p),readError:true}]}});const live=processes.some(p=>p.app||p.oldSubstringMatch);const uncertain=processes.some(p=>p.readError);console.log(JSON.stringify({fifo,processes,live,uncertain}));process.exit(!fifo?1:uncertain?3:live?2:0)"],False)
+  restart={'returnCode':inert.returncode,'passed':inert.returncode==0}
+  if inert.stdout.strip():restart['inspection']=json.loads(inert.stdout)
+  (out/'restart-inert-result.json').write_text(json.dumps(restart,indent=2))
   if inert.returncode:raise ValueError('restart did not fail closed')
   result={'passed':True,'scope':'real Docker helper, Linux policy, real synthetic PG/Bao and real AppModule, no production data','image':a.image,'imageID':im['Id'],'preflight':pre,'launch':launch,'appModule':summary,'liveVerification':live,'postAppRules4':r4,'postAppRules6':r6,'restartInert':True,'badLedgerRefusedBeforeCandidate':True,'incompletePolicyRefusedBeforeReleaseAndStopped':True,'ipv6Mode':a.ipv6_mode,'fixtureConfigAutoExtracted':True,'fixtureWrappersReboundToPrivatePrefix':True,'syntheticFreshLedgerNotHostLedger':True,'companionImages':[a.pg_image,a.bao_image],'limitations':['Does not exercise provider calls or production queue','Offline bundle TLS inventory is a separate exact-image gate','Not production qualification']}
   (out/'closed-helper-docker-result.json').write_text(json.dumps(result,indent=2));print('PASS real Docker closed-helper fixture')

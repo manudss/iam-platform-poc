@@ -34,6 +34,10 @@ class PostApp(unittest.TestCase):
   self.assertEqual(f.ipv4_gateway([v4,v6]),'172.18.0.1')
   self.assertRaises(ValueError,f.ipv4_gateway,[v6])
   self.assertRaises(ValueError,f.ipv4_gateway,[v4,v4])
+ def test_process_argv_not_embedded_script(self):
+  self.assertTrue(f.node_app_process(['/usr/local/bin/node','dist/main.js']))
+  self.assertTrue(f.node_app_process(['node','/app/api/dist/main.js']))
+  for argv in [['node','-e',"script containing dist/main.js"],['sh','-c','node dist/main.js'],[],['dist/main.js']]:self.assertFalse(f.node_app_process(argv))
  def test_postapp(self):
   launch={'policy4Exact':'four','policy6Exact':'six'};summary={'pid1Status':['CapEff: 0000000000000000','CapBnd: 0000000000000000','NoNewPrivs: 1']};f.assert_postapp('four','six',launch,summary)
   for a,b in [('changed','six'),('four','changed')]:self.assertRaises(ValueError,f.assert_postapp,a,b,launch,summary)
