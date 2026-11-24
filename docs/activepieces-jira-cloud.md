@@ -130,3 +130,11 @@ are reconciled. Disabling an unchanged trigger still invokes its own provider's
 onDisable once; an uncertain response retains disabling. No automatic recovery
 is authorized. A review state does not itself stop an already registered remote
 provider channel, so the operator must reconcile it before claiming removal.
+
+Retirement to manual and deletion retain a review tombstone without automatic
+onDisable. Disabling an unchanged native trigger calls onDisable, then keeps a
+review tombstone instead of clearing the subscription. Reactivation is blocked
+even after two edits or deletion/recreation of the same definition ID. Residual
+state without a subscription also blocks re-enable. Provider is part of the
+fingerprint; legacy fingerprints therefore require review rather than automatic
+reinterpretation. There is no automatic tombstone/cursor/pending purge.
