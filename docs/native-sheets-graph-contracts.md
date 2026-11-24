@@ -57,7 +57,9 @@ Result is `{updates:<Google update response>,row:<number>}`.
 `{{steps.find.result.length}}` reads array count. Missing paths fail closed.
 Prototype/constructor paths are rejected.
 
-For a valid JSON config string, interpolation parses the JSON container first.
+For a native Sheets node with a valid JSON config string containing step/event
+placeholders, interpolation parses the JSON container first. Non-native literal
+config strings are not parsed or rewritten.
 An exact placeholder inside a JSON value retains its source type, including
 number, boolean, array or object. Quotes/newlines in strings are JSON-escaped,
 not concatenated into JSON source. Mixed strings still interpolate as text.

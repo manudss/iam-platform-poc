@@ -34,7 +34,7 @@ export function validateCustomCall(props){
  if(u.protocol!=='https:'||u.hostname!=='sheets.googleapis.com'||u.port||u.username||u.password||!u.pathname.startsWith('/v4/')||u.hash)throw Error('Custom calls are limited to the Google Sheets API');
  if([...u.searchParams.keys(),...Object.keys(props.queryParams??{})].some(k=>['access_token','oauth_token','key'].includes(k.toLowerCase())))throw Error('Custom query authentication is not allowed');
  if(props.followRedirects)throw Error('Custom API redirects are disabled');
- if(Object.keys(props.headers??{}).some(k=>['authorization','host','cookie','proxy-authorization'].includes(k.toLowerCase())))throw Error('Custom authentication headers are not allowed');
+ if(Object.keys(props.headers??{}).some(k=>['authorization','host','cookie','proxy-authorization','x-http-method-override','x-method-override','x-http-method'].includes(k.toLowerCase())))throw Error('Custom authentication headers are not allowed');
  props.url={...props.url,url:u.toString()};
 }
 export const sheetBlockType=sheetType;
@@ -50,8 +50,7 @@ export const GOOGLE_SHEETS_BLOCKS=Object.entries(SHEETS_ACTIONS).map(([key,actio
   if(key==='custom_api_call')validateCustomCall(props);
   const auth=authOf(ctx.settings);
   if(!ctx.pieceRuntime)throw Error('Durable Activepieces runtime unavailable');
-  if(sheetsMutates(key,props)||['get_next_rows','sheets_get_next_rows'].includes(key)){if(!ctx.markEffectPending)throw Error('Durable effect tracking unavailable');await ctx.markEffectPending({kind:'google-sheets-action',action:key});}
-  const invoke=()=>runPieceAction(PKG,key,{auth,propsValue:props,runtime:ctx.pieceRuntime});
+  const invoke=async()=>{if(sheetsMutates(key,props)||['get_next_rows','sheets_get_next_rows'].includes(key)){if(!ctx.markEffectPending)throw Error('Durable effect tracking unavailable');await ctx.markEffectPending({kind:'google-sheets-action',action:key});}return runPieceAction(PKG,key,{auth,propsValue:props,runtime:ctx.pieceRuntime});};
   const result=ctx.pieceRuntime.withLock?await ctx.pieceRuntime.withLock(invoke):await invoke();
   return {result:result??null,confirmed:true};
  }
