@@ -110,10 +110,10 @@ export function substituteStepOutputs(node, outputs) {
       if(typeof value!=='string')return value;
       // Valid JSON containers are parsed before interpolation, so quotes and native
       // object/array/boolean/number values cannot corrupt or inject JSON syntax.
-      if(!typed&&node.type?.startsWith('google-sheets-ap-')&&value.includes('{{steps.')&&/^[\[{]/.test(value.trim())){try{const parsed=JSON.parse(value);return JSON.stringify(visit(parsed,true));}catch(e){if(e instanceof BadRequestException)throw e;}}
+      if(!typed&&node.type?.startsWith('google-sheets-ap-')&&value.includes('{{steps.')&&!value.trim().startsWith('{{')&&/^[\[{]/.test(value.trim())){try{const parsed=JSON.parse(value);return JSON.stringify(visit(parsed,true));}catch(e){if(e instanceof BadRequestException)throw e;throw new BadRequestException('Native JSON placeholders require valid quoted JSON values');}}
       const match=[...value.matchAll(new RegExp(STEP_PLACEHOLDER.source,'g'))];
       if(typed&&match.length===1&&match[0][0]===value)return resolve(match[0][1],match[0][2]);
-      return value.replace(new RegExp(STEP_PLACEHOLDER.source,'g'),(_m,id,path)=>{const val=resolve(id,path);return typeof val==='object'?JSON.stringify(val):String(val);});
+      return value.replace(new RegExp(STEP_PLACEHOLDER.source,'g'),(_m,id,path)=>{const val=resolve(id,path);return typeof val==='object'?JSON.stringify(val):String(val);}).replaceAll('\uE000','{{');
     };
     return {...node,config:Object.fromEntries(Object.entries(node.config).map(([k,v])=>[k,visit(v)]))};
 }
@@ -324,11 +324,12 @@ export const TRIGGER_KEYS = ['event', 'match', 'config', 'cron'];
 export function substituteEventPayload(graph, payload) {
     const nodes=graph.nodes.map(n=>{
       const visit=(value,typed=false)=>{
-       if(Array.isArray(value))return value.map(x=>visit(x,true));
+       if(Array.isArray(value))return n.type?.startsWith('google-sheets-ap-')?value.map(x=>visit(x,true)):value;
+       if(value&&typeof value==='object'&&!n.type?.startsWith('google-sheets-ap-'))return value;
        if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,visit(v,true)]));
        if(typeof value!=='string')return value;
-       if(!typed&&n.type?.startsWith('google-sheets-ap-')&&value.includes('{{event.')&&/^[\[{]/.test(value.trim())){try{return JSON.stringify(visit(JSON.parse(value),true));}catch(e){if(e instanceof BadRequestException)throw e;}}
-       const get=key=>{if(!Object.prototype.hasOwnProperty.call(payload,key)||payload[key]===undefined)throw new BadRequestException(`step "${n.id}": no value for {{event.${key}}} in the triggering event`);return payload[key];};
+       if(!typed&&n.type?.startsWith('google-sheets-ap-')&&value.includes('{{event.')&&!value.trim().startsWith('{{')&&/^[\[{]/.test(value.trim())){try{return JSON.stringify(visit(JSON.parse(value),true));}catch(e){if(e instanceof BadRequestException)throw e;throw new BadRequestException('Native JSON placeholders require valid quoted JSON values');}}
+       const get=key=>{if(!Object.prototype.hasOwnProperty.call(payload,key)||payload[key]===undefined)throw new BadRequestException(`step "${n.id}": no value for {{event.${key}}} in the triggering event`);const value=payload[key];if(typeof value==='string'){if(value.includes('\uE000'))throw new BadRequestException('Reserved placeholder escape');return value.replaceAll('{{','\uE000');}return value;};
        const matches=[...value.matchAll(new RegExp(PLACEHOLDER.source,'g'))];
        if(typed&&matches.length===1&&matches[0][0]===value)return get(matches[0][1]);
        return value.replace(new RegExp(PLACEHOLDER.source,'g'),(_m,key)=>String(get(key)));

@@ -22,7 +22,7 @@ describe('connection metadata on real Dolt', {skip:!have && 'DOLT_BIN missing'},
     for(let i=0;i<100;i++){if(spawnSync(bin,['--host','127.0.0.1','--port','14377','--no-tls','-u','root','sql','-q','select 1'],{env}).status===0)break;await new Promise(r=>setTimeout(r,100));}
     for(const k of ['DOLT_PORT','DOLT_DATABASE','IAM_WORKSPACE_MODE'])saved[k]=process.env[k];Object.assign(process.env,{DOLT_PORT:'14377',DOLT_DATABASE:'iam'});delete process.env.IAM_WORKSPACE_MODE;
     versioning=new VersioningService();const store=new WorkflowStore(versioning);const secrets=new Map<string,any>();service=new WorkflowConnections(store,{enabled:true,put:async(p:string,d:any)=>{secrets.set(p,d);},get:async(p:string)=>secrets.get(p)} as any);
-    await service.list('tenant-a'); // startup migration commits only tables, never credentials/content
+    await service.list('tenant-a');await store.preparePieceStorage(); // startup migration commits only tables, never credentials/content
     await versioning.createBranch('connections-edit','main');
   });
   after(async()=>{process_?.kill();await new Promise(r=>setTimeout(r,500));if(dir)rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200});for(const k of Object.keys(saved)){if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];}});
@@ -46,7 +46,15 @@ describe('connection metadata on real Dolt', {skip:!have && 'DOLT_BIN missing'},
 
   it('operational status omits native values, lock owner, webhook token and other tenants',async()=>{
     const a=new WorkflowStore(versioning);await a.piecePut('tenant-a','trigger:status','lyam:subscription',{key:'new-worksheet',status:'review',lastRenew:7,token:'SECRET_CHANNEL',config:{secret:'SECRET_CONFIG'}});await a.piecePut('tenant-a','trigger:status','lyam:pending',[{data:'SECRET_PAYLOAD'}]);await a.pieceClaim('tenant-a','trigger:status','SECRET_OWNER');
-    const status=await a.pieceStatuses('tenant-a');const row=status.find(x=>x.scope==='trigger:status')!;assert.deepEqual(row,{scope:'trigger:status',subscription:{key:'new-worksheet',status:'review',lastRenew:7},locked:true,pending:1});assert.equal(JSON.stringify(status).includes('SECRET'),false);assert.equal((await a.pieceStatuses('tenant-b')).some(x=>x.scope==='trigger:status'),false);await a.pieceRelease('tenant-a','trigger:status','SECRET_OWNER');
+    const status=await a.pieceStatuses('tenant-a');const row=status.find(x=>x.scope==='trigger:status')!;assert.deepEqual(row,{scope:'trigger:status',subscription:{key:'new-worksheet',status:'review',lastRenew:7},locked:true,pending:1,inbox:0});assert.equal(JSON.stringify(status).includes('SECRET'),false);assert.equal((await a.pieceStatuses('tenant-b')).some(x=>x.scope==='trigger:status'),false);await a.pieceRelease('tenant-a','trigger:status','SECRET_OWNER');
+  });
+
+  it('coalesces inbox, preserves concurrent replacement and rejects durable tenant quota',async()=>{
+    const a=new WorkflowStore(versioning),scope='trigger:inbox';await a.pieceEnqueue('tenant-quota',scope,{message:1});await a.pieceEnqueue('tenant-quota',scope,{message:2});const seen=await a.pieceInbox('tenant-quota',scope);assert.equal(seen.length,1);await a.pieceEnqueue('tenant-quota',scope,{message:3});await a.pieceDeleteExact('tenant-quota',scope,seen[0].key,seen[0].value);assert.deepEqual((await a.pieceInbox('tenant-quota',scope))[0].value,{message:3});
+    const c=await(a as any).meta();try{for(let i=1;i<1000;i++)await c.query("INSERT INTO workflow_piece_state VALUES (?,?,'lyam:inbox:notification','{}')",['tenant-quota','trigger:quota-'+i]);}finally{await c.end();}await assert.rejects(()=>a.pieceEnqueue('tenant-quota','trigger:overflow',{}),/quota/);await a.pieceEnqueue('tenant-quota',scope,{message:4});assert.equal((await a.pieceInbox('tenant-quota',scope)).length,1);
+  });
+  it('prunes only explicitly expired exports, retaining cursors, locks and uncertain subscriptions',async()=>{
+    const a=new WorkflowStore(versioning);await a.piecePut('tenant-a','file:expired','f',{expiresAt:1,data:'old'});await a.piecePut('tenant-a','file:kept','f',{expiresAt:Date.now()+999999,data:'new'});await a.piecePut('tenant-a','trigger:keep','lyam:subscription',{status:'review'});await a.prunePieceFiles();assert.equal(await a.pieceGet('tenant-a','file:expired','f'),null);assert.ok(await a.pieceGet('tenant-a','file:kept','f'));assert.deepEqual(await a.pieceGet('tenant-a','trigger:keep','lyam:subscription'),{status:'review'});
   });
 
   it('durable connector mutex rejects competing instances and releases only its owner',async()=>{

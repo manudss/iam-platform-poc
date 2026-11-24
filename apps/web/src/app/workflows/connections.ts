@@ -56,7 +56,7 @@ export function probeFor(c: WorkflowConnection, probes: Record<string, Connectio
 </div>
 <section class="wfc-info" aria-labelledby="native-runtime-title"><h3 id="native-runtime-title">Native connector runtime</h3><button class="secondary" (click)="loadNativeStatus()">Refresh runtime status</button>
 @if(nativeStatusError()){<p class="hint" role="status">{{nativeStatusError()}}</p>}
-@for(entry of nativeStatus();track entry.scope){<p class="hint"><b>{{entry.scope}}</b> · {{entry.subscription?.status || 'Action state'}} · {{entry.locked ? 'Locked: running or needs crash reconciliation' : 'No retained lock'}} · {{entry.pending}} pending deliveries</p>}
+@for(entry of nativeStatus();track entry.scope){<p class="hint"><b>{{entry.scope}}</b> · {{entry.subscription?.status || 'Action state'}} · {{entry.locked ? 'Locked: running or needs crash reconciliation' : 'No retained lock'}} · {{entry.pending}} pending deliveries · {{entry.inbox}} queued notification batches</p>}
 <p class="hint">For a stranded lock or uncertain subscription, stop the former worker and reconcile external effects and Google channels with your operator. Never clear a lock or retry automatically. Refresh is read-only; it does not poll Google or run workflows.</p></section>
 <p class="hint">A connection test reads service access only. It does not create a ticket, append a row or send a workflow action.</p>
 <div class="wfc-info"><b>Write-only credentials</b><p class="hint">Secret revisions live in OpenBao. Dolt versions connection metadata and references, never credentials. Without a secret store, credential storage and authenticated live use are blocked.</p>@if (!secretStoreConfigured()) {<p class="hint">OpenBao is not configured. Ask your operator to connect the secret store.</p>}</div>
@@ -96,7 +96,7 @@ export class WorkflowConnectionsPage  {
     catch { if (epoch === this.epoch) this.note.set('Connections could not be loaded. Check your access and try again.'); }
     finally { if (epoch === this.epoch) this.loading.set(false); }
   }
-  protected nativeStatus=signal<{scope:string;subscription:{status?:string}|null;locked:boolean;pending:number}[]>([]);
+  protected nativeStatus=signal<{scope:string;subscription:{status?:string}|null;locked:boolean;pending:number;inbox:number}[]>([]);
   protected nativeStatusError=signal('');
   protected async loadNativeStatus(){const epoch=this.epoch;this.nativeStatusError.set('Loading runtime status...');try{const r=await this.s.api.raw<any>('GET','/activepieces-runtime-status');if(epoch!==this.epoch)return;if(r.status>=400)throw Error();this.nativeStatus.set(r.data.entries);this.nativeStatusError.set(r.data.entries.length?'':'No native runtime state yet.');}catch{if(epoch!==this.epoch)return;this.nativeStatusError.set('Runtime status unavailable. Check administrator access and retry.');}}
   protected probe(c: WorkflowConnection) { return probeFor(c, this.probes()); }

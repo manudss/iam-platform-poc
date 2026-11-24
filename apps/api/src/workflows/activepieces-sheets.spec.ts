@@ -38,7 +38,7 @@ import{ActivepiecesSheetsService}from'./activepieces-sheets.js';
 describe('native trigger runtime with persisted fixtures, not live Google',()=>{
  function harness(key='new-worksheet'){
   const memory=new Map<string,unknown>();const d:any={id:'wf-fictional',tenant:'t',active:true,trigger:{event:Object.entries(full.GOOGLE_SHEETS_EVENTS).find(([,e]:any)=>e.activepiecesTrigger===key)![0],config:{connectionId:'conn-test',spreadsheetId:'fictional'}}};
-  const store:any={liveRef:'main',pieceClaim:async()=>true,pieceRelease:async()=>{},pieceGet:async(t:string,s:string,k:string)=>memory.get(t+s+k)??null,piecePut:async(t:string,s:string,k:string,v:unknown)=>{memory.set(t+s+k,structuredClone(v));},pieceDelete:async(t:string,s:string,k:string)=>{memory.delete(t+s+k);},getDefinition:async()=>d,listAllDefinitions:async()=>[d],pieceSubscriptions:async()=>[],pieceInbox:async(t:string,scope:string)=>[...memory.entries()].filter(([k])=>k.startsWith(t+scope+'lyam:inbox:')).map(([k,value])=>({key:k.slice((t+scope).length),value}))};
+  const store:any={liveRef:'main',pieceClaim:async()=>true,pieceRelease:async()=>{},pieceGet:async(t:string,s:string,k:string)=>memory.get(t+s+k)??null,piecePut:async(t:string,s:string,k:string,v:unknown)=>{memory.set(t+s+k,structuredClone(v));},pieceDelete:async(t:string,s:string,k:string)=>{memory.delete(t+s+k);},pieceEnqueue:async(t:string,s:string,v:unknown)=>{memory.set(t+s+'lyam:inbox:notification',structuredClone(v));},pieceDeleteExact:async(t:string,s:string,k:string,v:unknown)=>{if(JSON.stringify(memory.get(t+s+k))===JSON.stringify(v))memory.delete(t+s+k);},getDefinition:async()=>d,prunePieceFiles:async()=>{},listAllDefinitions:async()=>[d],pieceSubscriptions:async()=>[],pieceInbox:async(t:string,scope:string)=>[...memory.entries()].filter(([k])=>k.startsWith(t+scope+'lyam:inbox:')).map(([k,value])=>({key:k.slice((t+scope).length),value}))};
   const runs:any[]=[];const service:any=new ActivepiecesSheetsService(store,{resolve:async()=>({settings})}as any,{start:async(...args:any[])=>{runs.push(args);return{};}}as any,{isActive:()=>true}as any,{}as any);
   const state:any={key,config:d.trigger.config,fingerprint:'fictional',token:'fixture-token',lastRenew:Date.now(),status:'active'};return{service,memory,d,state,runs,store};
  }
@@ -65,8 +65,17 @@ describe('native trigger runtime with persisted fixtures, not live Google',()=>{
  });
  it('verified webhook is durably queued even while a worker lock is busy, then drained after restart',async()=>{
   const h=harness('googlesheets_new_row_added');h.state.fingerprint=(await import('node:crypto')).createHash('sha256').update(JSON.stringify([h.state.key,h.d.trigger.config])).digest('hex');await h.store.piecePut('t','trigger:wf-fictional','lyam:subscription',h.state);await h.store.piecePut('t','trigger:wf-fictional',h.state.key,{id:'channel',resourceId:'resource'});h.store.pieceClaim=async()=>false;
-  assert.deepEqual(await h.service.webhook('t',h.d.id,'fixture-token',{'x-goog-channel-id':'channel','x-goog-resource-id':'resource','x-goog-resource-state':'update'},{}),{received:true,queued:true});assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,1);
+  assert.deepEqual(await h.service.webhook('t',h.d.id,'fixture-token',{'x-goog-channel-id':'channel','x-goog-resource-id':'resource','x-goog-resource-state':'update','x-goog-message-number':'1'},{}),{received:true,queued:true});assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,1);
   let collect=0;h.service.collect=async()=>{collect++;};await h.service.drainInbox(h.d,h.state);assert.equal(collect,1);assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,0);
+ });
+ it('two coalesced notifications collect once and a notification arriving during collection survives exact deletion',async()=>{
+  const h=harness();const scope='trigger:wf-fictional';await h.store.pieceEnqueue('t',scope,{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'1'}});await h.store.pieceEnqueue('t',scope,{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'2'}});let calls=0;h.service.collect=async()=>{calls++;await h.store.pieceEnqueue('t',scope,{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'3'}});};await h.service.drainInbox(h.d,h.state);assert.equal(calls,1);assert.equal((await h.store.pieceInbox('t',scope)).length,1);h.service.collect=async()=>{calls++;};await h.service.drainInbox(h.d,h.state);assert.equal(calls,2);assert.equal((await h.store.pieceInbox('t',scope)).length,0);
+ });
+ it('failed inbox collect retains notification and exposes review state without advancing delivery',async()=>{
+  const h=harness();await h.store.pieceEnqueue('t','trigger:wf-fictional',{fingerprint:h.state.fingerprint,headers:{'x-goog-message-number':'1'}});h.service.collect=async()=>{throw Error('poison row');};await assert.rejects(()=>h.service.drainInbox(h.d,h.state),/review/);assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,1);assert.equal((await h.store.pieceGet('t','trigger:wf-fictional','lyam:delivery-status')as any).status,'review');
+ });
+ it('old subscription inbox is dropped without native collection and native lifecycle cannot touch host keys',async()=>{
+  const h=harness();await h.store.pieceEnqueue('t','trigger:wf-fictional',{fingerprint:'old',headers:{'x-goog-message-number':'1'}});h.service.collect=async()=>{throw Error('must not collect');};await h.service.drainInbox(h.d,h.state);assert.equal((await h.store.pieceInbox('t','trigger:wf-fictional')).length,0);const store=h.service.nativeStore('t',h.d.id);assert.throws(()=>store.get('lyam:lock'));assert.throws(()=>store.put('lyam:subscription',{}));assert.throws(()=>store.delete('lyam:batch'));
  });
  it('installed polling trigger consumes persistent cursor and emits only new worksheet objects',async()=>{
   nock.disableNetConnect();nock('https://sheets.googleapis.com').get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Existing'}},{properties:{sheetId:4,title:'New'}}]});
@@ -168,6 +177,10 @@ import{substituteEventPayload}from'./model.js';
 describe('native JSON placeholders and busy-lock safety regressions',()=>{
  it('event cell text cannot inject native JSON fields',()=>{
   const graph:any={nodes:[{id:'write',type:full.sheetBlockType('update_row'),config:{values:'{"A":"{{event.data}}"}'}}],edges:[]};const attack='x","I":"UNAUTHORIZED';const out=substituteEventPayload(graph,{data:attack});assert.deepEqual(JSON.parse(String(out.nodes[0].config.values)),{A:attack});
+ });
+ it('native unquoted JSON placeholders fail closed and event strings cannot inject second-order step lookups',()=>{
+  const type=full.sheetBlockType('update_row');assert.throws(()=>substituteEventPayload({nodes:[{id:'n',type,config:{values:'{"A":{{event.data}}}'}}],edges:[]}as any,{data:'"x","I":"bad"'}));
+  const graph:any={nodes:[{id:'n',type,config:{values:'{"A":"{{event.data}}"}'}}],edges:[]};const first=substituteEventPayload(graph,{data:'{{steps.secret.result}}'});const final=substituteStepOutputs(first.nodes[0],{secret:{result:'DO_NOT_READ'}});assert.deepEqual(JSON.parse(String(final.config.values)),{A:'{{steps.secret.result}}'});
  });
  it('literal nonnative HTTP/Jira/mail JSON stays byte exact including large numbers and spacing',()=>{
   for(const type of ['http-request','jira-create-issue','lyam-send-mail']){const input=' {"id":9007199254740993123, "spaces" : true}';const node:any={id:'n',type,config:{body:input}};assert.equal(substituteStepOutputs(node,{}).config.body,input);assert.equal(substituteEventPayload({nodes:[node],edges:[]},{data:'x'}).nodes[0].config.body,input);}

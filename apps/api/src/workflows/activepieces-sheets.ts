@@ -20,6 +20,7 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
  onModuleDestroy(){if(this.timer)clearInterval(this.timer);}
  private scope(id:string){return 'trigger:'+id;}
  private kv(tenant:string,id:string){const scope=this.scope(id);return {get:(k:string)=>this.store.pieceGet(tenant,scope,k),put:(k:string,v:unknown)=>this.store.piecePut(tenant,scope,k,v),delete:(k:string)=>this.store.pieceDelete(tenant,scope,k)};}
+ private nativeStore(tenant:string,id:string){const kv=this.kv(tenant,id);const check=(k:string)=>{if(k.startsWith('lyam:'))throw Error('Reserved host state key');};return{get:(k:string)=>{check(k);return kv.get(k);},put:(k:string,v:unknown)=>{check(k);return kv.put(k,v);},delete:(k:string)=>{check(k);return kv.delete(k);}};}
  private async enabled(tenant:string){const r=workspaceMode()?await this.branches.get(this.store.liveRef):this.reg;return r.isActive(tenant,'workflow-connectors')&&r.isActive(tenant,'workflows-iga');}
  private key(d:DefinitionRow){return Object.keys(piece().GOOGLE_SHEETS_EVENTS).includes(d.trigger?.event??'')?piece().GOOGLE_SHEETS_EVENTS[d.trigger!.event!].activepiecesTrigger:null;}
  private async context(d:DefinitionRow,state:State){
@@ -28,7 +29,7 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
   const base=process.env.IAM_ACTIVEPIECES_API_BASE_URL??process.env.IAM_PUBLIC_BASE_URL??process.env.PUBLIC_BASE_URL??'';
   const webhook=piece().SHEETS_TRIGGERS[state.key].type==='WEBHOOK';
   if(webhook&&(!base.startsWith('https://')||new URL(base).username||new URL(base).password||new URL(base).search||new URL(base).hash))throw Error('Configure an HTTPS public base URL for Google webhook delivery');
-  return {settings:result.settings,config:state.config,runtime:{store:this.kv(d.tenant,d.id)},webhookUrl:base.replace(/\/$/,'')+'/tenants/'+encodeURIComponent(d.tenant)+'/activepieces-sheets/'+encodeURIComponent(d.id)+'/'+state.token};
+  return {settings:result.settings,config:state.config,runtime:{store:this.nativeStore(d.tenant,d.id)},webhookUrl:base.replace(/\/$/,'')+'/tenants/'+encodeURIComponent(d.tenant)+'/activepieces-sheets/'+encodeURIComponent(d.id)+'/'+state.token};
  }
  private async invoke(d:DefinitionRow,state:State,stage:string,payload?:unknown){return piece().runSheetsTrigger(state.key,stage,{...await this.context(d,state),payload});}
  private async drain(d:DefinitionRow){
@@ -54,10 +55,17 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
   await kv.put('lyam:batch-envelope',{batch,staged,deleted:[...deleted],pending});
   await this.recoverEnvelope(d);await this.drain(d);
  }
- private async drainInbox(d:DefinitionRow,state:State){for(const item of await this.store.pieceInbox(d.tenant,this.scope(d.id))){const entry=item.value as {fingerprint:string,headers:Record<string,string>};if(entry.fingerprint===state.fingerprint)await this.collect(d,state,{headers:entry.headers,body:{}});await this.kv(d.tenant,d.id).delete(item.key);}}
+ private async drainInbox(d:DefinitionRow,state:State){
+  const items=await this.store.pieceInbox(d.tenant,this.scope(d.id));if(!items.length)return;
+  const current=items.filter(item=>(item.value as any).fingerprint===state.fingerprint);
+  if(current.length)try{await this.collect(d,state,{headers:(current[current.length-1].value as any).headers,body:{}});}catch{await this.kv(d.tenant,d.id).put('lyam:delivery-status',{status:'review',reason:'Native trigger collection failed; notification retained'});throw Error('Native trigger collection requires review');}
+  for(const item of items)await this.store.pieceDeleteExact(d.tenant,this.scope(d.id),item.key,item.value);
+  await this.kv(d.tenant,d.id).delete('lyam:delivery-status');
+ }
  private async recoverEnvelope(d:DefinitionRow){const kv=this.kv(d.tenant,d.id),e=await kv.get('lyam:batch-envelope') as any;if(!e)return;for(const[k,v]of Object.entries(e.staged))await kv.put(k,v);for(const k of e.deleted??[])await kv.delete(k);await kv.put('lyam:batch',e.batch);await kv.put('lyam:pending',e.pending);await kv.delete('lyam:batch-envelope');}
  private async locked<T>(tenant:string,id:string,fn:()=>Promise<T>){const k=tenant+':'+id;if(this.busy.has(k))throw Error('Native trigger is busy');this.busy.add(k);const owner=randomUUID();let claimed=false;try{claimed=await this.store.pieceClaim(tenant,this.scope(id),owner);if(!claimed)throw Error('Native trigger is busy or requires crash reconciliation');return await fn();}finally{if(claimed)await this.store.pieceRelease(tenant,this.scope(id),owner);this.busy.delete(k);}}
  async tick(){if(!dataReady())return;await branchContext.run({branch:this.store.liveRef},async()=>{
+  await this.store.prunePieceFiles();
   const defs=await this.store.listAllDefinitions(this.store.liveRef);
   for(const orphan of await this.store.pieceSubscriptions()){
     const id=orphan.scope.replace(/^trigger:/,'');
@@ -92,10 +100,13 @@ export class ActivepiecesSheetsService implements OnModuleInit,OnModuleDestroy {
   const fingerprint=createHash('sha256').update(JSON.stringify([this.key(d),d.trigger?.config??{}])).digest('hex');if(fingerprint!==state.fingerprint)throw Error('Subscription changed');
   const watch=await this.kv(tenant,id).get(state.key) as any;
   if(!watch||watch.id!==headers['x-goog-channel-id']||watch.resourceId!==headers['x-goog-resource-id'])throw Error('Unknown notification channel');
-  const safeHeaders=Object.fromEntries(['x-goog-channel-id','x-goog-resource-id','x-goog-resource-state','x-goog-changed'].map(k=>[k,String(headers[k]??'').slice(0,500)]));
+  const safeHeaders=Object.fromEntries(['x-goog-channel-id','x-goog-resource-id','x-goog-resource-state','x-goog-changed','x-goog-message-number'].map(k=>[k,String(headers[k]??'').slice(0,500)]));
   // Durable individual inbox entry before ACK. A busy worker never drops a valid
   // notification. The scheduler refetches provider state under the same mutex.
-  await this.kv(tenant,id).put('lyam:inbox:'+randomUUID(),{fingerprint,headers:safeHeaders});
+  const message=String(headers['x-goog-message-number']??'');if(!/^[0-9]{1,30}$/.test(message))throw Error('Invalid notification number');
+  // One deterministic coalescing slot per reviewed subscription/channel. Each
+  // notification triggers a full provider refetch, so no assumed message order.
+  await this.store.pieceEnqueue(tenant,this.scope(id),{fingerprint,headers:safeHeaders});
   return {received:true,queued:true};
  });}
 }
