@@ -57,7 +57,7 @@ const startModel = () => new Promise<void>((ok) => {
   }).listen(MODEL_PORT, '127.0.0.1', ok);
 });
 
-describe('AI assistant (real Dolt + real core): chat on the branch-confined MCP surface', { skip: !have && 'dolt or core binary missing' }, () => {
+describe('AI assistant (real Dolt + real core): chat on the branch-confined MCP surface', { skip: !have && !process.env.AI_E2E_REQUIRE && 'dolt or core binary missing' }, () => {
   let dolt: ChildProcess, core: ChildProcess, app: Awaited<ReturnType<typeof NestFactory.create>>, dir: string;
   let adminToken: string, bobToken: string, modelId = '', convId = '', branch = '';
   const H = () => ({ authorization: `Bearer ${adminToken}`, 'x-api-admin-token': ADMIN });
@@ -184,5 +184,32 @@ describe('AI assistant (real Dolt + real core): chat on the branch-confined MCP 
     assert.equal(d.status, 200);
     const s = (await (await fetch(`${API}/tenants/acme-demo/mcp-sessions`, { headers: H() })).json()) as { sessions: { branch: string; revoked: boolean }[] };
     assert.equal(s.sessions.find((x) => x.branch === branch)!.revoked, true);
+  });
+
+  // REAL model (Ollama, run by the ai-local-model workflow) -> REAL MCP tools on the session branch -> confirmation / refusal.
+  // Skipped unless IAM_AI_REAL_MODEL_URL is set. A small model may need a few tries to call the tools; the safety assertions never relax.
+  const real = process.env.IAM_AI_REAL_MODEL_URL, realName = process.env.IAM_AI_REAL_MODEL ?? 'qwen2.5:3b';
+  it('REAL MODEL: reads with a real tool, waits for approval on a write, a refusal changes nothing, an approval writes on the branch only', { skip: !real && 'IAM_AI_REAL_MODEL_URL not set', timeout: 900_000 }, async () => {
+    const m = await post(url('models'), { name: 'Real local', kind: 'openai-compatible', model: realName, baseUrl: real, maxTokens: 1024 }, H());
+    assert.equal(m.status, 201, await m.clone().text());
+    const realId = ((await m.json()) as { model: { id: string } }).model.id;
+    let proven = false; const log: string[] = [];
+    for (let attempt = 1; attempt <= 3 && !proven; attempt++) {
+      const c = await post(url('conversations'), { modelId: realId, title: `Real model ${attempt}` }, H());
+      const created = (await c.json()) as { conversation: { id: string }; branch: string };
+      convId = created.conversation.id; branch = created.branch;
+      const before = await assignments(branch);
+      const r1 = await sendOk('Use your tools. First list the users, then give the identity demo-bob the role accountant (call assign_role with identity "demo-bob" and role "accountant").');
+      log.push(`attempt ${attempt}: ${r1.status}; pending=${r1.pending.map((p) => p.name)}; trace=${r1.trace.map((t) => `${t.tool}:${t.outcome}`)}`);
+      if (r1.status !== 'needs_confirmation' || !r1.pending.some((p) => p.name === 'assign_role')) continue;
+      assert.equal(await assignments(branch), before, 'nothing is written while the real model waits for approval');
+      const denied = await decide(Object.fromEntries(r1.pending.map((p) => [p.id, 'deny'])));
+      assert.ok(['done', 'needs_confirmation', 'limit'].includes(denied.status));
+      assert.equal(bobAccountant(await assignments(branch)), false, 'a refusal wrote nothing on the branch');
+      assert.equal(bobAccountant(await assignments('main')), false, 'main untouched');
+      proven = true;
+    }
+    assert.ok(proven, `the real model never reached the confirmation step:\n${log.join('\n')}`);
+    console.log(log.join('\n'));
   });
 });
