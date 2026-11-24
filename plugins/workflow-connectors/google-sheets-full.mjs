@@ -12,7 +12,6 @@ const complex=new Set(['JSON','OBJECT','ARRAY','DYNAMIC']);
 function parse(value,name,prop,runtime=false){
   if(value===undefined||value===null||value===''){if(prop.required)throw Error(name+' is required');return undefined;}
   if(!runtime&&typeof value==='string'&&value.includes('{{'))return value;
- if(runtime&&typeof value==='string'&&value.includes('{{'))throw Error(name+': unresolved placeholder');
   if(prop.type==='CHECKBOX'){if(value===true||value==='true')return true;if(value===false||value==='false')return false;throw Error(name+': boolean required');}
   if(prop.type==='NUMBER'){const n=Number(value);if(!Number.isFinite(n))throw Error(name+': number required');return n;}
   if(complex.has(prop.type)) {if(typeof value!=='string')return value;try{return JSON.parse(value);}catch{throw Error(name+': valid JSON required');}}
