@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Partial real-systemd capability on disposable runner: adapted nsenter ExecStart,
 normal completion and three worker-MainPID kills. Not original unwrapped argv,
-not last-tick drift or orphan systemd proof. Distinct fixture revisions, not product migrations.
+adversarial last-tick drift and recreated populated cgroup injections, not a natural orphan updater proof. Distinct fixture revisions, not product migrations.
 Only bounded evidence, never raw environment or logs."""
 import fcntl, hashlib, json, os, shutil, signal, subprocess, sys, threading, time, urllib.request, urllib.error
 from pathlib import Path
@@ -202,6 +202,7 @@ def run(x):
                 if time.monotonic() - t0 > 120: raise RuntimeError('supervision-not-ready')
                 time.sleep(0.2)
             (folder / 'GO').write_text('operator-go-harness\n')
+            injection=None
             closed_seen = None; opening_seen = None; killed = None; deadline = time.monotonic() + 3000
             while time.monotonic() < deadline and not (folder / 'watchdog-result.json').exists():
                 try: st = jread(state_path); ph = (st.get('opening_intent') or {}).get('phase')
@@ -265,6 +266,11 @@ def run(x):
                         report.setdefault('workerKillEffects',{})[name]={'queueState':du.state_of(qi),'watchdogState':du.state_of(wd.identity)}
                     else:(os.killpg if kill_mode == 'group' else os.kill)(qi['pid'], signal.SIGKILL)
                     killed = ph
+                if killed and kill_mode in ('lasttick-drift','orphan-cgroup') and injection is None:
+                    events=folder/'watchdog-events.jsonl'
+                    if events.exists() and any(json.loads(line).get('action')=='interrupted-rearm-permitted' for line in events.read_text().splitlines()):
+                        adv=load_module(source/'scripts/systemd-held-adversarial.py','systemd_adversarial')
+                        injection=adv.inject(folder,handles,du,kill_mode,state_path,origin)
                 time.sleep(0.1)
             for p in (wk, wd):
                 try: p.wait(timeout=120)
@@ -307,6 +313,15 @@ def run(x):
                 if killed is None: raise RuntimeError('kill-phase-never-reached')
                 if first200 is not None and (opening_seen is None or first200 < opening_seen): raise RuntimeError('200-before-opening-after-kill')
                 if st['history'][-1]['sha'] != manifest['expected_delivered']['sha'] or st['recovery_fence'] != manifest['expected_delivered']['sha']: raise RuntimeError('cursor-advanced-after-interruption')
+                if kill_mode in ('lasttick-drift','orphan-cgroup'):
+                    if not injection or wres['action']!='identity-unknown-report-only' or not wres.get('report_only'):raise RuntimeError('injection-refusal-not-measured')
+                    try: urllib.request.build_opener(urllib.request.ProxyHandler({})).open(origin+'/healthz',timeout=10)
+                    except urllib.error.HTTPError as e:
+                        if e.code!=503:raise RuntimeError('injection-origin-not-503')
+                    else:raise RuntimeError('injection-origin-not-503')
+                    rec['adversarial']=injection;rec['rearm']='not-attempted-report-only'
+                    (ev/('scenario-%s.json'%name)).write_text(json.dumps(rec,indent=2,sort_keys=True));report['scenarios'][name]=rec
+                    return
                 if wres['action'] not in ('interrupted-rearm-permitted',): raise RuntimeError('unexpected-watchdog-category')
                 if wres['recovery']['exit'] != 0:
                     rec['rearm'] = 'refused-report-only'
@@ -324,16 +339,23 @@ def run(x):
             try:
                 if handles is not None:runtime.stop(handles)
             finally:
+                for src in ['adversarial-before-cleanup.json','adversarial-cleanup.json']:
+                    if (folder/src).exists():shutil.copyfile(folder/src,ev/('scenario-'+name+'-'+src))
                 cp=folder/'systemd-cleanup.json'
                 if cp.exists():shutil.copyfile(cp,ev/('systemd-cleanup-'+name+'.json'))
                 fp=folder/'systemd-start-failure.json'
                 if fp.exists():shutil.copyfile(fp,ev/('systemd-start-failure-'+name+'.json'))
 
-    supervise('one-clean', 1)
-    if not systemd_mode:supervise('three-clean', 3)   # already qualified plain-process; this run targets unit semantics
-    supervise('three-kill-closed-step-0-running', 3, 'closed-step-0-running')
-    supervise('three-kill-closed-step-1-qualified', 3, 'closed-step-1-qualified')
-    supervise('three-kill-opening', 3, 'opening')
-    if not systemd_mode:supervise('one-orphan-updater', 1, 'closed-step-0-updater-spawned', 'orphan')
-    if not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
-    result['checks']['realSystemdPartialCapability'] = True
+    selection=os.environ.get('HELD_SYSTEMD_SELECTION','complements')
+    if selection not in ('complements','full'):raise RuntimeError('unknown-systemd-selection')
+    report['scenarioSelection']=selection
+    if selection=='full':
+        supervise('one-clean',1)
+        supervise('three-kill-closed-step-0-running',3,'closed-step-0-running')
+        supervise('three-kill-closed-step-1-qualified',3,'closed-step-1-qualified')
+        supervise('three-kill-opening',3,'opening')
+    supervise('three-clean',3)
+    supervise('one-lasttick-drift',1,'closed-step-0-running','lasttick-drift')
+    supervise('one-orphan-cgroup',1,'closed-step-0-running','orphan-cgroup')
+    if selection=='full' and not any(v.get('rearm')=='measured-closed' for v in report['scenarios'].values()):raise RuntimeError('no-measured-recovery')
+    result['checks']['realSystemdPartialCapability']=True
