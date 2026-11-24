@@ -1,3 +1,4 @@
+import { automationHeld } from '../automation/hold.js';
 import { dataReady, awaitDataReady } from '../migrations/readiness.js';
 import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { PluginRegistry } from '../plugins/v1/registry.js';
@@ -20,6 +21,7 @@ export class EffectsService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly dolt: DoltService, @Optional() private readonly plugins?: PluginRegistry, @Optional() private readonly busRef?: BusHostRef) {}
 
   async onModuleInit() {
+    if (automationHeld) return;
     if (!dataReady()) { void awaitDataReady().then(() => this.onModuleInit()).catch(() => console.error('[effects] initialization refused after data migrations')); return; }
     const { IAM_EFFECTS, IAM_PG_URL, IAM_NOTIFY_SINK_URL, IAM_PROVISION_TARGET_URL } = process.env;
     if (IAM_EFFECTS !== '1' || !IAM_PG_URL) return;

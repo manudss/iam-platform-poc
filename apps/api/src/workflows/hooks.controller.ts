@@ -1,3 +1,4 @@
+import { assertAutomationAllowed } from '../automation/hold.js';
 import { Body, Controller, NotFoundException, Param, Post, Optional, UnauthorizedException } from '@nestjs/common';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { BranchRegistries } from '../plugins/v1/branch-registries.js';
@@ -20,6 +21,7 @@ export class WorkflowHooksController {
 
   @Post(':definition/:token')
   async fire(@Param('tenant') tenant: string, @Param('definition') definition: string, @Param('token') token: string, @Body() body: unknown) {
+    assertAutomationAllowed();
     return branchContext.run({ branch: this.store.liveRef }, async () => {
     const registry = workspaceMode() && this.branches ? await this.branches.get(this.store.liveRef) : this.reg;
     if (!registry.isActive(tenant, 'workflow-connectors') || !registry.isActive(tenant, 'workflows-iga'))

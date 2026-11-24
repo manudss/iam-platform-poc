@@ -1,4 +1,5 @@
 import {assertTlsVerification} from './security/tls-policy.js';
+import { automationHoldStatus } from './automation/hold.js';
 import { releaseDataReady } from './migrations/readiness.js';
 import { runBootMigrations } from './migrations/boot.js';
 import { migrationPaths } from './migrations/cli.js';
@@ -10,6 +11,7 @@ import { AppModule } from './app.module.js';
 
 async function bootstrap() {
   assertTlsVerification();
+  console.info('[startup] automation hold:', JSON.stringify(automationHoldStatus));
   if (process.env.IAM_DATA_MIGRATIONS === '1') migrationPaths().journal.assertBoot(process.env.IAM_MIGRATION_BOOT_ID ?? '');
   const app = await NestFactory.create(AppModule);
   // Signed plugin archives upload as base64 JSON (plan step 8): 2 MB zip -> ~2.7 MB base64.

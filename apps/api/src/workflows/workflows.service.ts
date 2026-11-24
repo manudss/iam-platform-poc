@@ -1,3 +1,4 @@
+import { assertAutomationAllowed } from '../automation/hold.js';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 import { PullRequestService } from '../versioning/pull-requests.service.js';
@@ -93,6 +94,7 @@ export class WorkflowsService {
   }
 
   async save(tenant: string, id: unknown, body: Record<string, unknown>, sub: unknown, create: boolean) {
+    assertAutomationAllowed();
     const wid = create ? `wf-def-${randomBytes(4).toString('hex')}` : this.checkId(id, 'workflow id');
     const name = String(body?.name ?? '').trim();
     if (!name || name.length > 80) throw new BadRequestException('a name is required (max 80)');
@@ -142,6 +144,7 @@ export class WorkflowsService {
    * must always instantiate into a working workflow.
    */
   async saveTemplate(tenant: string, body: Record<string, unknown>, sub: unknown) {
+    assertAutomationAllowed();
     if (Object.keys(body ?? {}).some((k) => !['name', 'description', 'category', 'graph', 'trigger', 'fromDefinition'].includes(k))) throw new BadRequestException('unknown field');
     let graphIn: unknown = body?.graph;
     let triggerIn: unknown = body?.trigger;
@@ -173,6 +176,7 @@ export class WorkflowsService {
 
   /** Deletes a user-saved template. Official/community catalog entries are static: they cannot be deleted. */
   async removeTemplate(_tenant: string, id: unknown) {
+    assertAutomationAllowed();
     const tid = String(id ?? '');
     if (!/^wf-tpl-[a-z0-9-]{1,32}$/.test(tid)) throw new BadRequestException('only a saved (user) template can be deleted');
     if (!(await this.store.deleteTemplate(tid, currentBranch(true)))) throw new NotFoundException('unknown template');
@@ -180,6 +184,7 @@ export class WorkflowsService {
   }
 
   async remove(tenant: string, id: unknown) {
+    assertAutomationAllowed();
     const wid = this.checkId(id, 'workflow id');
     const running = (await this.store.listRuns(tenant, wid, 100)).some((r) => r.status === 'queued' || r.status === 'running');
     if (running) throw new ConflictException('a run of this workflow is still active: cancel it first');
@@ -189,6 +194,7 @@ export class WorkflowsService {
 
   /** Flips only the active flag (the list cards' pause switch): no graph revalidation needed. */
   async setActive(tenant: string, id: unknown, active: unknown) {
+    assertAutomationAllowed();
     const ref = currentBranch(true);
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), ref);
     if (!d) throw new NotFoundException('unknown workflow');
@@ -200,6 +206,7 @@ export class WorkflowsService {
 
   /** Deletes a finished run and its steps; a live run must be canceled first. */
   async removeRun(tenant: string, runId: unknown) {
+    assertAutomationAllowed();
     const r = await this.store.getRun(tenant, this.checkId(runId, 'run id'));
     if (!r) throw new NotFoundException('unknown run');
     if (r.status === 'queued' || r.status === 'running' || r.status === 'waiting') throw new ConflictException('cancel the run first');
@@ -238,6 +245,7 @@ export class WorkflowsService {
   }
 
   async start(tenant: string, id: unknown, sub: unknown, event?: { branch: string; payload: Record<string, string>; eventId?: string }) {
+    assertAutomationAllowed();
     // A run executes effects now, so it always uses the LIVE (main) definition, never an unreviewed branch edit.
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), this.store.liveRef);
     if (!d) throw new NotFoundException('unknown workflow');
@@ -280,6 +288,7 @@ export class WorkflowsService {
    * from the default run list and can never be reviewed or merged.
    */
   async testRun(tenant: string, body: Record<string, unknown>, sub: unknown) {
+    assertAutomationAllowed();
     if (Object.keys(body ?? {}).some((k) => !['graph', 'trigger', 'payload'].includes(k))) throw new BadRequestException('unknown field');
     const trigger = validateTrigger(body?.trigger);
     const { graph, order } = validateGraph(body?.graph);
@@ -309,6 +318,7 @@ export class WorkflowsService {
 
   /** Re-runs a terminal run FROM a given step: that step and everything downstream are reset to pending. */
   async rerunFrom(tenant: string, runId: unknown, nodeId: unknown) {
+    assertAutomationAllowed();
     const view = await this.runView(tenant, runId);
     const r = view.run;
     if (!['completed', 'failed', 'canceled'].includes(r.status)) throw new ConflictException(`only a finished run can be re-run from a step (this one is ${r.status})`);
@@ -337,6 +347,7 @@ export class WorkflowsService {
 
   /** Duplicates a definition (same graph/trigger, new id, "(copy)" name). */
   async duplicate(tenant: string, id: unknown, sub: unknown) {
+    assertAutomationAllowed();
     const ref = currentBranch(true);
     const d = await this.store.getDefinition(tenant, this.checkId(id, 'workflow id'), ref);
     if (!d) throw new NotFoundException('unknown workflow');
@@ -362,6 +373,7 @@ export class WorkflowsService {
   }
 
   async retry(tenant: string, runId: unknown) {
+    assertAutomationAllowed();
     const view = await this.runView(tenant, runId);
     const r = view.run;
     if (r.status !== 'failed' && r.status !== 'canceled') throw new ConflictException(`only a failed or canceled run can be retried (this one is ${r.status})`);
@@ -394,6 +406,7 @@ export class WorkflowsService {
   }
 
   async cancel(tenant: string, runId: unknown) {
+    assertAutomationAllowed();
     const view = await this.runView(tenant, runId);
     if (view.run.status !== 'queued' && view.run.status !== 'running' && view.run.status !== 'waiting') throw new ConflictException(`this run is already ${view.run.status}`);
     this.engine.cancelFlag(view.run.id);
@@ -411,6 +424,7 @@ export class WorkflowsService {
 
   /** Opens (or reuses) the Dolt pull request reviewing the run's branch. The merge itself stays a human action. */
   async review(tenant: string, runId: unknown, sub: unknown) {
+    assertAutomationAllowed();
     const view = await this.runView(tenant, runId);
     const r = view.run;
     if (r.test) throw new BadRequestException('a test run cannot be reviewed: its branch is disposable and is dropped when the run settles');

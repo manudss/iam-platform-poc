@@ -1,3 +1,4 @@
+import { automationHeld } from '../automation/hold.js';
 import { ModuleRef } from '@nestjs/core';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { VersioningService } from '../versioning/versioning.service.js';
@@ -35,6 +36,7 @@ export class MainPublication implements OnModuleInit {
   /** Called by the API launcher before listen, not by unrelated module test harnesses. */
   async start() { return withActivationActor({ kind: 'system', id: 'startup-main' }, () => this.startOnce()); }
   private async startOnce() {
+    if (automationHeld) return;
     if (process.env.IAM_AUTO_ACTIVATE_MAIN === '0' || !this.activation.applyEnabled) return;
     const head = (await this.v.branches()).branches.find(b => b.name === 'main')?.commit;
     if (!head) throw new Error('Automatic activation requires main');
