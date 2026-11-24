@@ -16,8 +16,8 @@ already contaminated requires operator assessment; this patch does not restart
 anything or claim to repair that process.
 
 Static require inventory: Sheets, Jira and HTTP bundles depend only on Node
-builtins. Text Helper additionally has optional jsdom; that dependency is now
-refused pending separate review. A runtime require gate permits only Node
+builtins. Text Helper additionally has optional jsdom; that dependency is not loaded. Its JSDOM constructor is replaced by an explicit
+refusal pending separate review, leaving non-HTML text operations available. A runtime require gate permits only Node
 builtins for all four reviewed modules, blocking computed/unlisted externals
 as well. Consequently Text Helper operations requiring jsdom are unavailable,
 not silently covered by this qualification. Bundled code is covered by the

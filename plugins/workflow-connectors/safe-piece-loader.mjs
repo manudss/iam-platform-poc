@@ -13,14 +13,15 @@ const reviewed={
 };
 const NEEDLE='process.env.NODE_TLS_REJECT_UNAUTHORIZED="0";',cache=new Map();
 export function assertNativeTls(){if(process.env.NODE_TLS_REJECT_UNAUTHORIZED!==undefined&&process.env.NODE_TLS_REJECT_UNAUTHORIZED!=='1')throw Error('Native pieces require enabled TLS certificate verification');}
-export function neutralizePieceSource(pkg,source,version){const expected=reviewed[pkg];if(!expected||expected.version!==version||createHash('sha256').update(source).digest('hex')!==expected.sha256)throw Error('Native piece bytes/version not reviewed');const text=source.toString('utf8');if(text.split(NEEDLE).length-1!==expected.count)throw Error('Native TLS patch occurrence mismatch');const safe=text.split(NEEDLE).join('');if(safe.includes('NODE_TLS_REJECT_UNAUTHORIZED')||safe.includes('rejectUnauthorized'))throw Error('Native bundle contains unreviewed TLS controls');return safe;}
+export function removeReviewedTlsAssignment(source,count){const text=source.toString('utf8');if(text.split(NEEDLE).length-1!==count)throw Error('Native TLS patch occurrence mismatch');const safe=text.split(NEEDLE).join('');if(safe.includes('NODE_TLS_REJECT_UNAUTHORIZED')||safe.includes('rejectUnauthorized'))throw Error('Native bundle contains unreviewed TLS controls');return safe;}
+export function neutralizePieceSource(pkg,source,version){const expected=reviewed[pkg];if(!expected||expected.version!==version||createHash('sha256').update(source).digest('hex')!==expected.sha256)throw Error('Native piece bytes/version not reviewed');return removeReviewedTlsAssignment(source,expected.count);}
 export function loadSafePiece(require,pkg){
  assertNativeTls();if(cache.has(pkg))return cache.get(pkg);
  const entry=require.resolve(pkg),version=JSON.parse(readFileSync(join(dirname(entry),'..','package.json'),'utf8')).version;
  if(require.cache[entry])throw Error('Native piece was loaded outside the safe loader');
  const source=neutralizePieceSource(pkg,readFileSync(entry),version),mod=new Module(entry);
  const external=[...source.matchAll(/require\(["']([^"']+)["']\)/g)].map(m=>m[1]).filter(x=>!builtinModules.includes(x)&&!x.startsWith('node:'));if(external.some(x=>x!=='jsdom')||(external.length&&pkg!=='@activepieces/piece-text-helper'))throw Error('Native bundle external dependency not reviewed');
- mod.require=id=>{if(!builtinModules.includes(id)&&!id.startsWith('node:'))throw Error('Native optional external dependency unavailable pending review');return Module.prototype.require.call(mod,id);};
+ mod.require=id=>{if(pkg==='@activepieces/piece-text-helper'&&id==='jsdom'){const refuse=class{constructor(){throw Error('Native HTML parsing unavailable pending dependency review');}};return{JSDOM:refuse,VirtualConsole:refuse};}if(!builtinModules.includes(id)&&!id.startsWith('node:'))throw Error('Native optional external dependency unavailable pending review');return Module.prototype.require.call(mod,id);};
  mod.filename=entry;mod.paths=Module._nodeModulePaths(dirname(entry));
  mod._compile(source,entry);mod.loaded=true;cache.set(pkg,mod.exports);return mod.exports;
 }
