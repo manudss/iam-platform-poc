@@ -129,5 +129,18 @@ class BoundedQueueDiagnostic(unittest.TestCase):
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
         self.assertEqual(m.queue_failure_diagnostic('unknown private text',{}),{'updaterExit':None,'categories':['unclassified']})
 
+
+class BoundedQueueDiagnostic(unittest.TestCase):
+    def test_private_text_is_not_exported(self):
+        spec=importlib.util.spec_from_file_location('diag',Path(__file__).with_name('delivery-docker-integration.py'))
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        r=m.queue_failure_diagnostic('private-token-value pre-update hook failed /private/path',{'failed':{'exit':2}})
+        self.assertEqual(r,{'updaterExit':2,'categories':['pre-update-hook-refused']})
+        self.assertNotIn('private',json.dumps(r))
+    def test_unknown_stays_unknown(self):
+        spec=importlib.util.spec_from_file_location('diag2',Path(__file__).with_name('delivery-docker-integration.py'))
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        self.assertEqual(m.queue_failure_diagnostic('unknown private text',{}),{'updaterExit':None,'categories':['unclassified']})
+
 if __name__ == '__main__':
     unittest.main()
