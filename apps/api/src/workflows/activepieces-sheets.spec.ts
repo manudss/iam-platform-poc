@@ -255,3 +255,18 @@ describe('native callback HTTP failure classification',()=>{
   for(const error of [new Error('quota'),new Error('database unavailable'),new Error('conflict'),new NotFoundException('invalid')]){const controller=new ActivepiecesSheetsController({webhook:async()=>{throw error;}}as any,{}as any,{}as any);await assert.rejects(()=>controller.hook('t','d','token',{headers:{}},{}),(e:any)=>e.getStatus()===(error instanceof NotFoundException?404:503));}
  });
 });
+
+describe('generic JSON absence and native all-row boundaries',()=>{
+ it('defaults only absent paths, preserves empty/null/false/zero and rejects unsafe paths',async()=>{
+  const b=externalBlock('json-values')!;const run=(c:any)=>b.run({config:b.validate({input:'{}',...c})}as any);await assert.rejects(()=>run({path:'missing'}),/missing/);assert.deepEqual(await run({operation:'exists',path:'missing'}),{value:false,count:0});
+  for(const value of ['',null,false,0])assert.equal((await run({input:JSON.stringify({v:value}),path:'v',missing:'default',defaultJson:'"fallback"'}))!.value,value);
+  assert.equal((await run({path:'missing',missing:'default',defaultJson:'""'}))!.value,'');const rows=[{values:{A:'x'}},{values:{A:'y',F:''}},{values:{F:'ok'}}];assert.equal((await run({input:JSON.stringify(rows),operation:'filter-equals',field:'values.F',equals:'',missing:'default',defaultJson:'""'}))!.count,2);for(const path of ['constructor','absent.__proto__','values.prototype'])await assert.rejects(()=>run({path,operation:'exists',missing:'default'}),/unsafe/);
+ });
+ it('installed Find Rows exact mode differs from substring mode, and its cap hides duplicates',async()=>{
+  nock.disableNetConnect();nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Source'}}]});nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(function(uri:string){return[200,{values:decodeURIComponent(uri).includes('A1:ZZZ1')?[['name']]:[['Camille'],['Camille Martin'],['camille'],['Camille']]}];});const auth={type:'OAUTH2',access_token:'FICTIONAL'},base={spreadsheetId:'fictional',sheetId:0,columnName:'A',searchValue:'Camille',startingRow:2,headerRow:1,useHeaderNames:false};const run=(extra:any)=>adapter.runPieceAction('@activepieces/piece-google-sheets','find_rows',{auth,propsValue:{...base,...extra},runtime});assert.equal((await run({matchCase:true,numberOfRows:20})).length,2);assert.equal((await run({matchCase:false,numberOfRows:20})).length,4);assert.equal((await run({matchCase:true,numberOfRows:1})).length,1);
+ });
+ it('installed Get All Rows pads trailing empty cells to header width and does not cap duplicate rows',async()=>{
+  nock.disableNetConnect();nock('https://sheets.googleapis.com').persist().get('/v4/spreadsheets/fictional').reply(200,{sheets:[{properties:{sheetId:0,title:'Source'}}]});nock('https://sheets.googleapis.com').persist().get(/\/values\//).reply(function(uri:string){return[200,{values:decodeURIComponent(uri).includes('A1:ZZZ1')?[['name','process','created','email']]:[['Camille','OK'],['Camille','OK']]}];});
+  const r=await adapter.runPieceAction('@activepieces/piece-google-sheets','get-many-rows',{auth:{type:'OAUTH2',access_token:'FICTIONAL'},propsValue:{spreadsheetId:'fictional',sheetId:0,first_row_headers:false},runtime});assert.equal(r.length,2);assert.deepEqual(r[0].values,{A:'Camille',B:'OK',C:'',D:''});assert.deepEqual(r[1].values,r[0].values);
+ });
+});
